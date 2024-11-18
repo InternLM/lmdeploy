@@ -1,8 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import List
+from typing import Any, Dict, List
 
 from lmdeploy.messages import EngineOutput, GenerationConfig
-from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
 from lmdeploy.utils import get_logger
 
 from ..messages import SamplingParam
@@ -10,6 +9,8 @@ from .engine import Engine
 from .request import RequestSender, RequestType, Response, ResponseType
 
 logger = get_logger('lmdeploy')
+
+InputMultiModalType = List[Dict[str, Any]]
 
 
 def _check_resp(resp: Response, state: ResponseType, warning_msg: str = None):
@@ -129,7 +130,7 @@ class EngineInstance:
                                  session_id: int,
                                  input_ids: List[int],
                                  gen_config: GenerationConfig = None,
-                                 input_multimodals: MultiModalInputs = None,
+                                 input_multimodals: InputMultiModalType = None,
                                  adapter_name: str = None,
                                  **kwargs):
         """Send stream inference request.
@@ -183,7 +184,7 @@ class EngineInstance:
     async def async_infer(self,
                           session_id: int,
                           input_ids: List[int] = None,
-                          input_multimodals: MultiModalInputs = None,
+                          input_multimodals: InputMultiModalType = None,
                           gen_config: GenerationConfig = None,
                           **kwargs):
         """Send inference request.
@@ -215,7 +216,7 @@ class EngineInstance:
     def stream_infer(self,
                      session_id: int,
                      input_ids: List[int],
-                     input_multimodals: MultiModalInputs = None,
+                     input_multimodals: InputMultiModalType = None,
                      gen_config: GenerationConfig = None,
                      adapter_name: str = None,
                      **kwargs):
@@ -285,7 +286,7 @@ class EngineInstance:
     def infer(self,
               session_id: int,
               input_ids: List[int] = None,
-              input_multimodals: MultiModalInputs = None,
+              input_multimodals: InputMultiModalType = None,
               gen_config: GenerationConfig = None,
               **kwargs):
         """Send inference request.
@@ -313,113 +314,6 @@ class EngineInstance:
 
         return EngineOutput(0, token_ids, len(token_ids))
 
-    async def async_batched_infer(
-        self,
-        session_ids: List[int],
-        token_ids: List[List[int]] = None,
-        input_multimodals: List[MultiModalInputs] = None,
-        gen_config: GenerationConfig = None,
-        adapter_names: List[str] = None,
-        keep_cache: bool = False,
-    ):
-        """Send inference request.
-
-        Args:
-            session_ids (List[int]): The session id.
-            token_ids (List[int]): The input token ids.
-            gen_config (GenerationConfig): The sampling parameters.
-            adapter_names (List[str]): The name of the adapters.
-            keep_cache (bool): Keep kv cache after infer.
-
-        Returns:
-            int: Error flags. 0 if success.
-            List[int]: The streaming output tokens.
-            int: The number of the output tokens.
-        """
-        batch_size = len(token_ids)
-        assert len(session_ids) == batch_size
-        if adapter_names is not None:
-            assert len(adapter_names) == batch_size
-        else:
-            adapter_names = [None for _ in range(batch_size)]
-
-        if input_multimodals is not None:
-            assert len(input_multimodals) == batch_size
-        else:
-            input_multimodals = [None] * batch_size
-
-        async def _add_sessions(session_ids):
-            for session_id in session_ids:
-                await self._async_try_add_session(session_id)
-
-        async def _add_messages(session_ids, token_ids, adapter_names,
-                                input_multimodals):
-            add_msgs = []
-            sampling_param = SamplingParam.from_gen_config(gen_config)
-            for session_id, token_id, adapter_name, in_mm in zip(  # noqa: E501
-                    session_ids, token_ids, adapter_names, input_multimodals):
-                msg = dict(
-                    token_ids=token_id,
-                    session_id=session_id,
-                    sampling_param=sampling_param,
-                    adapter_name=adapter_name,
-                    input_multimodals=in_mm,
-                )
-                add_msgs.append(msg)
-            req_types = [RequestType.ADD_MESSAGE] * batch_size
-            req_ids = await self.req_sender.async_batched_send_async(
-                req_types, data=add_msgs)
-            return req_ids
-
-        await _add_sessions(session_ids)
-        req_ids = await _add_messages(session_ids, token_ids, adapter_names,
-                                      input_multimodals)
-
-        # receive messages
-        req_idx_map = dict(zip(req_ids, range(len(req_ids))))
-        output_token_ids = [list() for _ in req_ids]
-        status = 0
-        finish_count = batch_size
-        while finish_count:
-            resp = await self.req_sender.async_recv_any()
-            if resp.req_id not in req_ids:
-                continue
-            idx = req_idx_map[resp.req_id]
-            token_ids = output_token_ids[idx]
-            if resp.type == ResponseType.SUCCESS:
-                token_ids += resp.data['token_ids']
-            elif resp.type == ResponseType.FINISH:
-                token_ids += resp.data['token_ids']
-                if not keep_cache:
-                    session_id = session_ids[idx]
-                    await self.async_end(session_id=session_id)
-                finish_count -= 1
-            else:
-                logger.error(f'Unexpected response: {resp.type}')
-                status = 1
-                break
-
-        output_token_len = [len(token_ids) for token_ids in output_token_ids]
-        return EngineOutput(status, output_token_ids, output_token_len)
-
-    def batched_infer(
-        self,
-        session_ids: List[int],
-        token_ids: List[List[int]] = None,
-        input_multimodals: List[MultiModalInputs] = None,
-        gen_config: GenerationConfig = None,
-        adapter_names: List[str] = None,
-        keep_cache: bool = False,
-    ):
-        """batched infer."""
-        coro = self.async_batched_infer(session_ids,
-                                        token_ids,
-                                        input_multimodals=input_multimodals,
-                                        gen_config=gen_config,
-                                        adapter_names=adapter_names,
-                                        keep_cache=keep_cache)
-        return self.req_sender.run_until_complete(coro)
-
     async def async_end(self, session_id: int):
         """End the given session."""
         return await async_end(self.req_sender, session_id)
@@ -438,7 +332,7 @@ class EngineInstance:
 
     def decode(self,
                input_ids,
-               input_multimodals: List[MultiModalInputs] = None,
+               input_multimodals: List[InputMultiModalType] = None,
                steps: List[int] = None,
                sequence_start: bool = True,
                sequence_end: bool = True,
@@ -448,7 +342,7 @@ class EngineInstance:
         Args:
             input_ids (numpy.ndarray): the batch of input token ids
             steps (List[int]): the offset of the k/v cache
-            input_multimodals (List[MultiModalInputs]):
+            input_multimodals (List[InputMultiModalType]):
                 multimodals inputs.
             sequence_start (bool): indicator for starting a sequence
             sequence_end (bool): indicator for ending a sequence

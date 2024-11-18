@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, Callable, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 import torch
 from torch import nn
@@ -8,7 +8,7 @@ from transformers.configuration_utils import PretrainedConfig
 from lmdeploy.pytorch.engine.input_process import (BaseModelInputProcessor,
                                                    PreprocessInputResult)
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
+from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
 from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, FlashAttention,
                                  LayerNorm, RMSNorm, RopeType, SiluAndMul,
                                  build_rotary_embedding)
@@ -462,7 +462,7 @@ class VisionAttention(nn.Module):
             k,
             v,
             q_start_loc=cu_seqlens[:-1],
-            q_seqlens=cu_seqlens[1:],
+            q_seqlens=cu_seqlens[1:] - cu_seqlens[:-1],
         )
 
         attn_output = attn_output.reshape(seq_length, -1)
@@ -937,7 +937,7 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixin,
         if input_multimodals is None:
             input_multimodals = [None] * len(model_metas)
         position_ids = context.position_ids
-        batched_pos_ids = position_ids[0].split(context.q_seqlens)
+        batched_pos_ids = position_ids[0].split(context.q_seqlens.tolist())
         mrope_position_ids = []
         new_model_metas = []
         for pos_ids, model_meta, input_mm in zip(batched_pos_ids, model_metas,
@@ -991,41 +991,36 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixin,
         return self.input_processor
 
 
+InputMultiModalType = List[Dict[str, Any]]
+
+
 class Qwen2VLInputProcessor(BaseModelInputProcessor):
     """qwen2 input processor."""
 
     def __init__(self, config: PretrainedConfig) -> None:
-        from transformers import AutoProcessor
         self.config = config
-        self.processor = AutoProcessor.from_pretrained(config.name_or_path)
 
     def preprocess_input(self,
                          input_ids: List[int],
-                         input_multimodals: MultiModalInputs = None,
+                         input_multimodals: List[Dict[str, Any]] = None,
                          **kwargs) -> PreprocessInputResult:
         """prepare multimodal input."""
-        if input_multimodals is None:
+        if input_multimodals is None or len(input_multimodals) == 0:
             return input_ids, input_multimodals
 
-        input_imgs = input_multimodals.get('image', None)
-        if input_imgs is None:
-            return input_ids, input_multimodals
+        input_imgs = []
+        for input_mm in input_multimodals:
+            pixel_values = input_mm['pixel_values']
+            image_grid_thw = input_mm['image_grid_thw']
+            offset = input_mm['offset']
 
-        input_imgs = sorted(input_imgs, key=lambda mm: mm.start)
-
-        cum_pad = 0
-        image_token_id = self.config.image_token_id
-
-        for img in input_imgs:
-            pixel_values = img.data
             pad_size = pixel_values.size(0) // 4
-            start = img.start + cum_pad
-            end = start + pad_size
-            cum_pad += pad_size
-            input_ids = (input_ids[:start] + [image_token_id] * pad_size +
-                         input_ids[start:])
-            img.start = start
-            img.end = end
+
+            mm_data = MultiModalTensor(data=pixel_values,
+                                       start=offset,
+                                       end=offset + pad_size,
+                                       meta=dict(grid_thw=image_grid_thw))
+            input_imgs.append(mm_data)
 
         result = PreprocessInputResult(
             input_ids=input_ids,

@@ -7,6 +7,8 @@ from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
 
 TypeModelMetas = Dict[str, Any]
 
+InputMultiModalType = List[Dict[str, Any]]
+
 
 @dataclass
 class PreprocessInputResult:
@@ -22,7 +24,7 @@ class BaseModelInputProcessor(ABC):
     @abstractmethod
     def preprocess_input(self,
                          input_ids: List[int],
-                         input_mms: MultiModalInputs = None,
+                         input_mms: InputMultiModalType = None,
                          **kwargs) -> PreprocessInputResult:
         """preprocess input."""
         raise NotImplementedError('Not implemented.')

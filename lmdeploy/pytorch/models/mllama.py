@@ -11,7 +11,7 @@ from transformers.models.mllama.modeling_mllama import (MllamaTextConfig,
 from lmdeploy.pytorch.engine.input_process import (BaseModelInputProcessor,
                                                    PreprocessInputResult)
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
+from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
 from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, LayerNorm, RMSNorm,
                                  RopeType, SiluAndMul, build_rotary_embedding)
 from lmdeploy.pytorch.nn.linear import (build_colwise_linear,
@@ -1484,35 +1484,40 @@ class MLlamaInputProcessor(BaseModelInputProcessor):
     """mllama input processor."""
 
     def __init__(self, config: LlamaConfig, dtype: torch.dtype) -> None:
-        from transformers import AutoProcessor
         self.config = config
         self.dtype = dtype
-        self.processor = AutoProcessor.from_pretrained(config.name_or_path)
 
         vision_config = self.config.vision_config
-        self.image_size = vision_config.image_size
-        self.patch_size = vision_config.patch_size
-        wh = self.image_size // self.patch_size
+        image_size = vision_config.image_size
+        patch_size = vision_config.patch_size
+        wh = image_size // patch_size
         encoder_len = wh * wh + 1
         encoder_len = encoder_len * 4
         self.encoder_len = encoder_len
 
-    def preprocess_input(self, input_ids, input_multimodals: MultiModalInputs,
-                         **kwargs):
+    def preprocess_input(self, input_ids, input_multimodals, **kwargs):
         """prepare multimodal input."""
-        if input_multimodals is None:
+        if input_multimodals is None or len(input_multimodals) == 0:
             return input_ids, input_multimodals
 
-        input_imgs = input_multimodals.get('image', None)
-        if input_imgs is None:
-            return input_ids, input_multimodals
+        input_imgs = []
+        for input_mm in input_multimodals:
+            pixel_values = input_mm['pixel_values']
+            aspect_ratio_ids = input_mm['aspect_ratio_ids']
+            aspect_ratio_mask = input_mm['aspect_ratio_mask']
+            offset = input_mm['offset']
 
-        input_imgs = sorted(input_imgs, key=lambda mm: mm.start)
+            if pixel_values.dtype != self.dtype:
+                pixel_values = pixel_values.to(self.dtype)
 
-        for img in input_imgs:
-            img.data = img.data.to(self.dtype)
-            img.end = img.start + 1
-            img.encoder_len = self.encoder_len
+            mm_data = MultiModalTensor(
+                data=pixel_values,
+                start=offset,
+                end=offset + 1,
+                encoder_len=self.encoder_len,
+                meta=dict(aspect_ratio_ids=aspect_ratio_ids,
+                          aspect_ratio_mask=aspect_ratio_mask))
+            input_imgs.append(mm_data)
 
         result = PreprocessInputResult(
             input_ids=input_ids,

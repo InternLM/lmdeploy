@@ -816,6 +816,9 @@ class Engine:
                     continue
                 input_ids = req_data['token_ids']
                 input_multimodals = req_data['input_multimodals']
+                if len(input_multimodals) == 0:
+                    req_data['input_multimodals'] = None
+                    continue
                 result = self.input_processor.preprocess_input(
                     input_ids, input_multimodals)
 
