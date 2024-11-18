@@ -163,6 +163,7 @@ LMDeploy TurboMindエンジンは卓越した推論能力を持ち、さまざ�
   <li>Phi-3.5-vision (4.2B)</li>
   <li>GLM-4V (9B)</li>
   <li>Llama3.2-vision (11B, 90B)</li>
+  <li>Molmo (7B-D,72B)</li>
 </ul>
 </td>
 </tr>
