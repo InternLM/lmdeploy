@@ -72,6 +72,7 @@ The TurboMind engine doesn't support window attention. Therefore, for models tha
 |  DeepSeek-MoE  |     16B     | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |  DeepSeek-V2   |  16B, 236B  | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |    MiniCPM3    |     4B      | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
+| MiniCPM-V-2_6  |     8B      | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |     Gemma      |    2B-7B    | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 |      Dbrx      |    132B     | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 |   StarCoder2   |   3B-15B    | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
