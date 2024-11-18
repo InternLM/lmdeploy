@@ -51,7 +51,9 @@ public:
         FreeBuffer();
     }
 
-    void forward(T* inout, int tokens, int layer_id, const MoeFfnWeight<T>& moe);
+    void forward(T* output, const T* input, int tokens, int layer_id, const MoeFfnWeight<T>& moe);
+
+    void reduce(T* output, int tokens, const MoeFfnWeight<T>& moe);
 
     void gate(float* logits, const T* input, int tokens, const LlamaDenseWeight<T>& weight);
 
@@ -84,6 +86,8 @@ private:
     int*   f2n_{};
     int*   en2f_{};
     float* scales_{};
+
+    float* shared_scales_{};
 
     int* accum_{};
     int* offsets_{};

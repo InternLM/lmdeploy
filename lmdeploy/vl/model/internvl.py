@@ -1,7 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+import itertools
 from typing import Dict, List
 
+import numpy as np
 import torch
 from PIL.Image import Image
 from transformers import AutoModel, CLIPImageProcessor
@@ -11,6 +13,8 @@ from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
 from lmdeploy.vl.model.utils import disable_logging
 
 logger = get_logger('lmdeploy')
+
+IMAGE_TOKEN = '<IMAGE_TOKEN>'
 
 
 def find_closest_aspect_ratio(aspect_ratio, target_ratios, width, height,
@@ -80,36 +84,29 @@ class InternVLVisionModel(VisonModel):
 
     _arch = 'InternVLChatModel'
 
-    def build_model(self):
-        """Load model."""
+    def build_preprocessor(self):
+        # load empty model from its config
         from accelerate import init_empty_weights
         with init_empty_weights():
-            config = self.hf_config
+            self.config = self.hf_config
             # transformers below 4.37.0 may raise error about flash_attn
-            config.llm_config.attn_implementation = 'eager'
-            model = AutoModel.from_config(config, trust_remote_code=True)
+            self.config.llm_config.attn_implementation = 'eager'
+            self.model = AutoModel.from_config(self.config,
+                                               trust_remote_code=True)
             if not self.with_llm:
-                del model.language_model
+                del self.model.language_model
             else:
-                self.vl_model = model
-            model.half()
+                self.vl_model = self.model
 
-        from accelerate import load_checkpoint_and_dispatch
-        with disable_logging():
-            load_checkpoint_and_dispatch(
-                model=model,
-                checkpoint=self.model_path,
-                device_map='auto' if not self.with_llm else {'': 'cpu'},
-                max_memory=self.max_memory,
-                no_split_module_classes=['InternVisionEncoderLayer'],
-                dtype=torch.half)
+        dynamic_image_size = getattr(self.config, 'dynamic_image_size', False)
+        image_processor = None
+        try:
+            image_processor = CLIPImageProcessor.from_pretrained(
+                self.model_path)
+        except OSError:
+            pass
 
-        # We need eval mode to freeze the weights in model, thus,
-        # avoid randomness in inference.
-        self.model = model.eval()
-        self.config = config
-
-        if getattr(self.config, 'dynamic_image_size', False):
+        if dynamic_image_size or image_processor is None:
             logger.info('using InternVL-Chat-V1-5 vision preprocess')
             MEAN = (0.485, 0.456, 0.406)
             STD = (0.229, 0.224, 0.225)
@@ -124,42 +121,53 @@ class InternVLVisionModel(VisonModel):
                 T.ToTensor(),
                 T.Normalize(mean=MEAN, std=STD)
             ])
+            self.processor = self._preprocess_v1_5
             self._forward_func = self._forward_v1_5
         else:
-            self.image_processor = CLIPImageProcessor.from_pretrained(
-                self.model_path)
+            self.processor = self._preprocess
+            self.image_processor = image_processor
             self._forward_func = self._forward
 
-    def _preprocess_v1_5(self, images: List[Image], params: List[Dict] = None):
-        if params is not None:
-            assert len(images) == len(
-                params), 'different length of images and params'
-        else:
-            params = [{}] * len(images)
+    def build_model(self):
+        """Load model."""
 
+        self.model.half()
+        from accelerate import load_checkpoint_and_dispatch
+        with disable_logging():
+            load_checkpoint_and_dispatch(
+                model=self.model,
+                checkpoint=self.model_path,
+                device_map='auto' if not self.with_llm else {'': 'cpu'},
+                max_memory=self.max_memory,
+                no_split_module_classes=['InternVisionEncoderLayer'],
+                dtype=torch.half)
+
+        # We need eval mode to freeze the weights in model, thus,
+        # avoid randomness in inference.
+        self.model = self.model.eval()
+
+    def _preprocess_v1_5(self, image: Image, params: Dict = None):
         image_res = {'low': 6, 'medium': 12, 'high': 24}
+        max_num = params.get('max_dynamic_patch')
+        if max_num is None or not isinstance(max_num, int):
+            res_key = params.get('detail', 'default')
+            max_num = image_res.get(res_key, self.config.max_dynamic_patch)
+        out = dynamic_preprocess(
+            image,
+            min_num=self.config.min_dynamic_patch,
+            max_num=max_num,
+            image_size=self.config.vision_config.image_size,
+            use_thumbnail=self.config.use_thumbnail)
+        pixel_values = [self.transform(x) for x in out]
+        # (patch) x c x h x w
+        pixel_values = torch.stack(pixel_values)
+        return pixel_values
 
-        outputs = []
-        for image, param in zip(images, params):
-            max_num = param.get('max_dynamic_patch')
-            if max_num is None or not isinstance(max_num, int):
-                res_key = param.get('detail', 'default')
-                max_num = image_res.get(res_key, self.config.max_dynamic_patch)
-            out = dynamic_preprocess(
-                image,
-                min_num=self.config.min_dynamic_patch,
-                max_num=max_num,
-                image_size=self.config.vision_config.image_size,
-                use_thumbnail=self.config.use_thumbnail)
-            out = [self.transform(x) for x in out]
-            out = torch.stack(out)  # (patch) x c x h x w
-            outputs.append(out)
-        return outputs
-
-    def _forward_v1_5(self, images: List[Image], params: List[Dict] = None):
+    def _forward_v1_5(self, inputs):
         """forward for internvl-chat-v1-5."""
-        outputs = self._preprocess_v1_5(images, params)
-        split = [x.shape[0] for x in outputs]
+        assert all(x.get('pixel_values') is not None for x in inputs)
+        outputs = [x['pixel_values'] for x in inputs]
+        split = [x['pixel_values'].shape[0] for x in inputs]
         outputs = torch.cat(outputs, dim=0)
         outputs = outputs.to(self.model.device, dtype=torch.float16)
         outputs = self.model.extract_feature(outputs)
@@ -167,20 +175,131 @@ class InternVLVisionModel(VisonModel):
         outputs = [x.reshape(-1, x.shape[-1]) for x in outputs]
         return outputs
 
-    def _forward(self, images: List[Image], params: List[Dict] = None):
+    def _preprocess(self, image: Image, params: Dict = None):
         """forward for internvl-chat-v1-1, internvl-chat-v1-2."""
-        pixel_values = self.image_processor(images=images,
+        pixel_values = self.image_processor(images=image,
                                             return_tensors='pt').pixel_values
-        pixel_values = pixel_values.to(self.model.device, dtype=torch.float16)
-        outputs = self.model.extract_feature(pixel_values)
+        return pixel_values
+
+    def _forward(self, inputs):
+        """forward for internvl-chat-v1-1, internvl-chat-v1-2."""
+        assert all(x.get('pixel_values') is not None for x in inputs)
+        outputs = [x['pixel_values'] for x in inputs]
+        outputs = torch.cat(outputs, dim=0)
+        outputs = outputs.to(self.model.device, dtype=torch.float16)
+        outputs = self.model.extract_feature(outputs)
         outputs = torch.split(outputs, 1, dim=0)
         outputs = [x.squeeze() for x in outputs]
         return outputs
 
+    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+        assert isinstance(messages, List)
+        assert isinstance(messages[-1]['content'], List)
+        content = [
+            item['text'] for item in messages[-1]['content']
+            if item['type'] == 'text'
+        ]
+        if len(content) > 1:
+            logger.warning(f'There are {len(content)} text in {content}. '
+                           'Only the first one is considered')
+
+        # get images and their corresponding preprocess parameters from
+        # messages, and perform preprocessing
+        outputs = []
+        for item in messages[-1]['content']:
+            item_type = item['type']
+            if item_type == 'image':
+                image = item['image'].convert('RGB')
+                params = {
+                    key: item[key]
+                    for key in item.keys() if key not in {'type', 'image'}
+                }
+                pixel_values = self.processor(image, params)
+                outputs.append(dict(pixel_values=pixel_values))
+        return outputs
+
     @torch.no_grad()
-    def forward(self,
-                images: List[Image],
-                params: List[Dict] = None) -> List[torch.Tensor]:
-        """forward."""
-        images = [x.convert('RGB') for x in images]
-        return self._forward_func(images, params)
+    def forward(self, inputs: List[Dict]) -> List[torch.Tensor]:
+        """forward vision model to get vision embedding
+        Args:
+            inputs (List[Dict]): the output of `preprocess`
+        """
+        return self._forward_func(inputs)
+
+    @classmethod
+    def proc_messages(cls, messages, chat_template, sequence_start):
+        # apply chat template to get the prompt
+        prompt_messages = []
+        for message in messages:
+            if isinstance(message['content'], str):
+                prompt_messages.append(message)
+                continue
+            n_images = [
+                1 for item in message['content'] if item['type'] == 'image'
+            ]
+            n_images = sum(n_images)
+            content = [
+                item['text'] for item in message['content']
+                if item['type'] == 'text'
+            ]
+            content = f'<img>{IMAGE_TOKEN * n_images}</img>\n' + content[0]
+            prompt_messages.append(dict(role='user', content=content))
+        prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
+
+        # collect all preprocessing result from messages
+        preps = [
+            message.pop('preprocess') for message in messages
+            if 'preprocess' in message.keys()
+        ]
+        segs = prompt.split(IMAGE_TOKEN)
+        # flatten the list
+        preps = list(itertools.chain(*preps))
+        assert len(segs) == len(preps) + 1, (
+            f'the number of {IMAGE_TOKEN} is not equal '
+            f'to input images, {len(segs) - 1} vs {len(preps)}')
+
+        return prompt, segs, preps
+
+    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
+        prompt, segs, preps = self.proc_messages(messages, chat_template,
+                                                 sequence_start)
+
+        # calculate the image token offset for each image
+        input_ids = []
+        IMAGE_DUMMY_TOKEN_INDEX = 0
+        for i, seg in enumerate(segs):
+            if i > 0 and i <= len(preps):
+                preps[i - 1].update(offset=len(input_ids))
+                # TODO(hardcode 256)
+                image_dim = preps[i - 1]['pixel_values'].shape[0] * 256
+                input_ids.extend([IMAGE_DUMMY_TOKEN_INDEX] * image_dim)
+            token_ids = tokenizer.encode(seg,
+                                         add_bos=((i == 0) and sequence_start))
+            input_ids.extend(token_ids)
+
+        return dict(prompt=prompt, input_ids=input_ids, multimodal=preps)
+
+    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):
+        prompt, segs, features = self.proc_messages(messages, chat_template,
+                                                    sequence_start)
+        features = [x.cpu().numpy() for x in features]
+
+        # tokenizer prompt, and get input_embeddings and input_embedding_ranges
+        input_ids = []
+        begins = []
+        ends = []
+        IMAGE_DUMMY_TOKEN_INDEX = 0
+        for i, seg in enumerate(segs):
+            if i > 0 and i <= len(features):
+                image_dim = features[i - 1].shape[0]
+                begins.append(len(input_ids))
+                ends.append(begins[-1] + image_dim)
+                input_ids.extend([IMAGE_DUMMY_TOKEN_INDEX] * image_dim)
+            seg_ids = tokenizer.encode(seg,
+                                       add_bos=((i == 0) and sequence_start))
+            input_ids.extend(seg_ids)
+        ranges = np.stack([begins, ends], axis=1).tolist()
+        return dict(prompt=prompt,
+                    input_ids=input_ids,
+                    input_embeddings=features,
+                    input_embedding_ranges=ranges)

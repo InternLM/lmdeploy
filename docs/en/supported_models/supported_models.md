@@ -30,11 +30,13 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |    LLaVA(1.5,1.6)     |   7B - 34B   | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |       InternVL        | v1.1 - v1.5  | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |       InternVL2       | 2B, 8B - 76B | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
+|        ChemVLM        |   8B - 26B   | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 | MiniCPM-Llama3-V-2_5  |      -       | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |     MiniCPM-V-2_6     |      -       | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |    MiniGeminiLlama    |      7B      | MLLM |    Yes    |    -    |    -    |  Yes  |
 |         GLM4          |      9B      | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |       CodeGeeX4       |      9B      | LLM  |    Yes    |   Yes   |   Yes   |   -   |
+|         Molmo         |   7B-D,72B   | MLLM |    Yes    |   Yes   |   Yes   |  NO   |
 
 "-" means not verified yet.
 
@@ -81,6 +83,7 @@ The TurboMind engine doesn't support window attention. Therefore, for models tha
 | InternVL(v1.5) |   2B-26B    | MLLM |    Yes    |   Yes   |   Yes   |  No  |  Yes  |
 |   InternVL2    |   1B-40B    | MLLM |    Yes    |   Yes   |   Yes   |  No  |   -   |
 | Mono-InternVL  |     2B      | MLLM |   Yes\*   |   Yes   |   Yes   |  No  |   -   |
+|    ChemVLM     |   8B-26B    | MLLM |    Yes    |   Yes   |   No    |  No  |   -   |
 |     Gemma2     |   9B-27B    | LLM  |    Yes    |   Yes   |   Yes   |  No  |   -   |
 |      GLM4      |     9B      | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 |     GLM-4V     |     9B      | MLLM |    Yes    |   Yes   |   Yes   |  No  |  No   |

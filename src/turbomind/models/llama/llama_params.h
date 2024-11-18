@@ -18,6 +18,7 @@ struct ModelParam {
     size_t layer_num;
     size_t inter_size;
     size_t vocab_size;
+    size_t embedding_size;
     float  norm_eps;
     int    quant_policy;
     //
@@ -31,9 +32,11 @@ struct MoeParam {
         kNaive,
         kFused
     } method;
-    int expert_num;
-    int experts_per_token;
-    int inter_size;
+    int  expert_num;
+    int  experts_per_token;
+    int  inter_size;
+    bool norm_topk;
+    bool shared_gate;
 };
 
 struct AttentionParam {

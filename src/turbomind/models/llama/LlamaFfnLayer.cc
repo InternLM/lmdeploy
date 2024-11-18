@@ -28,10 +28,11 @@ namespace turbomind {
 
 template<typename T>
 void LlamaFfnLayer<T>::allocateBuffer(size_t                     token_num,
+                                      int                        inter_size,
                                       const LlamaDenseWeight<T>* gating,
                                       const LlamaDenseWeight<T>* inter)
 {
-    const size_t sz = token_num * inter_size_;
+    const size_t sz = token_num * inter_size;
 
     const size_t sz_gate  = token_num * gating->lora.r;
     const size_t sz_inter = token_num * inter->lora.r;
@@ -51,24 +52,24 @@ template<typename T>
 void LlamaFfnLayer<T>::freeBuffer()
 {
     if (is_allocate_buffer_) {
-        // allocator_->free((void**)&inter_buf_);
         allocator_->free((void**)&gating_buf_);
         is_allocate_buffer_ = false;
     }
 }
 
 template<typename T>
-void LlamaFfnLayer<T>::activation(int token_num, bool is_chunked)
+void LlamaFfnLayer<T>::activation(int token_num, int inter_size, bool is_chunked)
 {
     NvtxScope scope("activation");
     if (is_chunked) {
+        // gate & up are in the SAME buffer
         invokeGenericActivation_v2<SiluActivation>(
-            gating_buf_, gating_buf_ + inter_size_, inter_size_ * 2, token_num, inter_size_, stream_);
+            gating_buf_, gating_buf_ + inter_size, inter_size * 2, token_num, inter_size, stream_);
         sync_check_cuda_error();
     }
     else {
-        invokeGenericActivation_v2<SiluActivation>(
-            gating_buf_, inter_buf_, inter_size_, token_num, inter_size_, stream_);
+        // gate & up are in separate buffers
+        invokeGenericActivation_v2<SiluActivation>(gating_buf_, inter_buf_, inter_size, token_num, inter_size, stream_);
         sync_check_cuda_error();
     }
 }
@@ -88,11 +89,11 @@ void LlamaFfnLayer<T>::forward(TensorMap*               output_tensors,
 
     NvtxScope scope("ffn");
 
-    const size_t num_token = input_tensors->at("ffn_input").shape[0];
-    const int    layer_id  = input_tensors->getVal<int>("layer_id");
-    // LOG(WARNING);
+    const size_t token_num  = input_tensors->at("ffn_input").shape[0];
+    const int    layer_id   = input_tensors->getVal<int>("layer_id");
+    const int    inter_size = weights->inter_size;
 
-    allocateBuffer(num_token, &weights->gating, &weights->intermediate);
+    allocateBuffer(token_num, inter_size, &weights->gating, &weights->intermediate);
 
     const T* ffn_input_data  = input_tensors->at("ffn_input").getPtr<T>();
     T*       ffn_output_data = output_tensors->at("ffn_output").getPtr<T>();
@@ -103,50 +104,50 @@ void LlamaFfnLayer<T>::forward(TensorMap*               output_tensors,
 
         const auto type = weights->is_fused_silu ? LlamaLinear<T>::kFusedSiluFfn : LlamaLinear<T>::kGemm;
 
-        linear_->forward(gating_buf_, ffn_input_data, num_token, weights->fused_gating_intermediate, type);
+        linear_->forward(gating_buf_, ffn_input_data, token_num, weights->fused_gating_intermediate, type);
         sync_check_cuda_error();
 
         if (!weights->is_fused_silu) {
-            activation(num_token, true);
+            activation(token_num, inter_size, true);
         }
 
-        count_and_fix(gating_buf_, num_token * weights->output.input_dims, Concat("w1_w3_silu", layer_id), 3);
+        count_and_fix(gating_buf_, token_num * weights->output.input_dims, Concat("w1_w3_silu", layer_id), 3);
     }
     else {
         {  // w1(x)
             NvtxScope scope("w1");
-            linear_->forward(gating_buf_, ffn_input_data, num_token, weights->gating, LlamaLinear<T>::kGemm, lora_mask);
+            linear_->forward(gating_buf_, ffn_input_data, token_num, weights->gating, LlamaLinear<T>::kGemm, lora_mask);
             sync_check_cuda_error();
         }
-        count_and_fix(gating_buf_, num_token * weights->gating.output_dims, Concat("w1", layer_id), 3);
+        count_and_fix(gating_buf_, token_num * weights->gating.output_dims, Concat("w1", layer_id), 3);
 
         {  // w3(x)
             NvtxScope scope("w3");
             linear_->forward(
-                inter_buf_, ffn_input_data, num_token, weights->intermediate, LlamaLinear<T>::kGemm, lora_mask);
+                inter_buf_, ffn_input_data, token_num, weights->intermediate, LlamaLinear<T>::kGemm, lora_mask);
             sync_check_cuda_error();
         }
-        count_and_fix(inter_buf_, num_token * weights->intermediate.output_dims, Concat("w3", layer_id), 3);
+        count_and_fix(inter_buf_, token_num * weights->intermediate.output_dims, Concat("w3", layer_id), 3);
 
         // silu(w1(x)) * w3(x)
-        activation(num_token, false);
+        activation(token_num, inter_size, false);
 
-        count_and_fix(gating_buf_, num_token * weights->output.input_dims, Concat("act", layer_id), 3);
+        count_and_fix(gating_buf_, token_num * weights->output.input_dims, Concat("act", layer_id), 3);
     }
 
     {  // w2(x)
         NvtxScope scope("w2");
-        const int pitch = (weights->fused_gating_intermediate.kernel && !weights->is_fused_silu) ? inter_size_ * 2 : 0;
+        const int pitch = (weights->fused_gating_intermediate.kernel && !weights->is_fused_silu) ? inter_size * 2 : 0;
         linear_->forward(
-            ffn_output_data, {gating_buf_, pitch}, num_token, weights->output, LlamaLinear<T>::kGemm, lora_mask);
+            ffn_output_data, {gating_buf_, pitch}, token_num, weights->output, LlamaLinear<T>::kGemm, lora_mask);
         sync_check_cuda_error();
     }
 
-    count_and_fix(ffn_output_data, num_token * weights->output.output_dims, Concat("w2", layer_id), 3);
+    count_and_fix(ffn_output_data, token_num * weights->output.output_dims, Concat("w2", layer_id), 3);
 
     if (all_reduce_ && tensor_para_.world_size_ > 1) {
         NcclGuard nccl_guard(tensor_para_, stream_);
-        ftNcclAllReduceSum(ffn_output_data, ffn_output_data, num_token * hidden_units_, tensor_para_, stream_);
+        ftNcclAllReduceSum(ffn_output_data, ffn_output_data, token_num * hidden_units_, tensor_para_, stream_);
         sync_check_cuda_error();
     }
 

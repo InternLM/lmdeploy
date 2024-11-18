@@ -18,6 +18,7 @@ from .llava_next import LlavaNextVisionModel  # noqa F401
 from .mini_gemeni import MiniGeminiVisionModel  # noqa F401
 from .minicpmv import MiniCPMVModel  # noqa F401
 from .mllama import MllamaVLModel  # noqa F401
+from .molmo import MolmoVisionModel  # noqa F401
 from .phi3_vision import Phi3VisionModel  # noqa F401
 from .qwen import QwenVisionModel  # noqa F401
 from .qwen2 import Qwen2VLModel  # noqa F401
@@ -28,10 +29,18 @@ logger = get_logger('lmdeploy')
 
 
 def load_vl_model(model_path: str,
+                  backend: str,
                   with_llm: bool = False,
                   backend_config: Optional[Union[TurbomindEngineConfig,
                                                  PytorchEngineConfig]] = None):
-    """load visual model."""
+    """load visual model.
+
+    Args:
+        model_path(str): the path or repo_id from model hub of the model
+        with_llm(bool): whether to remove the LLM part from the model.
+            When it is False, it means removing LLM part
+        backend_config: the config of the inference engine
+    """
     if not os.path.exists(model_path):
         revision = getattr(backend_config, 'revision', None)
         download_dir = getattr(backend_config, 'download_dir', None)
@@ -49,7 +58,8 @@ def load_vl_model(model_path: str,
     kwargs = dict(model_path=model_path,
                   with_llm=with_llm,
                   max_memory=max_memory,
-                  hf_config=hf_config)
+                  hf_config=hf_config,
+                  backend=backend)
     for name, module in VISION_MODELS.module_dict.items():
         try:
             if module.match(hf_config):
