@@ -281,8 +281,7 @@ def get_model(url):
         return None
 
 
-PIC = 'https://raw.githubusercontent.com/' + \
-    'open-mmlab/mmdeploy/main/tests/data/tiger.jpeg'
+PIC = 'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg'  # noqa E501
 
 
 def run_vl_testcase(config, port: int = DEFAULT_PORT):
@@ -297,30 +296,7 @@ def run_vl_testcase(config, port: int = DEFAULT_PORT):
         'restful_vl_' + model_name.split('/')[-1] + str(port) + '.log')
     file = open(restful_log, 'w')
 
-    response = client.chat.completions.create(
-        model=model_name,
-        messages=[{
-            'role':
-            'user',
-            'content': [{
-                'type': 'text',
-                'text': 'Describe the image please',
-            }, {
-                'type': 'image_url',
-                'image_url': {
-                    'url': PIC,
-                },
-            }],
-        }],
-        temperature=0.8,
-        top_p=0.8)
-    file.writelines(str(response).lower() + '\n')
-    assert 'tiger' in str(response).lower() or '虎' in str(
-        response).lower(), response
-
-    api_client = APIClient(http_url)
-    model_name = api_client.available_models[0]
-    messages = [{
+    prompt_messages = [{
         'role':
         'user',
         'content': [{
@@ -331,10 +307,21 @@ def run_vl_testcase(config, port: int = DEFAULT_PORT):
             'image_url': {
                 'url': PIC,
             },
-        }]
+        }],
     }]
+
+    response = client.chat.completions.create(model=model_name,
+                                              messages=prompt_messages,
+                                              temperature=0.8,
+                                              top_p=0.8)
+    file.writelines(str(response).lower() + '\n')
+    assert 'tiger' in str(response).lower() or '虎' in str(
+        response).lower(), response
+
+    api_client = APIClient(http_url)
+    model_name = api_client.available_models[0]
     for item in api_client.chat_completions_v1(model=model_name,
-                                               messages=messages):
+                                               messages=prompt_messages):
         continue
     file.writelines(str(item) + '\n')
     assert 'tiger' in str(item).lower() or '虎' in str(item).lower(), item

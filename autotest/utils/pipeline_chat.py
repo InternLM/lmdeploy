@@ -273,10 +273,8 @@ def assert_pipeline_single_element(output,
     return result
 
 
-PIC1 = 'https://raw.githubusercontent.com/' + \
-    'open-mmlab/mmdeploy/main/tests/data/tiger.jpeg'
-PIC2 = 'https://raw.githubusercontent.com/' + \
-    'open-mmlab/mmdeploy/main/demo/resources/human-pose.jpg'
+PIC1 = 'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg'  # noqa E501
+PIC2 = 'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/demo/resources/human-pose.jpg'  # noqa E501
 
 
 def run_pipeline_vl_chat_test(config,
