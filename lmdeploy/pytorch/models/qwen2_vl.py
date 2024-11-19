@@ -1017,11 +1017,14 @@ class Qwen2VLInputProcessor(BaseModelInputProcessor):
             offset = input_mm['offset']
             start = offset
 
-            pad_size = pixel_values.size(0) // 4
+            if 'image_tokens' in input_mm:
+                num_pad = input_mm['image_tokens']
+            else:
+                num_pad = pixel_values.size(0) // 4
 
             mm_data = MultiModalTensor(data=pixel_values,
                                        start=start,
-                                       end=start + pad_size,
+                                       end=start + num_pad,
                                        meta=dict(grid_thw=image_grid_thw))
             input_imgs.append(mm_data)
 

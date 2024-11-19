@@ -981,10 +981,11 @@ class CogVLMInputProcessor(BaseModelInputProcessor):
         for input_mm in input_multimodals:
             pixel_values = input_mm['pixel_values'].to(self.dtype)
             offset = input_mm['offset']
+            num_pad = input_mm.get('image_tokens', self.vision_token_num)
 
             mm_data = MultiModalTensor(data=pixel_values,
                                        start=offset,
-                                       end=offset + self.vision_token_num)
+                                       end=offset + num_pad)
             input_imgs.append(mm_data)
 
         result = PreprocessInputResult(
