@@ -728,7 +728,7 @@ class CogVLMForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
         self.config = config
         self.ctx_mgr = ctx_mgr
         # preprocessor
-        self.input_processor = CogVLMInputProcessor(self.config)
+        self.input_processor = CogVLMInputProcessor(self.config, dtype)
         # build model
         self.model = CogVLMModel(config, dtype=dtype, device=device)
         # build lm_head
@@ -961,8 +961,9 @@ class CogVLMForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
 class CogVLMInputProcessor(BaseModelInputProcessor):
     """input processor."""
 
-    def __init__(self, config: PretrainedConfig) -> None:
+    def __init__(self, config: PretrainedConfig, dtype) -> None:
         self.config = config
+        self.dtype = dtype
         image_size: int = config.vision_config['image_size']
         patch_size: int = config.vision_config['patch_size']
         self.vision_token_num = ((image_size // patch_size // 2) *
@@ -978,7 +979,7 @@ class CogVLMInputProcessor(BaseModelInputProcessor):
 
         input_imgs = []
         for input_mm in input_multimodals:
-            pixel_values = input_mm['pixel_values']
+            pixel_values = input_mm['pixel_values'].to(self.dtype)
             offset = input_mm['offset']
 
             mm_data = MultiModalTensor(data=pixel_values,

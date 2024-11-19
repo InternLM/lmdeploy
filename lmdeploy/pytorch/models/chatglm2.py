@@ -3,6 +3,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import torch
 from torch import nn
+from torch.nn import functional as F
 from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.engine.input_process import (BaseModelInputProcessor,
@@ -11,7 +12,8 @@ from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
 from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, RopeType,
                                  SiluAndMul, build_rotary_embedding)
-from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
+from lmdeploy.pytorch.nn.linear import (build_colwise_linear,
+                                        build_merged_colwise_linear,
                                         build_qkv_proj, build_rowwise_linear)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
@@ -336,6 +338,286 @@ class Embedding(nn.Module):
         return embeddings
 
 
+class PatchEmbedding(nn.Module):
+    """vision embedding."""
+
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        self.proj = nn.Conv2d(config.in_channels,
+                              config.hidden_size,
+                              kernel_size=config.patch_size,
+                              stride=config.patch_size,
+                              dtype=dtype,
+                              device=device)
+        self.cls_embedding = nn.Parameter(
+            torch.empty(1, config.hidden_size, dtype=dtype, device=device))
+        self.position_embedding = nn.Embedding(config.num_positions,
+                                               config.hidden_size,
+                                               dtype=dtype,
+                                               device=device)
+
+    def forward(self, images):
+        """forward."""
+        x = self.proj(images)
+        x = x.flatten(2).transpose(1, 2)
+        cls_token = self.cls_embedding.expand(x.shape[0], -1, -1)
+        x = torch.cat((cls_token, x), dim=1)
+        x += self.position_embedding.weight.unsqueeze(0)
+        return x
+
+
+class EVA2CLIPAttention(nn.Module):
+    """vision attention."""
+
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        quantization_config = getattr(config, 'quantization_config', None)
+        hidden_size = config.hidden_size
+        num_heads = config.num_heads
+        head_dim = config.hidden_size // config.num_heads
+        self.scale = head_dim**-0.5
+
+        # packed qkv
+        self.query_key_value = build_qkv_proj(
+            hidden_size,
+            num_q_heads=num_heads,
+            num_kv_heads=num_heads,
+            head_size=head_dim,
+            bias=True,
+            quant_config=quantization_config,
+            dtype=dtype,
+            device=device,
+        )
+
+        # o_proj
+        self.dense = build_rowwise_linear(hidden_size,
+                                          hidden_size,
+                                          bias=True,
+                                          quant_config=quantization_config,
+                                          dtype=dtype,
+                                          device=device,
+                                          is_tp=True)
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        """forward."""
+        # qkv proj
+        qkv_states = self.query_key_value(hidden_states)
+        q, k, v = self.query_key_value.split_qkv(qkv_states)
+
+        q = q.transpose(1, 2)
+        k = k.transpose(1, 2)
+        v = v.transpose(1, 2)
+
+        attn_output = F.scaled_dot_product_attention(q, k, v, scale=self.scale)
+
+        # o proj
+        attn_output = attn_output.transpose(1, 2)
+        attn_output = attn_output.flatten(-2, -1)
+        attn_output = self.dense(attn_output)
+        return attn_output
+
+
+class EVA2CLIPMLP(nn.Module):
+    """vision MLP."""
+
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        from transformers.activations import ACT2FN
+
+        # gate up
+        quantization_config = getattr(config, 'quantization_config', None)
+        self.fc1 = build_colwise_linear(
+            config.hidden_size,
+            config.intermediate_size,
+            bias=True,
+            dtype=dtype,
+            device=device,
+            quant_config=quantization_config,
+            is_tp=True,
+        )
+
+        # silu and mul
+        if config.hidden_act in [
+                'gelu', 'gelu_fast', 'quick_gelu', 'gelu_python'
+        ]:
+            self.activation_fn = nn.GELU()
+        else:
+            self.activation_fn = ACT2FN[config.hidden_act]
+
+        # down
+        self.fc2 = build_rowwise_linear(config.intermediate_size,
+                                        config.hidden_size,
+                                        bias=True,
+                                        quant_config=quantization_config,
+                                        dtype=dtype,
+                                        device=device,
+                                        is_tp=True)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """forward."""
+        x = self.fc1(x)
+        x = self.activation_fn(x)
+        x = self.fc2(x)
+        return x
+
+
+class EVA2CLIPTransformerLayer(nn.Module):
+    """vision trans layer."""
+
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        self.input_layernorm = nn.LayerNorm(config.hidden_size,
+                                            eps=config.layer_norm_eps,
+                                            dtype=dtype,
+                                            device=device)
+        self.attention = EVA2CLIPAttention(config, dtype=dtype, device=device)
+        self.mlp = EVA2CLIPMLP(config, dtype=dtype, device=device)
+        self.post_attention_layernorm = nn.LayerNorm(config.hidden_size,
+                                                     eps=config.layer_norm_eps,
+                                                     dtype=dtype,
+                                                     device=device)
+
+    def forward(self, hidden_states):
+        """forward."""
+        attention_input = hidden_states
+        attention_output = self.input_layernorm(
+            self.attention(attention_input))
+        hidden_states = attention_input + attention_output
+        mlp_input = hidden_states
+        mlp_output = self.post_attention_layernorm(self.mlp(mlp_input))
+        output = mlp_input + mlp_output
+        return output
+
+
+class EVA2CLIPTransformer(nn.Module):
+    """vision transformer."""
+
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        self.layers = nn.ModuleList([
+            EVA2CLIPTransformerLayer(config, dtype=dtype, device=device)
+            for _ in range(config.num_hidden_layers)
+        ])
+
+    def forward(self, hidden_states):
+        """forward."""
+        for layer_module in self.layers:
+            hidden_states = layer_module(hidden_states)
+        return hidden_states
+
+
+class GLU(nn.Module):
+    """GLU."""
+
+    def __init__(self,
+                 config: PretrainedConfig,
+                 in_features: int,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        self.linear_proj = nn.Linear(in_features,
+                                     config.hidden_size,
+                                     bias=False,
+                                     dtype=dtype,
+                                     device=device)
+        self.norm1 = nn.LayerNorm(config.hidden_size,
+                                  dtype=dtype,
+                                  device=device)
+        self.act1 = nn.GELU()
+        self.act2 = nn.functional.silu
+        self.dense_h_to_4h = nn.Linear(config.hidden_size,
+                                       config.ffn_hidden_size,
+                                       bias=False,
+                                       dtype=dtype,
+                                       device=device)
+        self.gate_proj = nn.Linear(config.hidden_size,
+                                   config.ffn_hidden_size,
+                                   bias=False,
+                                   dtype=dtype,
+                                   device=device)
+        self.dense_4h_to_h = nn.Linear(config.ffn_hidden_size,
+                                       config.hidden_size,
+                                       bias=False,
+                                       dtype=dtype,
+                                       device=device)
+
+    def forward(self, x):
+        x = self.linear_proj(x)
+        x = self.act1(self.norm1(x))
+        x = self.act2(self.gate_proj(x)) * self.dense_h_to_4h(x)
+        x = self.dense_4h_to_h(x)
+        return x
+
+
+class EVA2CLIPModel(nn.Module):
+    """vision model."""
+
+    def __init__(self,
+                 config: PretrainedConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        from argparse import Namespace
+        vision_config = Namespace(**config.vision_config)
+
+        self.patch_embedding = PatchEmbedding(vision_config,
+                                              dtype=dtype,
+                                              device=device)
+        self.transformer = EVA2CLIPTransformer(vision_config,
+                                               dtype=dtype,
+                                               device=device)
+        self.linear_proj = GLU(config,
+                               in_features=config.hidden_size,
+                               dtype=dtype,
+                               device=device)
+        self.conv = nn.Conv2d(in_channels=vision_config.hidden_size,
+                              out_channels=config.hidden_size,
+                              kernel_size=2,
+                              stride=2,
+                              dtype=dtype,
+                              device=device)
+        self.boi = nn.Parameter(
+            torch.empty(1, 1, config.hidden_size, dtype=dtype, device=device))
+        self.eoi = nn.Parameter(
+            torch.empty(1, 1, config.hidden_size, dtype=dtype, device=device))
+        self.scaling_factor = vision_config.scaling_factor
+
+    def forward(self, images):
+        """forward."""
+        x = self.patch_embedding(images)
+        x = self.transformer(x)
+
+        x = x[:, 1:]
+
+        b, s, h = x.shape
+        grid_size = int(s**0.5)
+        x = x.view(b, grid_size, grid_size, h).permute(0, 3, 1, 2)
+        x = self.conv(x)
+
+        x = x.flatten(2).transpose(1, 2)
+        x = self.linear_proj(x)
+        boi = self.boi.expand(x.shape[0], -1, -1)
+        eoi = self.eoi.expand(x.shape[0], -1, -1)
+        x = torch.cat((boi, x, eoi), dim=1)
+        x = x / self.scaling_factor
+        return x
+
+
 class ChatGLMModel(nn.Module):
 
     def __init__(self,
@@ -370,7 +652,6 @@ class ChatGLMModel(nn.Module):
 
         self.vision = None
         if hasattr(config, 'vision_config'):
-            from .cogvlm import EVA2CLIPModel
             self.vision = EVA2CLIPModel(config, dtype=dtype, device=device)
 
     def forward(
@@ -486,6 +767,8 @@ class ChatGLMForConditionalGeneration(nn.Module, DeployModelMixin,
             images = [data for im_data in images for data in im_data]
             if len(images) != 0:
                 images = torch.stack([data.data for data in images])
+            else:
+                images = None
 
         # process vision embeddings
         vision_embeddings = context.input_embeddings
@@ -592,8 +875,16 @@ class ChatGLMForConditionalGeneration(nn.Module, DeployModelMixin,
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:
             if 'transformer.vision' in name:
-                param = params_dict[name]
-                load_weight(param, loaded_weight)
+                if '.query_key_value' in name:
+                    param = params_dict[name]
+                    q, k, v = param.weight_spliter(loaded_weight)
+                    load_weight(param, q, shard_id='q')
+                    load_weight(param, k, shard_id='k')
+                    load_weight(param, v, shard_id='v')
+                else:
+                    param = params_dict[name]
+                    load_weight(param, loaded_weight)
+                continue
 
             if 'rotary_pos_emb.inv_freq' in name:
                 continue
@@ -632,8 +923,8 @@ class ChatGLMInputProcessor(BaseModelInputProcessor):
 
         if hasattr(config, 'vision_config'):
             vision_config = config.vision_config
-            self.image_size = vision_config.image_size
-            self.patch_size = vision_config.patch_size
+            self.image_size = vision_config['image_size']
+            self.patch_size = vision_config['patch_size']
             self.num_patches = (self.image_size // self.patch_size)**2
             self.num_positions = self.num_patches + 1
             self.vision_token_num = self.num_patches // 4
