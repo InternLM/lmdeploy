@@ -40,9 +40,9 @@ DOCKER_BUILDKIT=1 docker build -t lmdeploy-aarch64-ascend:latest \
     -f docker/Dockerfile_aarch64_ascend .
 ```
 
-If the following command executes without any errors, it indicates that the environment setup is successful.
-
 The `Dockerfile_aarch64_ascend` is tested on Kunpeng CPU. For intel CPU, please try [this dockerfile](https://github.com/InternLM/lmdeploy/issues/2745#issuecomment-2473285703) (which is not fully tested)
+
+If the following command executes without any errors, it indicates that the environment setup is successful.
 
 ```bash
 docker run -e ASCEND_VISIBLE_DEVICES=0 --rm --name lmdeploy -t lmdeploy-aarch64-ascend:latest lmdeploy check_env
