@@ -1,11 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import itertools
+
 import warnings
 from contextlib import contextmanager
-from typing import Dict, List
+from typing import List, Union
 
-import numpy as np
 import torch
+from PIL.Image import Image
 from transformers import AutoConfig, AutoModelForCausalLM
 
 from lmdeploy.utils import get_logger
@@ -78,7 +78,9 @@ class InternVLLlavaVisionModel(VisonModel):
                 return True
         return False
 
-    def build_preprocessor(self):
+    def build_model(self):
+        """build model & load weights."""
+        # check llava install
         check_llava_install()
         # currently, only support llava llama
         from llava.model.language_model.llava_llama import (  # noqa
@@ -86,6 +88,7 @@ class InternVLLlavaVisionModel(VisonModel):
         self.config = LlavaConfig.from_pretrained(self.model_path)
         assert self.config.model_type in ['llava', 'llava_llama'], \
             'currently, only support llava llama'
+
         # init empty model, skip layer initialization
         from accelerate import init_empty_weights
         with init_empty_weights(), warnings.catch_warnings(), \
@@ -93,18 +96,18 @@ class InternVLLlavaVisionModel(VisonModel):
             warnings.simplefilter('ignore')
             self.config.quantization_config = {
             }  # disable vision part quantization
-            self.model = AutoModelForCausalLM.from_config(
-                self.config, trust_remote_code=True)
+            model = AutoModelForCausalLM.from_config(self.config,
+                                                     trust_remote_code=True)
             if not self.with_llm:
-                del self.model.lm_head
-                del self.model.model.embed_tokens
-                del self.model.model.layers
-                del self.model.model.norm
+                del model.lm_head
+                del model.model.embed_tokens
+                del model.model.layers
+                del model.model.norm
             else:
-                self.vl_model = self.model
+                self.vl_model = model
 
             with init_empty_vit():
-                vision_tower = self.model.get_vision_tower()
+                vision_tower = model.get_vision_tower()
                 vision_tower.is_loaded = False
                 vision_tower.load_model()
             crop_size = vision_tower.image_processor.crop_size['height']
@@ -119,21 +122,20 @@ class InternVLLlavaVisionModel(VisonModel):
                                                               width=crop_size)
                 vision_tower.image_processor.size = dict(
                     shortest_edge=crop_size)
-            self.vision_tower = self.model.model.vision_tower.eval()
-            self.mm_projector = self.model.model.mm_projector.eval()
 
-    def build_model(self):
-        """load weights for vision model."""
         from accelerate import load_checkpoint_and_dispatch
         with disable_logging():
             load_checkpoint_and_dispatch(
-                model=self.model,
+                model=model,
                 max_memory=self.max_memory,
                 checkpoint=self.model_path,
                 device_map='auto' if not self.with_llm else {'': 'cpu'},
                 no_split_module_classes=['InternVisionEncoderLayer'],
                 dtype=torch.half)
-        self.model = self.model.model.eval()
+
+        self.model = model.model.eval()
+        self.vision_tower = model.model.vision_tower.eval()
+        self.mm_projector = model.model.mm_projector.eval()
 
     def encode_images(self, images: torch.Tensor) -> torch.Tensor:
         """encode images."""
@@ -141,99 +143,36 @@ class InternVLLlavaVisionModel(VisonModel):
         image_features = self.mm_projector(image_features)
         return image_features
 
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
-        """get images and their corresponding preprocess parameters from
-        messages, and perform preprocessing."""
+    def preprocess(
+            self,
+            images: List[Image]) -> Union[torch.Tensor, List[torch.Tensor]]:
+        """preprocess."""
+        # TODO: gpu processor
         from llava.mm_utils import process_images
+        images = [x.convert('RGB') for x in images]
         image_processor = self.vision_tower.image_processor
-        outputs = []
-        for item in messages[-1]['content']:
-            item_type = item['type']
-            if item_type == 'image':
-                image = item['image'].convert('RGB')
-                pixel_values = process_images(image, image_processor,
-                                              self.config)
-                outputs.append(dict(pixel_values=pixel_values))
+        outputs = process_images(images, image_processor, self.config)
         return outputs
 
     @torch.no_grad()
-    def forward(self, inputs: List[Dict]) -> List[torch.Tensor]:
-        # TODO
-        pixel_values = [x['pixel_values'] for x in inputs]
-        outputs = torch.stack(pixel_values, dim=0).to(self.vision_tower.device,
-                                                      dtype=torch.half)
-        outputs = self.encode_images(outputs)
+    def forward(self, images: List[Image]) -> List[torch.Tensor]:
+        """forward."""
+        images = self.preprocess(images)
+        if isinstance(images, list):
+            images = [
+                x.to(self.vision_tower.device, dtype=torch.float16)
+                for x in images
+            ]
+        else:
+            images = images.to(self.vision_tower.device, dtype=torch.float16)
 
-    @classmethod
-    def proc_messages(cls, messages, chat_template, sequence_start):
-        # apply chat template to get the prompt
-        prompt_messages = []
-        IMAGE_TOKEN = '<IMAGE_TOKEN>'
-        for message in messages:
-            content = message['content']
-            if isinstance(content, str):
-                prompt_messages.append(message)
-                continue
-
-            prompt = [x['text'] for x in content if x['type'] == 'text']
-            n_images = len([1 for x in content if x['type'] == 'image'])
-            prompt = ''.join([f'{IMAGE_TOKEN}\n'] * n_images) + prompt[0]
-            prompt_messages.append(dict(role='user', content=prompt))
-        prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
-        segs = prompt.split(IMAGE_TOKEN)
-
-        # collect all preprocessing result from messages
-        preps = [
-            message.pop('preprocess') for message in messages
-            if 'preprocess' in message.keys()
-        ]
-        # flatten the list
-        preps = list(itertools.chain(*preps))
-        assert len(segs) == len(preps) + 1, (
-            f'the number of {IMAGE_TOKEN} is not equal '
-            f'to input images, {len(segs) - 1} vs {len(preps)}')
-
-        return prompt, segs, preps
-
-    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
-        prompt, segs, preps = self.proc_messages(messages, chat_template,
-                                                 sequence_start)
-
-        # calculate the image token offset for each image
-        input_ids = []
-        IMAGE_DUMMY_TOKEN_INDEX = 0
-        for i, seg in enumerate(segs):
-            if i > 0 and i <= len(preps):
-                preps[i - 1].update(offset=len(input_ids))
-                image_tokens = 0  # TODO
-                input_ids.extend([IMAGE_DUMMY_TOKEN_INDEX] * image_tokens)
-            token_ids = tokenizer.encode(seg,
-                                         add_bos=((i == 0) and sequence_start))
-            input_ids.extend(token_ids)
-
-        return dict(prompt=prompt, input_ids=input_ids, multimodal=preps)
-
-    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):
-        prompt, segs, features = self.proc_messages(messages, chat_template,
-                                                    sequence_start)
-        features = [x.cpu().numpy() for x in features]
-
-        # tokenizer prompt, and get input_embeddings and input_embedding_ranges
-        input_ids = []
-        begins = []
-        ends = []
-        IMAGE_DUMMY_TOKEN_INDEX = 0
-        for i, seg in enumerate(segs):
-            if i > 0 and i <= len(features):
-                image_dim = features[i - 1].shape[0]
-                begins.append(len(input_ids))
-                ends.append(begins[-1] + image_dim)
-                input_ids.extend([IMAGE_DUMMY_TOKEN_INDEX] * image_dim)
-            seg_ids = tokenizer.encode(seg,
-                                       add_bos=((i == 0) and sequence_start))
-            input_ids.extend(seg_ids)
-        ranges = np.stack([begins, ends], axis=1).tolist()
-        return dict(prompt=prompt,
-                    input_ids=input_ids,
-                    input_embeddings=features,
-                    input_embedding_ranges=ranges)
+        if type(images) is list or images.ndim == 5:
+            concat_images = torch.cat([image for image in images], dim=0)
+            image_features = self.encode_images(concat_images)
+            split_sizes = [image.shape[0] for image in images]
+            image_features = torch.split(image_features, split_sizes, dim=0)
+            image_features = [x.flatten(0, 1) for x in image_features]
+        else:
+            image_features = self.encode_images(images)
+            image_features = [x for x in image_features]
+        return image_features

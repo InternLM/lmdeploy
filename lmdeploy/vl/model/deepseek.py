@@ -87,8 +87,7 @@ class DeepSeekVisionModel(VisonModel):
         self.aligner = model.aligner.eval()
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
-        """get images and their corresponding preprocess parameters from
-        messages, and perform preprocessing."""
+        """refers to the spec of `super.preprocess()"""
         outputs = []
         for item in messages[-1]['content']:
             item_type = item['type']
