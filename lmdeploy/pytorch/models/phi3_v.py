@@ -281,7 +281,7 @@ class Phi3ImageEmbedding(nn.Module):
 
         from lmdeploy.vl.constants import IMAGE_DUMMY_TOKEN_INDEX
         vis_mask = input_ids == IMAGE_DUMMY_TOKEN_INDEX
-        hidden_states = torch.where(vis_mask, hidden_states, img_set_tensor)
+        hidden_states.masked_scatter_(vis_mask[..., None], img_set_tensor)
 
         return hidden_states
 

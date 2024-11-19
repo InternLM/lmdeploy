@@ -1,11 +1,14 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import torch
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
+from lmdeploy.pytorch.engine.input_process import (BaseModelInputProcessor,
+                                                   PreprocessInputResult)
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
+from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
 from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, RopeType,
                                  SiluAndMul, build_rotary_embedding)
 from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
@@ -13,87 +16,10 @@ from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
+from .utils.model import DeployModelMixin
 
 LANGUAGE_TOKEN_TYPE = 0
 VISION_TOKEN_TYPE = 1
-
-
-def get_vision_expert_mask(token_type_ids: torch.LongTensor):
-    vision_token_mask = torch.zeros_like(token_type_ids, dtype=torch.bool)
-    vision_token_mask[:, :-1] = (token_type_ids[:, :-1]
-                                 == VISION_TOKEN_TYPE) & (token_type_ids[:, 1:]
-                                                          == VISION_TOKEN_TYPE)
-    language_token_mask = ~vision_token_mask
-    return vision_token_mask, language_token_mask
-
-
-def build_position_ids(x: torch.BoolTensor) -> torch.LongTensor:
-    tmp = x.clone()
-    # image boi eoi token as LANGUAGE_TOKEN_TYPE
-    is_boi_eoi = torch.zeros_like(x, dtype=torch.bool)
-    is_boi_eoi[:, 1:] |= (tmp[:, 1:] == VISION_TOKEN_TYPE) & (
-        tmp[:, :-1] == LANGUAGE_TOKEN_TYPE)
-    is_boi_eoi[:, 0] |= (tmp[:, 0] == VISION_TOKEN_TYPE)
-    is_boi_eoi[:, :-1] |= (tmp[:, :-1] == VISION_TOKEN_TYPE) & (
-        tmp[:, 1:] == LANGUAGE_TOKEN_TYPE)
-    is_boi_eoi[:, -1] |= (tmp[:, -1] == VISION_TOKEN_TYPE)
-    tmp[is_boi_eoi] = LANGUAGE_TOKEN_TYPE
-    # final position ids
-    y = torch.zeros_like(x, dtype=torch.long)
-    y[:, 1:] = (tmp[:, 1:] == LANGUAGE_TOKEN_TYPE) | (
-        (tmp[:, 1:] == VISION_TOKEN_TYPE) &
-        (tmp[:, :-1] == LANGUAGE_TOKEN_TYPE))
-    y = y.cumsum(dim=-1)
-    return y
-
-
-def _get_cogvlm_position_ids(context):
-    """get cogvlm position_ids."""
-    q_seqlens = context.q_seqlens
-    history_lengths = context.kv_seqlens - q_seqlens
-    vision_input_info = context.vision_inputs
-    position_id_offsets = (vision_input_info.history_image_token_lengths -
-                           vision_input_info.history_image_nums * 3)
-    lang_ids = None
-    vis_ids = None
-    if context.is_decoding:
-        position_ids = history_lengths - position_id_offsets
-    else:
-        if vision_input_info.input_embeddings is not None and len(
-                vision_input_info.input_embeddings) > 0:
-            starts = history_lengths - vision_input_info.history_lengths
-            ends = starts + q_seqlens
-            token_type_ids = vision_input_info.input_embedding_indexing.to(
-                torch.int)
-            history_position_lengths = (vision_input_info.history_lengths -
-                                        position_id_offsets)
-            position_ids_all = (history_position_lengths[:, None] +
-                                build_position_ids(token_type_ids))
-            position_ids = torch.cat([
-                pids[s:e]
-                for (pids, s, e) in zip(position_ids_all, starts, ends)
-            ])
-            vision_token_mask_all, _ = get_vision_expert_mask(token_type_ids)
-            vision_token_mask = torch.cat([
-                masks[s:e]
-                for (masks, s, e) in zip(vision_token_mask_all, starts, ends)
-            ])
-            mask_indexing = torch.arange(vision_token_mask.shape[-1],
-                                         device=vision_token_mask.device)
-            vis_ids = mask_indexing[vision_token_mask]
-            lang_ids = mask_indexing[~vision_token_mask]
-
-        else:
-            position_ids = context.attention_mask.long().cumsum(-1) - 1
-            position_ids += (history_lengths -
-                             position_id_offsets).unsqueeze(-1)
-            device = position_ids.device
-            position_ids_1d = [
-                ids[:l] for ids, l in zip(position_ids.cpu(), q_seqlens.cpu())
-            ]
-            position_ids = torch.cat(position_ids_1d).to(device)
-
-    return position_ids, lang_ids, vis_ids
 
 
 class SelfAttention(torch.nn.Module):
@@ -442,19 +368,34 @@ class ChatGLMModel(nn.Module):
                                                  dtype=dtype,
                                                  device=device)
 
+        self.vision = None
+        if hasattr(config, 'vision_config'):
+            from .cogvlm import EVA2CLIPModel
+            self.vision = EVA2CLIPModel(config, dtype=dtype, device=device)
+
     def forward(
         self,
         input_ids: torch.LongTensor = None,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[List[torch.FloatTensor]] = None,
         attn_metadata: Any = None,
+        images: torch.Tensor = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
     ):
         """forward."""
 
         # token embedding
         if inputs_embeds is None:
+            images_features = None
+            if images is not None:
+                images_features = self.vision(images)
+                images_features = images_features.flatten(0, 1)[None]
             inputs_embeds = self.embedding(input_ids)
+            if images is not None:
+                from lmdeploy.vl.constants import IMAGE_DUMMY_TOKEN_INDEX
+                vis_mask = input_ids == IMAGE_DUMMY_TOKEN_INDEX
+                inputs_embeds.masked_scatter_(vis_mask[..., None],
+                                              images_features)
 
         hidden_states = inputs_embeds
 
@@ -477,7 +418,8 @@ class ChatGLMModel(nn.Module):
         return self.embedding
 
 
-class ChatGLMForConditionalGeneration(nn.Module, CudaGraphMixin):
+class ChatGLMForConditionalGeneration(nn.Module, DeployModelMixin,
+                                      CudaGraphMixin):
     """rewrote model of LlamaForCausalLM."""
 
     def __init__(self,
@@ -491,12 +433,15 @@ class ChatGLMForConditionalGeneration(nn.Module, CudaGraphMixin):
         # build Model
         self.transformer = ChatGLMModel(config, dtype=dtype, device=device)
 
+        self.input_processor = ChatGLMInputProcessor(self.config, dtype)
+
     def forward(
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
         past_key_values: List[List[torch.Tensor]],
         attn_metadata: Any = None,
+        images: torch.Tensor = None,
         inputs_embeds: torch.Tensor = None,
         **kwargs,
     ):
@@ -506,6 +451,7 @@ class ChatGLMForConditionalGeneration(nn.Module, CudaGraphMixin):
             position_ids=position_ids,
             past_key_values=past_key_values,
             attn_metadata=attn_metadata,
+            images=images,
             inputs_embeds=inputs_embeds,
         )
         return hidden_states
@@ -529,8 +475,17 @@ class ChatGLMForConditionalGeneration(nn.Module, CudaGraphMixin):
         input_ids = context.input_ids
         position_ids = context.position_ids
         attn_metadata = context.attn_metadata
-        if context.vision_inputs is not None:
-            position_ids = _get_cogvlm_position_ids(context)[0][None]
+
+        images = None
+        if context.input_multimodals is not None:
+            images = [
+                input_mm.get('image', [])
+                for input_mm in context.input_multimodals
+            ]
+            # flatten batch
+            images = [data for im_data in images for data in im_data]
+            if len(images) != 0:
+                images = torch.stack([data.data for data in images])
 
         # process vision embeddings
         vision_embeddings = context.input_embeddings
@@ -548,8 +503,87 @@ class ChatGLMForConditionalGeneration(nn.Module, CudaGraphMixin):
             position_ids=position_ids,
             past_key_values=past_key_values,
             attn_metadata=attn_metadata,
+            images=images,
             inputs_embeds=inputs_embeds,
         )
+
+    def update_model_metas(self,
+                           past_key_values: List[List[torch.Tensor]],
+                           inputs_embeds: Optional[torch.Tensor] = None,
+                           context: StepContext = None):
+        """update model meta."""
+        model_metas = context.model_metas
+        if not hasattr(self.config, 'vision_config'):
+            return model_metas
+
+        input_multimodals = context.input_multimodals
+        if input_multimodals is None:
+            input_imgs = [[] for _ in model_metas]
+        else:
+            input_imgs = []
+            for mm in input_multimodals:
+                if mm is None:
+                    input_imgs.append([])
+                else:
+                    input_imgs.append(mm.get('image', []))
+
+        config = self.config
+        image_size: int = config.vision_config['image_size']
+        patch_size: int = config.vision_config['patch_size']
+        vision_token_num = ((image_size // patch_size // 2) *
+                            (image_size // patch_size // 2) + 2)
+        num_pad = vision_token_num - 3
+
+        batched_num_img_tokens = []
+        new_model_metas = []
+        for meta, imgs in zip(model_metas, input_imgs):
+            if meta is None:
+                num_img_tokens = 0
+            else:
+                num_img_tokens = meta.get('num_img_tokens', 0)
+
+            batched_num_img_tokens.append(num_img_tokens)
+
+            num_img_tokens += num_pad * len(imgs)
+            new_model_metas.append(dict(num_img_tokens=num_img_tokens))
+
+        # prepare cogvlm position_ids
+        q_seqlens = context.q_seqlens
+        position_ids = context.position_ids
+
+        if context.is_decoding or all(len(imgs) == 0 for imgs in input_imgs):
+            num_img_tokens = torch.tensor(batched_num_img_tokens,
+                                          device=position_ids.device)
+            position_ids -= num_img_tokens[None]
+        else:
+            batched_position_ids = position_ids[0].split(q_seqlens)
+            for pos_ids, num_img_tok, imgs in zip(batched_position_ids,
+                                                  batched_num_img_tokens,
+                                                  input_imgs):
+                pos_ids -= num_img_tok
+                if len(imgs) == 0:
+                    continue
+
+                seq_len = pos_ids.size(0)
+                start = pos_ids[0].cpu().item()
+                new_pos_ids = []
+
+                imgs = sorted(imgs, key=lambda img: img.start)
+                for img in imgs:
+                    new_pos_ids += list(range(start, img.start + 1))
+                    new_pos_ids += [img.start + 1] * (img.end - img.start - 2)
+                    start = img.start + 2
+
+                remain = seq_len - len(new_pos_ids)
+                new_pos_ids += list(range(start, start + remain))
+
+                new_pos_ids = pos_ids.new_tensor(new_pos_ids)
+                pos_ids[:] = new_pos_ids
+
+            position_ids = torch.cat(batched_position_ids)[None]
+        context.position_ids = position_ids
+
+        return new_model_metas
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
         """load weights."""
@@ -558,7 +592,9 @@ class ChatGLMForConditionalGeneration(nn.Module, CudaGraphMixin):
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:
             if 'transformer.vision' in name:
-                continue
+                param = params_dict[name]
+                load_weight(param, loaded_weight)
+
             if 'rotary_pos_emb.inv_freq' in name:
                 continue
             if ('rotary_pos_emb.cos_cached' in name
@@ -581,3 +617,47 @@ class ChatGLMForConditionalGeneration(nn.Module, CudaGraphMixin):
             else:
                 param = params_dict[name]
                 load_weight(param, loaded_weight)
+
+    def get_input_processor(self) -> BaseModelInputProcessor:
+        """get input processor."""
+        return self.input_processor
+
+
+class ChatGLMInputProcessor(BaseModelInputProcessor):
+    """input processor."""
+
+    def __init__(self, config: PretrainedConfig, dtype) -> None:
+        self.config = config
+        self.dtype = dtype
+
+        if hasattr(config, 'vision_config'):
+            vision_config = config.vision_config
+            self.image_size = vision_config.image_size
+            self.patch_size = vision_config.patch_size
+            self.num_patches = (self.image_size // self.patch_size)**2
+            self.num_positions = self.num_patches + 1
+            self.vision_token_num = self.num_patches // 4
+
+    def preprocess_input(self,
+                         input_ids: List[int],
+                         input_multimodals: List[Dict[str, Any]] = None,
+                         **kwargs) -> PreprocessInputResult:
+        """prepare multimodal input."""
+        if input_multimodals is None or len(input_multimodals) == 0:
+            return input_ids, input_multimodals
+
+        input_imgs = []
+        for input_mm in input_multimodals:
+            pixel_values = input_mm['pixel_values'].to(self.dtype)
+            offset = input_mm['offset']
+
+            mm_data = MultiModalTensor(data=pixel_values,
+                                       start=offset,
+                                       end=offset + self.vision_token_num)
+            input_imgs.append(mm_data)
+
+        result = PreprocessInputResult(
+            input_ids=input_ids,
+            input_multimodals=dict(image=input_imgs),
+        )
+        return result
