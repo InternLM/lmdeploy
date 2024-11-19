@@ -5,6 +5,7 @@
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/llama/moe_ffn_layer.h"
 #include "src/turbomind/models/llama/unified_attention_layer.h"
+#include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include <cuda_runtime.h>
@@ -23,6 +24,7 @@ UnifiedDecoder<T>::UnifiedDecoder(const ModelParam&     model,
     rmsnorm_eps_(model.norm_eps),
     stream_(ctx.stream),
     allocator_(ctx.allocator.get()),
+    tp_(tp),
     dtype_(getTensorType<T>()),
     tune_layer_num_(model.tune_layer_num)
 {
@@ -34,7 +36,7 @@ UnifiedDecoder<T>::UnifiedDecoder(const ModelParam&     model,
     }
 
     if (std::accumulate(model.inter_size.begin(), model.inter_size.end(), 0LL)) {
-        ffn_layer_ = std::make_unique<LlamaFfnLayer<T>>(model, tp, ctx, !moe_ffn_layer_);
+        ffn_layer_ = std::make_unique<LlamaFfnLayer<T>>(model, tp, ctx);
     }
 
     check_cuda_error(cudaEventCreateWithFlags(&ev_h_cu_x_, cudaEventDisableTiming));
@@ -162,7 +164,7 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
     for (size_t layer = 0; layer < layer_num_; ++layer) {
 
         /// TODO: do not skip the layers when they are heterogeneous
-        if (isTuning() && layer < tune_layer_num_) {
+        if (isTuning() && layer >= tune_layer_num_) {
             continue;
         }
 
@@ -196,14 +198,21 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
         ////////////////////////////////////////////
         /// feed-forward network
 
-        if (!weights->at(layer)->moe_weights.experts.empty()) {
+        // if (tp_.rank_ == 0) {
+        //     Compare(decoder_output, token_num * hidden_units_, Concat("ffn_input", layer), compare_mode, stream_);
+        // }
+
+        const bool is_moe = !weights->at(layer)->moe_weights.experts.empty();
+        if (is_moe) {
             moe_ffn_layer_->forward(nullptr, decoder_output, token_num, layer, weights->at(layer)->moe_weights);
         }
 
-        if (ffn_layer_) {
-            int       layer_id = layer;  // int is needed
+        if (weights->at(layer)->ffn_weights.output.output_dims) {
+            int       layer_id   = layer;  // int is needed
+            bool      all_reduce = !is_moe;
             TensorMap ffn_inputs{{"ffn_input", {MEMORY_GPU, dtype_, {token_num, hidden_units_}, decoder_output}},
-                                 {"layer_id", {MEMORY_CPU, TYPE_INT32, {1}, &layer_id}}};
+                                 {"layer_id", {MEMORY_CPU, TYPE_INT32, {1}, &layer_id}},
+                                 {"all_reduce", {MEMORY_CPU, TYPE_BOOL, {1}, &all_reduce}}};
             TensorMap ffn_outputs{{"ffn_output", {MEMORY_GPU, dtype_, {token_num, hidden_units_}, decoder_output}}};
             if (inputs->isExist("lora_mask")) {
                 ffn_inputs.insert({"lora_mask", inputs->at("lora_mask")});
@@ -211,9 +220,17 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
             ffn_layer_->forward(&ffn_outputs, &ffn_inputs, &weights->at(layer)->ffn_weights);
         }
 
-        if (!weights->at(layer)->moe_weights.experts.empty()) {
-            moe_ffn_layer_->reduce(decoder_output, token_num, (bool)ffn_layer_, weights->at(layer)->moe_weights);
+        // if (tp_.rank_ == 0) {
+        //     Compare(decoder_output, token_num * hidden_units_, Concat("ffn_out", layer), compare_mode, stream_);
+        // }
+
+        if (is_moe) {
+            moe_ffn_layer_->reduce(decoder_output, token_num, (bool)ffn_layer_, layer, weights->at(layer)->moe_weights);
         }
+
+        // if (tp_.rank_ == 0) {
+        //     Compare(decoder_output, token_num * hidden_units_, Concat("moe_ffn_out", layer), compare_mode, stream_);
+        // }
 
         count_and_fix(decoder_output, token_num * hidden_units_, Concat("ffn_block", layer), 2);
 
@@ -261,6 +278,15 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
 
     // Wait for `h_cu_q/k_len_` to be consumed
     check_cuda_error(cudaEventSynchronize(ev_h_cu_x_));
+
+    // check_cuda_error(cudaStreamSynchronize(stream_));
+    // if (tp_.rank_ == 0) {
+    //     std::abort();
+    // }
+    // else {
+    //     while (1)
+    //         ;
+    // }
 }
 
 #ifdef ENABLE_FP32

@@ -203,10 +203,10 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     // [L, 2, H, s, D]
     const size_t layer_offset = layer_id * 2 * local_kv_head_num_ * param_.cache_block_seq_len * size_per_head_;
 
-    static int count = 0;
+    // static int count = 0;
 
-    // if (layer_id == 0 && count == 0) {
-    //     Compare(attention_input, token_num * weights->qkv.input_dims, "qkv_input", compare_mode, stream_);
+    // if (tensor_para_.rank_ == 0) {
+    //     Compare(attention_input, token_num * hidden_units_, Concat("qkv_input", layer_id), compare_mode, stream_);
     // }
 
     int* lora_mask = inputs->at("lora_mask", Tensor{MEMORY_GPU, TYPE_INVALID, {}, nullptr}).getPtr<int>();
@@ -222,10 +222,14 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         forward_mla(attention_input, token_num, *weights);
     }
 
+    // std::cerr << layer_id << " " << count << " " << tensor_para_.rank_ << "\n";
+
     count_and_fix(qkv_buf_, token_num * weights->qkv.output_dims, Concat("qkv", layer_id), 3);
 
-    // if (layer_id == 0 && count == 0) {
-    //     Compare(qkv_buf_, token_num * weights->qkv.output_dims, "qkv_buf", compare_mode, stream_);
+    // std::cerr << "token num: " << token_num << "\n";
+
+    // if (layer_id == 0 && count == 0 && tensor_para_.rank_ == 0) {
+    //     Compare(qkv_buf_, token_num * (3 * local_head_num_ * size_per_head_), "qkv_buf", CMP_MODE, stream_);
     // }
 
     if constexpr (0) {
@@ -421,8 +425,6 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     linear_->forward(attention_out, qkv_buf_3_, token_num, weights->output, LlamaLinear<T>::kGemm, lora_mask);
     sync_check_cuda_error();
 
-    // ++count;
-
     count_and_fix(attention_out, token_num * weights->output.output_dims, Concat("wo", layer_id), 3);
 
     if (tensor_para_.world_size_ > 1) {
@@ -431,10 +433,17 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         sync_check_cuda_error();
     }
 
+    // if (tensor_para_.rank_ == 0) {
+    //     Compare(attention_out, token_num * hidden_units_, Concat("attn_out", layer_id), compare_mode, stream_);
+    //     // dump(qkv_buf_3_, num_token * weights->output.input_dims, stream_, "qkv_buf_3");
+    // }
+
     if (is_free_buffer_after_forward_ == true) {
         freeBuffer();
     }
     sync_check_cuda_error();
+
+    // ++count;
 }
 
 template<typename T>
@@ -454,7 +463,6 @@ void UnifiedAttentionLayer<T>::forward_mla(const T* inputs, int token_num, const
         sync_check_cuda_error();
     }
     else {
-        FT_CHECK(0);
         T* q_a{};
         deviceMalloc((T**)&q_a, (size_t)token_num * q_lora_rank, stream_);
 

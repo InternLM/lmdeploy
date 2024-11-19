@@ -35,7 +35,7 @@ public:
                 max_expert_num, param.experts_per_token, ctx.cuda_device_prop, stream_);
         }
         else {
-            expert_ffn_ = std::make_unique<LlamaFfnLayer<T>>(model, tp, ctx, false);
+            expert_ffn_ = std::make_unique<LlamaFfnLayer<T>>(model, tp, ctx);
         }
 
         h_offsets_ = (int*)allocator_->malloc(sizeof(int) * (max_expert_num + 1), false, true);
@@ -44,7 +44,7 @@ public:
         accum_   = (int*)allocator_->malloc(sizeof(int) * max_expert_num * kMoeGateMaxTiles);
     }
 
-    void AllocateBuffer(size_t tokens, size_t padded, size_t expert_num);
+    void AllocateBuffer(size_t tokens, size_t padded, size_t expert_num, size_t inter_buf_factor);
 
     void FreeBuffer();
 
@@ -55,7 +55,7 @@ public:
 
     void forward(T* output, const T* input, int tokens, int layer_id, const MoeFfnWeight<T>& moe);
 
-    void reduce(T* output, int tokens, float output_scale, const MoeFfnWeight<T>& moe);
+    void reduce(T* output, int tokens, float output_scale, int layer_id, const MoeFfnWeight<T>& moe);
 
     void gate(float* logits, const T* input, int tokens, const LlamaDenseWeight<T>& weight);
 

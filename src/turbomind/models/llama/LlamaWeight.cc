@@ -25,58 +25,6 @@
 #include <cuda_runtime.h>
 
 namespace turbomind {
-#if 0
-template<typename T>
-LlamaWeight<T>::LlamaWeight(size_t     head_num,
-                            size_t     kv_head_num,
-                            size_t     size_per_head,
-                            size_t     hidden_units,
-                            size_t     inter_size,
-                            size_t     vocab_size,
-                            size_t     num_layer,
-                            bool       attn_bias,
-                            WeightType weight_type,
-                            int        group_size,
-                            LoraParam  lora_param,
-                            MoeParam   moe_param,
-                            size_t     tensor_para_size,
-                            size_t     tensor_para_rank):
-    hidden_units_(hidden_units),
-    inter_size_(inter_size),
-    vocab_size_(vocab_size),
-    vocab_size_padded_(vocab_size),
-    num_layer_(num_layer),
-    weight_type_(weight_type),
-    tensor_para_size_(tensor_para_size),
-    tensor_para_rank_(tensor_para_rank)
-{
-    if (vocab_size_padded_ % tensor_para_size_ != 0) {
-        vocab_size_padded_ = (vocab_size_padded_ + tensor_para_size_ - 1) / tensor_para_size_ * tensor_para_size_;
-        TM_LOG_WARNING("pad vocab size from %d to %d", vocab_size_, vocab_size_padded_);
-    }
-
-    FT_CHECK(hidden_units_ % tensor_para_size_ == 0);
-
-    decoder_layer_weights.reserve(num_layer_);
-    for (unsigned l = 0; l < num_layer_; ++l) {
-        decoder_layer_weights.push_back(new LlamaDecoderLayerWeight<T>(l,
-                                                                       head_num,
-                                                                       kv_head_num,
-                                                                       size_per_head,
-                                                                       hidden_units_,
-                                                                       inter_size_,
-                                                                       weight_type_,
-                                                                       group_size,
-                                                                       lora_param,
-                                                                       attn_bias,
-                                                                       moe_param,
-                                                                       tensor_para_size_,
-                                                                       tensor_para_rank_));
-    }
-
-    mallocWeights();
-}
-#else
 
 template<typename T>
 LlamaWeight<T>::LlamaWeight(
@@ -114,8 +62,6 @@ LlamaWeight<T>::LlamaWeight(
     // Wait for allocations
     check_cuda_error(cudaStreamSynchronize(stream_));
 }
-
-#endif
 
 template<typename T>
 LlamaWeight<T>::~LlamaWeight()

@@ -44,10 +44,15 @@ struct MoeParam {
         kFused
     } method;
 
-    int  experts_per_token;
-    int  inter_size;
-    bool norm_topk_prob;
-    bool shared_gate;
+    int   experts_per_token;
+    int   inter_size;
+    bool  norm_topk_prob;
+    bool  shared_gate;
+    float routed_scale;
+
+    int         topk_group;
+    std::string topk_method;
+    int         n_group;
 
     std::vector<int> expert_num;
 };

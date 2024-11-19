@@ -10,6 +10,7 @@ from typing import Iterator, Tuple
 
 import torch
 from safetensors import safe_open
+import safetensors
 
 # https://github.com/huggingface/transformers/blob/53fad641cfdb5105e2470bcf3ef17ea8e25cc300/src/transformers/modeling_utils.py#L372
 WEIGHT_INDEX_NAME = 'pytorch_model.bin.index.json'
@@ -87,6 +88,28 @@ class SafetensorsLoader(BaseLoader):
                 if misc:
                     yield (-1, {k: f.get_tensor(k) for k in misc})
         assert not params
+
+
+    # def items(self):
+    #     params = defaultdict(dict)
+    #     for shard in self.shards:
+    #         # with safe_open(shard, 'pt') as f:
+    #         with open(shard, 'rb') as f:
+    #             w = safetensors.torch.load(f.read())
+    #             misc = []
+    #             for k in w.keys():
+    #                 match = re.findall(self.pattern, k)
+    #                 if not match:
+    #                     misc.append(k)
+    #                 else:
+    #                     idx = int(match[0])
+    #                     param = params[idx]
+    #                     param[k] = w[k]
+    #                     if len(param) == self.item_count[idx]:
+    #                         yield (idx, params.pop(idx))
+    #             if misc:
+    #                 yield (-1, {k: w[k] for k in misc})
+    #     assert not params
 
 
 class PytorchLoader(BaseLoader):

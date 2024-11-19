@@ -37,7 +37,7 @@ class DeepSeek2Reader(LlamaReader):
         if not kind:
             return self.filter(r'self_attn.*proj')
         result = []
-        for key in ['q_a_proj', 'q_proj', 'kv_a_proj_with_mqa', 'kv_b_proj', 'o_proj']:
+        for key in ['q_a_proj', 'q_b_proj', 'q_proj', 'kv_a_proj_with_mqa', 'kv_b_proj', 'o_proj']:
             tensor = self.params.get(
                 f'{self.attn_layer_prefix}.{i}.self_attn.{key}.{kind}'
             )
@@ -90,6 +90,10 @@ class DeepSeek2Model(LlamaModel):
             experts_per_token=experts_per_token,
             inter_size=inter_size,
             norm_topk_prob=norm_topk_prob,
+            routed_scale=cfg['routed_scaling_factor'],
+            topk_method=cfg['topk_method'],
+            topk_group=cfg['topk_group'],
+            moe_group_num=cfg['n_group'],
             tune_layer_num=2
         )
         return info

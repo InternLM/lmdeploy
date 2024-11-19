@@ -239,7 +239,10 @@ class MLA(Module):
     def _export(self, idx: int, xs, kind: str, pack_fn, **kwargs):
         if all(x is None for x in xs):
             return
-        q_a, q_b, kv_a, kv_b, o = map(transpose, xs)
+        q_a, q_b, q, kv_a, kv_b, o = map(transpose, xs)
+
+        if q is not None:
+            q_b = q
 
         cfg = self.model.model_config
         qk_nope_dim = cfg.size_per_head - cfg.qk_rope_dim

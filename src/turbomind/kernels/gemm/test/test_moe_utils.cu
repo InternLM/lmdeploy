@@ -205,6 +205,8 @@ bool test_moe_gate(int                     tokens,  //
     cudaMemPrefetchAsync(scales.data().get(), sizeof(float) * scales.size(), 0);
     cudaMemPrefetchAsync(logits.data().get(), sizeof(float) * logits.size(), 0);
 
+    // invokeMaskMoeTopKGroups(logits.data().get(), tokens, expert_num, expert_num / 8, 3, nullptr);
+
     for (int i = 0; i < 1; ++i) {
         gemm::CacheFlushing::flush();
         cudaMemset(accum.data().get(), 0, sizeof(int) * accum.size());
@@ -221,7 +223,8 @@ bool test_moe_gate(int                     tokens,  //
                          expert_num,
                          experts_per_token,
                          false,
-                         0);
+                         1.f,
+                         nullptr);
     }
 
     // invokeMoeTiling(coords.data().get(), offsets.data().get(), expert_num, coords.size(), &tiling, 1, 0);
@@ -268,7 +271,9 @@ bool test_moe_gate(int                     tokens,  //
         success = false;
     }
 
-    if (!success || 1) {
+    // print_vecs(logits.data().get(), tokens, expert_num, "logits", 12);
+
+    if (!success && 1) {
 
         diff_vecs(eids.data().get(), eids_ref.data().get(), experts_per_token, tokens, "eids");
 
@@ -336,7 +341,7 @@ int main()
     // test_moe_gate(32768, 64, 8, tape, tiling);
     // test_moe_gate(8, 60, 4, tape, tiling);
 
-    test_moe_gate(16, 64, 6, tape, tiling);
+    test_moe_gate(16, 160, 6, tape, tiling);
     return 0;
 
     for (int i = 1; i < 16384; ++i) {

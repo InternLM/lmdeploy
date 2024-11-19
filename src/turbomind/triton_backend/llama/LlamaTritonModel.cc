@@ -310,6 +310,10 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     moe_param_.inter_size        = model_reader["expert_inter_size"].as<int>(0);
     moe_param_.shared_gate       = model_reader["moe_shared_gate"].as<int>(0);
     moe_param_.norm_topk_prob    = model_reader["norm_topk_prob"].as<bool>(false);
+    moe_param_.routed_scale      = model_reader["routed_scale"].as<float>(1.f);
+    moe_param_.topk_group        = model_reader["topk_group"].as<int>(1);
+    moe_param_.topk_method       = model_reader["topk_method"].as<std::string>("greedy");
+    moe_param_.n_group           = model_reader["moe_group_num"].as<int>(1);
     YAML::Node expert_num        = model_reader["expert_num"];
     for (auto it = expert_num.begin(); it != expert_num.end(); ++it) {
         moe_param_.expert_num.push_back(it->as<int>());

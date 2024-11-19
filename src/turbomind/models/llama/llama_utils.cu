@@ -17,6 +17,7 @@
 namespace turbomind {
 
 CmpMode compare_mode = kCmpRead;
+// CmpMode compare_mode = kCmpWrite;
 
 template<typename T>
 struct abs_diff_t {
@@ -94,6 +95,8 @@ void CmpRead(T* ptr, size_t size, std::string key, cudaStream_t stream)
     // sum(abs(a - b))
     auto asum = thrust::reduce(thrust::device, transform_iter, transform_iter + size);
     std::cerr << key << ": " << asum << " " << asum / size << "\n";
+
+    check_cuda_error(cudaMemcpyAsync(ptr, h_a.data(), sizeof(T) * h_a.size(), cudaMemcpyDefault, stream));
 }
 
 template<typename T>

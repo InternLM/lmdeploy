@@ -12,4 +12,9 @@ invokeDecoding<Decoding<arch::Sm80, nv_bfloat16, nv_bfloat16, 1, 192>>(const Att
 
 template bool invokeDecoding<Decoding<arch::Sm80, half, half, 1, 192>>(const AttentionParams<half>& params);
 
+template bool
+invokeDecoding<Decoding<arch::Sm80, nv_bfloat16, uint8_t, 1, 192>>(const AttentionParams<nv_bfloat16>& params);
+
+template bool invokeDecoding<Decoding<arch::Sm80, half, uint8_t, 1, 192>>(const AttentionParams<half>& params);
+
 }  // namespace turbomind

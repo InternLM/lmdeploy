@@ -22,6 +22,7 @@ private:
     const float        rmsnorm_eps_;
     cudaStream_t const stream_;
     IAllocator* const  allocator_;
+    const NcclParam    tp_;
     const DataType     dtype_;
     const int          tune_layer_num_;
     bool               is_free_buffer_after_forward_{};

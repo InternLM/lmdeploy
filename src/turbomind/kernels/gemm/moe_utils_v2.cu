@@ -264,7 +264,8 @@ __global__ void MoeGateKernel_v8(float*       scales,  // [e,n]
                                  int          token_num_padded,
                                  int          expert_num,
                                  int          top_k,
-                                 bool         norm_topk)
+                                 bool         norm_topk,
+                                 float        routed_scale)
 {
     constexpr int max_tiles         = kMoeGateMaxTiles;
     constexpr int threads_per_token = max_expert_num / items_per_thread;  // 8
@@ -286,8 +287,8 @@ __global__ void MoeGateKernel_v8(float*       scales,  // [e,n]
 
     const int warp_ti = threadIdx.x % WARP_SIZE / threads_per_token;
 
-    const int warp_offset  = thread_idx / WARP_SIZE * WARP_SIZE / threads_per_token;
-    const int block_offset = thread_idx / block_dim * block_dim / threads_per_token;
+    // const int warp_offset  = thread_idx / WARP_SIZE * WARP_SIZE / threads_per_token;
+    // const int block_offset = thread_idx / block_dim * block_dim / threads_per_token;
 
     float data[items_per_thread];
     int   idxs[items_per_thread];
@@ -536,7 +537,7 @@ __global__ void MoeGateKernel_v8(float*       scales,  // [e,n]
 
         if (ti2 < token_num && idx < top_k) {
             masks[expert_id * token_num_padded + ti2] = idx;
-            scales[idx * token_num + ti2]             = scale;
+            scales[idx * token_num + ti2]             = scale * routed_scale;
             atomicAdd(&smem.shared_accum[ti2 >> log_tile][expert_id], 1);
 
             // printf("%d %d %f\n", idx, expert_id, scale);
@@ -569,6 +570,7 @@ void invokeMoeGate_V2(int*         f2n,            // [e*n]  -> n
                       int          experts,        //  E
                       int          experts_per_token,
                       bool         norm_topk,
+                      float        routed_scale,
                       cudaStream_t st)
 {
     constexpr int base_log_tile = 9;
@@ -581,14 +583,14 @@ void invokeMoeGate_V2(int*         f2n,            // [e*n]  -> n
 
     // std::cout << log_tile << " " << tiles << "\n";
 
-    auto invoke = [&](auto max_expert_num, auto top_k, auto items_per_thread) {
+    auto invoke = [&](auto max_expert_num, auto top_k, auto items_per_thread, auto vec_size) {
         constexpr int thrs_per_tok = max_expert_num.value / items_per_thread.value;
         constexpr int threads      = 256;
         const int     blocks       = ceil_div(tokens, threads / thrs_per_tok);
 
         cudaMemsetAsync(masks, -1, sizeof(int8_t) * experts * tokens_padded, st);
 
-        MoeGateKernel_v8<max_expert_num.value, top_k.value, items_per_thread.value, threads, 4>
+        MoeGateKernel_v8<max_expert_num.value, top_k.value, items_per_thread.value, threads, vec_size.value>
             <<<blocks, threads, 0, st>>>(  //
                 scales,
                 (int8_t*)masks,
@@ -600,28 +602,38 @@ void invokeMoeGate_V2(int*         f2n,            // [e*n]  -> n
                 tokens_padded,
                 experts,
                 experts_per_token,
-                norm_topk);
+                norm_topk,
+                routed_scale);
     };
 
     auto fail = [&] {
-        std::cerr << "unsupported moe config: expert_num=" << experts << ", top_k=" << experts_per_token << "\n";
+        std::cerr << __FILE__ << "(" << __LINE__ << "): unsupported moe config: expert_num=" << experts
+                  << ", top_k=" << experts_per_token << "\n";
         std::abort();
     };
 
     if (experts <= 8) {
         if (experts_per_token <= 2) {
-            invoke(_Int<8>, _Int<2>, _Int<8>);
+            invoke(_Int<8>, _Int<2>, _Int<8>, _Int<4>);
         }
         else {
-            invoke(_Int<8>, _Int<8>, _Int<8>);
+            invoke(_Int<8>, _Int<8>, _Int<8>, _Int<4>);
         }
     }
     else if (experts <= 64) {
         if (experts_per_token <= 4) {
-            invoke(_Int<64>, _Int<4>, _Int<16>);
+            invoke(_Int<64>, _Int<4>, _Int<16>, _Int<4>);
         }
         else if (experts_per_token <= 8) {
-            invoke(_Int<64>, _Int<8>, _Int<16>);
+            invoke(_Int<64>, _Int<8>, _Int<16>, _Int<4>);
+        }
+        else {
+            fail();
+        }
+    }
+    else if (experts <= 160) {
+        if (experts_per_token <= 8) {
+            invoke(_Int<160>, _Int<8>, _Int<10>, _Int<2>);
         }
         else {
             fail();
@@ -834,6 +846,91 @@ std::vector<int> SampleBalanced(int token_num, int expert_num, int exp_per_tok, 
     }
     assert(it == ret.end());
     return ret;
+}
+
+template<int max_expert_num, int items_per_thread, int access_size>
+__global__ void MoeMaskTopKGroups(float* logits, int token_num, int expert_num, int top_k)
+{
+    constexpr int threads_per_token = max_expert_num / items_per_thread;
+
+    static_assert((threads_per_token & (threads_per_token - 1)) == 0);
+    static_assert(items_per_thread % access_size == 0);
+
+    const int thread_idx = threadIdx.x + blockIdx.x * blockDim.x;
+
+    const int ti = thread_idx / threads_per_token;
+    const int ei = thread_idx % threads_per_token;
+
+    float data[items_per_thread];
+    PRAGMA_UNROLL
+    for (int i = 0; i < items_per_thread; ++i) {
+        data[i] = -std::numeric_limits<float>::infinity();
+    }
+    float max_val = -std::numeric_limits<float>::infinity();
+    if (ti < token_num) {
+        PRAGMA_UNROLL
+        for (int i = 0; i < items_per_thread; i += access_size) {
+            const int e = ei * items_per_thread + i;
+            if (e < expert_num) {
+                Ldg((Array<float, access_size>&)data[i], &logits[ti * expert_num + e]);
+                PRAGMA_UNROLL
+                for (int c = 0; c < access_size; ++c) {
+                    max_val = fmaxf(max_val, data[i + c]);
+                }
+            }
+        }
+    }
+
+    const int warp_ti        = threadIdx.x % WARP_SIZE / threads_per_token;
+    const int warp_ti_offset = warp_ti * threads_per_token;
+
+    bool alive = false;
+
+    for (int k = 0; k < top_k; ++k) {
+        int   g_max_ei  = ei;
+        float g_max_val = max_val;
+        PRAGMA_UNROLL
+        for (int m = threads_per_token / 2; m >= 1; m /= 2) {
+            g_max_val = fmaxf(g_max_val, __shfl_xor_sync((uint32_t)-1, g_max_val, m));
+        }
+        // tie breaking
+        const auto active = __ballot_sync((uint32_t)-1, max_val == g_max_val);
+        g_max_ei          = __ffs(active >> (unsigned)warp_ti_offset) - 1;
+        if (ei == g_max_ei) {
+            alive   = true;
+            max_val = -std::numeric_limits<float>::infinity();
+        }
+    }
+
+    if (!alive && ti < token_num) {
+        Array<float, access_size> vec;
+        fill(vec, -std::numeric_limits<float>::infinity());
+        PRAGMA_UNROLL
+        for (int i = 0; i < items_per_thread; i += access_size) {
+            const int e = ei * items_per_thread + i;
+            if (e < expert_num) {
+                Store(&logits[ti * expert_num + e], vec);
+            }
+        }
+    }
+}
+
+void invokeMaskMoeTopKGroups(float* logits, int token_num, int expert_num, int group_size, int top_k, cudaStream_t st)
+{
+    auto invoke = [&](auto max_expert_num, auto items_per_thread, auto vec_size) {
+        constexpr int thrs_per_tok = max_expert_num.value / items_per_thread.value;
+        constexpr int threads      = 256;
+        const int     blocks       = ceil_div(token_num, threads / thrs_per_tok);
+        MoeMaskTopKGroups<max_expert_num.value, items_per_thread.value, vec_size.value>
+            <<<blocks, threads, 0, st>>>(logits, token_num, expert_num, top_k);
+    };
+    if (expert_num == 160 && group_size == 20) {
+        return invoke(_Int<160>, _Int<20>, _Int<4>);
+    }
+
+    std::cerr << __FILE__ << "(" << __LINE__ << "): unsupported moe config: expert_num=" << expert_num
+              << ", group_size=" << group_size << "\n";
+    std::abort();
 }
 
 }  // namespace turbomind

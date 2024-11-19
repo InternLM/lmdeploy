@@ -43,7 +43,7 @@ class ModelConfig:
     start_id: int = None
     end_id: int = None
     size_per_head: int = 128
-    group_size: int = 0
+    group_size: int = 64
     weight_type: str = None
     session_len: int = None
     tp: int = 1
@@ -53,6 +53,10 @@ class ModelConfig:
     experts_per_token: int = 0
     moe_shared_gate: int = False
     norm_topk_prob: int = False
+    routed_scale: float = 1.0
+    topk_group: int = 1
+    topk_method: str = 'greedy'
+    moe_group_num: int = 1
     # MLA
     q_lora_rank: int = 0
     kv_lora_rank: int = 0
