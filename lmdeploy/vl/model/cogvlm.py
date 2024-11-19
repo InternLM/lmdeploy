@@ -1,6 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-
-import itertools
 import warnings
 from typing import Dict, List
 
@@ -31,7 +29,9 @@ class CogVLMVisionModel(VisonModel):
                                  (0.26862954, 0.26130258, 0.27577711)),
         ])
 
-        from accelerate import init_empty_weights
+    def build_model(self):
+        from accelerate import init_empty_weights, load_checkpoint_and_dispatch
+        from accelerate.utils import get_balanced_memory, infer_auto_device_map
         with init_empty_weights(), warnings.catch_warnings():
             self.model = AutoModelForCausalLM.from_config(
                 self.hf_config, trust_remote_code=True)
@@ -42,9 +42,6 @@ class CogVLMVisionModel(VisonModel):
             else:
                 self.vl_model = self.model
 
-    def build_model(self):
-        from accelerate import load_checkpoint_and_dispatch
-        from accelerate.utils import get_balanced_memory, infer_auto_device_map
         no_split_module_classes = ['TransformerLayer']
         max_memory = get_balanced_memory(
             self.model,
@@ -76,15 +73,19 @@ class CogVLMVisionModel(VisonModel):
         self.model.eval()
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
-        """get images and their corresponding preprocess parameters from
-        messages, and perform preprocessing."""
+        """refer to the spec of `super().preprocess`"""
         outputs = []
         for item in messages[-1]['content']:
             item_type = item['type']
             if item_type == 'image':
                 image = item['image'].convert('RGB')
                 pixel_values = self.image_transform(image)
-                outputs.append(dict(pixel_values=pixel_values))
+                outputs.append(
+                    dict(
+                        pixel_values=pixel_values,
+                        image_size=image.size,
+                        image_tokens=2306,  # TODO
+                        image_token_id=0))
         return outputs
 
     @torch.no_grad()
@@ -93,9 +94,8 @@ class CogVLMVisionModel(VisonModel):
 
     @classmethod
     def proc_messages(cls, messages, chat_template, sequence_start):
-        # apply chat template to get the prompt
+        """apply chat template to get the prompt."""
         prompt_messages = []
-        IMAGE_TOKEN = '<IMAGE_TOKEN>'
         for message in messages:
             if isinstance(message['content'], str):
                 prompt_messages.append(message)
@@ -103,44 +103,36 @@ class CogVLMVisionModel(VisonModel):
             content = [
                 x['text'] for x in message['content'] if x['type'] == 'text'
             ]
-            content = content[0]
-            # n_images = len(
-            #     [1 for x in message['content'] if x['type'] == 'image'])
-            # TODO
-            # prompt_messages.append(dict(role='user', content=content))
-        prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
+            n_images = len(
+                [1 for x in message['content'] if x['type'] == 'image'])
 
-        # collect all preprocessing result from messages
-        preps = [
-            message.pop('preprocess') for message in messages
-            if 'preprocess' in message.keys()
-        ]
-        segs = prompt.split(IMAGE_TOKEN)
-        # flatten the list
-        preps = list(itertools.chain(*preps))
-        assert len(segs) == len(preps) + 1, (
-            f'the number of {IMAGE_TOKEN} is not equal '
-            f'to input images, {len(segs) - 1} vs {len(preps)}')
+            prompt_messages.append(
+                dict(role='user', content=content[0], num_images=n_images))
 
-        return prompt, segs, preps
+        from lmdeploy.model import Vicuna
+        llm_chat_template = Vicuna(eoa=chat_template.eoa,
+                                   stop_words=chat_template.stop_words)
+        prompt = ''
+        IMAGE_TOKEN = '<IMAGE_TOKEN>'
+        for i, msg in enumerate(prompt_messages):
+            num_images = msg.pop('num_images', 0)
+            if num_images == 0:
+                role = msg['role']
+                msg = llm_chat_template.messages2prompt([msg], sequence_start
+                                                        and i == 0)
+                msg = dict(role=role, content=msg)
+            prompt_i = chat_template.messages2prompt([msg], sequence_start
+                                                     and i == 0)
+            if num_images > 0:
+                prompt_i = (IMAGE_TOKEN * num_images) + prompt_i
+            prompt += prompt_i
+        return prompt, IMAGE_TOKEN
 
     def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
-        prompt, segs, preps = self.proc_messages(messages, chat_template,
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template,
                                                  sequence_start)
-
-        # calculate the image token offset for each image
-        input_ids = []
-        IMAGE_DUMMY_TOKEN_INDEX = 0
-        for i, seg in enumerate(segs):
-            if i > 0 and i <= len(preps):
-                preps[i - 1].update(offset=len(input_ids))
-                image_tokens = 0  # TODO
-                input_ids.extend([IMAGE_DUMMY_TOKEN_INDEX] * image_tokens)
-            token_ids = tokenizer.encode(seg,
-                                         add_bos=((i == 0) and sequence_start))
-            input_ids.extend(token_ids)
-
-        return dict(prompt=prompt, input_ids=input_ids, multimodal=preps)
+        return super().to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
+                                      sequence_start)
 
     def to_turbomind(self, messages, chat_template, sequence_start):
         assert 0, 'cogvlm is not supported by turbomind'
