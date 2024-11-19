@@ -192,18 +192,7 @@ class InternVLVisionModel(VisonModel):
         return outputs
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
-        assert isinstance(messages, List)
-        assert isinstance(messages[-1]['content'], List)
-        content = [
-            item['text'] for item in messages[-1]['content']
-            if item['type'] == 'text'
-        ]
-        if len(content) > 1:
-            logger.warning(f'There are {len(content)} text in {content}. '
-                           'Only the first one is considered')
-
-        # get images and their corresponding preprocess parameters from
-        # messages, and perform preprocessing
+        """refers to `super.preprocess() for spec."""
         outputs = []
         for item in messages[-1]['content']:
             item_type = item['type']
@@ -233,22 +222,29 @@ class InternVLVisionModel(VisonModel):
 
     @classmethod
     def proc_messages(cls, messages, chat_template, sequence_start):
-        # apply chat template to get the prompt
+        """apply chat template to get the prompt."""
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
         for message in messages:
             if isinstance(message['content'], str):
                 prompt_messages.append(message)
                 continue
-            n_images = [
-                1 for item in message['content'] if item['type'] == 'image'
-            ]
-            n_images = sum(n_images)
+            n_images = len(
+                [1 for x in message['content'] if x['type'] == 'image'])
             content = [
-                item['text'] for item in message['content']
-                if item['type'] == 'text'
+                x['text'] for x in message['content'] if x['type'] == 'text'
             ]
-            content = f'<img>{IMAGE_TOKEN * n_images}</img>\n' + content[0]
+            prompt = content[0]
+            if IMAGE_TOKEN in prompt and f'<img>{IMAGE_TOKEN}' not in prompt:
+                prompt = prompt.replace(f'{IMAGE_TOKEN}',
+                                        f'<img>{IMAGE_TOKEN}</img>')
+                prompt = prompt.replace('</img><img>', '')
+                prompt = prompt.replace('<img><img>', '<img>')
+                prompt = prompt.replace('</img></img>', '</img>')
+            elif IMAGE_TOKEN not in prompt:
+                prompt = f'<img>{IMAGE_TOKEN * n_images}</img>\n' + prompt
+            else:
+                pass
             prompt_messages.append(dict(role='user', content=content))
         prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
         return prompt, IMAGE_TOKEN
