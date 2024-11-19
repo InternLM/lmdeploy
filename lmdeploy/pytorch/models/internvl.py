@@ -1,12 +1,15 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import torch
 import torch.nn.functional as F
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
+from lmdeploy.pytorch.engine.input_process import (BaseModelInputProcessor,
+                                                   PreprocessInputResult)
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
+from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
 from lmdeploy.pytorch.nn import LayerNorm, RMSNorm
 from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_qkv_proj,
                                         build_rowwise_linear)
@@ -311,9 +314,12 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
         super().__init__()
         self.config = config
         self.ctx_mgr = ctx_mgr
+        self.select_layer = config.select_layer
 
         vision_config = config.vision_config
-        self.vision_model = InternVisionModel(vision_config)
+        self.vision_model = InternVisionModel(vision_config,
+                                              dtype=dtype,
+                                              device=device)
 
         llm_config = config.llm_config
         self.language_model = build_model_from_hf_config(llm_config,
@@ -345,17 +351,64 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
                 'Currently Mono-InternVL does not support FP16 due to'
                 'numerical instability. Please use BF16 instead.')
 
+        self.input_processor = InternVLInputProcessor(self.config, dtype)
+
+    def pixel_shuffle(self, x, scale_factor=0.5):
+        n, w, h, c = x.size()
+        # N, W, H, C --> N, W, H * scale, C // scale
+        x = x.view(n, w, int(h * scale_factor), int(c / scale_factor))
+        # N, W, H * scale, C // scale --> N, H * scale, W, C // scale
+        x = x.permute(0, 2, 1, 3).contiguous()
+        # N, H * scale, W, C // scale -->
+        # N, H * scale, W * scale, C // (scale ** 2)
+        x = x.view(n, int(h * scale_factor), int(w * scale_factor),
+                   int(c / (scale_factor * scale_factor)))
+        x = x.permute(0, 2, 1, 3).contiguous()
+        return x
+
+    def extract_feature(self, pixel_values):
+        """extract vision feature."""
+        assert self.select_layer == -1
+        vit_embeds = self.vision_model(pixel_values)
+        vit_embeds = vit_embeds[:, 1:, :]
+
+        h = w = int(vit_embeds.shape[1]**0.5)
+        vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], h, w, -1)
+        vit_embeds = self.pixel_shuffle(vit_embeds,
+                                        scale_factor=self.downsample_ratio)
+        vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], -1,
+                                        vit_embeds.shape[-1])
+        vit_embeds = self.mlp1(vit_embeds)
+        return vit_embeds
+
     def forward(
         self,
         input_ids: torch.Tensor,
         position_ids: torch.Tensor,
         past_key_values: List[List[torch.Tensor]],
         attn_metadata: Any = None,
+        pixel_values: torch.Tensor = None,
         inputs_embeds: torch.Tensor = None,
         vision_embedding_indexing: torch.Tensor = None,
         text_embedding_indexing: torch.Tensor = None,
         **kwargs,
     ):
+        if inputs_embeds is None and pixel_values is not None:
+
+            # get vis idx
+            from lmdeploy.vl.constants import IMAGE_DUMMY_TOKEN_INDEX
+            vis_mask = input_ids[0] == IMAGE_DUMMY_TOKEN_INDEX
+            vis_range = torch.arange(0,
+                                     input_ids.size(-1),
+                                     device=input_ids.device)
+            vis_idx = vis_range[vis_mask]
+
+            # extract feature
+            vit_embeds = self.extract_feature(pixel_values)
+            lang_embeds = self.language_model.get_input_embeddings()(input_ids)
+            lang_embeds[0, vis_idx] = vit_embeds.flatten(0, 1)
+            inputs_embeds = lang_embeds
+
         if self.is_mono:
             return self.language_model.forward(
                 input_ids=input_ids,
@@ -390,6 +443,21 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
         input_ids = context.input_ids
         position_ids = context.position_ids
         attn_metadata = context.attn_metadata
+
+        # vision inputs
+        pixel_values = None
+        if context.input_multimodals is not None:
+            pixel_values = [
+                input_mm.get('image', [])
+                for input_mm in context.input_multimodals
+            ]
+            # flatten batch
+            pixel_values = [
+                data for im_data in pixel_values for data in im_data
+            ]
+            if len(pixel_values) > 0:
+                pixel_values = torch.cat([data.data for data in pixel_values])
+
         # get inputs from context
         vision_embeddings = context.input_embeddings
         vision_embedding_indexing = context.input_embedding_indexing
@@ -424,6 +492,7 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
                 position_ids=position_ids,
                 past_key_values=past_key_values,
                 attn_metadata=attn_metadata,
+                pixel_values=pixel_values,
                 inputs_embeds=inputs_embeds,
             )
 
@@ -455,3 +524,46 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
             new_weights[new_key] = val
 
         self.language_model.load_weights(new_weights.items())
+
+    def get_input_processor(self) -> BaseModelInputProcessor:
+        """get input processor."""
+        return self.input_processor
+
+
+class InternVLInputProcessor(BaseModelInputProcessor):
+    """internvl input processor."""
+
+    def __init__(self, config: PretrainedConfig, dtype) -> None:
+        self.config = config
+        self.dtype = dtype
+
+        vision_config = config.vision_config
+        self.image_size = vision_config.image_size
+        self.patch_size = vision_config.patch_size
+        self.num_patches = (self.image_size // self.patch_size)**2
+        self.num_positions = self.num_patches + 1
+        self.vision_token_num = self.num_patches // 4
+
+    def preprocess_input(self,
+                         input_ids: List[int],
+                         input_multimodals: List[Dict[str, Any]] = None,
+                         **kwargs) -> PreprocessInputResult:
+        """prepare multimodal input."""
+        if input_multimodals is None or len(input_multimodals) == 0:
+            return input_ids, input_multimodals
+
+        input_imgs = []
+        for input_mm in input_multimodals:
+            pixel_values = input_mm['pixel_values'].to(self.dtype)
+            offset = input_mm['offset']
+
+            mm_data = MultiModalTensor(data=pixel_values,
+                                       start=offset,
+                                       end=offset + self.vision_token_num)
+            input_imgs.append(mm_data)
+
+        result = PreprocessInputResult(
+            input_ids=input_ids,
+            input_multimodals=dict(image=input_imgs),
+        )
+        return result
