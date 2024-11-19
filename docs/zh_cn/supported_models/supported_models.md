@@ -100,16 +100,16 @@ turbomind 引擎不支持 window attention。所以，对于应用了 window att
 
 |     Model      |   Size   | Type | FP16/BF16(eager) | FP16/BF16(graph) | W4A16(eager) |
 | :------------: | :------: | :--: | :--------------: | :--------------: | :----------: |
-|     Llama2     | 7B - 70B | LLM  |        Yes       |        Yes       |      Yes     |
-|     Llama3     |    8B    | LLM  |        Yes       |        Yes       |      Yes     |
-|    Llama3.1    |    8B    | LLM  |        Yes       |        Yes       |      Yes     |
-|   InternLM2    | 7B - 20B | LLM  |        Yes       |        Yes       |      Yes     |
-|  InternLM2.5   | 7B - 20B | LLM  |        Yes       |        Yes       |      Yes     |
-|    Mixtral     |   8x7B   | LLM  |        Yes       |        Yes       |      No      |
-|  QWen1.5-MoE   |  A2.7B   | LLM  |        Yes       |         -        |      No      |
-|   QWen2(.5)    |    7B    | LLM  |        Yes       |        Yes       |      No      |
-|   QWen2-MoE    | A14.57B  | LLM  |        Yes       |         -        |      No      |
-| InternVL(v1.5) |  2B-26B  | MLLM |        Yes       |         -        |      Yes     |
-|   InternVL2    |  1B-40B  | MLLM |        Yes       |        Yes       |      Yes     |
-|  CogVLM2-chat  |    19B   | MLLM |        Yes       |        No        |       -      |
-|      GLM4V     |    9B    | MLLM |        Yes       |        No        |       -      |
+|     Llama2     | 7B - 70B | LLM  |       Yes        |       Yes        |     Yes      |
+|     Llama3     |    8B    | LLM  |       Yes        |       Yes        |     Yes      |
+|    Llama3.1    |    8B    | LLM  |       Yes        |       Yes        |     Yes      |
+|   InternLM2    | 7B - 20B | LLM  |       Yes        |       Yes        |     Yes      |
+|  InternLM2.5   | 7B - 20B | LLM  |       Yes        |       Yes        |     Yes      |
+|    Mixtral     |   8x7B   | LLM  |       Yes        |       Yes        |      No      |
+|  QWen1.5-MoE   |  A2.7B   | LLM  |       Yes        |        -         |      No      |
+|   QWen2(.5)    |    7B    | LLM  |       Yes        |       Yes        |      No      |
+|   QWen2-MoE    | A14.57B  | LLM  |       Yes        |        -         |      No      |
+| InternVL(v1.5) |  2B-26B  | MLLM |       Yes        |        -         |     Yes      |
+|   InternVL2    |  1B-40B  | MLLM |       Yes        |       Yes        |     Yes      |
+|  CogVLM2-chat  |   19B    | MLLM |       Yes        |        No        |      -       |
+|     GLM4V      |    9B    | MLLM |       Yes        |        No        |      -       |
