@@ -40,6 +40,8 @@ DOCKER_BUILDKIT=1 docker build -t lmdeploy-aarch64-ascend:latest \
     -f docker/Dockerfile_aarch64_ascend .
 ```
 
+上述`Dockerfile_aarch64_ascend`适用于鲲鹏CPU. 如果是Intel CPU的机器，请尝试[这个dockerfile](https://github.com/InternLM/lmdeploy/issues/2745#issuecomment-2473285703) (未经过测试)
+
 如果以下命令执行没有任何错误，这表明环境设置成功。
 
 ```bash
