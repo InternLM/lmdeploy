@@ -132,12 +132,12 @@ class VisonModel(ABC):
 
         # calculate the image token offset for each image
         input_ids = []
-        IMAGE_DUMMY_TOKEN_INDEX = 0
         for i, seg in enumerate(segs):
             if i > 0 and i <= len(preps):
                 preps[i - 1].update(offset=len(input_ids))
                 image_tokens = preps[i - 1]['image_tokens']
-                input_ids.extend([IMAGE_DUMMY_TOKEN_INDEX] * image_tokens)
+                image_token_id = preps[i - 1]['image_token_id']
+                input_ids.extend([image_token_id] * image_tokens)
             token_ids = tokenizer.encode(seg,
                                          add_bos=((i == 0) and sequence_start))
             input_ids.extend(token_ids)
