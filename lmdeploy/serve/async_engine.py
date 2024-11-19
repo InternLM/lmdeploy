@@ -255,7 +255,7 @@ class AsyncEngine(LogitsMixin):
                                 **kwargs)
 
     async def handle_exception(self, session_id: int):
-        await self.metrics.failure_frame()
+        self.metrics.failure_frame()
         await self.stop_session(session_id)
 
     async def stop_session(self, session_id: int):
@@ -548,9 +548,9 @@ class AsyncEngine(LogitsMixin):
                                                         tools=tools)
             return prompt_input, gen_config
 
-        arrival_frame = await self.metrics.insert_frame()
+        arrival_frame = self.metrics.insert_frame()
         prompt_input, gen_config = await get_inputs_genconfig(gen_config)
-        await self.metrics.update_preprocess(arrival_frame)
+        self.metrics.update_preprocess(arrival_frame)
         prompt = prompt_input['prompt']
         input_ids = prompt_input['input_ids']
         finish_reason = None
@@ -586,9 +586,9 @@ class AsyncEngine(LogitsMixin):
             if sequence_end is True and sequence_start is False:
                 await self.end_session(session_id)
         else:
-            start_frame = await self.metrics.insert_frame()
+            start_frame = self.metrics.insert_frame()
             generator = await self.get_generator(False, session_id)
-            await self.metrics.update_queue_waiting(start_frame)
+            self.metrics.update_queue_waiting(start_frame)
             iterator = generator.async_stream_infer(
                 session_id=session_id,
                 **prompt_input,
@@ -605,9 +605,8 @@ class AsyncEngine(LogitsMixin):
                 start_ids_offset = state.ids_offset
                 response = ''
                 async for outputs in iterator:
-                    start_frame = await self.metrics.insert_frame()
-                    if state.prev_tokens is None:
-                        await self.metrics.update_FTL(arrival_frame)
+                    start_frame = self.metrics.insert_frame()
+                    is_first_token = state.prev_tokens is None
                     # decode res
                     if is_error(outputs.status):
                         tokens = 0
@@ -627,7 +626,9 @@ class AsyncEngine(LogitsMixin):
                     if outputs.logprobs:
                         log_offset = ids_offset - start_ids_offset
                         logprobs = outputs.logprobs[log_offset:]
-                    await self.metrics.update_postprocess(start_frame)
+                    self.metrics.update_postprocess(start_frame)
+                    if is_first_token:
+                        self.metrics.update_FTL(arrival_frame)
                     # response, history token len,
                     # input token len, gen token len
                     yield GenOut(response, self.id2step[str(session_id)],
@@ -659,7 +660,7 @@ class AsyncEngine(LogitsMixin):
                 # TODO modify pytorch or turbomind api
                 if self.backend == 'pytorch' and sequence_end:
                     await self.end_session(session_id)
-                await self.metrics.last_token_frame(iterator)
+                self.metrics.last_token_frame(iterator)
 
     def parse_tool_response(self, text, tools, **kwargs):
         """Parse model response containing tool information.

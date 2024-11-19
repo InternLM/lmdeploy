@@ -188,13 +188,13 @@ class Metrics:
             }
             self.info_backend_config.info(config_dict)
 
-    async def failure_frame(self):
+    def failure_frame(self):
         """log the failaure frame."""
         if self.applied:
             self.stats.request_failure += 1
             self.stats.request_total += 1
 
-    async def last_token_frame(self, iterator):
+    def last_token_frame(self, iterator):
         """log the last token frame."""
         if self.applied:
             self.stats.duration_infer += iterator.get_duration()
@@ -202,28 +202,28 @@ class Metrics:
             self.stats.request_total += 1
             self.log()
 
-    async def insert_frame(self):
+    def insert_frame(self):
         """Insert a frame."""
         if self.applied:
             return time.time()
         return None
 
-    async def update_postprocess(self, start_frame):
+    def update_postprocess(self, start_frame):
         """Update postprocess duration."""
         if self.applied:
             self.stats.duration_postprocess += time.time() - start_frame
 
-    async def update_preprocess(self, start_frame):
+    def update_preprocess(self, start_frame):
         """Update preprocess duration."""
         if self.applied:
             self.stats.duration_preprocess += time.time() - start_frame
 
-    async def update_queue_waiting(self, start_frame):
+    def update_queue_waiting(self, start_frame):
         """Update queue waiting time."""
         if self.applied:
             self.stats.duration_queue += time.time() - start_frame
 
-    async def update_FTL(self, start_frame):
+    def update_FTL(self, start_frame):
         """Update first token latency."""
         if self.applied:
             self.stats.first_token_latency += time.time() - start_frame
