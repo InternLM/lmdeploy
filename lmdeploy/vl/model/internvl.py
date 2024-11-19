@@ -1,11 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-
-import itertools
 from typing import Dict, List
 
-import numpy as np
 import torch
-from PIL.Image import Image
 from transformers import AutoModel, CLIPImageProcessor
 
 from lmdeploy.utils import get_logger
@@ -149,7 +145,7 @@ class InternVLVisionModel(VisonModel):
         # avoid randomness in inference.
         self.model = self.model.eval()
 
-    def _preprocess_v1_5(self, image: Image, params: Dict = None):
+    def _preprocess_v1_5(self, image, params=None):
         image_res = {'low': 6, 'medium': 12, 'high': 24}
         max_num = params.get('max_dynamic_patch')
         if max_num is None or not isinstance(max_num, int):
@@ -178,7 +174,7 @@ class InternVLVisionModel(VisonModel):
         outputs = [x.reshape(-1, x.shape[-1]) for x in outputs]
         return outputs
 
-    def _preprocess(self, image: Image, params: Dict = None):
+    def _preprocess(self, image, params=None):
         """forward for internvl-chat-v1-1, internvl-chat-v1-2."""
         pixel_values = self.image_processor(images=image,
                                             return_tensors='pt').pixel_values
@@ -218,7 +214,13 @@ class InternVLVisionModel(VisonModel):
                     for key in item.keys() if key not in {'type', 'image'}
                 }
                 pixel_values = self.processor(image, params)
-                outputs.append(dict(pixel_values=pixel_values))
+                image_tokens = (pixel_values.shape[0] *
+                                self.image_tokens_per_patch)
+                outputs.append(
+                    dict(pixel_values=pixel_values,
+                         image_tokens=image_tokens,
+                         image_token_id=0,
+                         image_size=image.size))
         return outputs
 
     @torch.no_grad()
@@ -249,61 +251,16 @@ class InternVLVisionModel(VisonModel):
             content = f'<img>{IMAGE_TOKEN * n_images}</img>\n' + content[0]
             prompt_messages.append(dict(role='user', content=content))
         prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
-
-        # collect all preprocessing result from messages
-        preps = [
-            message.pop('preprocess') for message in messages
-            if 'preprocess' in message.keys()
-        ]
-        segs = prompt.split(IMAGE_TOKEN)
-        # flatten the list
-        preps = list(itertools.chain(*preps))
-        assert len(segs) == len(preps) + 1, (
-            f'the number of {IMAGE_TOKEN} is not equal '
-            f'to input images, {len(segs) - 1} vs {len(preps)}')
-
-        return prompt, segs, preps
+        return prompt, IMAGE_TOKEN
 
     def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
-        prompt, segs, preps = self.proc_messages(messages, chat_template,
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template,
                                                  sequence_start)
-
-        # calculate the image token offset for each image
-        input_ids = []
-        IMAGE_DUMMY_TOKEN_INDEX = 0
-        for i, seg in enumerate(segs):
-            if i > 0 and i <= len(preps):
-                preps[i - 1].update(offset=len(input_ids))
-                image_tokens = (preps[i - 1]['pixel_values'].shape[0] *
-                                self.image_tokens_per_patch)
-                input_ids.extend([IMAGE_DUMMY_TOKEN_INDEX] * image_tokens)
-            token_ids = tokenizer.encode(seg,
-                                         add_bos=((i == 0) and sequence_start))
-            input_ids.extend(token_ids)
-
-        return dict(prompt=prompt, input_ids=input_ids, multimodal=preps)
+        return super().to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
+                                      sequence_start)
 
     def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):
-        prompt, segs, features = self.proc_messages(messages, chat_template,
-                                                    sequence_start)
-        features = [x.cpu().numpy() for x in features]
-
-        # tokenizer prompt, and get input_embeddings and input_embedding_ranges
-        input_ids = []
-        begins = []
-        ends = []
-        IMAGE_DUMMY_TOKEN_INDEX = 0
-        for i, seg in enumerate(segs):
-            if i > 0 and i <= len(features):
-                image_dim = features[i - 1].shape[0]
-                begins.append(len(input_ids))
-                ends.append(begins[-1] + image_dim)
-                input_ids.extend([IMAGE_DUMMY_TOKEN_INDEX] * image_dim)
-            seg_ids = tokenizer.encode(seg,
-                                       add_bos=((i == 0) and sequence_start))
-            input_ids.extend(seg_ids)
-        ranges = np.stack([begins, ends], axis=1).tolist()
-        return dict(prompt=prompt,
-                    input_ids=input_ids,
-                    input_embeddings=features,
-                    input_embedding_ranges=ranges)
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template,
+                                                 sequence_start)
+        return super().to_turbomind_aux(messages, prompt, IMAGE_TOKEN,
+                                        tokenizer, sequence_start)
