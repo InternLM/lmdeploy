@@ -1,6 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-
-import itertools
 from typing import Dict, List
 
 import torch
@@ -67,44 +65,7 @@ class Qwen2VLModel(VisonModel):
         self.model = model.eval()
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
-        """preprocess multimodal data in the messages, of which only the last
-        item includes the mulitmodal data.
-
-        Args:
-            message(Dict): multimodal data in a dict, which is as follows:
-            [
-                {'role': 'user', 'content': 'user prompt'},
-                {'role': 'assisant', 'content': 'AI reponse'},
-                {
-                    'role': 'user',
-                    'content': [
-                        {
-                            'type': 'text',
-                            'text': 'string',
-                        },
-                        {
-                            'type': 'image',
-                            'image': pillow.Image,
-                            key1: value1,
-                            ...
-                        },
-                        {
-                            'type': 'image',
-                            'image': pillow.Image,
-                            key1: value1,
-                            ...
-                        },
-                        ...
-                    ]
-                }
-            ]
-        Returns:
-            the preprocessing results in a list. list[i] is a dict. It refers
-            to the preprocessing result of an image
-        """
-        assert isinstance(messages, List)
-        assert isinstance(messages[-1]['content'], List)
-
+        """refer to `super().preprocess()` for spec."""
         from qwen_vl_utils import process_vision_info
 
         optional_keys = {
@@ -120,9 +81,15 @@ class Qwen2VLModel(VisonModel):
                     {key: x[key]
                      for key in x.keys() if key in optional_keys})
                 image_inputs, _ = process_vision_info([dict(content=[item])])
-                image_inputs = self.processor.image_processor(
-                    images=image_inputs, videos=None, return_tensors='pt')
-                outputs.append(image_inputs)
+                result = self.processor.image_processor(images=image_inputs,
+                                                        videos=None,
+                                                        return_tensors='pt')
+                result.update(
+                    dict(
+                        image_size=image.size,
+                        image_tokens=1,  # TODO
+                        image_token_id=0))
+                outputs.append(result)
         return outputs
 
     @torch.no_grad()
@@ -152,37 +119,14 @@ class Qwen2VLModel(VisonModel):
                     )
             prompt_messages.append(dict(role='user', content=''.join(content)))
         prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
-        segs = prompt.split(IMAGE_TOKEN)
-        # collect all preprocessing result from messages
-        preps = [
-            message.pop('preprocess') for message in messages
-            if 'preprocess' in message.keys()
-        ]
-        # flatten the list
-        preps = list(itertools.chain(*preps))
-        assert len(segs) == len(preps) + 1, (
-            f'the number of {IMAGE_TOKEN} is not equal '
-            f'to input images, {len(segs) - 1} vs {len(preps)}')
-
-        return prompt, segs, preps
+        return prompt, IMAGE_TOKEN
 
     def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
         """return to the information needed by pytorch engine."""
-        prompt, segs, preps = self.proc_messages(messages, chat_template,
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template,
                                                  sequence_start)
-        input_ids = []
-        IMAGE_DUMMY_TOKEN_INDEX = 0
-        merge_length = self.processor.image_processor.merge_size**2
-        for i, seg in enumerate(segs):
-            if i > 0 and i <= len(preps):
-                preps[i - 1].update(offset=len(input_ids))
-                image_grid_thw = preps[i - 1]['image_grid_thw']
-                imag_tokens = image_grid_thw.prod() // merge_length
-                input_ids.extend([IMAGE_DUMMY_TOKEN_INDEX] * imag_tokens)
-            token_ids = tokenizer.encode(seg,
-                                         add_bos=((i == 0) and sequence_start))
-            input_ids.extend(token_ids)
-        return dict(prompt=prompt, input_ids=input_ids, multimodal=preps)
+        return super().to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
+                                      sequence_start)
 
     def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):
         assert 0, 'TODO: support turbomind engine'
