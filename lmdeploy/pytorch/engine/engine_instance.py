@@ -130,7 +130,7 @@ class EngineInstance:
                                  session_id: int,
                                  input_ids: List[int],
                                  gen_config: GenerationConfig = None,
-                                 input_multimodals: InputMultiModalType = None,
+                                 multimodal: InputMultiModalType = None,
                                  adapter_name: str = None,
                                  **kwargs):
         """Send stream inference request.
@@ -159,7 +159,7 @@ class EngineInstance:
             session_id=session_id,
             sampling_param=sampling_param,
             adapter_name=adapter_name,
-            input_multimodals=input_multimodals,
+            input_multimodals=multimodal,
         )
         req_id = await self.req_sender.async_send_async(
             RequestType.ADD_MESSAGE, msg)
@@ -184,7 +184,7 @@ class EngineInstance:
     async def async_infer(self,
                           session_id: int,
                           input_ids: List[int] = None,
-                          input_multimodals: InputMultiModalType = None,
+                          multimodal: InputMultiModalType = None,
                           gen_config: GenerationConfig = None,
                           **kwargs):
         """Send inference request.
@@ -200,12 +200,11 @@ class EngineInstance:
             int: The number of the output tokens.
         """
         token_ids = []
-        async for outputs in self.async_stream_infer(
-                session_id,
-                input_ids,
-                input_multimodals=input_multimodals,
-                gen_config=gen_config,
-                **kwargs):
+        async for outputs in self.async_stream_infer(session_id,
+                                                     input_ids,
+                                                     multimodal=multimodal,
+                                                     gen_config=gen_config,
+                                                     **kwargs):
             status, tmp_ids = outputs.status, outputs.token_ids
             if status not in [ResponseType.SUCCESS, ResponseType.FINISH]:
                 return EngineOutput(status, token_ids, len(token_ids))
@@ -216,7 +215,7 @@ class EngineInstance:
     def stream_infer(self,
                      session_id: int,
                      input_ids: List[int],
-                     input_multimodals: InputMultiModalType = None,
+                     multimodal: InputMultiModalType = None,
                      gen_config: GenerationConfig = None,
                      adapter_name: str = None,
                      **kwargs):
@@ -239,13 +238,12 @@ class EngineInstance:
 
         def __call_async():
             """call async."""
-            coro_gen = self.async_stream_infer(
-                session_id,
-                input_ids,
-                input_multimodals=input_multimodals,
-                gen_config=gen_config,
-                adapter_name=adapter_name,
-                **kwargs)
+            coro_gen = self.async_stream_infer(session_id,
+                                               input_ids,
+                                               multimodal=multimodal,
+                                               gen_config=gen_config,
+                                               adapter_name=adapter_name,
+                                               **kwargs)
             while True:
                 try:
                     yield self.req_sender.run_until_complete(
@@ -266,7 +264,7 @@ class EngineInstance:
             session_id=session_id,
             sampling_param=sampling_param,
             adapter_name=adapter_name,
-            input_multimodals=input_multimodals,
+            input_multimodals=multimodal,
         )
         req_id = self.req_sender.send_async(RequestType.ADD_MESSAGE, msg)
 
@@ -290,7 +288,7 @@ class EngineInstance:
     def infer(self,
               session_id: int,
               input_ids: List[int] = None,
-              input_multimodals: InputMultiModalType = None,
+              multimodal: InputMultiModalType = None,
               gen_config: GenerationConfig = None,
               **kwargs):
         """Send inference request.
@@ -308,7 +306,7 @@ class EngineInstance:
         token_ids = []
         for outputs in self.stream_infer(session_id,
                                          input_ids,
-                                         input_multimodals=input_multimodals,
+                                         multimodal=multimodal,
                                          gen_config=gen_config,
                                          **kwargs):
             status, tmp_ids = outputs.status, outputs.token_ids
@@ -336,7 +334,7 @@ class EngineInstance:
 
     def decode(self,
                input_ids,
-               input_multimodals: List[InputMultiModalType] = None,
+               multimodal: List[InputMultiModalType] = None,
                steps: List[int] = None,
                sequence_start: bool = True,
                sequence_end: bool = True,
@@ -346,7 +344,7 @@ class EngineInstance:
         Args:
             input_ids (numpy.ndarray): the batch of input token ids
             steps (List[int]): the offset of the k/v cache
-            input_multimodals (List[InputMultiModalType]):
+            multimodal (List[InputMultiModalType]):
                 multimodals inputs.
             sequence_start (bool): indicator for starting a sequence
             sequence_end (bool): indicator for ending a sequence
@@ -398,7 +396,7 @@ class EngineInstance:
                 self._try_add_session(sid)
 
         req_ids = __add_messages(session_ids, input_ids, adapter_names,
-                                 input_multimodals)
+                                 multimodal)
         req_idx_map = dict(zip(req_ids, range(len(req_ids))))
 
         finish_count = batch_size

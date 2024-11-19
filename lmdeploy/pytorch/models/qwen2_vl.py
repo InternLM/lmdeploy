@@ -739,7 +739,9 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixin,
                 image_embeds = self.visual(pixel_values,
                                            cu_seqlens=vis_cu_seqlens,
                                            rotary_pos_emb=vis_pos_emb)
-                image_mask = ((input_ids == self.config.image_token_id
+                # pad_token_id = self.config.image_token_id
+                pad_token_id = 0
+                image_mask = ((input_ids == pad_token_id
                                ).unsqueeze(-1).expand_as(inputs_embeds).to(
                                    inputs_embeds.device))
                 inputs_embeds = inputs_embeds.masked_scatter(
@@ -1013,12 +1015,13 @@ class Qwen2VLInputProcessor(BaseModelInputProcessor):
             pixel_values = input_mm['pixel_values']
             image_grid_thw = input_mm['image_grid_thw']
             offset = input_mm['offset']
+            start = offset
 
             pad_size = pixel_values.size(0) // 4
 
             mm_data = MultiModalTensor(data=pixel_values,
-                                       start=offset,
-                                       end=offset + pad_size,
+                                       start=start,
+                                       end=start + pad_size,
                                        meta=dict(grid_thw=image_grid_thw))
             input_imgs.append(mm_data)
 
