@@ -13,6 +13,7 @@ disable_created_metrics()
 
 
 class IterTimer:
+    """"The timer to count all the time of iteration."""
 
     def __init__(self, iterable):
         self._iterable = iterable
@@ -28,6 +29,10 @@ class IterTimer:
         return item
 
     def get_duration(self):
+        """Get the whole duration of iteration.
+
+        Known as model forwarding latency.
+        """
         return self._duration
 
     def __aiter__(self):
@@ -43,7 +48,6 @@ class IterTimer:
 @dataclass
 class Stats:
     """Created by LLMEngine for use by StatLogger."""
-    now: float
 
     # request stats
     request_success: int = 0
@@ -57,6 +61,7 @@ class Stats:
     duration_infer: float = 0
     duration_preprocess: float = 0
     duration_postprocess: float = 0
+    first_token_latency: float = 0
 
     # system status
     cpu_utilization: Optional[float] = None
@@ -81,7 +86,7 @@ class Stats:
 
 
 def refresh_system(metrics):
-
+    """A thread life long function to get hardware information."""
     while True:
         time.sleep(1)
         # Log to prometheus.
@@ -96,8 +101,12 @@ def refresh_system(metrics):
 
 
 class Metrics:
+    """The metrics for serving."""
 
-    def __init__(self, stats: Stats, labelnames: Optional[List[str]] = []):
+    def __init__(self,
+                 applied: bool = False,
+                 labelnames: Optional[List[str]] = []):
+        self.applied = applied
         # Unregister any existing lmdeploy collectors
         for collector in list(REGISTRY._collector_to_names):
             if hasattr(collector, '_name') and 'lmdeploy' in collector._name:
@@ -160,33 +169,85 @@ class Metrics:
             documentation='Average duration of processing outputs in s.',
             labelnames=labelnames,
         )
-        self.stats = stats
+        self.gauge_first_token_latency = Gauge(
+            name='lmdeploy:first_token_latency',
+            documentation='Average first token latency in s.',
+            labelnames=labelnames,
+        )
+        self.stats = Stats()
         self.refresh_thread = threading.Thread(target=refresh_system,
                                                args=(self, ),
                                                daemon=True)
         self.refresh_thread.start()
 
     def info(self, backend_config: object) -> None:
-        config_dict = {
-            key: str(value)
-            for key, value in dataclasses.asdict(backend_config).items()
-        }
-        self.info_backend_config.info(config_dict)
+        if self.applied:
+            config_dict = {
+                key: str(value)
+                for key, value in dataclasses.asdict(backend_config).items()
+            }
+            self.info_backend_config.info(config_dict)
 
-    def log(self, stats: Stats) -> None:
+    async def failure_frame(self):
+        """log the failaure frame."""
+        if self.applied:
+            self.stats.request_failure += 1
+            self.stats.request_total += 1
+
+    async def last_token_frame(self, iterator):
+        """log the last token frame."""
+        if self.applied:
+            self.stats.duration_infer += iterator.get_duration()
+            self.stats.request_success += 1
+            self.stats.request_total += 1
+            self.log()
+
+    async def insert_frame(self):
+        """Insert a frame."""
+        if self.applied:
+            return time.time()
+        return None
+
+    async def update_postprocess(self, start_frame):
+        """Update postprocess duration."""
+        if self.applied:
+            self.stats.duration_postprocess += time.time() - start_frame
+
+    async def update_preprocess(self, start_frame):
+        """Update preprocess duration."""
+        if self.applied:
+            self.stats.duration_preprocess += time.time() - start_frame
+
+    async def update_queue_waiting(self, start_frame):
+        """Update queue waiting time."""
+        if self.applied:
+            self.stats.duration_queue += time.time() - start_frame
+
+    async def update_FTL(self, start_frame):
+        """Update first token latency."""
+        if self.applied:
+            self.stats.first_token_latency += time.time() - start_frame
+
+    def log(self) -> None:
         """Called by LLMEngine.
 
         Logs to prometheus and tracked stats every iteration. Logs to Stdout
         every self.local_interval seconds.
         """
-
+        stats = self.stats
         # Add to request counters.
         self.gauge_request_total.set(stats.request_total)
         self.gauge_request_success.set(stats.request_success)
         self.gauge_request_failure.set(stats.request_failure)
 
         # duration gauges
-        self.gauge_duration_infer.set(stats.duration_infer)
-        self.gauge_duration_queue.set(stats.duration_queue)
-        self.gauge_duration_preprocess.set(stats.duration_preprocess)
-        self.gauge_duration_postprocess.set(stats.duration_postprocess)
+        self.gauge_duration_infer.set(stats.duration_infer /
+                                      stats.request_total)
+        self.gauge_duration_queue.set(stats.duration_queue /
+                                      stats.request_total)
+        self.gauge_duration_preprocess.set(stats.duration_preprocess /
+                                           stats.request_total)
+        self.gauge_duration_postprocess.set(stats.duration_postprocess /
+                                            stats.request_total)
+        self.gauge_first_token_latency.set(stats.first_token_latency /
+                                           stats.request_total)

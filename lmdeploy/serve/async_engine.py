@@ -5,7 +5,6 @@ import json
 import os
 import random
 import re
-import time
 from contextlib import asynccontextmanager
 from copy import deepcopy
 from itertools import count
@@ -17,7 +16,7 @@ from lmdeploy.logger import RequestLogger
 from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig, Response,
                                ResponseType, TurbomindEngineConfig)
 from lmdeploy.model import MODELS, ChatTemplateConfig, best_match_model
-from lmdeploy.serve.metrics import IterTimer, Metrics, Stats
+from lmdeploy.serve.metrics import IterTimer, Metrics
 from lmdeploy.serve.utils import LogitsMixin, _get_event_loop
 from lmdeploy.tokenizer import DetokenizeState
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_logger
@@ -101,6 +100,11 @@ class Session:
                 user = str(user)
             res += f'USER:\n{user}\nASSISTANT:\n{assistant}\n'
         return res
+
+
+def is_error(status: ResponseType):
+    """Whether is an error response."""
+    return status not in [ResponseType.SUCCESS, ResponseType.FINISH]
 
 
 class AsyncEngine(LogitsMixin):
@@ -191,11 +195,8 @@ class AsyncEngine(LogitsMixin):
         self._session_id = count(0)
         self.request_logger = RequestLogger(max_log_len)
 
-        self.apply_metrics = metrics
-        if self.apply_metrics:
-            self.stats = Stats(now=time.time())
-            self.metrics = Metrics(self.stats)
-            self.metrics.info(self.backend_config)
+        self.metrics = Metrics(metrics)
+        self.metrics.info(self.backend_config)
 
     def _build_turbomind(
             self,
@@ -254,9 +255,7 @@ class AsyncEngine(LogitsMixin):
                                 **kwargs)
 
     async def handle_exception(self, session_id: int):
-        if self.metrics:
-            self.stats.request_failure += 1
-            self.stats.request_total += 1
+        await self.metrics.failure_frame()
         await self.stop_session(session_id)
 
     async def stop_session(self, session_id: int):
@@ -291,8 +290,6 @@ class AsyncEngine(LogitsMixin):
 
     async def get_generator(self, stop: bool, session_id: int):
         """Only return the model instance if it is available."""
-        if self.apply_metrics:
-            start = time.time()
         if stop:
             return self.engine.create_instance()
         # waiting no generator is available or the same session_id is running
@@ -301,8 +298,6 @@ class AsyncEngine(LogitsMixin):
         generator = self.gens_set.pop()
         self.id2generator[str(session_id)] = generator
         self.running_session_ids.add(session_id)
-        if self.apply_metrics:
-            self.stats.duration_queue += time.time() - start
         return generator
 
     def batch_infer(self,
@@ -512,8 +507,6 @@ class AsyncEngine(LogitsMixin):
         """
 
         async def get_inputs_genconfig(gen_config):
-            if self.apply_metrics:
-                start = time.time()
             if str(session_id) not in self.id2step:
                 self.id2step[str(session_id)] = 0
             if step != 0:
@@ -553,11 +546,11 @@ class AsyncEngine(LogitsMixin):
                                                         sequence_start,
                                                         adapter_name,
                                                         tools=tools)
-            if self.apply_metrics:
-                self.stats.duration_preprocess += time.time() - start
             return prompt_input, gen_config
 
+        arrival_frame = await self.metrics.insert_frame()
         prompt_input, gen_config = await get_inputs_genconfig(gen_config)
+        await self.metrics.update_preprocess(arrival_frame)
         prompt = prompt_input['prompt']
         input_ids = prompt_input['input_ids']
         finish_reason = None
@@ -593,13 +586,9 @@ class AsyncEngine(LogitsMixin):
             if sequence_end is True and sequence_start is False:
                 await self.end_session(session_id)
         else:
-
-            def is_error(status):
-                return status not in [
-                    ResponseType.SUCCESS, ResponseType.FINISH
-                ]
-
+            start_frame = await self.metrics.insert_frame()
             generator = await self.get_generator(False, session_id)
+            await self.metrics.update_queue_waiting(start_frame)
             iterator = generator.async_stream_infer(
                 session_id=session_id,
                 **prompt_input,
@@ -609,15 +598,16 @@ class AsyncEngine(LogitsMixin):
                 sequence_start=sequence_start,
                 sequence_end=sequence_end,
                 step=self.id2step[str(session_id)])
-            if self.apply_metrics:
+            if self.metrics.applied is True:
                 iterator = IterTimer(iterator)
             async with self.safe_run(session_id):
                 state = DetokenizeState(len(input_ids))
                 start_ids_offset = state.ids_offset
                 response = ''
                 async for outputs in iterator:
-                    if self.apply_metrics:
-                        start = time.perf_counter()
+                    start_frame = await self.metrics.insert_frame()
+                    if state.prev_tokens is None:
+                        await self.metrics.update_FTL(arrival_frame)
                     # decode res
                     if is_error(outputs.status):
                         tokens = 0
@@ -637,9 +627,7 @@ class AsyncEngine(LogitsMixin):
                     if outputs.logprobs:
                         log_offset = ids_offset - start_ids_offset
                         logprobs = outputs.logprobs[log_offset:]
-                    if self.apply_metrics:
-                        self.stats.duration_postprocess += time.perf_counter(
-                        ) - start
+                    await self.metrics.update_postprocess(start_frame)
                     # response, history token len,
                     # input token len, gen token len
                     yield GenOut(response, self.id2step[str(session_id)],
@@ -671,11 +659,7 @@ class AsyncEngine(LogitsMixin):
                 # TODO modify pytorch or turbomind api
                 if self.backend == 'pytorch' and sequence_end:
                     await self.end_session(session_id)
-            if self.apply_metrics:
-                self.stats.duration_infer += iterator.get_duration()
-                self.stats.request_success += 1
-                self.stats.request_total += 1
-                self.metrics.log(self.stats)
+                await self.metrics.last_token_frame(iterator)
 
     def parse_tool_response(self, text, tools, **kwargs):
         """Parse model response containing tool information.
