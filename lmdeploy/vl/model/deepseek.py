@@ -1,9 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import itertools
 import warnings
 from typing import Dict, List
 
-import numpy as np
 import torch
 from transformers import AutoModelForCausalLM
 
@@ -21,8 +19,8 @@ def check_deepseek_vl_install():
     except ImportError:
         raise ImportError(
             'To use DeepSeekVLModel, please install deepseek_vl by '
-            'pip install git+https://github.com/deepseek-ai/DeepSeek-VL.git'
-            ' --no-deps')
+            '`pip install git+https://github.com/deepseek-ai/DeepSeek-VL.git'
+            ' --no-deps`')
 
 
 @VISION_MODELS.register_module()
@@ -33,26 +31,26 @@ class DeepSeekVisionModel(VisonModel):
 
     def build_preprocessor(self):
         check_deepseek_vl_install()
-        # empty init
-        from accelerate import init_empty_weights
         from deepseek_vl.models import VLChatProcessor
-        with init_empty_weights():
-            warnings.simplefilter('ignore')
-            self.model = AutoModelForCausalLM.from_pretrained(self.model_path)
-            if not self.with_llm:
-                del self.model.language_model
-            else:
-                self.vl_model = self.model
         self.image_processor = VLChatProcessor.from_pretrained(
             self.model_path).image_processor
 
     def build_model(self):
+        from accelerate import init_empty_weights
+        with init_empty_weights():
+            warnings.simplefilter('ignore')
+            model = AutoModelForCausalLM.from_pretrained(self.model_path)
+            if not self.with_llm:
+                del model.language_model
+            else:
+                self.vl_model = model
+
         from accelerate.utils import get_balanced_memory, infer_auto_device_map
-        max_memory = get_balanced_memory(self.model,
+        max_memory = get_balanced_memory(model,
                                          max_memory=self.max_memory,
                                          dtype=torch.half,
                                          no_split_module_classes=['Block'])
-        device_map = infer_auto_device_map(self.model,
+        device_map = infer_auto_device_map(model,
                                            no_split_module_classes=['Block'],
                                            max_memory=max_memory,
                                            dtype=torch.half)
@@ -80,13 +78,13 @@ class DeepSeekVisionModel(VisonModel):
         from accelerate import load_checkpoint_and_dispatch
         with disable_logging():
             load_checkpoint_and_dispatch(
-                model=self.model,
+                model=model,
                 checkpoint=self.model_path,
                 device_map=device_map if not self.with_llm else {'': 'cpu'},
                 dtype=torch.half)
 
-        self.vision_model = self.model.vision_model.eval()
-        self.aligner = self.model.aligner.eval()
+        self.vision_model = model.vision_model.eval()
+        self.aligner = model.aligner.eval()
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """get images and their corresponding preprocess parameters from
@@ -97,8 +95,13 @@ class DeepSeekVisionModel(VisonModel):
             if item_type == 'image':
                 image = item['image'].convert('RGB')
                 pixel_values = self.image_processor(
-                    image, return_tensors='pt').pixel_values
-                outputs.append(dict(pixel_values=pixel_values))
+                    [image], return_tensors='pt').pixel_values
+                outputs.append(
+                    dict(
+                        pixel_values=pixel_values,
+                        image_size=image.size,
+                        image_tokens=576,  # TODO
+                        image_token_id=0))
         return outputs
 
     @torch.no_grad()
@@ -147,60 +150,16 @@ class DeepSeekVisionModel(VisonModel):
                 logger.error('TODO deepseek-vl')
             prompt_messages.append(dict(role='user', content=content))
         prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
-
-        # collect all preprocessing result from messages
-        preps = [
-            message.pop('preprocess') for message in messages
-            if 'preprocess' in message.keys()
-        ]
-        segs = prompt.split(IMAGE_TOKEN)
-        # flatten the list
-        preps = list(itertools.chain(*preps))
-        assert len(segs) == len(preps) + 1, (
-            f'the number of {IMAGE_TOKEN} is not equal '
-            f'to input images, {len(segs) - 1} vs {len(preps)}')
-
-        return prompt, segs, preps
+        return prompt, IMAGE_TOKEN
 
     def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
-        prompt, segs, preps = self.proc_messages(messages, chat_template,
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template,
                                                  sequence_start)
-
-        # calculate the image token offset for each image
-        input_ids = []
-        IMAGE_DUMMY_TOKEN_INDEX = 0
-        for i, seg in enumerate(segs):
-            if i > 0 and i <= len(preps):
-                preps[i - 1].update(offset=len(input_ids))
-                image_tokens = 0  # TODO
-                input_ids.extend([IMAGE_DUMMY_TOKEN_INDEX] * image_tokens)
-            token_ids = tokenizer.encode(seg,
-                                         add_bos=((i == 0) and sequence_start))
-            input_ids.extend(token_ids)
-
-        return dict(prompt=prompt, input_ids=input_ids, multimodal=preps)
+        return super().to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
+                                      sequence_start)
 
     def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):
-        prompt, segs, features = self.proc_messages(messages, chat_template,
-                                                    sequence_start)
-        features = [x.cpu().numpy() for x in features]
-
-        # tokenizer prompt, and get input_embeddings and input_embedding_ranges
-        input_ids = []
-        begins = []
-        ends = []
-        IMAGE_DUMMY_TOKEN_INDEX = 0
-        for i, seg in enumerate(segs):
-            if i > 0 and i <= len(features):
-                image_dim = features[i - 1].shape[0]
-                begins.append(len(input_ids))
-                ends.append(begins[-1] + image_dim)
-                input_ids.extend([IMAGE_DUMMY_TOKEN_INDEX] * image_dim)
-            seg_ids = tokenizer.encode(seg,
-                                       add_bos=((i == 0) and sequence_start))
-            input_ids.extend(seg_ids)
-        ranges = np.stack([begins, ends], axis=1).tolist()
-        return dict(prompt=prompt,
-                    input_ids=input_ids,
-                    input_embeddings=features,
-                    input_embedding_ranges=ranges)
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template,
+                                                 sequence_start)
+        return super().to_turbomind_aux(messages, prompt, IMAGE_TOKEN,
+                                        tokenizer, sequence_start)

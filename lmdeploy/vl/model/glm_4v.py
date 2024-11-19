@@ -27,14 +27,6 @@ class GLM4VisionModel(VisonModel):
         return False
 
     def build_preprocessor(self):
-        from accelerate import init_empty_weights
-
-        with init_empty_weights(), warnings.catch_warnings():
-            warnings.simplefilter('ignore')
-            from transformers import AutoModelForCausalLM
-            self.model = AutoModelForCausalLM.from_config(
-                self.hf_config, trust_remote_code=True)
-
         from torchvision import transforms
         self.image_transform = transforms.Compose([
             transforms.Resize(
@@ -46,16 +38,21 @@ class GLM4VisionModel(VisonModel):
         ])
 
     def build_model(self):
-        from accelerate import load_checkpoint_and_dispatch
+        from accelerate import init_empty_weights, load_checkpoint_and_dispatch
         from accelerate.utils import infer_auto_device_map
 
-        if not self.with_llm:
-            del self.model.transformer.embedding
-            del self.model.transformer.rotary_pos_emb
-            del self.model.transformer.encoder
-            del self.model.transformer.output_layer
-        else:
-            self.vl_model = self.model
+        with init_empty_weights(), warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            from transformers import AutoModelForCausalLM
+            self.model = AutoModelForCausalLM.from_config(
+                self.hf_config, trust_remote_code=True)
+            if not self.with_llm:
+                del self.model.transformer.embedding
+                del self.model.transformer.rotary_pos_emb
+                del self.model.transformer.encoder
+                del self.model.transformer.output_layer
+            else:
+                self.vl_model = self.model
 
         no_split_module_classes = ['TransformerLayer']
 
