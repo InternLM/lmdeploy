@@ -158,7 +158,7 @@ MODULE_MAP.update({
 # phi3 vision
 MODULE_MAP.update({
     'Phi3VForCausalLM':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3.Phi3VForCausalLM',
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3_v.Phi3VForCausalLM',
 })
 
 # phi-3.5-moe
