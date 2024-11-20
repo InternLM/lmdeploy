@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import collections
 import os.path as osp
 from abc import ABC
+from collections.abc import Sequence
 
 import torch
 import tqdm
@@ -92,7 +92,7 @@ class BaseOutputModel(ABC):
         num_layer = int(config['num_layer'])
         for k in keys:
             v = config.get(k, None)
-            if v is not None and not isinstance(v, collections.Sequence):
+            if v is not None and not isinstance(v, Sequence):
                 config[k] = [v] * num_layer
         return config
 
