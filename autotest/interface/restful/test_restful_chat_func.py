@@ -1442,3 +1442,38 @@ class TestRestfulSeverTools:
         assert func2_args == '{"a": 8, "b": 2}'
         assert func2_out == 16
         assert response.choices[0].message.tool_calls[0].type == 'function'
+
+    def test_search_prompt(self):
+        tools = [{
+            'type': 'function',
+            'function': {
+                'name': 'search',
+                'description': 'BING search API',
+                'parameters': {
+                    'type': 'object',
+                    'properties': {
+                        'query': {
+                            'type': 'string',
+                            'description': 'list of search query strings'
+                        }
+                    },
+                    'required': ['location']
+                }
+            }
+        }]
+        messages = [{'role': 'user', 'content': '搜索最近的人工智能发展趋势'}]
+
+        client = OpenAI(api_key='YOUR_API_KEY', base_url=BASE_URL + '/v1')
+        model_name = client.models.list().data[0].id
+        response = client.chat.completions.create(model=model_name,
+                                                  messages=messages,
+                                                  temperature=0.01,
+                                                  stream=False,
+                                                  tools=tools)
+        print(response)
+        assert response.choices[0].finish_reason == 'tool_calls'
+        assert response.choices[0].message.tool_calls[
+            0].function.name == 'search'
+        assert '人工智能' in response.choices[0].message.tool_calls[
+            0].function.arguments
+        assert response.choices[0].message.tool_calls[0].type == 'function'

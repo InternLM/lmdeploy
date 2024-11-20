@@ -64,6 +64,7 @@ class VLAsyncEngine(AsyncEngine):
         results = {}
         input_ids = []
         from lmdeploy.vl.templates import (MllamaTempateWrapper,
+                                           MolmoChatTemplateWrapper,
                                            Qwen2VLChatTemplateWrapper)
         ranges = None
         grid_thws = None
@@ -98,6 +99,10 @@ class VLAsyncEngine(AsyncEngine):
                     assert len(features)
                     results['cross_attention_states'] = features[0]
                     return results
+
+                if isinstance(self.vl_prompt_template,
+                              MolmoChatTemplateWrapper):
+                    return features[0]
 
             features = [x.cpu().numpy() for x in features]
             input_ids = []

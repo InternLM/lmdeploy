@@ -5,7 +5,7 @@ import triton
 import triton.language as tl
 
 from .activation import silu_and_mul
-from .triton_utils import get_kernel_meta, wrap_jit_func
+from .triton_utils import get_kernel_meta
 
 
 def get_cuda_autotune_config():
@@ -13,16 +13,16 @@ def get_cuda_autotune_config():
         triton.Config(
             {
                 'BLOCK_SIZE_M': 128,
-                'BLOCK_SIZE_N': 256,
-                'BLOCK_SIZE_K': 64,
+                'BLOCK_SIZE_N': 128,
+                'BLOCK_SIZE_K': 32,
                 'GROUP_SIZE_M': 1,
             },
-            num_stages=3,
-            num_warps=8),
+            num_stages=4,
+            num_warps=4),
         triton.Config(
             {
-                'BLOCK_SIZE_M': 128,
-                'BLOCK_SIZE_N': 128,
+                'BLOCK_SIZE_M': 64,
+                'BLOCK_SIZE_N': 256,
                 'BLOCK_SIZE_K': 32,
                 'GROUP_SIZE_M': 1,
             },
@@ -43,34 +43,9 @@ def get_cuda_autotune_config():
 @triton.autotune(
     configs=get_cuda_autotune_config(),
     key=['N', 'K', 'M_NP2'],
+    warmup=10,
+    rep=25,
 )
-@wrap_jit_func(type_hint=dict(
-    A=torch.Tensor,
-    B=torch.Tensor,
-    C=torch.Tensor,
-    SortedIdx=torch.Tensor,
-    ExpStart=torch.Tensor,
-    ExpEnd=torch.Tensor,
-    Weights=torch.Tensor,
-    N=int,
-    K=int,
-    stride_am=int,
-    stride_ak=int,
-    stride_be=int,
-    stride_bn=int,
-    stride_bk=int,
-    stride_cm=int,
-    stride_cn=int,
-    BLOCK_SIZE_M=torch.int32,
-    BLOCK_SIZE_N=torch.int32,
-    BLOCK_SIZE_K=torch.int32,
-    GROUP_SIZE_M=torch.int32,
-    ENABLE_WEIGHTS=bool,
-    top_k=torch.int32,
-    expert_offset=torch.int32,
-    reindex_a=bool,
-    reindex_c=bool,
-))
 @triton.jit
 def fused_moe_kernel(
     A,
@@ -110,16 +85,23 @@ def fused_moe_kernel(
     if M <= 0:
         return
 
-    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+    num_pid_m = tl.cdiv(M_NP2, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
-    num_pid_in_group = GROUP_SIZE_M * num_pid_n
-    group_id = pid // num_pid_in_group
-    first_pid_m = group_id * GROUP_SIZE_M
-    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-    pid_m = first_pid_m + (pid % group_size_m)
-    pid_n = (pid % num_pid_in_group) // group_size_m
 
-    if pid_m * BLOCK_SIZE_M >= M:
+    if GROUP_SIZE_M == 1:
+        pid_m = pid % num_pid_m
+        pid_n = pid // num_pid_m
+        # pid_m = pid // num_pid_n
+        # pid_n = pid % num_pid_n
+    else:
+        num_pid_in_group = GROUP_SIZE_M * num_pid_n
+        group_id = pid // num_pid_in_group
+        first_pid_m = group_id * GROUP_SIZE_M
+        group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+        pid_m = first_pid_m + (pid % group_size_m)
+        pid_n = (pid % num_pid_in_group) // group_size_m
+
+    if pid_m * BLOCK_SIZE_M >= M or pid_n * BLOCK_SIZE_N >= N:
         return
 
     offs_sid = exp_start + pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
@@ -189,11 +171,11 @@ def fused_moe_kernel_launcher(
     if num_tokens is None:
         num_tokens = A.size(0)
     M_NP2 = triton.next_power_of_2(num_tokens)
-    M_NP2 = max(32, M_NP2)
+    M_NP2 = max(64, M_NP2)
     E, N, K = B.shape
 
     def _grid_fn(META):
-        grid = (triton.cdiv(num_tokens, META['BLOCK_SIZE_M']) *
+        grid = (triton.cdiv(M_NP2, META['BLOCK_SIZE_M']) *
                 triton.cdiv(N, META['BLOCK_SIZE_N']), E)
         return grid
 
@@ -229,13 +211,6 @@ def fused_moe_kernel_launcher(
     )
 
 
-@wrap_jit_func(type_hint=dict(TopkIdx=torch.Tensor,
-                              SortedIdx=torch.Tensor,
-                              ExpStart=torch.Tensor,
-                              ExpEnd=torch.Tensor,
-                              len_sorted_idx=int,
-                              num_experts=torch.int32,
-                              BLOCK=torch.int32))
 @triton.jit
 def _start_end_kernel(TopkIdx, SortedIdx, ExpStart, ExpEnd,
                       len_sorted_idx: int, num_experts: tl.constexpr,

@@ -36,6 +36,13 @@ class ModelConfig:
     kv_head_num: int = None
     hidden_units: int = None
     vocab_size: int = None
+    # Turbomind used to assume token_embedding and lm_head has the same size
+    # at vocab dim, i.e. `vocab_size`
+    # But in molmo, embedding.shape is [vocab_size + 128, hidden_units]
+    # while lm_head shape is [hidden_units, vocab_size].
+    # Therefore, we add a new attr "embedding_size" to represent the vocab dim
+    # of token_embedding
+    embedding_size: int = 0
     num_layer: int = None
     inter_size: List[int] = None
     norm_eps: float = None

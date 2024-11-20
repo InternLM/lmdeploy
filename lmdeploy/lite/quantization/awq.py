@@ -39,6 +39,12 @@ NORM_FCS_MAP = {
     'GLMBlock': {
         'input_layernorm': ['self_attention.query_key_value'],
         'post_attention_layernorm': ['mlp.dense_h_to_4h']
+    },
+    'MixtralDecoderLayer': {
+        'input_layernorm':
+        ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
+        'post_attention_layernorm':
+        ['block_sparse_moe.experts.{i}.w1', 'block_sparse_moe.experts.{i}.w3']
     }
 }
 
@@ -73,8 +79,22 @@ FC_FCS_MAP = {
     'GLMBlock': {
         # 'self_attention.query_key_value': ['self_attention.dense']
         # 'mlp.dense_h_to_4h': ['mlp.dense_4h_to_h']
+    },
+    'MixtralDecoderLayer': {
+        'self_attn.v_proj': ['self_attn.o_proj'],
+        'block_sparse_moe.experts.{i}.w3': ['block_sparse_moe.experts.{i}.w2']
     }
 }
+
+SKIPPED_MODULE = ['lora', 'block_sparse_moe.gate']
+
+
+def skipped_module(name: str):
+    """Whether the module should be skipped from quantization."""
+    for m in SKIPPED_MODULE:
+        if m in name:
+            return True
+    return False
 
 
 @torch.no_grad()
@@ -225,13 +245,7 @@ def check_awq_supported(layer_type):
         raise NotImplementedError
 
 
-def quant_weights(model,
-                  fcs,
-                  bits,
-                  symmetry,
-                  group_size=-1,
-                  device='cuda',
-                  skip_if_contains: str = None):
+def quant_weights(model, fcs, bits, symmetry, group_size=-1, device='cuda'):
     """Quantize the weights of the target model's linear layers."""
     from lmdeploy.lite.quantization import WeightQuantizer
     from lmdeploy.lite.quantization.modules import WeightOnlyQLinear
@@ -241,7 +255,7 @@ def quant_weights(model,
         parent_name, _, child_name = name.rpartition('.')
         parent = model.get_submodule(parent_name)
         pack_or_skip = 'packed'
-        if skip_if_contains and skip_if_contains in child_name:
+        if skipped_module(name):
             q_linear = fc
             pack_or_skip = 'skipped'
         else:

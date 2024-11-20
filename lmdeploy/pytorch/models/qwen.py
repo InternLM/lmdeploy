@@ -174,7 +174,7 @@ class QWenBlock(torch.nn.Module):
         # build attention layer
         self.attn = QWenAttention(config, dtype=dtype, device=device)
 
-        # builf MLP
+        # build MLP
         self.mlp = QWenMLP(config, dtype=dtype, device=device)
 
         # build input layer norm

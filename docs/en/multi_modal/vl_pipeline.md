@@ -2,22 +2,13 @@
 
 LMDeploy abstracts the complex inference process of multi-modal Vision-Language Models (VLM) into an easy-to-use pipeline, similar to the Large Language Model (LLM) inference [pipeline](../llm/pipeline.md).
 
-Currently, it supports the following models.
-
-- [Qwen-VL-Chat](https://huggingface.co/Qwen/Qwen-VL-Chat)
-- LLaVA series: [v1.5](https://huggingface.co/collections/liuhaotian/llava-15-653aac15d994e992e2677a7e), [v1.6](https://huggingface.co/collections/liuhaotian/llava-16-65b9e40155f60fd046a5ccf2)
-- [Yi-VL](https://huggingface.co/01-ai/Yi-VL-6B)
-- [DeepSeek-VL](https://huggingface.co/deepseek-ai/deepseek-vl-7b-chat)
-- [InternVL](https://huggingface.co/OpenGVLab/InternVL-Chat-V1-5)
-- [MGM](https://huggingface.co/YanweiLi/MGM-7B)
-- [XComposer](https://huggingface.co/internlm/internlm-xcomposer2-vl-7b)
-- [CogVLM](https://github.com/InternLM/lmdeploy/tree/main/docs/en/multi_modal/cogvlm.md)
-
-We genuinely invite the community to contribute new VLM support to LMDeploy. Your involvement is truly appreciated.
+The supported models are listed [here](../supported_models/supported_models.md). We genuinely invite the community to contribute new VLM support to LMDeploy. Your involvement is truly appreciated.
 
 This article showcases the VLM pipeline using the [liuhaotian/llava-v1.6-vicuna-7b](https://huggingface.co/liuhaotian/llava-v1.6-vicuna-7b) model as a case study.
 You'll learn about the simplest ways to leverage the pipeline and how to gradually unlock more advanced features by adjusting engine parameters and generation arguments, such as tensor parallelism, context window sizing, random sampling, and chat template customization.
 Moreover, we will provide practical inference examples tailored to scenarios with multiple images, batch prompts etc.
+
+Using the pipeline interface to infer other VLM models is similar, with the main difference being the configuration and installation dependencies of the models. You can read [here](https://lmdeploy.readthedocs.io/en/latest/multi_modal/index.html) for environment installation and configuration methods for different models.
 
 ## A 'Hello, world' example
 

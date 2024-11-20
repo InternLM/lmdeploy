@@ -2,22 +2,13 @@
 
 LMDeploy 把视觉-语言模型（VLM）复杂的推理过程，抽象为简单好用的 pipeline。它的用法与大语言模型（LLM）推理 [pipeline](../llm/pipeline.md) 类似。
 
-目前，VLM pipeline 支持以下模型：
-
-- [Qwen-VL-Chat](https://huggingface.co/Qwen/Qwen-VL-Chat)
-- LLaVA series: [v1.5](https://huggingface.co/collections/liuhaotian/llava-15-653aac15d994e992e2677a7e), [v1.6](https://huggingface.co/collections/liuhaotian/llava-16-65b9e40155f60fd046a5ccf2)
-- [Yi-VL](https://huggingface.co/01-ai/Yi-VL-6B)
-- [DeepSeek-VL](https://huggingface.co/deepseek-ai/deepseek-vl-7b-chat)
-- [InternVL](https://huggingface.co/OpenGVLab/InternVL-Chat-V1-5)
-- [MGM](https://huggingface.co/YanweiLi/MGM-7B)
-- [XComposer](https://huggingface.co/internlm/internlm-xcomposer2-vl-7b)
-- [CogVLM](https://github.com/InternLM/lmdeploy/tree/main/docs/zh_cn/multi_modal/cogvlm.md)
-
-我们诚挚邀请社区在 LMDeploy 中添加更多 VLM 模型的支持。
+在[这个列表中](../supported_models/supported_models.md)，你可以查阅每个推理引擎支持的 VLM 模型。我们诚挚邀请社区在 LMDeploy 中添加更多 VLM 模型。
 
 本文将以 [liuhaotian/llava-v1.6-vicuna-7b](https://huggingface.co/liuhaotian/llava-v1.6-vicuna-7b) 模型为例，展示 VLM pipeline 的用法。你将了解它的最基础用法，以及如何通过调整引擎参数和生成条件来逐步解锁更多高级特性，如张量并行，上下文窗口大小调整，随机采样，以及对话模板的定制。
 
 此外，我们还提供针对多图、批量提示词等场景的实际推理示例。
+
+使用 pipeline 接口推理其他 VLM 模型，大同小异，主要区别在于模型依赖的配置和安装。你可以阅读[此处](https://lmdeploy.readthedocs.io/zh-cn/latest/multi_modal/)，查看不同模型的环境安装和配置方式
 
 ## "Hello, world" 示例
 

@@ -657,12 +657,12 @@ void LlamaDecoderLayerWeight<T>::prepare(void* workspace, size_t size, const cud
     };
 
     if (inter_size_) {
-        std::cerr << "process FFN\n";
+        // std::cerr << "process FFN\n";
         process_ffn(ffn_weights, false);
     }
 
     if (!moe_weights.experts.empty()) {
-        std::cerr << "process MoE\n";
+        // std::cerr << "process MoE\n";
         std::vector<std::pair<void*, int>> fused_ptrs;
         std::vector<std::pair<void*, int>> output_ptrs;
         std::vector<std::pair<void*, int>> fused_param_ptrs;

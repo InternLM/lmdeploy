@@ -133,6 +133,12 @@ void LlamaTritonModel<T>::handleMissingParams()
                        (int)model_param_.kv_head_num);
     }
 
+    if (model_param_.embedding_size == 0) {
+        model_param_.embedding_size = model_param_.vocab_size;
+        TM_LOG_WARNING("[LlamaTritonModel] `embedding_size` is not set, default to `vocab_size` (%d).",
+                       (int)model_param_.vocab_size);
+    }
+
     if (!attn_param_.max_position_embeddings) {
         attn_param_.max_position_embeddings = 2048;
         TM_LOG_WARNING("[LlamaTritonModel] `max_position_embeddings` is not set, default to %d.",
@@ -251,6 +257,7 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     model_param_.hidden_units       = model_reader["hidden_units"].as<int>();
     model_param_.layer_num          = model_reader["num_layer"].as<int>();
     model_param_.vocab_size         = model_reader["vocab_size"].as<int>();
+    model_param_.embedding_size     = model_reader["embedding_size"].as<int>();
     model_param_.norm_eps           = model_reader["norm_eps"].as<float>();
     model_param_.start_id           = model_reader["start_id"].as<int>();
     model_param_.end_id             = model_reader["end_id"].as<int>();

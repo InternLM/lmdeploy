@@ -263,7 +263,7 @@ class CogVLMDecoderLayer(nn.Module):
                                                dtype=dtype,
                                                device=device)
 
-        # builf MLP
+        # build MLP
         self.mlp = VisionExpertMLP(config, dtype=dtype, device=device)
 
         # build input layer norm

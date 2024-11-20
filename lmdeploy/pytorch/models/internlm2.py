@@ -160,7 +160,7 @@ class InternLM2DecoderLayer(nn.Module):
         # build attention layer
         self.attention = InternLM2Attention(config, dtype=dtype, device=device)
 
-        # builf MLP
+        # build MLP
         self.feed_forward = InternLM2MLP(config, dtype=dtype, device=device)
 
         # build input layer norm

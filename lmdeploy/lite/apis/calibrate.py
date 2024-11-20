@@ -24,7 +24,8 @@ LAYER_TYPE_MAP = {
     'MGMLlamaForCausalLM': 'LlamaDecoderLayer',  # mini gemini
     'InternLMXComposer2ForCausalLM': 'InternLM2DecoderLayer',
     'Phi3ForCausalLM': 'Phi3DecoderLayer',
-    'ChatGLMForConditionalGeneration': 'GLMBlock'
+    'ChatGLMForConditionalGeneration': 'GLMBlock',
+    'MixtralForCausalLM': 'MixtralDecoderLayer',
 }
 
 NORM_TYPE_MAP = {
@@ -39,7 +40,8 @@ NORM_TYPE_MAP = {
     'MGMLlamaForCausalLM': 'LlamaRMSNorm',  # mini gemini
     'InternLMXComposer2ForCausalLM': 'InternLM2RMSNorm',
     'Phi3ForCausalLM': 'Phi3RMSNorm',
-    'ChatGLMForConditionalGeneration': 'RMSNorm'
+    'ChatGLMForConditionalGeneration': 'RMSNorm',
+    'MixtralForCausalLM': 'MixtralRMSNorm',
 }
 
 HEAD_NAME_MAP = {
@@ -54,7 +56,8 @@ HEAD_NAME_MAP = {
     'MGMLlamaForCausalLM': 'lm_head',  # mini gemini
     'InternLMXComposer2ForCausalLM': 'output',
     'Phi3ForCausalLM': 'lm_head',
-    'ChatGLMForConditionalGeneration': 'output_layer'
+    'ChatGLMForConditionalGeneration': 'output_layer',
+    'MixtralForCausalLM': 'lm_head',
 }
 
 
@@ -150,6 +153,42 @@ def make_compatible_internvl_config(model_path):
             PretrainedConfig._get_non_default_generation_parameters = _get_non_default_generation_parameters  # noqa
 
 
+def update_moe_mapping(model, model_type):
+    """Update moe mapping."""
+    from lmdeploy.lite.quantization.awq import FC_FCS_MAP, NORM_FCS_MAP
+
+    # get experts num
+    num_experts = 0
+    for n, m in model.named_modules():
+        if type(m).__name__ == LAYER_TYPE_MAP[model_type]:
+            fc2fcs = FC_FCS_MAP[LAYER_TYPE_MAP[model_type]]
+            for k, v in fc2fcs.items():
+                if '{i}' in k:
+                    break
+            num_experts = len(m.get_submodule(k.split('.{i}')[0]))
+            break
+
+    # update FC_FCS_MAP
+    updated_fc2fcs = dict()
+    for prev_fc, post_fc in fc2fcs.items():
+        if '{i}' in prev_fc:
+            for i in range(num_experts):
+                updated_fc2fcs.update(
+                    {prev_fc.format(i=i): [v.format(i=i) for v in post_fc]})
+        else:
+            updated_fc2fcs.update({prev_fc: post_fc})
+    FC_FCS_MAP[LAYER_TYPE_MAP[model_type]] = updated_fc2fcs
+    # update NORM_FCS_MAP
+    norm2fcs = NORM_FCS_MAP[LAYER_TYPE_MAP[model_type]]
+    updated_norm2fcs = dict()
+    for norm, fc in norm2fcs.items():
+        updated_norm2fcs.update({
+            norm:
+            list(set([v.format(i=i) for v in fc for i in range(num_experts)]))
+        })
+    NORM_FCS_MAP[LAYER_TYPE_MAP[model_type]] = updated_norm2fcs
+
+
 def calibrate(model: str,
               calib_dataset: str = 'ptb',
               calib_samples: int = 128,
@@ -197,7 +236,6 @@ def calibrate(model: str,
     if model_type == 'llm':
         # Load tokenizer and configuration
         tokenizer = AutoTokenizer.from_pretrained(model,
-                                                  use_fast=False,
                                                   trust_remote_code=True)
 
         model = load_hf_from_pretrained(model,
@@ -215,6 +253,9 @@ def calibrate(model: str,
             f'Currently, quantification and calibration of {model_type} are '
             f'not supported. The supported model types are '
             f"{', '.join(LAYER_TYPE_MAP.keys())}.")
+
+    if model_type in ['MixtralForCausalLM']:
+        update_moe_mapping(model, model_type)
 
     if model_type == 'QWenLMHeadModel':
         try:

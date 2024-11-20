@@ -167,7 +167,7 @@ class DecoderLayer(nn.Module):
         # build attention layer
         self.self_attn = BaichuanAttention(config, dtype=dtype, device=device)
 
-        # builf MLP
+        # build MLP
         self.mlp = MLP(config, dtype=dtype, device=device)
 
         # build input layer norm
