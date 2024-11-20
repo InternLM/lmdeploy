@@ -7,14 +7,14 @@ import torch
 from transformers import AutoProcessor
 
 from lmdeploy.utils import get_logger
-from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
+from lmdeploy.vl.model.llava_hf import VISION_MODELS, LlavaHfVisionModel
 from lmdeploy.vl.model.utils import disable_logging
 
 logger = get_logger('lmdeploy')
 
 
 @VISION_MODELS.register_module()
-class LlavaNextVisionModel(VisonModel):
+class LlavaNextVisionModel(LlavaHfVisionModel):
     """Llava hf vision model."""
 
     _arch = 'LlavaNextForConditionalGeneration'
@@ -118,9 +118,6 @@ class LlavaNextVisionModel(VisonModel):
 
     @torch.no_grad()
     def forward(self, inputs: List[Dict]) -> List[torch.Tensor]:
-        # from transformers.models.llava_next.modeling_llava_next import \
-        #     image_size_to_num_patches
-
         pixel_values = [
             x['pixel_values'].to(device=self.model.device,
                                  dtype=self.model.dtype) for x in inputs
@@ -171,37 +168,3 @@ class LlavaNextVisionModel(VisonModel):
                               feature_lens.cpu().numpy().tolist(),
                               dim=0)
         return outputs
-
-    @classmethod
-    def proc_messages(cls, messages, chat_template, sequence_start):
-        """apply chat template to get the prompt."""
-        prompt_messages = []
-        IMAGE_TOKEN = '<IMAGE_TOKEN>'
-        for message in messages:
-            if isinstance(message['content'], str):
-                prompt_messages.append(message)
-                continue
-            n_images = [
-                1 for item in message['content'] if item['type'] == 'image'
-            ]
-            n_images = sum(n_images)
-            content = [
-                item['text'] for item in message['content']
-                if item['type'] == 'text'
-            ]
-            content = f'<img>{IMAGE_TOKEN * n_images}</img>\n' + content[0]
-            prompt_messages.append(dict(role='user', content=content))
-        prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
-        return prompt, IMAGE_TOKEN
-
-    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template,
-                                                 sequence_start)
-        return super().to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
-                                      sequence_start)
-
-    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template,
-                                                 sequence_start)
-        return super().to_turbomind_aux(messages, prompt, IMAGE_TOKEN,
-                                        tokenizer, sequence_start)
