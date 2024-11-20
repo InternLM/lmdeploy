@@ -114,7 +114,7 @@ void dispatchDecoding(const AttentionParams<T>& params)
     };
 
     if (params.size_per_head == 192) {
-        
+
         if (is_kv_int8) {
             invokeDecoding<Decoding<arch::Sm80, T, uint8_t, 1, 192>>(params);
         }

@@ -4,10 +4,10 @@ from .llama import LlamaModel, LlamaReader
 
 
 class DeepSeek2Reader(LlamaReader):
-    
+
     def moe_ffn_gate(self, i):
         return self.params.get(f'model.layers.{i}.mlp.gate.weight')
-    
+
     def moe_ffn_expert(self, e=None, i=None, kind=None):
         if not kind:
             return self.filter(r'experts')
@@ -18,7 +18,7 @@ class DeepSeek2Reader(LlamaReader):
             tensor = self.transform(tensor, kind)
             result.append(tensor)
         return (*result, )
-    
+
     def _ffn(self, i: int, kind: str):
         """Get ffn kind for layer i."""
         if not kind:
@@ -32,29 +32,32 @@ class DeepSeek2Reader(LlamaReader):
             tensor = self.transform(tensor, kind)
             result.append(tensor)
         return (*result, )
-    
+
     def mla(self, i: int, kind: str):
         if not kind:
             return self.filter(r'self_attn.*proj')
         result = []
-        for key in ['q_a_proj', 'q_b_proj', 'q_proj', 'kv_a_proj_with_mqa', 'kv_b_proj', 'o_proj']:
+        for key in [
+                'q_a_proj', 'q_b_proj', 'q_proj', 'kv_a_proj_with_mqa',
+                'kv_b_proj', 'o_proj'
+        ]:
             tensor = self.params.get(
-                f'{self.attn_layer_prefix}.{i}.self_attn.{key}.{kind}'
-            )
+                f'{self.attn_layer_prefix}.{i}.self_attn.{key}.{kind}')
             tensor = self.transform(tensor, kind)
             result.append(tensor)
         return (*result, )
-    
+
     def mla_norm(self, i: int):
         result = []
         for k in ['q', 'kv']:
-            result.append(self.params.get(f'{self.attn_layer_prefix}.{i}.self_attn.{k}_a_layernorm.weight'))
+            name = f'{self.attn_layer_prefix}.{i}.self_attn.{k}_a_layernorm.weight'  # noqa: E501
+            result.append(self.params.get(name))
         return (*result, )
-        
+
 
 @INPUT_MODELS.register_module(name='deepseek2')
 class DeepSeek2Model(LlamaModel):
-    
+
     Reader = DeepSeek2Reader
 
     def tokenizer_info(self):
@@ -78,23 +81,20 @@ class DeepSeek2Model(LlamaModel):
         inter_size = [n_shared_experts * expert_inter_size] * num_layer
         inter_size[0] = cfg['intermediate_size']
         norm_topk_prob = cfg['norm_topk_prob']
-        info.update(
-            kv_lora_rank=cfg['kv_lora_rank'],
-            q_lora_rank=cfg['q_lora_rank'] or 0,
-            qk_rope_dim=qk_rope_dim,
-            v_head_dim=cfg['v_head_dim'],
-            size_per_head=qk_rope_dim + qk_nope_dim,
-            rotary_embedding=qk_rope_dim,
-            expert_num=expert_num,
-            expert_inter_size=expert_inter_size,
-            experts_per_token=experts_per_token,
-            inter_size=inter_size,
-            norm_topk_prob=norm_topk_prob,
-            routed_scale=cfg['routed_scaling_factor'],
-            topk_method=cfg['topk_method'],
-            topk_group=cfg['topk_group'],
-            moe_group_num=cfg['n_group'],
-            tune_layer_num=2
-        )
+        info.update(kv_lora_rank=cfg['kv_lora_rank'],
+                    q_lora_rank=cfg['q_lora_rank'] or 0,
+                    qk_rope_dim=qk_rope_dim,
+                    v_head_dim=cfg['v_head_dim'],
+                    size_per_head=qk_rope_dim + qk_nope_dim,
+                    rotary_embedding=qk_rope_dim,
+                    expert_num=expert_num,
+                    expert_inter_size=expert_inter_size,
+                    experts_per_token=experts_per_token,
+                    inter_size=inter_size,
+                    norm_topk_prob=norm_topk_prob,
+                    routed_scale=cfg['routed_scaling_factor'],
+                    topk_method=cfg['topk_method'],
+                    topk_group=cfg['topk_group'],
+                    moe_group_num=cfg['n_group'],
+                    tune_layer_num=2)
         return info
-

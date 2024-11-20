@@ -10,7 +10,6 @@ from typing import Iterator, Tuple
 
 import torch
 from safetensors import safe_open
-import safetensors
 
 # https://github.com/huggingface/transformers/blob/53fad641cfdb5105e2470bcf3ef17ea8e25cc300/src/transformers/modeling_utils.py#L372
 WEIGHT_INDEX_NAME = 'pytorch_model.bin.index.json'
@@ -88,7 +87,6 @@ class SafetensorsLoader(BaseLoader):
                 if misc:
                     yield (-1, {k: f.get_tensor(k) for k in misc})
         assert not params
-
 
     # def items(self):
     #     params = defaultdict(dict)
