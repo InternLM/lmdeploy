@@ -648,3 +648,312 @@ class LLavaInputProcessor(BaseModelInputProcessor):
             input_multimodals=dict(image=input_imgs),
         )
         return result
+
+
+def get_anyres_image_grid_shape(image_size, grid_pinpoints, patch_size):
+
+    from transformers.image_processing_utils import select_best_resolution
+
+    if not isinstance(grid_pinpoints, list):
+        raise TypeError('grid_pinpoints should be a list of tuples or lists')
+
+    if not isinstance(image_size, (list, tuple)):
+        image_size = image_size.tolist()
+
+    height, width = select_best_resolution(image_size, grid_pinpoints)
+    return height // patch_size, width // patch_size
+
+
+def unpad_image(tensor, original_size):
+    """Unpads a PyTorch tensor of a padded and resized image."""
+    if not isinstance(original_size, (list, tuple)):
+        original_size = original_size.tolist()
+    original_height, original_width = original_size
+    current_height, current_width = tensor.shape[1:]
+
+    original_aspect_ratio = original_width / original_height
+    current_aspect_ratio = current_width / current_height
+
+    if original_aspect_ratio > current_aspect_ratio:
+        scale_factor = current_width / original_width
+        new_height = int(round(original_height * scale_factor, 7))
+        padding = (current_height - new_height) // 2
+        unpadded_tensor = tensor[:, padding:current_height - padding, :]
+    else:
+        scale_factor = current_height / original_height
+        new_width = int(round(original_width * scale_factor, 7))
+        padding = (current_width - new_width) // 2
+        unpadded_tensor = tensor[:, :, padding:current_width - padding]
+
+    return unpadded_tensor
+
+
+def image_size_to_num_patches(image_size, grid_pinpoints, patch_size: int):
+    """Calculate the number of patches after the preprocessing for images of
+    any resolution."""
+    from transformers.image_processing_utils import select_best_resolution
+    if not isinstance(grid_pinpoints, list):
+        raise TypeError('grid_pinpoints should be a list of tuples or lists')
+
+    if not isinstance(image_size, (list, tuple)):
+        image_size = image_size.tolist()
+
+    best_resolution = select_best_resolution(image_size, grid_pinpoints)
+    height, width = best_resolution
+
+    num_patches = (height // patch_size) * (width // patch_size)
+    # add the base patch
+    num_patches += 1
+    return num_patches
+
+
+class LlavaNextForConditionalGeneration(LlavaForConditionalGeneration):
+
+    def __init__(self,
+                 config: PretrainedConfig,
+                 ctx_mgr: StepContextManager,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__(config=config,
+                         ctx_mgr=ctx_mgr,
+                         dtype=dtype,
+                         device=device)
+        self.image_newline = nn.Parameter(
+            torch.empty(config.text_config.hidden_size,
+                        dtype=dtype,
+                        device=device))
+        self.input_processor = LLavaNextInputProcessor(config, dtype)
+
+    def get_image_features(
+        self,
+        pixel_values: torch.FloatTensor,
+        image_sizes: torch.Tensor,
+        vision_feature_layer: int,
+        vision_feature_select_strategy: str,
+    ):
+        # ! infer image_num_patches from image_sizes
+        image_num_patches = [
+            image_size_to_num_patches(
+                image_size=imsize,
+                grid_pinpoints=self.config.image_grid_pinpoints,
+                patch_size=self.config.vision_config.image_size,
+            ) for imsize in image_sizes
+        ]
+        if pixel_values.dim() == 5:
+            # stacked if input is
+            # (batch_size, num_patches, num_channels, height, width)
+            _pixel_values_list = [
+                pix_val[:num_patch]
+                for pix_val, num_patch in zip(pixel_values, image_num_patches)
+            ]
+            pixel_values = torch.cat(_pixel_values_list, dim=0)
+        elif pixel_values.dim() != 4:
+            # otherwise has to be stacked from list of
+            # (num_patches, num_channels, height, width)
+            raise ValueError(f'pixel_values of shape {pixel_values.shape}, '
+                             'expect to be of 4 or 5 dimensions')
+
+        selected_image_feature = self.vision_tower(
+            pixel_values, vision_feature_layer=vision_feature_layer)[0]
+        if vision_feature_select_strategy == 'default':
+            selected_image_feature = selected_image_feature[:, 1:]
+        elif vision_feature_select_strategy == 'full':
+            selected_image_feature = selected_image_feature
+        image_features = self.multi_modal_projector(selected_image_feature)
+        image_features = torch.split(image_features, image_num_patches, dim=0)
+        return image_features
+
+    def pack_image_features(self,
+                            image_features,
+                            image_sizes,
+                            vision_feature_select_strategy,
+                            image_newline=None):
+
+        new_image_features = []
+        feature_lens = []
+        for image_idx, image_feature in enumerate(image_features):
+            if image_feature.shape[0] > 1:
+                base_image_feature = image_feature[0]
+                image_feature = image_feature[1:]
+                height = width = (self.config.vision_config.image_size //
+                                  self.config.vision_config.patch_size)
+
+                if vision_feature_select_strategy == 'default':
+                    expected_num_patches = height * width
+                elif vision_feature_select_strategy == 'full':
+                    expected_num_patches = height * width + 1
+                if expected_num_patches != base_image_feature.shape[0]:
+                    raise ValueError('The number of patches is '
+                                     'not consistent with the image size.')
+
+                (num_patch_height,
+                 num_patch_width) = get_anyres_image_grid_shape(
+                     image_sizes[image_idx],
+                     self.config.image_grid_pinpoints,
+                     self.config.vision_config.image_size,
+                 )
+                image_feature = image_feature.view(num_patch_height,
+                                                   num_patch_width, height,
+                                                   width, -1)
+                image_feature = image_feature.permute(4, 0, 2, 1,
+                                                      3).contiguous()
+                image_feature = image_feature.flatten(1, 2).flatten(2, 3)
+                image_feature = unpad_image(image_feature,
+                                            image_sizes[image_idx])
+                if image_newline is not None:
+                    image_feature = torch.cat(
+                        (
+                            image_feature,
+                            image_newline[:, None, None].expand(
+                                *image_feature.shape[:-1], 1).to(
+                                    image_feature.dtype),
+                        ),
+                        dim=-1,
+                    )
+                image_feature = image_feature.flatten(1, 2).transpose(0, 1)
+                image_feature = torch.cat((base_image_feature, image_feature),
+                                          dim=0)
+            else:
+                image_feature = image_feature[0]
+                if image_newline is not None:
+                    image_feature = torch.cat(
+                        (image_feature, image_newline[None].to(image_feature)),
+                        dim=0)
+            new_image_features.append(image_feature)
+            feature_lens.append(image_feature.size(0))
+        image_features = torch.cat(new_image_features, dim=0)
+        return image_features
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        position_ids: torch.Tensor,
+        past_key_values: List[List[torch.Tensor]],
+        attn_metadata: Any = None,
+        pixel_values: torch.Tensor = None,
+        image_sizes: torch.Tensor = None,
+        inputs_embeds: torch.Tensor = None,
+        **kwargs,
+    ):
+        if inputs_embeds is None:
+            image_features = None
+            if pixel_values is not None:
+                vision_feature_layer = self.config.vision_feature_layer
+                select_strategy = self.config.vision_feature_select_strategy
+                image_sizes = image_sizes.tolist()
+                image_features = self.get_image_features(
+                    pixel_values,
+                    image_sizes,
+                    vision_feature_layer=vision_feature_layer,
+                    vision_feature_select_strategy=select_strategy)
+                image_features = self.pack_image_features(
+                    image_features,
+                    image_sizes,
+                    vision_feature_select_strategy=select_strategy,
+                    image_newline=self.image_newline,
+                )
+                image_features = image_features[None]
+            inputs_embeds = self.language_model.get_input_embeddings()(
+                input_ids)
+            if pixel_values is not None:
+                from lmdeploy.vl.constants import IMAGE_DUMMY_TOKEN_INDEX
+                vis_mask = input_ids == IMAGE_DUMMY_TOKEN_INDEX
+                inputs_embeds.masked_scatter_(vis_mask[..., None],
+                                              image_features)
+
+        return self.language_model.forward(input_ids=input_ids,
+                                           inputs_embeds=inputs_embeds,
+                                           past_key_values=past_key_values,
+                                           position_ids=position_ids,
+                                           attn_metadata=attn_metadata)
+
+    def get_input_processor(self) -> BaseModelInputProcessor:
+        """get input processor."""
+        return self.input_processor
+
+    def prepare_inputs_for_generation(
+        self,
+        past_key_values: List[List[torch.Tensor]],
+        inputs_embeds: torch.Tensor = None,
+        context: StepContext = None,
+    ):
+        """prepare input."""
+        input_ids = context.input_ids
+        position_ids = context.position_ids
+        attn_metadata = context.attn_metadata
+
+        # vision inputs
+        pixel_values = None
+        image_sizes = None
+        if context.input_multimodals is not None:
+            img_mms = [
+                input_mm.get('image', [])
+                for input_mm in context.input_multimodals
+            ]
+            # flatten batch
+            img_mms = [data for im_data in img_mms for data in im_data]
+            if len(img_mms) > 0:
+                pixel_values = torch.cat([data.data for data in img_mms])
+                image_sizes = torch.cat(
+                    [data.meta['image_sizes'] for data in img_mms])
+            else:
+                pixel_values = None
+                image_sizes = None
+
+        # get inputs from context
+        vision_embeddings = context.input_embeddings
+        vision_embedding_indexing = context.input_embedding_indexing
+
+        if vision_embeddings is not None and len(vision_embeddings) > 0:
+            if inputs_embeds is None:
+                inputs_embeds = self.get_input_embeddings()(input_ids)
+            inputs_embeds[:,
+                          vision_embedding_indexing, :] = vision_embeddings.to(
+                              inputs_embeds)
+
+        return dict(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            attn_metadata=attn_metadata,
+            pixel_values=pixel_values,
+            image_sizes=image_sizes,
+            inputs_embeds=inputs_embeds,
+        )
+
+
+class LLavaNextInputProcessor(BaseModelInputProcessor):
+    """llava input processor."""
+
+    def __init__(self, config: PretrainedConfig, dtype) -> None:
+        self.config = config
+        self.dtype = dtype
+
+    def preprocess_input(self,
+                         input_ids: List[int],
+                         input_multimodals: List[Dict[str, Any]] = None,
+                         **kwargs) -> PreprocessInputResult:
+        """prepare multimodal input."""
+        if input_multimodals is None or len(input_multimodals) == 0:
+            return input_ids, input_multimodals
+
+        input_imgs = []
+        for input_mm in input_multimodals:
+            pixel_values = input_mm['pixel_values'].to(self.dtype)
+            image_sizes = input_mm['image_sizes']
+            offset = input_mm['offset']
+            num_pad = input_mm['image_tokens']
+            if isinstance(num_pad, torch.Tensor):
+                num_pad = num_pad.item()
+
+            mm_data = MultiModalTensor(data=pixel_values,
+                                       start=offset,
+                                       end=offset + num_pad,
+                                       meta=dict(image_sizes=image_sizes))
+            input_imgs.append(mm_data)
+
+        result = PreprocessInputResult(
+            input_ids=input_ids,
+            input_multimodals=dict(image=input_imgs),
+        )
+        return result

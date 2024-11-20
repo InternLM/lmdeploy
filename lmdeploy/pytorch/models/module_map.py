@@ -88,7 +88,7 @@ MODULE_MAP.update(
         'LlavaForConditionalGeneration':
         f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llava.LlavaForConditionalGeneration',  # noqa: E501
         'LlavaNextForConditionalGeneration':  # noqa: E501
-        f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llava.LlavaForConditionalGeneration'
+        f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llava.LlavaNextForConditionalGeneration'  # noqa: E501
     })
 
 # qwen
