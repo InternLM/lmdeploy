@@ -234,9 +234,8 @@ class LlavaVisionModel(LlavaHfVisionModel):
 
     def build_preprocessor(self):
         from transformers import CLIPImageProcessor
-        vision_tower_name = 'openai/clip-vit-large-patch14-336'
         self.image_processor = CLIPImageProcessor.from_pretrained(
-            vision_tower_name)
+            self.hf_config.mm_vision_tower)
 
     def build_model(self):
         """build model & load weights."""
