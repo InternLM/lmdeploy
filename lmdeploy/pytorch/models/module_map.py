@@ -85,10 +85,6 @@ MODULE_MAP.update({
 # llava
 MODULE_MAP.update(
     {
-        'LlavaLlamaForCausalLM':
-        f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlavaLlamaForCausalLM',
-        'LlavaMistralForCausalLM':
-        f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mistral.LlavaMistralForCausalLM',
         'LlavaForConditionalGeneration':
         f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llava.LlavaForConditionalGeneration',  # noqa: E501
         'LlavaNextForConditionalGeneration':  # noqa: E501

@@ -457,6 +457,8 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
             ]
             if len(pixel_values) > 0:
                 pixel_values = torch.cat([data.data for data in pixel_values])
+            else:
+                pixel_values = None
 
         # get inputs from context
         vision_embeddings = context.input_embeddings
