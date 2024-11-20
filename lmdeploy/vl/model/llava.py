@@ -14,7 +14,9 @@ from transformers import AutoConfig, AutoModelForCausalLM
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
-from lmdeploy.vl.model.utils import disable_logging, rewrite_ctx
+from lmdeploy.vl.model.utils import (disable_logging,
+                                     get_vision_encoder_device_map,
+                                     rewrite_ctx)
 
 logger = get_logger('lmdeploy')
 
@@ -102,7 +104,7 @@ class LlavaVisionModel(VisonModel):
         else:
             assert 0, f'unsupported arch {self.arch}'
 
-        from accelerate import init_empty_weights
+        from accelerate import init_empty_weights, load_checkpoint_and_dispatch
 
         # init empty model, skip layer initialization
         with init_empty_weights(), warnings.catch_warnings(), \
@@ -132,14 +134,21 @@ class LlavaVisionModel(VisonModel):
             # for llava-v1.5, the vit is not in llm ckpt
             vision_tower.to(dtype=torch.half)
 
-        from accelerate import load_checkpoint_and_dispatch
+        setattr(model.config, 'tie_word_embeddings', False)
+        no_split_module_classes = ['CLIPEncoderLayer', 'SiglipEncoderLayer']
+        same_device_keys = [('mm_projector', 'vision_resampler',
+                             'image_newline', 'rotary_emb')]
+        device_map = get_vision_encoder_device_map(model.model,
+                                                   self.max_memory,
+                                                   no_split_module_classes,
+                                                   same_device_keys)
         with disable_logging():
             load_checkpoint_and_dispatch(
                 model=model,
                 max_memory=self.max_memory,
                 checkpoint=self.model_path,
-                device_map='auto' if not self.with_llm else {'': 'cpu'},
-                no_split_module_classes=['CLIPEncoderLayer'],
+                device_map=device_map if not self.with_llm else {'': 'cpu'},
+                no_split_module_classes=no_split_module_classes,
                 dtype=torch.half)
 
         self.model = model.model.eval()

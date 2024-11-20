@@ -8,7 +8,8 @@ from PIL.Image import Image
 from transformers import AutoProcessor
 
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
-from lmdeploy.vl.model.utils import disable_logging
+from lmdeploy.vl.model.utils import (disable_logging,
+                                     get_vision_encoder_device_map)
 
 
 @VISION_MODELS.register_module()
@@ -33,15 +34,16 @@ class LlavaHfVisionModel(VisonModel):
 
         # fix for llava-hf/llava-interleave-qwen-7b-hf
         setattr(model.config, 'tie_word_embeddings', False)
+        no_split_module_classes = ['CLIPEncoderLayer', 'SiglipEncoderLayer']
+        device_map = get_vision_encoder_device_map(model, self.max_memory,
+                                                   no_split_module_classes)
         with disable_logging():
             load_checkpoint_and_dispatch(
                 model=model,
                 max_memory=self.max_memory,
                 checkpoint=self.model_path,
-                device_map='auto' if not self.with_llm else {'': 'cpu'},
-                no_split_module_classes=[
-                    'CLIPEncoderLayer', 'SiglipEncoderLayer'
-                ],
+                device_map=device_map if not self.with_llm else {'': 'cpu'},
+                no_split_module_classes=no_split_module_classes,
                 dtype=torch.half)
         model.eval()
         self.model = model

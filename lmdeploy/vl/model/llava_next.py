@@ -8,7 +8,8 @@ from PIL.Image import Image
 from transformers import AutoProcessor
 
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
-from lmdeploy.vl.model.utils import disable_logging
+from lmdeploy.vl.model.utils import (disable_logging,
+                                     get_vision_encoder_device_map)
 
 
 @VISION_MODELS.register_module()
@@ -19,7 +20,6 @@ class LlavaNextVisionModel(VisonModel):
 
     def build_model(self):
         from accelerate import init_empty_weights, load_checkpoint_and_dispatch
-        from accelerate.utils import get_balanced_memory, infer_auto_device_map
 
         with init_empty_weights(), warnings.catch_warnings():
             warnings.simplefilter('ignore')
@@ -34,25 +34,10 @@ class LlavaNextVisionModel(VisonModel):
                 self.vl_model = model
 
         no_split_module_classes = ['CLIPEncoderLayer']
-        max_memory = get_balanced_memory(
-            model,
-            max_memory=self.max_memory,
-            dtype=torch.half,
-            no_split_module_classes=no_split_module_classes)
-        device_map = infer_auto_device_map(
-            model,
-            no_split_module_classes=no_split_module_classes,
-            max_memory=max_memory,
-            dtype=torch.half)
-
         same_device_keys = [('multi_modal_projector', 'image_newline')]
-        for keys in same_device_keys:
-            keys = [k for k in keys if k in device_map]
-            if len(keys) <= 1:
-                continue
-            for k in keys[1:]:
-                device_map[k] = device_map[keys[0]]
-
+        device_map = get_vision_encoder_device_map(model, self.max_memory,
+                                                   no_split_module_classes,
+                                                   same_device_keys)
         with disable_logging():
             load_checkpoint_and_dispatch(
                 model=model,
