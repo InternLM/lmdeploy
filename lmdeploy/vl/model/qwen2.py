@@ -84,11 +84,13 @@ class Qwen2VLModel(VisonModel):
                 result = self.processor.image_processor(images=image_inputs,
                                                         videos=None,
                                                         return_tensors='pt')
+                merge_length = self.processor.image_processor.merge_size**2
+                image_tokens = result['image_grid_thw'].prod(
+                    dim=1) // merge_length
                 result.update(
-                    dict(
-                        image_size=image.size,
-                        image_tokens=1,  # TODO
-                        image_token_id=0))
+                    dict(image_size=image.size,
+                         image_tokens=image_tokens,
+                         image_token_id=0))
                 outputs.append(result)
         return outputs
 
@@ -98,26 +100,33 @@ class Qwen2VLModel(VisonModel):
 
     @classmethod
     def proc_messages(cls, messages, chat_template, sequence_start):
-        # apply chat template to get the prompt
-        IMAGE_TOKEN = '<|image_pad|>'
+        """apply chat template to get the prompt."""
         prompt_messages = []
+        IMAGE_TOKEN = '<IMAGE_TOKEN>'
         for message in messages:
             if isinstance(message['content'], str):
                 prompt_messages.append(message)
                 continue
-            content = []
-            for item in message['content']:
-                item_type = item['type']
-                if item_type == 'text':
-                    content.append(item['text'])
-                elif item_type == 'image':
-                    content.append(
-                        f'<|vision_start|>{IMAGE_TOKEN}<|vision_end|>')
-                else:
-                    assert 0, (
-                        f'unsupported type {item_type} in {message["content"]}'
-                    )
-            prompt_messages.append(dict(role='user', content=''.join(content)))
+            n_images = len(
+                [1 for x in message['content'] if x['type'] == 'image'])
+            content = [
+                item['text'] for item in message['content']
+                if item['type'] == 'text'
+            ]
+            prompt = content[0]
+            if IMAGE_TOKEN in prompt and '<|vision_start|>' not in prompt:
+                prompt = prompt.replace(
+                    IMAGE_TOKEN,
+                    f'<|vision_start|>{IMAGE_TOKEN}<|vision_end|>')
+            else:
+                # Qwen2-VL-2B-Instruct will concat image and user prompt
+                # according to their order in the content list
+                # we insert image token before user prompt by default. The
+                # user can use custom image token position if they want the
+                # same decorated prompt as Qwen2-VL
+                prompt = f'<|vision_start|>{IMAGE_TOKEN}<|vision_end|>' * \
+                    n_images + prompt
+                prompt_messages.append(dict(role='user', content=prompt))
         prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
         return prompt, IMAGE_TOKEN
 
