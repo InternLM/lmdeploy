@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # Modified from
-# https://github.com/haotian-liu/LLaVA.git
+# https://github.com/LLaVA-VL/LLaVA-NeXT.git
 import math
 import re
 import warnings

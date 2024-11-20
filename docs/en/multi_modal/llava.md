@@ -8,6 +8,7 @@ LMDeploy supports the following llava series of models, which are detailed in th
 |       llava-hf/llava-1.5-7b-hf       |  7B  |     TurboMind, PyTorch     |
 |   liuhaotian/llava-v1.6-vicuna-7b    |  7B  |     TurboMind, PyTorch     |
 |   liuhaotian/llava-v1.6-mistral-7b   |  7B  |     TurboMind, PyTorch     |
+| lmms-lab/llava-onevision-qwen2-7b-ov |  7B  |     TurboMind, PyTorch     |
 
 The next chapter demonstrates how to deploy an Llava model using LMDeploy, with [llava-hf/llava-interleave](https://huggingface.co/llava-hf/llava-interleave-qwen-7b-hf) as an example.
 
