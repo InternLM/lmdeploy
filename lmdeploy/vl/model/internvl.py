@@ -245,7 +245,7 @@ class InternVLVisionModel(VisonModel):
                 prompt = f'<img>{IMAGE_TOKEN * n_images}</img>\n' + prompt
             else:
                 pass
-            prompt_messages.append(dict(role='user', content=content))
+            prompt_messages.append(dict(role='user', content=prompt))
         prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
         return prompt, IMAGE_TOKEN
 
