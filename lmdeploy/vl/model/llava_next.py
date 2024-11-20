@@ -1,46 +1,59 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-
+import itertools
 import warnings
-from typing import List
+from typing import Dict, List
 
 import torch
-from PIL.Image import Image
 from transformers import AutoProcessor
 
-from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
+from lmdeploy.utils import get_logger
+from lmdeploy.vl.model.llava_hf import VISION_MODELS, LlavaHfVisionModel
 from lmdeploy.vl.model.utils import disable_logging
+
+logger = get_logger('lmdeploy')
 
 
 @VISION_MODELS.register_module()
-class LlavaNextVisionModel(VisonModel):
+class LlavaNextVisionModel(LlavaHfVisionModel):
     """Llava hf vision model."""
 
     _arch = 'LlavaNextForConditionalGeneration'
 
-    def build_model(self):
-        from accelerate import init_empty_weights, load_checkpoint_and_dispatch
-        from accelerate.utils import get_balanced_memory, infer_auto_device_map
-
+    def build_preprocessor(self):
+        processor = AutoProcessor.from_pretrained(self.model_path,
+                                                  trust_remote_code=True)
+        if hasattr(processor, 'tokenizer'):
+            del processor.tokenizer
+            processor.prtokenizer = None
+        self.processor = processor.image_processor
+        # build the model with empty weights. The model will be used in
+        # `preprocess` to get the image token number
+        from accelerate import init_empty_weights
         with init_empty_weights(), warnings.catch_warnings():
             warnings.simplefilter('ignore')
             from transformers import LlavaNextForConditionalGeneration
-            model = LlavaNextForConditionalGeneration._from_config(
+            self.model = LlavaNextForConditionalGeneration._from_config(
                 self.hf_config)
-            if not self.with_llm:
-                del model.language_model
-                for key in ['language_model']:
-                    setattr(model, key, None)
-            else:
-                self.vl_model = model
+
+    def build_model(self):
+        from accelerate import load_checkpoint_and_dispatch
+        from accelerate.utils import get_balanced_memory, infer_auto_device_map
+
+        if not self.with_llm:
+            del self.model.language_model
+            for key in ['language_model']:
+                setattr(self.model, key, None)
+        else:
+            self.vl_model = self.model
 
         no_split_module_classes = ['CLIPEncoderLayer']
         max_memory = get_balanced_memory(
-            model,
+            self.model,
             max_memory=self.max_memory,
             dtype=torch.half,
             no_split_module_classes=no_split_module_classes)
         device_map = infer_auto_device_map(
-            model,
+            self.model,
             no_split_module_classes=no_split_module_classes,
             max_memory=max_memory,
             dtype=torch.half)
@@ -55,41 +68,68 @@ class LlavaNextVisionModel(VisonModel):
 
         with disable_logging():
             load_checkpoint_and_dispatch(
-                model=model,
+                model=self.model,
                 checkpoint=self.model_path,
                 device_map=device_map if not self.with_llm else {'': 'cpu'},
                 no_split_module_classes=no_split_module_classes,
                 dtype=torch.half)
-        model.eval()
-        self.model = model
-        # processor
-        processor = AutoProcessor.from_pretrained(self.model_path,
-                                                  trust_remote_code=True)
-        if hasattr(processor, 'tokenizer'):
-            del processor.tokenizer
-            processor.prtokenizer = None
-        self.processor = processor.image_processor
+        self.model.eval()
 
-    @torch.no_grad()
-    def forward(self, images: List[Image]) -> List[torch.Tensor]:
+    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+        """refers to the spec of `super.preprocess()"""
         from transformers.models.llava_next.modeling_llava_next import \
             image_size_to_num_patches
-        """forward."""
-        processed_inputs = self.processor(images,
-                                          return_tensors='pt',
-                                          input_data_format='channels_last')
-        pixel_values = processed_inputs['pixel_values'].to(
-            device=self.model.device, dtype=self.model.dtype)
-        image_sizes = processed_inputs['image_sizes'].to(
-            device=self.model.device, dtype=self.model.dtype)
-        # ! infer image_num_patches from image_sizes
-        image_num_patches = [
-            image_size_to_num_patches(
-                image_size=imsize,
-                grid_pinpoints=self.hf_config.image_grid_pinpoints,
-                patch_size=self.hf_config.vision_config.image_size,
-            ) for imsize in image_sizes
+        outputs = []
+        for item in messages[-1]['content']:
+            item_type = item['type']
+            if item_type == 'image':
+                image = item['image'].convert('RGB')
+                result = self.processor(image,
+                                        return_tensors='pt',
+                                        input_data_format='channels_last')
+                # ! infer image_num_patches from image_sizes
+                image_num_patches = [
+                    image_size_to_num_patches(
+                        image_size=imsize,
+                        grid_pinpoints=self.hf_config.image_grid_pinpoints,
+                        patch_size=self.hf_config.vision_config.image_size,
+                    ) for imsize in result['image_sizes']
+                ]
+                # TODO(remove hardcode 576)
+                hidden_size = self.hf_config.text_config.hidden_size
+                fake_image_features = torch.zeros(
+                    [image_num_patches[0], 576, hidden_size])
+                image_sizes = result['image_sizes']
+                image_newline = torch.randn(
+                    self.hf_config.text_config.hidden_size)
+                strategy = self.hf_config.vision_feature_select_strategy
+                _, image_tokens = self.model.pack_image_features(
+                    [fake_image_features],
+                    image_sizes,
+                    vision_feature_select_strategy=strategy,
+                    image_newline=image_newline)
+                result.update(
+                    dict(image_size=image.size,
+                         image_patches=image_num_patches,
+                         image_tokens=image_tokens,
+                         image_token_id=0))
+                outputs.append(result)
+        return outputs
+
+    @torch.no_grad()
+    def forward(self, inputs: List[Dict]) -> List[torch.Tensor]:
+        pixel_values = [
+            x['pixel_values'].to(device=self.model.device,
+                                 dtype=self.model.dtype) for x in inputs
         ]
+        pixel_values = torch.cat(pixel_values, dim=0)
+        image_sizes = [
+            x['image_sizes'].to(device=self.model.device,
+                                dtype=self.model.dtype) for x in inputs
+        ]
+        image_sizes = torch.cat(image_sizes, dim=0)
+        image_num_patches = [x['num_patch'] for x in inputs]
+        image_num_patches = list(itertools.chain(*image_num_patches))
         # figure out if pixel_values is concatenated or stacked
         if pixel_values.dim() == 5:
             # stacking when input is
@@ -108,19 +148,20 @@ class LlavaNextVisionModel(VisonModel):
             pixel_values, output_hidden_states=True)
         image_features = image_outputs.hidden_states[
             self.hf_config.vision_feature_layer]
-        if self.hf_config.vision_feature_select_strategy == 'default':
+        strategy = self.hf_config.vision_feature_select_strategy
+        if strategy == 'default':
             image_features = image_features[:, 1:]
-        elif self.hf_config.vision_feature_select_strategy == 'full':
+        elif strategy == 'full':
             image_features = image_features
         else:
-            raise ValueError(
-                'Unexpected select feature strategy: '
-                f'{self.hf_config.vision_feature_select_strategy}')
+            raise ValueError('Unexpected select feature strategy: '
+                             f'{strategy}')
         image_features = self.model.multi_modal_projector(image_features)
         image_features = torch.split(image_features, image_num_patches, dim=0)
         image_features, feature_lens = self.model.pack_image_features(
             image_features,
             image_sizes,
+            vision_feature_select_strategy=strategy,
             image_newline=self.model.image_newline,
         )
         outputs = torch.split(image_features,
