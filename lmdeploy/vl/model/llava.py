@@ -1,12 +1,15 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # Modified from
 # https://github.com/haotian-liu/LLaVA.git
+import math
+import re
 import warnings
 from contextlib import contextmanager
 from typing import List, Union
 
 import torch
 from PIL.Image import Image
+from torch import nn
 from transformers import AutoConfig, AutoModelForCausalLM
 
 from lmdeploy.utils import get_logger
@@ -23,7 +26,7 @@ def check_llava_install():
     except ImportError:
         raise ImportError(
             'To use LlavaVLModel, please install llava by '
-            'pip install git+https://github.com/haotian-liu/LLaVA.git --no-deps'  # noqa: E501
+            'pip install git+https://github.com/LLaVA-VL/LLaVA-NeXT.git --no-deps'  # noqa: E501
         )
 
 
@@ -61,7 +64,10 @@ class LlavaVisionModel(VisonModel):
     def match(cls, config: AutoConfig):
         """check whether the config match the model."""
         arch = config.architectures[0]
-        if arch in ['LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM']:
+        if arch in [
+                'LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM',
+                'LlavaQwenForCausalLM'
+        ]:
             # internvl-llava has vision_tower of OpenGVLab/xxx
             mm_vision_tower = getattr(config, 'mm_vision_tower', '')
             # yi-vl has projector type of xxx_Norm
@@ -90,6 +96,9 @@ class LlavaVisionModel(VisonModel):
             from llava.model.language_model.llava_mistral import \
                 LlavaMistralConfig
             self.config = LlavaMistralConfig.from_pretrained(self.model_path)
+        elif self.arch == 'LlavaQwenForCausalLM':
+            from llava.model.language_model.llava_qwen import LlavaQwenConfig
+            self.config = LlavaQwenConfig.from_pretrained(self.model_path)
         else:
             assert 0, f'unsupported arch {self.arch}'
 
@@ -190,7 +199,16 @@ class LlavaVisionModel(VisonModel):
                         image_feature = image_feature[1:]
                         height = width = self.vision_tower.num_patches_per_side
                         assert height * width == base_image_feature.shape[0]
-                        if image_aspect_ratio == 'anyres':
+
+                        # https://github.com/LLaVA-VL/LLaVA-NeXT/blob/79ef45a6d8b89b92d7a8525f077c3a3a9894a87d/llava/model/llava_arch.py#L357-L410
+                        if 'anyres_max' in image_aspect_ratio:
+                            matched_anyres_max_num_patches = re.match(
+                                r'anyres_max_(\d+)', image_aspect_ratio)
+                            if matched_anyres_max_num_patches:
+                                max_num_patches = int(
+                                    matched_anyres_max_num_patches.group(1))
+
+                        if image_aspect_ratio == 'anyres' or 'anyres_max' in image_aspect_ratio:  # noqa: E501
                             num_patch_width, num_patch_height = \
                                 get_anyres_image_grid_shape(
                                     image_sizes[image_idx],
@@ -199,9 +217,37 @@ class LlavaVisionModel(VisonModel):
                             image_feature = image_feature.view(
                                 num_patch_height, num_patch_width, height,
                                 width, -1)
-                        else:
-                            raise NotImplementedError
-                        if 'unpad' in mm_patch_merge_type:
+                        if 'unpad' in mm_patch_merge_type \
+                            and 'anyres_max' in image_aspect_ratio \
+                                and matched_anyres_max_num_patches:
+                            unit = image_feature.shape[2]
+                            image_feature = image_feature.permute(
+                                4, 0, 2, 1, 3).contiguous()
+                            image_feature = image_feature.flatten(1,
+                                                                  2).flatten(
+                                                                      2, 3)
+                            image_feature = unpad_image(
+                                image_feature, image_sizes[image_idx])
+                            c, h, w = image_feature.shape
+                            times = math.sqrt(h * w /
+                                              (max_num_patches * unit**2))
+                            if times > 1.1:
+                                image_feature = image_feature[None]
+                                image_feature = nn.functional.interpolate(
+                                    image_feature,
+                                    [int(h // times),
+                                     int(w // times)],
+                                    mode='bilinear')[0]
+                            image_feature = torch.cat((
+                                image_feature,
+                                self.model.image_newline[:, None, None].expand(
+                                    *image_feature.shape[:-1], 1).to(
+                                        image_feature.device)),
+                                                      dim=-1)
+                            image_feature = image_feature.flatten(1,
+                                                                  2).transpose(
+                                                                      0, 1)
+                        elif 'unpad' in mm_patch_merge_type:
                             image_feature = image_feature.permute(
                                 4, 0, 2, 1, 3).contiguous()
                             image_feature = image_feature.flatten(1,
