@@ -315,8 +315,6 @@ class LlavaVisionModel(VisonModel):
                 image = item['image'].convert('RGB')
                 pixel_values = process_images([image], self.image_processor,
                                               self.config)
-                import pdb
-                pdb.set_trace()
                 outputs.append(
                     dict(
                         pixel_values=pixel_values,
@@ -335,8 +333,9 @@ class LlavaVisionModel(VisonModel):
         pixel_values = pixel_values.to(device=self.vision_tower.device,
                                        dtype=torch.float16)
         if pixel_values.ndim == 5:
+            split_sizes = [x.shape[0] for x in pixel_values]
+            pixel_values = torch.cat([x for x in pixel_values], dim=0)
             image_features = self.encode_images(pixel_values)
-            split_sizes = [x['pixel_values'].shape[0] for x in inputs]
             image_features = torch.split(image_features, split_sizes, dim=0)
             mm_patch_merge_type = getattr(self.config, 'mm_patch_merge_type',
                                           'flat')
