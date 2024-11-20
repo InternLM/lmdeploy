@@ -281,7 +281,8 @@ public:
                 pointer_mapping_.erase(address);
             }
             else {
-                FT_CHECK_WITH_INFO(0, fmtstr("pointer_mapping_ does not have information of ptr at %p.", address).c_str());
+                FT_CHECK_WITH_INFO(0,
+                                   fmtstr("pointer_mapping_ does not have information of ptr at %p.", address).c_str());
             }
         }
         *ptr = nullptr;

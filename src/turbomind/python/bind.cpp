@@ -297,7 +297,8 @@ PYBIND11_MODULE(_turbomind, m)
                         ft::check_cuda_error(cudaPointerGetAttributes(&at, self->data));
                         {
                             // Switch to the same device where TM's tenosr memory resides because it's allocated
-                            // from a pool with no peer access enabled (can't be accessed from a context of other devices)
+                            // from a pool with no peer access enabled (can't be accessed from a context of other
+                            // devices)
                             ft::CudaDeviceGuard guard{at.device};
                             ft::check_cuda_error(cudaMemcpy(const_cast<void*>(self->data),
                                                             const_cast<void*>(src->data),

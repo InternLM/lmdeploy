@@ -13,7 +13,6 @@
 #include "src/turbomind/kernels/attention/impl.h"
 #include "src/turbomind/kernels/attention/quantization.h"
 
-
 namespace turbomind::attention {
 
 template<class T_,

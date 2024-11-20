@@ -30,7 +30,7 @@ template<typename T>
 void LlamaFfnLayer<T>::allocateBuffer(
     size_t token_num, int inter_size, size_t inter_buf_factor, size_t gating_lora_r, size_t inter_lora_r)
 {
-    const size_t sz  = token_num * inter_size;
+    const size_t sz = token_num * inter_size;
 
     const size_t sz_gate  = token_num * gating_lora_r;
     const size_t sz_inter = token_num * inter_lora_r;

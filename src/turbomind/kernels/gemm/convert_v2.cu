@@ -303,7 +303,7 @@ void* make_blocked_ptrs(const std::vector<std::pair<void*, int>>& ptrs, cudaStre
 {
     constexpr int N = 64;
     Param<N>      param{};
-    static_assert(sizeof(param) <= 4096); // max parameter size for cuda11
+    static_assert(sizeof(param) <= 4096);  // max parameter size for cuda11
     StridedPtr* ptr{};
     cudaMallocAsync(&ptr, sizeof(StridedPtr) * ptrs.size(), stream);
     param.ptr = ptr;

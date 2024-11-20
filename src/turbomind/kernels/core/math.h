@@ -51,7 +51,8 @@ TM_HOST_DEVICE constexpr T lowbit(T x)
 
 // https://arxiv.org/abs/1902.01961
 template<class T>
-struct FastDivMod {};
+struct FastDivMod {
+};
 
 template<>
 struct FastDivMod<uint16_t> {

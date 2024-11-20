@@ -39,7 +39,7 @@ public:
                             size_t            tp_rank);
 
     ~LlamaDecoderLayerWeight();
-    LlamaDecoderLayerWeight(const LlamaDecoderLayerWeight& other)            = delete;
+    LlamaDecoderLayerWeight(const LlamaDecoderLayerWeight& other) = delete;
     LlamaDecoderLayerWeight& operator=(const LlamaDecoderLayerWeight& other) = delete;
 
     void loadModel(std::string dir_path, FtCudaDataType model_file_type);

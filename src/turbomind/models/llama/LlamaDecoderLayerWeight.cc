@@ -365,7 +365,6 @@ void getMLATensor(LlamaAttentionWeight<T>& w, const std::string& p, TensorMap& m
              Tensor{MEMORY_GPU, getTensorType<T>(), {sizeof(T) * w.kv_b_proj.input_dims}, w.kv_a_layernorm});
 }
 
-
 template<typename T>
 TensorMap LlamaDecoderLayerWeight<T>::getParams(std::string prefix)
 {

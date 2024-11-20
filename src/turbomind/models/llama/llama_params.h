@@ -40,7 +40,8 @@ struct ModelParam {
 };
 
 struct MoeParam {
-    enum Method {
+    enum Method
+    {
         kNaive,
         kFused
     } method;
@@ -93,7 +94,8 @@ struct EngineParam {
     int max_prefill_iters;
 };
 
-enum class LoraPolicy : int {
+enum class LoraPolicy : int
+{
     kNull,
     kPlora,
 };

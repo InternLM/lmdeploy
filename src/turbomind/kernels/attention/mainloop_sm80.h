@@ -52,7 +52,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
     template<class... Args>
     __device__ void operator()(Args&&... args)
     {
-        Run(Sm80_CpAsync<Stages>{}, std::integral_constant<int, Impl::kHeadDim>{}, ((Args&&)args)...);
+        Run(Sm80_CpAsync<Stages>{}, std::integral_constant<int, Impl::kHeadDim>{}, ((Args &&) args)...);
     }
 
     template<int Idx, class A, class B>
@@ -236,7 +236,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
         Wait();
         state_QK.Load(0, 0);
 
-        constexpr auto _ = [](int){};
+        constexpr auto _ = [](int) {};
 
         auto loop = [&](auto is_residue, auto is_mask) {
             const int offset_K = tile_iter * CTA_S;
