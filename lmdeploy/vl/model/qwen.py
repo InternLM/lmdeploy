@@ -1,9 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import List
+from typing import Dict, List
 
 import torch
-from PIL.Image import Image
 from transformers import AutoModelForCausalLM
 
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
@@ -15,6 +14,19 @@ class QwenVisionModel(VisonModel):
     """Qwen vision model."""
 
     _arch = 'QWenLMHeadModel'
+
+    def build_preprocessor(self):
+        from torchvision import transforms
+        from torchvision.transforms import InterpolationMode
+        mean = (0.48145466, 0.4578275, 0.40821073)
+        std = (0.26862954, 0.26130258, 0.27577711)
+        image_size = self.hf_config.visual['image_size']
+        self.image_transform = transforms.Compose([
+            transforms.Resize((image_size, image_size),
+                              interpolation=InterpolationMode.BICUBIC),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=mean, std=std),
+        ])
 
     def build_model(self):
         from accelerate import init_empty_weights
@@ -60,13 +72,64 @@ class QwenVisionModel(VisonModel):
 
         self.model = model.transformer.visual.eval()
 
+    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+        """refers to `super.preprocess() for spec."""
+        outputs = []
+        for item in messages[-1]['content']:
+            if item['type'] == 'image':
+                image = item['image'].convert('RGB')
+                pixel_values = self.image_transform(image)
+                outputs.append(
+                    dict(
+                        pixel_values=pixel_values,
+                        image_size=image.size,
+                        image_tokens=256,  # TODO
+                        image_token_id=0))
+        return outputs
+
     @torch.no_grad()
-    def forward(self, images: List[Image]) -> List[torch.Tensor]:
-        """forward."""
-        outputs = [x.convert('RGB') for x in images]
-        outputs = [self.model.image_transform(x) for x in outputs]
-        outputs = torch.stack(outputs, dim=0)
-        outputs = self.model(outputs)
+    def forward(self, inputs: List[Dict]) -> List[torch.Tensor]:
+        pixel_values = [x['pixel_values'] for x in inputs]
+        pixel_values = torch.stack(pixel_values, dim=0)
+        outputs = self.model(pixel_values)
         outputs = torch.split(outputs, 1, dim=0)
         outputs = [x.squeeze() for x in outputs]
         return outputs
+
+    @classmethod
+    def proc_messages(cls, messages, chat_template, sequence_start):
+        """apply chat template to get the prompt."""
+        prompt_messages = []
+        IMAGE_TOKEN = '<IMAGE_TOKEN>'
+        for message in messages:
+            if isinstance(message['content'], str):
+                prompt_messages.append(message)
+                continue
+            n_images = len(
+                [1 for x in message['content'] if x['type'] == 'image'])
+            content = [
+                x['text'] for x in message['content'] if x['type'] == 'text'
+            ]
+            prompt = content[0]
+            if IMAGE_TOKEN in prompt:
+                pass
+            else:
+                prompt = ''.join([
+                    f'Picture {str(i)}:{IMAGE_TOKEN}\n'
+                    for i in range(n_images)
+                ]) + prompt
+            prompt_messages.append(dict(role='user', content=prompt))
+        prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
+        return prompt, IMAGE_TOKEN
+
+    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template,
+                                                 sequence_start)
+        return super().to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
+                                      sequence_start)
+
+    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template,
+                                                 sequence_start)
+        return super().to_turbomind_aux(messages, prompt, IMAGE_TOKEN,
+                                        tokenizer, sequence_start)

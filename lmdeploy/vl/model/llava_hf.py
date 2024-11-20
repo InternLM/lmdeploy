@@ -53,7 +53,7 @@ class LlavaHfVisionModel(VisonModel):
         self.model = model
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
-        """refers to the spec of `super.preprocess()"""
+        """refers to `super.preprocess() for spec."""
         outputs = []
         for item in messages[-1]['content']:
             if item['type'] == 'image':
@@ -102,10 +102,8 @@ class LlavaHfVisionModel(VisonModel):
             if isinstance(message['content'], str):
                 prompt_messages.append(message)
                 continue
-            n_images = [
-                1 for item in message['content'] if item['type'] == 'image'
-            ]
-            n_images = sum(n_images)
+            n_images = len(
+                [1 for x in message['content'] if x['type'] == 'image'])
             content = [
                 item['text'] for item in message['content']
                 if item['type'] == 'text'
