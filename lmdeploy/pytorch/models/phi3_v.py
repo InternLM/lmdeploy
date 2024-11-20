@@ -344,7 +344,7 @@ class Phi3VForCausalLM(Phi3ForCausalLM, DeployModelMixin):
                  ctx_mgr: StepContextManager,
                  dtype: torch.dtype = None,
                  device: torch.device = None):
-        super().__init__()
+        super().__init__(config, ctx_mgr, dtype=dtype, device=device)
         self.config = config
         self.ctx_mgr = ctx_mgr
         # build model
@@ -396,21 +396,18 @@ class Phi3VForCausalLM(Phi3ForCausalLM, DeployModelMixin):
         # vision inputs
         pixel_values = None
         if context.input_multimodals is not None:
-            pixel_values = [
+            input_mms = [
                 input_mm.get('image', [])
                 for input_mm in context.input_multimodals
             ]
             # flatten batch
-            pixel_values = [
-                data for im_data in pixel_values for data in im_data
-            ]
-            if len(pixel_values) > 0:
-                pixel_values = torch.cat([data.data for data in pixel_values])
+            input_mms = [data for im_data in input_mms for data in im_data]
+            if len(input_mms) > 0:
+                pixel_values = torch.cat([data.data for data in input_mms])
                 image_sizes = torch.cat(
-                    [data.meta['image_sizes'] for data in pixel_values])
-
-            output['pixel_values'] = pixel_values
-            output['image_sizes'] = image_sizes
+                    [data.meta['image_sizes'] for data in input_mms])
+                output['pixel_values'] = pixel_values
+                output['image_sizes'] = image_sizes
 
         return output
 
@@ -451,13 +448,13 @@ class Phi3VInputProcessor(BaseModelInputProcessor):
             pixel_values = input_mm['pixel_values'].to(self.dtype)
             image_sizes = input_mm['image_sizes']
             offset = input_mm['offset']
-
-            h, w = (image_sizes[0] // 336).tolist()
-            temp_len = int((h * w + 1) * 144 + 1 + (h + 1) * 12)
+            num_pad = input_mm['image_tokens']
+            if isinstance(num_pad, torch.Tensor):
+                num_pad = num_pad.item()
 
             mm_data = MultiModalTensor(data=pixel_values,
                                        start=offset,
-                                       end=offset + temp_len,
+                                       end=offset + num_pad,
                                        meta=dict(image_sizes=image_sizes))
             input_imgs.append(mm_data)
 
