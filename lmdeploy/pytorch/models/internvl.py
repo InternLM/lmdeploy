@@ -316,12 +316,23 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
         self.ctx_mgr = ctx_mgr
         self.select_layer = config.select_layer
 
-        vision_config = config.vision_config
-        self.vision_model = InternVisionModel(vision_config,
-                                              dtype=dtype,
-                                              device=device)
-
         llm_config = config.llm_config
+        self.llm_arch_name = llm_config.architectures[0]
+        self.is_mono = self.llm_arch_name == 'InternLM2VEForCausalLM'
+
+        vision_config = config.vision_config
+        if self.is_mono:
+            from .internvl_patch import InternVisionPatchModel
+            self.vision_model = InternVisionPatchModel(
+                vision_config,
+                dtype=dtype,
+                device=device,
+            )
+        else:
+            self.vision_model = InternVisionModel(vision_config,
+                                                  dtype=dtype,
+                                                  device=device)
+
         self.language_model = build_model_from_hf_config(llm_config,
                                                          dtype=dtype,
                                                          device=device)
@@ -342,10 +353,7 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
                       dtype=dtype,
                       device=device))
 
-        self.llm_arch_name = llm_config.architectures[0]
-
         # for Mono-InternVL
-        self.is_mono = self.llm_arch_name == 'InternLM2VEForCausalLM'
         if self.is_mono:
             assert dtype != torch.float16, (
                 'Currently Mono-InternVL does not support FP16 due to'
@@ -370,7 +378,11 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
         """extract vision feature."""
         assert self.select_layer == -1
         vit_embeds = self.vision_model(pixel_values)
-        vit_embeds = vit_embeds[:, 1:, :]
+        if self.is_mono:
+            if int(vit_embeds.shape[1]**0.5)**2 != vit_embeds.shape[1]:
+                vit_embeds = vit_embeds[:, 1:, :]
+        else:
+            vit_embeds = vit_embeds[:, 1:, :]
 
         h = w = int(vit_embeds.shape[1]**0.5)
         vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], h, w, -1)
@@ -394,19 +406,13 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
         **kwargs,
     ):
         if inputs_embeds is None and pixel_values is not None:
-
-            # get vis idx
-            from lmdeploy.vl.constants import IMAGE_DUMMY_TOKEN_INDEX
-            vis_mask = input_ids[0] == IMAGE_DUMMY_TOKEN_INDEX
-            vis_range = torch.arange(0,
-                                     input_ids.size(-1),
-                                     device=input_ids.device)
-            vis_idx = vis_range[vis_mask]
-
             # extract feature
             vit_embeds = self.extract_feature(pixel_values)
             lang_embeds = self.language_model.get_input_embeddings()(input_ids)
-            lang_embeds[0, vis_idx] = vit_embeds.flatten(0, 1)
+            from lmdeploy.vl.constants import IMAGE_DUMMY_TOKEN_INDEX
+            vis_mask = input_ids == IMAGE_DUMMY_TOKEN_INDEX
+            lang_embeds.masked_scatter_(vis_mask[..., None], vit_embeds)
+
             inputs_embeds = lang_embeds
 
         if self.is_mono:
@@ -443,6 +449,8 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
         input_ids = context.input_ids
         position_ids = context.position_ids
         attn_metadata = context.attn_metadata
+        vision_embeddings = context.input_embeddings
+        vision_embedding_indexing = None
 
         # vision inputs
         pixel_values = None
@@ -460,11 +468,15 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
             else:
                 pixel_values = None
 
-        # get inputs from context
-        vision_embeddings = context.input_embeddings
-        vision_embedding_indexing = context.input_embedding_indexing
+        if self.is_mono and pixel_values is not None:
+            vision_embedding_indexing = torch.arange(input_ids.shape[1],
+                                                     device=input_ids.device)
+            vision_embedding_indexing = vision_embedding_indexing[input_ids[0]
+                                                                  == 0]
 
+        # get inputs from context
         if vision_embeddings is not None and len(vision_embeddings) > 0:
+            vision_embedding_indexing = context.input_embedding_indexing
             if inputs_embeds is None:
                 inputs_embeds = self.get_input_embeddings()(input_ids)
             inputs_embeds[:,
@@ -484,6 +496,7 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
                 position_ids=position_ids,
                 past_key_values=past_key_values,
                 attn_metadata=attn_metadata,
+                pixel_values=pixel_values,
                 inputs_embeds=inputs_embeds,
                 vision_embedding_indexing=vision_embedding_indexing,
                 text_embedding_indexing=text_embedding_indexing,
@@ -558,7 +571,9 @@ class InternVLInputProcessor(BaseModelInputProcessor):
         for input_mm in input_multimodals:
             pixel_values = input_mm['pixel_values'].to(self.dtype)
             offset = input_mm['offset']
-            num_pad = input_mm.get('image_tokens', self.vision_token_num)
+            num_pad = input_mm['image_tokens']
+            if isinstance(num_pad, torch.Tensor):
+                num_pad = num_pad.item()
 
             mm_data = MultiModalTensor(data=pixel_values,
                                        start=offset,
