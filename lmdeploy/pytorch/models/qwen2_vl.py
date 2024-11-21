@@ -726,6 +726,7 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixin,
         pixel_values: torch.Tensor = None,
         vis_cu_seqlens: torch.Tensor = None,
         vis_pos_emb: torch.Tensor = None,
+        image_mask: torch.Tensor = None,
         **kwargs,
     ):
         """model forward, return logits."""
@@ -739,13 +740,8 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixin,
                 image_embeds = self.visual(pixel_values,
                                            cu_seqlens=vis_cu_seqlens,
                                            rotary_pos_emb=vis_pos_emb)
-                # pad_token_id = self.config.image_token_id
-                pad_token_id = 0
-                image_mask = ((input_ids == pad_token_id
-                               ).unsqueeze(-1).expand_as(inputs_embeds).to(
-                                   inputs_embeds.device))
                 inputs_embeds = inputs_embeds.masked_scatter(
-                    image_mask, image_embeds[None])
+                    image_mask[..., None], image_embeds)
 
         hidden_states = self.model(
             input_ids=input_ids,
@@ -786,22 +782,30 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixin,
         pixel_values = None
         vis_cu_seqlens = None
         vis_pos_emb = None
+        image_mask = None
         if context.input_multimodals is not None:
             image_data = [
                 input_mm['image'] for input_mm in context.input_multimodals
             ]
-            # flatten batch
-            image_data = [data for im_data in image_data for data in im_data]
-            pixel_values = torch.cat([data.data for data in image_data])
-            grid_thw = torch.cat(
-                [data.meta['grid_thw'] for data in image_data]).cpu()
-            vis_pos_emb = self.visual.rot_pos_emb(grid_thw)
-            vis_cu_seqlens = torch.repeat_interleave(
-                grid_thw[:, 1] * grid_thw[:, 2],
-                grid_thw[:, 0]).to(pixel_values.device)
-            vis_cu_seqlens = vis_cu_seqlens.cumsum(dim=0, dtype=torch.int32)
-            vis_pos_emb = vis_pos_emb.repeat(1, 2)
-            vis_pos_emb = (vis_pos_emb.cos(), vis_pos_emb.sin())
+
+            if len(image_data) > 0:
+                # flatten batch
+                image_data = [
+                    data for im_data in image_data for data in im_data
+                ]
+                pixel_values = torch.cat([data.data for data in image_data])
+                image_token_id = image_data[0].meta['image_token_id']
+                image_mask = input_ids == image_token_id
+                grid_thw = torch.cat(
+                    [data.meta['grid_thw'] for data in image_data]).cpu()
+                vis_pos_emb = self.visual.rot_pos_emb(grid_thw)
+                vis_cu_seqlens = torch.repeat_interleave(
+                    grid_thw[:, 1] * grid_thw[:, 2],
+                    grid_thw[:, 0]).to(pixel_values.device)
+                vis_cu_seqlens = vis_cu_seqlens.cumsum(dim=0,
+                                                       dtype=torch.int32)
+                vis_pos_emb = vis_pos_emb.repeat(1, 2)
+                vis_pos_emb = (vis_pos_emb.cos(), vis_pos_emb.sin())
 
         mrope_position_ids = getattr(context, 'mrope_position_ids', None)
 
@@ -826,6 +830,7 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixin,
             pixel_values=pixel_values,
             vis_cu_seqlens=vis_cu_seqlens,
             vis_pos_emb=vis_pos_emb,
+            image_mask=image_mask,
         )
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
@@ -1016,12 +1021,17 @@ class Qwen2VLInputProcessor(BaseModelInputProcessor):
             image_grid_thw = input_mm['image_grid_thw']
             offset = input_mm['offset']
             start = offset
-            num_pad = input_mm['image_tokens'].item()
+            image_token_id = input_mm.get('image_token_id', 0)
+            num_pad = input_mm['image_tokens']
+            if isinstance(num_pad, torch.Tensor):
+                num_pad = num_pad.item()
 
             mm_data = MultiModalTensor(data=pixel_values,
                                        start=start,
                                        end=start + num_pad,
-                                       meta=dict(grid_thw=image_grid_thw))
+                                       meta=dict(
+                                           grid_thw=image_grid_thw,
+                                           image_token_id=image_token_id))
             input_imgs.append(mm_data)
 
         result = PreprocessInputResult(

@@ -490,6 +490,7 @@ class LlavaForConditionalGeneration(nn.Module, CudaGraphMixin,
         past_key_values: List[List[torch.Tensor]],
         attn_metadata: Any = None,
         pixel_values: torch.Tensor = None,
+        image_mask: torch.Tensor = None,
         inputs_embeds: torch.Tensor = None,
         **kwargs,
     ):
@@ -505,9 +506,7 @@ class LlavaForConditionalGeneration(nn.Module, CudaGraphMixin,
             inputs_embeds = self.language_model.get_input_embeddings()(
                 input_ids)
             if pixel_values is not None:
-                from lmdeploy.vl.constants import IMAGE_DUMMY_TOKEN_INDEX
-                vis_mask = input_ids == IMAGE_DUMMY_TOKEN_INDEX
-                inputs_embeds.masked_scatter_(vis_mask[..., None],
+                inputs_embeds.masked_scatter_(image_mask[..., None],
                                               image_features)
 
         return self.language_model.forward(input_ids=input_ids,
@@ -537,6 +536,7 @@ class LlavaForConditionalGeneration(nn.Module, CudaGraphMixin,
 
         # vision inputs
         pixel_values = None
+        image_mask = None
         if context.input_multimodals is not None:
             pixel_values = [
                 input_mm.get('image', [])
@@ -547,9 +547,12 @@ class LlavaForConditionalGeneration(nn.Module, CudaGraphMixin,
                 data for im_data in pixel_values for data in im_data
             ]
             if len(pixel_values) > 0:
+                image_token_id = pixel_values[0].meta['image_token_id']
+                image_mask = input_ids == image_token_id
                 pixel_values = torch.cat([data.data for data in pixel_values])
             else:
                 pixel_values = None
+                image_mask = None
 
         # get inputs from context
         vision_embeddings = context.input_embeddings
@@ -568,6 +571,7 @@ class LlavaForConditionalGeneration(nn.Module, CudaGraphMixin,
             past_key_values=past_key_values,
             attn_metadata=attn_metadata,
             pixel_values=pixel_values,
+            image_mask=image_mask,
             inputs_embeds=inputs_embeds,
         )
 
@@ -634,13 +638,16 @@ class LLavaInputProcessor(BaseModelInputProcessor):
         for input_mm in input_multimodals:
             pixel_values = input_mm['pixel_values'].to(self.dtype)
             offset = input_mm['offset']
+            image_token_id = input_mm.get('image_token_id', 0)
             num_pad = input_mm['image_tokens']
             if isinstance(num_pad, torch.Tensor):
                 num_pad = num_pad.item()
 
-            mm_data = MultiModalTensor(data=pixel_values,
-                                       start=offset,
-                                       end=offset + num_pad)
+            mm_data = MultiModalTensor(
+                data=pixel_values,
+                start=offset,
+                end=offset + num_pad,
+                meta=dict(image_token_id=image_token_id))
             input_imgs.append(mm_data)
 
         result = PreprocessInputResult(
@@ -832,6 +839,7 @@ class LlavaNextForConditionalGeneration(LlavaForConditionalGeneration):
         attn_metadata: Any = None,
         pixel_values: torch.Tensor = None,
         image_sizes: torch.Tensor = None,
+        image_mask: torch.Tensor = None,
         inputs_embeds: torch.Tensor = None,
         **kwargs,
     ):
@@ -856,9 +864,7 @@ class LlavaNextForConditionalGeneration(LlavaForConditionalGeneration):
             inputs_embeds = self.language_model.get_input_embeddings()(
                 input_ids)
             if pixel_values is not None:
-                from lmdeploy.vl.constants import IMAGE_DUMMY_TOKEN_INDEX
-                vis_mask = input_ids == IMAGE_DUMMY_TOKEN_INDEX
-                inputs_embeds.masked_scatter_(vis_mask[..., None],
+                inputs_embeds.masked_scatter_(image_mask[..., None],
                                               image_features)
 
         return self.language_model.forward(input_ids=input_ids,
@@ -885,6 +891,7 @@ class LlavaNextForConditionalGeneration(LlavaForConditionalGeneration):
         # vision inputs
         pixel_values = None
         image_sizes = None
+        image_mask = None
         if context.input_multimodals is not None:
             img_mms = [
                 input_mm.get('image', [])
@@ -893,6 +900,8 @@ class LlavaNextForConditionalGeneration(LlavaForConditionalGeneration):
             # flatten batch
             img_mms = [data for im_data in img_mms for data in im_data]
             if len(img_mms) > 0:
+                image_token_id = img_mms[0].meta['image_token_id']
+                image_mask = input_ids == image_token_id
                 pixel_values = torch.cat([data.data for data in img_mms])
                 image_sizes = torch.cat(
                     [data.meta['image_sizes'] for data in img_mms])
@@ -918,6 +927,7 @@ class LlavaNextForConditionalGeneration(LlavaForConditionalGeneration):
             attn_metadata=attn_metadata,
             pixel_values=pixel_values,
             image_sizes=image_sizes,
+            image_mask=image_mask,
             inputs_embeds=inputs_embeds,
         )
 
@@ -942,6 +952,7 @@ class LLavaNextInputProcessor(BaseModelInputProcessor):
             pixel_values = input_mm['pixel_values'].to(self.dtype)
             image_sizes = input_mm['image_sizes']
             offset = input_mm['offset']
+            image_token_id = input_mm.get('image_token_id', 0)
             num_pad = input_mm['image_tokens']
             if isinstance(num_pad, torch.Tensor):
                 num_pad = num_pad.item()
@@ -949,7 +960,9 @@ class LLavaNextInputProcessor(BaseModelInputProcessor):
             mm_data = MultiModalTensor(data=pixel_values,
                                        start=offset,
                                        end=offset + num_pad,
-                                       meta=dict(image_sizes=image_sizes))
+                                       meta=dict(
+                                           image_sizes=image_sizes,
+                                           image_token_id=image_token_id))
             input_imgs.append(mm_data)
 
         result = PreprocessInputResult(

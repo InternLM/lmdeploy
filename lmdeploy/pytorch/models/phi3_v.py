@@ -165,10 +165,13 @@ class Phi3ImageEmbedding(nn.Module):
 
         raise NotImplementedError
 
-    def forward(self,
-                input_ids: torch.LongTensor,
-                pixel_values: torch.FloatTensor,
-                image_sizes=None) -> torch.FloatTensor:
+    def forward(
+        self,
+        input_ids: torch.LongTensor,
+        pixel_values: torch.FloatTensor,
+        image_sizes=None,
+        image_mask: torch.Tensor = None,
+    ) -> torch.FloatTensor:
         """forward."""
 
         target_device = pixel_values.device
@@ -279,9 +282,7 @@ class Phi3ImageEmbedding(nn.Module):
 
         hidden_states = self.wte(input_ids)
 
-        from lmdeploy.vl.constants import IMAGE_DUMMY_TOKEN_INDEX
-        vis_mask = input_ids == IMAGE_DUMMY_TOKEN_INDEX
-        hidden_states.masked_scatter_(vis_mask[..., None], img_set_tensor)
+        hidden_states.masked_scatter_(image_mask[..., None], img_set_tensor)
 
         return hidden_states
 
@@ -317,6 +318,7 @@ class Phi3VModel(Phi3Model):
         attn_metadata: Any = None,
         pixel_values: Optional[torch.FloatTensor] = None,
         image_sizes: Optional[torch.LongTensor] = None,
+        image_mask: torch.Tensor = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
     ):
         """Rewrite of LlamaModel.forward."""
@@ -326,6 +328,7 @@ class Phi3VModel(Phi3Model):
                 input_ids,
                 pixel_values,
                 image_sizes,
+                image_mask,
             )
 
         return super().forward(
@@ -366,6 +369,7 @@ class Phi3VForCausalLM(Phi3ForCausalLM, DeployModelMixin):
         attn_metadata: Any = None,
         pixel_values: torch.Tensor = None,
         image_sizes: torch.Tensor = None,
+        image_mask: torch.Tensor = None,
         inputs_embeds: torch.Tensor = None,
         **kwargs,
     ):
@@ -377,6 +381,7 @@ class Phi3VForCausalLM(Phi3ForCausalLM, DeployModelMixin):
             attn_metadata=attn_metadata,
             pixel_values=pixel_values,
             image_sizes=image_sizes,
+            image_mask=image_mask,
             inputs_embeds=inputs_embeds,
         )
         return hidden_states
@@ -406,8 +411,11 @@ class Phi3VForCausalLM(Phi3ForCausalLM, DeployModelMixin):
                 pixel_values = torch.cat([data.data for data in input_mms])
                 image_sizes = torch.cat(
                     [data.meta['image_sizes'] for data in input_mms])
+                image_token_id = input_mms[0].meta['image_token_id']
+                image_mask = output['input_ids'] == image_token_id
                 output['pixel_values'] = pixel_values
                 output['image_sizes'] = image_sizes
+                output['image_mask'] = image_mask
 
         return output
 
@@ -448,6 +456,7 @@ class Phi3VInputProcessor(BaseModelInputProcessor):
             pixel_values = input_mm['pixel_values'].to(self.dtype)
             image_sizes = input_mm['image_sizes']
             offset = input_mm['offset']
+            image_token_id = input_mm.get('image_token_id', 0)
             num_pad = input_mm['image_tokens']
             if isinstance(num_pad, torch.Tensor):
                 num_pad = num_pad.item()
@@ -455,7 +464,9 @@ class Phi3VInputProcessor(BaseModelInputProcessor):
             mm_data = MultiModalTensor(data=pixel_values,
                                        start=offset,
                                        end=offset + num_pad,
-                                       meta=dict(image_sizes=image_sizes))
+                                       meta=dict(
+                                           image_sizes=image_sizes,
+                                           image_token_id=image_token_id))
             input_imgs.append(mm_data)
 
         result = PreprocessInputResult(

@@ -661,6 +661,7 @@ class ChatGLMModel(nn.Module):
         past_key_values: Optional[List[torch.FloatTensor]] = None,
         attn_metadata: Any = None,
         images: torch.Tensor = None,
+        image_mask: torch.Tensor = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
     ):
         """forward."""
@@ -673,9 +674,7 @@ class ChatGLMModel(nn.Module):
                 images_features = images_features.flatten(0, 1)[None]
             inputs_embeds = self.embedding(input_ids)
             if images is not None:
-                from lmdeploy.vl.constants import IMAGE_DUMMY_TOKEN_INDEX
-                vis_mask = input_ids == IMAGE_DUMMY_TOKEN_INDEX
-                inputs_embeds.masked_scatter_(vis_mask[..., None],
+                inputs_embeds.masked_scatter_(image_mask[..., None],
                                               images_features)
 
         hidden_states = inputs_embeds
@@ -723,6 +722,7 @@ class ChatGLMForConditionalGeneration(nn.Module, DeployModelMixin,
         past_key_values: List[List[torch.Tensor]],
         attn_metadata: Any = None,
         images: torch.Tensor = None,
+        image_mask: torch.Tensor = None,
         inputs_embeds: torch.Tensor = None,
         **kwargs,
     ):
@@ -733,6 +733,7 @@ class ChatGLMForConditionalGeneration(nn.Module, DeployModelMixin,
             past_key_values=past_key_values,
             attn_metadata=attn_metadata,
             images=images,
+            image_mask=image_mask,
             inputs_embeds=inputs_embeds,
         )
         return hidden_states
@@ -758,6 +759,7 @@ class ChatGLMForConditionalGeneration(nn.Module, DeployModelMixin,
         attn_metadata = context.attn_metadata
 
         images = None
+        image_mask = None
         if context.input_multimodals is not None:
             images = [
                 input_mm.get('image', [])
@@ -766,9 +768,12 @@ class ChatGLMForConditionalGeneration(nn.Module, DeployModelMixin,
             # flatten batch
             images = [data for im_data in images for data in im_data]
             if len(images) != 0:
+                image_token_id = images[0].meta['image_token_id']
+                image_mask = input_ids == image_token_id
                 images = torch.stack([data.data for data in images])
             else:
                 images = None
+                image_mask = None
 
         # process vision embeddings
         vision_embeddings = context.input_embeddings
@@ -787,6 +792,7 @@ class ChatGLMForConditionalGeneration(nn.Module, DeployModelMixin,
             past_key_values=past_key_values,
             attn_metadata=attn_metadata,
             images=images,
+            image_mask=image_mask,
             inputs_embeds=inputs_embeds,
         )
 
@@ -942,12 +948,15 @@ class ChatGLMInputProcessor(BaseModelInputProcessor):
             pixel_values = input_mm['pixel_values'].to(self.dtype)
             offset = input_mm['offset']
             num_pad = input_mm['image_tokens']
+            image_token_id = input_mm.get('image_token_id', 0)
             if isinstance(num_pad, torch.Tensor):
                 num_pad = num_pad.item()
 
-            mm_data = MultiModalTensor(data=pixel_values,
-                                       start=offset,
-                                       end=offset + num_pad)
+            mm_data = MultiModalTensor(
+                data=pixel_values,
+                start=offset,
+                end=offset + num_pad,
+                meta=dict(image_token_id=image_token_id))
             input_imgs.append(mm_data)
 
         result = PreprocessInputResult(

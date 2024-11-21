@@ -789,7 +789,6 @@ class CogVLMForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
         # vision inputs
         images = None
         if context.input_multimodals is not None:
-            from lmdeploy.vl.constants import IMAGE_DUMMY_TOKEN_INDEX
             images = [
                 input_mm.get('image', [])
                 for input_mm in context.input_multimodals
@@ -800,10 +799,11 @@ class CogVLMForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
                 images = None
 
         if images is not None:
+            image_token_id = images[0].meta['image_token_id']
+            vis_mask = input_ids[0] == image_token_id
             images = torch.stack([data.data for data in images])
 
             # get lang_ids
-            vis_mask = input_ids[0] == IMAGE_DUMMY_TOKEN_INDEX
             vis_range = torch.arange(0,
                                      input_ids.size(-1),
                                      device=input_ids.device)
@@ -981,13 +981,16 @@ class CogVLMInputProcessor(BaseModelInputProcessor):
         for input_mm in input_multimodals:
             pixel_values = input_mm['pixel_values'].to(self.dtype)
             offset = input_mm['offset']
+            image_token_id = input_mm.get('image_token_id', 0)
             num_pad = input_mm['image_tokens']
             if isinstance(num_pad, torch.Tensor):
                 num_pad = num_pad.item()
 
-            mm_data = MultiModalTensor(data=pixel_values,
-                                       start=offset,
-                                       end=offset + num_pad)
+            mm_data = MultiModalTensor(
+                data=pixel_values,
+                start=offset,
+                end=offset + num_pad,
+                meta=dict(image_token_id=image_token_id))
             input_imgs.append(mm_data)
 
         result = PreprocessInputResult(

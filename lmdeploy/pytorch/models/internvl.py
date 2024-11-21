@@ -400,6 +400,7 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
         past_key_values: List[List[torch.Tensor]],
         attn_metadata: Any = None,
         pixel_values: torch.Tensor = None,
+        image_mask: torch.Tensor = None,
         inputs_embeds: torch.Tensor = None,
         vision_embedding_indexing: torch.Tensor = None,
         text_embedding_indexing: torch.Tensor = None,
@@ -409,9 +410,7 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
             # extract feature
             vit_embeds = self.extract_feature(pixel_values)
             lang_embeds = self.language_model.get_input_embeddings()(input_ids)
-            from lmdeploy.vl.constants import IMAGE_DUMMY_TOKEN_INDEX
-            vis_mask = input_ids == IMAGE_DUMMY_TOKEN_INDEX
-            lang_embeds.masked_scatter_(vis_mask[..., None], vit_embeds)
+            lang_embeds.masked_scatter_(image_mask[..., None], vit_embeds)
 
             inputs_embeds = lang_embeds
 
@@ -454,6 +453,7 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
 
         # vision inputs
         pixel_values = None
+        image_mask = None
         if context.input_multimodals is not None:
             pixel_values = [
                 input_mm.get('image', [])
@@ -464,15 +464,18 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
                 data for im_data in pixel_values for data in im_data
             ]
             if len(pixel_values) > 0:
+                image_token_id = pixel_values[0].meta['image_token_id']
+                image_mask = input_ids == image_token_id
                 pixel_values = torch.cat([data.data for data in pixel_values])
             else:
                 pixel_values = None
+                image_mask = None
 
         if self.is_mono and pixel_values is not None:
             vision_embedding_indexing = torch.arange(input_ids.shape[1],
                                                      device=input_ids.device)
-            vision_embedding_indexing = vision_embedding_indexing[input_ids[0]
-                                                                  == 0]
+            vision_embedding_indexing = vision_embedding_indexing[
+                image_mask[0]]
 
         # get inputs from context
         if vision_embeddings is not None and len(vision_embeddings) > 0:
@@ -497,6 +500,7 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
                 past_key_values=past_key_values,
                 attn_metadata=attn_metadata,
                 pixel_values=pixel_values,
+                image_mask=image_mask,
                 inputs_embeds=inputs_embeds,
                 vision_embedding_indexing=vision_embedding_indexing,
                 text_embedding_indexing=text_embedding_indexing,
@@ -508,6 +512,7 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
                 past_key_values=past_key_values,
                 attn_metadata=attn_metadata,
                 pixel_values=pixel_values,
+                image_mask=image_mask,
                 inputs_embeds=inputs_embeds,
             )
 
@@ -571,13 +576,16 @@ class InternVLInputProcessor(BaseModelInputProcessor):
         for input_mm in input_multimodals:
             pixel_values = input_mm['pixel_values'].to(self.dtype)
             offset = input_mm['offset']
+            image_token_id = input_mm.get('image_token_id', 0)
             num_pad = input_mm['image_tokens']
             if isinstance(num_pad, torch.Tensor):
                 num_pad = num_pad.item()
 
-            mm_data = MultiModalTensor(data=pixel_values,
-                                       start=offset,
-                                       end=offset + num_pad)
+            mm_data = MultiModalTensor(
+                data=pixel_values,
+                start=offset,
+                end=offset + num_pad,
+                meta=dict(image_token_id=image_token_id))
             input_imgs.append(mm_data)
 
         result = PreprocessInputResult(
