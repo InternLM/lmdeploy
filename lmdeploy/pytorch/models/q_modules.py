@@ -34,13 +34,17 @@ class QRMSNorm(nn.Module):
     """It performs traditional RMS normalization and then quantizes the output
     to 8-bit integers."""
 
-    def __init__(self, hidden_size, eps=1e-6):
+    def __init__(self, hidden_size, eps=1e-6, quant_dtype=torch.int8):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(hidden_size))
         self.variance_epsilon = eps
+        self.quant_dtype = quant_dtype
 
     @classmethod
-    def from_float(cls, mod: nn.Module, initialization: bool = True):
+    def from_float(cls,
+                   mod: nn.Module,
+                   initialization: bool = True,
+                   quant_dtype=torch.int8):
         """Class method to create a QRMSNorm instance from a floating-point
         module.
 
@@ -49,7 +53,7 @@ class QRMSNorm(nn.Module):
         """
         hidden_size = mod.weight.shape[0]
         eps = mod.variance_epsilon
-        q_mod = cls(hidden_size, eps)
+        q_mod = cls(hidden_size, eps, quant_dtype=quant_dtype)
         if initialization:
             q_mod.weight = nn.Parameter(mod.weight.detach())
         return q_mod
@@ -62,7 +66,10 @@ class QRMSNorm(nn.Module):
         with its scale factor.
         """
         hidden_states_quant, rms_scale = rms_norm_dynamic_quant(
-            hidden_states, self.weight, self.variance_epsilon)
+            hidden_states,
+            self.weight,
+            self.variance_epsilon,
+            quant_dtype=self.quant_dtype)
         return QTensor(hidden_states_quant, rms_scale)
 
 
@@ -83,16 +90,18 @@ class QLinear(nn.Module):
                  out_features: int,
                  bias: bool = True,
                  device=None,
-                 dtype=None) -> None:
+                 dtype=None,
+                 quant_dtype=torch.int8) -> None:
         factory_kwargs = {'device': device, 'dtype': dtype}
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
+        self.quant_dtype = quant_dtype
         self.register_buffer(
             'weight',
             torch.empty((out_features, in_features),
                         device=device,
-                        dtype=torch.int8))
+                        dtype=quant_dtype))
         self.register_buffer(
             'scale',
             torch.empty((out_features, 1), device=device, dtype=torch.float32))
@@ -103,7 +112,10 @@ class QLinear(nn.Module):
             self.register_parameter('bias', None)
 
     @classmethod
-    def from_float(cls, mod: nn.Module, initialization: bool = True):
+    def from_float(cls,
+                   mod: nn.Module,
+                   initialization: bool = True,
+                   quant_dtype=torch.int8):
         """Class method to create a QLinear instance from a floating-point
         module.
 
@@ -114,11 +126,12 @@ class QLinear(nn.Module):
                     mod.out_features,
                     mod.bias is not None,
                     device=mod.weight.device,
-                    dtype=mod.weight.dtype)
+                    dtype=mod.weight.dtype,
+                    quant_dtype=quant_dtype)
 
         if initialization:
             weight_quant, scale = per_channel_quant(mod.weight.detach(), 8,
-                                                    torch.int8)
+                                                    quant_dtype)
             q_mod.weight.data = weight_quant
             q_mod.scale = scale
 
@@ -137,7 +150,8 @@ class QLinear(nn.Module):
         """
 
         if isinstance(input, torch.Tensor):
-            input_quant, input_scale = per_token_quant_int8(input, 1e-7)
+            input_quant, input_scale = per_token_quant_int8(
+                input, 1e-7, quant_dtype=self.quant_dtype)
         else:
             assert isinstance(input, QTensor)
             input_quant, input_scale = input.tensor, input.scale

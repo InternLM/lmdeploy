@@ -598,17 +598,16 @@ class QKVAwqLinear(MergedAwqLinear, QKVMixin):
 class W8A8Linear(nn.Module):
     """w8a8 linear."""
 
-    def __init__(
-        self,
-        in_features: int,
-        out_features: int,
-        bias: bool,
-        dtype: Optional[torch.dtype] = None,
-        device: Optional[torch.device] = None,
-        colwise: bool = True,
-        is_tp: bool = False,
-        all_reduce: bool = True,
-    ):
+    def __init__(self,
+                 in_features: int,
+                 out_features: int,
+                 bias: bool,
+                 dtype: Optional[torch.dtype] = None,
+                 device: Optional[torch.device] = None,
+                 colwise: bool = True,
+                 is_tp: bool = False,
+                 all_reduce: bool = True,
+                 quant_dtype: Optional[torch.dtype] = torch.int8):
         super().__init__()
         if device is None:
             device = torch.device('cpu')
@@ -618,10 +617,12 @@ class W8A8Linear(nn.Module):
             in_features, out_features = self._get_io_features(
                 in_features, out_features, colwise)
         impl_builder = get_backend().get_layer_impl_builder(OpType.LinearW8A8)
+        self.quant_dtype = quant_dtype
         self.impl = impl_builder.build(in_features,
                                        out_features,
                                        bias is not None,
-                                       dtype=dtype)
+                                       dtype=dtype,
+                                       quant_dtype=quant_dtype)
         weight, scale, bias = self.create_weights(in_features, out_features,
                                                   bias, dtype, device)
         weight = torch.nn.Parameter(weight, requires_grad=False)
@@ -663,7 +664,9 @@ class W8A8Linear(nn.Module):
                                   loaded_weight: torch.Tensor, rank: int,
                                   world_size: int):
         """weight loader for rowwise linear."""
-        if loaded_weight.dim() == 2 and param.dtype == torch.int8:
+        if loaded_weight.dim() == 2 and param.dtype in (torch.float16,
+                                                        torch.float32,
+                                                        torch.bfloat16):
             weight = loaded_weight.chunk(world_size, 1)[rank]
             return default_weight_loader(param, weight)
         elif loaded_weight.dim() == 2 and loaded_weight.size(1) == 1:
@@ -693,7 +696,7 @@ class W8A8Linear(nn.Module):
                        dtype: torch.dtype, device: torch.device):
         """create weights."""
         weight = torch.empty((out_features, in_features),
-                             dtype=torch.int8,
+                             dtype=self.quant_dtype,
                              device=device)
         scale = torch.empty((out_features, 1),
                             dtype=torch.float32,
@@ -745,7 +748,8 @@ class MergedW8A8Linear(W8A8Linear):
                  dtype: Optional[torch.dtype] = None,
                  device: Optional[torch.device] = None,
                  is_tp: bool = True,
-                 out_names: Optional[List[int]] = None):
+                 out_names: Optional[List[int]] = None,
+                 quant_dtype: torch.dtype = torch.int8):
         self.split_section = all_out_features
         all_out_features = self._update_all_out_features(all_out_features)
         self.all_out_features = all_out_features
@@ -761,7 +765,8 @@ class MergedW8A8Linear(W8A8Linear):
                          dtype,
                          device,
                          colwise=True,
-                         is_tp=is_tp)
+                         is_tp=is_tp,
+                         quant_dtype=quant_dtype)
         self.weight.weight_loader = self.weight_loader
         self.scale.weight_loader = self.weight_loader
         self.weight.weight_spliter = self.weight_spliter
@@ -814,7 +819,9 @@ class QKVW8A8Linear(MergedW8A8Linear, QKVMixin):
                  dtype: Optional[torch.dtype] = None,
                  device: Optional[torch.device] = None,
                  is_tp: bool = True,
-                 num_replicate_kv_heads: int = 1):
+                 num_replicate_kv_heads: int = 1,
+                 quant_dtype: torch.dtype = torch.int8):
+        
         self.qkv_split_section = self._get_qkv_out_features(
             num_q_heads, num_kv_heads, head_size, head_size_v,
             num_replicate_kv_heads)
@@ -835,7 +842,8 @@ class QKVW8A8Linear(MergedW8A8Linear, QKVMixin):
                          dtype=dtype,
                          device=device,
                          is_tp=is_tp,
-                         out_names=out_names)
+                         out_names=out_names,
+                         quant_dtype=quant_dtype)
 
     def _update_all_out_features(self, all_out_features: List[int]):
         """update all out features."""
@@ -1200,6 +1208,10 @@ def build_linear(in_features: int,
         )
 
     quant_method = quant_config['quant_method']
+    quant_dtype = torch.int8
+    if 'quant_dtype' in quant_config:
+        quant_dtype = eval('torch.' + quant_config['quant_dtype'])
+
     if quant_method == 'awq':
         w_bit = quant_config.get('bits', 4)
         group_size = quant_config.get('group_size', 128)
@@ -1215,16 +1227,15 @@ def build_linear(in_features: int,
             all_reduce=all_reduce,
         )
     if quant_method == 'smooth_quant':
-        return W8A8Linear(
-            in_features,
-            out_features,
-            bias=bias,
-            dtype=dtype,
-            device=device,
-            colwise=colwise,
-            is_tp=is_tp,
-            all_reduce=all_reduce,
-        )
+        return W8A8Linear(in_features,
+                          out_features,
+                          bias=bias,
+                          dtype=dtype,
+                          device=device,
+                          colwise=colwise,
+                          is_tp=is_tp,
+                          all_reduce=all_reduce,
+                          quant_dtype=quant_dtype)
     else:
         raise RuntimeError(f'Unsupported quant method: {quant_method}')
 
@@ -1299,6 +1310,10 @@ def build_merged_colwise_linear(
         )
 
     quant_method = quant_config['quant_method']
+    quant_dtype = torch.int8
+    if 'quant_dtype' in quant_config:
+        quant_dtype = eval('torch.' + quant_config['quant_dtype'])
+
     if quant_method == 'awq':
         w_bit = quant_config.get('bits', 4)
         group_size = quant_config.get('group_size', 128)
@@ -1312,15 +1327,14 @@ def build_merged_colwise_linear(
             is_tp=is_tp,
         )
     if quant_method == 'smooth_quant':
-        return MergedW8A8Linear(
-            in_features=in_features,
-            all_out_features=all_out_features,
-            bias=bias,
-            dtype=dtype,
-            device=device,
-            is_tp=is_tp,
-            out_names=out_names,
-        )
+        return MergedW8A8Linear(in_features=in_features,
+                                all_out_features=all_out_features,
+                                bias=bias,
+                                dtype=dtype,
+                                device=device,
+                                is_tp=is_tp,
+                                out_names=out_names,
+                                quant_dtype=quant_dtype)
     else:
         raise RuntimeError(f'Unsupported quant method: {quant_method}')
 
@@ -1357,6 +1371,10 @@ def build_qkv_proj(in_features: int,
                              num_replicate_kv_heads=num_replicate_kv_heads)
 
     quant_method = quant_config['quant_method']
+    quant_dtype = torch.int8
+    if 'quant_dtype' in quant_config:
+        quant_dtype = eval('torch.' + quant_config['quant_dtype'])
+
     if quant_method == 'awq':
         w_bit = quant_config.get('bits', 4)
         group_size = quant_config.get('group_size', 128)
@@ -1381,6 +1399,7 @@ def build_qkv_proj(in_features: int,
                              dtype=dtype,
                              device=device,
                              is_tp=is_tp,
-                             num_replicate_kv_heads=num_replicate_kv_heads)
+                             num_replicate_kv_heads=num_replicate_kv_heads,
+                             quant_dtype=quant_dtype)
     else:
         raise RuntimeError(f'Unsupported quant method: {quant_method}')

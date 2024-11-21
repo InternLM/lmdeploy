@@ -15,10 +15,14 @@ from ..qmodules import (LinearW8A8Builder, LinearW8A8Impl, RMSNormW8A8Builder,
 class TritonRMSNormW8A8Impl(RMSNormW8A8Impl):
     """triton RMS norm w8a8 implementation api."""
 
-    def __init__(self, hidden_size: int, eps: float = 1e-6):
+    def __init__(self,
+                 hidden_size: int,
+                 eps: float = 1e-6,
+                 quant_dtype: torch.dtype = torch.int8):
         super().__init__()
         self.hidden_size = hidden_size
         self.eps = eps
+        self.quant_dtype = quant_dtype
 
     def forward(self,
                 x: torch.Tensor,
@@ -29,7 +33,7 @@ class TritonRMSNormW8A8Impl(RMSNormW8A8Impl):
             x = x + residual
             residual = x
         hidden_states_quant, rms_scale = rms_norm_dynamic_quant(
-            x, weight, self.eps)
+            x, weight, self.eps, quant_dtype=self.quant_dtype)
         x = QTensor(hidden_states_quant, rms_scale)
         if residual is None:
             return x
@@ -40,17 +44,23 @@ class TritonRMSNormBuilder(RMSNormW8A8Builder):
     """triton RMS norm w8a8 implementation builder."""
 
     @staticmethod
-    def build(hidden_size: int, eps: float = 1e-6):
+    def build(hidden_size: int,
+              eps: float = 1e-6,
+              quant_dtype: torch.dtype = torch.int8):
         """build."""
-        return TritonRMSNormW8A8Impl(hidden_size, eps)
+        return TritonRMSNormW8A8Impl(hidden_size, eps, quant_dtype)
 
 
 class TritonLinearW8A8Impl(LinearW8A8Impl):
     """triton linear w8a8 implementation."""
 
-    def __init__(self, in_features: int, out_features: int):
+    def __init__(self,
+                 in_features: int,
+                 out_features: int,
+                 quant_dtype: torch.dtype = torch.int8):
         self.in_features = in_features
         self.out_features = out_features
+        self.quant_dtype = quant_dtype
 
     def forward(self,
                 x,
@@ -61,7 +71,8 @@ class TritonLinearW8A8Impl(LinearW8A8Impl):
         """forward."""
         if isinstance(x, torch.Tensor):
             x = x.contiguous()
-            input_quant, input_scale = per_token_quant_int8(x, 1e-7)
+            input_quant, input_scale = per_token_quant_int8(
+                x, 1e-7, quant_dtype=self.quant_dtype)
         else:
             assert isinstance(x, QTensor)
             input_quant, input_scale = x.tensor, x.scale
@@ -85,6 +96,9 @@ class TritonLinearW8A8Builder(LinearW8A8Builder):
     def build(in_features: int,
               out_features: int,
               bias: bool = True,
-              dtype: torch.dtype = None):
+              dtype: torch.dtype = None,
+              quant_dtype: torch.dtype = torch.int8):
         """build."""
-        return TritonLinearW8A8Impl(in_features, out_features)
+        return TritonLinearW8A8Impl(in_features,
+                                    out_features,
+                                    quant_dtype=quant_dtype)
