@@ -3,7 +3,10 @@ import subprocess
 from subprocess import PIPE
 
 import allure
+import numpy as np
 import torch
+from decord import VideoReader, cpu
+from PIL import Image
 from pytest_assume.plugin import assume
 from utils.get_run_config import get_model_name, get_tp_num
 from utils.rule_condition_assert import assert_result
@@ -13,6 +16,7 @@ from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig
 from lmdeploy.utils import is_bf16_supported
 from lmdeploy.vl import load_image
 from lmdeploy.vl.constants import IMAGE_TOKEN
+from lmdeploy.vl.utils import encode_image_base64
 
 
 def run_pipeline_chat_test(config,
@@ -275,6 +279,11 @@ def assert_pipeline_single_element(output,
 
 PIC1 = 'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg'  # noqa E501
 PIC2 = 'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/demo/resources/human-pose.jpg'  # noqa E501
+PIC_BEIJING = 'https://raw.githubusercontent.com/QwenLM/Qwen-VL/master/assets/mm_tutorial/Beijing_Small.jpeg'  # noqa E501
+PIC_CHONGQING = 'https://raw.githubusercontent.com/QwenLM/Qwen-VL/master/assets/mm_tutorial/Chongqing_Small.jpeg'  # noqa E501
+PIC_RACCON = 'https://raw.githubusercontent.com/OpenGVLab/InternVL/main/internvl_chat/examples/image1.jpg'  # noqa E501
+PIC_PANDA = 'https://raw.githubusercontent.com/OpenGVLab/InternVL/main/internvl_chat/examples/image2.jpg'  # noqa E501
+DESC = 'What are the similarities and differences between these two images.'  # noqa E501
 
 
 def run_pipeline_vl_chat_test(config,
@@ -386,10 +395,324 @@ def run_pipeline_vl_chat_test(config,
                     ', reason: Multi-turn example: ski not in ' +
                     sess.response.text + '\n')
 
+    if 'internvl' in model_case.lower():
+        internvl_vl_testcase(config, pipe, file)
+    if 'llava' in model_case.lower():
+        llava_vl_testcase(config, pipe, file)
+    if 'minicpm' in model_case.lower():
+        MiniCPM_vl_testcase(config, pipe, file)
+    if 'qwen' in model_case.lower():
+        Qwen_vl_testcase(config, pipe, file)
+
     file.close()
 
     del pipe
     torch.cuda.empty_cache()
+
+
+def internvl_vl_testcase(config, pipe, file):
+    # multi-image multi-round conversation, combined images
+    messages = [
+        dict(
+            role='user',
+            content=[
+                dict(
+                    type='text',
+                    text=f'{IMAGE_TOKEN}{IMAGE_TOKEN}\n{DESC}'  # noqa E251,E501
+                ),
+                dict(type='image_url',
+                     image_url=dict(max_dynamic_patch=12, url=PIC_RACCON)),
+                dict(type='image_url',
+                     image_url=dict(max_dynamic_patch=12, url=PIC_PANDA))
+            ])
+    ]
+    response = pipe(messages)
+    result = 'ski' in response.text.lower() or '滑雪' in response.text.lower()
+    file.writelines('result:' + str(result) +
+                    ', reason: Multi-turn example: ski not in ' +
+                    response.text + '\n')
+
+    messages.append(dict(role='assistant', content=response.text))
+    messages.append(dict(role='user', content=DESC))
+    response = pipe(messages)
+    result = 'ski' in response.text.lower() or '滑雪' in response.text.lower()
+    file.writelines('result:' + str(result) +
+                    ', reason: Multi-turn example: ski not in ' +
+                    response.text + '\n')
+
+    # multi-image multi-round conversation, separate images
+    messages = [
+        dict(
+            role='user',
+            content=[
+                dict(
+                    type='text',
+                    text=f'Image-1: {IMAGE_TOKEN}\nImage-2: {IMAGE_TOKEN}\n'
+                    +  # noqa E251,E501
+                    DESC),
+                dict(type='image_url',
+                     image_url=dict(max_dynamic_patch=12, url=PIC_RACCON)),
+                dict(type='image_url',
+                     image_url=dict(max_dynamic_patch=12, url=PIC_PANDA))
+            ])
+    ]
+    response = pipe(messages)
+    result = 'ski' in response.text.lower() or '滑雪' in response.text.lower()
+    file.writelines('result:' + str(result) +
+                    ', reason: Multi-turn example: ski not in ' +
+                    response.text + '\n')
+
+    messages.append(dict(role='assistant', content=response.text))
+    messages.append(dict(role='user', content=DESC))
+    response = pipe(messages)
+    result = 'ski' in response.text.lower() or '滑雪' in response.text.lower()
+    file.writelines('result:' + str(result) +
+                    ', reason: Multi-turn example: ski not in ' +
+                    response.text + '\n')
+
+    # video multi-round conversation
+    def get_index(bound, fps, max_frame, first_idx=0, num_segments=32):
+        if bound:
+            start, end = bound[0], bound[1]
+        else:
+            start, end = -100000, 100000
+        start_idx = max(first_idx, round(start * fps))
+        end_idx = min(round(end * fps), max_frame)
+        seg_size = float(end_idx - start_idx) / num_segments
+        frame_indices = np.array([
+            int(start_idx + (seg_size / 2) + np.round(seg_size * idx))
+            for idx in range(num_segments)
+        ])
+        return frame_indices
+
+    def load_video(video_path, bound=None, num_segments=32):
+        vr = VideoReader(video_path, ctx=cpu(0), num_threads=1)
+        max_frame = len(vr) - 1
+        fps = float(vr.get_avg_fps())
+        frame_indices = get_index(bound,
+                                  fps,
+                                  max_frame,
+                                  first_idx=0,
+                                  num_segments=num_segments)
+        imgs = []
+        for frame_index in frame_indices:
+            img = Image.fromarray(vr[frame_index].asnumpy()).convert('RGB')
+            imgs.append(img)
+        return imgs
+
+    resource_path = config.get('resource_path')
+    video_path = resource_path + '/red-panda.mp4'
+    imgs = load_video(video_path, num_segments=8)
+
+    question = ''
+    for i in range(len(imgs)):
+        question = question + f'Frame{i+1}: {IMAGE_TOKEN}\n'
+
+    question += 'What is the red panda doing?'
+
+    content = [{'type': 'text', 'text': question}]
+    for img in imgs:
+        content.append({
+            'type': 'image_url',
+            'image_url': {
+                'max_dynamic_patch': 1,
+                'url': f'data:image/jpeg;base64,{encode_image_base64(img)}'
+            }
+        })
+
+    messages = [dict(role='user', content=content)]
+    response = pipe(messages)
+    result = 'ski' in response.text.lower() or '滑雪' in response.text.lower()
+    file.writelines('result:' + str(result) +
+                    ', reason: Multi-turn example: ski not in ' +
+                    response.text + '\n')
+
+    messages.append(dict(role='assistant', content=response.text))
+    messages.append(
+        dict(role='user',
+             content='Describe this video in detail. Don\'t repeat.'))
+    response = pipe(messages)
+    result = 'ski' in response.text.lower() or '滑雪' in response.text.lower()
+    file.writelines('result:' + str(result) +
+                    ', reason: Multi-turn example: ski not in ' +
+                    response.text + '\n')
+
+
+def llava_vl_testcase(config, pipe, file):
+    # multi-image multi-round conversation, combined images
+    messages = [
+        dict(role='user',
+             content=[
+                 dict(type='text', text='Describe the two images in detail.'),
+                 dict(type='image_url', image_url=dict(url=PIC_BEIJING)),
+                 dict(type='image_url', image_url=dict(url=PIC_CHONGQING))
+             ])
+    ]
+    response = pipe(messages)
+    result = 'ski' in response.text.lower() or '滑雪' in response.text.lower()
+    file.writelines('result:' + str(result) +
+                    ', reason: Multi-turn example: ski not in ' +
+                    response.text + '\n')
+
+    messages.append(dict(role='assistant', content=response.text))
+    messages.append(dict(role='user', content=DESC))
+    response = pipe(messages)
+    result = 'ski' in response.text.lower() or '滑雪' in response.text.lower()
+    file.writelines('result:' + str(result) +
+                    ', reason: Multi-turn example: ski not in ' +
+                    response.text + '\n')
+
+
+def MiniCPM_vl_testcase(config, pipe, file):
+    # Chat with multiple images
+    messages = [
+        dict(role='user',
+             content=[
+                 dict(type='text', text='Describe the two images in detail.'),
+                 dict(type='image_url',
+                      image_url=dict(max_slice_nums=9, url=PIC_RACCON)),
+                 dict(type='image_url',
+                      image_url=dict(max_slice_nums=9, url=PIC_PANDA))
+             ])
+    ]
+    response = pipe(messages)
+    result = 'ski' in response.text.lower() or '滑雪' in response.text.lower()
+    file.writelines('result:' + str(result) +
+                    ', reason: Multi-turn example: ski not in ' +
+                    response.text + '\n')
+
+    messages.append(dict(role='assistant', content=response.text))
+    messages.append(dict(role='user', content=DESC))
+    response = pipe(messages)
+    result = 'ski' in response.text.lower() or '滑雪' in response.text.lower()
+    file.writelines('result:' + str(result) +
+                    ', reason: Multi-turn example: ski not in ' +
+                    response.text + '\n')
+
+    # In-context few-shot learning
+    question = 'production date'
+    messages = [
+        dict(role='user',
+             content=[
+                 dict(type='text', text=question),
+                 dict(type='image_url', image_url=dict(url='example1.jpg')),
+             ]),
+        dict(role='assistant', content='2023.08.04'),
+        dict(role='user',
+             content=[
+                 dict(type='text', text=question),
+                 dict(type='image_url', image_url=dict(url='example2.jpg')),
+             ]),
+        dict(role='assistant', content='2007.04.24'),
+        dict(role='user',
+             content=[
+                 dict(type='text', text=question),
+                 dict(type='image_url', image_url=dict(url='test.jpg')),
+             ])
+    ]
+    response = pipe(messages)
+    result = 'ski' in response.text.lower() or '滑雪' in response.text.lower()
+    file.writelines('result:' + str(result) +
+                    ', reason: Multi-turn example: ski not in ' +
+                    response.text + '\n')
+
+    # Chat with video
+    MAX_NUM_FRAMES = 64  # if cuda OOM set a smaller number
+
+    def encode_video(video_path):
+
+        def uniform_sample(length, n):
+            gap = len(length) / n
+            idxs = [int(i * gap + gap / 2) for i in range(n)]
+            return [length[i] for i in idxs]
+
+        vr = VideoReader(video_path, ctx=cpu(0))
+        sample_fps = round(vr.get_avg_fps() / 1)  # FPS
+        frame_idx = [i for i in range(0, len(vr), sample_fps)]
+        if len(frame_idx) > MAX_NUM_FRAMES:
+            frame_idx = uniform_sample(frame_idx, MAX_NUM_FRAMES)
+        frames = vr.get_batch(frame_idx).asnumpy()
+        frames = [Image.fromarray(v.astype('uint8')) for v in frames]
+        print('num frames:', len(frames))
+        return frames
+
+    resource_path = config.get('resource_path')
+    video_path = resource_path + '/video_test.mp4'
+    frames = encode_video(video_path)
+    question = 'Describe the video'
+
+    content = [dict(type='text', text=question)]
+    for frame in frames:
+        content.append(
+            dict(type='image_url',
+                 image_url=dict(
+                     use_image_id=False,
+                     max_slice_nums=2,
+                     url=f'data:image/jpeg;base64,{encode_image_base64(frame)}'
+                 )))
+
+    messages = [dict(role='user', content=content)]
+    response = pipe(messages)
+    result = 'ski' in response.text.lower() or '滑雪' in response.text.lower()
+    file.writelines('result:' + str(result) +
+                    ', reason: Multi-turn example: ski not in ' +
+                    response.text + '\n')
+
+
+def Qwen_vl_testcase(config, pipe, file):
+    # multi-image multi-round conversation, combined images
+    messages = [
+        dict(role='user',
+             content=[
+                 dict(type='text', text='Describe the two images in detail.'),
+                 dict(type='image_url', image_url=dict(url=PIC_BEIJING)),
+                 dict(type='image_url', image_url=dict(url=PIC_CHONGQING))
+             ])
+    ]
+    response = pipe(messages)
+    result = 'ski' in response.text.lower() or '滑雪' in response.text.lower()
+    file.writelines('result:' + str(result) +
+                    ', reason: Multi-turn example: ski not in ' +
+                    response.text + '\n')
+
+    messages.append(dict(role='assistant', content=response.text))
+    messages.append(dict(role='user', content=DESC))
+    response = pipe(messages)
+    result = 'ski' in response.text.lower() or '滑雪' in response.text.lower()
+    file.writelines('result:' + str(result) +
+                    ', reason: Multi-turn example: ski not in ' +
+                    response.text + '\n')
+
+    # image resolution for performance boost
+    min_pixels = 64 * 28 * 28
+    max_pixels = 64 * 28 * 28
+    messages = [
+        dict(role='user',
+             content=[
+                 dict(type='text', text='Describe the two images in detail.'),
+                 dict(type='image_url',
+                      image_url=dict(min_pixels=min_pixels,
+                                     max_pixels=max_pixels,
+                                     url=PIC_BEIJING)),
+                 dict(type='image_url',
+                      image_url=dict(min_pixels=min_pixels,
+                                     max_pixels=max_pixels,
+                                     url=PIC_CHONGQING))
+             ])
+    ]
+    response = pipe(messages)
+    result = 'ski' in response.text.lower() or '滑雪' in response.text.lower()
+    file.writelines('result:' + str(result) +
+                    ', reason: Multi-turn example: ski not in ' +
+                    response.text + '\n')
+
+    messages.append(dict(role='assistant', content=response.text))
+    messages.append(dict(role='user', content=DESC))
+    response = pipe(messages)
+    result = 'ski' in response.text.lower() or '滑雪' in response.text.lower()
+    file.writelines('result:' + str(result) +
+                    ', reason: Multi-turn example: ski not in ' +
+                    response.text + '\n')
 
 
 def assert_pipeline_vl_chat_log(config, model_case, worker_id):

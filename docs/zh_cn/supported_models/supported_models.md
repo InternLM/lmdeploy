@@ -19,7 +19,7 @@
 |         Qwen          |   1.8B - 72B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |        Qwen1.5        |  1.8B - 110B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |         Qwen2         |   0.5B - 72B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
-|        Mistral        |       7B       | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
+|        Mistral        |       7B       | LLM  |    Yes    |   Yes   |   Yes   |  No   |
 |        Mixtral        |  8x7B, 8x22B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |        Qwen-VL        |       7B       | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |      DeepSeek-VL      |       7B       | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
@@ -36,7 +36,7 @@
 |    MiniGeminiLlama    |       7B       | MLLM |    Yes    |    -    |    -    |  Yes  |
 |         GLM4          |       9B       | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |       CodeGeeX4       |       9B       | LLM  |    Yes    |   Yes   |   Yes   |   -   |
-|         Molmo         |    7B-D,72B    | MLLM |    Yes    |   Yes   |   Yes   |  NO   |
+|         Molmo         |    7B-D,72B    | MLLM |    Yes    |   Yes   |   Yes   |  No   |
 
 “-” 表示还没有验证。
 
