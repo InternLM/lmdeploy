@@ -276,7 +276,10 @@ class StepContext:
 
         # cross
         cross_seqlens = inputs.cross_length
-        cross_kv_seqlens = inputs.cross_length + inputs.history_cross_length
+        cross_kv_seqlens = None
+        if cross_kv_seqlens is not None:
+            cross_kv_seqlens = (inputs.cross_length +
+                                inputs.history_cross_length)
 
         # position ids 1d
         position_ids = cls.get_position_ids_1d(position_ids, q_seqlens)[None]
