@@ -1,4 +1,5 @@
 model_path: /nvme/qa_test_models
+resource_path: /nvme/qa_test_models/resource
 dst_path: /nvme/qa_test_models/autotest_model
 log_path: /nvme/qa_test_models/autotest_model/log
 benchmark_path: /nvme/qa_test_models/benchmark-reports
@@ -120,13 +121,7 @@ pytorch_quatization:
         - internlm/internlm2_5-20b-chat
         - Qwen/Qwen2-1.5B-Instruct
     w8a8:
-        - meta-llama/Meta-Llama-3-8B-Instruct
-        - meta-llama/Llama-2-7b-chat-hf
-        - internlm/internlm2-chat-20b
         - internlm/internlm2_5-7b-chat
-        - internlm/internlm2_5-20b-chat
-        - 01-ai/Yi-6B-Chat
-        - internlm/internlm2_5-20b
         - internlm/internlm2_5-7b
     no_kvint4:
         - OpenGVLab/InternVL2-1B
