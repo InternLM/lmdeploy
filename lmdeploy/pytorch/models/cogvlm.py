@@ -938,9 +938,12 @@ class CogVLMForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
 
                 imgs = sorted(imgs, key=lambda img: img.start)
                 for img in imgs:
-                    new_pos_ids += list(range(start, img.start + 1))
-                    new_pos_ids += [img.start + 1] * (img.end - img.start - 2)
-                    start = img.start + 2
+                    img_pad_pos = img.start + 1 - num_img_tok
+                    num_pad = img.end - img.start - 2
+                    new_pos_ids += list(range(start, img_pad_pos))
+                    new_pos_ids += [img_pad_pos] * num_pad
+                    start = img_pad_pos + 1
+                    num_img_tok += num_pad
 
                 remain = seq_len - len(new_pos_ids)
                 new_pos_ids += list(range(start, start + remain))
