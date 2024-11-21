@@ -70,6 +70,8 @@ _SUPPORTED_ARCHS = dict(
     PhiMoEForCausalLM=True,
     # mllama
     MllamaForConditionalGeneration=True,
+    # MiniCPM-V-2_6
+    MiniCPMVForCausalLM=True,
 )
 
 
