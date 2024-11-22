@@ -30,10 +30,8 @@ def check_llava_install():
 
 def _clip_vision_tower_load_model(self, **kwargs):
     logger.info(f'CLIPVisionTower.load_model: {self.vision_tower_name}')
-    from transformers import (CLIPImageProcessor, CLIPVisionConfig,
-                              CLIPVisionModel)
-    self.image_processor = CLIPImageProcessor.from_pretrained(
-        self.vision_tower_name)
+    from transformers import CLIPVisionConfig, CLIPVisionModel
+
     config = CLIPVisionConfig.from_pretrained(self.vision_tower_name)
     self.vision_tower = CLIPVisionModel._from_config(config=config)
     self.vision_tower.requires_grad_(False)
