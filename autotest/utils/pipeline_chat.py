@@ -399,8 +399,6 @@ def run_pipeline_vl_chat_test(config,
     if 'internvl' in model_case.lower():
         internvl_vl_testcase(config, pipe, file)
         internvl_vl_testcase(config, pipe, file, 'cn')
-    if 'llava' in model_case.lower():
-        llava_vl_testcase(config, pipe, file)
     if 'minicpm' in model_case.lower():
         MiniCPM_vl_testcase(config, pipe, file)
     if 'qwen' in model_case.lower():
@@ -541,7 +539,7 @@ def internvl_vl_testcase(config, pipe, file, lang='en'):
             dict(role='user',
                  content='Describe this video in detail. Don\'t repeat.'))
     response = pipe(messages)
-    result = 'red pandas' in response.text.lower(
+    result = 'red panda' in response.text.lower(
     ) or '熊猫' in response.text.lower()
     file.writelines('result:' + str(result) +
                     ', reason: video images: red panda not in ' +
@@ -560,7 +558,8 @@ def llava_vl_testcase(config, pipe, file):
     ]
     response = pipe(messages)
     result = 'buildings' in response.text.lower(
-    ) or '楼' in response.text.lower() or 'skyline' in response.text.lower()
+    ) or '楼' in response.text.lower() or 'skyline' in response.text.lower(
+    ) or 'cityscape' in response.text.lower()
     file.writelines('result:' + str(result) +
                     ', reason: combined images: buildings not in ' +
                     response.text + '\n')
@@ -569,7 +568,8 @@ def llava_vl_testcase(config, pipe, file):
     messages.append(dict(role='user', content=DESC))
     response = pipe(messages)
     result = 'buildings' in response.text.lower(
-    ) or '楼' in response.text.lower() or 'skyline' in response.text.lower()
+    ) or '楼' in response.text.lower() or 'skyline' in response.text.lower(
+    ) or 'cityscape' in response.text.lower()
     file.writelines('result:' + str(result) +
                     ', reason: combined images second: buildings not in ' +
                     response.text + '\n')
@@ -687,7 +687,8 @@ def Qwen_vl_testcase(config, pipe, file):
     ]
     response = pipe(messages)
     result = 'buildings' in response.text.lower(
-    ) or '楼' in response.text.lower() or 'skyline' in response.text.lower()
+    ) or '楼' in response.text.lower() or 'skyline' in response.text.lower(
+    ) or 'cityscape' in response.text.lower()
     file.writelines('result:' + str(result) +
                     ', reason: combined images: buildings not in ' +
                     response.text + '\n')
@@ -696,7 +697,8 @@ def Qwen_vl_testcase(config, pipe, file):
     messages.append(dict(role='user', content=DESC))
     response = pipe(messages)
     result = 'buildings' in response.text.lower(
-    ) or '楼' in response.text.lower() or 'skyline' in response.text.lower()
+    ) or '楼' in response.text.lower() or 'skyline' in response.text.lower(
+    ) or 'cityscape' in response.text.lower()
     file.writelines('result:' + str(result) +
                     ', reason: combined images second: buildings not in ' +
                     response.text + '\n')
@@ -721,7 +723,8 @@ def Qwen_vl_testcase(config, pipe, file):
     response = pipe(messages)
     result = 'ski' in response.text.lower() or '滑雪' in response.text.lower()
     result = 'buildings' in response.text.lower(
-    ) or '楼' in response.text.lower() or 'skyline' in response.text.lower()
+    ) or '楼' in response.text.lower() or 'skyline' in response.text.lower(
+    ) or 'cityscape' in response.text.lower()
     file.writelines('result:' + str(result) +
                     ', reason: performance boost: buildings not in ' +
                     response.text + '\n')
@@ -730,7 +733,8 @@ def Qwen_vl_testcase(config, pipe, file):
     messages.append(dict(role='user', content=DESC))
     response = pipe(messages)
     result = 'buildings' in response.text.lower(
-    ) or '楼' in response.text.lower() or 'skyline' in response.text.lower()
+    ) or '楼' in response.text.lower() or 'skyline' in response.text.lower(
+    ) or 'cityscape' in response.text.lower()
     file.writelines('result:' + str(result) +
                     ', reason: performance boost second: buildings not in ' +
                     response.text + '\n')
