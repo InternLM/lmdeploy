@@ -69,7 +69,6 @@ class MiniCPMVModel(VisonModel):
             device=model.resampler.proj.device)
         self.config = config
         self.model = model.eval()
-        self._forward_func = self._forward_v2_5
 
     def _get_slice_image(self, image: Image):
         slice_images = []
@@ -110,7 +109,46 @@ class MiniCPMVModel(VisonModel):
                     image_tokens=1,
                     image_token_id=0)
 
-    def _forward_v2_5(self, inputs: List[Dict]) -> List[torch.Tensor]:
+    def _preprocess_v2_6(self, image: Image, params: Dict = None) -> Dict:
+        """image preprocessing for MiniCPM-V-2_6."""
+        max_slice_nums = self.image_processor.max_slice_nums
+        use_image_id = self.image_processor.use_image_id
+        max_slice_nums = params.get('max_slice_nums', max_slice_nums)
+        use_image_id = params.get('use_image_id', use_image_id)
+        outputs = self.image_processor(image, max_slice_nums=max_slice_nums)
+        pixel_values = outputs['pixel_values'][0]
+        num_patches = len(pixel_values)
+        pixel_values = [torch.as_tensor(x) for x in pixel_values]
+        tgt_sizes = outputs['tgt_sizes'][0]
+        tgt_sizes = [torch.as_tensor(x) for x in tgt_sizes]
+        grid = self.image_processor.get_sliced_grid(
+            image_size=image.size, max_slice_nums=max_slice_nums)
+
+        return dict(
+            pixel_values=pixel_values,  # a list
+            tgt_sizes=tgt_sizes,  # a list
+            best_grid=grid,
+            num_patches=num_patches,
+            image_tokens=1,
+            image_token_id=0,
+            use_image_id=use_image_id)
+
+    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+        """refer to `super().preprocess() for spec."""
+        outputs = []
+        for item in messages[-1]['content']:
+            if item['type'] == 'image':
+                image = item['image'].convert('RGB')
+                params = {
+                    k: v
+                    for k, v in item.items() if k not in {'type', 'image'}
+                }
+                result = self._preprocess_func(image, params)
+                outputs.append(result)
+        return outputs
+
+    @torch.no_grad()
+    def forward(self, inputs: List[Dict]) -> List[torch.Tensor]:
         """forward for MiniCPM-Llama3-V-2_5.
 
         Args:
@@ -141,52 +179,11 @@ class MiniCPMVModel(VisonModel):
                                       device=self.model.device)
         for i in range(B):
             patch_attn_mask[i, :tgt_sizes[i][0] * tgt_sizes[i][1]] = True
-        embeddings = self.model.vpm(
-            pixel_values.type(torch.half),
-            patch_attention_mask=patch_attn_mask).last_hidden_state
+        embeddings = self.model.vpm(pixel_values.type(torch.half),
+                                    patch_attention_mask=patch_attn_mask,
+                                    tgt_sizes=tgt_sizes).last_hidden_state
         embeddings = self.model.resampler(embeddings, tgt_sizes)
         return embeddings
-
-    def _preprocess_v2_6(self, image: Image, params: Dict = None) -> Dict:
-        """image preprocessing for MiniCPM-V-2_6."""
-        max_slice_nums = self.image_processor.max_slice_nums
-        use_image_id = self.image_processor.use_image_id
-        max_slice_nums = params.get('max_slice_nums', max_slice_nums)
-        use_image_id = params.get('use_image_id', use_image_id)
-        outputs = self.image_processor(image, max_slice_nums=max_slice_nums)
-        pixel_values = outputs['pixel_values'][0]
-        num_patches = len(pixel_values)
-        pixel_values = [torch.as_tensor(x) for x in pixel_values]
-        tgt_sizes = outputs['tgt_sizes'][0]
-        tgt_sizes = [torch.as_tensor(x) for x in tgt_sizes]
-        grid = self.image_processor.get_sliced_grid(
-            image_size=image.size, max_slice_nums=max_slice_nums)
-        return dict(
-            pixel_values=pixel_values,  # a list
-            tgt_sizes=tgt_sizes,  # a list
-            best_grid=grid,
-            num_patches=num_patches,
-            image_tokens=1,
-            image_token_id=0,
-            use_image_id=use_image_id)
-
-    def preprocess(self, messages: List[Dict]) -> List[Dict]:
-        """refer to `super().preprocess() for spec."""
-        outputs = []
-        for item in messages[-1]['content']:
-            if item['type'] == 'image':
-                image = item['image'].convert('RGB')
-                params = {
-                    k: v
-                    for k, v in item.items() if k not in {'type', 'image'}
-                }
-                result = self._preprocess_func(image, params)
-                outputs.append(result)
-        return outputs
-
-    @torch.no_grad()
-    def forward(self, inputs: List[Dict]) -> List[torch.Tensor]:
-        return self._forward_func(inputs)
 
     def proc_messages(self, messages, chat_template, sequence_start):
         """apply chat template to get the prompt."""
