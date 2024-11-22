@@ -619,7 +619,7 @@ def MiniCPM_vl_testcase(config, pipe, file):
     response = pipe(messages)
     result = '2021' in response.text.lower() or '14' in response.text.lower()
     file.writelines('result:' + str(result) +
-                    ', reason: in context learning: 2021 not in ' +
+                    ', reason: in context learning: 2021 or 14 not in ' +
                     response.text + '\n')
 
     # Chat with video
@@ -643,7 +643,7 @@ def MiniCPM_vl_testcase(config, pipe, file):
         return frames
 
     resource_path = config.get('resource_path')
-    video_path = resource_path + '/video_test.mp4'
+    video_path = resource_path + '/red-panda.mp4'
     frames = encode_video(video_path)
     question = 'Describe the video'
 
