@@ -258,7 +258,7 @@ class Qwen2MoeDecoderLayer(nn.Module):
         # build attention layer
         self.self_attn = Qwen2MoeAttention(config, dtype=dtype, device=device)
 
-        # builf MLP
+        # build MLP
         if (layer_idx not in config.mlp_only_layers) and (
                 config.num_experts > 0) and ((layer_idx + 1) %
                                              config.decoder_sparse_step == 0):

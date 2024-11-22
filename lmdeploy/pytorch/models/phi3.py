@@ -165,7 +165,7 @@ class Phi3DecoderLayer(nn.Module):
         # build attention layer
         self.self_attn = Phi3Attention(config, dtype=dtype, device=device)
 
-        # builf MLP
+        # build MLP
         self.mlp = Phi3MLP(config, dtype=dtype, device=device)
 
         # build input layer norm

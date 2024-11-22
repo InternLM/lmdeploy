@@ -153,6 +153,7 @@ class LlamaModel(BaseInputModel):
             max_position_embeddings = int(
                 model_arg.get('max_position_embeddings', 0))
             rope_scaling = model_arg.get('rope_scaling', None)
+            head_dim = model_arg.get('head_dim', hidden_units // attn_head_num)
             scaling_factor = 0.0
             use_dynamic_ntk = 0
             scaling_type = ''
@@ -189,7 +190,7 @@ class LlamaModel(BaseInputModel):
                     beta_slow = rope_scaling.get('beta_slow', 1.0)
 
         return dict(
-            size_per_head=hidden_units // attn_head_num,
+            size_per_head=head_dim,
             rotary_embedding=hidden_units // attn_head_num,
             num_layer=num_layer,
             norm_eps=norm_eps,

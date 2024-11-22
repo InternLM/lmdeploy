@@ -62,12 +62,16 @@ _SUPPORTED_ARCHS = dict(
     DeepseekV2ForCausalLM=True,
     # internvl
     InternVLChatModel=True,
+    # mono-internvl
+    InternLM2VEForCausalLM=True,
     # gemma2
     Gemma2ForCausalLM=True,
     # phi3.5-moe
     PhiMoEForCausalLM=True,
     # mllama
     MllamaForConditionalGeneration=True,
+    # MiniCPM-V-2_6
+    MiniCPMVForCausalLM=True,
 )
 
 

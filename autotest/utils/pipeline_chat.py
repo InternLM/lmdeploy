@@ -4,7 +4,7 @@ from subprocess import PIPE
 
 import allure
 import torch
-from pytest import assume
+from pytest_assume.plugin import assume
 from utils.get_run_config import get_model_name, get_tp_num
 from utils.rule_condition_assert import assert_result
 
@@ -61,7 +61,7 @@ def run_pipeline_chat_test(config,
         ]))
     file = open(config_log, 'w')
     log_string = '\n'.join([
-        'reproduce config info:',
+        'reproduce config info:', 'from lmdeploy import pipeline',
         'from lmdeploy.messages import PytorchEngineConfig',
         'from lmdeploy.messages import TurbomindEngineConfig',
         'engine_config = ' + str(backend_config),
@@ -273,36 +273,41 @@ def assert_pipeline_single_element(output,
     return result
 
 
-PIC1 = 'https://raw.githubusercontent.com/' + \
-    'open-mmlab/mmdeploy/main/tests/data/tiger.jpeg'
-PIC2 = 'https://raw.githubusercontent.com/' + \
-    'open-mmlab/mmdeploy/main/demo/resources/human-pose.jpg'
+PIC1 = 'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg'  # noqa E501
+PIC2 = 'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/demo/resources/human-pose.jpg'  # noqa E501
 
 
-def run_pipeline_vl_chat_test(config, model_case, quant_policy: int = None):
+def run_pipeline_vl_chat_test(config,
+                              model_case,
+                              backend,
+                              worker_id: str = '',
+                              quant_policy: int = None):
     log_path = config.get('log_path')
     tp = get_tp_num(config, model_case)
     model_path = config.get('model_path')
     hf_path = model_path + '/' + model_case
 
-    if 'llava' in model_case:
-        backend_config = TurbomindEngineConfig(tp=tp,
-                                               session_len=8192,
-                                               model_name='vicuna')
+    if 'pytorch' in backend:
+        backend_config = PytorchEngineConfig(tp=tp, session_len=8192)
+        if not is_bf16_supported():
+            backend_config.dtype = 'float16'
     else:
         backend_config = TurbomindEngineConfig(tp=tp, session_len=8192)
+
+    if 'llava' in model_case:
+        backend_config.model_name = 'vicuna'
     if '4bit' in model_case.lower() or 'awq' in model_case.lower():
         backend_config.model_format = 'awq'
     if quant_policy is not None:
         backend_config.quant_policy = quant_policy
 
     if not is_bf16_supported():
-        backend_config.cache_max_entry_count = 0.5
         backend_config.dtype = 'float16'
     pipe = pipeline(hf_path, backend_config=backend_config)
 
     pipeline_chat_log = os.path.join(
-        log_path, 'pipeline_vl_chat_' + model_case.split('/')[1] + '.log')
+        log_path,
+        'pipeline_vl_chat_' + model_case.split('/')[1] + worker_id + '.log')
     file = open(pipeline_chat_log, 'w')
 
     image = load_image(PIC1)
@@ -312,7 +317,16 @@ def run_pipeline_vl_chat_test(config, model_case, quant_policy: int = None):
     else:
         prompt = 'describe this image'
 
-    file.writelines('engineconfig:' + str(backend_config))
+    log_string = '\n'.join([
+        'reproduce config info:', 'from lmdeploy import pipeline',
+        'from lmdeploy.messages import PytorchEngineConfig',
+        'from lmdeploy.messages import TurbomindEngineConfig',
+        'engine_config = ' + str(backend_config),
+        'pipe = pipeline("' + hf_path + '",  backend_config=engine_config)',
+        f'res = pipe(({prompt}, {image}))'
+    ])
+    file.writelines(log_string)
+    print(log_string)
     response = pipe((prompt, image))
     result = 'tiger' in response.text.lower() or '虎' in response.text.lower()
     file.writelines('result:' + str(result) +
@@ -378,11 +392,12 @@ def run_pipeline_vl_chat_test(config, model_case, quant_policy: int = None):
     torch.cuda.empty_cache()
 
 
-def assert_pipeline_vl_chat_log(config, model_case):
+def assert_pipeline_vl_chat_log(config, model_case, worker_id):
     log_path = config.get('log_path')
 
     pipeline_chat_log = os.path.join(
-        log_path, 'pipeline_vl_chat_' + model_case.split('/')[1] + '.log')
+        log_path,
+        'pipeline_vl_chat_' + model_case.split('/')[1] + worker_id + '.log')
 
     allure.attach.file(pipeline_chat_log,
                        attachment_type=allure.attachment_type.TEXT)
