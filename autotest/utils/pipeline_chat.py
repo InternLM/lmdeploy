@@ -284,6 +284,7 @@ PIC_CHONGQING = 'https://raw.githubusercontent.com/QwenLM/Qwen-VL/master/assets/
 PIC_REDPANDA = 'https://raw.githubusercontent.com/OpenGVLab/InternVL/main/internvl_chat/examples/image1.jpg'  # noqa E501
 PIC_PANDA = 'https://raw.githubusercontent.com/OpenGVLab/InternVL/main/internvl_chat/examples/image2.jpg'  # noqa E501
 DESC = 'What are the similarities and differences between these two images.'  # noqa E501
+DESC_ZH = '两张图有什么相同和不同的地方.'  # noqa E501
 
 
 def run_pipeline_vl_chat_test(config,
@@ -397,6 +398,7 @@ def run_pipeline_vl_chat_test(config,
 
     if 'internvl' in model_case.lower():
         internvl_vl_testcase(config, pipe, file)
+        internvl_vl_testcase(config, pipe, file, 'cn')
     if 'llava' in model_case.lower():
         llava_vl_testcase(config, pipe, file)
     if 'minicpm' in model_case.lower():
@@ -410,21 +412,22 @@ def run_pipeline_vl_chat_test(config,
     torch.cuda.empty_cache()
 
 
-def internvl_vl_testcase(config, pipe, file):
+def internvl_vl_testcase(config, pipe, file, lang='en'):
+    if lang == 'cn':
+        description = DESC_ZH
+    else:
+        description = DESC
     # multi-image multi-round conversation, combined images
     messages = [
-        dict(
-            role='user',
-            content=[
-                dict(
-                    type='text',
-                    text=f'{IMAGE_TOKEN}{IMAGE_TOKEN}\n{DESC}'  # noqa E251,E501
-                ),
-                dict(type='image_url',
-                     image_url=dict(max_dynamic_patch=12, url=PIC_REDPANDA)),
-                dict(type='image_url',
-                     image_url=dict(max_dynamic_patch=12, url=PIC_PANDA))
-            ])
+        dict(role='user',
+             content=[
+                 dict(type='text',
+                      text=f'{IMAGE_TOKEN}{IMAGE_TOKEN}\n{description}'),
+                 dict(type='image_url',
+                      image_url=dict(max_dynamic_patch=12, url=PIC_REDPANDA)),
+                 dict(type='image_url',
+                      image_url=dict(max_dynamic_patch=12, url=PIC_PANDA))
+             ])
     ]
     response = pipe(messages)
     result = 'panda' in response.text.lower() or '熊猫' in response.text.lower()
@@ -433,7 +436,7 @@ def internvl_vl_testcase(config, pipe, file):
                     response.text + '\n')
 
     messages.append(dict(role='assistant', content=response.text))
-    messages.append(dict(role='user', content=DESC))
+    messages.append(dict(role='user', content=description))
     response = pipe(messages)
     result = 'panda' in response.text.lower() or '熊猫' in response.text.lower()
     file.writelines('result:' + str(result) +
@@ -449,7 +452,7 @@ def internvl_vl_testcase(config, pipe, file):
                     type='text',
                     text=f'Image-1: {IMAGE_TOKEN}\nImage-2: {IMAGE_TOKEN}\n'
                     +  # noqa E251,E501
-                    DESC),
+                    description),
                 dict(type='image_url',
                      image_url=dict(max_dynamic_patch=12, url=PIC_REDPANDA)),
                 dict(type='image_url',
@@ -463,7 +466,7 @@ def internvl_vl_testcase(config, pipe, file):
                     response.text + '\n')
 
     messages.append(dict(role='assistant', content=response.text))
-    messages.append(dict(role='user', content=DESC))
+    messages.append(dict(role='user', content=description))
     response = pipe(messages)
     result = 'panda' in response.text.lower() or '熊猫' in response.text.lower()
     file.writelines('result:' + str(result) +
@@ -508,7 +511,10 @@ def internvl_vl_testcase(config, pipe, file):
     for i in range(len(imgs)):
         question = question + f'Frame{i+1}: {IMAGE_TOKEN}\n'
 
-    question += 'What is the red panda doing?'
+    if lang == 'cn':
+        question += '小熊猫在做什么？'
+    else:
+        question += 'What is the red panda doing?'
 
     content = [{'type': 'text', 'text': question}]
     for img in imgs:
@@ -528,9 +534,12 @@ def internvl_vl_testcase(config, pipe, file):
                     response.text + '\n')
 
     messages.append(dict(role='assistant', content=response.text))
-    messages.append(
-        dict(role='user',
-             content='Describe this video in detail. Don\'t repeat.'))
+    if lang == 'cn':
+        messages.append(dict(role='user', content='描述视频详情，不要重复'))
+    else:
+        messages.append(
+            dict(role='user',
+                 content='Describe this video in detail. Don\'t repeat.'))
     response = pipe(messages)
     result = 'red pandas' in response.text.lower(
     ) or '熊猫' in response.text.lower()
