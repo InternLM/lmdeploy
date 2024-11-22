@@ -64,7 +64,11 @@ def load_vl_model(model_path: str,
         try:
             if module.match(hf_config):
                 logger.info(f'matching vision model: {name}')
-                return module(**kwargs)
+                model = module(**kwargs)
+                model.build_preprocessor()
+                if backend == 'turbomind':
+                    model.build_model()
+                return model
         except Exception:
             logger.error(f'matching vision model: {name} failed')
             raise

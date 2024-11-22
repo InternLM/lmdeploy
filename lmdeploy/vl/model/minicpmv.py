@@ -6,7 +6,7 @@ from typing import Dict, List
 import numpy as np
 import torch
 from PIL.Image import Image
-from transformers import AutoModelForCausalLM
+from transformers import AutoConfig, AutoModelForCausalLM
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
@@ -21,7 +21,13 @@ class MiniCPMVModel(VisonModel):
 
     _arch = 'MiniCPMV'
 
-    def build_preprocessor(self):
+    def __init__(self,
+                 model_path: str,
+                 with_llm: bool = False,
+                 max_memory: Dict[int, int] = None,
+                 hf_config: AutoConfig = None,
+                 backend: str = ''):
+        super().__init__(model_path, with_llm, max_memory, hf_config, backend)
         if not hasattr(self.hf_config, 'version'):
             raise ValueError('Can not find `version` in config.json. '
                              'Please checkout the latest model')
@@ -29,14 +35,15 @@ class MiniCPMVModel(VisonModel):
         if version not in ['2.5', '2.6']:
             raise ValueError(
                 f'Only support v2.5 and v2.6, but got version {version}')
-        self._preprocess_func = (self._preprocess_v2_5 if version == '2.5' else
-                                 self._preprocess_v2_6)
         self.version = version
 
+    def build_preprocessor(self):
         from transformers import AutoProcessor
         self.processor = AutoProcessor.from_pretrained(self.model_path,
                                                        trust_remote_code=True)
         self.image_processor = self.processor.image_processor
+        self._preprocess_func = (self._preprocess_v2_5 if self.version == '2.5'
+                                 else self._preprocess_v2_6)
 
     def build_model(self):
         """build model & load weights."""
