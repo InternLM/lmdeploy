@@ -25,12 +25,13 @@ class MiniCPMVModel(VisonModel):
         if not hasattr(self.hf_config, 'version'):
             raise ValueError('Can not find `version` in config.json. '
                              'Please checkout the latest model')
-        version = self.hf_config.version
+        version = str(self.hf_config.version)
         if version not in ['2.5', '2.6']:
             raise ValueError(
                 f'Only support v2.5 and v2.6, but got version {version}')
         self._preprocess_func = (self._preprocess_v2_5 if version == '2.5' else
                                  self._preprocess_v2_6)
+        self.version = version
 
         from transformers import AutoProcessor
         self.processor = AutoProcessor.from_pretrained(self.model_path,
@@ -68,8 +69,7 @@ class MiniCPMVModel(VisonModel):
             device=model.resampler.proj.device)
         self.config = config
         self.model = model.eval()
-        self._forward_func = (self._forward_v2_5 if self.config.version
-                              == '2.5' else self._forward_v2_6)
+        self._forward_func = self._forward_v2_5
 
     def _get_slice_image(self, image: Image):
         slice_images = []
@@ -100,11 +100,9 @@ class MiniCPMVModel(VisonModel):
     def _preprocess_v2_5(self, image: Image, params: Dict = None) -> Dict:
         """image preprocessing for MiniCPM-Llama3-V-2_5."""
         slice_images, best_grid = self._get_slice_image(image)
-        # _patches, _tgt_sies are list
-        patches, tgt_sizes = self._reshape_by_patch(slice_images)
-        num_patches = len(patches)
-        pixel_values = torch.vstack(patches)
-        tgt_sizes = torch.vstack(tgt_sizes)
+        # pixel_values, tgt_sizes are list of torch tensors
+        pixel_values, tgt_sizes = self._reshape_by_patch(slice_images)
+        num_patches = len(pixel_values)
         return dict(pixel_values=pixel_values,
                     tgt_sizes=tgt_sizes,
                     best_grid=best_grid,
@@ -119,11 +117,15 @@ class MiniCPMVModel(VisonModel):
             inputs(List[Dict]): the preprocessing result, each dict is
                 the value returned by `_preprocess_v2_5`
         """
-        pixel_values = [
-            x['pixel_values'].to(dtype=torch.half, device=self.model.device)
-            for x in inputs
-        ]
         tgt_sizes = [x['tgt_sizes'] for x in inputs]
+        pixel_values = [x['pixel_values'] for x in inputs]
+        # flatten the list
+        tgt_sizes = list(itertools.chain(*tgt_sizes))
+        pixel_values = list(itertools.chain(*pixel_values))
+        pixel_values = [
+            x.to(dtype=torch.half, device=self.model.device)
+            for x in pixel_values
+        ]
         pixel_values = [
             x.flatten(end_dim=1).permute(1, 0) for x in pixel_values
         ]
@@ -146,76 +148,27 @@ class MiniCPMVModel(VisonModel):
         return embeddings
 
     def _preprocess_v2_6(self, image: Image, params: Dict = None) -> Dict:
-        # """image preprocessing for MiniCPM-V-2_6."""
-        # max_slice_nums = self.image_processor.max_slice_nums
-        # use_image_id = self.image_processor.use_image_id
-        # max_slice_nums = params.get('max_slice_nums', max_slice_nums)
-        # use_image_id = params.get('use_image_id', use_image_id)
-        # outputs = self.image_processor(image, max_slice_nums=max_slice_nums)
-        # grid = self.image_processor.get_sliced_grid(
-        #     image_size=image.size, max_slice_nums=max_slice_nums)
-        # use_image_id = params.get('use_image_id', False)
-        # outputs.update(
-        #     best_grid=grid,
-        #     image_size=image.size,
-        #     image_tokens=1,  # TODO
-        #     image_token_id=0,
-        #     use_image_id=use_image_id)
-        # return outputs
-        return []
-
-    def _forward_v2_6(self, inputs: List[Dict]) -> List[torch.tensor]:
-        """perform vision embedding for iniCPM-V-2_6.
-
-        Args:
-            inputs(List[Dict]): each dict in the list refers to the output
-                of `_image_process_v_2_6
-        """
-        # patches = []
-        # tgt_sizes = []
-        # best_grids = []
-        # num_patches = []
-        # for x in inputs:
-        #     patches.extend(x['pixel_values'][0])
-        #     num_patches.append(len(outputs['pixel_values'][0]))
-        #     tgt_sizes.extend(outputs['tgt_sizes'][0])
-        #     best_grids.append(x['best_grid'])
-
-        # patches = [
-        #     torch.as_tensor(x).to(dtype=torch.half, device=self.model.device)
-        #     for x in patches
-        # ]
-        # patches = [x.flatten(end_dim=1).permute(1, 0) for x in patches]
-        # tgt_sizes = [torch.as_tensor(x) for x in tgt_sizes]
-        # tgt_sizes = torch.vstack(tgt_sizes).type(torch.int32)
-        # max_patches = torch.max(tgt_sizes[:, 0] * tgt_sizes[:, 1])
-        # all_pixel_values = torch.nn.utils.rnn.pad_sequence(patches,
-        #                                                    batch_first=True,
-        #                                                    padding_value=0.0)
-        # B, L, _ = all_pixel_values.shape
-        # all_pixel_values = all_pixel_values.permute(0, 2,
-        #                                             1).reshape(B, 3, -1, L)
-        # patch_attn_mask = torch.zeros((B, 1, max_patches),
-        #                               dtype=torch.bool,
-        #                               device=self.model.device)
-        # for i in range(B):
-        #     patch_attn_mask[i, 0, :tgt_sizes[i][0] * tgt_sizes[i][1]] = True
-        # vision_embedding = self.model.vpm(
-        #     all_pixel_values.type(torch.half),
-        #     patch_attention_mask=patch_attn_mask,
-        #     tgt_sizes=tgt_sizes).last_hidden_state
-        # vision_embedding = self.model.resampler(vision_embedding, tgt_sizes)
-        # vision_embedding = torch.split(vision_embedding, num_patches, 0)
-        # outputs = []
-        # for embeddings, grid in zip(vision_embedding, best_grids):
-        #     embeddings = embeddings.cpu()  # n x d x h
-        #     outputs.append(
-        #         dict(embeddings=embeddings,
-        #              grid=grid,
-        #              use_image_id=self.image_processor.use_image_id))
-
-        # return outputs
-        return []
+        """image preprocessing for MiniCPM-V-2_6."""
+        max_slice_nums = self.image_processor.max_slice_nums
+        use_image_id = self.image_processor.use_image_id
+        max_slice_nums = params.get('max_slice_nums', max_slice_nums)
+        use_image_id = params.get('use_image_id', use_image_id)
+        outputs = self.image_processor(image, max_slice_nums=max_slice_nums)
+        pixel_values = outputs['pixel_values'][0]
+        num_patches = len(pixel_values)
+        pixel_values = [torch.as_tensor(x) for x in pixel_values]
+        tgt_sizes = outputs['tgt_sizes'][0]
+        tgt_sizes = [torch.as_tensor(x) for x in tgt_sizes]
+        grid = self.image_processor.get_sliced_grid(
+            image_size=image.size, max_slice_nums=max_slice_nums)
+        return dict(
+            pixel_values=pixel_values,  # a list
+            tgt_sizes=tgt_sizes,  # a list
+            best_grid=grid,
+            num_patches=num_patches,
+            image_tokens=1,
+            image_token_id=0,
+            use_image_id=use_image_id)
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """refer to `super().preprocess() for spec."""
@@ -286,15 +239,11 @@ class MiniCPMVModel(VisonModel):
             inputs = message.pop('preprocess', None)
             embeddings = message.pop('forward', None)
             num_patches = [x['num_patches'] for x in inputs]
-            import pdb
-            pdb.set_trace()
             embeddings = torch.split(embeddings, num_patches, 0)
             embeddings = [emmbedding.split(1) for emmbedding in embeddings]
             embeddings = list(itertools.chain(*embeddings))
             features.extend(embeddings)
-        import pdb
-        pdb.set_trace()
-        # features = [feature.split(1) for feature in features]
+
         # flatten the list
         features = list(itertools.chain(*features))
         features = [x.cpu().numpy() for x in features]
