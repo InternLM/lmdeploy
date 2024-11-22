@@ -246,10 +246,10 @@ class ImageEncoder:
         assert isinstance(messages, List)
         assert all(isinstance(item, Dict) for item in messages)
         for i, message in enumerate(messages):
-            preprocess = message.pop('preprocess', None)
+            preprocess = message['preprocess']
             if preprocess:
                 result = self.model.forward(preprocess)
-                messages[i].update(preprocess=result)
+                messages[i].update(forward=result)
         return messages
 
     async def wrap_for_pytorch(self, messages: List[Dict], chat_template,
@@ -275,5 +275,17 @@ class ImageEncoder:
 
     async def wrap_for_turbomind(self, messages: List[Dict], chat_template,
                                  tokenizer, sequence_start) -> Dict:
+        """
+        Args:
+            messages (List[Dict]): a list of message, which is supposed to be
+                the output of `async_infer`
+        Returns:
+            a dict which will be passed to pytorch engine_instance's forward.
+            The dict is like the following:
+            Dict(
+                'prompt': 'the prompt after applying chat template'
+                'input_ids': [],
+
+        """
         return self.model.to_turbomind(messages, chat_template, tokenizer,
                                        sequence_start)

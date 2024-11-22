@@ -149,8 +149,8 @@ class VisonModel(ABC):
                          sequence_start):
         # collect image features from messages
         features = [
-            message.pop('preprocess') for message in messages
-            if 'preprocess' in message.keys()
+            message.pop('forward') for message in messages
+            if 'forward' in message.keys()
         ]
         # flatten the list
         features = list(itertools.chain(*features))
