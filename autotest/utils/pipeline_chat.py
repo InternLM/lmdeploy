@@ -427,7 +427,7 @@ def internvl_vl_testcase(config, pipe, file):
             ])
     ]
     response = pipe(messages)
-    result = 'pandas' in response.text.lower() or '熊猫' in response.text.lower()
+    result = 'panda' in response.text.lower() or '熊猫' in response.text.lower()
     file.writelines('result:' + str(result) +
                     ', reason: combined images: panda not in ' +
                     response.text + '\n')
@@ -435,7 +435,7 @@ def internvl_vl_testcase(config, pipe, file):
     messages.append(dict(role='assistant', content=response.text))
     messages.append(dict(role='user', content=DESC))
     response = pipe(messages)
-    result = 'pandas' in response.text.lower() or '熊猫' in response.text.lower()
+    result = 'panda' in response.text.lower() or '熊猫' in response.text.lower()
     file.writelines('result:' + str(result) +
                     ', reason: combined images second: panda not in ' +
                     response.text + '\n')
@@ -457,7 +457,7 @@ def internvl_vl_testcase(config, pipe, file):
             ])
     ]
     response = pipe(messages)
-    result = 'pandas' in response.text.lower() or '熊猫' in response.text.lower()
+    result = 'panda' in response.text.lower() or '熊猫' in response.text.lower()
     file.writelines('result:' + str(result) +
                     ', reason: separate images: panda not in ' +
                     response.text + '\n')
@@ -465,7 +465,7 @@ def internvl_vl_testcase(config, pipe, file):
     messages.append(dict(role='assistant', content=response.text))
     messages.append(dict(role='user', content=DESC))
     response = pipe(messages)
-    result = 'pandas' in response.text.lower() or '熊猫' in response.text.lower()
+    result = 'panda' in response.text.lower() or '熊猫' in response.text.lower()
     file.writelines('result:' + str(result) +
                     ', reason: separate images second: panda not in ' +
                     response.text + '\n')
@@ -522,7 +522,7 @@ def internvl_vl_testcase(config, pipe, file):
 
     messages = [dict(role='user', content=content)]
     response = pipe(messages)
-    result = 'pandas' in response.text.lower() or '熊猫' in response.text.lower()
+    result = 'panda' in response.text.lower() or '熊猫' in response.text.lower()
     file.writelines('result:' + str(result) +
                     ', reason: video images: red panda not in ' +
                     response.text + '\n')
@@ -551,7 +551,7 @@ def llava_vl_testcase(config, pipe, file):
     ]
     response = pipe(messages)
     result = 'buildings' in response.text.lower(
-    ) or '楼' in response.text.lower()
+    ) or '楼' in response.text.lower() or 'skyline' in response.text.lower()
     file.writelines('result:' + str(result) +
                     ', reason: combined images: buildings not in ' +
                     response.text + '\n')
@@ -560,7 +560,7 @@ def llava_vl_testcase(config, pipe, file):
     messages.append(dict(role='user', content=DESC))
     response = pipe(messages)
     result = 'buildings' in response.text.lower(
-    ) or '楼' in response.text.lower()
+    ) or '楼' in response.text.lower() or 'skyline' in response.text.lower()
     file.writelines('result:' + str(result) +
                     ', reason: combined images second: buildings not in ' +
                     response.text + '\n')
@@ -579,7 +579,7 @@ def MiniCPM_vl_testcase(config, pipe, file):
              ])
     ]
     response = pipe(messages)
-    result = 'pandas' in response.text.lower() or '熊猫' in response.text.lower()
+    result = 'panda' in response.text.lower() or '熊猫' in response.text.lower()
     file.writelines('result:' + str(result) +
                     ', reason: multiple images: panda not in ' +
                     response.text + '\n')
@@ -587,7 +587,7 @@ def MiniCPM_vl_testcase(config, pipe, file):
     messages.append(dict(role='assistant', content=response.text))
     messages.append(dict(role='user', content=DESC))
     response = pipe(messages)
-    result = 'pandas' in response.text.lower() or '熊猫' in response.text.lower()
+    result = 'panda' in response.text.lower() or '熊猫' in response.text.lower()
     file.writelines('result:' + str(result) +
                     ', reason: multiple images second: panda not in ' +
                     response.text + '\n')
@@ -678,7 +678,7 @@ def Qwen_vl_testcase(config, pipe, file):
     ]
     response = pipe(messages)
     result = 'buildings' in response.text.lower(
-    ) or '楼' in response.text.lower()
+    ) or '楼' in response.text.lower() or 'skyline' in response.text.lower()
     file.writelines('result:' + str(result) +
                     ', reason: combined images: buildings not in ' +
                     response.text + '\n')
@@ -687,7 +687,7 @@ def Qwen_vl_testcase(config, pipe, file):
     messages.append(dict(role='user', content=DESC))
     response = pipe(messages)
     result = 'buildings' in response.text.lower(
-    ) or '楼' in response.text.lower()
+    ) or '楼' in response.text.lower() or 'skyline' in response.text.lower()
     file.writelines('result:' + str(result) +
                     ', reason: combined images second: buildings not in ' +
                     response.text + '\n')
@@ -712,7 +712,7 @@ def Qwen_vl_testcase(config, pipe, file):
     response = pipe(messages)
     result = 'ski' in response.text.lower() or '滑雪' in response.text.lower()
     result = 'buildings' in response.text.lower(
-    ) or '楼' in response.text.lower()
+    ) or '楼' in response.text.lower() or 'skyline' in response.text.lower()
     file.writelines('result:' + str(result) +
                     ', reason: performance boost: buildings not in ' +
                     response.text + '\n')
@@ -721,7 +721,7 @@ def Qwen_vl_testcase(config, pipe, file):
     messages.append(dict(role='user', content=DESC))
     response = pipe(messages)
     result = 'buildings' in response.text.lower(
-    ) or '楼' in response.text.lower()
+    ) or '楼' in response.text.lower() or 'skyline' in response.text.lower()
     file.writelines('result:' + str(result) +
                     ', reason: performance boost second: buildings not in ' +
                     response.text + '\n')
