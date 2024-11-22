@@ -31,9 +31,6 @@ class VisonModel(ABC):
         if hf_config is None:
             _, hf_config = get_model_arch(model_path)
         self.hf_config = hf_config
-        self.build_preprocessor()
-        if backend == 'turbomind':
-            self.build_model()
 
     @abstractmethod
     def build_preprocessor(self, ):

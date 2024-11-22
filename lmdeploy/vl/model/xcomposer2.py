@@ -5,7 +5,7 @@ import os
 import sys
 import warnings
 from contextlib import contextmanager
-from typing import Any, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 import torch
 from PIL.Image import Image
@@ -17,6 +17,17 @@ from lmdeploy.vl.model.utils import (add_device_hook, disable_logging,
                                      rewrite_ctx)
 
 logger = get_logger('lmdeploy')
+
+
+def check_xcomposer_install():
+    try:
+        # WARNING! we have to do this otherwise the model_type is wrong for
+        # xcomposer2d5
+        import decord  # noqa: F401
+    except ImportError:
+        raise ImportError(
+            "No module named 'decord'. Please install decord by `pip install decord`"  # noqa
+        )
 
 
 class ModelType(enum.Enum):
@@ -83,6 +94,17 @@ def init_empty_vit(model_path):
 class Xcomposer2VisionModel(VisonModel):
     """InternLM-Xcomposer2 vision model."""
 
+    def __init__(self,
+                 model_path: str,
+                 with_llm: bool = False,
+                 max_memory: Dict[int, int] = None,
+                 hf_config: AutoConfig = None,
+                 backend: str = ''):
+        super().__init__(model_path, with_llm, max_memory, hf_config, backend)
+        check_xcomposer_install()
+        self.model_type, self.module = get_xcomposer_type(self.model_path)
+        logger.info(f'matching type of {self.model_type}')
+
     @classmethod
     def match(cls, config: AutoConfig):
         """check whether the config match the model."""
@@ -93,6 +115,34 @@ class Xcomposer2VisionModel(VisonModel):
             if target in v:
                 return True
         return False
+
+    def build_preprocessor(self):
+
+        import torchvision.transforms as transforms
+        from torchvision.transforms.functional import InterpolationMode
+
+        if self.model_type in [
+                ModelType.XCOMPOSER2D5, ModelType.XCOMPOSER2_4KHD
+        ]:
+            self.HD_transform = self.module
+            self.vis_processor = transforms.Compose([
+                transforms.ToTensor(),
+                transforms.Normalize((0.48145466, 0.4578275, 0.40821073),
+                                     (0.26862954, 0.26130258, 0.27577711)),
+            ])
+            self.preprocess_func = (self._preprocess_2d5 if self.model_type
+                                    == ModelType.XCOMPOSER2D5 else
+                                    self._preprocess_4khd_7b)
+        else:
+            self.vis_processor = transforms.Compose([
+                transforms.Resize(
+                    (self.hf_config.img_size, self.hf_config.img_size),
+                    interpolation=InterpolationMode.BICUBIC),
+                transforms.ToTensor(),
+                transforms.Normalize((0.48145466, 0.4578275, 0.40821073),
+                                     (0.26862954, 0.26130258, 0.27577711)),
+            ])
+            self.preprocess_func = self._preprocess_7b
 
     def build_model(self):
         from accelerate import init_empty_weights
@@ -111,18 +161,6 @@ class Xcomposer2VisionModel(VisonModel):
                 del model.output
             else:
                 self.vl_model = model
-
-        # additional components.
-        model_type, module = get_xcomposer_type(self.model_path)
-        logger.info(f'matching type of {model_type}')
-        if model_type == ModelType.XCOMPOSER2D5:
-            self.HD_transform = module
-            self._forward_func = self._forward_2d5
-        elif model_type == ModelType.XCOMPOSER2_4KHD:
-            self.HD_transform = module
-            self._forward_func = self._forward_4khd_7b
-        else:
-            self._forward_func = self._forward_7b
 
         from accelerate.utils import get_balanced_memory, infer_auto_device_map
         max_memory = get_balanced_memory(
@@ -156,51 +194,92 @@ class Xcomposer2VisionModel(VisonModel):
 
         self.model = model.eval()
 
-    def _forward_2d5(self, images: List[Image]) -> List[torch.Tensor]:
-        """internlm-xcomposer2d5-7b vit forward."""
-        outputs = [x.convert('RGB') for x in images]
-        hd_num = 6 if len(images) > 1 else 24
-        outputs = [self.HD_transform(x, hd_num=hd_num) for x in outputs]
-        outputs = [
-            self.model.vis_processor(x).unsqueeze(0).to(dtype=torch.half)
-            for x in outputs
-        ]
-        embeds, split = self.model.vit(outputs, self.model.plora_glb_GN,
-                                       self.model.plora_sub_GN)
-        embeds = self.model.vision_proj(embeds)
-        embeds = torch.split(embeds, split, dim=1)
-        embeds = [x.squeeze() for x in embeds]
-        return embeds
+    def _preprocess_2d5(self, image: Image, params: Dict) -> Dict:
+        """image preprocessing for internlm-xcomposer2d5-7b."""
+        hd_num = params.get('hd_num', 24)
+        pixel_values = self.HD_transform(image, hd_num=hd_num)
+        pixel_values = self.vis_processor(pixel_values).unsqueeze(0).half()
+        return pixel_values
 
-    def _forward_7b(self, images: List[Image]) -> List[torch.Tensor]:
-        """internlm-xcomposer2-7b vit forward."""
-        outputs = [x.convert('RGB') for x in images]
-        outputs = [
-            self.model.vis_processor(x).unsqueeze(0).half() for x in outputs
-        ]
-        outputs = torch.cat(outputs, dim=0)
-        outputs = self.model.vit(outputs)
-        outputs = self.model.vision_proj(outputs)
-        outputs = torch.split(outputs, 1, dim=0)
-        outputs = [x.squeeze() for x in outputs]
+    def _preprocess_7b(self, image: Image, params: Dict) -> Dict:
+        """image preprocessing for internlm-xcomposer2-7b."""
+        pixel_values = self.vis_processor(image).unsqueeze(0).half()
+        return pixel_values
+
+    def _preprocess_4khd_7b(self, image: Image, params: Dict) -> Dict:
+        """image preprocessing for internlm-xcomposer2-4khd-7b."""
+        pixel_values = self.HD_transform(image, hd_num=25)
+        pixel_values = self.vis_processor(pixel_values).unsqueeze(0).half()
+        return pixel_values
+
+    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+        """refer to `super().preprocess() for spec."""
+        outputs = []
+        for item in messages[-1]['content']:
+            if item['type'] == 'image':
+                image = item['image'].convert('RGB')
+                params = {
+                    k: v
+                    for k, v in item.items() if k not in {'type', 'image'}
+                }
+                pixel_values = self.preprocess_func(image, params)
+                outputs.append(
+                    dict(
+                        pixel_values=pixel_values,
+                        image_size=image.size,
+                        image_tokens=576,  # TODO
+                        image_token_id=0))
         return outputs
 
-    def _forward_4khd_7b(self, images: List[Image]) -> List[torch.Tensor]:
-        """internlm-xcomposer2-4khd-7b vit forward."""
-        outputs = [x.convert('RGB') for x in images]
-        outputs = [self.HD_transform(x, hd_num=25) for x in outputs]
-        outputs = [
-            self.model.vis_processor(x).unsqueeze(0).to(dtype=torch.half)
-            for x in outputs
-        ]
-        embeds, split = self.model.vit(outputs, self.model.plora_glb_GN,
-                                       self.model.plora_sub_GN)
-        embeds = self.model.vision_proj(embeds)
-        embeds = torch.split(embeds, split, dim=1)
-        embeds = [x.squeeze() for x in embeds]
+    @torch.no_grad()
+    def forward(self, inputs: List[Dict]) -> List[torch.Tensor]:
+        if self.model_type in [
+                ModelType.XCOMPOSER2D5, ModelType.XCOMPOSER2_4KHD
+        ]:
+            pixel_values = [x['pixel_values'] for x in inputs]
+            embeds, split = self.model.vit(pixel_values,
+                                           self.model.plora_glb_GN,
+                                           self.model.plora_sub_GN)
+            embeds = self.model.vision_proj(embeds)
+            embeds = torch.split(embeds, split, dim=1)
+            embeds = [x.squeeze() for x in embeds]
+        else:
+            pixel_values = [x['pixel_values'] for x in inputs]
+            pixel_values = torch.cat(pixel_values, dim=0)
+            embeds = self.model.vit(pixel_values)
+            embeds = self.model.vision_proj(embeds)
+            embeds = torch.split(embeds, 1, dim=0)
+            embeds = [x.squeeze() for x in embeds]
         return embeds
 
-    @torch.no_grad()
-    def forward(self, images: List[Image]) -> List[torch.Tensor]:
-        """forward."""
-        return self._forward_func(images)
+    @classmethod
+    def proc_messages(cls, messages, chat_template, sequence_start):
+        """apply chat template to get the prompt."""
+        prompt_messages = []
+        IMAGE_TOKEN = '<IMAGE_TOKEN>'
+        for message in messages:
+            if isinstance(message['content'], str):
+                prompt_messages.append(message)
+                continue
+            n_images = len(
+                [1 for x in message['content'] if x['type'] == 'image'])
+            content = [
+                item['text'] for item in message['content']
+                if item['type'] == 'text'
+            ]
+            prompt = ' '.join([IMAGE_TOKEN] * n_images) + content[0]
+            prompt_messages.append(dict(role='user', content=prompt))
+        prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
+        return prompt, IMAGE_TOKEN
+
+    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template,
+                                                 sequence_start)
+        return super().to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
+                                      sequence_start)
+
+    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template,
+                                                 sequence_start)
+        return super().to_turbomind_aux(messages, prompt, IMAGE_TOKEN,
+                                        tokenizer, sequence_start)
