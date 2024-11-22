@@ -179,9 +179,14 @@ class MiniCPMVModel(VisonModel):
                                       device=self.model.device)
         for i in range(B):
             patch_attn_mask[i, :tgt_sizes[i][0] * tgt_sizes[i][1]] = True
-        embeddings = self.model.vpm(pixel_values.type(torch.half),
-                                    patch_attention_mask=patch_attn_mask,
-                                    tgt_sizes=tgt_sizes).last_hidden_state
+        if self.version == '2.5':
+            embeddings = self.model.vpm(
+                pixel_values.type(torch.half),
+                patch_attention_mask=patch_attn_mask).last_hidden_state
+        else:
+            embeddings = self.model.vpm(pixel_values.type(torch.half),
+                                        patch_attention_mask=patch_attn_mask,
+                                        tgt_sizes=tgt_sizes).last_hidden_state
         embeddings = self.model.resampler(embeddings, tgt_sizes)
         return embeddings
 
