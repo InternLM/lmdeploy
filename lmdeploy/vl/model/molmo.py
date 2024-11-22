@@ -156,7 +156,7 @@ class MolmoVisionModel(VisonModel):
         for i, message in enumerate(messages):
             role, content = message['role'], message['content']
             if isinstance(content, List):
-                forward_result = message.pop('preprocess')
+                forward_result = message.pop('forward')
                 input_ids = forward_result['input_ids']
                 embeddings = forward_result['embeddings']
                 results.append((input_ids.tolist(), embeddings))
