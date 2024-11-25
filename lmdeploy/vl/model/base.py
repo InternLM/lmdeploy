@@ -1,10 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import itertools
 from abc import ABC, abstractmethod
 from typing import Dict, List, Union
 
 import numpy as np
-import torch
 from mmengine import Registry
 from transformers import AutoConfig
 
@@ -34,18 +32,29 @@ class VisonModel(ABC):
 
     @abstractmethod
     def build_preprocessor(self, ):
+        """build the preprocessor.
+
+        When the derived class implements this method, try not to introduce the
+        upper stream model repo as a thirdparty package
+        """
         raise NotImplementedError()
 
     @abstractmethod
     def build_model(self, ):
-        """build model."""
-        raise NotImplementedError()
+        """build model.
+
+        ONLY implement it when the backend is turbomind engine
+        """
+        if self.backend == 'turbomind':
+            raise NotImplementedError()
 
     @abstractmethod
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
-        """preprocess multimodal data in the messages, of which only the last
-        item includes the mulitmodal data.
-
+        """preprocess multimodal data in the messages. The derived class,
+        i.e., a specific vision model, takes the charge of image preprocessing
+        and the result management.
+        It can integrate the result into the messages list, or insert it to
+        the individual image item.
         Args:
             message(Dict): multimodal data in a dict, which is as follows:
             [
@@ -73,53 +82,77 @@ class VisonModel(ABC):
                         ...
                     ]
                 }
+                {....}
+                {'role': 'images', 'content': List[Dict]}
             ]
         Returns:
-            the preprocessing results in a list. list[i] is a dict, referring
-            to the preprocessing result of an image. The dict acts like:
-            {
-                'pixel_values': torch.Tensor,
-                'others_output_by_image_preprocessing': torch.Tensor or else,
-                ...,
-                'image_tokens': int, # the number of tokens that the corresponding image encoded,
-                'image_token_id': int, #
-            }
+            the message list with preprocessing results included, which is
+            determined by the derived classes
         """  # noqa
         raise NotImplementedError()
 
     @abstractmethod
-    def forward(self, inputs: List[Dict]) -> List[torch.Tensor]:
-        """extract image feature.
+    def forward(self, inputs: List[Dict]) -> List[Dict]:
+        """extract image feature. ONLY implement it when the backend is
+        turbomind engine.
 
         Args:
             inputs: the outputs of `preprocess`
         Return:
-            A list of torch.Tensor. Each one represents the feature of an
-                image
+            the message list with forwarding results included, which is
+            determined by the derived classes
         """
-        raise NotImplementedError()
+        if self.backend == 'turbomind':
+            raise NotImplementedError()
 
     @abstractmethod
     def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
-        """"""
-        raise NotImplementedError()
+        """pack the preprocessing results in a format compatible with what is
+        required by pytorch engine. ONLY implement it when the backend is
+        pytorch engine.
+
+        Args:
+            messages(List[Dict]): the output of `preprocess`
+            chat_template: the chat template defined in `lmdeploy/model.py`
+            tokenzer: the tokenizer model
+            sequence_start: starting flag of a sequence
+        """
+        if self.backend == 'pytorch':
+            raise NotImplementedError()
 
     @abstractmethod
     def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):
-        """"""
-        raise NotImplementedError()
+        """pack the forwarding results in a format compatible with what is
+        required by turbomind engine. ONLY implement it when the backend is
+        turbomind engine.
+
+        Args:
+            messages(List[Dict]): the output of `preprocess`
+            chat_template: the chat template defined in `lmdeploy/model.py`
+            tokenzer: the tokenizer model
+            sequence_start: starting flag of a sequence
+        """
+        if self.backend == 'turbomind':
+            raise NotImplementedError()
 
     @classmethod
     def to_pytorch_aux(cls, messages, prompt, IMAGE_TOKEN, tokenizer,
                        sequence_start):
-        """"""
+        """auxiliary function to pack the preprocessing results in a format
+        compatible with what is required by pytorch engine.
+
+        Args:
+            messages(List[Dict]): the output of `preprocess`
+            prompt(str): the prompt after applying chat template
+            IMAGE_TOKEN(str): a placeholder where image tokens will be
+                inserted
+            tokenzer: the tokenizer model
+            sequence_start: starting flag of a sequence
+        """
         # collect all preprocessing result from messages
-        preps = [
-            message.pop('preprocess') for message in messages
-            if 'preprocess' in message.keys()
-        ]
-        # flatten the list
-        preps = list(itertools.chain(*preps))
+        preps = [x['content'] for x in messages if x['role'] == 'preprocess']
+        assert len(preps) == 1
+        preps = preps[0]
 
         # split prompt into segments and validate data
         segs = prompt.split(IMAGE_TOKEN)
@@ -144,13 +177,21 @@ class VisonModel(ABC):
     @classmethod
     def to_turbomind_aux(cls, messages, prompt, IMAGE_TOKEN, tokenizer,
                          sequence_start):
+        """auxiliary function to pack the forwarding results in a format
+        compatible with what is required by turbomind engine.
+
+        Args:
+            messages(List[Dict]): the output of `preprocess`
+            prompt(str): the prompt after applying chat template
+            IMAGE_TOKEN(str): a placeholder where image tokens will be
+                inserted
+            tokenzer: the tokenizer model
+            sequence_start: starting flag of a sequence
+        """
         # collect image features from messages
-        features = [
-            message.pop('forward') for message in messages
-            if 'forward' in message.keys()
-        ]
-        # flatten the list
-        features = list(itertools.chain(*features))
+        features = [x['content'] for x in messages if x['role'] == 'forward']
+        assert len(features) == 1
+        features = features[0]
         features = [x.cpu().numpy() for x in features]
 
         # split prompt into segments and validate data
