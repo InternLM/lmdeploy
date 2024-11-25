@@ -74,19 +74,21 @@ class CogVLMVisionModel(VisonModel):
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """refer to the spec of `super().preprocess`"""
+        images = [x['content'] for x in messages if x['role'] == 'images']
+        assert len(images) == 1
+        images = images[0]
         outputs = []
-        for item in messages[-1]['content']:
-            item_type = item['type']
-            if item_type == 'image':
-                image = item['image'].convert('RGB')
-                pixel_values = self.image_transform(image)
-                outputs.append(
-                    dict(
-                        pixel_values=pixel_values,
-                        image_size=image.size,
-                        image_tokens=2306,  # TODO
-                        image_token_id=0))
-        return outputs
+        for image, params in images:
+            image = image.convert('RGB')
+            pixel_values = self.image_transform(image)
+            outputs.append(
+                dict(
+                    pixel_values=pixel_values,
+                    image_size=image.size,
+                    image_tokens=2306,  # TODO
+                    image_token_id=0))
+        messages.append(dict(role='preprocess', content=outputs))
+        return messages
 
     @torch.no_grad()
     def forward(self, inputs: List[Dict]) -> List[torch.Tensor]:
@@ -99,6 +101,8 @@ class CogVLMVisionModel(VisonModel):
         for message in messages:
             if isinstance(message['content'], str):
                 prompt_messages.append(message)
+                continue
+            elif message['role'] in ['images', 'preprocess', 'forward']:
                 continue
             content = [
                 x['text'] for x in message['content'] if x['type'] == 'text'
