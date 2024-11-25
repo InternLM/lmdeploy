@@ -146,12 +146,17 @@ def model_forward(
             kv_quant_policy=cache_engine.cache_config.quant_policy,
         )
         with ctx_mgr.context(context):
+            model_metas = None
+            model_metas = model.update_model_metas(
+                past_key_values=cache_engine.gpu_cache,
+                context=context,
+            )
             input_dict = model.prepare_inputs_for_generation(
                 past_key_values=cache_engine.gpu_cache,
                 context=context,
             )
             output = model(**input_dict)
-    return dict(hidden_states=output)
+    return dict(hidden_states=output, model_metas=model_metas)
 
 
 SwapMap = Dict[int, int]
@@ -163,10 +168,6 @@ class AutoModelAgent:
     def __init__(self, model_config: ModelConfig, cache_config: CacheConfig):
         self.model_config = model_config
         self.cache_config = cache_config
-
-    def get_block_numel(self):
-        """get block nelement."""
-        raise NotImplementedError('Not implemented')
 
     async def async_forward(self, inputs: ModelInputs, swap_in_map: SwapMap,
                             swap_out_map: SwapMap):
@@ -192,6 +193,10 @@ class AutoModelAgent:
 
     def get_logits(self, hidden_states: torch.Tensor):
         """get logits of model output."""
+        raise NotImplementedError('Not implemented.')
+
+    def get_input_processor(self):
+        """get input processor."""
         raise NotImplementedError('Not implemented.')
 
 
@@ -257,11 +262,6 @@ class BaseModelAgent(AutoModelAgent):
                          device=device)
         return patched_model
 
-    def get_block_numel(self):
-        """get block nelement."""
-        k_cache = self.cache_engine.local_gpu_cache[0][0]
-        return k_cache[0].numel()
-
     def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap,
                       swap_out_map: SwapMap):
         cache_swapping(self.cache_engine,
@@ -310,6 +310,10 @@ class BaseModelAgent(AutoModelAgent):
     def get_logits(self, hidden_states: torch.Tensor):
         """get logits of model output."""
         return self.patched_model.get_logits(hidden_states)
+
+    def get_input_processor(self):
+        """get input processor.."""
+        return self.patched_model.get_input_processor()
 
 
 @torch.inference_mode()
@@ -690,11 +694,6 @@ class TPModelAgent(AutoModelAgent):
 
         return model, cache_engine, cache_config
 
-    def get_block_numel(self):
-        """get block nelement."""
-        k_cache = self.cache_engine.local_gpu_cache[0][0]
-        return k_cache[0].numel()
-
     def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap,
                       swap_out_map: SwapMap):
         """forward impl."""
@@ -749,6 +748,10 @@ class TPModelAgent(AutoModelAgent):
     def get_logits(self, hidden_states: torch.Tensor):
         """get logits of model output."""
         return self.patched_model.get_logits(hidden_states)
+
+    def get_input_processor(self):
+        """get input processor.."""
+        return self.patched_model.get_input_processor()
 
 
 def _exit_handler(agent: TPModelAgent):
