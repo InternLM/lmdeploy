@@ -10,8 +10,7 @@ namespace turbomind {
 
 struct Sequence {
 
-    enum Status
-    {
+    enum Status {
         kCached = 0,
         kLocked,
         kActive
@@ -29,7 +28,8 @@ struct Sequence {
 
     mutable std::vector<int> tokens;  // update by user
 
-    mutable int cache_len = 0;
+    mutable int cache_len        = 0;
+    mutable int prefix_cache_len = 0;
 
     // additional data kept round-to-round
     mutable std::vector<std::byte> random_state;  // update by user

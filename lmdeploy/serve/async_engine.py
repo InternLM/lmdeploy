@@ -50,6 +50,7 @@ class GenOut:
     finish_reason: Optional[Literal['stop', 'length', 'error']] = None
     token_ids: List[int] = None
     logprobs: List[Dict[int, float]] = None
+    prefix_cached_token_len: int = None
 
 
 class Session:
@@ -573,6 +574,7 @@ class AsyncEngine(LogitsMixin):
                 state = DetokenizeState(len(input_ids))
                 start_ids_offset = state.ids_offset
                 response = ''
+                prefix_cached_token_len = None
                 async for outputs in generator.async_stream_infer(
                         session_id=session_id,
                         **prompt_input,
@@ -587,6 +589,7 @@ class AsyncEngine(LogitsMixin):
                         tokens = 0
                         break
                     res, tokens = input_ids + outputs.token_ids, outputs.num_token  # noqa
+                    prefix_cached_token_len = outputs.num_prefix_cached_token
                     if len(res) <= state.ids_offset:
                         continue
 
@@ -604,9 +607,15 @@ class AsyncEngine(LogitsMixin):
 
                     # response, history token len,
                     # input token len, gen token len
-                    yield GenOut(response, self.id2step[str(session_id)],
-                                 len(input_ids), tokens, finish_reason, res,
-                                 logprobs)
+                    yield GenOut(
+                        response,
+                        self.id2step[str(session_id)],
+                        len(input_ids),
+                        tokens,
+                        finish_reason,
+                        res,
+                        logprobs,
+                        prefix_cached_token_len=prefix_cached_token_len)
                 if not is_error(outputs.status):
                     finish_reason = 'length' \
                         if tokens >= gen_config.max_new_tokens else 'stop'
@@ -615,8 +624,13 @@ class AsyncEngine(LogitsMixin):
                     if not response.endswith('�'):
                         # avaid returning the last response twice
                         response = ''
-                    yield GenOut(response, self.id2step[str(session_id)],
-                                 len(input_ids), tokens, finish_reason)
+                    yield GenOut(
+                        response,
+                        self.id2step[str(session_id)],
+                        len(input_ids),
+                        tokens,
+                        finish_reason,
+                        prefix_cached_token_len=prefix_cached_token_len)
                 else:
                     yield GenOut(
                         response='internal error happened',

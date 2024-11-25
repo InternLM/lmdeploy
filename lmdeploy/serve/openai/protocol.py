@@ -55,6 +55,7 @@ class UsageInfo(BaseModel):
     prompt_tokens: int = 0
     total_tokens: int = 0
     completion_tokens: Optional[int] = 0
+    prefix_cached_tokens: Optional[int] = None
 
 
 class Function(BaseModel):
