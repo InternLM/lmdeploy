@@ -97,13 +97,15 @@ class ImageEncoder:
         self.vision_config = vision_config
         self.max_batch_size = vision_config.max_batch_size
         torch.cuda.empty_cache()
-        self._que = asyncio.Queue()
+        self._que: asyncio.Queue = None
+        self._loop_task: asyncio.Task = None
         if vision_config.thread_safe:
             self._create_thread_safe_task()
 
     def _create_thread_safe_task(self):
         """thread safe loop task."""
         self._loop = asyncio.new_event_loop()
+        self._que = asyncio.Queue()
 
         def _work_thread():
             asyncio.set_event_loop(self._loop)
@@ -111,6 +113,7 @@ class ImageEncoder:
 
         thread = Thread(target=_work_thread, daemon=True)
         thread.start()
+        self._loop_thread = thread
 
     def _create_event_loop_task(self):
         """event loop task."""
@@ -122,6 +125,8 @@ class ImageEncoder:
     def req_que(self):
         if self.vision_config.thread_safe:
             return self._que
+        if self._que is None:
+            self._que = asyncio.Queue()
         if self._loop_task is None:
             self._create_event_loop_task()
         if asyncio.get_event_loop() != self._loop:
