@@ -98,7 +98,9 @@ class DeepSeekVisionModel(VisonModel):
                 dict(
                     pixel_values=pixel_values,
                     image_size=image.size,
-                    image_tokens=576,  # TODO
+                    # refer to https://github.com/deepseek-ai/DeepSeek-VL/blob/main/deepseek_vl/models/processing_vlm.py  # noqa
+                    # which is hardcoded 576
+                    image_tokens=576,
                     image_token_id=0))
         messages.append(dict(role='preprocess', content=outputs))
         return messages

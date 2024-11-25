@@ -22,6 +22,11 @@ class LlavaHfVisionModel(VisonModel):
             del processor.tokenizer
             processor.prtokenizer = None
         self.processor = processor.image_processor
+        image_size = self.hf_config.vision_config.image_size
+        patch_size = self.hf_config.vision_config.patch_size
+        self.n_token_per_image = (image_size // patch_size)**2
+        if self.hf_config.vision_feature_select_strategy == 'full':
+            self.n_token_per_image += 1
 
     def build_model(self):
         from accelerate import init_empty_weights, load_checkpoint_and_dispatch
@@ -62,11 +67,10 @@ class LlavaHfVisionModel(VisonModel):
                 image, return_tensors='pt',
                 input_data_format='channels_last').pixel_values
             outputs.append(
-                dict(
-                    pixel_values=pixel_values,
-                    image_size=image.size,
-                    image_tokens=576,  # TODO
-                    image_token_id=0))
+                dict(pixel_values=pixel_values,
+                     image_size=image.size,
+                     image_tokens=self.n_token_per_image,
+                     image_token_id=0))
         messages.append(dict(role='preprocess', content=outputs))
         return messages
 
