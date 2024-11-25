@@ -76,7 +76,8 @@ class AscendOpsBackend(DlinferOpsBackend):
             # (fill kv-cache for just ONE token during the decoding phase)
             idx = (step_context.kv_seqlens - 1) % block_size
             block_num = (step_context.kv_seqlens - 1) // block_size
-            last_block = step_context.block_offsets.gather(1, block_num.view(-1, 1)).view(-1)
+            last_block = step_context.block_offsets.gather(
+                1, block_num.view(-1, 1)).view(-1)
             kv_start_indices = last_block * block_size + idx
         else:
             for i in range(step_context.q_start_loc.size(0)):
@@ -86,7 +87,8 @@ class AscendOpsBackend(DlinferOpsBackend):
                 # collect kv start indices during the prefill phase.
                 history_length = kv_seq_len - q_seq_len
                 total_slots = get_total_slots()
-                slot_tables = total_slots[step_context.block_offsets[i]].view(-1)
+                slot_tables = total_slots[step_context.block_offsets[i]].view(
+                    -1)
                 slots = slot_tables[history_length:kv_seq_len]
                 kv_start_indices.append(slots)
 
@@ -94,11 +96,12 @@ class AscendOpsBackend(DlinferOpsBackend):
                 if not is_unpaged_prefill:
                     single_attention_mask = torch.logical_not(
                         torch.tril(
-                            torch.ones(q_seq_len,
-                                       step_context.block_offsets.shape[1] *
-                                       block_size,
-                                       dtype=torch.bool,
-                                       device=step_context.block_offsets.device),
+                            torch.ones(
+                                q_seq_len,
+                                step_context.block_offsets.shape[1] *
+                                block_size,
+                                dtype=torch.bool,
+                                device=step_context.block_offsets.device),
                             diagonal=kv_seq_len - q_seq_len,
                         ))
                     attention_mask.append(single_attention_mask)
