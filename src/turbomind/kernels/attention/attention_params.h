@@ -56,6 +56,7 @@ struct AttentionParams {
     int   size_per_head;
     float inv_sqrt_dh;
 
+    float* cos_sin;
     // rotary embedding
     int   rotary_embedding_dim;
     float rotary_embedding_base;

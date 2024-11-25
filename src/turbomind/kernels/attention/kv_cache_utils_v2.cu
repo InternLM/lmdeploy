@@ -20,6 +20,7 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**       blocks,
                                                     const int*   cu_q_len,
                                                     const int*   cu_k_len,
                                                     const int*   cu_block_num,
+                                                    const float* cos_sin,
                                                     const float* rope_base,
                                                     int          rope_dim,
                                                     float        rope_ti_scale,
@@ -124,6 +125,35 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**       blocks,
         }
     }
 
+    if (cos_sin) {
+        Array<float, kVecSize> vec_cs[ITER_S][ITER_C];
+        PRAGMA_UNROLL
+        for (int s = 0; s < ITER_S; ++s) {
+            const int qi = offset.y + s * Map::kDeltaS + token_idx;
+            PRAGMA_UNROLL
+            for (int c = 0; c < ITER_C; ++c) {
+                const int     di    = offset.x + c * Map::kDeltaC;
+                const int64_t index = (qi_beg + qi) * HeadDim + di;
+                PRAGMA_UNROLL
+                for (int k = 0; k < kVecSize; k += 4) {
+                    if (qi < q_len) {
+                        (float4&)vec_cs[s][c][k] = __ldg((const float4*)&cos_sin[index + k]);
+                    }
+                }
+            }
+        }
+
+        PrecomputeFastRoPE rope;
+        PRAGMA_UNROLL
+        for (int s = 0; s < ITER_S; ++s) {
+            PRAGMA_UNROLL
+            for (int c = 0; c < ITER_C; ++c) {
+                rope.apply(vec_K[s][c], vec_cs[s][c]);
+            }
+        }
+    }
+
+#if 0
     if (rope_base) {
         float base = rope_base[batch_idx];
         PRAGMA_UNROLL
@@ -149,6 +179,7 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**       blocks,
             }
         }
     }
+#endif
 
     Array<T, 2> param_K[ITER_S];
     Array<T, 2> param_V[ITER_S];
@@ -211,6 +242,7 @@ void invokeProcessKV_v2(char**       blocks,
                         const int*   cu_q_len,
                         const int*   cu_k_len,
                         const int*   cu_block_num,
+                        const float* cos_sin,
                         const float* rope_base,
                         int          rope_dim,
                         float        rope_ti_scale,
@@ -257,6 +289,7 @@ void invokeProcessKV_v2(char**       blocks,
                                                                               cu_q_len,
                                                                               cu_k_len,
                                                                               cu_block_num,
+                                                                              cos_sin,
                                                                               rope_base,
                                                                               rope_dim,
                                                                               rope_ti_scale,
@@ -306,6 +339,7 @@ void invokeProcessKV_v2(char**       blocks,
                                      const int*   cu_q_len,                                                            \
                                      const int*   cu_k_len,                                                            \
                                      const int*   cu_block_num,                                                        \
+                                     const float* cos_sin,                                                             \
                                      const float* rope_base,                                                           \
                                      int          rope_dim,                                                            \
                                      float        rope_ti_scale,                                                       \

@@ -194,6 +194,8 @@ struct AttentionUniversal {
         Vec vec_K[1][ITER_C];
         Vec vec_V[1][ITER_C];
 
+        Array<float, kVecSize> vec_cs[ITER_S][ITER_C];  // precomputed cos sin
+
         const int2 offset = Map::get_offset(warp_id, lane_id);
 
         // Load Q
@@ -217,12 +219,38 @@ struct AttentionUniversal {
                             Ldg(vec_V[0][c], &params.v[k_idx]);
                         }
                     }
+                    if (params.cos_sin) {
+                        float*        cos_sin = params.cos_sin;
+                        const int64_t index   = qi * kHeadDim + di;
+                        PRAGMA_UNROLL
+                        for (int k = 0; k < kVecSize; k += 4) {
+                            (float4&)vec_cs[s][c][k] = __ldg((const float4*)&cos_sin[index + k]);
+                        }
+                    }
                 }
             }
         }
 
         ApplyBias(vec_Q, vec_K, vec_V, params, head_idx, kv_head_idx, offset);
 
+        if (params.cos_sin) {
+            PrecomputeFastRoPE rope{};
+            PRAGMA_UNROLL
+            for (int c = 0; c < ITER_C; ++c) {
+                const int di = offset.x + c * Map::kDeltaC;
+                PRAGMA_UNROLL
+                for (int s = 0; s < ITER_S; ++s) {
+                    rope.apply(vec_Q[s][c], vec_cs[s][c]);
+                    if constexpr (kProcessKV) {
+                        if (s == 0) {
+                            rope.apply(vec_K[0][c], vec_cs[s][c]);
+                        }
+                    }
+                }
+            }
+        }
+
+#if 0
         const float rope_base = params.rope_theta ? params.rope_theta[batch_idx] : params.rotary_embedding_base;
         PRAGMA_UNROLL
         for (int c = 0; c < ITER_C; ++c) {
@@ -251,6 +279,7 @@ struct AttentionUniversal {
                 }
             }
         }
+#endif
 
         if (params.use_logn_attn) {
             PRAGMA_UNROLL
