@@ -177,72 +177,8 @@ class ImageEncoder:
         return self.forward(messages)
 
     async def preprocess(self, messages: List[Dict]) -> List[Dict]:
-        """preprocess multimodal data in the messages.
-
-        This function is designed to gather all images along with their respective parameters from the
-        messages and compile them into a single list. It then appends an entry to the messages list,
-        formatted as a dictionary `dict(role='images', conrtent=List[Dict])`.
-        Additionally, it invokes the preprocess method of the vision model to handle image preprocessing.
-        The subsequent results are integrated into the messages list, with the specific approach left to
-        the vision model's discretion. For instance, the results may be appended directly to the messages
-        list or merged into each individual image item.
-        Args:
-            messages (List[Dict]): a list of message. For instance,
-            [
-                {'role': 'user', 'content': 'string'},
-                {'role': 'assistant', 'content': 'string'},
-                {
-                    'role': 'user',
-                    'content': [
-                        {'type': 'text', 'text': 'string'},
-                        {
-                            'type': 'image',
-                            'image': pillow.Image,
-                            'key1': 'value1',
-                            ...
-                        },
-                        {...},
-                    ]
-                },
-                {...}
-            ]
-        Returns:
-            [
-                {'role': 'user', 'content': 'string'},
-                {'role': 'assistant', 'content': 'string'},
-                {
-                    'role': 'user',
-                    'content': [
-                        {'type': 'text', 'text': 'string'},
-                        {
-                            'type': 'image',
-                            'image': pillow.Image,
-                            'key1': 'value1',
-                            ...
-                        },
-                        {...},
-                    ],
-                },
-                {...},
-                {'role': 'images', 'images': List[Tuple]}
-            ]
-        """  # noqa
-        # collect all images in the `messages` to a list and insert it
-        # to `messages` as a new entry
-        images = []
-        for i, message in enumerate(messages):
-            content = message['content']
-            if not isinstance(content, List):
-                continue
-            images.extend([
-                (x['image'],
-                 {k: v
-                  for k, v in x.items() if k not in {'type', 'image'}})
-                for x in content if x['type'] == 'image'
-            ])
-        messages.append(dict(role='images', content=images))
-        result = self.model.preprocess(messages)
-        return result
+        """preprocess multimodal data in the messages."""
+        return self.model.preprocess(messages)
 
     async def async_infer(self, messages: List[Dict]) -> List[Dict]:
         """get multimodal embedding.

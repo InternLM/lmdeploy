@@ -55,8 +55,7 @@ class MolmoVisionModel(VisonModel):
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """refer to the `super.preprocess() for spec."""
         for i, message in enumerate(messages):
-            if message['role'] != 'user' or not isinstance(
-                    message['content'], List):
+            if not isinstance(message['content'], List):
                 continue
             images = [
                 x['image'].convert('RGB') for x in message['content']
@@ -85,9 +84,13 @@ class MolmoVisionModel(VisonModel):
 
     @torch.no_grad()
     def forward(self, messages: List[Dict]) -> List[Dict]:
-        """forward vision model to get vision embedding
+        """extract image feature. ONLY implement it when the backend is
+        turbomind engine.
+
         Args:
-            inputs (List[Dict]): the output of `preprocess`
+            messages(List[Dict]): the outputs of `preprocess`
+        Return:
+            the message list with forwarding results included
         """
         for i, message in enumerate(messages):
             if 'preprocess' not in message.keys():

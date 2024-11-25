@@ -83,11 +83,8 @@ class GLM4VisionModel(VisonModel):
         self.model.eval()
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
-        """get images and their corresponding preprocess parameters from
-        messages, and perform preprocessing."""
-        images = [x['content'] for x in messages if x['role'] == 'images']
-        assert len(images) == 1
-        images = images[0]
+        """refers to the spec of `super.preprocess()"""
+        images = super().collect_images(messages)
         outputs = []
         for image, params in images:
             image = image.convert('RGB')
@@ -102,7 +99,15 @@ class GLM4VisionModel(VisonModel):
         return messages
 
     @torch.no_grad()
-    def forward(self, inputs: List[Dict]) -> List[torch.Tensor]:
+    def forward(self, messages: List[Dict]) -> List[Dict]:
+        """extract image feature. ONLY implement it when the backend is
+        turbomind engine.
+
+        Args:
+            messages(List[Dict]): the outputs of `preprocess`
+        Return:
+            the message list with forwarding results included
+        """
         assert 0, 'glm4v is not supported by turbomind'
 
     @classmethod
@@ -115,7 +120,7 @@ class GLM4VisionModel(VisonModel):
             if isinstance(content, str):
                 prompt_messages.append(message)
                 continue
-            elif message['role'] in ['images', 'preprocess', 'forward']:
+            elif message['role'] in ['preprocess', 'forward']:
                 continue
             prompt = [x['text'] for x in content if x['type'] == 'text']
             n_images = len([1 for x in content if x['type'] == 'image'])

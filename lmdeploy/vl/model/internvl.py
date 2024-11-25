@@ -198,10 +198,7 @@ class InternVLVisionModel(VisonModel):
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """refers to `super.preprocess() for spec."""
-        images = [x['content'] for x in messages if x['role'] == 'images']
-        assert len(images) == 1
-        images = images[0]
-
+        images = super().collect_images(messages)
         outputs = []
         for image, params in images:
             image = image.convert('RGB')
@@ -217,13 +214,16 @@ class InternVLVisionModel(VisonModel):
         return messages
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict]) -> List[torch.Tensor]:
-        """forward vision model to get vision embedding
+    def forward(self, messages: List[Dict]) -> List[Dict]:
+        """extract image feature. ONLY implement it when the backend is
+        turbomind engine.
+
         Args:
-            inputs (List[Dict]): the output of `preprocess`
+            messages(List[Dict]): the outputs of `preprocess`
+        Return:
+            the message list with forwarding results included
         """
         inputs = [x['content'] for x in messages if x['role'] == 'preprocess']
-        assert len(inputs) == 1
         inputs = inputs[0]
         outputs = self._forward_func(inputs)
         messages.append(dict(role='forward', content=outputs))
@@ -235,11 +235,10 @@ class InternVLVisionModel(VisonModel):
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
         for message in messages:
-            role, content = message['role'], message['content']
             if isinstance(message['content'], str):
                 prompt_messages.append(message)
                 continue
-            elif role in ['images', 'preprocess', 'forward']:
+            elif message['role'] in ['preprocess', 'forward']:
                 continue
             n_images = len(
                 [1 for x in message['content'] if x['type'] == 'image'])

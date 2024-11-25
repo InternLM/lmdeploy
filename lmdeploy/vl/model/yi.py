@@ -118,8 +118,7 @@ class YiVisionModel(LlavaVisionModel):
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """refer to `super().preprocess() for spec."""
-        images = [x['content'] for x in messages if x['role'] == 'images']
-        images = images[0]
+        images = super().collect_images(messages)
         outputs = []
         for image, params in images:
             image = image.convert('RGB')

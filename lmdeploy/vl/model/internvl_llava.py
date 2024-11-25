@@ -143,9 +143,13 @@ class InternVLLlavaVisionModel(LlavaVisionModel):
 
     @torch.no_grad()
     def forward(self, messages: List[Dict]) -> List[Dict]:
-        """forward vision model to get vision embedding
+        """extract image feature. ONLY implement it when the backend is
+        turbomind engine.
+
         Args:
-            inputs (List[Dict]): the output of `preprocess`
+            messages(List[Dict]): the outputs of `preprocess`
+        Return:
+            the message list with forwarding results included
         """
         inputs = [x['content'] for x in messages if x['role'] == 'preprocess']
         inputs = inputs[0]

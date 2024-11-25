@@ -74,11 +74,9 @@ class CogVLMVisionModel(VisonModel):
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """refer to the spec of `super().preprocess`"""
-        images = [x['content'] for x in messages if x['role'] == 'images']
-        assert len(images) == 1
-        images = images[0]
+        images = super().collect_images(messages)
         outputs = []
-        for image, params in images:
+        for image, _ in images:
             image = image.convert('RGB')
             pixel_values = self.image_transform(image)
             outputs.append(
@@ -91,7 +89,15 @@ class CogVLMVisionModel(VisonModel):
         return messages
 
     @torch.no_grad()
-    def forward(self, inputs: List[Dict]) -> List[torch.Tensor]:
+    def forward(self, messages: List[Dict]) -> List[Dict]:
+        """extract image feature. ONLY implement it when the backend is
+        turbomind engine.
+
+        Args:
+            messages(List[Dict]): the outputs of `preprocess`
+        Return:
+            the message list with forwarding results included
+        """
         assert 0, 'cogvlm is not supported by turbomind'
 
     @classmethod

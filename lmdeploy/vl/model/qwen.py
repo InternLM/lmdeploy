@@ -74,8 +74,7 @@ class QwenVisionModel(VisonModel):
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """refers to `super.preprocess() for spec."""
-        images = [x['content'] for x in messages if x['role'] == 'images']
-        images = images[0]
+        images = super().collect_images(messages)
         outputs = []
         for image, params in images:
             image = image.convert('RGB')
@@ -91,9 +90,13 @@ class QwenVisionModel(VisonModel):
 
     @torch.no_grad()
     def forward(self, messages: List[Dict]) -> List[Dict]:
-        """forward vision model to get vision embedding
+        """extract image feature. ONLY implement it when the backend is
+        turbomind engine.
+
         Args:
-            inputs (List[Dict]): the output of `preprocess`
+            messages(List[Dict]): the outputs of `preprocess`
+        Return:
+            the message list with forwarding results included
         """
         inputs = [x['content'] for x in messages if x['role'] == 'preprocess']
         inputs = inputs[0]

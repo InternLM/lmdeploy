@@ -83,7 +83,6 @@ class VisonModel(ABC):
                     ]
                 }
                 {....}
-                {'role': 'images', 'content': List[Dict]}
             ]
         Returns:
             the message list with preprocessing results included, which is
@@ -92,12 +91,12 @@ class VisonModel(ABC):
         raise NotImplementedError()
 
     @abstractmethod
-    def forward(self, inputs: List[Dict]) -> List[Dict]:
+    def forward(self, messages: List[Dict]) -> List[Dict]:
         """extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
-            inputs: the outputs of `preprocess`
+            messages(List[Dict]): the outputs of `preprocess`
         Return:
             the message list with forwarding results included, which is
             determined by the derived classes
@@ -134,6 +133,27 @@ class VisonModel(ABC):
         """
         if self.backend == 'turbomind':
             raise NotImplementedError()
+
+    @classmethod
+    def collect_images(cls, messages):
+        """gather all images along with their respective parameters from the
+        messages and compile them into a single list.
+
+        Args:
+            messages (List[Dict]): a list of message
+        """  # noqa
+        images = []
+        for message in messages:
+            content = message['content']
+            if not isinstance(content, List):
+                continue
+            images.extend([
+                (x['image'],
+                 {k: v
+                  for k, v in x.items() if k not in {'type', 'image'}})
+                for x in content if x['type'] == 'image'
+            ])
+        return images
 
     @classmethod
     def to_pytorch_aux(cls, messages, prompt, IMAGE_TOKEN, tokenizer,

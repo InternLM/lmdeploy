@@ -68,8 +68,7 @@ class Qwen2VLModel(VisonModel):
         """refer to `super().preprocess()` for spec."""
         from qwen_vl_utils import process_vision_info
 
-        images = [x['content'] for x in messages if x['role'] == 'images']
-        images = images[0]
+        images = super().collect_images(messages)
         optional_keys = {
             'resized_height', 'resized_width', 'min_pixels', 'max_pixels'
         }
@@ -98,6 +97,14 @@ class Qwen2VLModel(VisonModel):
 
     @torch.no_grad()
     def forward(self, messages: List[Dict]) -> List[Dict]:
+        """extract image feature. ONLY implement it when the backend is
+        turbomind engine.
+
+        Args:
+            messages(List[Dict]): the outputs of `preprocess`
+        Return:
+            the message list with forwarding results included
+        """
         assert 0, 'TODO: support turbomind engine'
 
     @classmethod
