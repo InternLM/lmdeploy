@@ -138,8 +138,7 @@ class LlavaVisionModel(VisonModel):
         no_split_module_classes = ['CLIPEncoderLayer', 'SiglipEncoderLayer']
         same_device_keys = [('mm_projector', 'vision_resampler',
                              'image_newline', 'rotary_emb')]
-        device_map = get_vision_encoder_device_map(model.model,
-                                                   self.max_memory,
+        device_map = get_vision_encoder_device_map(model, self.max_memory,
                                                    no_split_module_classes,
                                                    same_device_keys)
         with disable_logging():
