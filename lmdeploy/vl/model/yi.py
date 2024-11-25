@@ -105,6 +105,12 @@ class YiVisionModel(LlavaVisionModel):
                                      self.hf_config.mm_vision_tower)
         self.image_processor = CLIPImageProcessor.from_pretrained(
             vision_tower_name)
+        config = AutoConfig.from_pretrained(vision_tower_name)
+        image_size = config.image_size
+        patch_size = config.patch_size
+        self.n_token_per_image = (image_size // patch_size)**2
+        if self.hf_config.mm_vision_select_feature == 'cls_patch':
+            self.n_token_per_image += 1
 
     def build_model(self):
         """build model & load weights."""
@@ -125,10 +131,9 @@ class YiVisionModel(LlavaVisionModel):
             pixel_values = process_images([image], self.image_processor,
                                           self.config)
             outputs.append(
-                dict(
-                    pixel_values=pixel_values,
-                    image_size=image.size,
-                    image_tokens=1024,  # TODO
-                    image_token_id=0))
+                dict(pixel_values=pixel_values,
+                     image_size=image.size,
+                     image_tokens=self.n_token_per_image,
+                     image_token_id=0))
         messages.append(dict(role='preprocess', content=outputs))
         return messages

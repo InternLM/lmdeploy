@@ -28,6 +28,9 @@ class CogVLMVisionModel(VisonModel):
             transforms.Normalize((0.48145466, 0.4578275, 0.40821073),
                                  (0.26862954, 0.26130258, 0.27577711)),
         ])
+        image_size = self.hf_config.vision_config['image_size']
+        patch_size = self.hf_config.vision_config['patch_size']
+        self.n_token_per_image = 2 + (image_size // patch_size // 2)**2
 
     def build_model(self):
         from accelerate import init_empty_weights, load_checkpoint_and_dispatch
@@ -80,11 +83,10 @@ class CogVLMVisionModel(VisonModel):
             image = image.convert('RGB')
             pixel_values = self.image_transform(image)
             outputs.append(
-                dict(
-                    pixel_values=pixel_values,
-                    image_size=image.size,
-                    image_tokens=2306,  # TODO
-                    image_token_id=0))
+                dict(pixel_values=pixel_values,
+                     image_size=image.size,
+                     image_tokens=self.n_token_per_image,
+                     image_token_id=0))
         messages.append(dict(role='preprocess', content=outputs))
         return messages
 

@@ -173,6 +173,12 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.minicpm3.MiniCPM3ForCausalLM',
 })
 
+# minicpmv2_6
+MODULE_MAP.update({
+    'MiniCPMV':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.minicpmv26.MiniCPMVForCausalLM',
+})
+
 # mllama
 MODULE_MAP.update({
     'MllamaForConditionalGeneration':

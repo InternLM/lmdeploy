@@ -1,15 +1,19 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
+
+import PIL
 
 from lmdeploy.pytorch.check_env import try_import_deeplink
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.engine import ImageEncoder
-from lmdeploy.vl.templates import VLPromptType, get_vl_prompt_template
 from lmdeploy.vl.utils import load_image
 
 logger = get_logger('lmdeploy')
+
+VLPromptType = Union[str, Tuple[str, PIL.Image.Image],
+                     Tuple[str, List[PIL.Image.Image]]]
 
 
 class VLAsyncEngine(AsyncEngine):
@@ -30,19 +34,16 @@ class VLAsyncEngine(AsyncEngine):
             raise RuntimeError(
                 'please specify chat template as guided in https://lmdeploy.readthedocs.io/en/latest/inference/vl_pipeline.html#set-chat-template'  # noqa: E501
             )
-        self.vl_prompt_template = get_vl_prompt_template(
-            model_path, self.chat_template, self.model_name)
 
-    def _convert_prompts(self,
+    @classmethod
+    def _convert_prompts(cls,
                          prompts: Union[VLPromptType, List[Dict],
                                         List[VLPromptType], List[List[Dict]]]):
         """convert prompts to openai GPT4V format."""
         if isinstance(prompts, str) or isinstance(prompts, tuple):
-            _prompts = self.vl_prompt_template.prompt_to_messages(prompts)
+            _prompts = cls.prompt_to_messages(prompts)
         elif isinstance(prompts[0], tuple) or isinstance(prompts[0], str):
-            _prompts = [
-                self.vl_prompt_template.prompt_to_messages(x) for x in prompts
-            ]
+            _prompts = [cls.prompt_to_messages(x) for x in prompts]
         else:
             _prompts = prompts
         return _prompts
@@ -55,17 +56,11 @@ class VLAsyncEngine(AsyncEngine):
                                 tools: Optional[List[object]] = None,
                                 **kwargs):
         """process messages and return the required data for the inference
-        engines. Refer to pytorch.engine.EngineInstance.async_stream_infer and
+        engines.
+
+        Refer to pytorch.engine.EngineInstance.async_stream_infer and
         turbomind.TurboMindInstance.async_stream_infer for the argument
         specification.
-
-        Args:
-            messages
-            do_preprocess
-            sequence_start
-            adapter_name
-            tools
-        Returns:
         """
         if isinstance(messages, str):
             return super(self)._get_prompt_input(messages, do_preprocess,
@@ -227,3 +222,46 @@ class VLAsyncEngine(AsyncEngine):
         last_round = sess.history[-1]
         sess.history[-1] = (prompts, last_round[-1])
         return sess
+
+    @classmethod
+    def prompt_to_messages(cls, prompt: VLPromptType):
+        """convert prompt to GTP4V format."""
+        messages = {
+            'role': 'user',
+            'content': [{
+                'type': 'text',
+                'text': '',
+            }]
+        }
+        if isinstance(prompt, str):
+            messages['content'][0]['text'] = prompt
+        else:
+            prompt, images = prompt
+            if not isinstance(images, list):
+                images = [images]
+            messages['content'][0]['text'] = prompt
+            for image in images:
+                # 'image_url': means url or local path to image.
+                # 'image_data': means PIL.Image.Image object.
+                if isinstance(image, str):
+                    image = load_image(image)
+                    item = {
+                        'type': 'image_data',
+                        'image_data': {
+                            'data': image
+                        }
+                    }
+                elif isinstance(image, PIL.Image.Image):
+                    item = {
+                        'type': 'image_data',
+                        'image_data': {
+                            'data': image
+                        }
+                    }
+                else:
+                    raise ValueError(
+                        'image should be a str(url/path) or PIL.Image.Image')
+
+                messages['content'].append(item)
+
+        return [messages]

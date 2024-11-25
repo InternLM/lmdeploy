@@ -17,10 +17,15 @@ on:
         required: true
         description: 'Set backend testcase filter: turbomind or pytorch or turbomind, pytorch. Default is "["turbomind", "pytorch"]"'
         type: string
-        default: '["turbomind", "pytorch", "turbomind_vl"]'
+        default: "['turbomind', 'pytorch']"
       model:
         required: true
-        description: 'Set testcase module filter: chat, restful, pipeline, quantization. Default contains all models'
+        description: 'Set testcase module filter: llm, vllm. Default contains all models'
+        type: string
+        default: "['llm','mllm']"
+      function:
+        required: true
+        description: 'Set testcase function filter: chat, restful, pipeline. Default contains all functions'
         type: string
         default: '["pipeline", "restful", "chat"]'
       offline_mode:
@@ -201,14 +206,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch", "turbomind_vl"]')}}
-        model: ${{ fromJSON(inputs.model || '["pipeline", "restful", "chat"]')}}
+        backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
+        model: ${{ fromJSON(inputs.model || '["llm", "mllm"]')}}
+        function: ${{ fromJSON(inputs.function || '["pipeline","restful","chat"]')}}
         exclude:
-          - backend: turbomind_vl
-            model: chat
+          - backend: turbomind
+            model: mllm
+            function: chat
+          - backend: pytorch
+            model: mllm
+            function: chat
         include:
           - backend: turbomind
-            model: local_case
+            model: llm
+            function: local_case
     env:
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /root/modelscope_hub
@@ -255,7 +266,7 @@ jobs:
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
       - name: Test lmdeploy - chat workspace
         continue-on-error: true
-        if: matrix.backend == 'turbomind' && matrix.model == 'chat'
+        if: matrix.backend == 'turbomind' && matrix.model == 'llm' && matrix.function == 'chat'
         run: |
           pytest autotest/tools/chat/test_command_chat_workspace.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
@@ -263,7 +274,7 @@ jobs:
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - chat
         continue-on-error: true
-        if: (matrix.backend == 'pytorch' || matrix.backend == 'turbomind') && matrix.model == 'chat'
+        if: (matrix.backend == 'pytorch' || matrix.backend == 'turbomind') && matrix.model == 'llm' && matrix.function == 'chat'
         run: |
           pytest autotest/tools/chat/test_command_chat_hf_${{matrix.backend}}.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
@@ -271,30 +282,30 @@ jobs:
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - pipeline
         continue-on-error: true
-        if: matrix.model == 'pipeline'
+        if: matrix.function == 'pipeline'
         run: |
-          pytest autotest/tools/pipeline/test_pipeline_chat_${{matrix.backend}}.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/pipeline/test_pipeline_chat_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/tools/pipeline/test_pipeline_chat_${{matrix.backend}}.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/pipeline/test_pipeline_chat_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - restful
         continue-on-error: true
-        if: matrix.model == 'restful'
+        if: matrix.function == 'restful'
         run: |
-          pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - restful workspace
         continue-on-error: true
-        if: matrix.backend == 'turbomind' && matrix.model == 'restful'
+        if: matrix.backend == 'turbomind' && matrix.model == 'llm' && matrix.function == 'restful'
         run: |
           pytest autotest/tools/restful/test_restful_chat_workspace.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
           pytest autotest/tools/restful/test_restful_chat_workspace.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - local testcase
-        if: matrix.backend == 'turbomind' && matrix.model == 'local_case'
+        if: matrix.backend == 'turbomind' && matrix.model == 'llm' && matrix.function == 'local_case'
         run: |
           pytest /local_case/issue_regression --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}}|| true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
@@ -315,7 +326,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: ['turbomind', 'pytorch']
+        backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
     timeout-minutes: 120
     container:
       image: openmmlab/lmdeploy:latest-cu12

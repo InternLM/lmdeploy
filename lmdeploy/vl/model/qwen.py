@@ -80,11 +80,10 @@ class QwenVisionModel(VisonModel):
             image = image.convert('RGB')
             pixel_values = self.image_transform(image)
             outputs.append(
-                dict(
-                    pixel_values=pixel_values,
-                    image_size=image.size,
-                    image_tokens=256,  # TODO
-                    image_token_id=0))
+                dict(pixel_values=pixel_values,
+                     image_size=image.size,
+                     image_tokens=256,
+                     image_token_id=0))
         messages.append(dict(role='preprocess', content=outputs))
         return messages
 
