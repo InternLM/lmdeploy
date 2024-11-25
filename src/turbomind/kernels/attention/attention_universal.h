@@ -221,7 +221,7 @@ struct AttentionUniversal {
                     }
                     if (params.cos_sin) {
                         float*        cos_sin = params.cos_sin;
-                        const int64_t index   = qi * kHeadDim + di;
+                        const int64_t index   = qi * params.rotary_embedding_dim + di;
                         PRAGMA_UNROLL
                         for (int k = 0; k < kVecSize; k += 4) {
                             (float4&)vec_cs[s][c][k] = __ldg((const float4*)&cos_sin[index + k]);
@@ -236,50 +236,21 @@ struct AttentionUniversal {
         if (params.cos_sin) {
             PrecomputeFastRoPE rope{};
             PRAGMA_UNROLL
-            for (int c = 0; c < ITER_C; ++c) {
-                const int di = offset.x + c * Map::kDeltaC;
+            for (int s = 0; s < ITER_S; ++s) {
                 PRAGMA_UNROLL
-                for (int s = 0; s < ITER_S; ++s) {
-                    rope.apply(vec_Q[s][c], vec_cs[s][c]);
-                    if constexpr (kProcessKV) {
-                        if (s == 0) {
-                            rope.apply(vec_K[0][c], vec_cs[s][c]);
+                for (int c = 0; c < ITER_C; ++c) {
+                    const int di = offset.x + c * Map::kDeltaC;
+                    if (di < params.rotary_embedding_dim) {
+                        rope.apply(vec_Q[s][c], vec_cs[s][c]);
+                        if constexpr (kProcessKV) {
+                            if (s == 0) {
+                                rope.apply(vec_K[0][c], vec_cs[s][c]);
+                            }
                         }
                     }
                 }
             }
         }
-
-#if 0
-        const float rope_base = params.rope_theta ? params.rope_theta[batch_idx] : params.rotary_embedding_base;
-        PRAGMA_UNROLL
-        for (int c = 0; c < ITER_C; ++c) {
-            const int di = offset.x + c * Map::kDeltaC;
-            FastRoPE  rope(di,
-                          params.rotary_embedding_dim,
-                          rope_base,
-                          params.rope_ti_scale,
-                          params.rope_scaling_factor,
-                          params.llama3_inv_scaling_factor,
-                          params.llama3_alpha,
-                          params.llama3_beta,
-                          params.yarn_ramp_inv_factor_div_2,
-                          params.yarn_ramp_inv_factor_mul_min,
-                          params.yarn_inv_scaling_factor,
-                          params.attention_scaling,
-                          std::integral_constant<int, kVecSize>{});
-            PRAGMA_UNROLL
-            for (int s = 0; s < ITER_S; ++s) {
-                const int ti = (offset.y + s * Map::kDeltaS) / CTA_H + query_idx + history_len;
-                rope.apply(vec_Q[s][c], ti);
-                if constexpr (kProcessKV) {
-                    if (s == 0) {
-                        rope.apply(vec_K[0][c], ti);
-                    }
-                }
-            }
-        }
-#endif
 
         if (params.use_logn_attn) {
             PRAGMA_UNROLL
