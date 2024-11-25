@@ -118,16 +118,18 @@ class YiVisionModel(LlavaVisionModel):
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """refer to `super().preprocess() for spec."""
+        images = [x['content'] for x in messages if x['role'] == 'images']
+        images = images[0]
         outputs = []
-        for item in messages[-1]['content']:
-            if item['type'] == 'image':
-                image = item['image'].convert('RGB')
-                pixel_values = process_images([image], self.image_processor,
-                                              self.config)
-                outputs.append(
-                    dict(
-                        pixel_values=pixel_values,
-                        image_size=image.size,
-                        image_tokens=1024,  # TODO
-                        image_token_id=0))
-        return outputs
+        for image, params in images:
+            image = image.convert('RGB')
+            pixel_values = process_images([image], self.image_processor,
+                                          self.config)
+            outputs.append(
+                dict(
+                    pixel_values=pixel_values,
+                    image_size=image.size,
+                    image_tokens=1024,  # TODO
+                    image_token_id=0))
+        messages.append(dict(role='preprocess', content=outputs))
+        return messages
