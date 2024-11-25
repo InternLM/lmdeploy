@@ -214,25 +214,29 @@ class Xcomposer2VisionModel(VisonModel):
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """refer to `super().preprocess() for spec."""
+        images = [x['content'] for x in messages if x['role'] == 'images']
+        images = images[0]
         outputs = []
-        for item in messages[-1]['content']:
-            if item['type'] == 'image':
-                image = item['image'].convert('RGB')
-                params = {
-                    k: v
-                    for k, v in item.items() if k not in {'type', 'image'}
-                }
-                pixel_values = self.preprocess_func(image, params)
-                outputs.append(
-                    dict(
-                        pixel_values=pixel_values,
-                        image_size=image.size,
-                        image_tokens=576,  # TODO
-                        image_token_id=0))
-        return outputs
+        for image, params in images:
+            image = image.convert('RGB')
+            pixel_values = self.preprocess_func(image, params)
+            outputs.append(
+                dict(
+                    pixel_values=pixel_values,
+                    image_size=image.size,
+                    image_tokens=576,  # TODO
+                    image_token_id=0))
+        messages.append(dict(role='preprocess', content=outputs))
+        return messages
 
     @torch.no_grad()
-    def forward(self, inputs: List[Dict]) -> List[torch.Tensor]:
+    def forward(self, messages: List[Dict]) -> List[Dict]:
+        """forward vision model to get vision embedding
+        Args:
+            inputs (List[Dict]): the output of `preprocess`
+        """
+        inputs = [x['content'] for x in messages if x['role'] == 'preprocess']
+        inputs = inputs[0]
         if self.model_type in [
                 ModelType.XCOMPOSER2D5, ModelType.XCOMPOSER2_4KHD
         ]:
@@ -250,7 +254,8 @@ class Xcomposer2VisionModel(VisonModel):
             embeds = self.model.vision_proj(embeds)
             embeds = torch.split(embeds, 1, dim=0)
             embeds = [x.squeeze() for x in embeds]
-        return embeds
+        messages.append(dict(role='forward', content=embeds))
+        return messages
 
     @classmethod
     def proc_messages(cls, messages, chat_template, sequence_start):
@@ -260,6 +265,8 @@ class Xcomposer2VisionModel(VisonModel):
         for message in messages:
             if isinstance(message['content'], str):
                 prompt_messages.append(message)
+                continue
+            elif message['role'] in ['images', 'preprocess', 'forward']:
                 continue
             n_images = len(
                 [1 for x in message['content'] if x['type'] == 'image'])
