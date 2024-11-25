@@ -35,32 +35,35 @@ class Qwen2VLModel(VisonModel):
         self.processor = AutoProcessor.from_pretrained(self.model_path)
 
     def build_model(self):
-        from accelerate import init_empty_weights
-        with init_empty_weights():
-            config = self.hf_config
-            config.quantization_config = {}  # disable vision part quantization
-            # disable accelerate check_tied_parameters_in_config
-            # for Qwen2-VL-2B-Instruct
-            config.tie_word_embeddings = False
+        from transformers import Qwen2VLForConditionalGeneration
+        if self.with_llm:
+            model = Qwen2VLForConditionalGeneration.from_pretrained(
+                self.hf_config._name_or_path, trust_remote_code=True)
+            model.half()
+            self.vl_model = model
+        else:
+            from accelerate import init_empty_weights
+            with init_empty_weights():
+                config = self.hf_config
+                config.quantization_config = {
+                }  # disable vision part quantization
+                # disable accelerate check_tied_parameters_in_config
+                # for Qwen2-VL-2B-Instruct
+                config.tie_word_embeddings = False
 
-            from transformers import Qwen2VLForConditionalGeneration
-            model = Qwen2VLForConditionalGeneration._from_config(config)
-            if not self.with_llm:
+                model = Qwen2VLForConditionalGeneration._from_config(config)
                 del model.model
                 del model.lm_head
-            else:
-                self.vl_model = model
-            model.half()
-
-        from accelerate import load_checkpoint_and_dispatch
-        with disable_logging():
-            load_checkpoint_and_dispatch(
-                model=model,
-                checkpoint=self.model_path,
-                device_map='auto' if not self.with_llm else {'': 'cpu'},
-                max_memory=self.max_memory,
-                no_split_module_classes=['Qwen2VLVisionBlock'],
-                dtype=torch.half)
+                model.half()
+            from accelerate import load_checkpoint_and_dispatch
+            with disable_logging():
+                load_checkpoint_and_dispatch(
+                    model=model,
+                    checkpoint=self.model_path,
+                    device_map='auto' if not self.with_llm else {'': 'cpu'},
+                    max_memory=self.max_memory,
+                    no_split_module_classes=['Qwen2VLVisionBlock'],
+                    dtype=torch.half)
 
         self.model = model.eval()
 

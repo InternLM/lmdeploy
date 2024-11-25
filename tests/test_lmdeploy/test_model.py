@@ -9,6 +9,7 @@ from lmdeploy.model import MODELS, best_match_model
      ('internlm/internlm2-1_8b', ['base']),
      ('models--internlm--internlm-chat-7b/snapshots/1234567', ['internlm']),
      ('Qwen/Qwen-7B-Chat', ['qwen']),
+     ('Qwen/Qwen2.5-7B-Instruct', ['qwen2d5']),
      ('codellama/CodeLlama-7b-hf', ['codellama']),
      ('upstage/SOLAR-0-70b', ['solar', 'solar-70b']),
      ('meta-llama/Llama-2-7b-chat-hf', ['llama2']),
@@ -281,6 +282,291 @@ def test_qwen():
     with pytest.raises(AssertionError):
         _prompt = model.get_prompt(prompt, sequence_start=True)
         assert _prompt is None
+
+
+def test_qwen2d5():
+    prompt = 'hello, can u introduce yourself'
+    model = MODELS.get('qwen2d5')(capability='completion')
+    assert model.get_prompt(prompt, sequence_start=True) == prompt
+    assert model.get_prompt(prompt, sequence_start=False) == prompt
+
+    model = MODELS.get('qwen2d5')(capability='chat')
+
+    # No tool call
+    messages = [
+        dict(role='user',
+             content='What\'s the temperature in San Francisco now?')
+    ]
+    no_tool_prompt = ('<|im_start|>system\nYou are Qwen, created by Alibaba '
+                      'Cloud. You are a helpful '
+                      "assistant.<|im_end|>\n<|im_start|>user\nWhat's the "
+                      'temperature in San Francisco '
+                      'now?<|im_end|>\n<|im_start|>assistant\n')
+    assert model.messages2prompt(messages) == no_tool_prompt
+    assert model.messages2prompt(messages, tools=[]) == no_tool_prompt
+
+    messages.append({'role': 'assistant', 'content': 'I don\'t know.'})
+    no_tool_prompt = ('<|im_start|>system\nYou are Qwen, created by Alibaba '
+                      'Cloud. You are a helpful '
+                      "assistant.<|im_end|>\n<|im_start|>user\nWhat's the "
+                      'temperature in San Francisco '
+                      "now?<|im_end|>\n<|im_start|>assistant\nI don't "
+                      'know.<|im_end|>\n<|im_start|>assistant\n')
+    assert model.messages2prompt(messages) == no_tool_prompt
+    # Single tool call
+    tools = [{
+        'name': 'get_current_temperature',
+        'description': 'Get current temperature at a location.',
+        'parameters': {
+            'type': 'object',
+            'properties': {
+                'location': {
+                    'type':
+                    'string',
+                    'description':
+                    'The location to get the temperature for,'
+                    ' in the format \'City, State, Country\'.'
+                },
+                'unit': {
+                    'type':
+                    'string',
+                    'enum': ['celsius', 'fahrenheit'],
+                    'description':
+                    'The unit to return the temperature in. Defaults to '
+                    '\'celsius\'.'
+                }
+            },
+            'required': ['location']
+        }
+    }]
+
+    messages = [
+        dict(role='user',
+             content='What\'s the temperature in San Francisco now?')
+    ]
+    tool_prompt = ('<|im_start|>system\nYou are Qwen, created by Alibaba '
+                   'Cloud. You are a helpful assistant.\n\n# Tools\n\nYou '
+                   'may call one or more functions to assist with the user '
+                   'query.\n\nYou are provided with function signatures '
+                   "within <tools></tools> XML tags:\n<tools>\n{\"type\": "
+                   "\"function\", \"function\": {\"name\": "
+                   "\"get_current_temperature\", \"description\": \"Get "
+                   "current temperature at a location.\", \"parameters\": {"
+                   "\"type\": \"object\", \"properties\": {\"location\": {"
+                   "\"type\": \"string\", \"description\": \"The location to "
+                   "get the temperature for, in the format 'City, State, "
+                   "Country'.\"}, \"unit\": {\"type\": \"string\", \"enum\": "
+                   "[\"celsius\", \"fahrenheit\"], \"description\": \"The "
+                   'unit to return the temperature in. Defaults to '
+                   "'celsius'.\"}}, \"required\": ["
+                   "\"location\"]}}}\n</tools>\n\nFor each function call, "
+                   'return a json object with function name and arguments '
+                   'within <tool_call></tool_call> XML tags:\n<tool_call>\n{'
+                   "\"name\": <function-name>, \"arguments\": "
+                   '<args-json-object>}\n</tool_call><|im_end|>\n<|im_start'
+                   "|>user\nWhat's the temperature in San Francisco "
+                   'now?<|im_end|>\n<|im_start|>assistant\n')
+    assert model.messages2prompt(messages, tools=tools) == tool_prompt
+
+    messages.append(
+        dict(role='tool',
+             name='get_current_temperature',
+             content={
+                 'temperature': 26.1,
+                 'location': 'San Francisco, California, USA',
+                 'unit': 'celsius'
+             },
+             tool_call_id='0'))
+    tool_prompt = ('<|im_start|>system\nYou are Qwen, created by Alibaba '
+                   'Cloud. You are a helpful assistant.\n\n# Tools\n\nYou '
+                   'may call one or more functions to assist with the user '
+                   'query.\n\nYou are provided with function signatures '
+                   "within <tools></tools> XML tags:\n<tools>\n{\"type\": "
+                   "\"function\", \"function\": {\"name\": "
+                   "\"get_current_temperature\", \"description\": \"Get "
+                   "current temperature at a location.\", \"parameters\": {"
+                   "\"type\": \"object\", \"properties\": {\"location\": {"
+                   "\"type\": \"string\", \"description\": \"The location to "
+                   "get the temperature for, in the format 'City, State, "
+                   "Country'.\"}, \"unit\": {\"type\": \"string\", \"enum\": "
+                   "[\"celsius\", \"fahrenheit\"], \"description\": \"The "
+                   'unit to return the temperature in. Defaults to '
+                   "'celsius'.\"}}, \"required\": ["
+                   "\"location\"]}}}\n</tools>\n\nFor each function call, "
+                   'return a json object with function name and arguments '
+                   'within <tool_call></tool_call> XML tags:\n<tool_call>\n{'
+                   "\"name\": <function-name>, \"arguments\": "
+                   '<args-json-object>}\n</tool_call><|im_end|>\n<|im_start'
+                   "|>user\nWhat's the temperature in San Francisco "
+                   'now?<|im_end|>\n<|im_start|>user\n<tool_response>\n{'
+                   "'temperature': 26.1, 'location': 'San Francisco, "
+                   "California, USA', 'unit': "
+                   "'celsius'}\n</tool_response><|im_end|>\n<|im_start"
+                   '|>assistant\n')
+    assert model.messages2prompt(messages, tools=tools) == tool_prompt
+    # Multi tool calling
+    tools = [{
+        'name': 'get_current_temperature',
+        'description': 'Get current temperature at a location.',
+        'parameters': {
+            'type': 'object',
+            'properties': {
+                'location': {
+                    'type':
+                    'string',
+                    'description':
+                    'The location to get the temperature for, in the format '
+                    '\'City, State, Country\'.'
+                },
+                'unit': {
+                    'type':
+                    'string',
+                    'enum': ['celsius', 'fahrenheit'],
+                    'description':
+                    'The unit to return the temperature in.'
+                    ' Defaults to \'celsius\'.'
+                }
+            },
+            'required': ['location']
+        }
+    }, {
+        'name': 'get_temperature_date',
+        'description': 'Get temperature at a location and date.',
+        'parameters': {
+            'type': 'object',
+            'properties': {
+                'location': {
+                    'type':
+                    'string',
+                    'description':
+                    'The location to get the temperature for,'
+                    ' in the format \'City, State, Country\'.'
+                },
+                'date': {
+                    'type':
+                    'string',
+                    'description':
+                    'The date to get the temperature for,'
+                    ' in the format \'Year-Month-Day\'.'
+                },
+                'unit': {
+                    'type':
+                    'string',
+                    'enum': ['celsius', 'fahrenheit'],
+                    'description':
+                    'The unit to return the temperature in.'
+                    ' Defaults to \'celsius\'.'
+                }
+            },
+            'required': ['location', 'date']
+        }
+    }]
+    messages = [
+        dict(role='user',
+             content='Today is 2024-11-14, What\'s the temperature in'
+             ' San Francisco now? How about tomorrow?')
+    ]
+    tool_prompt = ('<|im_start|>system\nYou are Qwen, created by Alibaba '
+                   'Cloud. You are a helpful assistant.\n\n# Tools\n\nYou '
+                   'may call one or more functions to assist with the user '
+                   'query.\n\nYou are provided with function signatures '
+                   "within <tools></tools> XML tags:\n<tools>\n{\"type\": "
+                   "\"function\", \"function\": {\"name\": "
+                   "\"get_current_temperature\", \"description\": \"Get "
+                   "current temperature at a location.\", \"parameters\": {"
+                   "\"type\": \"object\", \"properties\": {\"location\": {"
+                   "\"type\": \"string\", \"description\": \"The location to "
+                   "get the temperature for, in the format 'City, State, "
+                   "Country'.\"}, \"unit\": {\"type\": \"string\", \"enum\": "
+                   "[\"celsius\", \"fahrenheit\"], \"description\": \"The "
+                   'unit to return the temperature in. Defaults to '
+                   "'celsius'.\"}}, \"required\": [\"location\"]}}}\n{"
+                   "\"type\": \"function\", \"function\": {\"name\": "
+                   "\"get_temperature_date\", \"description\": \"Get "
+                   "temperature at a location and date.\", \"parameters\": {"
+                   "\"type\": \"object\", \"properties\": {\"location\": {"
+                   "\"type\": \"string\", \"description\": \"The location to "
+                   "get the temperature for, in the format 'City, State, "
+                   "Country'.\"}, \"date\": {\"type\": \"string\", "
+                   "\"description\": \"The date to get the temperature for, "
+                   "in the format 'Year-Month-Day'.\"}, \"unit\": {\"type\": "
+                   "\"string\", \"enum\": [\"celsius\", \"fahrenheit\"], "
+                   "\"description\": \"The unit to return the temperature "
+                   "in. Defaults to 'celsius'.\"}}, \"required\": ["
+                   "\"location\", \"date\"]}}}\n</tools>\n\nFor each "
+                   'function call, return a json object with function name '
+                   'and arguments within <tool_call></tool_call> XML '
+                   "tags:\n<tool_call>\n{\"name\": <function-name>, "
+                   "\"arguments\": "
+                   '<args-json-object>}\n</tool_call><|im_end|>\n<|im_start'
+                   "|>user\nToday is 2024-11-14, What's the temperature in "
+                   'San Francisco now? How about '
+                   'tomorrow?<|im_end|>\n<|im_start|>assistant\n')
+    assert model.messages2prompt(messages, tools=tools) == tool_prompt
+
+    messages.append(
+        dict(role='tool',
+             name='get_current_temperature',
+             content={
+                 'temperature': 26.1,
+                 'location': 'San Francisco, California, USA',
+                 'unit': 'celsius'
+             },
+             tool_call_id='0'))
+    messages.append(
+        dict(role='tool',
+             name='get_temperature_date',
+             content={
+                 'temperature': 25.9,
+                 'location': 'San Francisco, California, USA',
+                 'date': '2024-11-15',
+                 'unit': 'celsius'
+             },
+             tool_call_id='1'))
+    tool_prompt = ('<|im_start|>system\nYou are Qwen, created by Alibaba '
+                   'Cloud. You are a helpful assistant.\n\n# Tools\n\nYou '
+                   'may call one or more functions to assist with the user '
+                   'query.\n\nYou are provided with function signatures '
+                   "within <tools></tools> XML tags:\n<tools>\n{\"type\": "
+                   "\"function\", \"function\": {\"name\": "
+                   "\"get_current_temperature\", \"description\": \"Get "
+                   "current temperature at a location.\", \"parameters\": {"
+                   "\"type\": \"object\", \"properties\": {\"location\": {"
+                   "\"type\": \"string\", \"description\": \"The location to "
+                   "get the temperature for, in the format 'City, State, "
+                   "Country'.\"}, \"unit\": {\"type\": \"string\", \"enum\": "
+                   "[\"celsius\", \"fahrenheit\"], \"description\": \"The "
+                   'unit to return the temperature in. Defaults to '
+                   "'celsius'.\"}}, \"required\": [\"location\"]}}}\n{"
+                   "\"type\": \"function\", \"function\": {\"name\": "
+                   "\"get_temperature_date\", \"description\": \"Get "
+                   "temperature at a location and date.\", \"parameters\": {"
+                   "\"type\": \"object\", \"properties\": {\"location\": {"
+                   "\"type\": \"string\", \"description\": \"The location to "
+                   "get the temperature for, in the format 'City, State, "
+                   "Country'.\"}, \"date\": {\"type\": \"string\", "
+                   "\"description\": \"The date to get the temperature for, "
+                   "in the format 'Year-Month-Day'.\"}, \"unit\": {\"type\": "
+                   "\"string\", \"enum\": [\"celsius\", \"fahrenheit\"], "
+                   "\"description\": \"The unit to return the temperature "
+                   "in. Defaults to 'celsius'.\"}}, \"required\": ["
+                   "\"location\", \"date\"]}}}\n</tools>\n\nFor each "
+                   'function call, return a json object with function name '
+                   'and arguments within <tool_call></tool_call> XML '
+                   "tags:\n<tool_call>\n{\"name\": <function-name>, "
+                   "\"arguments\": "
+                   '<args-json-object>}\n</tool_call><|im_end|>\n<|im_start'
+                   "|>user\nToday is 2024-11-14, What's the temperature in "
+                   'San Francisco now? How about '
+                   'tomorrow?<|im_end|>\n<|im_start|>user\n<tool_response'
+                   ">\n{'temperature': 26.1, 'location': 'San Francisco, "
+                   "California, USA', 'unit': "
+                   "'celsius'}\n</tool_response>\n<tool_response>\n{"
+                   "'temperature': 25.9, 'location': 'San Francisco, "
+                   "California, USA', 'date': '2024-11-15', 'unit': "
+                   "'celsius'}\n</tool_response><|im_end|>\n<|im_start"
+                   '|>assistant\n')
+    assert model.messages2prompt(messages, tools=tools) == tool_prompt
 
 
 def test_codellama_completion():

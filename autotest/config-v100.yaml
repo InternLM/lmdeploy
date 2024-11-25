@@ -22,6 +22,7 @@ tp_config:
 
 turbomind_chat_model:
     - meta-llama/Llama-3.2-1B-Instruct
+    - meta-llama/Llama-3.2-3B-Instruct
     - meta-llama/Meta-Llama-3-1-8B-Instruct
     - meta-llama/Meta-Llama-3-1-8B-Instruct-AWQ
     - meta-llama/Meta-Llama-3-8B-Instruct
@@ -48,6 +49,7 @@ pytorch_chat_model:
     - meta-llama/Meta-Llama-3-1-8B-Instruct
     - internlm/internlm2_5-7b-chat
     - internlm/internlm2_5-20b-chat
+    - OpenGVLab/InternVL2-1B
     - OpenGVLab/InternVL2-2B
     - OpenGVLab/InternVL2-4B
     - OpenGVLab/InternVL2-8B
@@ -71,15 +73,24 @@ pytorch_base_model:
     - internlm/internlm2_5-7b
     - internlm/internlm2_5-20b
 
-vl_model:
+turbomind_vl_model:
     - OpenGVLab/InternVL2-1B
     - OpenGVLab/InternVL2-2B
-    - OpenGVLab/InternVL2-4B
     - OpenGVLab/InternVL2-8B
     - OpenGVLab/InternVL2-26B
     - Qwen/Qwen2-VL-2B-Instruct
     - Qwen/Qwen2-VL-7B-Instruct
     - internlm/internlm-xcomposer2d5-7b
+    - THUDM/glm-4v-9b
+
+pytorch_vl_model:
+    - OpenGVLab/InternVL2-1B
+    - OpenGVLab/InternVL2-4B
+    - OpenGVLab/InternVL2-8B
+    - OpenGVLab/InternVL2-26B
+    - OpenGVLab/Mono-InternVL-2B
+    - Qwen/Qwen2-VL-2B-Instruct
+    - Qwen/Qwen2-VL-7B-Instruct
     - THUDM/glm-4v-9b
     - microsoft/Phi-3.5-vision-instruct
 
@@ -107,10 +118,13 @@ pytorch_quatization:
         - internlm/internlm2_5-7b-chat
         - internlm/internlm2_5-7b
     no_kvint4:
+        - OpenGVLab/InternVL2-1B
         - OpenGVLab/InternVL2-4B
         - deepseek-ai/DeepSeek-V2-Lite-Chat
         - microsoft/Phi-3-mini-4k-instruct
         - microsoft/Phi-3-vision-128k-instruct
+        - microsoft/Phi-3.5-vision-instruct
+        - openbmb/MiniCPM-V-2_6
     no_kvint8:
         - deepseek-ai/DeepSeek-V2-Lite-Chat
 
