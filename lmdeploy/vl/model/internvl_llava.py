@@ -142,7 +142,13 @@ class InternVLLlavaVisionModel(LlavaVisionModel):
         return super().preprocess(messages)
 
     @torch.no_grad()
-    def forward(self, inputs: List[Dict]) -> List[torch.Tensor]:
+    def forward(self, messages: List[Dict]) -> List[Dict]:
+        """forward vision model to get vision embedding
+        Args:
+            inputs (List[Dict]): the output of `preprocess`
+        """
+        inputs = [x['content'] for x in messages if x['role'] == 'preprocess']
+        inputs = inputs[0]
         pixel_values = [x['pixel_values'] for x in inputs]
         split_sizes = [x.shape[0] for x in pixel_values]
         pixel_values = torch.cat(pixel_values, dim=0)
@@ -156,4 +162,5 @@ class InternVLLlavaVisionModel(LlavaVisionModel):
         else:
             image_features = self.encode_images(pixel_values)
             image_features = [x for x in image_features]
-        return image_features
+        messages.append(dict(role='forward', content=image_features))
+        return messages
