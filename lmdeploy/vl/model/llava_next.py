@@ -79,45 +79,54 @@ class LlavaNextVisionModel(LlavaHfVisionModel):
         """refers to the spec of `super.preprocess()"""
         from transformers.models.llava_next.modeling_llava_next import \
             image_size_to_num_patches
+        images = super().collect_images(messages)
         outputs = []
-        for item in messages[-1]['content']:
-            item_type = item['type']
-            if item_type == 'image':
-                image = item['image'].convert('RGB')
-                result = self.processor(image,
-                                        return_tensors='pt',
-                                        input_data_format='channels_last')
-                # ! infer image_num_patches from image_sizes
-                image_num_patches = [
-                    image_size_to_num_patches(
-                        image_size=imsize,
-                        grid_pinpoints=self.hf_config.image_grid_pinpoints,
-                        patch_size=self.hf_config.vision_config.image_size,
-                    ) for imsize in result['image_sizes']
-                ]
-                # TODO(remove hardcode 576)
-                hidden_size = self.hf_config.text_config.hidden_size
-                fake_image_features = torch.zeros(
-                    [image_num_patches[0], 576, hidden_size])
-                image_sizes = result['image_sizes']
-                image_newline = torch.randn(
-                    self.hf_config.text_config.hidden_size)
-                strategy = self.hf_config.vision_feature_select_strategy
-                _, image_tokens = self.model.pack_image_features(
-                    [fake_image_features],
-                    image_sizes,
-                    vision_feature_select_strategy=strategy,
-                    image_newline=image_newline)
-                result.update(
-                    dict(image_size=image.size,
-                         image_patches=image_num_patches,
-                         image_tokens=image_tokens,
-                         image_token_id=0))
-                outputs.append(result)
-        return outputs
+        for image, params in images:
+            image = image.convert('RGB')
+            result = self.processor(image,
+                                    return_tensors='pt',
+                                    input_data_format='channels_last')
+            # ! infer image_num_patches from image_sizes
+            image_num_patches = [
+                image_size_to_num_patches(
+                    image_size=imsize,
+                    grid_pinpoints=self.hf_config.image_grid_pinpoints,
+                    patch_size=self.hf_config.vision_config.image_size,
+                ) for imsize in result['image_sizes']
+            ]
+            # TODO(remove hardcode 576)
+            hidden_size = self.hf_config.text_config.hidden_size
+            fake_image_features = torch.zeros(
+                [image_num_patches[0], 576, hidden_size])
+            image_sizes = result['image_sizes']
+            image_newline = torch.randn(self.hf_config.text_config.hidden_size)
+            strategy = self.hf_config.vision_feature_select_strategy
+            _, image_tokens = self.model.pack_image_features(
+                [fake_image_features],
+                image_sizes,
+                vision_feature_select_strategy=strategy,
+                image_newline=image_newline)
+            result.update(
+                dict(image_size=image.size,
+                     image_patches=image_num_patches,
+                     image_tokens=image_tokens,
+                     image_token_id=0))
+            outputs.append(result)
+        messages.append(dict(role='preprocess', content=outputs))
+        return messages
 
     @torch.no_grad()
-    def forward(self, inputs: List[Dict]) -> List[torch.Tensor]:
+    def forward(self, messages: List[Dict]) -> List[Dict]:
+        """extract image feature. ONLY implement it when the backend is
+        turbomind engine.
+
+        Args:
+            messages(List[Dict]): the outputs of `preprocess`
+        Return:
+            the message list with forwarding results included
+        """
+        inputs = [x['content'] for x in messages if x['role'] == 'preprocess']
+        inputs = inputs[0]
         pixel_values = [
             x['pixel_values'].to(device=self.model.device,
                                  dtype=self.model.dtype) for x in inputs
@@ -167,4 +176,5 @@ class LlavaNextVisionModel(LlavaHfVisionModel):
         outputs = torch.split(image_features,
                               feature_lens.cpu().numpy().tolist(),
                               dim=0)
-        return outputs
+        messages.append(dict(role='forward', content=outputs))
+        return messages

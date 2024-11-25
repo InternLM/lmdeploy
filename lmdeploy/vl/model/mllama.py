@@ -23,18 +23,18 @@ class MllamaVLModel(VisonModel):
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """refer to the spec of `super().preprocess`"""
+        images = super().collect_images(messages)
         outputs = []
-        for item in messages[-1]['content']:
-            item_type = item['type']
-            if item_type == 'image':
-                image = item['image'].convert('RGB')
-                results = self.processor.image_processor(images=image,
-                                                         return_tensors='pt')
-                results.update(image_size=image.size,
-                               image_tokens=1,
-                               image_token_id=self.image_token_id)
-                outputs.append(results)
-        return outputs
+        for image, params in images:
+            image = image.convert('RGB')
+            results = self.processor.image_processor(images=image,
+                                                     return_tensors='pt')
+            results.update(image_size=image.size,
+                           image_tokens=1,
+                           image_token_id=self.image_token_id)
+            outputs.append(results)
+        messages.append(dict(role='preprocess', content=outputs))
+        return messages
 
     @classmethod
     def proc_messages(cls, messages, chat_template, sequence_start):
@@ -44,6 +44,8 @@ class MllamaVLModel(VisonModel):
         for message in messages:
             if isinstance(message['content'], str):
                 prompt_messages.append(message)
+                continue
+            elif message['role'] in ['images', 'preprocess', 'forward']:
                 continue
             n_images = len(
                 [1 for x in message['content'] if x['type'] == 'image'])
@@ -57,7 +59,15 @@ class MllamaVLModel(VisonModel):
         return prompt, IMAGE_TOKEN
 
     @torch.no_grad()
-    def forward(self, inputs: List[Dict]) -> List[torch.Tensor]:
+    def forward(self, messages: List[Dict]) -> List[Dict]:
+        """extract image feature. ONLY implement it when the backend is
+        turbomind engine.
+
+        Args:
+            messages(List[Dict]): the outputs of `preprocess`
+        Return:
+            the message list with forwarding results included
+        """
         assert 0, 'cogvlm is not supported by turbomind'
 
     def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):

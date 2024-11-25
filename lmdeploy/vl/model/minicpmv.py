@@ -143,59 +143,72 @@ class MiniCPMVModel(VisonModel):
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """refer to `super().preprocess() for spec."""
         outputs = []
-        for item in messages[-1]['content']:
-            if item['type'] == 'image':
-                image = item['image'].convert('RGB')
-                params = {
-                    k: v
-                    for k, v in item.items() if k not in {'type', 'image'}
-                }
-                result = self._preprocess_func(image, params)
-                outputs.append(result)
-        return outputs
+        for i, message in enumerate(messages):
+            if message['role'] != 'user' or not isinstance(
+                    message['content'], List):
+                continue
+            for item in message['content']:
+                if item['type'] == 'image':
+                    image = item['image'].convert('RGB')
+                    params = {
+                        k: v
+                        for k, v in item.items() if k not in {'type', 'image'}
+                    }
+                    result = self._preprocess_func(image, params)
+                    outputs.append(result)
+            messages[i].update(dict(preprocess=outputs))
+        return messages
 
     @torch.no_grad()
-    def forward(self, inputs: List[Dict]) -> List[torch.Tensor]:
-        """forward for MiniCPM-Llama3-V-2_5.
+    def forward(self, messages: List[Dict]) -> List[Dict]:
+        """extract image feature. ONLY implement it when the backend is
+        turbomind engine.
 
         Args:
-            inputs(List[Dict]): the preprocessing result, each dict is
-                the value returned by `_preprocess_v2_5`
+            messages(List[Dict]): the outputs of `preprocess`
+        Return:
+            the message list with forwarding results included
         """
-        tgt_sizes = [x['tgt_sizes'] for x in inputs]
-        pixel_values = [x['pixel_values'] for x in inputs]
-        # flatten the list
-        tgt_sizes = list(itertools.chain(*tgt_sizes))
-        pixel_values = list(itertools.chain(*pixel_values))
-        pixel_values = [
-            x.to(dtype=torch.half, device=self.model.device)
-            for x in pixel_values
-        ]
-        pixel_values = [
-            x.flatten(end_dim=1).permute(1, 0) for x in pixel_values
-        ]
-        pixel_values = torch.nn.utils.rnn.pad_sequence(pixel_values,
-                                                       batch_first=True,
-                                                       padding_value=0.0)
-        B, L, _ = pixel_values.shape
-        pixel_values = pixel_values.permute(0, 2, 1).reshape(B, 3, -1, L)
-        tgt_sizes = torch.vstack(tgt_sizes).type(torch.int32)
-        max_patches = torch.max(tgt_sizes[:, 0] * tgt_sizes[:, 1])
-        patch_attn_mask = torch.zeros((B, 1, max_patches),
-                                      dtype=torch.bool,
-                                      device=self.model.device)
-        for i in range(B):
-            patch_attn_mask[i, :tgt_sizes[i][0] * tgt_sizes[i][1]] = True
-        if self.version == '2.5':
-            embeddings = self.model.vpm(
-                pixel_values.type(torch.half),
-                patch_attention_mask=patch_attn_mask).last_hidden_state
-        else:
-            embeddings = self.model.vpm(pixel_values.type(torch.half),
-                                        patch_attention_mask=patch_attn_mask,
-                                        tgt_sizes=tgt_sizes).last_hidden_state
-        embeddings = self.model.resampler(embeddings, tgt_sizes)
-        return embeddings
+        for i, message in enumerate(messages):
+            if 'preprocess' not in message.keys():
+                continue
+            inputs = message['preprocess']
+            tgt_sizes = [x['tgt_sizes'] for x in inputs]
+            pixel_values = [x['pixel_values'] for x in inputs]
+            # flatten the list
+            tgt_sizes = list(itertools.chain(*tgt_sizes))
+            pixel_values = list(itertools.chain(*pixel_values))
+            pixel_values = [
+                x.to(dtype=torch.half, device=self.model.device)
+                for x in pixel_values
+            ]
+            pixel_values = [
+                x.flatten(end_dim=1).permute(1, 0) for x in pixel_values
+            ]
+            pixel_values = torch.nn.utils.rnn.pad_sequence(pixel_values,
+                                                           batch_first=True,
+                                                           padding_value=0.0)
+            B, L, _ = pixel_values.shape
+            pixel_values = pixel_values.permute(0, 2, 1).reshape(B, 3, -1, L)
+            tgt_sizes = torch.vstack(tgt_sizes).type(torch.int32)
+            max_patches = torch.max(tgt_sizes[:, 0] * tgt_sizes[:, 1])
+            patch_attn_mask = torch.zeros((B, 1, max_patches),
+                                          dtype=torch.bool,
+                                          device=self.model.device)
+            for i in range(B):
+                patch_attn_mask[i, :tgt_sizes[i][0] * tgt_sizes[i][1]] = True
+            if self.version == '2.5':
+                embeddings = self.model.vpm(
+                    pixel_values.type(torch.half),
+                    patch_attention_mask=patch_attn_mask).last_hidden_state
+            else:
+                embeddings = self.model.vpm(
+                    pixel_values.type(torch.half),
+                    patch_attention_mask=patch_attn_mask,
+                    tgt_sizes=tgt_sizes).last_hidden_state
+            embeddings = self.model.resampler(embeddings, tgt_sizes)
+            messages[i].update(dict(forward=embeddings))
+        return messages
 
     def proc_messages(self, messages, chat_template, sequence_start):
         """apply chat template to get the prompt."""
@@ -205,6 +218,8 @@ class MiniCPMVModel(VisonModel):
         for message in messages:
             if isinstance(message['content'], str):
                 prompt_messages.append(message)
+                continue
+            if 'preprocess' not in message.keys():
                 continue
             for x in message['preprocess']:
                 prompt = f'<image>{IMAGE_TOKEN}</image>'
@@ -245,6 +260,7 @@ class MiniCPMVModel(VisonModel):
         for message in messages:
             if 'preprocess' not in message.keys():
                 continue
+            assert 'forward' in message.keys()
             inputs = message.pop('preprocess', None)
             embeddings = message.pop('forward', None)
             num_patches = [x['num_patches'] for x in inputs]

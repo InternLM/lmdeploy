@@ -2,7 +2,7 @@
 from typing import Dict, List
 
 import torch
-from transformers import AutoModel, CLIPImageProcessor
+from transformers import AutoConfig, AutoModel, CLIPImageProcessor
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
@@ -78,20 +78,16 @@ class InternVLVisionModel(VisonModel):
 
     _arch = 'InternVLChatModel'
 
-    def build_preprocessor(self):
-        # load empty model from its config
-        from accelerate import init_empty_weights
-        with init_empty_weights():
-            self.config = self.hf_config
-            # transformers below 4.37.0 may raise error about flash_attn
-            self.config.llm_config.attn_implementation = 'eager'
-            self.model = AutoModel.from_config(self.config,
-                                               trust_remote_code=True)
-            if not self.with_llm:
-                del self.model.language_model
-            else:
-                self.vl_model = self.model
+    def __init__(self,
+                 model_path: str,
+                 with_llm: bool = False,
+                 max_memory: Dict[int, int] = None,
+                 hf_config: AutoConfig = None,
+                 backend: str = ''):
+        super().__init__(model_path, with_llm, max_memory, hf_config, backend)
 
+    def build_preprocessor(self):
+        self.config = self.hf_config
         dynamic_image_size = getattr(self.config, 'dynamic_image_size', False)
         image_processor = None
         try:
@@ -130,11 +126,20 @@ class InternVLVisionModel(VisonModel):
 
     def build_model(self):
         """Load model."""
-        self.model.half()
+        from accelerate import init_empty_weights
+        with init_empty_weights():
+            # transformers below 4.37.0 may raise error about flash_attn
+            self.config.llm_config.attn_implementation = 'eager'
+            model = AutoModel.from_config(self.config, trust_remote_code=True)
+            if not self.with_llm:
+                del model.language_model
+            else:
+                self.vl_model = model
+        model.half()
         from accelerate import load_checkpoint_and_dispatch
         with disable_logging():
             load_checkpoint_and_dispatch(
-                model=self.model,
+                model=model,
                 checkpoint=self.model_path,
                 device_map='auto' if not self.with_llm else {'': 'cpu'},
                 max_memory=self.max_memory,
@@ -143,7 +148,7 @@ class InternVLVisionModel(VisonModel):
 
         # We need eval mode to freeze the weights in model, thus,
         # avoid randomness in inference.
-        self.model = self.model.eval()
+        self.model = model.eval()
 
     def _preprocess_v1_5(self, image, params=None):
         image_res = {'low': 6, 'medium': 12, 'high': 24}
@@ -193,32 +198,36 @@ class InternVLVisionModel(VisonModel):
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """refers to `super.preprocess() for spec."""
+        images = super().collect_images(messages)
         outputs = []
-        for item in messages[-1]['content']:
-            item_type = item['type']
-            if item_type == 'image':
-                image = item['image'].convert('RGB')
-                params = {
-                    key: item[key]
-                    for key in item.keys() if key not in {'type', 'image'}
-                }
-                pixel_values = self.processor(image, params)
-                image_tokens = (pixel_values.shape[0] *
-                                self.image_tokens_per_patch)
-                outputs.append(
-                    dict(pixel_values=pixel_values,
-                         image_tokens=image_tokens,
-                         image_token_id=0,
-                         image_size=image.size))
-        return outputs
+        for image, params in images:
+            image = image.convert('RGB')
+            pixel_values = self.processor(image, params)
+            image_tokens = (pixel_values.shape[0] *
+                            self.image_tokens_per_patch)
+            outputs.append(
+                dict(pixel_values=pixel_values,
+                     image_tokens=image_tokens,
+                     image_token_id=0,
+                     image_size=image.size))
+        messages.append(dict(role='preprocess', content=outputs))
+        return messages
 
     @torch.no_grad()
-    def forward(self, inputs: List[Dict]) -> List[torch.Tensor]:
-        """forward vision model to get vision embedding
+    def forward(self, messages: List[Dict]) -> List[Dict]:
+        """extract image feature. ONLY implement it when the backend is
+        turbomind engine.
+
         Args:
-            inputs (List[Dict]): the output of `preprocess`
+            messages(List[Dict]): the outputs of `preprocess`
+        Return:
+            the message list with forwarding results included
         """
-        return self._forward_func(inputs)
+        inputs = [x['content'] for x in messages if x['role'] == 'preprocess']
+        inputs = inputs[0]
+        outputs = self._forward_func(inputs)
+        messages.append(dict(role='forward', content=outputs))
+        return messages
 
     @classmethod
     def proc_messages(cls, messages, chat_template, sequence_start):
@@ -228,6 +237,8 @@ class InternVLVisionModel(VisonModel):
         for message in messages:
             if isinstance(message['content'], str):
                 prompt_messages.append(message)
+                continue
+            elif message['role'] in ['preprocess', 'forward']:
                 continue
             n_images = len(
                 [1 for x in message['content'] if x['type'] == 'image'])

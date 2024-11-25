@@ -3,10 +3,9 @@
 import os.path as osp
 import warnings
 from contextlib import contextmanager
-from typing import List
+from typing import Dict, List
 
 import torch
-from PIL.Image import Image
 
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
 from lmdeploy.vl.model.utils import (add_device_hook, disable_logging,
@@ -22,8 +21,8 @@ def check_mini_gemini_install():
     except ImportError:
         raise ImportError(
             'To use MiniGeminiVisionModel, please install minigemini by '
-            'pip install git+https://github.com/dvlab-research/MGM.git'
-            ' --no-deps')
+            '`pip install git+https://github.com/dvlab-research/MGM.git'
+            ' --no-deps`')
 
 
 def _build_vision_tower(vision_tower_cfg, **kwargs):
@@ -169,6 +168,12 @@ class MiniGeminiVisionModel(VisonModel):
 
     _arch = ['MiniGeminiLlamaForCausalLM', 'MGMLlamaForCausalLM']
 
+    def build_preprocessor(self):
+        # pytorch engine will not support mini-gemini. Therefore, in order to
+        # reuse the previous code as much as possible, we do not extract image
+        # preprocessor from `build_model` function.
+        pass
+
     def build_model(self):
         check_mini_gemini_install()
         # empty init
@@ -246,11 +251,31 @@ class MiniGeminiVisionModel(VisonModel):
         self.image_processor = image_processor
         self.process_images = process_images
 
+    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+        return messages
+
     @torch.no_grad()
-    def forward(self, images: List[Image]) -> List[torch.Tensor]:
-        """forward."""
-        outputs = [x.convert('RGB') for x in images]
-        image_tensor = self.process_images(outputs, self.image_processor,
+    def forward(self, messages: List[Dict]) -> List[Dict]:
+        """extract image feature. ONLY implement it when the backend is
+        turbomind engine.
+
+        Args:
+            messages(List[Dict]): the outputs of `preprocess`
+        Return:
+            the message list with forwarding results included
+        """
+        images = []
+        for message in messages:
+            if not isinstance(message['content'], List):
+                continue
+            _ = [
+                x['image'] for x in message['content'] if x['type'] == 'image'
+            ]
+            assert len(_) == 1, f'MiniGeminiLlama accepts ONE input ' \
+                f'image, but got {len(images)} images'
+            images.extend(_)
+
+        image_tensor = self.process_images(images, self.image_processor,
                                            self.model.config)
         image_grid = getattr(self.model.config, 'image_grid', 1)
         if hasattr(self.model.config, 'image_size_aux'):
@@ -312,4 +337,35 @@ class MiniGeminiVisionModel(VisonModel):
 
         outputs = torch.split(images_embeds, 1, dim=0)
         outputs = [x.squeeze() for x in outputs]
-        return outputs
+        messages.append(dict(role='forward', cotent=outputs))
+
+    @classmethod
+    def proc_messages(cls, messages, chat_template, sequence_start):
+        """apply chat template to get the prompt."""
+        prompt_messages = []
+        IMAGE_TOKEN = '<IMAGE_TOKEN>'
+        for message in messages:
+            if isinstance(message['content'], str):
+                prompt_messages.append(message)
+                continue
+            elif message['role'] in ['images', 'preprocess', 'forward']:
+                continue
+            n_images = len(
+                [1 for x in message['content'] if x['type'] == 'image'])
+            content = [
+                item['text'] for item in message['content']
+                if item['type'] == 'text'
+            ]
+            prompt = (IMAGE_TOKEN + '\n') * n_images + content[0]
+            prompt_messages.append(dict(role='user', content=prompt))
+        prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
+        return prompt, IMAGE_TOKEN
+
+    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
+        assert 0, 'cogvlm is not supported by pytorch engine'
+
+    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template,
+                                                 sequence_start)
+        return super().to_turbomind_aux(messages, prompt, IMAGE_TOKEN,
+                                        tokenizer, sequence_start)

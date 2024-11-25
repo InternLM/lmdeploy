@@ -68,34 +68,43 @@ class Qwen2VLModel(VisonModel):
         """refer to `super().preprocess()` for spec."""
         from qwen_vl_utils import process_vision_info
 
+        images = super().collect_images(messages)
         optional_keys = {
             'resized_height', 'resized_width', 'min_pixels', 'max_pixels'
         }
         outputs = []
-        for x in messages[-1]['content']:
-            item_type = x['type']
-            if item_type == 'image':
-                image = x['image'].convert('RGB')
-                item = dict(type='image', image=image)
-                item.update(
-                    {key: x[key]
-                     for key in x.keys() if key in optional_keys})
-                image_inputs, _ = process_vision_info([dict(content=[item])])
-                result = self.processor.image_processor(images=image_inputs,
-                                                        videos=None,
-                                                        return_tensors='pt')
-                merge_length = self.processor.image_processor.merge_size**2
-                image_tokens = result['image_grid_thw'].prod(
-                    dim=1) // merge_length
-                result.update(
-                    dict(image_size=image.size,
-                         image_tokens=image_tokens,
-                         image_token_id=0))
-                outputs.append(result)
-        return outputs
+        for image, params in images:
+            image = image.convert('RGB')
+
+            item = dict(type='image', image=image)
+            item.update({
+                key: params[key]
+                for key in params.keys() if key in optional_keys
+            })
+            image_inputs, _ = process_vision_info([dict(content=[item])])
+            result = self.processor.image_processor(images=image_inputs,
+                                                    videos=None,
+                                                    return_tensors='pt')
+            merge_length = self.processor.image_processor.merge_size**2
+            image_tokens = result['image_grid_thw'].prod(dim=1) // merge_length
+            result.update(
+                dict(image_size=image.size,
+                     image_tokens=image_tokens,
+                     image_token_id=0))
+            outputs.append(result)
+        messages.append(dict(role='preprocess', content=outputs))
+        return messages
 
     @torch.no_grad()
-    def forward(self, inputs: List[Dict]) -> List[torch.Tensor]:
+    def forward(self, messages: List[Dict]) -> List[Dict]:
+        """extract image feature. ONLY implement it when the backend is
+        turbomind engine.
+
+        Args:
+            messages(List[Dict]): the outputs of `preprocess`
+        Return:
+            the message list with forwarding results included
+        """
         assert 0, 'TODO: support turbomind engine'
 
     @classmethod
@@ -106,6 +115,8 @@ class Qwen2VLModel(VisonModel):
         for message in messages:
             if isinstance(message['content'], str):
                 prompt_messages.append(message)
+                continue
+            elif message['role'] in ['images', 'preprocess', 'forward']:
                 continue
             n_images = len(
                 [1 for x in message['content'] if x['type'] == 'image'])

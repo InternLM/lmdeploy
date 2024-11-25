@@ -54,77 +54,93 @@ class MolmoVisionModel(VisonModel):
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """refer to the `super.preprocess() for spec."""
-        images = [
-            x['image'].convert('RGB') for x in messages[-1]['content']
-            if x['type'] == 'image'
-        ]
-        content = [
-            x['text'] for x in messages[-1]['content'] if x['type'] == 'text'
-        ]
-        prompt = f' User: {content[0]}'
-        tokens = self.processor.tokenizer.encode(prompt,
-                                                 add_special_tokens=False)
-        # preprocess images. The output is a dict, which is
-        # {
-        #     'input_ids': torch.Tensor,
-        #     'images': torch.Tensor, # (n_patch, d_model)
-        #     'image_input_idx': torch.Tensor, # (n_patch, d_model)
-        #     'image_masks': torch.Tensor,  # (n_patch, d_model)
-        # }
-        result = self.processor.process(images=images, tokens=tokens)
-        # remove the bos from input_ids which is prepended by molmo's
-        # processor
-        input_ids = result['input_ids'][1:]
-        result.update(input_ids=input_ids)
-        return [result]
+        for i, message in enumerate(messages):
+            if not isinstance(message['content'], List):
+                continue
+            images = [
+                x['image'].convert('RGB') for x in message['content']
+                if x['type'] == 'image'
+            ]
+            content = [
+                x['text'] for x in message['content'] if x['type'] == 'text'
+            ]
+            prompt = f' User: {content[0]}'
+            tokens = self.processor.tokenizer.encode(prompt,
+                                                     add_special_tokens=False)
+            # preprocess images. The output is a dict, which is
+            # {
+            #     'input_ids': torch.Tensor,
+            #     'images': torch.Tensor, # (n_patch, d_model)
+            #     'image_input_idx': torch.Tensor, # (n_patch, d_model)
+            #     'image_masks': torch.Tensor,  # (n_patch, d_model)
+            # }
+            result = self.processor.process(images=images, tokens=tokens)
+            # remove the bos from input_ids which is prepended by molmo's
+            # processor
+            input_ids = result['input_ids'][1:]
+            result.update(input_ids=input_ids)
+            messages[i].update(preprocess=result)
+        return messages
 
     @torch.no_grad()
-    def forward(self, inputs: List[Dict]) -> Dict:
-        """perform vision embedding
-        Args:
-            inputs (List[Dict]): the returned value of `preprocess()`
-        """
-        # get input_ids of embedding
-        inputs = inputs[0]
-        inputs = {
-            k: v.to(self.model.device).unsqueeze(0)
-            for k, v in inputs.items()
-        }
-        input_ids = inputs['input_ids']
-        # (batch_size, num_image, num_patch, d_model)
-        images = inputs['images']
-        # (batch_size, num_image, num_patch)
-        image_input_idx = inputs['image_input_idx']
-        image_masks = inputs['image_masks']
-        batch_size, seq_len = input_ids.size()
-        assert batch_size == 1
-        input_ids = input_ids * (input_ids != -1).to(input_ids.dtype)
-        embeddings = self.model.model.transformer.wte(input_ids)
-        image_features, _ = self.model.model.vision_backbone(
-            images, image_masks)
-        num_image, num_patch = image_features.shape[1:3]
-        assert image_input_idx.shape == (batch_size, num_image, num_patch)
+    def forward(self, messages: List[Dict]) -> List[Dict]:
+        """extract image feature. ONLY implement it when the backend is
+        turbomind engine.
 
-        # insert the image feature into the embedding.
-        image_features = image_features.view(batch_size, num_image * num_patch,
-                                             -1)
-        image_input_idx = image_input_idx.view(batch_size,
-                                               num_image * num_patch)
-        valid = image_input_idx >= 0
-        batch_idx = torch.arange(batch_size, device=embeddings.device)
-        batch_idx = torch.tile(batch_idx[:, None],
-                               [1, image_features.shape[1]])
-        image_features = image_features.to(embeddings.device)
-        embeddings[batch_idx[valid],
-                   image_input_idx[valid]] += image_features[valid]
-        assert embeddings.shape[:2] == (batch_size, seq_len)
-        return dict(input_ids=input_ids.flatten(), embeddings=embeddings)
+        Args:
+            messages(List[Dict]): the outputs of `preprocess`
+        Return:
+            the message list with forwarding results included
+        """
+        for i, message in enumerate(messages):
+            if 'preprocess' not in message.keys():
+                continue
+            inputs = message['preprocess']
+            # get input_ids of embedding
+            inputs = {
+                k: v.to(self.model.device).unsqueeze(0)
+                for k, v in inputs.items()
+            }
+            input_ids = inputs['input_ids']
+            # (batch_size, num_image, num_patch, d_model)
+            images = inputs['images']
+            # (batch_size, num_image, num_patch)
+            image_input_idx = inputs['image_input_idx']
+            image_masks = inputs['image_masks']
+            batch_size, seq_len = input_ids.size()
+            assert batch_size == 1
+            input_ids = input_ids * (input_ids != -1).to(input_ids.dtype)
+            embeddings = self.model.model.transformer.wte(input_ids)
+            image_features, _ = self.model.model.vision_backbone(
+                images, image_masks)
+            num_image, num_patch = image_features.shape[1:3]
+            assert image_input_idx.shape == (batch_size, num_image, num_patch)
+
+            # insert the image feature into the embedding.
+            image_features = image_features.view(batch_size,
+                                                 num_image * num_patch, -1)
+            image_input_idx = image_input_idx.view(batch_size,
+                                                   num_image * num_patch)
+            valid = image_input_idx >= 0
+            batch_idx = torch.arange(batch_size, device=embeddings.device)
+            batch_idx = torch.tile(batch_idx[:, None],
+                                   [1, image_features.shape[1]])
+            image_features = image_features.to(embeddings.device)
+            embeddings[batch_idx[valid],
+                       image_input_idx[valid]] += image_features[valid]
+            assert embeddings.shape[:2] == (batch_size, seq_len)
+            messages[i].update(
+                dict(forward=dict(input_ids=input_ids.flatten(),
+                                  embeddings=embeddings)))
+        return messages
 
     def proc_messages(cls, messages):
         prompt = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
         for message in messages:
             role, content = message['role'], message['content']
+            if role == 'images':
+                continue
             if isinstance(content, List):
                 n_images = len([1 for x in content if x['type'] == 'image'])
                 content = [x['text'] for x in content if x['type'] == 'text']
@@ -155,6 +171,8 @@ class MolmoVisionModel(VisonModel):
 
         for i, message in enumerate(messages):
             role, content = message['role'], message['content']
+            if role == 'images':
+                continue
             if isinstance(content, List):
                 forward_result = message.pop('forward')
                 input_ids = forward_result['input_ids']

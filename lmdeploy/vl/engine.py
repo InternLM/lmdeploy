@@ -177,80 +177,17 @@ class ImageEncoder:
         return self.forward(messages)
 
     async def preprocess(self, messages: List[Dict]) -> List[Dict]:
-        """preprocess multimodal data in the messages.
-
-        Args:
-            messages (List[Dict]): a list of message. For instance,
-            [
-                {'role': 'user', 'content': 'string'},
-                {'role': 'assistant', 'content': 'string'},
-                {
-                    'role': 'user',
-                    'content': [
-                        {'type': 'text', 'text': 'string'},
-                        {
-                            'type': 'image',
-                            'image': pillow.Image,
-                            'key1': 'value1',
-                            ...
-                        },
-                        {...},
-                    ]
-                },
-                {...}
-            ]
-        Returns:
-            [
-                {'role': 'user', 'content': 'string'},
-                {'role': 'assistant', 'content': 'string'},
-                {
-                    'role': 'user',
-                    'content': [
-                        {'type': 'text', 'text': 'string'},
-                        {
-                            'type': 'image',
-                            'image': pillow.Image,
-                            'key1': 'value1',
-                            ...
-                        },
-                        {...},
-                    ],
-                    # depends on each vision model's preprocessing
-                    'multimodal': {
-                        'pixel_value': torch.tensor,
-                        ...
-                    }
-                },
-                {...}
-            ]
-        """
-        start = 0
-        for i, message in enumerate(messages):
-            role = message['role']
-            content = message['content']
-            if role == 'user' and isinstance(content, List):
-                result = self.model.preprocess(messages[start:i + 1])
-                messages[i].update(preprocess=result)
-                start = i + 1
-        return messages
+        """preprocess multimodal data in the messages."""
+        return self.model.preprocess(messages)
 
     async def async_infer(self, messages: List[Dict]) -> List[Dict]:
         """get multimodal embedding.
 
         Args:
-            messages (List[Dict]): a list of message. The embedding
-                will be performed with the item that includes
-                `preprocess` key. Refer to the output of `preprocess()`
+            messages (List[Dict]): a list of message, which is the output
+            of `preprocess()`
         """
-
-        assert isinstance(messages, List)
-        assert all(isinstance(item, Dict) for item in messages)
-        for i, message in enumerate(messages):
-            preprocess = message['preprocess']
-            if preprocess:
-                result = self.model.forward(preprocess)
-                messages[i].update(forward=result)
-        return messages
+        return self.model.forward(messages)
 
     async def wrap_for_pytorch(self, messages: List[Dict], chat_template,
                                tokenizer, sequence_start) -> List[Dict]:
@@ -270,8 +207,13 @@ class ImageEncoder:
                 ]
             )
         """
-        return self.model.to_pytorch(messages, chat_template, tokenizer,
-                                     sequence_start)
+        result = self.model.to_pytorch(messages, chat_template, tokenizer,
+                                       sequence_start)
+        # clear data
+        for i, message in enumerate(messages):
+            if isinstance(message['content'], List):
+                messages[i]['preprocess'] = None
+        return result
 
     async def wrap_for_turbomind(self, messages: List[Dict], chat_template,
                                  tokenizer, sequence_start) -> Dict:
@@ -285,7 +227,15 @@ class ImageEncoder:
             Dict(
                 'prompt': 'the prompt after applying chat template'
                 'input_ids': [],
-
+                'input_embeddings': list[torch.Tensor],
+                'input_embedding_ranges': list[torch.Tensor],
+                ...
         """
-        return self.model.to_turbomind(messages, chat_template, tokenizer,
-                                       sequence_start)
+        result = self.model.to_turbomind(messages, chat_template, tokenizer,
+                                         sequence_start)
+        # clear data
+        for i, message in enumerate(messages):
+            if isinstance(message['content'], List):
+                messages[i]['preprocess'] = None
+                messages[i]['forward'] = None
+        return result

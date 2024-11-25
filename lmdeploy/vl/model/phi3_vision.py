@@ -184,24 +184,34 @@ class Phi3VisionModel(LlavaHfVisionModel):
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """refers to `super.preprocess() for spec."""
+        images = super().collect_images(messages)
         outputs = []
-        for item in messages[-1]['content']:
-            if item['type'] == 'image':
-                image = item['image'].convert('RGB')
-                result = self.processor.image_processor(image,
-                                                        return_tensors='pt')
-                h = result['image_sizes'][0][0].item() // 336
-                w = result['image_sizes'][0][1].item() // 336
-                image_tokens = int((h * w + 1) * 144 + 1 + (h + 1) * 12)
-                result.update(
-                    dict(image_size=image.size,
-                         image_tokens=image_tokens,
-                         image_token_id=0))
-                outputs.append(result)
-        return outputs
+        for image, params in images:
+            image = image.convert('RGB')
+            result = self.processor.image_processor(image, return_tensors='pt')
+            h = result['image_sizes'][0][0].item() // 336
+            w = result['image_sizes'][0][1].item() // 336
+            image_tokens = int((h * w + 1) * 144 + 1 + (h + 1) * 12)
+            result.update(
+                dict(image_size=image.size,
+                     image_tokens=image_tokens,
+                     image_token_id=0))
+            outputs.append(result)
+        messages.append(dict(role='preprocess', content=outputs))
+        return messages
 
     @torch.no_grad()
-    def forward(self, inputs: List[Dict]) -> List[torch.Tensor]:
+    def forward(self, messages: List[Dict]) -> List[Dict]:
+        """extract image feature. ONLY implement it when the backend is
+        turbomind engine.
+
+        Args:
+            messages(List[Dict]): the outputs of `preprocess`
+        Return:
+            the message list with forwarding results included
+        """
+        inputs = [x['content'] for x in messages if x['role'] == 'preprocess']
+        inputs = inputs[0]
         pixel_values = [x['pixel_values'] for x in inputs]
         pixel_values = torch.stack(pixel_values, dim=0)
         image_sizes = [x['image_sizes'] for x in inputs]
@@ -211,4 +221,5 @@ class Phi3VisionModel(LlavaHfVisionModel):
             pixel_values=pixel_values,
             image_sizes=image_sizes)
         outputs = [x.squeeze() for x in image_features]
-        return outputs
+        messages.append(dict(role='forward', content=outputs))
+        return messages

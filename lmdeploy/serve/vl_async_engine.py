@@ -87,10 +87,17 @@ class VLAsyncEngine(AsyncEngine):
         messages = await self.async_convert_to_pil_images(messages)
         results = await self.vl_encoder.preprocess(messages)
         if self.backend == 'turbomind':
+            # for tm engine, this module perform vision embedding after image
+            # preprocessing. It utilizes the hf model's vision embeddings
+            # functions and returns the input_ids, input_embeddings,
+            # embedding_ranges and so on. All the returned values are passed
+            # to tm engine for token generation
             results = await self.vl_encoder.async_infer(results)
             results = await self.vl_encoder.wrap_for_turbomind(
                 results, self.chat_template, self.tokenizer, sequence_start)
         elif self.backend == 'pytorch':
+            # for pt engine, this module only conduct the image preprocessing
+            # It leaves the vision embedding to the pt engine
             results = await self.vl_encoder.wrap_for_pytorch(
                 results, self.chat_template, self.tokenizer, sequence_start)
         return results

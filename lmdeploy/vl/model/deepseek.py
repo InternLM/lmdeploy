@@ -88,25 +88,33 @@ class DeepSeekVisionModel(VisonModel):
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """refers to the spec of `super.preprocess()"""
+        images = super().collect_images(messages)
         outputs = []
-        for item in messages[-1]['content']:
-            item_type = item['type']
-            if item_type == 'image':
-                image = item['image'].convert('RGB')
-                pixel_values = self.image_processor(
-                    [image], return_tensors='pt').pixel_values
-                outputs.append(
-                    dict(
-                        pixel_values=pixel_values,
-                        image_size=image.size,
-                        image_tokens=576,  # TODO
-                        image_token_id=0))
-        return outputs
+        for image, _ in images:
+            image = image.convert('RGB')
+            pixel_values = self.image_processor(
+                [image], return_tensors='pt').pixel_values
+            outputs.append(
+                dict(
+                    pixel_values=pixel_values,
+                    image_size=image.size,
+                    image_tokens=576,  # TODO
+                    image_token_id=0))
+        messages.append(dict(role='preprocess', content=outputs))
+        return messages
 
     @torch.no_grad()
-    def forward(self, inputs: List[Dict]) -> List[torch.Tensor]:
-        """forward."""
-        assert all(x.get('pixel_values') is not None for x in inputs)
+    def forward(self, messages: List[Dict]) -> List[Dict]:
+        """extract image feature. ONLY implement it when the backend is
+        turbomind engine.
+
+        Args:
+            messages(List[Dict]): the outputs of `preprocess`
+        Return:
+            the message list with forwarding results included
+        """
+        inputs = [x['content'] for x in messages if x['role'] == 'preprocess']
+        inputs = inputs[0]
         pixel_values = [x['pixel_values'] for x in inputs]
         pixel_values = torch.cat(pixel_values, dim=0)
         pixel_values = pixel_values.to(device=next(
@@ -116,7 +124,8 @@ class DeepSeekVisionModel(VisonModel):
         images_embeds = self.aligner(self.vision_model(pixel_values))
         outputs = torch.split(images_embeds, 1, dim=0)
         outputs = [x.squeeze() for x in outputs]
-        return outputs
+        messages.append(dict(role='forward', content=outputs))
+        return messages
 
     @classmethod
     def proc_messages(cls, messages, chat_template, sequence_start):
@@ -126,6 +135,8 @@ class DeepSeekVisionModel(VisonModel):
         for message in messages:
             if isinstance(message['content'], str):
                 prompt_messages.append(message)
+                continue
+            elif message['role'] in ['images', 'preprocess', 'forward']:
                 continue
             content = [
                 x['text'] for x in message['content'] if x['type'] == 'text'
