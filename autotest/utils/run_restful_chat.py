@@ -6,6 +6,7 @@ from time import sleep, time
 
 import allure
 import psutil
+from openai import OpenAI
 from pytest_assume.plugin import assume
 from utils.config_utils import get_cuda_prefix_by_workerid, get_workerid
 from utils.get_run_config import get_command_with_extra
@@ -278,3 +279,52 @@ def get_model(url):
         return model_name.split('/')[-1]
     except Exception:
         return None
+
+
+PIC = 'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg'  # noqa E501
+
+
+def run_vl_testcase(config, port: int = DEFAULT_PORT):
+    http_url = BASE_HTTP_URL + ':' + str(port)
+    log_path = config.get('log_path')
+
+    client = OpenAI(api_key='YOUR_API_KEY', base_url=http_url + '/v1')
+    model_name = client.models.list().data[0].id
+
+    restful_log = os.path.join(
+        log_path,
+        'restful_vl_' + model_name.split('/')[-1] + str(port) + '.log')
+    file = open(restful_log, 'w')
+
+    prompt_messages = [{
+        'role':
+        'user',
+        'content': [{
+            'type': 'text',
+            'text': 'Describe the image please',
+        }, {
+            'type': 'image_url',
+            'image_url': {
+                'url': PIC,
+            },
+        }],
+    }]
+
+    response = client.chat.completions.create(model=model_name,
+                                              messages=prompt_messages,
+                                              temperature=0.8,
+                                              top_p=0.8)
+    file.writelines(str(response).lower() + '\n')
+    assert 'tiger' in str(response).lower() or '虎' in str(
+        response).lower(), response
+
+    api_client = APIClient(http_url)
+    model_name = api_client.available_models[0]
+    for item in api_client.chat_completions_v1(model=model_name,
+                                               messages=prompt_messages):
+        continue
+    file.writelines(str(item) + '\n')
+    assert 'tiger' in str(item).lower() or '虎' in str(item).lower(), item
+
+    allure.attach.file(restful_log,
+                       attachment_type=allure.attachment_type.TEXT)

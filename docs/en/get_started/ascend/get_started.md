@@ -3,6 +3,8 @@
 The usage of lmdeploy on a Huawei Ascend device is almost the same as its usage on CUDA with PytorchEngine in lmdeploy.
 Please read the original [Get Started](../get_started.md) guide before reading this tutorial.
 
+Here is the [supported model list](../../supported_models/supported_models.md#PyTorchEngine-on-Huawei-Ascend-Platform).
+
 ## Installation
 
 We highly recommend that users build a Docker image for streamlined environment setup.
@@ -38,6 +40,8 @@ DOCKER_BUILDKIT=1 docker build -t lmdeploy-aarch64-ascend:latest \
     -f docker/Dockerfile_aarch64_ascend .
 ```
 
+The `Dockerfile_aarch64_ascend` is tested on Kunpeng CPU. For intel CPU, please try [this dockerfile](https://github.com/InternLM/lmdeploy/issues/2745#issuecomment-2473285703) (which is not fully tested)
+
 If the following command executes without any errors, it indicates that the environment setup is successful.
 
 ```bash
@@ -49,7 +53,7 @@ For more information about running the Docker client on Ascend devices, please r
 ## Offline batch inference
 
 > \[!TIP\]
-> Graph mode has been supported on Atlas 800T A2. Currently, LLaMa3-8B/LLaMa2-7B/Qwen2-7B are tested on graph mode.
+> Graph mode has been supported on Atlas 800T A2.
 > Users can set `eager_mode=False` to enable graph mode, or, set `eager_mode=True` to disable graph mode.
 > (Please source `/usr/local/Ascend/nnal/atb/set_env.sh` before enabling graph mode)
 
@@ -86,7 +90,7 @@ if __name__ == "__main__":
 ## Online serving
 
 > \[!TIP\]
-> Graph mode has been supported on Atlas 800T A2. Currently, InternLM2-7B/LLaMa2-7B/Qwen2-7B are tested on graph mode.
+> Graph mode has been supported on Atlas 800T A2.
 > Graph mode is default enabled in online serving. Users can add `--eager-mode` to disable graph mode.
 > (Please source `/usr/local/Ascend/nnal/atb/set_env.sh` before enabling graph mode)
 

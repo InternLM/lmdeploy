@@ -98,6 +98,27 @@ with read_base():
         models as lmdeploy_qwen2_7b_instruct  # noqa: F401, E501
     from opencompass.configs.models.qwen.lmdeploy_qwen_7b_chat import \
         models as lmdeploy_qwen_7b_chat  # noqa: F401, E501
+    # Summary Groups
+    from opencompass.configs.summarizers.groups.bbh import \
+        bbh_summary_groups  # noqa: F401, E501
+    from opencompass.configs.summarizers.groups.cmmlu import \
+        cmmlu_summary_groups  # noqa: F401, E501
+    from opencompass.configs.summarizers.groups.ds1000 import \
+        ds1000_summary_groups  # noqa: F401, E501
+    from opencompass.configs.summarizers.groups.GaokaoBench import \
+        GaokaoBench_summary_groups  # noqa: F401, E501
+    from opencompass.configs.summarizers.groups.humanevalx import \
+        humanevalx_summary_groups  # noqa: F401, E501
+    from opencompass.configs.summarizers.groups.mathbench_v1_2024 import \
+        mathbench_2024_summary_groups  # noqa: F401, E501
+    from opencompass.configs.summarizers.groups.mmlu import \
+        mmlu_summary_groups  # noqa: F401, E501
+    from opencompass.configs.summarizers.groups.mmlu_pro import \
+        mmlu_pro_summary_groups  # noqa: F401, E501
+    from opencompass.configs.summarizers.groups.scicode import \
+        scicode_summary_groups  # noqa: F401, E501
+    from opencompass.configs.summarizers.groups.teval import \
+        teval_summary_groups  # noqa: F401, E501
 
 llama2_meta_template = dict(round=[
     dict(role='HUMAN', begin='[INST] ', end=' [/INST]'),
