@@ -137,10 +137,12 @@ class VisonModel(ABC):
     @classmethod
     def collect_images(cls, messages):
         """gather all images along with their respective parameters from the
-        messages and compile them into a single list.
+        messages and compile them into a single list. Each image is converted
+        to RGB color space.
 
         Args:
-            messages (List[Dict]): a list of message
+            messages (List[Tuple[Image, Dict]]): a list of images with their
+                corresponding parameters
         """  # noqa
         images = []
         for message in messages:
@@ -210,7 +212,6 @@ class VisonModel(ABC):
         """
         # collect image features from messages
         features = [x['content'] for x in messages if x['role'] == 'forward']
-        assert len(features) == 1
         features = features[0]
         features = [x.cpu().numpy() for x in features]
 
