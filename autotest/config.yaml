@@ -168,6 +168,7 @@ turbomind_quatization:
         - Qwen/Qwen2-VL-7B-Instruct
         - mistralai/Mistral-7B-Instruct-v0.3
         - deepseek-ai/deepseek-coder-1.3b-instruct
+        - deepseek-ai/DeepSeek-V2-Lite-Chat
         - codellama/CodeLlama-7b-Instruct-hf
     gptq:
         - internlm/internlm2_5-7b-chat
