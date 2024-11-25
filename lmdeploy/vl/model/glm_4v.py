@@ -85,19 +85,21 @@ class GLM4VisionModel(VisonModel):
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """get images and their corresponding preprocess parameters from
         messages, and perform preprocessing."""
+        images = [x['content'] for x in messages if x['role'] == 'images']
+        assert len(images) == 1
+        images = images[0]
         outputs = []
-        for item in messages[-1]['content']:
-            item_type = item['type']
-            if item_type == 'image':
-                image = item['image'].convert('RGB')
-                pixel_values = self.image_transform(image)
-                outputs.append(
-                    dict(
-                        pixel_values=pixel_values,
-                        image_size=image.size,
-                        image_tokens=1602,  # TODO
-                        image_token_id=0))
-        return outputs
+        for image, params in images:
+            image = image.convert('RGB')
+            pixel_values = self.image_transform(image)
+            outputs.append(
+                dict(
+                    pixel_values=pixel_values,
+                    image_size=image.size,
+                    image_tokens=1602,  # TODO
+                    image_token_id=0))
+        messages.append(dict(role='preprocess', content=outputs))
+        return messages
 
     @torch.no_grad()
     def forward(self, inputs: List[Dict]) -> List[torch.Tensor]:
@@ -112,6 +114,8 @@ class GLM4VisionModel(VisonModel):
             content = message['content']
             if isinstance(content, str):
                 prompt_messages.append(message)
+                continue
+            elif message['role'] in ['images', 'preprocess', 'forward']:
                 continue
             prompt = [x['text'] for x in content if x['type'] == 'text']
             n_images = len([1 for x in content if x['type'] == 'image'])
