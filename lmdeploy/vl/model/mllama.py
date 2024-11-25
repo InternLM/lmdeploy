@@ -23,18 +23,19 @@ class MllamaVLModel(VisonModel):
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """refer to the spec of `super().preprocess`"""
+        images = [x['content'] for x in messages if x['role'] == 'images']
+        images = images[0]
         outputs = []
-        for item in messages[-1]['content']:
-            item_type = item['type']
-            if item_type == 'image':
-                image = item['image'].convert('RGB')
-                results = self.processor.image_processor(images=image,
-                                                         return_tensors='pt')
-                results.update(image_size=image.size,
-                               image_tokens=1,
-                               image_token_id=self.image_token_id)
-                outputs.append(results)
-        return outputs
+        for image, params in images:
+            image = image.convert('RGB')
+            results = self.processor.image_processor(images=image,
+                                                     return_tensors='pt')
+            results.update(image_size=image.size,
+                           image_tokens=1,
+                           image_token_id=self.image_token_id)
+            outputs.append(results)
+        messages.append(dict(role='preprocess', content=outputs))
+        return messages
 
     @classmethod
     def proc_messages(cls, messages, chat_template, sequence_start):
@@ -44,6 +45,8 @@ class MllamaVLModel(VisonModel):
         for message in messages:
             if isinstance(message['content'], str):
                 prompt_messages.append(message)
+                continue
+            elif message['role'] in ['images', 'preprocess', 'forward']:
                 continue
             n_images = len(
                 [1 for x in message['content'] if x['type'] == 'image'])
