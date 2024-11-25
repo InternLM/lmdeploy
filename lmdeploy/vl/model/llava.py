@@ -306,24 +306,32 @@ class LlavaVisionModel(LlavaHfVisionModel):
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """refer to `super().preprocess() for spec."""
+        images = [x['content'] for x in messages if x['role'] == 'images']
+        images = images[0]
         outputs = []
-        for item in messages[-1]['content']:
-            if item['type'] == 'image':
-                image = item['image'].convert('RGB')
-                pixel_values = process_images([image], self.image_processor,
-                                              self.config)
-                outputs.append(
-                    dict(
-                        pixel_values=pixel_values,
-                        image_size=image.size,
-                        image_tokens=576,  # TODO
-                        image_token_id=0))
-        return outputs
+        for image, params in images:
+            image = image.convert('RGB')
+            pixel_values = process_images([image], self.image_processor,
+                                          self.config)
+            outputs.append(
+                dict(
+                    pixel_values=pixel_values,
+                    image_size=image.size,
+                    image_tokens=576,  # TODO
+                    image_token_id=0))
+        messages.append(dict(role='preprocess', content=outputs))
+        return messages
 
     @torch.no_grad()
-    def forward(self, inputs: List[Dict]) -> List[torch.Tensor]:
+    def forward(self, messages: List[Dict]) -> List[Dict]:
+        """forward vision model to get vision embedding
+        Args:
+            inputs (List[Dict]): the output of `preprocess`
+        """
         from llava.model.llava_arch import (get_anyres_image_grid_shape,
                                             unpad_image)
+        inputs = [x['content'] for x in messages if x['role'] == 'preprocess']
+        inputs = inputs[0]
         image_sizes = [x['image_size'] for x in inputs]
         pixel_values = [x['pixel_values'] for x in inputs]
         pixel_values = torch.cat(pixel_values, dim=0)
@@ -398,4 +406,5 @@ class LlavaVisionModel(LlavaHfVisionModel):
         else:
             image_features = self.encode_images(pixel_values)
             image_features = [x for x in image_features]
-        return image_features
+        messages.append(dict(role='forward', content=image_features))
+        return messages
