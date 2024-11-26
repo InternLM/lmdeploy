@@ -27,17 +27,18 @@
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
-#include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
-#include "src/turbomind/triton_backend/llama/LlamaTritonModelInstance.h"
-#include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
-namespace ft = turbomind;
+#include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
+#include "src/turbomind/triton_backend/llama/LlamaTritonModelInstance.h"
+#include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
 
-static std::optional<ft::MoeParam::Method> get_moe_method()
+namespace turbomind {
+
+static std::optional<MoeParam::Method> get_moe_method()
 {
-    static const auto value = []() -> std::optional<ft::MoeParam::Method> {
+    static const auto value = []() -> std::optional<MoeParam::Method> {
         const auto p = std::getenv("TM_MOE_METHOD");
         if (p) {
             std::string str(p);
@@ -45,10 +46,10 @@ static std::optional<ft::MoeParam::Method> get_moe_method()
                 x = std::tolower(x);
             }
             if (str == "naive") {
-                return ft::MoeParam::kNaive;
+                return MoeParam::kNaive;
             }
             else if (str == "fused") {
-                return ft::MoeParam::kFused;
+                return MoeParam::kFused;
             }
             else {
                 std::cerr << "[WARNING] unrecognised MoE method: " << str << "\n";
@@ -67,7 +68,7 @@ std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createLlamaM
     }
     catch (const YAML::Exception& e) {
         std::cerr << "Error reading YAML config: " << e.what() << std::endl;
-        ft::FT_CHECK(false);
+        FT_CHECK(false);
     }
 
     const auto        ft_instance_hyperparameter = reader["ft_instance_hyperparameter"];
@@ -91,7 +92,7 @@ std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createLlamaM
             model_dir);
 #else
         TM_LOG_ERROR("[ERROR] Turbomind is not built with ENABLE_BF16");
-        ft::FT_CHECK(false);
+        FT_CHECK(false);
 #endif
     }
     else {
@@ -103,7 +104,7 @@ std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createLlamaM
             model_dir);
 #else
         TM_LOG_ERROR("[ERROR] Turbomind is not built with ENABLE_BF32");
-        ft::FT_CHECK(false);
+        FT_CHECK(false);
 #endif
     }
     return nullptr;
@@ -205,10 +206,10 @@ void LlamaTritonModel<T>::handleMissingParams()
 template<typename T>
 LlamaTritonModel<T>::~LlamaTritonModel()
 {
-    ft::FT_CHECK(weights_.size() == engines_.size());
+    FT_CHECK(weights_.size() == engines_.size());
     for (int device_id = 0; device_id < (int)engines_.size(); ++device_id) {
         // Set device id before destructing CUDA resources
-        ft::check_cuda_error(cudaSetDevice(device_id));
+        check_cuda_error(cudaSetDevice(device_id));
         engines_[device_id].reset();
         weights_[device_id].reset();
     }
@@ -222,7 +223,7 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
                                       std::string config):
     tensor_para_size_(tensor_para_size),
     pipeline_para_size_(pipeline_para_size),
-    weights_(ft::getDeviceCount()),
+    weights_(getDeviceCount()),
     enable_custom_all_reduce_(enable_custom_all_reduce)
 {
     FT_CHECK_WITH_INFO(!(config.empty() && model_dir.empty()), "invalid init options");
@@ -242,7 +243,7 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     }
     catch (const YAML::Exception& e) {
         std::cerr << "Error reading YAML config: " << e.what() << std::endl;
-        ft::FT_CHECK(false);
+        FT_CHECK(false);
     }
 
     const auto model_reader     = reader["model_config"];
@@ -297,7 +298,7 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     engine_param_.num_tokens_per_iter = engine_reader["num_tokens_per_iter"].as<int>(0);
     engine_param_.max_prefill_iters   = engine_reader["max_prefill_iters"].as<int>(1);
 
-    lora_param_.policy           = ft::getLoraPolicy(reader["lora_config"]["lora_policy"].as<std::string>(""));
+    lora_param_.policy           = getLoraPolicy(reader["lora_config"]["lora_policy"].as<std::string>(""));
     lora_param_.r                = lora_reader["lora_r"].as<int>(0);
     lora_param_.scale            = lora_reader["lora_scale"].as<float>(0);
     lora_param_.max_wo_r         = lora_reader["lora_max_wo_r"].as<int>(0);
@@ -313,75 +314,75 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
 
     handleMissingParams();
 
-    shared_state_          = std::make_shared<ft::SharedState>();
-    shared_state_->barrier = std::make_shared<ft::Barrier>(tensor_para_size);
+    shared_state_          = std::make_shared<SharedState>();
+    shared_state_->barrier = std::make_shared<Barrier>(tensor_para_size);
 
-    const auto device_count = ft::getDeviceCount();
+    const auto device_count = getDeviceCount();
     engines_.resize(device_count);
 
     const std::string weight_type_str = model_reader["weight_type"].as<std::string>();
     if (weight_type_str == "fp16" || weight_type_str == "float16") {
-        weight_type_ = ft::WeightType::kFP16;
+        weight_type_ = WeightType::kFP16;
     }
     else if (weight_type_str == "bf16" || weight_type_str == "bfloat16") {
-        weight_type_ = ft::WeightType::kBF16;
+        weight_type_ = WeightType::kBF16;
     }
     else if (weight_type_str == "fp32") {
-        weight_type_ = ft::WeightType::kFP32;
+        weight_type_ = WeightType::kFP32;
     }
     else if (weight_type_str == "int8") {
-        weight_type_ = ft::WeightType::kINT8;
+        weight_type_ = WeightType::kINT8;
     }
     else if (weight_type_str == "int4") {
-        weight_type_ = ft::WeightType::kINT4;
+        weight_type_ = WeightType::kINT4;
     }
     else {
         std::cout << "[ERROR] Unsupported weight type: '" << weight_type_str << "'\n";
-        ft::FT_CHECK(0);
+        FT_CHECK(0);
     }
 
     if (auto method = get_moe_method()) {
         moe_param_.method = *method;
     }
     else {
-        moe_param_.method = ft::MoeParam::kFused;
+        moe_param_.method = MoeParam::kFused;
     }
 
     TM_LOG_INFO("%s", toString().c_str());
 }
 
 template<typename T>
-std::unique_ptr<ft::Engine<T>> LlamaTritonModel<T>::createSharedModelInstance(
-    int                                                               device_id,
-    int                                                               rank,
-    std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>> nccl_params,
-    std::shared_ptr<ft::AbstractCustomComm>                           custom_all_reduce_comm)
+std::unique_ptr<Engine<T>>
+LlamaTritonModel<T>::createSharedModelInstance(int                                                       device_id,
+                                               int                                                       rank,
+                                               std::pair<std::vector<NcclParam>, std::vector<NcclParam>> nccl_params,
+                                               std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm)
 {
-    ft::check_cuda_error(cudaSetDevice(device_id));
+    check_cuda_error(cudaSetDevice(device_id));
     const int comms_rank = device_id % (tensor_para_size_ * pipeline_para_size_);
 
-    auto ctx = std::make_unique<ft::Context<T>>(device_id);
+    auto ctx = std::make_unique<Context<T>>(device_id);
 
-    ft::NcclParam tensor_para   = nccl_params.first[comms_rank];
-    ft::NcclParam pipeline_para = nccl_params.second[comms_rank];
+    NcclParam tensor_para   = nccl_params.first[comms_rank];
+    NcclParam pipeline_para = nccl_params.second[comms_rank];
 
-    ft::FT_CHECK(tensor_para.world_size_ == tensor_para_size_);
-    ft::FT_CHECK(pipeline_para.world_size_ == pipeline_para_size_);
+    FT_CHECK(tensor_para.world_size_ == tensor_para_size_);
+    FT_CHECK(pipeline_para.world_size_ == pipeline_para_size_);
 
-    auto model = std::make_unique<ft::LlamaV2<T>>(model_param_,  //
-                                                  attn_param_,
-                                                  moe_param_,
-                                                  lora_param_,
-                                                  tensor_para,
-                                                  *ctx,
-                                                  engine_param_.max_batch_size,
-                                                  weights_[device_id]);
+    auto model = std::make_unique<LlamaV2<T>>(model_param_,  //
+                                              attn_param_,
+                                              moe_param_,
+                                              lora_param_,
+                                              tensor_para,
+                                              *ctx,
+                                              engine_param_.max_batch_size,
+                                              weights_[device_id]);
 
-    auto engine = std::make_unique<ft::Engine<T>>(engine_param_,  //
-                                                  std::move(model),
-                                                  std::move(ctx),
-                                                  shared_state_,
-                                                  device_id);
+    auto engine = std::make_unique<Engine<T>>(engine_param_,  //
+                                              std::move(model),
+                                              std::move(ctx),
+                                              shared_state_,
+                                              device_id);
 
     // Wait for pinned buffers to be allocated for all ranks, otherwise tuning will hang
     // due to concurrent kernel launch & cudaMallocHost
@@ -397,14 +398,14 @@ std::unique_ptr<AbstractTransformerModelInstance>
 LlamaTritonModel<T>::createModelInstance(int          device_id,
                                          int          rank,
                                          cudaStream_t stream,
-                                         std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>>,
-                                         std::shared_ptr<ft::AbstractCustomComm>)
+                                         std::pair<std::vector<NcclParam>, std::vector<NcclParam>>,
+                                         std::shared_ptr<AbstractCustomComm>)
 {
-    ft::check_cuda_error(cudaSetDevice(device_id));
+    check_cuda_error(cudaSetDevice(device_id));
 
-    ft::FT_CHECK(engines_[device_id] != nullptr);
+    FT_CHECK(engines_[device_id] != nullptr);
 
-    auto allocator = std::make_unique<ft::Allocator<ft::AllocatorType::CUDA>>(device_id, false);
+    auto allocator = std::make_unique<Allocator<AllocatorType::CUDA>>(device_id, false);
 
     allocator->setStream(stream);
 
@@ -414,25 +415,25 @@ LlamaTritonModel<T>::createModelInstance(int          device_id,
 template<typename T>
 void LlamaTritonModel<T>::createSharedWeights(int device_id, int rank)
 {
-    ft::check_cuda_error(cudaSetDevice(device_id));
+    check_cuda_error(cudaSetDevice(device_id));
     const int tensor_para_rank   = rank % tensor_para_size_;
     const int pipeline_para_rank = rank / tensor_para_size_;
-    ft::FT_CHECK(pipeline_para_size_ == 1 && pipeline_para_rank == 0);
-    weights_[device_id] = std::make_shared<ft::LlamaWeight<T>>(model_param_.head_num,
-                                                               model_param_.kv_head_num,
-                                                               model_param_.head_dim,
-                                                               model_param_.hidden_units,
-                                                               model_param_.inter_size,
-                                                               model_param_.vocab_size,
-                                                               model_param_.embedding_size,
-                                                               model_param_.layer_num,
-                                                               attn_bias_,
-                                                               weight_type_,
-                                                               group_size_,
-                                                               lora_param_,
-                                                               moe_param_,
-                                                               tensor_para_size_,
-                                                               tensor_para_rank);
+    FT_CHECK(pipeline_para_size_ == 1 && pipeline_para_rank == 0);
+    weights_[device_id] = std::make_shared<LlamaWeight<T>>(model_param_.head_num,
+                                                           model_param_.kv_head_num,
+                                                           model_param_.head_dim,
+                                                           model_param_.hidden_units,
+                                                           model_param_.inter_size,
+                                                           model_param_.vocab_size,
+                                                           model_param_.embedding_size,
+                                                           model_param_.layer_num,
+                                                           attn_bias_,
+                                                           weight_type_,
+                                                           group_size_,
+                                                           lora_param_,
+                                                           moe_param_,
+                                                           tensor_para_size_,
+                                                           tensor_para_rank);
     // model inited with model_dir
     if (model_dir_ != "") {
         weights_[device_id]->loadModel(model_dir_);
@@ -441,37 +442,41 @@ void LlamaTritonModel<T>::createSharedWeights(int device_id, int rank)
 }
 
 template<typename T>
-TensorMap LlamaTritonModel<T>::getParams(int deviceId, int rank)
+std::unordered_map<std::string, Tensor> LlamaTritonModel<T>::getParams(int deviceId, int rank)
 {
-    ft::check_cuda_error(cudaSetDevice(deviceId));
+    check_cuda_error(cudaSetDevice(deviceId));
+
     // shared_weight should be created before getParams
-    ft::FT_CHECK(weights_[deviceId] != nullptr);
-    ft::TensorMap output = weights_[deviceId]->getParams();
-    TensorMap     result;
+    FT_CHECK(weights_[deviceId] != nullptr);
+
+    TensorMap output = weights_[deviceId]->getParams();
+
+    std::unordered_map<std::string, Tensor> result;
     for (auto [name, tensor] : output) {
-        result.emplace(name, triton::Tensor{tensor.where, tensor.type, tensor.shape, tensor.data});
+        result.insert({{name, Tensor{tensor.where, tensor.type, tensor.shape, tensor.data}}});
     }
+
     return result;
 }
 
 template<typename T>
 void LlamaTritonModel<T>::processWeights(int device_id, int rank)
 {
-    ft::check_cuda_error(cudaSetDevice(device_id));
-    ft::FT_CHECK(weights_[device_id] != nullptr);
+    check_cuda_error(cudaSetDevice(device_id));
+    FT_CHECK(weights_[device_id] != nullptr);
 
     cudaDeviceProp props{};
-    ft::check_cuda_error(cudaGetDeviceProperties(&props, device_id));
+    check_cuda_error(cudaGetDeviceProperties(&props, device_id));
 
     weights_[device_id]->prepare(props);
-    ft::sync_check_cuda_error();
+    sync_check_cuda_error();
 }
 
 template<typename T>
-void LlamaTritonModel<T>::createEngine(int                                                               device_id,
-                                       int                                                               rank,
-                                       std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>> nccl_params,
-                                       std::shared_ptr<ft::AbstractCustomComm> custom_all_reduce_comm)
+void LlamaTritonModel<T>::createEngine(int                                                       device_id,
+                                       int                                                       rank,
+                                       std::pair<std::vector<NcclParam>, std::vector<NcclParam>> nccl_params,
+                                       std::shared_ptr<AbstractCustomComm>                       custom_all_reduce_comm)
 {
 
     auto engine = createSharedModelInstance(device_id, rank, nccl_params, custom_all_reduce_comm);
@@ -509,17 +514,11 @@ std::string LlamaTritonModel<T>::toString()
 }
 
 template<typename T>
-void LlamaTritonModel<T>::createCustomComms(
-    std::vector<std::shared_ptr<ft::AbstractCustomComm>>* custom_all_reduce_comms, int world_size)
+void LlamaTritonModel<T>::createCustomComms(std::vector<std::shared_ptr<AbstractCustomComm>>* custom_all_reduce_comms,
+                                            int                                               world_size)
 {
-    using commDataType = typename ft::CustomARCommTypeConverter<T>::Type;
-    ft::initCustomAllReduceComm<commDataType>(custom_all_reduce_comms, enable_custom_all_reduce_, world_size);
-}
-
-template<typename T>
-std::unique_ptr<ft::AbstractInstanceComm> LlamaTritonModel<T>::createInstanceComm(int size)
-{
-    return nullptr;
+    using commDataType = typename CustomARCommTypeConverter<T>::Type;
+    initCustomAllReduceComm<commDataType>(custom_all_reduce_comms, enable_custom_all_reduce_, world_size);
 }
 
 template<typename T>
@@ -541,3 +540,5 @@ template struct LlamaTritonModel<half>;
 #ifdef ENABLE_BF16
 template struct LlamaTritonModel<__nv_bfloat16>;
 #endif
+
+}  // namespace turbomind
