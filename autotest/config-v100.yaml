@@ -97,9 +97,14 @@ pytorch_vl_model:
 
 turbomind_quatization:
     no_awq:
+        - meta-llama/Meta-Llama-3-1-8B-Instruct
+        - meta-llama/Meta-Llama-3-8B-Instruct
+        - internlm/internlm-xcomposer2d5-7b
+        - OpenGVLab/Mini-InternVL-Chat-2B-V1-5
         - Qwen/Qwen2-VL-2B-Instruct
         - Qwen/Qwen2-VL-7B-Instruct
         - mistralai/Mistral-7B-Instruct-v0.3
+        - THUDM/glm-4-9b-chat
         - deepseek-ai/deepseek-coder-1.3b-instruct
         - codellama/CodeLlama-7b-Instruct-hf
     gptq:
