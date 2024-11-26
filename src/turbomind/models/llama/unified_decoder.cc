@@ -207,7 +207,7 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
             moe_ffn_layer_->forward(nullptr, decoder_output, token_num, layer, weights->at(layer)->moe_weights);
         }
 
-        if (weights->at(layer)->ffn_weights.output.output_dims) {
+        if (weights->at(layer)->ffn_weights.output.kernel) {
             int       layer_id   = layer;  // int is needed
             bool      all_reduce = !is_moe;
             TensorMap ffn_inputs{{"ffn_input", {MEMORY_GPU, dtype_, {token_num, hidden_units_}, decoder_output}},
