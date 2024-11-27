@@ -1,12 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import argparse
+import asyncio
 import csv
 import json
 import os
 import random
 import time
 from queue import Queue
-from threading import Thread
 from typing import List, Tuple, Union
 
 import numpy as np
@@ -86,15 +86,15 @@ class Engine:
         self.csv = csv
         self.pbar = None
 
-    def _inference(self, req_queue: Queue, res_queue: Queue, session_id: int,
-                   temperature: float, top_p: float, top_k: int,
-                   stream_output: bool):
+    async def _inference(self, req_queue: Queue, res_queue: Queue,
+                         session_id: int, temperature: float, top_p: float,
+                         top_k: int, stream_output: bool):
         model_inst = self.tm_model.create_instance()
         stats = []
         # get each generated token's latency
         per_token_latency_stats = []
         for prompt, input_seqlen, output_seqlen in iter(
-                req_queue.get, [None, None, None]):
+                req_queue.get_nowait, [None, None, None]):
             _per_token_latency_stats = [0] * (output_seqlen + 1)
             prev = time.perf_counter()
             n_prev_token = 0
@@ -102,7 +102,7 @@ class Engine:
             input_ids = self.tokenizer(prompt).input_ids
             state = DetokenizeState(len(input_ids))
 
-            for outputs in model_inst.stream_infer(
+            async for outputs in model_inst.async_stream_infer(
                     session_id,
                     input_ids=input_ids,
                     gen_config=GenerationConfig(max_new_tokens=output_seqlen,
@@ -123,7 +123,7 @@ class Engine:
                 prev = now
             # for pytorch engine to restart a session
             if isinstance(model_inst, EngineInstance):
-                model_inst.end(session_id)
+                await model_inst.async_end(session_id)
             assert output_seqlen <= n_token <= output_seqlen + 1, \
                 f'Error. session_id({session_id}) request {output_seqlen} ' \
                 f'tokens, but generate {n_token} tokens.\n' \
@@ -139,13 +139,12 @@ class Engine:
             # skip the first token latency
             per_token_latency_stats.append(_per_token_latency_stats[1:])
             self.pbar.update(1)
-        res_queue.put((session_id, stats, per_token_latency_stats))
+        res_queue.put_nowait((session_id, stats, per_token_latency_stats))
 
     def process_request(self, requests, concurrency, temperature, top_p, top_k,
                         stream_output):
         res_queue = Queue()
         req_queue = Queue()
-        threads = []
 
         self.pbar = tqdm(total=len(requests))
 
@@ -157,18 +156,16 @@ class Engine:
 
         start = time.time()
 
-        # start threads
-        for i in range(concurrency):
-            t = Thread(target=self._inference,
-                       args=(req_queue, res_queue, i, temperature, top_p,
-                             top_k, stream_output),
-                       daemon=True)
-            t.start()
-            threads.append(t)
+        event_loop = asyncio.get_event_loop()
 
-        # wait for finish
-        for t in threads:
-            t.join()
+        # start threads
+        tasks = []
+        for i in range(concurrency):
+            task = self._inference(req_queue, res_queue, i, temperature, top_p,
+                                   top_k, stream_output)
+            tasks.append(task)
+
+        event_loop.run_until_complete(asyncio.gather(*tasks))
 
         elapsed_time = time.time() - start
 
@@ -333,7 +330,6 @@ def main():
             block_size=args.cache_block_seq_len,
             max_batch_size=args.concurrency,
             tp=args.tp,
-            thread_safe=True,
             eager_mode=args.eager_mode,
             enable_prefix_caching=args.enable_prefix_caching,
             quant_policy=args.quant_policy,
