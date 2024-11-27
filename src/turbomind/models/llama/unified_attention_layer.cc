@@ -334,8 +334,9 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
             };
             float low, high;
             find_correction_range(param_.beta_fast, param_.beta_slow, low, high);
+            // https://github.com/huggingface/transformers/blob/6c3f168b36882f0beebaa9121eafa1928ba29633/src/transformers/modeling_rope_utils.py#L216
             if (low == high) {
-                high += 0.01f;
+                high += 0.001f;
             }
             params.yarn_ramp_inv_factor_div_2   = 1.0 / (high - low) / 2.0;
             params.yarn_ramp_inv_factor_mul_min = 1.0 / (high - low) * low;

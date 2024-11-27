@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import math
+
 from .base import INPUT_MODELS
 from .llama import LlamaModel, LlamaReader
 
@@ -55,6 +57,23 @@ class DeepSeek2Reader(LlamaReader):
         return (*result, )
 
 
+def get_yarn_attention_factor(rope_scaling: dict):
+
+    scaling_factor = float(rope_scaling['factor'])
+    mscale = rope_scaling['mscale']
+    mscale_all_dim = rope_scaling['mscale_all_dim']
+
+    def yarn_get_mscale(scale=1, mscale=1):
+        if scale <= 1:
+            return 1.0
+        return 0.1 * mscale * math.log(scale) + 1.0
+
+    _mscale = float(
+        yarn_get_mscale(scaling_factor, mscale) /
+        yarn_get_mscale(scaling_factor, mscale_all_dim))
+    return _mscale
+
+
 @INPUT_MODELS.register_module(name='deepseek2')
 class DeepSeek2Model(LlamaModel):
 
@@ -97,4 +116,10 @@ class DeepSeek2Model(LlamaModel):
                     topk_group=cfg['topk_group'],
                     moe_group_num=cfg['n_group'],
                     tune_layer_num=2)
+        rope_scaling = cfg.get('rope_scaling')
+        if rope_scaling and rope_scaling['type'] == 'yarn':
+            info.update(
+                max_position_embeddings=rope_scaling[
+                    'original_max_position_embeddings'],
+                attention_factor=get_yarn_attention_factor(rope_scaling))
         return info

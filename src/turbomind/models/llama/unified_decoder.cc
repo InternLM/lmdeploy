@@ -278,15 +278,6 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
 
     // Wait for `h_cu_q/k_len_` to be consumed
     check_cuda_error(cudaEventSynchronize(ev_h_cu_x_));
-
-    // check_cuda_error(cudaStreamSynchronize(stream_));
-    // if (tp_.rank_ == 0) {
-    //     std::abort();
-    // }
-    // else {
-    //     while (1)
-    //         ;
-    // }
 }
 
 #ifdef ENABLE_FP32
