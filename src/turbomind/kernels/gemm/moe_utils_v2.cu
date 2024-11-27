@@ -515,9 +515,11 @@ __global__ void MoeGateKernel_v8(float*       scales,  // [e,n]
 
     PRAGMA_UNROLL
     for (int i = 0; i < max_tiles * max_expert_num; i += block_dim) {
-        int e                   = (i + threadIdx.x) % max_expert_num;
-        int t                   = (i + threadIdx.x) / max_expert_num;
-        smem.shared_accum[t][e] = 0;
+        int e = (i + threadIdx.x) % max_expert_num;
+        int t = (i + threadIdx.x) / max_expert_num;
+        if (t < max_tiles) {
+            smem.shared_accum[t][e] = 0;
+        }
     }
 
     __syncthreads();
@@ -538,8 +540,6 @@ __global__ void MoeGateKernel_v8(float*       scales,  // [e,n]
             masks[expert_id * token_num_padded + ti2] = idx;
             scales[idx * token_num + ti2]             = scale * routed_scale;
             atomicAdd(&smem.shared_accum[ti2 >> log_tile][expert_id], 1);
-
-            // printf("%d %d %f\n", idx, expert_id, scale);
         }
     }
 
@@ -613,6 +613,17 @@ void invokeMoeGate_V2(int*         f2n,            // [e*n]  -> n
 
     if (experts <= 8) {
         if (experts_per_token <= 2) {
+            // MoeGateKernel_V2<2, 128><<<cdiv(tokens, 128), 128, 0, st>>>(scales,
+            //     (int8_t*)masks,
+            //     accum,
+            //     logits,
+            //     log_tile,
+            //     tiles,
+            //     tokens,
+            //     tokens_padded,
+            //     experts);
+
+            // std::cout << tokens << " " << experts << " " << experts_per_token << " " << tokens_padded << "\n";
             invoke(_Int<8>, _Int<2>, _Int<8>, _Int<4>);
         }
         else {

@@ -58,8 +58,8 @@ class ModelConfig:
     expert_num: List[int] = ()
     expert_inter_size: int = 0
     experts_per_token: int = 0
-    moe_shared_gate: int = False
-    norm_topk_prob: int = False
+    moe_shared_gate: bool = False
+    norm_topk_prob: bool = False
     routed_scale: float = 1.0
     topk_group: int = 1
     topk_method: str = 'greedy'
