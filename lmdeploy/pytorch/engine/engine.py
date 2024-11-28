@@ -661,7 +661,7 @@ class Engine:
 
     def _make_infer_outputs(self, next_token_ids: torch.LongTensor,
                             logits: torch.Tensor, stopped: torch.Tensor,
-                            event: torch.Event):
+                            event: torch.cuda.Event):
         """make infer output."""
 
         def __get_out_token_ids(token: torch.Tensor, msg: SchedulerSequence,
