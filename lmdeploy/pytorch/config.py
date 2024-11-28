@@ -37,8 +37,8 @@ def _update_torch_dtype(config: 'ModelConfig', dtype: str):
         # change to user specified data type if it is not 'auto'
         if dtype == 'auto':
             torch_dtype = torch_dtype if torch_dtype in [
-                torch.float16, torch.bfloat16
-            ] else torch.float16
+                'float16', 'bfloat16'
+            ] else 'float16'
         else:
             torch_dtype = dtype
     config.dtype = eval(f'torch.{torch_dtype}')
@@ -118,7 +118,8 @@ class ModelConfig:
     def from_pretrained(cls,
                         pretrained_model_name_or_path: str,
                         trust_remote_code: bool = True,
-                        dtype: str = 'auto'):
+                        dtype: str = 'auto',
+                        tp: int = 1):
         """Instantiate one of the configuration classes of the library from a
         pretrained model configuration.
 
@@ -138,17 +139,21 @@ class ModelConfig:
                 pretrained_model_name_or_path)
         return cls.from_hf_config(hf_config,
                                   pretrained_model_name_or_path,
-                                  dtype=dtype)
+                                  dtype=dtype,
+                                  tp=tp)
 
     @classmethod
     def from_hf_config(cls,
                        hf_config: Any,
                        model_path: str = None,
-                       dtype: str = 'auto'):
+                       dtype: str = 'auto',
+                       tp: int = 1):
         """from huggingface config."""
         from lmdeploy.pytorch.configurations import AutoModelConfigBuilder
 
-        model_config = AutoModelConfigBuilder.build(hf_config, model_path)
+        model_config = AutoModelConfigBuilder.build(hf_config,
+                                                    model_path,
+                                                    tp=tp)
 
         if model_config.k_head_dim is None:
             assert model_config.head_dim is not None
@@ -156,6 +161,13 @@ class ModelConfig:
         if model_config.v_head_dim is None:
             assert model_config.head_dim is not None
             model_config.v_head_dim = model_config.head_dim
+
+        # check for tp
+        assert model_config.num_attention_heads % tp == 0
+        if model_config.num_key_value_heads >= tp:
+            assert model_config.num_key_value_heads % tp == 0
+        else:
+            assert tp % model_config.num_key_value_heads == 0
 
         # should after setting `hf_config` and `model_arch` attributes
         model_config = _update_torch_dtype(model_config, dtype)

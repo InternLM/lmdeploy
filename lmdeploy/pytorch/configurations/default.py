@@ -12,7 +12,7 @@ class DefaultModelConfigBuilder(AutoModelConfigBuilder):
         return True
 
     @classmethod
-    def build(cls, hf_config, model_path: str = None):
+    def build(cls, hf_config, model_path: str = None, **kwargs):
         """build."""
         head_dim = hf_config.hidden_size // hf_config.num_attention_heads
         num_attention_heads = hf_config.num_attention_heads
@@ -23,6 +23,15 @@ class DefaultModelConfigBuilder(AutoModelConfigBuilder):
         if use_sliding_window:
             sliding_window = getattr(hf_config, 'sliding_window',
                                      sliding_window) or -1
+        tp = kwargs.get('tp', 1)
+        # update num_kv_heads for tp mode
+        if tp > 1 and tp > num_key_value_heads:
+            assert tp % num_key_value_heads == 0
+            n_replicate = tp // num_key_value_heads
+            hf_config.num_replicate_key_value_heads = n_replicate
+            num_key_value_heads = tp
+            hf_config.num_key_value_heads = tp
+
         return ModelConfig(
             hidden_size=hf_config.hidden_size,
             num_layers=hf_config.num_hidden_layers,
