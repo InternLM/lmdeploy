@@ -171,6 +171,7 @@ class Engine:
         self._start_loop()
         self._create_buffers()
         self.engine_instance = self.create_instance()
+        self._output_stream = torch.cuda.Stream()
 
     @classmethod
     def from_pretrained(cls,
@@ -659,7 +660,8 @@ class Engine:
         return ret
 
     def _make_infer_outputs(self, next_token_ids: torch.LongTensor,
-                            logits: torch.Tensor, stopped: torch.Tensor):
+                            logits: torch.Tensor, stopped: torch.Tensor,
+                            event: torch.Event):
         """make infer output."""
 
         def __get_out_token_ids(token: torch.Tensor, msg: SchedulerSequence,
@@ -679,6 +681,11 @@ class Engine:
                 return torch.arange(0, batch_size)
             else:
                 return seq_length.cumsum(0) - seq_length
+
+        with torch.cuda.stream(self._output_stream):
+            event.wait()
+            next_token_ids = next_token_ids.cpu()
+            stopped = stopped.cpu()
 
         running = self._running
         is_run = [seq.status == MessageStatus.RUNNING for seq in running]
@@ -741,6 +748,7 @@ class Engine:
         logger.debug('<ForwardTask>: '
                      f'batch_size={inputs.seq_length.size(0)} '
                      f'num_tokens={inputs.input_ids.size(-1)}')
+        inputs = inputs.to_device('cuda')
         is_decoding = inputs.is_decoding
         if all_ids is not None:
             all_ids = all_ids.cuda()
@@ -771,10 +779,11 @@ class Engine:
                 next_token_ids, sampling_inputs.stop_words, num_appendable_ids)
 
             # send output
-            stopped = stopped.cpu()
-            finish = stopped.all().item() or (idx == loop_count - 1)
+            finish = (idx == loop_count - 1)
             finish = finish or _check_finish(self.scheduler, idx)
-            output = (next_token_ids.cpu(), logits, stopped)
+            event = torch.cuda.Event()
+            event.record()
+            output = (next_token_ids, logits, stopped, event)
             output_que.put_nowait((finish, output))
 
             if finish:
@@ -937,9 +946,9 @@ class Engine:
                 try:
                     if isinstance(out, Exception):
                         raise out
-                    next_token_ids, logits, stopped = out
+                    next_token_ids, logits, stopped, event = out
                     step_outputs = self._make_infer_outputs(
-                        next_token_ids, logits, stopped)
+                        next_token_ids, logits, stopped, event)
                     __send_resps(step_outputs)
                 except Exception as e:
                     raise e
