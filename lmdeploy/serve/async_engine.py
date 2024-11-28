@@ -605,7 +605,6 @@ class AsyncEngine(LogitsMixin):
                 start_ids_offset = state.ids_offset
                 response = ''
                 async for outputs in iterator:
-                    start_frame = self.metrics.insert_frame()
                     is_first_token = state.prev_tokens is None
                     # decode res
                     if is_error(outputs.status):
@@ -626,7 +625,6 @@ class AsyncEngine(LogitsMixin):
                     if outputs.logprobs:
                         log_offset = ids_offset - start_ids_offset
                         logprobs = outputs.logprobs[log_offset:]
-                    self.metrics.update_postprocess(start_frame)
                     if is_first_token:
                         self.metrics.update_FTL(arrival_frame)
                     # response, history token len,

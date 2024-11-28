@@ -2,12 +2,13 @@
 import dataclasses
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 import psutil
 import pynvml
-from prometheus_client import REGISTRY, Gauge, Info, disable_created_metrics
+from prometheus_client import (REGISTRY, Counter, Gauge, Histogram, Info,
+                               disable_created_metrics)
 
 disable_created_metrics()
 
@@ -57,11 +58,11 @@ class Stats:
     request_waiting: int = 0
 
     # latency stats
-    duration_queue: float = 0
-    duration_infer: float = 0
-    duration_preprocess: float = 0
-    duration_postprocess: float = 0
-    first_token_latency: float = 0
+    duration_queue: list = field(default_factory=list)
+    duration_infer: list = field(default_factory=list)
+    duration_preprocess: list = field(default_factory=list)
+    duration_postprocess: list = field(default_factory=list)
+    first_token_latency: list = field(default_factory=list)
 
     # system status
     cpu_utilization: Optional[float] = None
@@ -134,43 +135,38 @@ class Metrics:
             labelnames=labelnames)
 
         # requests
-        self.gauge_request_success = Gauge(
+        self.counter_request_success = Counter(
             name='lmdeploy:request_success',
             documentation='Number of successful requests.',
             labelnames=labelnames)
-        self.gauge_request_failure = Gauge(
+        self.counter_request_failure = Counter(
             name='lmdeploy:request_failure',
             documentation='Number of failed requests.',
             labelnames=labelnames)
-        self.gauge_request_total = Gauge(
+        self.counter_request_total = Counter(
             name='lmdeploy:request_total',
             documentation='Number of total requests.',
             labelnames=labelnames)
 
         # latency metrics
-        self.gauge_duration_queue = Gauge(
-            name='lmdeploy:duration_queue',
+        self.histogram_duration_queue = Histogram(
+            name='lmdeploy:duration_queue_seconds',
             documentation=  # noqa
             'Avarate duration waiting in the queue of requests in s.',
             labelnames=labelnames,
         )
-        self.gauge_duration_infer = Gauge(
-            name='lmdeploy:duration_infer',
+        self.histogram_duration_infer = Histogram(
+            name='lmdeploy:duration_infer_seconds',
             documentation='Average inference time in s.',
             labelnames=labelnames,
         )
-        self.gauge_duration_preprocess = Gauge(
-            name='lmdeploy:duration_preprocess',
+        self.histogram_duration_preprocess = Histogram(
+            name='lmdeploy:duration_preprocess_seconds',
             documentation='Average duration of processing inputs in s.',
             labelnames=labelnames,
         )
-        self.gauge_duration_postprocess = Gauge(
-            name='lmdeploy:duration_postprocess',
-            documentation='Average duration of processing outputs in s.',
-            labelnames=labelnames,
-        )
-        self.gauge_first_token_latency = Gauge(
-            name='lmdeploy:first_token_latency',
+        self.histogram_first_token_latency = Histogram(
+            name='lmdeploy:first_token_latency_seconds',
             documentation='Average first token latency in s.',
             labelnames=labelnames,
         )
@@ -191,16 +187,15 @@ class Metrics:
     def failure_frame(self):
         """log the failaure frame."""
         if self.applied:
-            self.stats.request_failure += 1
-            self.stats.request_total += 1
+            self.counter_request_failure.inc()
+            self.counter_request_total.inc()
 
     def last_token_frame(self, iterator):
         """log the last token frame."""
         if self.applied:
-            self.stats.duration_infer += iterator.get_duration()
-            self.stats.request_success += 1
-            self.stats.request_total += 1
-            self.log()
+            self.histogram_duration_infer.observe(iterator.get_duration())
+            self.counter_request_success.inc()
+            self.counter_request_total.inc()
 
     def insert_frame(self):
         """Insert a frame."""
@@ -208,46 +203,19 @@ class Metrics:
             return time.time()
         return None
 
-    def update_postprocess(self, start_frame):
-        """Update postprocess duration."""
-        if self.applied:
-            self.stats.duration_postprocess += time.time() - start_frame
-
     def update_preprocess(self, start_frame):
         """Update preprocess duration."""
         if self.applied:
-            self.stats.duration_preprocess += time.time() - start_frame
+            self.histogram_duration_preprocess.observe(time.time() -
+                                                       start_frame)
 
     def update_queue_waiting(self, start_frame):
         """Update queue waiting time."""
         if self.applied:
-            self.stats.duration_queue += time.time() - start_frame
+            self.histogram_duration_queue.observe(time.time() - start_frame)
 
     def update_FTL(self, start_frame):
         """Update first token latency."""
         if self.applied:
-            self.stats.first_token_latency += time.time() - start_frame
-
-    def log(self) -> None:
-        """Called by LLMEngine.
-
-        Logs to prometheus and tracked stats every iteration. Logs to Stdout
-        every self.local_interval seconds.
-        """
-        stats = self.stats
-        # Add to request counters.
-        self.gauge_request_total.set(stats.request_total)
-        self.gauge_request_success.set(stats.request_success)
-        self.gauge_request_failure.set(stats.request_failure)
-
-        # duration gauges
-        self.gauge_duration_infer.set(stats.duration_infer /
-                                      stats.request_total)
-        self.gauge_duration_queue.set(stats.duration_queue /
-                                      stats.request_total)
-        self.gauge_duration_preprocess.set(stats.duration_preprocess /
-                                           stats.request_total)
-        self.gauge_duration_postprocess.set(stats.duration_postprocess /
-                                            stats.request_total)
-        self.gauge_first_token_latency.set(stats.first_token_latency /
-                                           stats.request_total)
+            self.histogram_first_token_latency.observe(time.time() -
+                                                       start_frame)
