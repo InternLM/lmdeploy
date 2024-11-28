@@ -2,7 +2,7 @@
 import dataclasses
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 import psutil
@@ -48,22 +48,7 @@ class IterTimer:
 
 @dataclass
 class Stats:
-    """Created by LLMEngine for use by StatLogger."""
-
-    # request stats
-    request_success: int = 0
-    request_failure: int = 0
-    request_total: int = 0
-    request_responding: int = 0
-    request_waiting: int = 0
-
-    # latency stats
-    duration_queue: list = field(default_factory=list)
-    duration_infer: list = field(default_factory=list)
-    duration_preprocess: list = field(default_factory=list)
-    duration_postprocess: list = field(default_factory=list)
-    first_token_latency: list = field(default_factory=list)
-
+    """Log system information."""
     # system status
     cpu_utilization: Optional[float] = None
     cpu_memory_used_bytes: Optional[float] = None
