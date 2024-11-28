@@ -1,14 +1,17 @@
 
-#include "src/turbomind/models/llama/unified_decoder.h"
+
+#include <cuda_runtime.h>
+
+#include "src/turbomind/kernels/norm/rms_norm.h"
 #include "src/turbomind/models/llama/llama_decoder_kernels.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/llama/moe_ffn_layer.h"
 #include "src/turbomind/models/llama/unified_attention_layer.h"
+#include "src/turbomind/models/llama/unified_decoder.h"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/cuda_utils.h"
-#include <cuda_runtime.h>
 
 namespace turbomind {
 
@@ -144,19 +147,25 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
 
     const int pf_offset = dc_batch_size;
 
+    const bool flag = false && !isTuning();
+
     // Compare(decoder_input_output, token_num * hidden_units_, "decoder_input", kCmpRead, stream_);
 
     // printf("%d %f\n", (int)token_num, rmsnorm_eps_);
 
+    if (flag) {
+        Compare(decoder_input_output, token_num * hidden_units_, "norm0", kCmpRead, stream_);
+    }
+
     /////////////////////////////////////////////
     /// RMSNorm
-    invokeRootMeanSquareNorm(decoder_output,
-                             decoder_input_output,
-                             weights->at(0)->self_attn_norm_weights,
-                             rmsnorm_eps_,
-                             token_num,
-                             hidden_units_,
-                             stream_);
+    invokeRMSNorm(decoder_output,
+                  decoder_input_output,
+                  weights->at(0)->self_attn_norm_weights,
+                  hidden_units_,
+                  token_num,
+                  rmsnorm_eps_,
+                  stream_);
     sync_check_cuda_error();
 
     count_and_fix(decoder_output, token_num * hidden_units_, Concat("norm0", 0), 2);
@@ -168,7 +177,9 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
             continue;
         }
 
-        // Compare(decoder_output, token_num * hidden_units_, "attn_input", kCmpRead, stream_);
+        if (flag) {
+            Compare(decoder_output, token_num * hidden_units_, "attn_input", kCmpRead, stream_);
+        }
 
         /////////////////////////////////////////////
         /// self-attention
@@ -182,15 +193,25 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
 
         count_and_fix(decoder_output, token_num * hidden_units_, Concat("attn_block", layer), 2);
 
-        invokeFusedAddBiasResidualRMSNorm(decoder_input_output,
-                                          decoder_output,
-                                          weights->at(layer)->self_attn_weights.output.bias,
-                                          weights->at(layer)->ffn_norm_weights,
-                                          rmsnorm_eps_,
-                                          token_num,
-                                          hidden_units_,
-                                          stream_);
+        if (flag) {
+            Compare(decoder_input_output, token_num * hidden_units_, "res0", kCmpRead, stream_);
+            Compare(decoder_output, token_num * hidden_units_, "attn_out", kCmpRead, stream_);
+        }
+
+        invokeBiasResidualRMSNorm(decoder_input_output,
+                                  decoder_output,
+                                  weights->at(layer)->ffn_norm_weights,
+                                  weights->at(layer)->self_attn_weights.output.bias,
+                                  hidden_units_,
+                                  token_num,
+                                  rmsnorm_eps_,
+                                  stream_);
         sync_check_cuda_error();
+
+        if (flag) {
+            Compare(decoder_input_output, token_num * hidden_units_, "res1", kCmpRead, stream_);
+            Compare(decoder_output, token_num * hidden_units_, "ffn_in", kCmpRead, stream_);
+        }
 
         count_and_fix(decoder_input_output, token_num * hidden_units_, Concat("residual0", layer), 2);
         count_and_fix(decoder_output, token_num * hidden_units_, Concat("norm1", layer), 2);
@@ -228,6 +249,10 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
             moe_ffn_layer_->reduce(decoder_output, token_num, (bool)ffn_layer_, layer, weights->at(layer)->moe_weights);
         }
 
+        if (flag) {
+            Compare(decoder_output, token_num * hidden_units_, "ffn_out", kCmpRead, stream_);
+        }
+
         // if (tp_.rank_ == 0) {
         //     Compare(decoder_output, token_num * hidden_units_, Concat("moe_ffn_out", layer), compare_mode, stream_);
         // }
@@ -250,6 +275,11 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
 
         count_and_fix(decoder_input_output, token_num * hidden_units_, Concat("residual1", layer), 2);
         count_and_fix(decoder_output, token_num * hidden_units_, Concat("norm0", layer + 1), 2);
+
+        if (flag) {
+            cudaStreamSynchronize(stream_);
+            std::abort();
+        }
     }
 
     if (dc_batch_size) {

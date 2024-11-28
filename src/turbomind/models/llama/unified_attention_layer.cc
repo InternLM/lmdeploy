@@ -300,8 +300,15 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         params.num_heads     = local_head_num_;
         params.num_kv_heads  = local_kv_head_num_;
         params.size_per_head = size_per_head_;
+
         // MSVC does not have M_LOG2E
-        params.inv_sqrt_dh = (float)std::log2(expf(1.)) / std::sqrt((float)params.size_per_head);
+        params.inv_sqrt_dh = (float)std::log2(expf(1.));
+        if (param_.softmax_scale) {  // model predefined softmax scale
+            params.inv_sqrt_dh *= param_.softmax_scale;
+        }
+        else {  // default value
+            params.inv_sqrt_dh /= std::sqrt((float)params.size_per_head);
+        }
 
         params.rotary_embedding_dim    = param_.rotary_embedding_dim;
         params.rotary_embedding_base   = param_.rotary_embedding_base;
@@ -421,6 +428,24 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
 
     count_and_fix(qkv_buf_3_, token_num * weights->output.input_dims, Concat("attn", layer_id), 3);
 
+#if 0
+    if (!isTuning()) {
+        T* o{};
+        cudaMallocAsync(&o, sizeof(T) * token_num * head_num_ * size_per_head_, stream_);
+        cudaMemsetAsync(o, 0, sizeof(T) * token_num * head_num_ * size_per_head_, stream_);
+        auto dst = o;
+        auto src = qkv_buf_3_;
+        for (int i = 0; i < token_num; ++i) {
+            for (int j = 0; j < head_num_; ++j) {
+                cudaMemcpyAsync(dst, src, sizeof(T) * 128, cudaMemcpyDefault, stream_);
+                src += 192;
+                dst += 128;
+            }
+        }
+        Compare(o, token_num * head_num_ * 128, "attn", kCmpRead, stream_);
+    }
+#endif
+
     //////////////////////////////////////////////
     /// output gemm <Bs,HD> -> <Bs,HD>
     linear_->forward(attention_out, qkv_buf_3_, token_num, weights->output, LlamaLinear<T>::kGemm, lora_mask);
@@ -458,7 +483,7 @@ void UnifiedAttentionLayer<T>::forward_mla(const T* inputs, int token_num, const
 
     T* q{};
 
-    if (w.q_proj.output_dims) {
+    if (w.q_proj.kernel) {
         deviceMalloc((T**)&q, (size_t)token_num * w.q_proj.output_dims, stream_);
         linear_->forward(q, inputs, token_num, w.q_proj);
         sync_check_cuda_error();

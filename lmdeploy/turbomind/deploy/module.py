@@ -245,14 +245,6 @@ class MLA(Module):
             q_b = q
 
         cfg = self.model.model_config
-        qk_nope_dim = cfg.size_per_head - cfg.qk_rope_dim
-
-        q_b = q_b.reshape(-1, cfg.size_per_head)
-
-        # [nope_dim | rope_dim] -> [rope_dim | nope_dim]
-        q_nope, q_pe = torch.split(q_b, (qk_nope_dim, cfg.qk_rope_dim), dim=-1)
-        q_b = torch.cat((q_pe, q_nope),
-                        dim=-1).view(-1, cfg.head_num * cfg.size_per_head)
 
         o = o.reshape(cfg.head_num, cfg.v_head_dim, -1)
         o = torch.nn.functional.pad(

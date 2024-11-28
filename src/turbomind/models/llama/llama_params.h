@@ -63,6 +63,7 @@ struct AttentionParam {
     int         rotary_embedding_dim;
     float       rotary_embedding_base;
     int         max_position_embeddings;
+    float       softmax_scale;
     std::string rope_scaling_type;
     int         original_max_position_embeddings;
     float       rope_scaling_factor;

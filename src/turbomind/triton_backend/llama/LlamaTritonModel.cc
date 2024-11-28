@@ -279,6 +279,7 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     // rotary embedding parameters
     attn_param_.rotary_embedding_dim    = attention_reader["rotary_embedding"].as<int>();
     attn_param_.rotary_embedding_base   = attention_reader["rope_theta"].as<float>(10000.0f);
+    attn_param_.softmax_scale           = attention_reader["softmax_scale"].as<float>(0);
     attn_param_.attention_factor        = attention_reader["attention_factor"].as<float>(-1.f);
     attn_param_.beta_fast               = attention_reader["beta_fast"].as<float>(32.f);
     attn_param_.beta_slow               = attention_reader["beta_slow"].as<float>(1.f);

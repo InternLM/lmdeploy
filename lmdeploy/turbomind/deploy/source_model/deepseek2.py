@@ -57,7 +57,7 @@ class DeepSeek2Reader(LlamaReader):
         return (*result, )
 
 
-def get_yarn_attention_factor(rope_scaling: dict):
+def get_yarn_params(rope_scaling: dict):
 
     scaling_factor = float(rope_scaling['factor'])
     mscale = rope_scaling['mscale']
@@ -71,7 +71,13 @@ def get_yarn_attention_factor(rope_scaling: dict):
     _mscale = float(
         yarn_get_mscale(scaling_factor, mscale) /
         yarn_get_mscale(scaling_factor, mscale_all_dim))
-    return _mscale
+
+    softmax_scale = 0
+    if mscale_all_dim:
+        scale = yarn_get_mscale(scaling_factor, mscale_all_dim)
+        softmax_scale = scale * scale
+
+    return _mscale, softmax_scale
 
 
 @INPUT_MODELS.register_module(name='deepseek2')
@@ -100,11 +106,12 @@ class DeepSeek2Model(LlamaModel):
         inter_size = [n_shared_experts * expert_inter_size] * num_layer
         inter_size[0] = cfg['intermediate_size']
         norm_topk_prob = cfg['norm_topk_prob']
+        size_per_head = qk_rope_dim + qk_nope_dim
         info.update(kv_lora_rank=cfg['kv_lora_rank'],
                     q_lora_rank=cfg['q_lora_rank'] or 0,
                     qk_rope_dim=qk_rope_dim,
                     v_head_dim=cfg['v_head_dim'],
-                    size_per_head=qk_rope_dim + qk_nope_dim,
+                    size_per_head=size_per_head,
                     rotary_embedding=qk_rope_dim,
                     expert_num=expert_num,
                     expert_inter_size=expert_inter_size,
@@ -118,8 +125,10 @@ class DeepSeek2Model(LlamaModel):
                     tune_layer_num=2)
         rope_scaling = cfg.get('rope_scaling')
         if rope_scaling and rope_scaling['type'] == 'yarn':
-            info.update(
-                max_position_embeddings=rope_scaling[
-                    'original_max_position_embeddings'],
-                attention_factor=get_yarn_attention_factor(rope_scaling))
+            attention_factor, softmax_scale = get_yarn_params(rope_scaling)
+            softmax_scale *= size_per_head**(-0.5)
+            info.update(max_position_embeddings=rope_scaling[
+                'original_max_position_embeddings'],
+                        attention_factor=attention_factor,
+                        softmax_scale=softmax_scale)
         return info

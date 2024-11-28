@@ -84,6 +84,7 @@ class ModelConfig:
 class AttentionConfig:
     rotary_embedding: int = 128
     rope_theta: float = 10000.0
+    softmax_scale: float = 0
     attention_factor: float = None
     max_position_embeddings: int = 0
     original_max_position_embeddings: int = 0

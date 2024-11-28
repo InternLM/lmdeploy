@@ -65,14 +65,23 @@ void CmpRead(T* ptr, size_t size, std::string key, cudaStream_t stream)
     check_cuda_error(cudaMemcpyAsync(h_b.data(), ptr, sizeof(T) * size, cudaMemcpyDefault, stream));
     check_cuda_error(cudaStreamSynchronize(stream));
 
-    using Tacc = std::conditional_t<std::is_integral_v<T>, int64_t, float>;
+    using Tacc         = std::conditional_t<std::is_integral_v<T>, int64_t, float>;
+    constexpr Tacc eps = std::is_integral_v<T> ? 1 : 1e-8f;
 
     Tacc asum{};
+    Tacc rsum{};
+    Tacc amean{};
     for (size_t i = 0; i < size; ++i) {
-        asum += std::abs((Tacc)h_a[i] - (Tacc)h_b[i]);
+        Tacc x        = (Tacc)h_b[i];
+        Tacc r        = (Tacc)h_a[i];
+        Tacc abs_diff = std::abs(x - r);
+        Tacc rel_diff = abs_diff / std::max(std::max(std::abs(r), std::abs(x)), eps);
+        asum += abs_diff;
+        rsum += rel_diff;
+        amean += std::abs(r);
     }
 
-    std::cerr << key << ": " << asum << " " << asum / size << "\n";
+    std::cerr << key << ": " << amean / size << " " << asum << " " << asum / size << " " << rsum / size << "\n";
 
     check_cuda_error(cudaMemcpyAsync(ptr, h_a.data(), sizeof(T) * h_a.size(), cudaMemcpyDefault, stream));
     check_cuda_error(cudaStreamSynchronize(stream));

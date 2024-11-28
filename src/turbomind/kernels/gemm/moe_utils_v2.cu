@@ -733,6 +733,7 @@ __global__ void MoeReduceKernel(T*           dst,         // [  n, d]
     }
 
     for (int i = threadIdx.x; i < dims; i += block_dim) {
+#if 1
         Array<float, vec_size> accum{};
         if (dst_scale) {
             Vec v;
@@ -749,6 +750,24 @@ __global__ void MoeReduceKernel(T*           dst,         // [  n, d]
             accum        = accum + x;
         }
         Store(dst_ptr[i].data(), cast<T>(accum));
+#else
+        Array<T, vec_size> accum{};
+        if (dst_scale) {
+            Vec v;
+            Ldg(v, dst_ptr[i].data());
+            using namespace ops;
+            accum = v * (T)dst_scale;
+        }
+        PRAGMA_UNROLL
+        for (int e = 0; e < exp_k; ++e) {
+            Vec v;
+            Ldg(v, src_ptr[e][i].data());
+            using namespace ops;
+            const auto x = v * (T)scale[e];
+            accum        = accum + x;
+        }
+        Store(dst_ptr[i].data(), accum);
+#endif
     }
 }
 
