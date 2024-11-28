@@ -156,7 +156,8 @@ class Engine:
 
         start = time.time()
 
-        event_loop = asyncio.get_event_loop()
+        event_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(event_loop)
 
         # start threads
         tasks = []
@@ -165,7 +166,10 @@ class Engine:
                                    top_k, stream_output)
             tasks.append(task)
 
-        event_loop.run_until_complete(asyncio.gather(*tasks))
+        async def _gather_tasks(tasks):
+            return await asyncio.gather(*tasks)
+
+        event_loop.run_until_complete(_gather_tasks(tasks))
 
         elapsed_time = time.time() - start
 
