@@ -428,24 +428,6 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
 
     count_and_fix(qkv_buf_3_, token_num * weights->output.input_dims, Concat("attn", layer_id), 3);
 
-#if 0
-    if (!isTuning()) {
-        T* o{};
-        cudaMallocAsync(&o, sizeof(T) * token_num * head_num_ * size_per_head_, stream_);
-        cudaMemsetAsync(o, 0, sizeof(T) * token_num * head_num_ * size_per_head_, stream_);
-        auto dst = o;
-        auto src = qkv_buf_3_;
-        for (int i = 0; i < token_num; ++i) {
-            for (int j = 0; j < head_num_; ++j) {
-                cudaMemcpyAsync(dst, src, sizeof(T) * 128, cudaMemcpyDefault, stream_);
-                src += 192;
-                dst += 128;
-            }
-        }
-        Compare(o, token_num * head_num_ * 128, "attn", kCmpRead, stream_);
-    }
-#endif
-
     //////////////////////////////////////////////
     /// output gemm <Bs,HD> -> <Bs,HD>
     linear_->forward(attention_out, qkv_buf_3_, token_num, weights->output, LlamaLinear<T>::kGemm, lora_mask);
