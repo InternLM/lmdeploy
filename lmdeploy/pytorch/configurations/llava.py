@@ -13,7 +13,7 @@ class LlavaModelConfigBuilder(AutoModelConfigBuilder):
         ]
 
     @classmethod
-    def build(cls, hf_config, model_path: str = None):
+    def build(cls, hf_config, model_path: str = None, **kwargs):
         """build."""
         arch = hf_config.architectures[0]
         if arch in ['LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM']:
@@ -22,5 +22,5 @@ class LlavaModelConfigBuilder(AutoModelConfigBuilder):
             # reload hf_config due to model_type='llava' is already
             # registered in transformers
             hf_config = LlavaConfig.from_pretrained(model_path)
-        cfg = DefaultModelConfigBuilder.build(hf_config)
+        cfg = DefaultModelConfigBuilder.build(hf_config, model_path, **kwargs)
         return cfg
