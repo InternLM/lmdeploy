@@ -52,7 +52,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
     template<class... Args>
     __device__ void operator()(Args&&... args)
     {
-        Run(Sm80_CpAsync<Stages>{}, ((Args &&) args)...);
+        Run(Sm80_CpAsync<Stages>{}, std::integral_constant<int, Impl::kHeadDim>{}, ((Args &&) args)...);
     }
 
     template<int Idx, class A, class B>
@@ -81,8 +81,9 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
         }
     }
 
-    template<class CacheIter, class StoreS, int Stages_>
+    template<int head_dim, class CacheIter, class StoreS, int Stages_>
     __device__ void Run(Sm80_CpAsync<Stages_>,
+                        std::integral_constant<int, head_dim>,
                         FragQ&         frag_Q,
                         CacheIter&     cache_iter,
                         FragO&         frag_O,
@@ -199,9 +200,10 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
         __pipeline_wait_prior(0);
     }
 
-#if 0
+    // #if 1
     template<class CacheIter, class StoreS>
     __device__ void Run(Sm80_CpAsync<2>,
+                        std::integral_constant<int, 192>,
                         FragQ&         frag_Q,
                         CacheIter&     cache_iter,
                         FragO&         frag_O,
@@ -234,7 +236,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
         Wait();
         state_QK.Load(0, 0);
 
-        constexpr auto _ = [](int){};
+        constexpr auto _ = [](int) {};
 
         auto loop = [&](auto is_residue, auto is_mask) {
             const int offset_K = tile_iter * CTA_S;
@@ -292,14 +294,15 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
         __pipeline_wait_prior(0);
     }
 
-#elif 1
+    // #elif 1
     // Load      : K0,K1 | V0,K2,V1,K3 ...
     // Compute   :    K0 | K1,V0,K2,V1 ...
     // - more register consumption
     // - more interleaved HMMA and FMA
     // - slight performance gain
-    template<class CacheIter, class StoreS>
+    template<int head_dim, class CacheIter, class StoreS>
     __device__ void Run(Sm80_CpAsync<2>,
+                        std::integral_constant<int, head_dim>,
                         FragQ&         frag_Q,
                         CacheIter&     cache_iter_,
                         FragO&         frag_O,
@@ -407,7 +410,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
         __pipeline_commit();
         __pipeline_wait_prior(0);
     }
-#endif
+    // #endif
 
     __device__ void Wait()
     {

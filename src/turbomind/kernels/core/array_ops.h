@@ -172,7 +172,7 @@ inline __device__ void copy(const Array<T, N> (&src)[M], Array<T, N> (&dst)[M])
 }
 
 template<typename T, int N>
-inline __device__ void Store(T* __restrict__ dst, const Array<T, N>& src)
+inline __device__ void Store(T* dst, const Array<T, N>& src)
 {
     if constexpr (sizeof(Array<T, N>) == sizeof(uint4)) {
         *(uint4*)dst = (const uint4&)src;

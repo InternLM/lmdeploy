@@ -27,21 +27,20 @@
 namespace turbomind {
 
 template<typename T>
-void LlamaFfnLayer<T>::allocateBuffer(size_t                     token_num,
-                                      int                        inter_size,
-                                      const LlamaDenseWeight<T>* gating,
-                                      const LlamaDenseWeight<T>* inter)
+void LlamaFfnLayer<T>::allocateBuffer(
+    size_t token_num, int inter_size, size_t inter_buf_factor, size_t gating_lora_r, size_t inter_lora_r)
 {
     const size_t sz = token_num * inter_size;
 
-    const size_t sz_gate  = token_num * gating->lora.r;
-    const size_t sz_inter = token_num * inter->lora.r;
+    const size_t sz_gate  = token_num * gating_lora_r;
+    const size_t sz_inter = token_num * inter_lora_r;
 
-    gating_buf_ = (T*)allocator_->reMalloc(gating_buf_, sizeof(T) * (sz * 2 + sz_gate + sz_inter), false);
-    inter_buf_  = gating_buf_ + sz;
+    gating_buf_ =
+        (T*)allocator_->reMalloc(gating_buf_, sizeof(T) * (sz * inter_buf_factor + sz_gate + sz_inter), false);
+    inter_buf_ = gating_buf_ + sz;
 
     // gate & inter is not fused when lora is enabled
-    if (gating->lora.r) {
+    if (gating_lora_r) {
         inter_buf_ += sz_gate;
     }
 
@@ -93,11 +92,15 @@ void LlamaFfnLayer<T>::forward(TensorMap*               output_tensors,
     const int    layer_id   = input_tensors->getVal<int>("layer_id");
     const int    inter_size = weights->inter_size;
 
-    allocateBuffer(token_num, inter_size, &weights->gating, &weights->intermediate);
+    const bool is_fused_silu = weights->fused_gating_intermediate.kernel && weights->is_fused_silu;
+
+    allocateBuffer(token_num, inter_size, is_fused_silu ? 1 : 2, weights->gating.lora.r, weights->intermediate.lora.r);
 
     const T* ffn_input_data  = input_tensors->at("ffn_input").getPtr<T>();
     T*       ffn_output_data = output_tensors->at("ffn_output").getPtr<T>();
     int*     lora_mask = input_tensors->at("lora_mask", Tensor{MEMORY_GPU, TYPE_INVALID, {}, nullptr}).getPtr<int>();
+
+    const bool all_reduce = input_tensors->getVal<bool>("all_reduce", false);
 
     if (weights->fused_gating_intermediate.kernel) {
         NvtxScope scope("fused_silu_ffn");
@@ -145,7 +148,8 @@ void LlamaFfnLayer<T>::forward(TensorMap*               output_tensors,
 
     count_and_fix(ffn_output_data, token_num * weights->output.output_dims, Concat("w2", layer_id), 3);
 
-    if (all_reduce_ && tensor_para_.world_size_ > 1) {
+    if (all_reduce && tensor_para_.world_size_ > 1) {
+        // std::cout << "ffn all reduce " << layer_id << "\n";
         NcclGuard nccl_guard(tensor_para_, stream_);
         ftNcclAllReduceSum(ffn_output_data, ffn_output_data, token_num * hidden_units_, tensor_para_, stream_);
         sync_check_cuda_error();
