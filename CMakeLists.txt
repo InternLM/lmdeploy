@@ -304,7 +304,7 @@ link_directories(
 
 # add_subdirectory(3rdparty)
 add_subdirectory(src)
-add_subdirectory(examples)
+# add_subdirectory(examples)
 
 if(BUILD_TEST)
     add_subdirectory(tests/csrc)
