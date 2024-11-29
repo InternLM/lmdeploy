@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import os
 from typing import Optional
 
 import torch
@@ -10,6 +11,14 @@ from ..linear import LinearBuilder, LinearImpl
 
 class DlinferLinearImpl(LinearImpl):
     """Dlinfer linear implementation api."""
+
+    def update_weights(self,
+                       weight: torch.Tensor,
+                       bias: Optional[torch.Tensor] = None):
+        """update weights."""
+        if os.getenv('TORCH_MACA_NN_LAYOUT', 'False').lower() == 'true':
+            weight = weight.data.t().contiguous()
+        return weight, bias
 
     def forward(self,
                 x,
