@@ -16,7 +16,7 @@ class DlinferLinearImpl(LinearImpl):
                        weight: torch.Tensor,
                        bias: Optional[torch.Tensor] = None):
         """update weights."""
-        if os.getenv('TORCH_MACA_NN_LAYOUT', 'False').lower() == 'true':
+        if os.getenv('DLINER_LINEAR_USE_NN_LAYOUT', '0') == '1':
             weight = weight.data.t().contiguous()
         return weight, bias
 
