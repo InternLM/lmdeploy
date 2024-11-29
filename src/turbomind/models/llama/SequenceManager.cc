@@ -403,7 +403,8 @@ auto SequenceManager::Materialize(Sequences                    sequences,
             if (!sequences[i]->prompt.empty() && sequences[i]->blocks.empty()) {
                 auto& seq = const_cast<Sequence&>(*sequences[i]);
                 block_trie_->match(seq);
-                seq.cache_len = seq.blocks.size() * block_seq_len_;
+                seq.cache_len        = seq.blocks.size() * block_seq_len_;
+                seq.prefix_cache_len = seq.cache_len;
             }
         }
     }
