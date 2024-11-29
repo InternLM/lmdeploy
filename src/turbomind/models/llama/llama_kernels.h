@@ -154,7 +154,7 @@ template<typename T>
 struct TempBuffer {
     TempBuffer(size_t size)
     {
-        deviceMalloc(&data, size, false);
+        cudaMalloc(&data, size);
     }
     T* data;
 };

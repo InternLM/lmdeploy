@@ -26,77 +26,71 @@
 namespace turbomind {
 
 template<typename T>
-void deviceMalloc(T** ptr, size_t size, bool is_random_initialize)
+void deviceMalloc(T** ptr, size_t size, cudaStream_t st, bool is_random_initialize)
 {
-    FT_CHECK_WITH_INFO(size >= ((size_t)0), "Ask deviceMalloc size " + std::to_string(size) + "< 0 is invalid.");
-    check_cuda_error(cudaMalloc((void**)(ptr), sizeof(T) * size));
+    check_cuda_error(cudaMallocAsync((void**)(ptr), sizeof(T) * size, st));
     if (is_random_initialize) {
-        cudaRandomUniform(*ptr, size);
+        cudaRandomUniform(*ptr, size, st);
     }
 }
 
-template void deviceMalloc(float** ptr, size_t size, bool is_random_initialize);
-template void deviceMalloc(half** ptr, size_t size, bool is_random_initialize);
+template void deviceMalloc(float** ptr, size_t size, cudaStream_t, bool is_random_initialize);
+template void deviceMalloc(half** ptr, size_t size, cudaStream_t, bool is_random_initialize);
 #ifdef ENABLE_BF16
-template void deviceMalloc(__nv_bfloat16** ptr, size_t size, bool is_random_initialize);
+template void deviceMalloc(__nv_bfloat16** ptr, size_t size, cudaStream_t, bool is_random_initialize);
 #endif
-template void deviceMalloc(uint16_t** ptr, size_t size, bool is_random_initialize);
-template void deviceMalloc(int** ptr, size_t size, bool is_random_initialize);
-template void deviceMalloc(bool** ptr, size_t size, bool is_random_initialize);
-template void deviceMalloc(char** ptr, size_t size, bool is_random_initialize);
-template void deviceMalloc(int8_t** ptr, size_t size, bool is_random_initialize);
+template void deviceMalloc(uint16_t** ptr, size_t size, cudaStream_t, bool is_random_initialize);
+template void deviceMalloc(int** ptr, size_t size, cudaStream_t, bool is_random_initialize);
+template void deviceMalloc(bool** ptr, size_t size, cudaStream_t, bool is_random_initialize);
+template void deviceMalloc(char** ptr, size_t size, cudaStream_t, bool is_random_initialize);
+template void deviceMalloc(int8_t** ptr, size_t size, cudaStream_t, bool is_random_initialize);
 #ifdef ENABLE_FP8
-template void deviceMalloc(__nv_fp8_e4m3** ptr, size_t size, bool is_random_initialize);
+template void deviceMalloc(__nv_fp8_e4m3** ptr, size_t size, cudaStream_t, bool is_random_initialize);
 #endif
 
 template<typename T>
-void deviceMemSetZero(T* ptr, size_t size)
-{
-    check_cuda_error(cudaMemset(static_cast<void*>(ptr), 0, sizeof(T) * size));
-}
-
-template void deviceMemSetZero(float* ptr, size_t size);
-template void deviceMemSetZero(half* ptr, size_t size);
-template void deviceMemSetZero(int* ptr, size_t size);
-template void deviceMemSetZero(uint32_t* ptr, size_t size);
-template void deviceMemSetZero(bool* ptr, size_t size);
-#ifdef ENABLE_FP8
-template void deviceMemSetZero(__nv_fp8_e4m3* ptr, size_t size);
-#endif
-#ifdef ENABLE_BF16
-template void deviceMemSetZero(__nv_bfloat16* ptr, size_t size);
-#endif
-
-template<typename T>
-void deviceFree(T*& ptr)
+void deviceFree(T*& ptr, cudaStream_t st)
 {
     if (ptr != NULL) {
-        check_cuda_error(cudaFree(ptr));
+        check_cuda_error(cudaFreeAsync(ptr, st));
         ptr = NULL;
     }
 }
 
-template void deviceFree(float*& ptr);
-template void deviceFree(half*& ptr);
+template void deviceFree(float*& ptr, cudaStream_t);
+template void deviceFree(half*& ptr, cudaStream_t);
 #ifdef ENABLE_BF16
-template void deviceFree(__nv_bfloat16*& ptr);
+template void deviceFree(__nv_bfloat16*& ptr, cudaStream_t);
 #endif
-template void deviceFree(unsigned short*& ptr);
-template void deviceFree(int*& ptr);
-template void deviceFree(bool*& ptr);
-template void deviceFree(char*& ptr);
-template void deviceFree(int8_t*& ptr);
+template void deviceFree(unsigned short*& ptr, cudaStream_t);
+template void deviceFree(int*& ptr, cudaStream_t);
+template void deviceFree(bool*& ptr, cudaStream_t);
+template void deviceFree(char*& ptr, cudaStream_t);
+template void deviceFree(int8_t*& ptr, cudaStream_t);
+template void deviceFree(void*& ptr, cudaStream_t);
 #ifdef ENABLE_FP8
-template void deviceFree(__nv_fp8_e4m3*& ptr);
+template void deviceFree(__nv_fp8_e4m3*& ptr, cudaStream_t);
 #endif
+
+namespace {
+
+template<class T>
+__global__ void fill_kernel(T* devptr, size_t size, T value)
+{
+    const int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    for (size_t i = idx; i < size; i += blockDim.x * gridDim.x) {
+        devptr[i] = value;
+    }
+}
+
+}  // namespace
 
 template<typename T>
 void deviceFill(T* devptr, size_t size, T value, cudaStream_t stream)
 {
-    T* arr = new T[size];
-    std::fill(arr, arr + size, value);
-    check_cuda_error(cudaMemcpyAsync(devptr, arr, sizeof(T) * size, cudaMemcpyHostToDevice, stream));
-    delete[] arr;
+    constexpr int threads = 512;
+    const int     blocks  = (size + threads - 1) / threads;
+    fill_kernel<<<blocks, threads, 0, stream>>>(devptr, size, value);
 }
 
 template void deviceFill(float* devptr, size_t size, float value, cudaStream_t stream);
@@ -280,23 +274,23 @@ __global__ void cuda_random_uniform_kernel<char>(char* buffer, const size_t size
 }
 
 template<typename T>
-void cudaRandomUniform(T* buffer, const size_t size)
+void cudaRandomUniform(T* buffer, const size_t size, cudaStream_t st)
 {
     static int seq_offset = 0;
-    cuda_random_uniform_kernel<T><<<256, 256>>>(buffer, size, seq_offset);
+    cuda_random_uniform_kernel<T><<<256, 256, 0, st>>>(buffer, size, seq_offset);
     seq_offset += 256 * 256;
 }
 
-template void cudaRandomUniform(float* buffer, const size_t size);
-template void cudaRandomUniform(half* buffer, const size_t size);
+template void cudaRandomUniform(float* buffer, const size_t size, cudaStream_t);
+template void cudaRandomUniform(half* buffer, const size_t size, cudaStream_t);
 #ifdef ENABLE_BF16
-template void cudaRandomUniform(__nv_bfloat16* buffer, const size_t size);
+template void cudaRandomUniform(__nv_bfloat16* buffer, const size_t size, cudaStream_t);
 #endif
-template void cudaRandomUniform(int* buffer, const size_t size);
-template void cudaRandomUniform(bool* buffer, const size_t size);
-template void cudaRandomUniform(char* buffer, const size_t size);
+template void cudaRandomUniform(int* buffer, const size_t size, cudaStream_t);
+template void cudaRandomUniform(bool* buffer, const size_t size, cudaStream_t);
+template void cudaRandomUniform(char* buffer, const size_t size, cudaStream_t);
 #ifdef ENABLE_FP8
-template void cudaRandomUniform(__nv_fp8_e4m3* buffer, const size_t size);
+template void cudaRandomUniform(__nv_fp8_e4m3* buffer, const size_t size, cudaStream_t);
 #endif
 
 // loads data from binary file. If it succeeds, returns a non-empty vector. If loading fails or
@@ -366,10 +360,10 @@ int loadWeightFromBinFunc(T* ptr, std::vector<size_t> shape, std::string filenam
     }
     else {
         T_IN* ptr_2 = nullptr;
-        deviceMalloc(&ptr_2, host_array.size(), false);
+        deviceMalloc(&ptr_2, host_array.size(), nullptr, false);
         cudaH2Dcpy(ptr_2, host_array.data(), host_array.size());
         invokeCudaD2DcpyConvert(ptr, ptr_2, host_array.size());
-        deviceFree(ptr_2);
+        deviceFree(ptr_2, nullptr);
     }
     return 0;
 }

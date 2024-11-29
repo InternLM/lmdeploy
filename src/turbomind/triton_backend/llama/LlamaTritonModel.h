@@ -91,9 +91,6 @@ private:
     ft::EngineParam    engine_param_;
     size_t             tensor_para_size_;
     size_t             pipeline_para_size_;
-    ft::WeightType     weight_type_;
-    bool               attn_bias_;
-    int                group_size_;
 
     std::shared_ptr<ft::SharedState> shared_state_;
     // Weights & engine instances for the ranks
