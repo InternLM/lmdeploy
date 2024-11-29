@@ -23,16 +23,13 @@
 namespace turbomind {
 
 template<typename T>
-void deviceMalloc(T** ptr, size_t size, bool is_random_initialize = true);
+void deviceMalloc(T** ptr, size_t size, cudaStream_t st, bool is_random_initialize = false);
 
 template<typename T>
-void deviceMemSetZero(T* ptr, size_t size);
+void deviceFree(T*& ptr, cudaStream_t st);
 
 template<typename T>
-void deviceFree(T*& ptr);
-
-template<typename T>
-void deviceFill(T* devptr, size_t size, T value, cudaStream_t stream = 0);
+void deviceFill(T* devptr, size_t size, T value, cudaStream_t stream = {});
 
 template<typename T>
 void cudaD2Hcpy(T* tgt, const T* src, const size_t size);
@@ -44,10 +41,10 @@ template<typename T>
 void cudaD2Dcpy(T* tgt, const T* src, const size_t size);
 
 template<typename T>
-void cudaAutoCpy(T* tgt, const T* src, const size_t size, cudaStream_t stream = NULL);
+void cudaAutoCpy(T* tgt, const T* src, const size_t size, cudaStream_t stream = {});
 
 template<typename T>
-void cudaRandomUniform(T* buffer, const size_t size);
+void cudaRandomUniform(T* buffer, const size_t size, cudaStream_t stream = {});
 
 template<typename T>
 int loadWeightFromBin(T*                  ptr,

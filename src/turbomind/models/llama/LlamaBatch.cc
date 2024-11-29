@@ -20,6 +20,7 @@
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/debug_utils.h"
 #include "src/turbomind/utils/logger.h"
+#include "src/turbomind/utils/nccl_utils.h"
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -1041,6 +1042,9 @@ LlamaBatch<T>::LlamaBatch(const EngineParam&           param,
 
     AllocateBuffer(max_batch_size_, session_len_, cache_block_seq_len);
     AllocatePersistantBuffer(max_batch_size_, cache_block_seq_len);
+
+    // Wait for allocations
+    check_cuda_error(cudaStreamSynchronize(stream_));
 }
 
 template<typename T>
@@ -1990,7 +1994,7 @@ void LlamaBatch<T>::tune()
                                    nullptr,
                                    nullptr);
             // implicit barrier for TP
-            check_cuda_error(cudaStreamSynchronize(stream_));
+            ftNcclStreamSynchronize(model_->tensor_para_, {}, stream_);
         }
 
         auto tock = std::chrono::steady_clock::now();

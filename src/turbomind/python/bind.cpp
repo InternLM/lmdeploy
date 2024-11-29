@@ -219,6 +219,51 @@ DLTensor GetDLTensor(py::object obj)
     return dlmt->dl_tensor;
 }
 
+static void safe_memcpy(void* dst, const void* src, size_t size)
+{
+    cudaPointerAttributes dat{};
+    cudaPointerAttributes sat{};
+    ft::check_cuda_error(cudaPointerGetAttributes(&dat, dst));
+    ft::check_cuda_error(cudaPointerGetAttributes(&sat, src));
+    try {
+        if (dat.devicePointer && sat.devicePointer) {
+            // Both can be accessed from current context
+            ft::check_cuda_error(cudaMemcpy(dst, src, size, cudaMemcpyDefault));
+        }
+        else if (dat.type == cudaMemoryTypeDevice && sat.type == cudaMemoryTypeDevice) {
+            if (dat.device != sat.device) {
+                // On different devices, try peer memcpy
+                ft::check_cuda_error(cudaMemcpyPeer(dst, dat.device, src, sat.device, size));
+            }
+            else {
+                // Same device, switch to the device first (this is unlikely)
+                ft::CudaDeviceGuard guard(dat.device);
+                ft::check_cuda_error(cudaMemcpy(dst, src, size, cudaMemcpyDefault));
+            }
+        }
+        else {
+            // Unknown case, give it a try anyway
+            ft::check_cuda_error(cudaMemcpy(dst, src, size, cudaMemcpyDefault));
+        }
+    }
+    catch (...) {
+        int device_id{-1};
+        cudaGetDevice(&device_id);
+        TM_LOG_ERROR("cudaMemcpy failed: dst=(%d, %d, %p, %p), src=(%d, %d, %p, %p), size=%s, device=%d",
+                     (int)dat.type,
+                     dat.device,
+                     dat.devicePointer,
+                     dat.hostPointer,
+                     (int)sat.type,
+                     sat.device,
+                     sat.devicePointer,
+                     sat.hostPointer,
+                     std::to_string(size).c_str(),
+                     device_id);
+        throw;
+    }
+}
+
 PYBIND11_MODULE(_turbomind, m)
 {
     // nccl param
@@ -292,8 +337,7 @@ PYBIND11_MODULE(_turbomind, m)
                             std::accumulate(src->shape.begin(), src->shape.end(), 1LL, std::multiplies<int64_t>());
                         auto num_bytes = num_element * dlmt->dl_tensor.dtype.bits / 8;
                         ft::FT_CHECK(self->shape.size() == 1 && num_bytes == self->shape[0]);
-                        cudaMemcpy(
-                            const_cast<void*>(self->data), const_cast<void*>(src->data), num_bytes, cudaMemcpyDefault);
+                        safe_memcpy(const_cast<void*>(self->data), src->data, num_bytes);
                         break;
                     }
                     default:

@@ -2,28 +2,41 @@
 
 #pragma once
 
-#include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include <cstddef>
 #include <map>
 #include <regex>
 #include <string>
 
+#include "src/turbomind/models/llama/weight_type.h"
+
 namespace turbomind {
 
+struct MLAParam {
+    size_t q_lora_rank;
+    size_t kv_lora_rank;
+    size_t qk_rope_dim;
+    size_t v_head_dim;
+};
+
 struct ModelParam {
-    size_t head_num;
-    size_t head_dim;
-    size_t kv_head_num;
-    size_t hidden_units;
-    size_t layer_num;
-    size_t inter_size;
-    size_t vocab_size;
-    size_t embedding_size;
-    float  norm_eps;
-    int    quant_policy;
-    //
-    int start_id;
-    int end_id;
+    size_t     head_num;
+    size_t     head_dim;
+    size_t     kv_head_num;
+    size_t     hidden_units;
+    size_t     layer_num;
+    size_t     vocab_size;
+    size_t     embedding_size;
+    float      norm_eps;
+    int        quant_policy;
+    bool       attn_bias;
+    WeightType weight_type;
+    int        group_size;
+    int        start_id;
+    int        end_id;
+    MLAParam   mla;
+    int        tune_layer_num;
+
+    std::vector<int> inter_size;
 };
 
 struct MoeParam {
@@ -32,17 +45,25 @@ struct MoeParam {
         kNaive,
         kFused
     } method;
-    int  expert_num;
-    int  experts_per_token;
-    int  inter_size;
-    bool norm_topk;
-    bool shared_gate;
+
+    int   experts_per_token;
+    int   inter_size;
+    bool  norm_topk_prob;
+    bool  shared_gate;
+    float routed_scale;
+
+    int         topk_group;
+    std::string topk_method;
+    int         n_group;
+
+    std::vector<int> expert_num;
 };
 
 struct AttentionParam {
     int         rotary_embedding_dim;
     float       rotary_embedding_base;
     int         max_position_embeddings;
+    float       softmax_scale;
     std::string rope_scaling_type;
     int         original_max_position_embeddings;
     float       rope_scaling_factor;
@@ -72,6 +93,12 @@ struct EngineParam {
     int max_context_token_num;
     int num_tokens_per_iter;
     int max_prefill_iters;
+};
+
+enum class LoraPolicy : int
+{
+    kNull,
+    kPlora,
 };
 
 struct LoraParam {

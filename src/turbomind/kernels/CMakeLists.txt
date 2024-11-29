@@ -68,3 +68,4 @@ endif ()
 
 add_subdirectory(attention)
 add_subdirectory(gemm)
+add_subdirectory(norm)

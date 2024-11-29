@@ -113,7 +113,6 @@ private:
     const size_t    head_num_;
     const size_t    size_per_head_;
     const size_t    hidden_units_;
-    const size_t    inter_size_;
     const size_t    layer_num_;
     const size_t    vocab_size_;
     const size_t    vocab_size_padded_;

@@ -46,6 +46,12 @@ void dispatchAttention(const AttentionParams<T>& params)
     else if (params.size_per_head == 128) {
         return dispatch(std::integral_constant<int, 128>{});
     }
+
+    if (params.size_per_head == 192) {
+        using Config = AttentionConfig<arch::Sm80, T, 192, CacheType::kLinear>;
+        return invokeAttention<typename Config::Kernel>(params);
+    }
+
     FT_CHECK(0);
 }
 
