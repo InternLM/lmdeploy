@@ -4,35 +4,9 @@ import triton
 import triton.language as tl
 from torch import Tensor
 
-from .triton_utils import get_kernel_meta, wrap_jit_func
+from .triton_utils import get_kernel_meta
 
 
-@wrap_jit_func(type_hint=dict(
-    Q=Tensor,
-    K=Tensor,
-    COS=Tensor,
-    SIN=Tensor,
-    POS=Tensor,
-    Q_EMB=Tensor,
-    K_EMB=Tensor,
-    seq_len=int,
-    stride_qs=int,
-    stride_qh=int,
-    stride_qd=int,
-    stride_ks=int,
-    stride_kh=int,
-    stride_kd=int,
-    stride_qes=int,
-    stride_qeh=int,
-    stride_qed=int,
-    stride_kes=int,
-    stride_keh=int,
-    stride_ked=int,
-    half_size=torch.int32,
-    BLOCK=torch.int32,
-    BLOCK_QH=torch.int32,
-    BLOCK_N=torch.int32,
-))
 @triton.jit(do_not_specialize=('seq_len', ))
 def apply_rotary_pos_emb_qk_kernel(
     Q,
