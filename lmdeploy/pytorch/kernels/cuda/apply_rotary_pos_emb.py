@@ -60,8 +60,8 @@ def apply_rotary_pos_emb_qk_kernel(
     BLOCK_N: tl.constexpr,
 ):
     """apply rotary on key AND query kernel."""
-    seq_block_id = tl.program_id(0)
-    head_id = tl.program_id(1)
+    seq_block_id = tl.program_id(1)
+    head_id = tl.program_id(0)
 
     pos_offset = seq_block_id * BLOCK + tl.arange(0, BLOCK)
     pos_mask = pos_offset < seq_len
@@ -158,10 +158,13 @@ def apply_rotary_pos_emb(q: Tensor,
     num_heads_q = q.size(-2)
     num_heads_k = k.size(-2)
     num_warps = 4
-    num_stages = 4
+    num_stages = 1
 
     kernel_meta = get_kernel_meta(q)
-    grid = [triton.cdiv(seq_len, BLOCK), num_heads_q + num_heads_k]
+    grid = [
+        num_heads_q + num_heads_k,
+        triton.cdiv(seq_len, BLOCK),
+    ]
     apply_rotary_pos_emb_qk_kernel[grid](q,
                                          k,
                                          cos,
