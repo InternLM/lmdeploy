@@ -180,7 +180,7 @@ RotaryEmbeddingV2::RotaryEmbeddingV2(const AttentionParam& param, cudaStream_t s
     }
 }
 
-void RotaryEmbeddingV2::forward(const RotaryEmbeddingV2Params& params)
+void RotaryEmbeddingV2::forward(const RotaryEmbeddingV2Param& params)
 {
     allocateBuffer(params.token_num);
 

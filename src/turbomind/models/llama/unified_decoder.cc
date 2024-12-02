@@ -164,7 +164,7 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
     count_and_fix(decoder_output, token_num * hidden_units_, Concat("norm0", 0), 2);
 
     {
-        RotaryEmbeddingV2Params params;
+        RotaryEmbeddingV2Param params;
         params.rope_theta = inputs->getPtr<float>("rope_theta");
         params.q_len      = cu_q_len_;
         params.k_ken      = cu_k_len_;

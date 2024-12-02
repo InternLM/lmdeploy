@@ -7,6 +7,7 @@
 #include "src/turbomind/kernels/attention/attention_params.h"
 #include "src/turbomind/kernels/attention/reference.h"
 #include "src/turbomind/models/llama/llama_utils.h"
+#include "src/turbomind/models/llama/rotary_emb.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "test_utils.h"
 #include <algorithm>
@@ -376,6 +377,26 @@ int test_attention()
         rope_base[i]        = kRoPEBase;
     }
 
+    // precompute cos/sin
+    const int device_id = 0;
+    auto      allocator = std::make_unique<Allocator<AllocatorType::CUDA>>(device_id, false);
+    allocator->setStream(nullptr);
+    AttentionParam attn_param;
+    attn_param.rope.type   = RopeType::kDefault;
+    attn_param.rope.base   = kRoPEBase;
+    attn_param.rope.dim    = kRoPEDim;
+    attn_param.rope.factor = 1.0f;
+    auto rotary_emb        = std::make_unique<RotaryEmbeddingV2>(attn_param, nullptr, allocator.get());
+
+    RotaryEmbeddingV2Param rotary_param;
+    rotary_param.rope_theta = rope_base.data().get();
+    rotary_param.q_len      = cu_seqlens.data().get();
+    rotary_param.k_ken      = cu_kv_lens.data().get();
+    rotary_param.batch_size = kBatchSize;
+    rotary_param.token_num  = kTokenNum;
+    rotary_emb->forward(rotary_param);
+    params.cos_sin = rotary_emb->cos_sin_;
+
     // getchar();
 
     params.out = output_ref.data().get();
@@ -428,8 +449,6 @@ int test_attention()
 
     params.qk = qk_buf.data().get();
     params.pr = pr_buf.data().get();
-
-    params.cos_sin = nullptr;
 
     Reference<T> reference(kDump ? Reference<T>::kUNFUSED : Reference<T>::kFLASH_ATTENTION, {});
     // Reference<T> reference(Reference<T>::kUNFUSED, {});

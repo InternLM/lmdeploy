@@ -7,7 +7,7 @@ namespace turbomind {
 
 RopeType GetRoPEType(const std::string& type);
 
-struct RotaryEmbeddingV2Params {
+struct RotaryEmbeddingV2Param {
     float* rope_theta;
     int*   q_len;
     int*   k_ken;
@@ -41,7 +41,7 @@ struct RotaryEmbeddingV2 {
         freeBuffer();
     }
 
-    void forward(const RotaryEmbeddingV2Params& params);
+    void forward(const RotaryEmbeddingV2Param& params);
 
     cudaStream_t const stream_;
     IAllocator* const  allocator_;
