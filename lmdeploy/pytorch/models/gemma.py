@@ -78,6 +78,8 @@ class GemmaAttention(nn.Module):
         attn_metadata: Any = None,
     ):
         """Rewrite of LlamaAttention.forward."""
+        if self.layer_idx == 5:
+            hidden_states
         # qkv proj
         qkv_states = self.qkv_proj(hidden_states)
         # (-1, heads, head_dim)
@@ -110,6 +112,7 @@ class GemmaAttention(nn.Module):
             inplace=True,
         )
         attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
+        # print(self.layer_idx,attn_output.shape, attn_output.sum())
 
         # o proj
         attn_output = self.o_proj(attn_output)
@@ -383,6 +386,8 @@ class GemmaForCausalLM(nn.Module, CudaGraphMixin):
                                             bias=False,
                                             dtype=dtype,
                                             device=device)
+        self.final_logit_softcapping = getattr(config,
+                                               'final_logit_softcapping', None)
 
     def forward(
         self,
@@ -405,7 +410,12 @@ class GemmaForCausalLM(nn.Module, CudaGraphMixin):
 
     def get_logits(self, hidden_states: torch.Tensor):
         """compute logits of the model output."""
-        return self.lm_head(hidden_states)
+        logits = self.lm_head(hidden_states)
+        if self.final_logit_softcapping is not None:
+            logits = logits / self.final_logit_softcapping
+            logits = torch.tanh(logits)
+            logits = logits * self.final_logit_softcapping
+        return logits
 
     def get_input_embeddings(self):
         """get input embeddings."""

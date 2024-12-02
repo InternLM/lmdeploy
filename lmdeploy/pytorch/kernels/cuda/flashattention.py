@@ -49,7 +49,7 @@ def softcapping(qk, logit_softcapping: tl.constexpr):
 
 @triton.jit
 def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs,
-                       loop_start, loop_end, qk_scale, history_mask,
+                       loop_start, loop_end, sm_scale, history_mask,
                        kv_min_loc, causal_mask: tl.constexpr,
                        window_size: tl.constexpr,
                        logit_softcapping: tl.constexpr, BLOCK_N: tl.constexpr,
@@ -71,8 +71,9 @@ def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs,
             qk += tl.dot(q1, k1)
 
         if causal_mask:
-            qk *= qk_scale
+            qk *= sm_scale
             qk = softcapping(qk, logit_softcapping)
+            qk = qk * tl_log2(math.e)
             qk_mask = (history_mask[:, None]) >= (start_n + offs_n[None, :])
             if window_size > 0:
                 qk_mask = qk_mask and (
@@ -85,8 +86,9 @@ def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs,
             m_i_new = tl.maximum(m_i, tl.max(qk, 1))
             qk -= m_i_new[:, None]
         elif window_size > 0:
-            qk *= qk_scale
+            qk *= sm_scale
             qk = softcapping(qk, logit_softcapping)
+            qk = qk * tl_log2(math.e)
             qk_mask = ((start_n + offs_n[None, :]) >= kv_min_loc[:, None])
             qk = tl.where(
                 qk_mask,
@@ -96,11 +98,13 @@ def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs,
             m_i_new = tl.maximum(m_i, tl.max(qk, 1))
             qk -= m_i_new[:, None]
         elif logit_softcapping > 0:
-            qk *= qk_scale
+            qk *= sm_scale
             qk = softcapping(qk, logit_softcapping)
+            qk = qk * tl_log2(math.e)
             m_i_new = tl.maximum(m_i, tl.max(qk, 1))
             qk -= m_i_new[:, None]
         else:
+            qk_scale = sm_scale * tl_log2(math.e)
             m_i_new = tl.maximum(m_i, tl.max(qk, 1) * qk_scale)
             qk = qk * qk_scale - m_i_new[:, None]
 
@@ -256,7 +260,6 @@ def _flash_prefill_fwd_kernel(
     l_i = tl.zeros([BLOCK_M], dtype=tl.float32) + 1.0
     acc = tl.zeros([BLOCK_M, BLOCK_DV], dtype=tl.float32)
 
-    qk_scale = sm_scale * tl_log2(math.e)
     history_mask = history_len + start_m * BLOCK_M + tl.arange(0, BLOCK_M)
 
     loop_end = (history_len + start_m * BLOCK_M) // BLOCK_N * BLOCK_N
@@ -270,7 +273,7 @@ def _flash_prefill_fwd_kernel(
                                        k1_ptrs,
                                        loop_start,
                                        loop_end,
-                                       qk_scale,
+                                       sm_scale,
                                        history_mask,
                                        kv_min_loc,
                                        causal_mask=False,
@@ -291,7 +294,7 @@ def _flash_prefill_fwd_kernel(
                                        k1_ptrs,
                                        loop_start,
                                        loop_end,
-                                       qk_scale,
+                                       sm_scale,
                                        history_mask,
                                        kv_min_loc,
                                        causal_mask=True,
