@@ -164,6 +164,7 @@ class Engine:
         self.cache_config = cache_config
         self.backend_config = backend_config
         self.stream = self.model_agent.stream
+        self.max_session_len = self._get_max_session_len()
 
         self.req_manager = self._bind_request_manager()
 
@@ -261,6 +262,20 @@ class Engine:
                      data=data,
                      err_msg=err_msg))
 
+    def _get_max_session_len(self):
+        """get max session len."""
+        session_len = self.scheduler_config.max_session_len
+        max_tokens = (self.cache_config.num_gpu_blocks *
+                      self.cache_config.block_size)
+        window_size = self.cache_config.window_size
+        if window_size > 0 and window_size <= max_tokens:
+            max_tokens = (1 << 63) - 1
+        if session_len is None:
+            session_len = max_tokens
+        else:
+            session_len = min(max_tokens, session_len)
+        return session_len
+
     def _on_add_session(self, reqs: Request, **kwargs):
         """on add session callback."""
         for req in reqs:
@@ -315,12 +330,11 @@ class Engine:
 
         def __update_max_new_tokens(msg):
             """update max new tokens."""
-            max_session_len = self.scheduler_config.max_session_len
-            if max_session_len is not None:
-                sampling_param = msg.sampling_param
-                sampling_param.max_new_tokens = min(
-                    sampling_param.max_new_tokens,
-                    max_session_len - msg.num_all_tokens())
+            max_session_len = self.max_session_len
+            sampling_param = msg.sampling_param
+            sampling_param.max_new_tokens = min(
+                sampling_param.max_new_tokens,
+                max_session_len - msg.num_all_tokens())
 
         for req in reqs:
             session_id = req.data['session_id']

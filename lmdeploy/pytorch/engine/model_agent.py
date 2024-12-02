@@ -120,9 +120,7 @@ def cache_swapping(cache_engine: CacheEngine, swap_in_map: dict,
         issued_cache_op = True
 
     if issued_cache_op:
-        cache_events = cache_engine.events
-        for event in cache_events:
-            event.wait()
+        cache_engine.events.wait()
 
 
 @torch.inference_mode()
