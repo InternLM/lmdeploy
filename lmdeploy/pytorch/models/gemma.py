@@ -78,8 +78,6 @@ class GemmaAttention(nn.Module):
         attn_metadata: Any = None,
     ):
         """Rewrite of LlamaAttention.forward."""
-        if self.layer_idx == 5:
-            hidden_states
         # qkv proj
         qkv_states = self.qkv_proj(hidden_states)
         # (-1, heads, head_dim)
@@ -112,7 +110,6 @@ class GemmaAttention(nn.Module):
             inplace=True,
         )
         attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
-        # print(self.layer_idx,attn_output.shape, attn_output.sum())
 
         # o proj
         attn_output = self.o_proj(attn_output)
