@@ -113,12 +113,7 @@ protected:
 
 class MoeGemmContext: public Context {
 public:
-    MoeGemmContext(int experts,
-                   int experts_per_token,
-                   //    int                   output_dims,
-                   //    int                   input_dims,
-                   const cudaDeviceProp& prop,
-                   cudaStream_t          stream);
+    MoeGemmContext(int experts, int experts_per_token, const cudaDeviceProp& prop, cudaStream_t stream);
 
     ~MoeGemmContext() override;
 
@@ -156,9 +151,11 @@ public:
 
     Tape Schedule(const LaunchSpec&) override;
 
-    void set_offsets(const int* offsets)
+    void update(int expert_num, int experts_per_token, const int* offsets)
     {
-        offsets_ = offsets;
+        expert_num_        = expert_num;
+        experts_per_token_ = experts_per_token;
+        offsets_           = offsets;
     }
 
 protected:

@@ -515,6 +515,16 @@ public:
         return tensor_map_.end();
     }
 
+    int count(const std::string& key) const
+    {
+        return tensor_map_.count(key);
+    }
+
+    bool empty() const
+    {
+        return tensor_map_.empty();
+    }
+
     std::string      toString();
     static TensorMap fromNpyFolder(const std::string& base_folder);
     void             saveNpy(const std::string& base_folder);

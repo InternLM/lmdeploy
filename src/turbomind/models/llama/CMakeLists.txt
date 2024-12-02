@@ -21,11 +21,15 @@ add_library(Llama STATIC
         llama_kernels.cu
         llama_decoder_kernels.cu
         rotary_emb.cu
-        llama_utils.cu)
+        llama_utils.cu
+        mla_utils.cu
+)
+
 set_property(TARGET Llama PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET Llama PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(Llama PUBLIC CUDA::cudart
         gemm2
+        rms_norm
         cublasMMWrapper
         DynamicDecodeLayer
         activation_kernels
