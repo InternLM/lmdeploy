@@ -5,7 +5,7 @@
 
 namespace turbomind {
 
-RotaryScalingType GetRoPEType(const std::string& type);
+RopeType GetRoPEType(const std::string& type);
 
 struct RotaryEmbeddingV2Params {
     float* rope_theta;
@@ -17,15 +17,15 @@ struct RotaryEmbeddingV2Params {
 
 struct InnerYarnRopeParam {
     float attention_factor;
-    float yarn_ramp_inv_factor_div_2;
-    float yarn_ramp_inv_factor_mul_min;
-    float yarn_inv_scaling_factor;
+    float ramp_inv_factor_div_2;
+    float ramp_inv_factor_mul_min;
+    float inv_scaling_factor;
 };
 
 struct InnerLlama3RopeParam {
-    float llama3_inv_scaling_factor;
-    float llama3_alpha;
-    float llama3_beta;
+    float inv_scaling_factor;
+    float alpha;
+    float beta;
 };
 
 struct RotaryEmbeddingV2 {
@@ -46,9 +46,9 @@ struct RotaryEmbeddingV2 {
     cudaStream_t const stream_;
     IAllocator* const  allocator_;
 
-    int               dim_;
-    RotaryScalingType type_;
-    float             inv_factor_{1.0};
+    int      dim_;
+    RopeType type_;
+    float    inv_factor_{1.0};
 
     union {
         InnerYarnRopeParam   yarn_;

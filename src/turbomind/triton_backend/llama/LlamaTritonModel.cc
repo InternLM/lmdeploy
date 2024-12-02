@@ -285,12 +285,12 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     attn_param_.rope.base                    = attention_reader["rope_theta"].as<float>(10000.0f);
     attn_param_.rope.max_position_embeddings = attention_reader["max_position_embeddings"].as<int>(0);
     attn_param_.rope.factor                  = attention_reader["rope_scaling_factor"].as<float>(0.f);
-    if (attn_param_.rope.type == RotaryScalingType::kYarn) {
+    if (attn_param_.rope.type == RopeType::kYarn) {
         attn_param_.rope.yarn.attention_factor = attention_reader["attention_factor"].as<float>(-1.f);
         attn_param_.rope.yarn.beta_fast        = attention_reader["beta_fast"].as<float>(32.f);
         attn_param_.rope.yarn.beta_slow        = attention_reader["beta_slow"].as<float>(1.f);
     }
-    else if (attn_param_.rope.type == RotaryScalingType::kLlama3) {
+    else if (attn_param_.rope.type == RopeType::kLlama3) {
         attn_param_.rope.llama3.low_freq_factor  = attention_reader["low_freq_factor"].as<float>(1.0);
         attn_param_.rope.llama3.high_freq_factor = attention_reader["high_freq_factor"].as<float>(1.0);
         attn_param_.rope.llama3.original_max_position_embeddings =

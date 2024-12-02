@@ -429,9 +429,7 @@ int test_attention()
     params.qk = qk_buf.data().get();
     params.pr = pr_buf.data().get();
 
-    params.attention_scaling          = 1.f;
-    params.llama3_inv_scaling_factor  = 0;
-    params.yarn_ramp_inv_factor_div_2 = 0;
+    params.cos_sin = nullptr;
 
     Reference<T> reference(kDump ? Reference<T>::kUNFUSED : Reference<T>::kFLASH_ATTENTION, {});
     // Reference<T> reference(Reference<T>::kUNFUSED, {});

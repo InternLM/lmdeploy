@@ -59,7 +59,7 @@ struct MoeParam {
     std::vector<int> expert_num;
 };
 
-enum class RotaryScalingType
+enum class RopeType
 {
     kDefault,
     kLinear,
@@ -87,11 +87,11 @@ struct AttentionParam {
     // rope
     struct {
         // common
-        RotaryScalingType type;
-        int               dim;
-        float             base;
-        float             factor;
-        int               max_position_embeddings;
+        RopeType type;
+        int      dim;
+        float    base;
+        float    factor;
+        int      max_position_embeddings;
         // special
         union {
             YarnRopeParam   yarn;

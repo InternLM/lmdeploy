@@ -55,9 +55,9 @@ __global__ void computeCosSinLlama3(const float* rope_base,
                                     int          token_num,
                                     int          batch_size,
                                     int          dim,
-                                    float        llama3_inv_scaling_factor,
-                                    float        llama3_alpha,
-                                    float        llama3_beta,
+                                    float        inv_scaling_factor,
+                                    float        alpha,
+                                    float        beta,
                                     float*       cos_sin)
 {
     int qi = blockIdx.x;
@@ -69,8 +69,8 @@ __global__ void computeCosSinLlama3(const float* rope_base,
     float ti          = history_len + qi - q_len[bid - 1];
 
     float inv_freq = compute_default_parameters(base, dim, di * 2, 1.0f);
-    auto  smooth   = fmaxf(0.f, fminf(1.f, llama3_alpha * inv_freq - llama3_beta));
-    inv_freq       = (1 - smooth) * inv_freq * llama3_inv_scaling_factor + smooth * inv_freq;
+    auto  smooth   = fmaxf(0.f, fminf(1.f, alpha * inv_freq - beta));
+    inv_freq       = (1 - smooth) * inv_freq * inv_scaling_factor + smooth * inv_freq;
     float c, s;
     sincosf(ti * inv_freq, &s, &c);
     (float2&)cos_sin[dim * qi + 2 * di] = {c, s};
@@ -82,9 +82,9 @@ __global__ void computeCosSinYarn(const float* rope_base,
                                   int          token_num,
                                   int          batch_size,
                                   int          dim,
-                                  float        yarn_ramp_inv_factor_div_2,
-                                  float        yarn_ramp_inv_factor_mul_min,
-                                  float        yarn_inv_scaling_factor,
+                                  float        ramp_inv_factor_div_2,
+                                  float        ramp_inv_factor_mul_min,
+                                  float        inv_scaling_factor,
                                   float        attention_scaling,
                                   float*       cos_sin)
 {
@@ -97,9 +97,9 @@ __global__ void computeCosSinYarn(const float* rope_base,
     float ti          = history_len + qi - q_len[bid - 1];
 
     float inv_freq = compute_default_parameters(base, dim, di * 2, 1.0f);
-    float alpha    = 2 * di * yarn_ramp_inv_factor_div_2 - yarn_ramp_inv_factor_mul_min;
+    float alpha    = 2 * di * ramp_inv_factor_div_2 - ramp_inv_factor_mul_min;
     alpha          = fmaxf(0.f, fminf(1.f, alpha));
-    inv_freq       = inv_freq - inv_freq * alpha * yarn_inv_scaling_factor;
+    inv_freq       = inv_freq - inv_freq * alpha * inv_scaling_factor;
 
     float c, s;
     sincosf(ti * inv_freq, &s, &c);
@@ -108,13 +108,13 @@ __global__ void computeCosSinYarn(const float* rope_base,
     (float2&)cos_sin[dim * qi + 2 * di] = {c, s};
 }
 
-RotaryScalingType GetRoPEType(const std::string& type)
+RopeType GetRoPEType(const std::string& type)
 {
-    std::map<std::string, RotaryScalingType> lookup = {{"", RotaryScalingType::kDefault},
-                                                       {"linear", RotaryScalingType::kLinear},
-                                                       {"dynamic", RotaryScalingType::kDynamic},
-                                                       {"yarn", RotaryScalingType::kYarn},
-                                                       {"llama3", RotaryScalingType::kLlama3}};
+    std::map<std::string, RopeType> lookup = {{"", RopeType::kDefault},
+                                              {"linear", RopeType::kLinear},
+                                              {"dynamic", RopeType::kDynamic},
+                                              {"yarn", RopeType::kYarn},
+                                              {"llama3", RopeType::kLlama3}};
     return lookup.at(type);
 }
 
@@ -135,15 +135,15 @@ RotaryEmbeddingV2::RotaryEmbeddingV2(const AttentionParam& param, cudaStream_t s
     dim_  = param.rope.dim;
 
     switch (type_) {
-        case RotaryScalingType::kDefault:
+        case RopeType::kDefault:
             break;
-        case RotaryScalingType::kLinear:
+        case RopeType::kLinear:
             inv_factor_ = 1.0f / param.rope.factor;
             break;
-        case RotaryScalingType::kDynamic:
+        case RopeType::kDynamic:
             inv_factor_ = param.rope.factor;
             break;
-        case RotaryScalingType::kYarn: {
+        case RopeType::kYarn: {
             const double PI                  = 3.14159265358979323846;
             auto         find_correction_dim = [&](float num_rotations) {
                 return (param.rope.dim * std::log(param.rope.max_position_embeddings / (num_rotations * 2 * PI)))
@@ -160,18 +160,18 @@ RotaryEmbeddingV2::RotaryEmbeddingV2(const AttentionParam& param, cudaStream_t s
             if (low == high) {
                 high += 0.01f;
             }
-            yarn_.yarn_ramp_inv_factor_div_2   = 1.0 / (high - low) / 2.0;
-            yarn_.yarn_ramp_inv_factor_mul_min = 1.0 / (high - low) * low;
-            yarn_.yarn_inv_scaling_factor      = (1 - 1.0 / param.rope.factor);
-            yarn_.attention_factor             = param.rope.yarn.attention_factor;
+            yarn_.ramp_inv_factor_div_2   = 1.0 / (high - low) / 2.0;
+            yarn_.ramp_inv_factor_mul_min = 1.0 / (high - low) * low;
+            yarn_.inv_scaling_factor      = (1 - 1.0 / param.rope.factor);
+            yarn_.attention_factor        = param.rope.yarn.attention_factor;
             break;
         }
-        case RotaryScalingType::kLlama3: {
+        case RopeType::kLlama3: {
             const double PI            = 3.14159265358979323846;
             float inv_diff_freq_factor = 1.0 / (param.rope.llama3.high_freq_factor - param.rope.llama3.low_freq_factor);
-            llama3_.llama3_inv_scaling_factor = 1.0 / param.rope.factor;
-            llama3_.llama3_alpha = param.rope.llama3.original_max_position_embeddings / (2 * PI) * inv_diff_freq_factor;
-            llama3_.llama3_beta  = param.rope.llama3.low_freq_factor * inv_diff_freq_factor;
+            llama3_.inv_scaling_factor = 1.0 / param.rope.factor;
+            llama3_.alpha = param.rope.llama3.original_max_position_embeddings / (2 * PI) * inv_diff_freq_factor;
+            llama3_.beta  = param.rope.llama3.low_freq_factor * inv_diff_freq_factor;
             break;
         }
         default:
@@ -188,9 +188,9 @@ void RotaryEmbeddingV2::forward(const RotaryEmbeddingV2Params& params)
     const int block = dim_ / 2;
 
     switch (type_) {
-        case RotaryScalingType::kDefault:
-        case RotaryScalingType::kLinear:
-        case RotaryScalingType::kDynamic:
+        case RopeType::kDefault:
+        case RopeType::kLinear:
+        case RopeType::kDynamic:
             computeCosSinDefault<<<grid, block, 0, stream_>>>(params.rope_theta,
                                                               params.q_len,
                                                               params.k_ken,
@@ -200,28 +200,28 @@ void RotaryEmbeddingV2::forward(const RotaryEmbeddingV2Params& params)
                                                               inv_factor_,
                                                               cos_sin_);
             break;
-        case RotaryScalingType::kLlama3:
+        case RopeType::kLlama3:
             computeCosSinLlama3<<<grid, block, 0, stream_>>>(params.rope_theta,
                                                              params.q_len,
                                                              params.k_ken,
                                                              params.token_num,
                                                              params.batch_size,
                                                              dim_,
-                                                             llama3_.llama3_inv_scaling_factor,
-                                                             llama3_.llama3_alpha,
-                                                             llama3_.llama3_beta,
+                                                             llama3_.inv_scaling_factor,
+                                                             llama3_.alpha,
+                                                             llama3_.beta,
                                                              cos_sin_);
             break;
-        case RotaryScalingType::kYarn:
+        case RopeType::kYarn:
             computeCosSinYarn<<<grid, block, 0, stream_>>>(params.rope_theta,
                                                            params.q_len,
                                                            params.k_ken,
                                                            params.token_num,
                                                            params.batch_size,
                                                            dim_,
-                                                           yarn_.yarn_ramp_inv_factor_div_2,
-                                                           yarn_.yarn_ramp_inv_factor_mul_min,
-                                                           yarn_.yarn_inv_scaling_factor,
+                                                           yarn_.ramp_inv_factor_div_2,
+                                                           yarn_.ramp_inv_factor_mul_min,
+                                                           yarn_.inv_scaling_factor,
                                                            yarn_.attention_factor,
                                                            cos_sin_);
             break;

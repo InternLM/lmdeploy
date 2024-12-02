@@ -369,7 +369,7 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
         // compute rope scaling factor
         if (r->start_flag) {
             seq.rope_theta = model_->attn_param_.rope.base;
-            if (model_->attn_param_.rope.type == RotaryScalingType::kDynamic) {
+            if (model_->attn_param_.rope.type == RopeType::kDynamic) {
                 auto scaling_factor = model_->attn_param_.rope.factor;
                 if (scaling_factor >= 1.f) {  // infer by current context length
                     auto max_seq_len = state.h_context_length[idx];
