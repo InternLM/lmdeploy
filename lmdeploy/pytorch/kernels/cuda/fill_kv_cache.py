@@ -336,7 +336,6 @@ def fill_kv_cache(k_states: Tensor,
     kernel_meta = get_kernel_meta(k_states)
     if quant_policy == 0:
         grid = [num_heads, max_num_blocks, batch_size]
-        num_heads = 1
         is_decoding = max_num_blocks == 1
         _fill_kv_cache_kernel[grid](
             k_states,
