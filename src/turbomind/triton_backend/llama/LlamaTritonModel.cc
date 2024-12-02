@@ -140,10 +140,10 @@ void LlamaTritonModel<T>::handleMissingParams()
                        (int)model_param_.vocab_size);
     }
 
-    if (!attn_param_.max_position_embeddings) {
-        attn_param_.max_position_embeddings = 2048;
+    if (!attn_param_.rope.max_position_embeddings) {
+        attn_param_.rope.max_position_embeddings = 2048;
         TM_LOG_WARNING("[LlamaTritonModel] `max_position_embeddings` is not set, default to %d.",
-                       (int)attn_param_.max_position_embeddings);
+                       (int)attn_param_.rope.max_position_embeddings);
     }
 
     if (!engine_param_.max_batch_size) {
@@ -153,7 +153,7 @@ void LlamaTritonModel<T>::handleMissingParams()
     }
 
     if (!engine_param_.session_len) {
-        engine_param_.session_len = attn_param_.max_position_embeddings;
+        engine_param_.session_len = attn_param_.rope.max_position_embeddings;
         TM_LOG_WARNING("[LlamaTritonModel] `session_len` is not set, default to %d.", (int)engine_param_.session_len);
     }
 
@@ -277,22 +277,25 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     model_param_.attn_bias  = model_reader["attn_bias"].as<int>(0);
     model_param_.group_size = model_reader["group_size"].as<int>(0);
 
+    attn_param_.softmax_scale = attention_reader["softmax_scale"].as<float>(0);
+    attn_param_.use_logn_attn = attention_reader["use_logn_attn"].as<int>(0);
     // rotary embedding parameters
-    attn_param_.rotary_embedding_dim    = attention_reader["rotary_embedding"].as<int>();
-    attn_param_.rotary_embedding_base   = attention_reader["rope_theta"].as<float>(10000.0f);
-    attn_param_.softmax_scale           = attention_reader["softmax_scale"].as<float>(0);
-    attn_param_.attention_factor        = attention_reader["attention_factor"].as<float>(-1.f);
-    attn_param_.beta_fast               = attention_reader["beta_fast"].as<float>(32.f);
-    attn_param_.beta_slow               = attention_reader["beta_slow"].as<float>(1.f);
-    attn_param_.rope_scaling_type       = attention_reader["rope_scaling_type"].as<std::string>("");
-    attn_param_.rope_scaling_factor     = attention_reader["rope_scaling_factor"].as<float>(0.f);
-    attn_param_.low_freq_factor         = attention_reader["low_freq_factor"].as<float>(1.0);
-    attn_param_.high_freq_factor        = attention_reader["high_freq_factor"].as<float>(1.0);
-    attn_param_.max_position_embeddings = attention_reader["max_position_embeddings"].as<int>(0);
-    attn_param_.use_dynamic_ntk         = attention_reader["use_dynamic_ntk"].as<int>(0);
-    attn_param_.use_logn_attn           = attention_reader["use_logn_attn"].as<int>(0);
-
-    attn_param_.original_max_position_embeddings = attention_reader["original_max_position_embeddings"].as<int>(0);
+    attn_param_.rope.type                    = GetRoPEType(attention_reader["rope_scaling_type"].as<std::string>(""));
+    attn_param_.rope.dim                     = attention_reader["rotary_embedding"].as<int>();
+    attn_param_.rope.base                    = attention_reader["rope_theta"].as<float>(10000.0f);
+    attn_param_.rope.max_position_embeddings = attention_reader["max_position_embeddings"].as<int>(0);
+    attn_param_.rope.factor                  = attention_reader["rope_scaling_factor"].as<float>(0.f);
+    if (attn_param_.rope.type == RotaryScalingType::kYarn) {
+        attn_param_.rope.yarn.attention_factor = attention_reader["attention_factor"].as<float>(-1.f);
+        attn_param_.rope.yarn.beta_fast        = attention_reader["beta_fast"].as<float>(32.f);
+        attn_param_.rope.yarn.beta_slow        = attention_reader["beta_slow"].as<float>(1.f);
+    }
+    else if (attn_param_.rope.type == RotaryScalingType::kLlama3) {
+        attn_param_.rope.llama3.low_freq_factor  = attention_reader["low_freq_factor"].as<float>(1.0);
+        attn_param_.rope.llama3.high_freq_factor = attention_reader["high_freq_factor"].as<float>(1.0);
+        attn_param_.rope.llama3.original_max_position_embeddings =
+            attention_reader["original_max_position_embeddings"].as<int>(0);
+    }
 
     engine_param_.max_batch_size        = engine_reader["max_batch_size"].as<int>(0);
     engine_param_.max_prefill_token_num = engine_reader["max_prefill_token_num"].as<int>(0);

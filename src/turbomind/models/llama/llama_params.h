@@ -59,22 +59,45 @@ struct MoeParam {
     std::vector<int> expert_num;
 };
 
+enum class RotaryScalingType
+{
+    kDefault,
+    kLinear,
+    kDynamic,
+    kYarn,
+    kLlama3,
+};
+
+struct YarnRopeParam {
+    float attention_factor;
+    float beta_fast;
+    float beta_slow;
+};
+
+struct Llama3RopeParam {
+    float low_freq_factor;
+    float high_freq_factor;
+    int   original_max_position_embeddings;
+};
+
 struct AttentionParam {
-    int         rotary_embedding_dim;
-    float       rotary_embedding_base;
-    int         max_position_embeddings;
-    float       softmax_scale;
-    std::string rope_scaling_type;
-    int         original_max_position_embeddings;
-    float       rope_scaling_factor;
-    float       low_freq_factor;
-    float       high_freq_factor;
-    float       attention_factor;
-    float       beta_fast;
-    float       beta_slow;
-    bool        use_dynamic_ntk;
-    bool        use_logn_attn;
-    int         cache_block_seq_len;
+    float softmax_scale;
+    int   cache_block_seq_len;
+    bool  use_logn_attn;
+    // rope
+    struct {
+        // common
+        RotaryScalingType type;
+        int               dim;
+        float             base;
+        float             factor;
+        int               max_position_embeddings;
+        // special
+        union {
+            YarnRopeParam   yarn;
+            Llama3RopeParam llama3;
+        };
+    } rope;
 };
 
 struct EngineParam {

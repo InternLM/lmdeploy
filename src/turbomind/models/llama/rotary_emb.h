@@ -5,15 +5,7 @@
 
 namespace turbomind {
 
-enum class RotaryScalingType
-{
-    kDefault,
-    kLinear,
-    kDynamic,
-    kYarn,
-    kLlama3,
-    kMrope
-};
+RotaryScalingType GetRoPEType(const std::string& type);
 
 struct RotaryEmbeddingV2Params {
     float* rope_theta;
@@ -21,6 +13,19 @@ struct RotaryEmbeddingV2Params {
     int*   k_ken;
     int    batch_size;
     int    token_num;
+};
+
+struct InnerYarnRopeParam {
+    float attention_factor;
+    float yarn_ramp_inv_factor_div_2;
+    float yarn_ramp_inv_factor_mul_min;
+    float yarn_inv_scaling_factor;
+};
+
+struct InnerLlama3RopeParam {
+    float llama3_inv_scaling_factor;
+    float llama3_alpha;
+    float llama3_beta;
 };
 
 struct RotaryEmbeddingV2 {
@@ -38,28 +43,20 @@ struct RotaryEmbeddingV2 {
 
     void forward(const RotaryEmbeddingV2Params& params);
 
-    RotaryScalingType  type_;
     cudaStream_t const stream_;
     IAllocator* const  allocator_;
 
+    int               dim_;
+    RotaryScalingType type_;
+    float             inv_factor_{1.0};
+
+    union {
+        InnerYarnRopeParam   yarn_;
+        InnerLlama3RopeParam llama3_;
+    };
+
     // output
     float* cos_sin_;  // num_token x dim, (cos, sin, ...)
-
-    int dim_;
-    // default, linear, dynamic
-    float attention_factor_;
-    float rope_scaling_factor_;
-    float inv_scale_factor_;
-    // llama3
-    float llama3_inv_scaling_factor_;
-    float llama3_alpha_;
-    float llama3_beta_;
-    // yarn
-    float yarn_ramp_inv_factor_div_2_;
-    float yarn_ramp_inv_factor_mul_min_;
-    float yarn_inv_scaling_factor_;
-    // mrope
-    int3 mrope_section_;
 };
 
 };  // namespace turbomind

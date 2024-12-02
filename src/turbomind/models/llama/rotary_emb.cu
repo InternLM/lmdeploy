@@ -114,8 +114,7 @@ RotaryScalingType GetRoPEType(const std::string& type)
                                                        {"linear", RotaryScalingType::kLinear},
                                                        {"dynamic", RotaryScalingType::kDynamic},
                                                        {"yarn", RotaryScalingType::kYarn},
-                                                       {"llama3", RotaryScalingType::kLlama3},
-                                                       {"mrope", RotaryScalingType::kMrope}};
+                                                       {"llama3", RotaryScalingType::kLlama3}};
     return lookup.at(type);
 }
 
@@ -132,42 +131,52 @@ void RotaryEmbeddingV2::allocateBuffer(size_t token_num)
 RotaryEmbeddingV2::RotaryEmbeddingV2(const AttentionParam& param, cudaStream_t stream, IAllocator* allocator):
     stream_(stream), allocator_(allocator)
 {
-    type_                = GetRoPEType(param.rope_scaling_type);
-    dim_                 = param.rotary_embedding_dim;
-    rope_scaling_factor_ = 1.0f;
-    attention_factor_    = 1.0f;
+    type_ = param.rope.type;
+    dim_  = param.rope.dim;
 
-    if (type_ == RotaryScalingType::kLinear) {
-        rope_scaling_factor_ /= param.rope_scaling_factor;
-    }
-    else if (type_ == RotaryScalingType::kLlama3) {
-        const double PI                   = 3.14159265358979323846;
-        float        inv_diff_freq_factor = 1.0 / (param.high_freq_factor - param.low_freq_factor);
-        llama3_inv_scaling_factor_        = 1.0 / param.rope_scaling_factor;
-        llama3_alpha_                     = param.original_max_position_embeddings / (2 * PI) * inv_diff_freq_factor;
-        llama3_beta_                      = param.low_freq_factor * inv_diff_freq_factor;
-    }
-    else if (type_ == RotaryScalingType::kYarn) {
-        const double PI                  = 3.14159265358979323846;
-        auto         find_correction_dim = [&](float num_rotations) {
-            return (param.rotary_embedding_dim * std::log(param.max_position_embeddings / (num_rotations * 2 * PI)))
-                   / (2 * std::log(param.rotary_embedding_base));
-        };
-        auto find_correction_range = [&](float low_rot, float high_rot, float& low, float& high) {
-            low  = std::floor(find_correction_dim(low_rot));
-            high = std::ceil(find_correction_dim(high_rot));
-            low  = std::max(low, 0.f);
-            high = std::min(high, param.rotary_embedding_dim - 1.f);
-        };
-        float low, high;
-        find_correction_range(param.beta_fast, param.beta_slow, low, high);
-        if (low == high) {
-            high += 0.01f;
+    switch (type_) {
+        case RotaryScalingType::kDefault:
+            break;
+        case RotaryScalingType::kLinear:
+            inv_factor_ = 1.0f / param.rope.factor;
+            break;
+        case RotaryScalingType::kDynamic:
+            inv_factor_ = param.rope.factor;
+            break;
+        case RotaryScalingType::kYarn: {
+            const double PI                  = 3.14159265358979323846;
+            auto         find_correction_dim = [&](float num_rotations) {
+                return (param.rope.dim * std::log(param.rope.max_position_embeddings / (num_rotations * 2 * PI)))
+                       / (2 * std::log(param.rope.base));
+            };
+            auto find_correction_range = [&](float low_rot, float high_rot, float& low, float& high) {
+                low  = std::floor(find_correction_dim(low_rot));
+                high = std::ceil(find_correction_dim(high_rot));
+                low  = std::max(low, 0.f);
+                high = std::min(high, param.rope.dim - 1.f);
+            };
+            float low, high;
+            find_correction_range(param.rope.yarn.beta_fast, param.rope.yarn.beta_slow, low, high);
+            if (low == high) {
+                high += 0.01f;
+            }
+            yarn_.yarn_ramp_inv_factor_div_2   = 1.0 / (high - low) / 2.0;
+            yarn_.yarn_ramp_inv_factor_mul_min = 1.0 / (high - low) * low;
+            yarn_.yarn_inv_scaling_factor      = (1 - 1.0 / param.rope.factor);
+            yarn_.attention_factor             = param.rope.yarn.attention_factor;
+            break;
         }
-        yarn_ramp_inv_factor_div_2_   = 1.0 / (high - low) / 2.0;
-        yarn_ramp_inv_factor_mul_min_ = 1.0 / (high - low) * low;
-        yarn_inv_scaling_factor_      = (1 - 1.0 / param.rope_scaling_factor);
-        attention_factor_             = param.attention_factor;
+        case RotaryScalingType::kLlama3: {
+            const double PI            = 3.14159265358979323846;
+            float inv_diff_freq_factor = 1.0 / (param.rope.llama3.high_freq_factor - param.rope.llama3.low_freq_factor);
+            llama3_.llama3_inv_scaling_factor = 1.0 / param.rope.factor;
+            llama3_.llama3_alpha = param.rope.llama3.original_max_position_embeddings / (2 * PI) * inv_diff_freq_factor;
+            llama3_.llama3_beta  = param.rope.llama3.low_freq_factor * inv_diff_freq_factor;
+            break;
+        }
+        default:
+            FT_CHECK(0);
+            break;
     }
 }
 
@@ -188,7 +197,7 @@ void RotaryEmbeddingV2::forward(const RotaryEmbeddingV2Params& params)
                                                               params.token_num,
                                                               params.batch_size,
                                                               dim_,
-                                                              rope_scaling_factor_,
+                                                              inv_factor_,
                                                               cos_sin_);
             break;
         case RotaryScalingType::kLlama3:
@@ -198,9 +207,9 @@ void RotaryEmbeddingV2::forward(const RotaryEmbeddingV2Params& params)
                                                              params.token_num,
                                                              params.batch_size,
                                                              dim_,
-                                                             llama3_inv_scaling_factor_,
-                                                             llama3_alpha_,
-                                                             llama3_beta_,
+                                                             llama3_.llama3_inv_scaling_factor,
+                                                             llama3_.llama3_alpha,
+                                                             llama3_.llama3_beta,
                                                              cos_sin_);
             break;
         case RotaryScalingType::kYarn:
@@ -210,14 +219,12 @@ void RotaryEmbeddingV2::forward(const RotaryEmbeddingV2Params& params)
                                                            params.token_num,
                                                            params.batch_size,
                                                            dim_,
-                                                           yarn_ramp_inv_factor_div_2_,
-                                                           yarn_ramp_inv_factor_mul_min_,
-                                                           yarn_inv_scaling_factor_,
-                                                           attention_factor_,
+                                                           yarn_.yarn_ramp_inv_factor_div_2,
+                                                           yarn_.yarn_ramp_inv_factor_mul_min,
+                                                           yarn_.yarn_inv_scaling_factor,
+                                                           yarn_.attention_factor,
                                                            cos_sin_);
             break;
-        case RotaryScalingType::kMrope:
-            FT_CHECK(0);
         default:
             FT_CHECK(0);
     }
