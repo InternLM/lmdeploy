@@ -78,7 +78,6 @@ LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(int               layer_id,
                                                 weight_type_,
                                                 model.group_size};
 
-
     ffn_weights = LlamaFfnWeight<T>{
         hidden_units_,
         inter_size_,
