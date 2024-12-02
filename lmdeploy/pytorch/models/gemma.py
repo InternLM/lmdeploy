@@ -383,6 +383,8 @@ class GemmaForCausalLM(nn.Module, CudaGraphMixin):
                                             bias=False,
                                             dtype=dtype,
                                             device=device)
+        self.final_logit_softcapping = getattr(config,
+                                               'final_logit_softcapping', None)
 
     def forward(
         self,
@@ -405,7 +407,12 @@ class GemmaForCausalLM(nn.Module, CudaGraphMixin):
 
     def get_logits(self, hidden_states: torch.Tensor):
         """compute logits of the model output."""
-        return self.lm_head(hidden_states)
+        logits = self.lm_head(hidden_states)
+        if self.final_logit_softcapping is not None:
+            logits = logits / self.final_logit_softcapping
+            logits = torch.tanh(logits)
+            logits = logits * self.final_logit_softcapping
+        return logits
 
     def get_input_embeddings(self):
         """get input embeddings."""
