@@ -187,7 +187,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     bool*  is_finished = inputs->getPtr<bool>("finished");
     float* rope_theta  = inputs->getPtr<float>("rope_theta");
 
-    float* cos_sin = inputs->at("cos_sin", Tensor{MEMORY_GPU, TYPE_INVALID, {}, nullptr}).getPtr<float>();
+    float* cos_sin = inputs->getPtr<float>("cos_sin");
 
     void** block_ptrs     = outputs->getPtr<void*>("block_ptrs");
     int*   cu_block_count = inputs->getPtr<int>("cu_block_counts");

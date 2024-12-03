@@ -280,7 +280,12 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     attn_param_.softmax_scale = attention_reader["softmax_scale"].as<float>(0);
     attn_param_.use_logn_attn = attention_reader["use_logn_attn"].as<int>(0);
     // rotary embedding parameters
-    attn_param_.rope.type                    = GetRoPEType(attention_reader["rope_scaling_type"].as<std::string>(""));
+    if (attention_reader["use_dynamic_ntk"].as<int>(0) == 1) {
+        attn_param_.rope.type = RopeType::kDynamic;
+    }
+    else {
+        attn_param_.rope.type = GetRoPEType(attention_reader["rope_scaling_type"].as<std::string>(""));
+    }
     attn_param_.rope.dim                     = attention_reader["rotary_embedding"].as<int>();
     attn_param_.rope.base                    = attention_reader["rope_theta"].as<float>(10000.0f);
     attn_param_.rope.max_position_embeddings = attention_reader["max_position_embeddings"].as<int>(0);
