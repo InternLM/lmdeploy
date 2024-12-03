@@ -12,6 +12,7 @@ logger = get_logger('lmdeploy')
 
 class MacaOpsBackend(DlinferOpsBackend):
     """maca layer backend."""
+    total_slots = None
 
     @staticmethod
     def get_name() -> str:
@@ -40,6 +41,16 @@ class MacaOpsBackend(DlinferOpsBackend):
     @classmethod
     def update_step_context(cls, step_context):
         """update step context."""
+
+        def get_total_slots():
+            if cls.total_slots is None:
+                cls.total_slots = torch.arange(
+                    block_num * block_size,
+                    dtype=torch.long,
+                    device=step_context.block_offsets.device)
+                cls.total_slots = cls.total_slots.view(block_num, block_size)
+            return cls.total_slots
+
         kv_start_indices, attention_mask = [], []
         block_num, _, block_size, _ = step_context.kv_caches[0][1].shape
         device = step_context.block_offsets.device
@@ -65,19 +76,15 @@ class MacaOpsBackend(DlinferOpsBackend):
                 1, b_num.view(-1, 1)).view(-1)
             kv_start_indices = (last_block * block_size + idx).reshape((-1, 1))
         else:
-            total_slots = torch.arange(block_num * block_size,
-                                       dtype=torch.long,
-                                       device=device)
-            total_slots = total_slots.view(block_num, block_size)
             for i in range(step_context.q_start_loc.size(0)):
                 q_seq_len = int(step_context.q_seqlens[i])
                 kv_seq_len = int(step_context.kv_seqlens[i])
                 # collect kv start indices during the prefill phase.
                 history_length = kv_seq_len - q_seq_len
-                slot_tables = total_slots[
-                    step_context.block_offsets[i]].flatten()
-                slot_indices = [p for p in range(history_length, kv_seq_len)]
-                slots = slot_tables[slot_indices].reshape((-1, 1))
+                total_slots = get_total_slots()
+                slot_tables = total_slots[step_context.block_offsets[i]].view(
+                    -1)
+                slots = slot_tables[history_length:kv_seq_len]
                 kv_start_indices.append(slots)
             kv_start_indices = torch.cat(kv_start_indices)
 
