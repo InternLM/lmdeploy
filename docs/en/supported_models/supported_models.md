@@ -19,8 +19,11 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |         Qwen          |   1.8B - 72B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |        Qwen1.5        |  1.8B - 110B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |         Qwen2         |   0.5B - 72B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
+|       Qwen2-MoE       |    57BA14B     | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
+|        Qwen2.5        |   0.5B - 72B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |        Mistral        |       7B       | LLM  |    Yes    |   Yes   |   Yes   |  No   |
 |        Mixtral        |  8x7B, 8x22B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
+|      DeepSeek-V2      |   16B, 236B    | LLM  |    Yes    |   Yes   |   Yes   |  No   |
 |        Qwen-VL        |       7B       | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |      DeepSeek-VL      |       7B       | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |       Baichuan        |       7B       | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
@@ -42,6 +45,7 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 
 ```{note}
 The TurboMind engine doesn't support window attention. Therefore, for models that have applied window attention and have the corresponding switch "use_sliding_window" enabled, such as Mistral, Qwen1.5 and etc., please choose the PyTorch engine for inference.
+
 ```
 
 ## PyTorchEngine on CUDA Platform
@@ -68,6 +72,7 @@ The TurboMind engine doesn't support window attention. Therefore, for models tha
 |    QWen1.5     | 0.5B - 110B | LLM  |    Yes    |   Yes   |   Yes   |  No  |  Yes  |
 |  QWen1.5-MoE   |    A2.7B    | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 |     QWen2      | 0.5B - 72B  | LLM  |    Yes    |   Yes   |   No    |  No  |  Yes  |
+|    Qwen2.5     | 0.5B - 72B  | LLM  |    Yes    |   Yes   |   Yes   |  No  |  Yes  |
 |    QWen2-VL    |   2B, 7B    | MLLM |    Yes    |   Yes   |   No    |  No  |  No   |
 |  DeepSeek-MoE  |     16B     | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |  DeepSeek-V2   |  16B, 236B  | LLM  |    Yes    |   No    |   No    |  No  |  No   |

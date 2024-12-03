@@ -122,6 +122,8 @@ LMDeploy TurboMindエンジンは卓越した推論能力を持ち、さまざ�
   <li>Qwen1.5 (0.5B - 110B)</li>
   <li>Qwen1.5 - MoE (0.5B - 72B)</li>
   <li>Qwen2 (0.5B - 72B)</li>
+  <li>Qwen2-MoE (57BA14B)</li>
+  <li>Qwen2.5 (0.5B - 32B)</li>
   <li>Baichuan (7B)</li>
   <li>Baichuan2 (7B-13B)</li>
   <li>Code Llama (7B - 34B)</li>
