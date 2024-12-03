@@ -136,12 +136,10 @@ RotaryEmbeddingV2::RotaryEmbeddingV2(const AttentionParam& param, cudaStream_t s
 
     switch (type_) {
         case RopeType::kDefault:
+        case RopeType::kDynamic:
             break;
         case RopeType::kLinear:
             inv_factor_ = 1.0f / param.rope.factor;
-            break;
-        case RopeType::kDynamic:
-            inv_factor_ = param.rope.factor;
             break;
         case RopeType::kYarn: {
             const double PI                  = 3.14159265358979323846;
