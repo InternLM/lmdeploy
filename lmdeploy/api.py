@@ -71,7 +71,7 @@ def pipeline(model_path: str,
 
     task, pipeline_class = get_task(model_path)
     if task == 'vlm':
-        if backend_config.enable_prefix_caching:
+        if backend_config and backend_config.enable_prefix_caching:
             backend_config.enable_prefix_caching = False
             logger.warning('VLM does not support prefix caching.')
 
