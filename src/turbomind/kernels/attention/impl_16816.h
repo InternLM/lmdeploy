@@ -63,25 +63,27 @@ struct Impl<MMA_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, H
 
     static_assert(sizeof(FragS) / 2 == sizeof(FragP));
 
-    using SmemLayoutQ = std::conditional_t<HeadDim == 128,
+    using SmemLayoutQ = std::conditional_t<HeadDim % 128 == 0,
                                            SmemLayoutV2<CTA_Q * CTA_H, HeadDim, 64, 128, Swizzle<3, 3, 4>>,
                                            SmemLayoutV2<CTA_Q * CTA_H, HeadDim, 64, 64, Swizzle<3, 3, 3>>>;
-    using SmemLayoutK = std::conditional_t<HeadDim == 128,
+    using SmemLayoutK = std::conditional_t<HeadDim % 128 == 0,
                                            SmemLayoutV2<CTA_S, HeadDim, 16, 128, Swizzle<3, 3, 4>>,
                                            SmemLayoutV2<CTA_S, HeadDim, 16, 64, Swizzle<3, 3, 3>>>;
-    using SmemLayoutV = std::conditional_t<HeadDim == 128,
+    using SmemLayoutV = std::conditional_t<HeadDim % 128 == 0,
                                            SmemLayoutV2<CTA_S, HeadDim, 16, 128, Swizzle<3, 3, 4>>,
                                            SmemLayoutV2<CTA_S, HeadDim, 16, 64, Swizzle<3, 3, 3>>>;
 
     using SmemLayoutKVp = void;
 
+    static constexpr bool kUseSmemQ = false;
+    static constexpr bool kUseSmemP = false;
+
+    static_assert(!kUseSmemQ, "current smemQ impl yields inconsistent outputs");
+
     union SharedStorage {
         __align__(16) T KV[Stages * (SmemLayoutK::kSize + SmemLayoutV::kSize) / 2];
         __align__(16) T Q[SmemLayoutQ::kSize];
     };
-
-    static constexpr bool kUseSmemQ = false;
-    static constexpr bool kUseSmemP = false;
 
     using ThreadMapQ  = RakedThreadMap<HeadDim, CTA_Q * CTA_H, 8, kWarpCount>;
     using ThreadMapKV = RakedThreadMap<HeadDim, CTA_S, 8, kWarpCount>;
@@ -109,22 +111,24 @@ struct Impl<MMA_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, H
         const int warp_id = threadIdx.x / WARP_SIZE;
         const int lane_id = threadIdx.x % WARP_SIZE;
 
-        __syncwarp();
+        if constexpr (!kUseSmemQ) {
+            __syncwarp();
 
-        SmemAccessor<T, SmemLayoutQ> sQ{smem_Q};
+            SmemAccessor<T, SmemLayoutQ> sQ{smem_Q};
 
-        // Load from shared memory using LDSM, rearrange to m16n8k16 atom layout
-        PRAGMA_UNROLL
-        for (int m = 0; m < K_M; ++m) {
+            // Load from shared memory using LDSM, rearrange to m16n8k16 atom layout
             PRAGMA_UNROLL
-            for (int k = 0; k < K_K; ++k) {
-                const int qi = lane_id % 16 * 1 + m * 16 + warp_id * WARP_Q;
-                const int di = lane_id / 16 * 8 + k * 16;
-                ldsm_x4((Array<uint32_t, 4>&)frag_Q[k][m], cast_smem_ptr_to_uint(&sQ(qi, di)));
+            for (int m = 0; m < K_M; ++m) {
+                PRAGMA_UNROLL
+                for (int k = 0; k < K_K; ++k) {
+                    const int qi = lane_id % 16 * 1 + m * 16 + warp_id * WARP_Q;
+                    const int di = lane_id / 16 * 8 + k * 16;
+                    ldsm_x4((Array<uint32_t, 4>&)frag_Q[k][m], cast_smem_ptr_to_uint(&sQ(qi, di)));
+                }
             }
         }
 
-        if constexpr (kUseSmemQ) {
+        if constexpr (0) {
             __syncthreads();
 
             // Rearrange Q in smem so that swizzling is not needed for later LDSMs
@@ -142,19 +146,24 @@ struct Impl<MMA_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, H
 
     struct StateQK {
         SmemAccessor<T, SmemLayoutK> smem_K;
+        T*                           smem_Q;
 
         FragQ frag_Q;
         FragK frag_K;
 
         __device__ StateQK(SharedStorage& storage, FragQ frag_Q_): smem_K{storage.KV}
         {
-            static_assert(!kUseSmemQ, "not implemented");
-            PRAGMA_UNROLL
-            for (int k = 0; k < K_K; ++k) {
+            if constexpr (!kUseSmemQ) {
                 PRAGMA_UNROLL
-                for (int m = 0; m < K_M; ++m) {
-                    frag_Q[k][m] = frag_Q_[k][m];
+                for (int k = 0; k < K_K; ++k) {
+                    PRAGMA_UNROLL
+                    for (int m = 0; m < K_M; ++m) {
+                        frag_Q[k][m] = frag_Q_[k][m];
+                    }
                 }
+            }
+            else {
+                smem_Q = storage.Q;
             }
         }
 
@@ -166,6 +175,16 @@ struct Impl<MMA_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, H
             const int offset_s      = group_lane_id % 8 + group_id * 8;
             const int offset_c      = group_lane_id / 8 * 8;
             const int offset        = pipe_iter * SmemLayoutK::kSize;
+            if constexpr (kUseSmemQ) {
+                const int                    warp_id = threadIdx.x / WARP_SIZE;
+                SmemAccessor<T, SmemLayoutQ> sQ{smem_Q};
+                PRAGMA_UNROLL
+                for (int m = 0; m < K_M; ++m) {
+                    const int qi = lane_id % 16 * 1 + m * 16 + warp_id * WARP_Q;
+                    const int di = lane_id / 16 * 8 + k * 16;
+                    ldsm_x4((Array<uint32_t, 4>&)frag_Q[k][m], cast_smem_ptr_to_uint(&sQ(qi, di)));
+                }
+            }
             PRAGMA_UNROLL
             for (int n = 0; n < K_N; n += 2) {  // Load (s16,d16) tiles
                 const int s = n * 8 + offset_s;

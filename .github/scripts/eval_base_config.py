@@ -89,6 +89,17 @@ with read_base():
         models as lmdeploy_qwen1_5_7b  # noqa: F401, E501
     from opencompass.configs.models.qwen.lmdeploy_qwen2_7b import \
         models as lmdeploy_qwen2_7b  # noqa: F401, E501
+    # Summary Groups
+    from opencompass.configs.summarizers.groups.cmmlu import \
+        cmmlu_summary_groups  # noqa: F401, E501
+    from opencompass.configs.summarizers.groups.GaokaoBench import \
+        GaokaoBench_summary_groups  # noqa: F401, E501
+    from opencompass.configs.summarizers.groups.mathbench_v1_2024 import \
+        mathbench_2024_summary_groups  # noqa: F401, E501
+    from opencompass.configs.summarizers.groups.mmlu import \
+        mmlu_summary_groups  # noqa: F401, E501
+    from opencompass.configs.summarizers.groups.mmlu_pro import \
+        mmlu_pro_summary_groups  # noqa: F401, E501
 
     # read models
 race_datasets = [race_datasets[1]]

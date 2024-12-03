@@ -158,6 +158,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>InternVL-Chat (v1.1-v1.5)</li>
   <li>InternVL2 (1B-76B)</li>
   <li>Mono-InternVL (2B)</li>
+  <li>ChemVLM (8B-26B)</li>
   <li>MiniGeminiLlama (7B)</li>
   <li>CogVLM-Chat (17B)</li>
   <li>CogVLM2-Chat (19B)</li>
@@ -167,6 +168,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>Phi-3.5-vision (4.2B)</li>
   <li>GLM-4V (9B)</li>
   <li>Llama3.2-vision (11B, 90B)</li>
+  <li>Molmo (7B-D,72B)</li>
 </ul>
 </td>
 </tr>

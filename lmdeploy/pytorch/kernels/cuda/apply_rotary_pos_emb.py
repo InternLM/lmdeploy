@@ -4,35 +4,9 @@ import triton
 import triton.language as tl
 from torch import Tensor
 
-from .triton_utils import get_kernel_meta, wrap_jit_func
+from .triton_utils import get_kernel_meta
 
 
-@wrap_jit_func(type_hint=dict(
-    Q=Tensor,
-    K=Tensor,
-    COS=Tensor,
-    SIN=Tensor,
-    POS=Tensor,
-    Q_EMB=Tensor,
-    K_EMB=Tensor,
-    seq_len=int,
-    stride_qs=int,
-    stride_qh=int,
-    stride_qd=int,
-    stride_ks=int,
-    stride_kh=int,
-    stride_kd=int,
-    stride_qes=int,
-    stride_qeh=int,
-    stride_qed=int,
-    stride_kes=int,
-    stride_keh=int,
-    stride_ked=int,
-    half_size=torch.int32,
-    BLOCK=torch.int32,
-    BLOCK_QH=torch.int32,
-    BLOCK_N=torch.int32,
-))
 @triton.jit(do_not_specialize=('seq_len', ))
 def apply_rotary_pos_emb_qk_kernel(
     Q,
@@ -60,8 +34,8 @@ def apply_rotary_pos_emb_qk_kernel(
     BLOCK_N: tl.constexpr,
 ):
     """apply rotary on key AND query kernel."""
-    seq_block_id = tl.program_id(0)
-    head_id = tl.program_id(1)
+    seq_block_id = tl.program_id(1)
+    head_id = tl.program_id(0)
 
     pos_offset = seq_block_id * BLOCK + tl.arange(0, BLOCK)
     pos_mask = pos_offset < seq_len
@@ -158,10 +132,13 @@ def apply_rotary_pos_emb(q: Tensor,
     num_heads_q = q.size(-2)
     num_heads_k = k.size(-2)
     num_warps = 4
-    num_stages = 4
+    num_stages = 1
 
     kernel_meta = get_kernel_meta(q)
-    grid = [triton.cdiv(seq_len, BLOCK), num_heads_q + num_heads_k]
+    grid = [
+        num_heads_q + num_heads_k,
+        triton.cdiv(seq_len, BLOCK),
+    ]
     apply_rotary_pos_emb_qk_kernel[grid](q,
                                          k,
                                          cos,

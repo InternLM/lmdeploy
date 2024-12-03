@@ -241,11 +241,10 @@ def get_tm_model(model_path,
         engine_config.model_format = quant_method
         group_size = _group_size
 
-    # Compatible to awq models that are quantized by lmdeploy (<=v0.3.0)
-    if not group_size:
-        group_size = 128
-
     if engine_config.model_format in ['awq', 'gptq']:
+        # Compatible to awq models that are quantized by lmdeploy (<=v0.3.0)
+        if not group_size:
+            group_size = 128
         assert group_size == 128, \
             f'model format is "{engine_config.model_format}" ' \
             f'but group_size is {group_size}. Currently, only 128 ' \

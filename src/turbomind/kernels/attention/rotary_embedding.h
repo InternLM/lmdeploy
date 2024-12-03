@@ -131,6 +131,7 @@ struct FastRoPE {
     template<typename T>
     __device__ void apply(Array<T, N>& x, float timestep)
     {
+#if 0
         PRAGMA_UNROLL
         for (int i = 0; i < N; i += 2) {
             float c, s;
@@ -144,6 +145,22 @@ struct FastRoPE {
                 x[i + 1] = (T)tmp1;
             }
         }
+#else
+        // Most models apply rotary embedding in half precision
+        PRAGMA_UNROLL
+        for (int i = 0; i < N; i += 2) {
+            float c, s;
+            sincosf(timestep * inv_freq_[i / 2], &s, &c);
+            s *= attention_scaling_;
+            c *= attention_scaling_;
+            T tmp0 = (T)c * x[i] - (T)s * x[i + 1];
+            T tmp1 = (T)c * x[i + 1] + (T)s * x[i];
+            if (is_valid_) {
+                x[i]     = tmp0;
+                x[i + 1] = tmp1;
+            }
+        }
+#endif
     }
 };
 

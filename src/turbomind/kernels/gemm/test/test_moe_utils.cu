@@ -26,71 +26,24 @@ void print_vecs(const T* data, int m, int k, std::string msg, int width = 4)
     }
 }
 
-#if 0
-void func()
+template<class T>
+void diff_vecs(const T* data, const T* refs, int m, int k, std::string msg)
 {
-    using thrust::universal_vector;
-
-    // clang-format off
-    std::vector<float> h_logits{
-        8,  5,  1,  4,  3,  6,  2,  7,
-        50, 60, 90, 20, 70, 71, 72, 73,
-        0, 1, 0, 0, 0, 1, 0, 1,
-        0, 0, 0, 1, 0, 0, 0, 2};
-    // clang-format on
-
-    h_logits.resize(8);
-
-    // auto tmp = h_logits;
-    // for (int i = 0; i < 127; ++i) {
-    //     h_logits.insert(h_logits.end(), tmp.begin(), tmp.end());
-    // }
-
-    universal_vector<float> logits(h_logits.begin(), h_logits.end());
-
-    const int E = 8;
-    const int n = h_logits.size() / E;
-    const int e = 2;
-
-    const int n_padded = (n + kMoeGateVecSize - 1) / kMoeGateVecSize * kMoeGateVecSize;
-
-    universal_vector<int>   f2n(e * n);
-    universal_vector<int>   en2f(e * n);
-    universal_vector<int>   offsets(E + 1);
-    universal_vector<int>   accum(E * kMoeGateMaxTiles);
-    universal_vector<float> scales(n * e);
-    universal_vector<int>   masks(E * n_padded);
-
-    for (int i = 0; i < 10; ++i) {
-        gemm::CacheFlushing::flush(0);
-        cudaMemset(accum.data().get(), 0, sizeof(int) * accum.size());
-        invokeMoeGate_V2(f2n.data().get(),
-                         en2f.data().get(),
-                         offsets.data().get(),
-                         scales.data().get(),
-                         masks.data().get(),
-                         accum.data().get(),
-                         logits.data().get(),
-                         n,
-                         n_padded,
-                         E,
-                         e,
-                         0);
+    if (!msg.empty()) {
+        std::cout << msg << ": [" << m << ", " << k << "]\n";
     }
-
-    auto err = cudaDeviceSynchronize();
-    if (err) {
-        std::cerr << cudaGetErrorString(err) << "\n";
+    for (int mm = 0; mm < m; ++mm) {
+        std::cout << "m=" << mm << ": ";
+        for (int kk = 0; kk < k; ++kk) {
+            const auto& x = data[mm * k + kk];
+            const auto& y = refs[mm * k + kk];
+            if (x != y) {
+                std::cout << kk << "(" << x << ", " << y << ") ";
+            }
+        }
+        std::cout << "\n";
     }
-
-    print_vecs(scales.data().get(), e, n, "scales", 12);
-    print_vecs(masks.data().get(), E, n_padded, "tmp");
-    print_vecs(accum.data().get(), E, 1, "accum");
-    print_vecs(offsets.data().get(), 1, E + 1, "offsets");
-    print_vecs(f2n.data().get(), n * e, 1, "f2n");
-    print_vecs(en2f.data().get(), e, n, "en2f");
 }
-#endif
 
 RNG& gRNG()
 {
@@ -190,7 +143,7 @@ void moe_gate_ref(int                            tokens,
     }
 }
 
-void mask2eids(const universal_vector<int>& masks, universal_vector<int>& eids, int tokens, int expert_num)
+void mask2eids(universal_vector<int8_t>& masks, universal_vector<int>& eids, int tokens, int expert_num)
 {
     const int tokens_padded = masks.size() / expert_num;
     // std::cout << eids.size() << std::endl;
@@ -228,13 +181,13 @@ bool test_moe_gate(int                     tokens,  //
     const int tokens_padded = (tokens + kMoeGateVecSize - 1) / kMoeGateVecSize * kMoeGateVecSize;
     // const int max_coords    = get_max_coords(tokens, expert_num, experts_per_token, tiling);
 
-    universal_vector<int>   offsets(expert_num + 1);
-    universal_vector<int>   accum(expert_num * kMoeGateMaxTiles);
-    universal_vector<int>   masks(expert_num * tokens_padded);
-    universal_vector<int>   eids(experts_per_token * tokens);
-    universal_vector<int>   f2n(experts_per_token * tokens);
-    universal_vector<int>   en2f(experts_per_token * tokens);
-    universal_vector<float> scales(experts_per_token * tokens);
+    universal_vector<int>    offsets(expert_num + 1);
+    universal_vector<int>    accum(expert_num * kMoeGateMaxTiles);
+    universal_vector<int8_t> masks(expert_num * tokens_padded);
+    universal_vector<int>    eids(experts_per_token * tokens);
+    universal_vector<int>    f2n(experts_per_token * tokens);
+    universal_vector<int>    en2f(experts_per_token * tokens);
+    universal_vector<float>  scales(experts_per_token * tokens);
     // universal_vector<int2>  coords(max_coords);
     // thrust::fill(coords.begin(), coords.end(), int2{-1, 0});
 
@@ -246,8 +199,18 @@ bool test_moe_gate(int                     tokens,  //
 
     moe_gate_ref(tokens, expert_num, experts_per_token, logits, offsets_ref, eids_ref, f2n_ref, en2f_ref, scales_ref);
 
-    for (int i = 0; i < 10; ++i) {
+    cudaMemPrefetchAsync(f2n.data().get(), sizeof(int) * f2n.size(), 0);
+    cudaMemPrefetchAsync(en2f.data().get(), sizeof(int) * en2f.size(), 0);
+    cudaMemPrefetchAsync(offsets.data().get(), sizeof(int) * offsets.size(), 0);
+    cudaMemPrefetchAsync(scales.data().get(), sizeof(float) * scales.size(), 0);
+    cudaMemPrefetchAsync(logits.data().get(), sizeof(float) * logits.size(), 0);
+
+    // invokeMaskMoeTopKGroups(logits.data().get(), tokens, expert_num, expert_num / 8, 3, nullptr);
+
+    for (int i = 0; i < 1; ++i) {
+        gemm::CacheFlushing::flush();
         cudaMemset(accum.data().get(), 0, sizeof(int) * accum.size());
+        cudaMemset(masks.data().get(), -1, sizeof(int8_t) * masks.size());
         invokeMoeGate_V2(f2n.data().get(),
                          en2f.data().get(),
                          offsets.data().get(),
@@ -259,7 +222,9 @@ bool test_moe_gate(int                     tokens,  //
                          tokens_padded,
                          expert_num,
                          experts_per_token,
-                         0);
+                         false,
+                         1.f,
+                         nullptr);
     }
 
     // invokeMoeTiling(coords.data().get(), offsets.data().get(), expert_num, coords.size(), &tiling, 1, 0);
@@ -306,7 +271,12 @@ bool test_moe_gate(int                     tokens,  //
         success = false;
     }
 
-    if (!success || false) {
+    // print_vecs(logits.data().get(), tokens, expert_num, "logits", 12);
+
+    if (!success && 1) {
+
+        diff_vecs(eids.data().get(), eids_ref.data().get(), experts_per_token, tokens, "eids");
+
         print_vecs(offsets_ref.data().get(), 1, expert_num + 1, "offsets_ref");
         print_vecs(offsets.data().get(), 1, expert_num + 1, "offsets");
 
@@ -322,32 +292,41 @@ bool test_moe_gate(int                     tokens,  //
         print_vecs(scales_ref.data().get(), experts_per_token, tokens, "scales_ref", 12);
         print_vecs(scales.data().get(), experts_per_token, tokens, "scales", 12);
 
-        print_vecs(accum.data().get(), expert_num, 1, "accum");
+        for (int i = 0; i < tokens; ++i) {
+            float sum = 0;
+            for (int j = 0; j < experts_per_token; ++j) {
+                sum += scales[j * tokens + i];
+            }
+            std::cout << sum << " ";
+        }
+        std::cout << "\n";
+
+        // print_vecs(accum.data().get(), expert_num, 1, "accum");
 
         // print_vecs(coords.data().get(), 1, max_coords, "coords");
 
-        thrust::host_vector<int4> tile_offsets(tape.max_ctas);
-        std::cout << tape.max_ctas << std::endl;
-        cudaMemcpy(tile_offsets.data(), tape.tile_offsets, sizeof(int4) * tile_offsets.size(), cudaMemcpyDefault);
-        cudaDeviceSynchronize();
+        // thrust::host_vector<int4> tile_offsets(tape.max_ctas);
+        // std::cout << tape.max_ctas << std::endl;
+        // cudaMemcpy(tile_offsets.data(), tape.tile_offsets, sizeof(int4) * tile_offsets.size(), cudaMemcpyDefault);
+        // cudaDeviceSynchronize();
 
-        std::cout << "coords:\n";
-        int last = -1;
-        for (int i = 0; i < tape.max_ctas; ++i) {
-            auto& c = tile_offsets[i];
-            if (last >= 0 && c.w != last) {
-                std::cout << "\n";
-            }
-            if (c.w == -1) {
-                std::cout << i << "\n";
-                break;
-            }
-            last = c.w;
-            std::stringstream ss;
-            ss << c.x << "," << c.y;
-            std::cout << std::setw(6) << ss.str();
-        }
-        std::cout << "\n";
+        // std::cout << "coords:\n";
+        // int last = -1;
+        // for (int i = 0; i < tape.max_ctas; ++i) {
+        //     auto& c = tile_offsets[i];
+        //     if (last >= 0 && c.w != last) {
+        //         std::cout << "\n";
+        //     }
+        //     if (c.w == -1) {
+        //         std::cout << i << "\n";
+        //         break;
+        //     }
+        //     last = c.w;
+        //     std::stringstream ss;
+        //     ss << c.x << "," << c.y;
+        //     std::cout << std::setw(6) << ss.str();
+        // }
+        // std::cout << "\n";
     }
 
     return success;
@@ -358,7 +337,11 @@ int main()
     gemm::Tape       tape{};
     constexpr Tiling tiling{14336, 128, {128, 128, 32}};
 
-    test_moe_gate(8192, 8, 2, tape, tiling);
+    // test_moe_gate(32768 * 4, 60, 4, tape, tiling);
+    // test_moe_gate(32768, 64, 8, tape, tiling);
+    // test_moe_gate(8, 60, 4, tape, tiling);
+
+    test_moe_gate(16, 160, 6, tape, tiling);
     return 0;
 
     for (int i = 1; i < 16384; ++i) {

@@ -84,7 +84,7 @@ int main(int argc, char* argv[])
         return -1;
     }
     else {
-        ft::deviceMalloc(reinterpret_cast<char**>(&gemm_test_buf), buf_size_in_byte, false);
+        ft::deviceMalloc(reinterpret_cast<char**>(&gemm_test_buf), buf_size_in_byte, nullptr, false);
     }
 
     if (0) {}

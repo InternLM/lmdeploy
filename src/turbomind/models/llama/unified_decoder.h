@@ -22,7 +22,9 @@ private:
     const float        rmsnorm_eps_;
     cudaStream_t const stream_;
     IAllocator* const  allocator_;
+    const NcclParam    tp_;
     const DataType     dtype_;
+    const int          tune_layer_num_;
     bool               is_free_buffer_after_forward_{};
 
     int* cu_q_len_{};
@@ -39,13 +41,13 @@ private:
 
     using WeightType = LlamaDecoderLayerWeight<T>;
 
-    void forwardSelfAttn(T*                             attn_io,
-                         TensorMap*                     _outputs,
-                         const TensorMap*               _inputs,
-                         size_t                         token_num,
-                         size_t                         batch_size,
-                         int                            layer_id,
-                         const LlamaAttentionWeight<T>* weight);
+    void forwardSelfAttn(T*                attn_io,
+                         TensorMap*        _outputs,
+                         const TensorMap*  _inputs,
+                         size_t            token_num,
+                         size_t            batch_size,
+                         int               layer_id,
+                         const WeightType* weight);
 
 public:
     UnifiedDecoder(const ModelParam&     model,
