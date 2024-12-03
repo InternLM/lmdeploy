@@ -265,7 +265,7 @@ class StepContext:
         # kv_seqlens
         if inputs.is_decoding:
             attention_mask = torch.ones_like(q_seqlens)[:, None]
-            position_ids = history_seqlens.unsqueeze(-1)
+            position_ids = history_seqlens.unsqueeze(-1).clone()
         else:
             max_q_seqlen = q_seqlens.max().item()
             mask_range = torch.arange(max_q_seqlen, device=device)[None, :]
@@ -277,7 +277,7 @@ class StepContext:
         # cross
         cross_seqlens = inputs.cross_length
         cross_kv_seqlens = None
-        if cross_kv_seqlens is not None:
+        if inputs.cross_length is not None:
             cross_kv_seqlens = (inputs.cross_length +
                                 inputs.history_cross_length)
 

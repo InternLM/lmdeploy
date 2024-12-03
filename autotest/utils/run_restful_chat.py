@@ -282,6 +282,7 @@ def get_model(url):
 
 
 PIC = 'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg'  # noqa E501
+PIC2 = 'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/demo/resources/human-pose.jpg'  # noqa E501
 
 
 def run_vl_testcase(config, port: int = DEFAULT_PORT):
@@ -307,6 +308,11 @@ def run_vl_testcase(config, port: int = DEFAULT_PORT):
             'image_url': {
                 'url': PIC,
             },
+        }, {
+            'type': 'image_url',
+            'image_url': {
+                'url': PIC2,
+            },
         }],
     }]
 
@@ -315,8 +321,6 @@ def run_vl_testcase(config, port: int = DEFAULT_PORT):
                                               temperature=0.8,
                                               top_p=0.8)
     file.writelines(str(response).lower() + '\n')
-    assert 'tiger' in str(response).lower() or '虎' in str(
-        response).lower(), response
 
     api_client = APIClient(http_url)
     model_name = api_client.available_models[0]
@@ -324,7 +328,12 @@ def run_vl_testcase(config, port: int = DEFAULT_PORT):
                                                messages=prompt_messages):
         continue
     file.writelines(str(item) + '\n')
-    assert 'tiger' in str(item).lower() or '虎' in str(item).lower(), item
 
     allure.attach.file(restful_log,
                        attachment_type=allure.attachment_type.TEXT)
+
+    assert 'tiger' in str(response).lower() or '虎' in str(
+        response).lower() or 'ski' in str(response).lower() or '滑雪' in str(
+            response).lower(), response
+    assert 'tiger' in str(item).lower() or '虎' in str(item).lower(
+    ) or 'ski' in str(item).lower() or '滑雪' in str(item).lower(), item

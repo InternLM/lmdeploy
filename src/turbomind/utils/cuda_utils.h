@@ -483,5 +483,24 @@ void compareTwoTensor(
 
 bool is_16xx_series(const char* name);
 
+class CudaDeviceGuard {
+public:
+    CudaDeviceGuard(int device)
+    {
+        cudaGetDevice(&last_device_id_);
+        if (device != last_device_id_) {
+            cudaSetDevice(device);
+        }
+    }
+
+    ~CudaDeviceGuard()
+    {
+        cudaSetDevice(last_device_id_);
+    }
+
+private:
+    int last_device_id_{-1};
+};
+
 /* ************************** end of common utils ************************** */
 }  // namespace turbomind

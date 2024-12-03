@@ -205,11 +205,12 @@ def _fwd_grouped_split_kernel(
         qk += tl.dot(q, k)
         if BLOCK_DMODEL1 != 0:
             qk += tl.dot(q1, k1)
-        qk *= sm_scale * tl_log2(math.e)
+        qk *= sm_scale
         if logit_softcapping > 0.0:
             qk = qk / logit_softcapping
             qk = tanh(qk)
             qk = qk * logit_softcapping
+        qk = qk * tl_log2(math.e)
         # NOTE: inf - inf = nan, and nan will leads to error
         if start_n + BLOCK_N > history_len or window_size > 0:
             qk_mask = history_len >= (start_n + offs_n)
@@ -491,11 +492,12 @@ def _fwd_grouped_split_quant_kernel(
         qk += tl.dot(q, k)
         if BLOCK_DMODEL1 != 0:
             qk += tl.dot(q1, k1)
-        qk *= sm_scale * tl_log2(math.e)
+        qk *= sm_scale
         if logit_softcapping > 0.0:
             qk = qk / logit_softcapping
             qk = tanh(qk)
             qk = qk * logit_softcapping
+        qk = qk * tl_log2(math.e)
         # NOTE: inf - inf = nan, and nan will leads to error
         if start_n + BLOCK_N > history_len or window_size > 0:
             qk_mask = history_len >= (start_n + offs_n)

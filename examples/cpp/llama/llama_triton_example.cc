@@ -114,14 +114,14 @@ broadCastRequest(const std::vector<int>& v_start_ids,
         }
         else {
             // conditional case.
-            ft::deviceMalloc(&d_input_ids, size_1, false);
+            ft::deviceMalloc(&d_input_ids, size_1, nullptr, false);
             // ft::deviceMalloc(&d_input_lengths, size_2, false);
             ft::cudaH2Dcpy(d_input_ids, v_input_ids.data(), size_1);
             // ft::cudaH2Dcpy(d_input_lengths, v_input_lengths.data(), size_2);
         }
 
         if (!v_input_bad_words.empty()) {
-            ft::deviceMalloc(&d_input_bad_words, size_bad_words, false);
+            ft::deviceMalloc(&d_input_bad_words, size_bad_words, nullptr, false);
             ft::cudaH2Dcpy(d_input_bad_words, v_input_bad_words.data(), size_bad_words);
         }
         else {

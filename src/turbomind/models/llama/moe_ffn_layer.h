@@ -9,6 +9,7 @@
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
 #include "src/turbomind/utils/nccl_utils.h"
+#include <algorithm>
 
 namespace turbomind {
 
@@ -26,23 +27,24 @@ public:
         linear_(ctx.linear.get()),
         allocator_(ctx.allocator.get())
     {
-        model.inter_size = param.inter_size;
+        FT_CHECK(!param.expert_num.empty());
+        const int max_expert_num = *std::max_element(param.expert_num.begin(), param.expert_num.end());
 
         if (param_.method == MoeParam::kFused) {
             context_ = std::make_unique<gemm::MoeGemmContext>(
-                param.expert_num, param.experts_per_token, ctx.cuda_device_prop, stream_);
+                max_expert_num, param.experts_per_token, ctx.cuda_device_prop, stream_);
         }
         else {
-            expert_ffn_ = std::make_unique<LlamaFfnLayer<T>>(model, tp, ctx, false);
+            expert_ffn_ = std::make_unique<LlamaFfnLayer<T>>(model, tp, ctx);
         }
 
-        h_offsets_ = (int*)allocator_->malloc(sizeof(int) * (param_.expert_num + 1), false, true);
+        h_offsets_ = (int*)allocator_->malloc(sizeof(int) * (max_expert_num + 1), false, true);
 
-        offsets_ = (int*)allocator_->malloc(sizeof(int) * (param_.expert_num + 1));
-        accum_   = (int*)allocator_->malloc(sizeof(int) * param_.expert_num * kMoeGateMaxTiles);
+        offsets_ = (int*)allocator_->malloc(sizeof(int) * (max_expert_num + 1));
+        accum_   = (int*)allocator_->malloc(sizeof(int) * max_expert_num * kMoeGateMaxTiles);
     }
 
-    void AllocateBuffer(size_t tokens, size_t padded);
+    void AllocateBuffer(size_t tokens, size_t padded, size_t expert_num, size_t inter_buf_factor);
 
     void FreeBuffer();
 
@@ -53,11 +55,11 @@ public:
 
     void forward(T* output, const T* input, int tokens, int layer_id, const MoeFfnWeight<T>& moe);
 
-    void reduce(T* output, int tokens, const MoeFfnWeight<T>& moe);
+    void reduce(T* output, int tokens, float output_scale, int layer_id, const MoeFfnWeight<T>& moe);
 
     void gate(float* logits, const T* input, int tokens, const LlamaDenseWeight<T>& weight);
 
-    void dump_logits(int token_num, int layer_id);
+    void dump_logits(int token_num, int layer_id, int expert_num);
 
 private:
     const size_t           inter_size_;
