@@ -39,6 +39,8 @@ def prefill_attention(
     else:
         return ext_ops.paged_prefill_attention(
             query_states,
+            key_states,
+            value_states,
             key_cache,
             value_cache,
             block_offsets,
@@ -46,6 +48,7 @@ def prefill_attention(
             q_start_loc,
             q_seq_len,
             kv_seq_len,
+            max_q_seq_len,
             num_q_heads,
             num_kv_heads,
             attn_mask,
