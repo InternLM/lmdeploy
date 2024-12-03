@@ -202,6 +202,26 @@ class Attn(Module):
             o = torch.zeros_like(q)
         return qkv, o
 
+    def _repeat_kv(self, qkvo, kind: str):
+        """replicate kv."""
+        q, k, v, o = qkvo
+        head_dim = self.model.model_config.size_per_head
+        hidden_dim = self.model.model_config.hidden_units
+
+        def _repeat(x):
+            dim = hidden_dim if kind != 'bias' else 1
+            x = x.view(-1, head_dim, dim).repeat(1, self.model.repeat_kv, 1)
+            x = x.reshape(-1, dim)
+            return x
+
+        k, v = map(_repeat, (k, v))
+        if kind == 'bias':
+            if o is None:
+                o = torch.zeros(hidden_dim, dtype=q.dtype, device=q.device)
+            q, k, v, o = map(torch.squeeze, (q, k, v, o))
+
+        return (q, k, v, o)
+
     def _export(self, idx: int, qkvo, kind: str, pack_fn, **kwargs):
         if all(x is None for x in qkvo):
             return
