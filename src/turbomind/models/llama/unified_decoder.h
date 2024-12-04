@@ -37,7 +37,7 @@ private:
     std::unique_ptr<UnifiedAttentionLayer<T>> attn_layer_;
     std::unique_ptr<LlamaFfnLayer<T>>         ffn_layer_;
     std::unique_ptr<MoeFfnLayer<T>>           moe_ffn_layer_;
-    std::unique_ptr<RotaryEmbeddingV2>        rotary_emb_;
+    std::unique_ptr<RotaryEmbeddingV2<T>>     rotary_emb_;
 
     cudaEvent_t ev_h_cu_x_{};
 

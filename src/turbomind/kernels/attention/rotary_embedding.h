@@ -70,14 +70,12 @@ __device__ void ApplyRotaryEmbedding(Array<T, 4>& x, float base, int dims, int t
 struct PrecomputeFastRoPE {
 
     template<typename T, int N>
-    __device__ void apply(Array<T, N>& x, Array<float, N>& cs)
+    __device__ void apply(Array<T, N>& x, Array<T, N>& cs)
     {
         PRAGMA_UNROLL
         for (int i = 0; i < N; i += 2) {
-            float tmp0 = cs[i] * (float)x[i] - cs[i + 1] * (float)x[i + 1];
-            float tmp1 = cs[i] * (float)x[i + 1] + cs[i + 1] * (float)x[i];
-            x[i]       = (T)tmp0;
-            x[i + 1]   = (T)tmp1;
+            x[i]     = cs[i] * x[i] - cs[i + 1] * x[i + 1];
+            x[i + 1] = cs[i] * x[i + 1] + cs[i + 1] * x[i];
         }
     }
 };

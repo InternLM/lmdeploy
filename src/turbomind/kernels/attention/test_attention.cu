@@ -147,7 +147,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
                            cu_seq_lens.data().get(),
                            cu_seq_lens.data().get(),
                            cu_block_cnts.data().get(),
-                           nullptr,
+                           (T*)nullptr,
                            rope_dim,
                            2 * head_num * seq_len,
                            0,
@@ -386,7 +386,7 @@ int test_attention()
     attn_param.rope.base   = kRoPEBase;
     attn_param.rope.dim    = kRoPEDim;
     attn_param.rope.factor = 1.0f;
-    auto rotary_emb        = std::make_unique<RotaryEmbeddingV2>(attn_param, nullptr, allocator.get());
+    auto rotary_emb        = std::make_unique<RotaryEmbeddingV2<T>>(attn_param, nullptr, allocator.get());
 
     RotaryEmbeddingV2Param rotary_param;
     rotary_param.rope_theta = rope_base.data().get();

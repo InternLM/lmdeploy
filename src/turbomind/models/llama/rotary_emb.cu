@@ -26,14 +26,9 @@ __inline__ __device__ float compute_default_parameters(float base, float dim, in
     return inv_freq;
 }
 
-__global__ void computeCosSinDefault(const float* rope_base,
-                                     int*         q_len,
-                                     int*         k_len,
-                                     int          token_num,
-                                     int          batch_size,
-                                     int          dim,
-                                     float        factor,
-                                     float*       cos_sin)
+template<typename T>
+__global__ void computeCosSinDefault(
+    const float* rope_base, int* q_len, int* k_len, int token_num, int batch_size, int dim, float factor, T* cos_sin)
 {
     int qi = blockIdx.x;
     int di = threadIdx.x;
@@ -46,9 +41,11 @@ __global__ void computeCosSinDefault(const float* rope_base,
     float inv_freq = compute_default_parameters(base, dim, di * 2, factor);
     float c, s;
     sincosf(ti * inv_freq, &s, &c);
-    (float2&)cos_sin[dim * qi + 2 * di] = {c, s};
+    cos_sin[dim * qi + 2 * di]     = (T)c;
+    cos_sin[dim * qi + 2 * di + 1] = (T)s;
 }
 
+template<typename T>
 __global__ void computeCosSinLlama3(const float* rope_base,
                                     int*         q_len,
                                     int*         k_len,
@@ -58,7 +55,7 @@ __global__ void computeCosSinLlama3(const float* rope_base,
                                     float        inv_scaling_factor,
                                     float        alpha,
                                     float        beta,
-                                    float*       cos_sin)
+                                    T*           cos_sin)
 {
     int qi = blockIdx.x;
     int di = threadIdx.x;
@@ -73,9 +70,11 @@ __global__ void computeCosSinLlama3(const float* rope_base,
     inv_freq       = (1 - smooth) * inv_freq * inv_scaling_factor + smooth * inv_freq;
     float c, s;
     sincosf(ti * inv_freq, &s, &c);
-    (float2&)cos_sin[dim * qi + 2 * di] = {c, s};
+    cos_sin[dim * qi + 2 * di]     = (T)c;
+    cos_sin[dim * qi + 2 * di + 1] = (T)s;
 }
 
+template<typename T>
 __global__ void computeCosSinYarn(const float* rope_base,
                                   int*         q_len,
                                   int*         k_len,
@@ -86,7 +85,7 @@ __global__ void computeCosSinYarn(const float* rope_base,
                                   float        ramp_inv_factor_mul_min,
                                   float        inv_scaling_factor,
                                   float        attention_scaling,
-                                  float*       cos_sin)
+                                  T*           cos_sin)
 {
     int qi = blockIdx.x;
     int di = threadIdx.x;
@@ -105,7 +104,8 @@ __global__ void computeCosSinYarn(const float* rope_base,
     sincosf(ti * inv_freq, &s, &c);
     c *= attention_scaling;
     s *= attention_scaling;
-    (float2&)cos_sin[dim * qi + 2 * di] = {c, s};
+    cos_sin[dim * qi + 2 * di]     = (T)c;
+    cos_sin[dim * qi + 2 * di + 1] = (T)s;
 }
 
 RopeType GetRoPEType(const std::string& type)
@@ -118,17 +118,20 @@ RopeType GetRoPEType(const std::string& type)
     return lookup.at(type);
 }
 
-void RotaryEmbeddingV2::freeBuffer()
+template<typename T>
+void RotaryEmbeddingV2<T>::freeBuffer()
 {
     allocator_->free((void**)&cos_sin_);
 }
 
-void RotaryEmbeddingV2::allocateBuffer(size_t token_num)
+template<typename T>
+void RotaryEmbeddingV2<T>::allocateBuffer(size_t token_num)
 {
-    cos_sin_ = (float*)allocator_->reMalloc(cos_sin_, sizeof(float) * token_num * dim_);
+    cos_sin_ = (T*)allocator_->reMalloc(cos_sin_, sizeof(T) * token_num * dim_);
 }
 
-RotaryEmbeddingV2::RotaryEmbeddingV2(const AttentionParam& param, cudaStream_t stream, IAllocator* allocator):
+template<typename T>
+RotaryEmbeddingV2<T>::RotaryEmbeddingV2(const AttentionParam& param, cudaStream_t stream, IAllocator* allocator):
     stream_(stream), allocator_(allocator)
 {
     type_ = param.rope.type;
@@ -178,7 +181,8 @@ RotaryEmbeddingV2::RotaryEmbeddingV2(const AttentionParam& param, cudaStream_t s
     }
 }
 
-void RotaryEmbeddingV2::forward(const RotaryEmbeddingV2Param& params)
+template<typename T>
+void RotaryEmbeddingV2<T>::forward(const RotaryEmbeddingV2Param& params)
 {
     allocateBuffer(params.token_num);
 
@@ -227,5 +231,12 @@ void RotaryEmbeddingV2::forward(const RotaryEmbeddingV2Param& params)
             FT_CHECK(0);
     }
 }
+#ifdef ENABLE_FP32
+template class RotaryEmbeddingV2<float>;
+#endif
+template class RotaryEmbeddingV2<half>;
+#ifdef ENABLE_BF16
+template class RotaryEmbeddingV2<__nv_bfloat16>;
+#endif  // ENABLE_BF16
 
 }  // namespace turbomind

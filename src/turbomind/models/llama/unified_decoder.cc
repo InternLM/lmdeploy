@@ -42,7 +42,7 @@ UnifiedDecoder<T>::UnifiedDecoder(const ModelParam&     model,
         ffn_layer_ = std::make_unique<LlamaFfnLayer<T>>(model, tp, ctx);
     }
 
-    rotary_emb_ = std::make_unique<RotaryEmbeddingV2>(attn, ctx.stream, ctx.allocator.get());
+    rotary_emb_ = std::make_unique<RotaryEmbeddingV2<T>>(attn, ctx.stream, ctx.allocator.get());
 
     check_cuda_error(cudaEventCreateWithFlags(&ev_h_cu_x_, cudaEventDisableTiming));
 }
@@ -88,7 +88,8 @@ void UnifiedDecoder<T>::forwardSelfAttn(T*                attn_io,
     inputs.insert("cu_k_len", {MEMORY_GPU, TYPE_INT32, {batch_size + 1}, cu_k_len_});
     inputs.insert("h_cu_q_len", {MEMORY_CPU, TYPE_INT32, {batch_size + 1}, h_cu_q_len_});
     inputs.insert("h_cu_k_len", {MEMORY_CPU, TYPE_INT32, {batch_size + 1}, h_cu_k_len_});
-    inputs.insert("cos_sin", {MEMORY_GPU, TYPE_FP32, {token_num, (size_t)rotary_emb_->dim_}, rotary_emb_->cos_sin_});
+    inputs.insert("cos_sin",
+                  {MEMORY_GPU, getTensorType<T>(), {token_num, (size_t)rotary_emb_->dim_}, rotary_emb_->cos_sin_});
 
     TensorMap outputs(*_outputs);
     outputs.insert("hidden_features", {MEMORY_GPU, dtype_, {token_num, hidden_units_}, attn_io});

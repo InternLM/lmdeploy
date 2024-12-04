@@ -194,7 +194,7 @@ struct AttentionUniversal {
         Vec vec_K[1][ITER_C];
         Vec vec_V[1][ITER_C];
 
-        Array<float, kVecSize> vec_cs[ITER_S][ITER_C];  // precomputed cos sin
+        Vec vec_cs[ITER_S][ITER_C];  // precomputed cos sin
 
         const int2 offset = Map::get_offset(warp_id, lane_id);
 
@@ -220,12 +220,9 @@ struct AttentionUniversal {
                         }
                     }
                     if (params.cos_sin) {
-                        float*        cos_sin = params.cos_sin;
+                        T*            cos_sin = params.cos_sin;
                         const int64_t index   = qi * params.rotary_embedding_dim + di;
-                        PRAGMA_UNROLL
-                        for (int k = 0; k < kVecSize; k += 4) {
-                            (float4&)vec_cs[s][c][k] = __ldg((const float4*)&cos_sin[index + k]);
-                        }
+                        Ldg(vec_cs[s][c], &cos_sin[index]);
                     }
                 }
             }

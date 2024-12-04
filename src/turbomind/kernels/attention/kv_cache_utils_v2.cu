@@ -12,22 +12,22 @@
 namespace turbomind {
 
 template<class Tkv, int CTA_S, int HeadDim, int WarpCnt, class T, class BlockLayout>
-__global__ void __launch_bounds__(128) ProcessKV_v2(char**       blocks,
-                                                    const T*     k,
-                                                    const T*     v,
-                                                    const T*     k_bias,
-                                                    const T*     v_bias,
-                                                    const int*   cu_q_len,
-                                                    const int*   cu_k_len,
-                                                    const int*   cu_block_num,
-                                                    const float* cos_sin,
-                                                    int          rope_dim,
-                                                    int64_t      stride_b,
-                                                    int64_t      stride_c,
-                                                    int64_t      stride_h,
-                                                    int64_t      stride_s,
-                                                    int          layer_id,
-                                                    BlockLayout  block_layout)
+__global__ void __launch_bounds__(128) ProcessKV_v2(char**      blocks,
+                                                    const T*    k,
+                                                    const T*    v,
+                                                    const T*    k_bias,
+                                                    const T*    v_bias,
+                                                    const int*  cu_q_len,
+                                                    const int*  cu_k_len,
+                                                    const int*  cu_block_num,
+                                                    const T*    cos_sin,
+                                                    int         rope_dim,
+                                                    int64_t     stride_b,
+                                                    int64_t     stride_c,
+                                                    int64_t     stride_h,
+                                                    int64_t     stride_s,
+                                                    int         layer_id,
+                                                    BlockLayout block_layout)
 {
 
     constexpr int kVecSize = sizeof(uint4) / sizeof(T);
@@ -116,7 +116,7 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**       blocks,
     }
 
     if (cos_sin) {
-        Array<float, kVecSize> vec_cs[ITER_S][ITER_C];
+        Vec __align__(16) vec_cs[ITER_S][ITER_C];
         PRAGMA_UNROLL
         for (int s = 0; s < ITER_S; ++s) {
             const int qi = offset.y + s * Map::kDeltaS + token_idx;
@@ -124,11 +124,8 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**       blocks,
             for (int c = 0; c < ITER_C; ++c) {
                 const int     di    = offset.x + c * Map::kDeltaC;
                 const int64_t index = (qi_beg + qi) * rope_dim + di;
-                PRAGMA_UNROLL
-                for (int k = 0; k < kVecSize; k += 4) {
-                    if (qi < q_len) {
-                        (float4&)vec_cs[s][c][k] = __ldg((const float4*)&cos_sin[index + k]);
-                    }
+                if (qi < q_len) {
+                    Ldg(vec_cs[s][c], &cos_sin[index]);
                 }
             }
         }
@@ -207,7 +204,7 @@ void invokeProcessKV_v2(char**       blocks,
                         const int*   cu_q_len,
                         const int*   cu_k_len,
                         const int*   cu_block_num,
-                        const float* cos_sin,
+                        const T*     cos_sin,
                         int          rope_dim,
                         int64_t      stride_b,
                         int64_t      stride_c,
@@ -287,7 +284,7 @@ void invokeProcessKV_v2(char**       blocks,
                                      const int*   cu_q_len,                                                            \
                                      const int*   cu_k_len,                                                            \
                                      const int*   cu_block_num,                                                        \
-                                     const float* cos_sin,                                                             \
+                                     const type*  cos_sin,                                                             \
                                      int          rope_dim,                                                            \
                                      int64_t      stride_b,                                                            \
                                      int64_t      stride_c,                                                            \

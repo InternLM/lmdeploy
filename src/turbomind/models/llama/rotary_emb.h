@@ -28,6 +28,7 @@ struct InnerLlama3RopeParam {
     float beta;
 };
 
+template<typename T>
 struct RotaryEmbeddingV2 {
 
     RotaryEmbeddingV2(const AttentionParam& param, cudaStream_t stream, IAllocator* allocator);
@@ -56,7 +57,7 @@ struct RotaryEmbeddingV2 {
     };
 
     // output
-    float* cos_sin_;  // num_token x dim, (cos, sin, ...)
+    T* cos_sin_;  // num_token x dim, (cos, sin, ...)
 };
 
 };  // namespace turbomind
