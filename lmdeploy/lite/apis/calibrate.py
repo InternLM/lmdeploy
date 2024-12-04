@@ -27,6 +27,7 @@ LAYER_TYPE_MAP = {
     'ChatGLMForConditionalGeneration': 'GLMBlock',
     'MixtralForCausalLM': 'MixtralDecoderLayer',
     'Qwen2VLForConditionalGeneration': 'Qwen2VLDecoderLayer',
+    'MistralForCausalLM': 'MistralDecoderLayer',
 }
 
 NORM_TYPE_MAP = {
@@ -44,6 +45,7 @@ NORM_TYPE_MAP = {
     'ChatGLMForConditionalGeneration': 'RMSNorm',
     'MixtralForCausalLM': 'MixtralRMSNorm',
     'Qwen2VLForConditionalGeneration': 'Qwen2RMSNorm',
+    'MistralForCausalLM': 'MistralRMSNorm',
 }
 
 HEAD_NAME_MAP = {
@@ -61,6 +63,7 @@ HEAD_NAME_MAP = {
     'ChatGLMForConditionalGeneration': 'output_layer',
     'MixtralForCausalLM': 'lm_head',
     'Qwen2VLForConditionalGeneration': 'lm_head',
+    'MistralForCausalLM': 'lm_head',
 }
 
 
