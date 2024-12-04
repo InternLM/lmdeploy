@@ -74,8 +74,10 @@ struct PrecomputeFastRoPE {
     {
         PRAGMA_UNROLL
         for (int i = 0; i < N; i += 2) {
-            x[i]     = cs[i] * x[i] - cs[i + 1] * x[i + 1];
-            x[i + 1] = cs[i] * x[i + 1] + cs[i + 1] * x[i];
+            T tmp0   = cs[i] * x[i] - cs[i + 1] * x[i + 1];
+            T tmp1   = cs[i] * x[i + 1] + cs[i + 1] * x[i];
+            x[i]     = tmp0;
+            x[i + 1] = tmp1;
         }
     }
 };
