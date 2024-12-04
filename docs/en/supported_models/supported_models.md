@@ -24,6 +24,7 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |        Mistral        |       7B       | LLM  |    Yes    |   Yes   |   Yes   |  No   |
 |        Mixtral        |  8x7B, 8x22B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |      DeepSeek-V2      |   16B, 236B    | LLM  |    Yes    |   Yes   |   Yes   |  No   |
+|     DeepSeek-V2.5     |      236B      | LLM  |    Yes    |   Yes   |   Yes   |  No   |
 |        Qwen-VL        |       7B       | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |      DeepSeek-VL      |       7B       | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |       Baichuan        |       7B       | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
@@ -76,6 +77,7 @@ The TurboMind engine doesn't support window attention. Therefore, for models tha
 |    QWen2-VL    |   2B, 7B    | MLLM |    Yes    |   Yes   |   No    |  No  |  No   |
 |  DeepSeek-MoE  |     16B     | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |  DeepSeek-V2   |  16B, 236B  | LLM  |    Yes    |   No    |   No    |  No  |  No   |
+| DeepSeek-V2.5  |    236B     | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |    MiniCPM3    |     4B      | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 | MiniCPM-V-2_6  |     8B      | LLM  |    Yes    |   No    |   No    | Yes  |  Yes  |
 |     Gemma      |    2B-7B    | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
