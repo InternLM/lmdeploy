@@ -137,7 +137,8 @@ class ModelInputs:
                 mm_start = flatten_mms[0][1].start
                 mm_end = flatten_mms[0][1].end
                 if mm_start > self.history_lengths + start:
-                    end = min(mm_start, start + split_size)
+                    end = min(mm_start - self.history_lengths,
+                              start + split_size)
                 else:
                     input_mms = dict()
                     key, mm = flatten_mms.pop(0)
