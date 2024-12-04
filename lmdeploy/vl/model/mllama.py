@@ -19,11 +19,11 @@ class MllamaVLModel(VisonModel):
         self.image_token_id = 128256
 
     def build_model(self):
-        assert 0, 'cogvlm is not supported by turbomind'
+        assert 0, 'mllama is not supported by turbomind'
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """refer to the spec of `super().preprocess`"""
-        images = super().collect_images(messages)
+        images = self.collect_images(messages)
         outputs = []
         for image, params in images:
             image = image.convert('RGB')
@@ -77,4 +77,4 @@ class MllamaVLModel(VisonModel):
                                       sequence_start)
 
     def to_turbomind(self, messages, chat_template, sequence_start):
-        assert 0, 'cogvlm is not supported by turbomind'
+        assert 0, 'mllama is not supported by turbomind'

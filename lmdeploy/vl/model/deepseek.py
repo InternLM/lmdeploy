@@ -88,7 +88,7 @@ class DeepSeekVisionModel(VisonModel):
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """refers to the spec of `super.preprocess()"""
-        images = super().collect_images(messages)
+        images = self.collect_images(messages)
         outputs = []
         for image, _ in images:
             image = image.convert('RGB')

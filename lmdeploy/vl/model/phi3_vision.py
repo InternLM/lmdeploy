@@ -128,7 +128,7 @@ class Phi3VisionModel(LlavaHfVisionModel):
                                                   trust_remote_code=True)
         if hasattr(processor, 'tokenizer'):
             del processor.tokenizer
-            processor.prtokenizer = None
+            processor.tokenizer = None
         self.processor = processor.image_processor
         self.processor = processor
 
@@ -184,7 +184,7 @@ class Phi3VisionModel(LlavaHfVisionModel):
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """refers to `super.preprocess() for spec."""
-        images = super().collect_images(messages)
+        images = self.collect_images(messages)
         outputs = []
         for image, params in images:
             image = image.convert('RGB')
