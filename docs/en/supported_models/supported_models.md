@@ -72,7 +72,7 @@ The TurboMind engine doesn't support window attention. Therefore, for models tha
 |  DeepSeek-MoE  |     16B     | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |  DeepSeek-V2   |  16B, 236B  | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |    MiniCPM3    |     4B      | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
-| MiniCPM-V-2_6  |     8B      | LLM  |    Yes    |   No    |   No    | Yes  |  Yes  |
+| MiniCPM-V-2_6  |     8B      | LLM  |    Yes    |   No    |   No    |  No  |  Yes  |
 |     Gemma      |    2B-7B    | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 |      Dbrx      |    132B     | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 |   StarCoder2   |   3B-15B    | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
@@ -81,7 +81,7 @@ The TurboMind engine doesn't support window attention. Therefore, for models tha
 |  CogVLM-Chat   |     17B     | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
 |  CogVLM2-Chat  |     19B     | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
 | LLaVA(1.5,1.6) |   7B-34B    | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
-| InternVL(v1.5) |   2B-26B    | MLLM |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
+| InternVL(v1.5) |   2B-26B    | MLLM |    Yes    |   Yes   |   Yes   |  No  |  Yes  |
 |   InternVL2    |   1B-40B    | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
 | Mono-InternVL  |     2B      | MLLM |   Yes\*   |   Yes   |   Yes   |  -   |   -   |
 |    ChemVLM     |   8B-26B    | MLLM |    Yes    |   Yes   |   No    |  -   |   -   |
