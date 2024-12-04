@@ -130,7 +130,7 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**      blocks,
             }
         }
 
-        PrecomputeFastRoPE rope;
+        FastRoPE rope{};
         PRAGMA_UNROLL
         for (int s = 0; s < ITER_S; ++s) {
             PRAGMA_UNROLL

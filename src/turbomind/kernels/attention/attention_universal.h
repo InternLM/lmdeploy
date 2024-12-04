@@ -231,7 +231,7 @@ struct AttentionUniversal {
         ApplyBias(vec_Q, vec_K, vec_V, params, head_idx, kv_head_idx, offset);
 
         if (params.cos_sin) {
-            PrecomputeFastRoPE rope{};
+            FastRoPE rope{};
             PRAGMA_UNROLL
             for (int s = 0; s < ITER_S; ++s) {
                 PRAGMA_UNROLL

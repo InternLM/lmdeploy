@@ -168,6 +168,17 @@ RotaryEmbeddingV2<T>::RotaryEmbeddingV2(const AttentionParam& param, cudaStream_
             break;
         }
         case RopeType::kLlama3: {
+            // clang-format off
+            /* The [llama3 rope](https://github.com/huggingface/transformers/blob/5f4ee98a7ade33e1c54fdd6181d04ee7b426b392/src/transformers/modeling_rope_utils.py#L298)
+            * used by llama3.1 equals to the following equation, given the precommuted parameters as:
+            ```C++
+            inv_scaling_factor = 1 / factor;
+            inv_diff_freq_factor = 1 / (high_freq_factor - low_freq_factor);
+            alpha = old_context_len / (2 * PI) * inv_diff_freq_factor;
+            beta = low_freq_factor * inv_diff_freq_factor
+            ```
+            */
+            // clang-format on
             const double PI            = 3.14159265358979323846;
             float inv_diff_freq_factor = 1.0 / (param.rope.llama3.high_freq_factor - param.rope.llama3.low_freq_factor);
             llama3_.inv_scaling_factor = 1.0 / param.rope.factor;
