@@ -76,18 +76,26 @@ class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
         max_q_seq_len = attn_metadata.max_q_seq_len
         max_kv_seq_len = attn_metadata.max_kv_seq_len
         quant_bits = attn_metadata.quant_policy
-        k_scales_zeros = [
-            next(attn_metadata.quant_meta['k_scales']),
-            next(attn_metadata.quant_meta['k_zeros'])
-        ] if 'k_scales' in attn_metadata.quant_meta else []
-        v_scales_zeros = [
-            next(attn_metadata.quant_meta['v_scales']),
-            next(attn_metadata.quant_meta['v_zeros'])
-        ] if 'v_scales' in attn_metadata.quant_meta else []
-        kv_scales = next(attn_metadata.quant_meta['kv_scales']
-                         ) if 'kv_scales' in attn_metadata.quant_meta else None
-        kv_zeros = next(attn_metadata.quant_meta['kv_zeros']
-                        ) if 'kv_zeros' in attn_metadata.quant_meta else None
+        if attn_metadata.quant_meta is not None:
+            k_scales_zeros = [
+                next(attn_metadata.quant_meta['k_scales']),
+                next(attn_metadata.quant_meta['k_zeros'])
+            ] if 'k_scales' in attn_metadata.quant_meta else []
+            v_scales_zeros = [
+                next(attn_metadata.quant_meta['v_scales']),
+                next(attn_metadata.quant_meta['v_zeros'])
+            ] if 'v_scales' in attn_metadata.quant_meta else []
+            kv_scales = next(
+                attn_metadata.quant_meta['kv_scales']
+            ) if 'kv_scales' in attn_metadata.quant_meta else None
+            kv_zeros = next(
+                attn_metadata.quant_meta['kv_zeros']
+            ) if 'kv_zeros' in attn_metadata.quant_meta else None
+        else:
+            k_scales_zeros = []
+            v_scales_zeros = []
+            kv_scales = None
+            kv_zeros = None
 
         # fill kv cache
         k_cache, v_cache = self.fill_kv_cache(key,
