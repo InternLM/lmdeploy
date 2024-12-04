@@ -21,6 +21,7 @@ class TritonAttentionMetadata(AttentionMetadata):
     fill_seqlens: torch.Tensor = None
     quant_policy: Literal[0, 4, 8] = 0
     kv_flatten_size: int = None
+    medusa_attn_mask: torch.Tensor = None
 
 
 def _cdiv(a, b):
@@ -100,6 +101,9 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             fill_seqlens = attn_metadata.fill_seqlens
             fill_max_q_seqlen = key.numel() // (key.size(-1) * key.size(-2))
             fill_q_start_loc = fill_seqlens.cumsum(0) - fill_seqlens
+        attention_mask = None
+        if attn_metadata.medusa_attn_mask is not None:
+            attention_mask = attn_metadata.medusa_attn_mask
 
         # fill kv cache
         if key is not None and value is not None:
@@ -161,6 +165,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
                     flatten_k,
                     flatten_v,
                     attn_output,
+                    attention_mask=attention_mask,
                     q_start_loc=q_start_loc,
                     q_seqlens=q_seqlens,
                     kv_start_loc=kv_start_loc,

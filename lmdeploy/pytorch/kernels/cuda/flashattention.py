@@ -48,6 +48,17 @@ def softcapping(qk, logit_softcapping: tl.constexpr):
 
 
 @triton.jit
+def _load_kv(ptrs, causal_mask: tl.constexpr, boundary_check: tl.constexpr):
+    """load kv."""
+    if causal_mask:
+        return tl.load(ptrs,
+                       boundary_check=boundary_check,
+                       padding_option='zero')
+    else:
+        return tl.load(ptrs)
+
+
+@triton.jit
 def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs,
                        loop_start, loop_end, qk_scale, history_mask,
                        kv_min_loc, causal_mask: tl.constexpr,
@@ -63,11 +74,11 @@ def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs,
     for start_n in range(loop_start, loop_end, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
 
-        k = tl.load(k_ptrs)
+        k = _load_kv(k_ptrs, causal_mask, boundary_check=(1, ))
         qk = tl.dot(q, k)
 
         if BLOCK_DK1 != 0:
-            k1 = tl.load(k1_ptrs)
+            k1 = _load_kv(k1_ptrs, causal_mask, boundary_check=(1, ))
             qk += tl.dot(q1, k1)
 
         if causal_mask:
@@ -113,13 +124,97 @@ def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs,
         acc = acc * alpha[:, None]
 
         # update acc
-        v = tl.load(v_ptrs)
+        v = _load_kv(v_ptrs, causal_mask, boundary_check=(0, ))
         p = p.to(v.dtype)
         acc += tl.dot(p, v)
         # update m_i and l_i
         m_i = m_i_new
 
         k_ptrs = tl.advance(k_ptrs, (0, BLOCK_N))
+        v_ptrs = tl.advance(v_ptrs, (BLOCK_N, 0))
+        if BLOCK_DK1:
+            k1_ptrs = tl.advance(k1_ptrs, (0, BLOCK_N))
+
+    return acc, l_i, m_i
+
+
+@triton.jit
+def _prefill_fwd_inner_with_mask(
+        acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs, loop_start, loop_end,
+        qk_scale, history_mask, kv_min_loc, attn_mask_ptr,
+        causal_mask: tl.constexpr, window_size: tl.constexpr,
+        logit_softcapping: tl.constexpr, BLOCK_N: tl.constexpr,
+        BLOCK_DK1: tl.constexpr):
+    k_ptrs = tl.advance(k_ptrs, (0, loop_start))
+    attn_mask_ptr = tl.advance(attn_mask_ptr, (0, loop_start))
+    v_ptrs = tl.advance(v_ptrs, (loop_start, 0))
+    if BLOCK_DK1:
+        k1_ptrs = tl.advance(k1_ptrs, (0, loop_start))
+
+    offs_n = tl.arange(0, BLOCK_N)
+    for start_n in range(loop_start, loop_end, BLOCK_N):
+        start_n = tl.multiple_of(start_n, BLOCK_N)
+
+        k = _load_kv(k_ptrs, causal_mask, boundary_check=(1, ))
+        attn_mask = tl.load(attn_mask_ptr)
+        qk = tl.dot(q, k)
+
+        if BLOCK_DK1 != 0:
+            k1 = _load_kv(k1_ptrs, causal_mask, boundary_check=(1, ))
+            qk += tl.dot(q1, k1)
+
+        if causal_mask:
+            qk *= qk_scale
+            qk = softcapping(qk, logit_softcapping)
+            qk_mask = (history_mask[:, None]) >= (start_n + offs_n[None, :])
+            if window_size > 0:
+                qk_mask = qk_mask and (
+                    (start_n + offs_n[None, :]) >= kv_min_loc[:, None])
+            qk = tl.where(
+                qk_mask,
+                qk,
+                float(-1e30),
+            )
+            m_i_new = tl.maximum(m_i, tl.max(qk, 1))
+            qk -= m_i_new[:, None]
+        elif window_size > 0:
+            qk *= qk_scale
+            qk = softcapping(qk, logit_softcapping)
+            qk_mask = ((start_n + offs_n[None, :]) >= kv_min_loc[:, None])
+            qk = tl.where(
+                qk_mask,
+                qk,
+                float(-1e30),
+            )
+            m_i_new = tl.maximum(m_i, tl.max(qk, 1))
+            qk -= m_i_new[:, None]
+        elif logit_softcapping > 0:
+            qk *= qk_scale
+            qk = softcapping(qk, logit_softcapping)
+            m_i_new = tl.maximum(m_i, tl.max(qk, 1))
+            qk -= m_i_new[:, None]
+        else:
+            m_i_new = tl.maximum(m_i, tl.max(qk, 1) * qk_scale)
+            qk = qk * qk_scale - m_i_new[:, None]
+
+        qk = qk + attn_mask
+        # -- compute p, m_i and l_i
+        p = tl_exp2(qk)
+        alpha = tl_exp2(m_i - m_i_new)
+        l_i = alpha * l_i + tl.sum(p, 1)
+        # -- update output accumulator --
+        # scale acc
+        acc = acc * alpha[:, None]
+
+        # update acc
+        v = _load_kv(v_ptrs, causal_mask, boundary_check=(0, ))
+        p = p.to(v.dtype)
+        acc += tl.dot(p, v)
+        # update m_i and l_i
+        m_i = m_i_new
+
+        k_ptrs = tl.advance(k_ptrs, (0, BLOCK_N))
+        attn_mask_ptr = tl.advance(attn_mask_ptr, (0, BLOCK_N))
         v_ptrs = tl.advance(v_ptrs, (BLOCK_N, 0))
         if BLOCK_DK1:
             k1_ptrs = tl.advance(k1_ptrs, (0, BLOCK_N))
@@ -168,6 +263,7 @@ def _flash_prefill_fwd_kernel(
     kv_group_num,
     head_dim_k,
     head_dim_v,
+    causal: tl.constexpr,
     window_size: tl.constexpr,
     logit_softcapping: tl.constexpr,
     BLOCK_M: tl.constexpr,
@@ -257,9 +353,13 @@ def _flash_prefill_fwd_kernel(
     acc = tl.zeros([BLOCK_M, BLOCK_DV], dtype=tl.float32)
 
     qk_scale = sm_scale * tl_log2(math.e)
-    history_mask = history_len + start_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    if causal:
+        history_mask = history_len + start_m * BLOCK_M + tl.arange(0, BLOCK_M)
+        loop_end = (history_len + start_m * BLOCK_M) // BLOCK_N * BLOCK_N
+    else:
+        history_mask = tl.full([BLOCK_M], kv_seqlen - 1, dtype=tl.int32)
+        loop_end = kv_seqlen // BLOCK_N * BLOCK_N
 
-    loop_end = (history_len + start_m * BLOCK_M) // BLOCK_N * BLOCK_N
     acc, l_i, m_i = _prefill_fwd_inner(acc,
                                        l_i,
                                        m_i,
@@ -280,7 +380,10 @@ def _flash_prefill_fwd_kernel(
                                        BLOCK_DK1=BLOCK_DK1)
 
     loop_start = loop_end
-    loop_end = tl.minimum(kv_seqlen, loop_start + BLOCK_M + BLOCK_N)
+    if causal:
+        loop_end = tl.minimum(kv_seqlen, loop_start + BLOCK_M + BLOCK_N)
+    else:
+        loop_end = kv_seqlen
     acc, l_i, m_i = _prefill_fwd_inner(acc,
                                        l_i,
                                        m_i,
@@ -314,6 +417,203 @@ def _flash_prefill_fwd_kernel(
              mask=(offs_m[:, None] < q_seqlen) & mask_dv[None, :])
 
 
+@triton.jit
+def _flash_prefill_fwd_kernel_with_mask(
+    q_ptr,
+    k_ptr,
+    v_ptr,
+    o_ptr,
+    q_start_loc_ptr,
+    q_seqlens_ptr,
+    kv_start_loc_ptr,
+    kv_seqlens_ptr,
+    sm_scale,
+    attention_mask,
+    stride_qs: tl.constexpr,
+    stride_qh: tl.constexpr,
+    stride_qd: tl.constexpr,
+    stride_ks: tl.constexpr,
+    stride_kh,
+    stride_kd: tl.constexpr,
+    stride_vs: tl.constexpr,
+    stride_vh,
+    stride_vd: tl.constexpr,
+    stride_os: tl.constexpr,
+    stride_oh: tl.constexpr,
+    stride_od: tl.constexpr,
+    stride_amb: tl.constexpr,
+    stride_amqs: tl.constexpr,
+    stride_amkvs: tl.constexpr,
+    kv_group_num,
+    head_dim_k,
+    head_dim_v,
+    causal: tl.constexpr,
+    window_size: tl.constexpr,
+    logit_softcapping: tl.constexpr,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    BLOCK_DK: tl.constexpr,
+    BLOCK_DK1: tl.constexpr,
+    BLOCK_DV: tl.constexpr,
+):
+    """flash attention kernel."""
+    start_m = tl.program_id(0)
+    head_id = tl.program_id(1)
+    batch_id = tl.program_id(2)
+
+    q_seqlen = tl.load(q_seqlens_ptr + batch_id)
+
+    if BLOCK_M * start_m >= q_seqlen:
+        return
+
+    kv_head_id = head_id // kv_group_num
+    q_seqlen = q_seqlen.to(tl.int32)
+    kv_seqlen = tl.load(kv_seqlens_ptr + batch_id).to(tl.int32)
+    q_start_loc = tl.load(q_start_loc_ptr + batch_id).to(tl.int32)
+    kv_start_loc = tl.load(kv_start_loc_ptr + batch_id).to(tl.int32)
+
+    history_len = kv_seqlen - q_seqlen
+
+    offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
+
+    loop_start = 0
+    kv_min_loc = tl.zeros([BLOCK_M], dtype=tl.int32)
+    if window_size > 0:
+        start_block_id = tl.maximum(
+            history_len + start_m * BLOCK_M - window_size, 0) // BLOCK_N
+        kv_min_loc = tl.maximum(history_len + offs_m - window_size, 0)
+        loop_start = start_block_id * BLOCK_N
+
+    offs_dk = tl.arange(0, BLOCK_DK)
+    mask_dk = offs_dk < head_dim_k
+    offs_dk = tl.multiple_of(tl.max_contiguous(offs_dk % head_dim_k, BLOCK_DK),
+                             BLOCK_DK)
+    off_q = ((q_start_loc + offs_m[:, None]) * stride_qs +
+             head_id * stride_qh + offs_dk[None, :] * stride_qd)
+    q_ptrs = q_ptr + off_q
+    q = tl.load(q_ptrs, mask=(offs_m[:, None] < q_seqlen and mask_dk[None, :]))
+
+    k_ptrs = tl.make_block_ptr(
+        base=k_ptr + kv_start_loc * stride_ks + kv_head_id * stride_kh,
+        shape=(head_dim_k, kv_seqlen),
+        strides=(stride_kd, stride_ks),
+        offsets=(0, 0),
+        block_shape=(BLOCK_DK, BLOCK_N),
+        order=(0, 1),
+    )
+    v_ptrs = tl.make_block_ptr(
+        base=v_ptr + kv_start_loc * stride_vs + kv_head_id * stride_vh,
+        shape=(kv_seqlen, head_dim_v),
+        strides=(stride_vs, stride_vd),
+        offsets=(0, 0),
+        block_shape=(BLOCK_N, BLOCK_DV),
+        order=(1, 0),
+    )
+    attn_mask_ptrs = tl.make_block_ptr(
+        base=attention_mask + batch_id * stride_amb +
+        start_m * BLOCK_M * stride_amqs,
+        shape=(q_seqlen, kv_seqlen),
+        strides=(stride_amqs, stride_amkvs),
+        offsets=(0, 0),
+        block_shape=(BLOCK_M, BLOCK_N),
+        order=(0, 1),
+    )
+
+    if BLOCK_DK1 != 0:
+        offs_dk1 = BLOCK_DK + tl.arange(0, BLOCK_DK1)
+        mask_dk1 = offs_dk1 < head_dim_k
+        offs_dk1 = tl.multiple_of(
+            tl.max_contiguous(offs_dk1 % head_dim_k, BLOCK_DK1), BLOCK_DK1)
+        offs_q1 = ((q_start_loc + offs_m[:, None]) * stride_qs +
+                   head_id * stride_qh + offs_dk1[None, :] * stride_qd)
+        q1_ptrs = q_ptr + offs_q1
+        q1 = tl.load(q1_ptrs,
+                     mask=(offs_m[:, None] < q_seqlen and mask_dk1[None, :]))
+        k1_ptrs = tl.make_block_ptr(
+            base=k_ptr + kv_start_loc * stride_ks + kv_head_id * stride_kh,
+            shape=(head_dim_k, kv_seqlen),
+            strides=(stride_kd, stride_ks),
+            offsets=(BLOCK_DK, 0),
+            block_shape=(BLOCK_DK1, BLOCK_N),
+            order=(0, 1),
+        )
+    else:
+        q1 = q
+        k1_ptrs = k_ptrs
+
+    m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float('inf')
+    l_i = tl.zeros([BLOCK_M], dtype=tl.float32) + 1.0
+    acc = tl.zeros([BLOCK_M, BLOCK_DV], dtype=tl.float32)
+
+    qk_scale = sm_scale * tl_log2(math.e)
+    if causal:
+        history_mask = history_len + start_m * BLOCK_M + tl.arange(0, BLOCK_M)
+        loop_end = (history_len + start_m * BLOCK_M) // BLOCK_N * BLOCK_N
+    else:
+        history_mask = tl.full([BLOCK_M], kv_seqlen - 1, dtype=tl.int32)
+        loop_end = kv_seqlen // BLOCK_N * BLOCK_N
+
+    acc, l_i, m_i = _prefill_fwd_inner_with_mask(
+        acc,
+        l_i,
+        m_i,
+        q,
+        k_ptrs,
+        v_ptrs,
+        q1,
+        k1_ptrs,
+        loop_start,
+        loop_end,
+        qk_scale,
+        history_mask,
+        kv_min_loc,
+        attn_mask_ptrs,
+        causal_mask=False,
+        window_size=window_size,
+        logit_softcapping=logit_softcapping,
+        BLOCK_N=BLOCK_N,
+        BLOCK_DK1=BLOCK_DK1)
+
+    loop_start = loop_end
+    if causal:
+        loop_end = tl.minimum(kv_seqlen, loop_start + BLOCK_M + BLOCK_N)
+    else:
+        loop_end = kv_seqlen
+    acc, l_i, m_i = _prefill_fwd_inner_with_mask(
+        acc,
+        l_i,
+        m_i,
+        q,
+        k_ptrs,
+        v_ptrs,
+        q1,
+        k1_ptrs,
+        loop_start,
+        loop_end,
+        qk_scale,
+        history_mask,
+        kv_min_loc,
+        attn_mask_ptrs,
+        causal_mask=True,
+        window_size=window_size,
+        logit_softcapping=logit_softcapping,
+        BLOCK_N=BLOCK_N,
+        BLOCK_DK1=BLOCK_DK1)
+    # epilogue
+    m_i += tl.math.log2(l_i)
+    acc = acc / l_i[:, None]
+
+    # initialize pointers to output
+    offs_dv = tl.arange(0, BLOCK_DV)
+    mask_dv = offs_dv < head_dim_v
+    off_o = ((q_start_loc + offs_m[:, None]) * stride_os +
+             head_id * stride_oh + offs_dv[None, :] * stride_od)
+    out_ptrs = o_ptr + off_o
+    tl.store(out_ptrs,
+             acc,
+             mask=(offs_m[:, None] < q_seqlen) & mask_dv[None, :])
+
+
 _nv_cap = None
 
 
@@ -326,10 +626,12 @@ def flash_attention_fwd(
     q_seqlens: Tensor,
     kv_start_loc: Tensor,
     kv_seqlens: Tensor,
+    attention_mask: Tensor = None,
     max_seqlen: int = None,
     window_size: int = None,
     sm_scale: float = None,
     logit_softcapping: float = None,
+    causal: bool = True,
     kv_layout: str = 'hsd',
 ):
     """varlen flash Attention forward.
@@ -380,6 +682,7 @@ def flash_attention_fwd(
         BLOCK_M = max(16, 8192 // BLOCK_DK)
     else:
         BLOCK_M = max(16, 16384 // BLOCK_DK)
+    BLOCK_M = min(128, BLOCK_M)
     num_warps = 4
     num_stages = min(4, max(2, 1024 // BLOCK_DK))
     if BLOCK_DK >= 512:
@@ -388,40 +691,83 @@ def flash_attention_fwd(
         num_stages = 3
     else:
         num_stages = 4
-    _flash_prefill_fwd_kernel[grid](
-        q_states,
-        k_states,
-        v_states,
-        o_states,
-        q_start_loc,
-        q_seqlens,
-        kv_start_loc,
-        kv_seqlens,
-        sm_scale=sm_scale,
-        stride_qs=q_states.stride(0),
-        stride_qh=q_states.stride(1),
-        stride_qd=q_states.stride(2),
-        stride_ks=k_states.stride(s_dim),
-        stride_kh=k_states.stride(h_dim),
-        stride_kd=k_states.stride(d_dim),
-        stride_vs=v_states.stride(s_dim),
-        stride_vh=v_states.stride(h_dim),
-        stride_vd=v_states.stride(d_dim),
-        stride_os=o_states.stride(0),
-        stride_oh=o_states.stride(1),
-        stride_od=o_states.stride(2),
-        kv_group_num=kv_group_num,
-        head_dim_k=head_dim_k,
-        head_dim_v=head_dim_v,
-        window_size=window_size,
-        logit_softcapping=logit_softcapping,
-        BLOCK_DK=BLOCK_DK,
-        BLOCK_DK1=BLOCK_DK1,
-        BLOCK_DV=BLOCK_DV,
-        BLOCK_M=BLOCK_M,
-        BLOCK_N=BLOCK_N,
-        num_warps=num_warps,
-        num_stages=num_stages,
-    )
+    if attention_mask is None:
+        _flash_prefill_fwd_kernel[grid](
+            q_states,
+            k_states,
+            v_states,
+            o_states,
+            q_start_loc,
+            q_seqlens,
+            kv_start_loc,
+            kv_seqlens,
+            sm_scale=sm_scale,
+            stride_qs=q_states.stride(0),
+            stride_qh=q_states.stride(1),
+            stride_qd=q_states.stride(2),
+            stride_ks=k_states.stride(s_dim),
+            stride_kh=k_states.stride(h_dim),
+            stride_kd=k_states.stride(d_dim),
+            stride_vs=v_states.stride(s_dim),
+            stride_vh=v_states.stride(h_dim),
+            stride_vd=v_states.stride(d_dim),
+            stride_os=o_states.stride(0),
+            stride_oh=o_states.stride(1),
+            stride_od=o_states.stride(2),
+            kv_group_num=kv_group_num,
+            head_dim_k=head_dim_k,
+            head_dim_v=head_dim_v,
+            causal=causal,
+            window_size=window_size,
+            logit_softcapping=logit_softcapping,
+            BLOCK_DK=BLOCK_DK,
+            BLOCK_DK1=BLOCK_DK1,
+            BLOCK_DV=BLOCK_DV,
+            BLOCK_M=BLOCK_M,
+            BLOCK_N=BLOCK_N,
+            num_warps=num_warps,
+            num_stages=num_stages,
+        )
+    else:
+        _flash_prefill_fwd_kernel_with_mask[grid](
+            q_states,
+            k_states,
+            v_states,
+            o_states,
+            q_start_loc,
+            q_seqlens,
+            kv_start_loc,
+            kv_seqlens,
+            sm_scale=sm_scale,
+            attention_mask=attention_mask,
+            stride_qs=q_states.stride(0),
+            stride_qh=q_states.stride(1),
+            stride_qd=q_states.stride(2),
+            stride_ks=k_states.stride(s_dim),
+            stride_kh=k_states.stride(h_dim),
+            stride_kd=k_states.stride(d_dim),
+            stride_vs=v_states.stride(s_dim),
+            stride_vh=v_states.stride(h_dim),
+            stride_vd=v_states.stride(d_dim),
+            stride_os=o_states.stride(0),
+            stride_oh=o_states.stride(1),
+            stride_od=o_states.stride(2),
+            stride_amb=attention_mask.stride(0),
+            stride_amqs=attention_mask.stride(1),
+            stride_amkvs=attention_mask.stride(2),
+            kv_group_num=kv_group_num,
+            head_dim_k=head_dim_k,
+            head_dim_v=head_dim_v,
+            causal=causal,
+            window_size=window_size,
+            logit_softcapping=logit_softcapping,
+            BLOCK_DK=BLOCK_DK,
+            BLOCK_DK1=BLOCK_DK1,
+            BLOCK_DV=BLOCK_DV,
+            BLOCK_M=BLOCK_M,
+            BLOCK_N=BLOCK_N,
+            num_warps=num_warps,
+            num_stages=num_stages,
+        )
 
     return o_states

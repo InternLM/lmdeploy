@@ -110,6 +110,20 @@ class CudaOpsBackend(DefaultOpsBackend):
         if not step_context.is_decoding:
             kv_start_loc = kv_seqlens.cumsum(0) - kv_seqlens
             kv_flatten_size = kv_seqlens.sum().item()
+        if step_context.medusa_attn_mask is not None:
+            max_q_seqlen = q_seqlens.max()
+            max_kv_seqlen = kv_seqlens.max()
+            bs = q_seqlens.shape[0]
+            medusa_len = step_context.medusa_attn_mask.shape[-1]
+            dtype = step_context.medusa_attn_mask.dtype
+            device = step_context.medusa_attn_mask.device
+            attention_mask = torch.zeros((bs, max_q_seqlen, max_kv_seqlen),
+                                         dtype=dtype,
+                                         device=device)
+            attention_mask[:, -medusa_len:, -medusa_len:] = (
+                1 - step_context.medusa_attn_mask) * (-1e30)
+            step_context.medusa_attn_mask = attention_mask
+
         attn_metadata = attn_meta_cls(
             step_context.is_decoding,
             step_context.block_offsets,
@@ -119,6 +133,7 @@ class CudaOpsBackend(DefaultOpsBackend):
             kv_seqlens=kv_seqlens,
             kv_flatten_size=kv_flatten_size,
             quant_policy=step_context.kv_quant_policy,
+            medusa_attn_mask=step_context.medusa_attn_mask,
         )
 
         cross_attn_metadata = None

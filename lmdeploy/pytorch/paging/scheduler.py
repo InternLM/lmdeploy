@@ -214,6 +214,7 @@ class Scheduler:
 
     def schedule(self, is_prefill: bool, prealloc_size: int = 0):
         """Schedule inputs for next steps."""
+        prealloc_size = max(prealloc_size, 64)  # 64 for medusa tree decode
         if is_prefill:
             output = self._schedule_prefill(prealloc_size)
         else:

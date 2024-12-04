@@ -330,7 +330,7 @@ class BaseModelAgent(AutoModelAgent):
 
     async def score_proposal(self, inputs: ModelInputs, swap_in_map: SwapMap,
                              swap_out_map: SwapMap, num_speculative_tokens):
-        """model forward.
+        """score the proposal.
 
         Args:
             inputs (Dict): The input data comes from _make_inputs.
@@ -355,6 +355,36 @@ class BaseModelAgent(AutoModelAgent):
             [-1, num_speculative_tokens + 1, hidden_states.shape[-1]])
         logits = self.get_logits(hidden_states)
         return logits
+
+    async def tree_decoding(self, inputs: ModelInputs, swap_in_map: SwapMap,
+                            swap_out_map: SwapMap,
+                            retrieve_indices: torch.Tensor):
+        cache_swapping(self.cache_engine,
+                       swap_in_map=swap_in_map,
+                       swap_out_map=swap_out_map)
+        bs = inputs.history_lengths.shape[0]
+        inputs.medusa_position_ids = inputs.medusa_position_ids.repeat(
+            inputs.history_lengths.shape[0], 1)
+        inputs.medusa_position_ids = inputs.medusa_position_ids.to(
+            inputs.history_lengths.device) + inputs.history_lengths[:, None]
+        spec_outputs = model_forward(
+            self.patched_model,
+            inputs,
+            self.cache_engine,
+            world_size=1,
+            stream=self.stream,
+        )
+        await asyncio.get_event_loop().run_in_executor(None,
+                                                       self.stream.synchronize)
+        hidden_states = spec_outputs['hidden_states']
+        hidden_states = hidden_states.reshape(bs, -1, hidden_states.shape[-1])
+        logits = self.get_logits(hidden_states)[:, retrieve_indices]
+        return logits
+
+    def generate_candidates(self, draft_logits: torch.Tensor,
+                            base_token_id: torch.Tensor):
+        return self.speculative_model.generate_candidates(
+            draft_logits, base_token_id)
 
     def get_logits(self, hidden_states: torch.Tensor):
         """get logits of model output."""
@@ -877,6 +907,11 @@ class TPModelAgent(AutoModelAgent):
         await asyncio.get_event_loop().run_in_executor(None,
                                                        self.stream.synchronize)
         return output
+
+    def generate_candidates(self, draft_logits: torch.Tensor,
+                            base_token_id: torch.Tensor):
+        return self.speculative_model.generate_candidates(
+            draft_logits, base_token_id)
 
     def get_logits(self, hidden_states: torch.Tensor):
         """get logits of model output."""

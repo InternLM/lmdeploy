@@ -565,10 +565,10 @@ class Engine:
             return [token_ids], token_ids in eos_token_ids
         for i, token_id in enumerate(token_ids):
             if token_id in eos_token_ids:
-                return token_ids[:i + 1], True
+                return token_ids[:i], True
             if token_id == -1:
-                break
-        return token_ids[:i], False
+                return token_ids[:i], False
+        return token_ids, False
 
     @logging_timer('UpdateRunning', logger)
     def update_running(self, running: SeqList, next_token_ids: torch.Tensor,
@@ -810,34 +810,38 @@ class Engine:
             num_ignore_eos = num_ignore_eos - 1
             if 'spec_logits' in output:
                 spec_logits = output['spec_logits']
-                # TODO add tree decoding
-                proposal_token_ids = spec_logits.argmax(-1)
-                # score the proposals with the target model
+                cart_candidates, tree_candidates, medusa_attn_mask, medusa_position_ids, retrieve_indices = self.model_agent.generate_candidates(
+                    spec_logits, next_token_ids)
+                bs, _, tree_decode_len = tree_candidates.shape
                 spec_inputs = copy.deepcopy(inputs)
-                _, num_speculative_tokens = proposal_token_ids.shape
-                target_proposal_ids = torch.cat(
-                    [next_token_ids.unsqueeze(-1), proposal_token_ids], -1)
-                spec_inputs.input_ids = target_proposal_ids.flatten(
-                ).unsqueeze(0)
+                spec_inputs.input_ids = tree_candidates.flatten().unsqueeze(0)
                 spec_inputs.history_lengths += spec_inputs.seq_length
                 spec_inputs.seq_length = torch.ones_like(
-                    spec_inputs.seq_length) * (num_speculative_tokens + 1)
-                score_output = await self.model_agent.score_proposal(
+                    spec_inputs.seq_length) * tree_decode_len
+                spec_inputs.medusa_attn_mask = medusa_attn_mask
+                spec_inputs.medusa_position_ids = medusa_position_ids
+                logits = await self.model_agent.tree_decoding(
                     spec_inputs,
                     swap_in_map=swap_in_map,
                     swap_out_map=swap_out_map,
-                    num_speculative_tokens=num_speculative_tokens)
-                from ..nn.rejection_sampling import RejectionSampler
-                rejection_sampler = RejectionSampler()
-                score_output = score_output.softmax(-1)
-                spec_logits = spec_logits.softmax(-1)
-                target_output, last_accpet = rejection_sampler.forward(
-                    score_output,
-                    draft_probs=spec_logits,
-                    draft_token_ids=proposal_token_ids)
-                next_token_ids = torch.cat(
-                    [next_token_ids[:, None], target_output], -1)
-                num_appendable_ids = num_appendable_ids - last_accpet - 1
+                    retrieve_indices=retrieve_indices)
+                # NOTE currently only greedy sampling supported
+                proposal_len = cart_candidates.shape[-1]
+                greedy_token_ids = logits.argmax(-1)
+                posterior_mask = cart_candidates[..., 1:] == greedy_token_ids[
+                    ..., :-1]
+                accept_len, best_idx = torch.cumprod(posterior_mask,
+                                                     dim=-1).sum(-1).max(-1)
+                # accept_len = torch.where(accept_len==proposal_len-1, proposal_len, accept_len)
+                next_token_ids = cart_candidates[torch.arange(bs), best_idx]
+                # bonus_token_ids = greedy_token_ids[torch.arange(bs),best_idx,-1:]
+                # next_token_ids = torch.cat([best_candidates, bonus_token_ids], -1)
+                mask_idx = torch.arange(
+                    proposal_len,
+                    device=next_token_ids.device).expand_as(next_token_ids)
+                next_token_ids[mask_idx > accept_len[:, None]] = -1
+                # next_token_ids = next_token_ids[...,:-1] # to be removed
+                num_appendable_ids = num_appendable_ids - accept_len - 1
 
             # stopping criteria
             stopped, num_appendable_ids = self._batch_stopping_criteria(
