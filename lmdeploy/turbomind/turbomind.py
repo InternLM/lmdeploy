@@ -358,12 +358,10 @@ class TurboMindInstance:
         self.que.put((False, result))
 
     def _forward_thread(self, inputs):
-        instance_comm = self.tm_model.model_comm.create_instance_comm(
-            self.gpu_count)
 
         def _func():
             try:
-                output = self.model_inst.forward(inputs, instance_comm)
+                output = self.model_inst.forward(inputs)
             except Exception as e:
                 logger.error(f'unhandled exception: {e}')
                 self.que.put((-1, None))
@@ -377,12 +375,10 @@ class TurboMindInstance:
         que.put((False, result))
 
     def _async_forward_thread(self, inputs, que: LifoQueue):
-        instance_comm = self.tm_model.model_comm.create_instance_comm(
-            self.gpu_count)
 
         def _func():
             try:
-                output = self.model_inst.forward(inputs, instance_comm)
+                output = self.model_inst.forward(inputs)
             except Exception as e:
                 logger.error(f'unhandled exception: {e}')
                 que.put((-1, None))

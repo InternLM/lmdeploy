@@ -217,7 +217,7 @@ class InternVisionEncoderLayer(nn.Module):
         self.config = config
         self.embed_dim = config.hidden_size
         self.intermediate_size = config.intermediate_size
-        self.norm_type = config.norm_type
+        self.norm_type = getattr(config, 'norm_type', 'rms_norm')
 
         self.attn = InternAttention(config, dtype=dtype, device=device)
         self.mlp = InternMLP(config, dtype=dtype, device=device)

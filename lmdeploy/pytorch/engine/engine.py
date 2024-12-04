@@ -164,12 +164,14 @@ class Engine:
         self.cache_config = cache_config
         self.backend_config = backend_config
         self.stream = self.model_agent.stream
+        self.max_session_len = self._get_max_session_len()
 
         self.req_manager = self._bind_request_manager()
 
         # create main thread
         self._start_loop()
         self._create_buffers()
+        self._output_stream = torch.cuda.Stream()
 
     @classmethod
     def from_pretrained(cls,
@@ -260,6 +262,20 @@ class Engine:
                      data=data,
                      err_msg=err_msg))
 
+    def _get_max_session_len(self):
+        """get max session len."""
+        session_len = self.scheduler_config.max_session_len
+        max_tokens = (self.cache_config.num_gpu_blocks *
+                      self.cache_config.block_size)
+        window_size = self.cache_config.window_size
+        if window_size > 0 and window_size <= max_tokens:
+            max_tokens = (1 << 63) - 1
+        if session_len is None:
+            session_len = max_tokens
+        else:
+            session_len = min(max_tokens, session_len)
+        return session_len
+
     def _on_add_session(self, reqs: Request, **kwargs):
         """on add session callback."""
         for req in reqs:
@@ -318,12 +334,11 @@ class Engine:
 
         def __update_max_new_tokens(msg):
             """update max new tokens."""
-            max_session_len = self.scheduler_config.max_session_len
-            if max_session_len is not None:
-                sampling_param = msg.sampling_param
-                sampling_param.max_new_tokens = min(
-                    sampling_param.max_new_tokens,
-                    max_session_len - msg.num_all_tokens())
+            max_session_len = self.max_session_len
+            sampling_param = msg.sampling_param
+            sampling_param.max_new_tokens = min(
+                sampling_param.max_new_tokens,
+                max_session_len - msg.num_all_tokens())
 
         if que.qsize() == 0:
             return
@@ -425,14 +440,6 @@ class Engine:
 
         model_metas = [msg.model_meta for msg in messages]
 
-        def __get_cogvlm_image_info():
-            """Get cogvlm history image info for position ids."""
-            history_image_nums = torch.LongTensor(
-                [msg.history_image_num for msg in messages])
-            history_image_token_lengths = torch.LongTensor(
-                [msg.history_image_token_len for msg in messages])
-            return history_image_nums, history_image_token_lengths
-
         def __get_vlm_embeddings():
             """get vlm input embeddings and indexings."""
             input_embeddings = [[
@@ -459,10 +466,6 @@ class Engine:
         # for inputs with embeddings
         history_image_nums = None
         history_image_token_lengths = None
-        # only for cogvlm
-        if self.model_config.cogvlm_style:
-            (history_image_nums,
-             history_image_token_lengths) = __get_cogvlm_image_info()
 
         input_embeddings = None
         input_embedding_indexing = None
@@ -674,7 +677,8 @@ class Engine:
 
     def _make_infer_outputs(self, next_token_ids: torch.LongTensor,
                             logits: torch.Tensor, stopped: torch.Tensor,
-                            model_metas: List[Dict[str, Any]]):
+                            model_metas: List[Dict[str, Any]],
+                            event: torch.cuda.Event):
         """make infer output."""
 
         def __get_out_token_ids(token: torch.Tensor, msg: SchedulerSequence,
@@ -694,6 +698,11 @@ class Engine:
                 return torch.arange(0, batch_size)
             else:
                 return seq_length.cumsum(0) - seq_length
+
+        with torch.cuda.stream(self._output_stream):
+            event.wait()
+            next_token_ids = next_token_ids.cpu()
+            stopped = stopped.cpu()
 
         running = self._running
         is_run = [seq.status == MessageStatus.RUNNING for seq in running]
@@ -756,6 +765,8 @@ class Engine:
         logger.debug('<ForwardTask>: '
                      f'batch_size={inputs.seq_length.size(0)} '
                      f'num_tokens={inputs.input_ids.size(-1)}')
+        if self.gpu_count == 1:
+            inputs = inputs.to_device('cuda')
         is_decoding = inputs.is_decoding
         if all_ids is not None:
             all_ids = all_ids.cuda()
@@ -787,10 +798,11 @@ class Engine:
 
             # send output
             model_metas = output.get('model_metas')
-            stopped = stopped.cpu()
-            finish = stopped.all().item() or (idx == loop_count - 1)
+            finish = (idx == loop_count - 1)
             finish = finish or _check_finish(self.scheduler, idx)
-            output = (next_token_ids.cpu(), logits, stopped, model_metas)
+            event = torch.cuda.Event()
+            event.record()
+            output = (next_token_ids, logits, stopped, model_metas, event)
             output_que.put_nowait((finish, output))
 
             inputs.model_metas = model_metas
@@ -991,9 +1003,9 @@ class Engine:
                 try:
                     if isinstance(out, Exception):
                         raise out
-                    next_token_ids, logits, stopped, model_metas = out
+                    (next_token_ids, logits, stopped, model_metas, event) = out
                     step_outputs = self._make_infer_outputs(
-                        next_token_ids, logits, stopped, model_metas)
+                        next_token_ids, logits, stopped, model_metas, event)
                     __send_resps(step_outputs)
                 except Exception as e:
                     raise e

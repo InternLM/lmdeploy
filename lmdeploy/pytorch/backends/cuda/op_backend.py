@@ -51,7 +51,11 @@ class CudaOpsBackend(DefaultOpsBackend):
             from .activation import TritonSiluAndMulBuilder
             return TritonSiluAndMulBuilder
         elif layer_type == OpType.LinearW4A16:
-            from awq.modules.linear.gemm import AWQ_INSTALLED
+            try:
+                from awq.modules.linear.gemm import awq_ext  # noqa: F401
+                AWQ_INSTALLED = True
+            except Exception:
+                AWQ_INSTALLED = False
             if AWQ_INSTALLED:
                 from .awq_modules import AwqLinearW4A16Builder
                 return AwqLinearW4A16Builder

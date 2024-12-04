@@ -20,41 +20,29 @@
 
 #pragma once
 
+#include <memory>
+
 #include "src/turbomind/models/llama/LlamaBatch.h"
 #include "src/turbomind/models/llama/LlamaV2.h"
 #include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
 #include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
-#include <memory>
 
-namespace ft = turbomind;
+namespace turbomind {
 
 template<typename T>
 struct LlamaTritonModelInstance: AbstractTransformerModelInstance {
 
-    LlamaTritonModelInstance(ft::Engine<T>&                                          instance,
-                             std::unique_ptr<ft::Allocator<ft::AllocatorType::CUDA>> allocator,
-                             int                                                     device_id);
-    ~LlamaTritonModelInstance();
+    LlamaTritonModelInstance(Engine<T>&                                      instance,
+                             std::unique_ptr<Allocator<AllocatorType::CUDA>> allocator,
+                             int                                             device_id);
+    ~LlamaTritonModelInstance() override;
 
-    std::shared_ptr<std::vector<triton::Tensor>>
-    forward(std::shared_ptr<std::vector<triton::Tensor>> input_tensors) override;
-
-    std::shared_ptr<std::unordered_map<std::string, triton::Tensor>>
-    forward(std::shared_ptr<std::unordered_map<std::string, triton::Tensor>> input_tensors) override;
-
-    std::shared_ptr<std::unordered_map<std::string, triton::Tensor>>
-    forward(std::shared_ptr<std::unordered_map<std::string, triton::Tensor>> input_tensors,
-            ft::AbstractInstanceComm*) override;
-
-    static std::shared_ptr<std::unordered_map<std::string, triton::Tensor>>
-    convert_outputs(const std::unordered_map<std::string, ft::Tensor>& output_tensors);
+    virtual std::shared_ptr<std::unordered_map<std::string, Tensor>>
+    forward(std::shared_ptr<std::unordered_map<std::string, Tensor>> input_tensors) override;
 
 private:
-    ft::Engine<T>*                                                instance_;
-    const std::unique_ptr<ft::Allocator<ft::AllocatorType::CUDA>> allocator_;
-
-    std::unordered_map<std::string, ft::Tensor>
-    convert_inputs(std::shared_ptr<std::unordered_map<std::string, triton::Tensor>> input_tensors);
+    Engine<T>*                                            instance_;
+    const std::unique_ptr<Allocator<AllocatorType::CUDA>> allocator_;
 
     void allocateBuffer(const size_t request_batch_size,
                         const size_t max_input_len,
@@ -88,3 +76,5 @@ private:
     uint32_t*          h_total_output_lengths_ = nullptr;
     std::exception_ptr h_exception_            = nullptr;
 };
+
+}  // namespace turbomind

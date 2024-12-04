@@ -88,6 +88,27 @@ class SafetensorsLoader(BaseLoader):
                     yield (-1, {k: f.get_tensor(k) for k in misc})
         assert not params
 
+    # def items(self):
+    #     params = defaultdict(dict)
+    #     for shard in self.shards:
+    #         # with safe_open(shard, 'pt') as f:
+    #         with open(shard, 'rb') as f:
+    #             w = safetensors.torch.load(f.read())
+    #             misc = []
+    #             for k in w.keys():
+    #                 match = re.findall(self.pattern, k)
+    #                 if not match:
+    #                     misc.append(k)
+    #                 else:
+    #                     idx = int(match[0])
+    #                     param = params[idx]
+    #                     param[k] = w[k]
+    #                     if len(param) == self.item_count[idx]:
+    #                         yield (idx, params.pop(idx))
+    #             if misc:
+    #                 yield (-1, {k: w[k] for k in misc})
+    #     assert not params
+
 
 class PytorchLoader(BaseLoader):
 

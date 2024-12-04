@@ -87,7 +87,7 @@ class GLM4VisionModel(VisonModel):
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """refers to the spec of `super.preprocess()"""
-        images = super().collect_images(messages)
+        images = self.collect_images(messages)
         outputs = []
         for image, params in images:
             image = image.convert('RGB')

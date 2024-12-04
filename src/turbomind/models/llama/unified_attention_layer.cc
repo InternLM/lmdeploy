@@ -19,21 +19,24 @@
 // Modified from
 // https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/layers/attention_layers/GptContextAttentionLayer.cc
 
-#include "src/turbomind/models/llama/unified_attention_layer.h"
+#include <algorithm>
+#include <math.h>
+
 #include "src/turbomind/kernels/attention/attention.h"
 #include "src/turbomind/kernels/attention/decoding.h"
 #include "src/turbomind/kernels/attention/kv_cache_utils_v2.h"
+#include "src/turbomind/kernels/norm/rms_norm.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_utils.h"
+#include "src/turbomind/models/llama/mla_utils.h"
+#include "src/turbomind/models/llama/unified_attention_layer.h"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/cuda_utils.h"
-#include "src/turbomind/utils/debug_utils.h"
 #include "src/turbomind/utils/logger.h"
-#include <algorithm>
-#include <math.h>
+#include "src/turbomind/utils/memory_utils.h"
 
 namespace turbomind {
 
@@ -72,17 +75,14 @@ UnifiedAttentionLayer<T>::UnifiedAttentionLayer(const ModelParam&     model,
 }
 
 template<typename T>
-void UnifiedAttentionLayer<T>::allocateBuffer(size_t            q_count,
-                                              size_t            k_count,
-                                              size_t            batch_size,
-                                              const WeightType* weights)
+void UnifiedAttentionLayer<T>::allocateBuffer(size_t q_count, size_t k_count, size_t batch_size, size_t qkv_lora_rank)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
     const int local_q_kv_head_num = local_head_num_ + 2 * local_kv_head_num_;
 
-    if (weights->qkv.lora.r) {
-        size_t sz = sizeof(T) * q_count * (local_q_kv_head_num * size_per_head_ + weights->qkv.lora.r);
+    if (qkv_lora_rank) {
+        size_t sz = sizeof(T) * q_count * (local_q_kv_head_num * size_per_head_ + qkv_lora_rank);
         qkv_buf_  = (T*)allocator_->reMalloc(qkv_buf_, sz, false);
     }
     else {
@@ -198,28 +198,38 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     allocateBuffer(token_num,                                           // shared
                    h_cu_k_len[batch_size] - h_cu_k_len[dc_batch_size],  // prefill
                    batch_size,
-                   weights);
+                   weights->qkv.lora.r);
 
     // [L, 2, H, s, D]
     const size_t layer_offset = layer_id * 2 * local_kv_head_num_ * param_.cache_block_seq_len * size_per_head_;
 
-    static int count = 0;
+    // static int count = 0;
 
-    // if (layer_id == 0 && count == 0) {
-    //     Compare(attention_input, token_num * weights->qkv.input_dims, "qkv_input", compare_mode, stream_);
+    // if (tensor_para_.rank_ == 0) {
+    //     Compare(attention_input, token_num * hidden_units_, Concat("qkv_input", layer_id), compare_mode, stream_);
     // }
 
     int* lora_mask = inputs->at("lora_mask", Tensor{MEMORY_GPU, TYPE_INVALID, {}, nullptr}).getPtr<int>();
-    //////////////////////////////////////////////
-    /// qkv gemm
-    // [token_num, hidden_dim] -> [token_num, 3, local_hidden_dim]
-    linear_->forward(qkv_buf_, attention_input, token_num, weights->qkv, LlamaLinear<T>::kGemm, lora_mask);
-    sync_check_cuda_error();
+
+    if (weights->qkv.output_dims) {
+        //////////////////////////////////////////////
+        /// qkv gemm
+        // [token_num, hidden_dim] -> [token_num, 3, local_hidden_dim]
+        linear_->forward(qkv_buf_, attention_input, token_num, weights->qkv, LlamaLinear<T>::kGemm, lora_mask);
+        sync_check_cuda_error();
+    }
+    else {
+        forward_mla(attention_input, token_num, *weights);
+    }
+
+    // std::cerr << layer_id << " " << count << " " << tensor_para_.rank_ << "\n";
 
     count_and_fix(qkv_buf_, token_num * weights->qkv.output_dims, Concat("qkv", layer_id), 3);
 
-    // if (layer_id == 0 && count == 0) {
-    //     Compare(qkv_buf_, token_num * weights->qkv.output_dims, "qkv_buf", compare_mode, stream_);
+    // std::cerr << "token num: " << token_num << "\n";
+
+    // if (layer_id == 0 && count == 0 && tensor_para_.rank_ == 0) {
+    //     Compare(qkv_buf_, token_num * (3 * local_head_num_ * size_per_head_), "qkv_buf", CMP_MODE, stream_);
     // }
 
     if constexpr (0) {
@@ -290,8 +300,15 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         params.num_heads     = local_head_num_;
         params.num_kv_heads  = local_kv_head_num_;
         params.size_per_head = size_per_head_;
+
         // MSVC does not have M_LOG2E
-        params.inv_sqrt_dh = (float)std::log2(expf(1.)) / std::sqrt((float)params.size_per_head);
+        params.inv_sqrt_dh = (float)std::log2(expf(1.));
+        if (param_.softmax_scale) {  // model predefined softmax scale
+            params.inv_sqrt_dh *= param_.softmax_scale;
+        }
+        else {  // default value
+            params.inv_sqrt_dh /= std::sqrt((float)params.size_per_head);
+        }
 
         params.rotary_embedding_dim    = param_.rotary_embedding_dim;
         params.rotary_embedding_base   = param_.rotary_embedding_base;
@@ -324,8 +341,9 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
             };
             float low, high;
             find_correction_range(param_.beta_fast, param_.beta_slow, low, high);
+            // https://github.com/huggingface/transformers/blob/6c3f168b36882f0beebaa9121eafa1928ba29633/src/transformers/modeling_rope_utils.py#L216
             if (low == high) {
-                high += 0.01f;
+                high += 0.001f;
             }
             params.yarn_ramp_inv_factor_div_2   = 1.0 / (high - low) / 2.0;
             params.yarn_ramp_inv_factor_mul_min = 1.0 / (high - low) * low;
@@ -415,8 +433,6 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     linear_->forward(attention_out, qkv_buf_3_, token_num, weights->output, LlamaLinear<T>::kGemm, lora_mask);
     sync_check_cuda_error();
 
-    // ++count;
-
     count_and_fix(attention_out, token_num * weights->output.output_dims, Concat("wo", layer_id), 3);
 
     if (tensor_para_.world_size_ > 1) {
@@ -425,10 +441,94 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         sync_check_cuda_error();
     }
 
+    // if (tensor_para_.rank_ == 0) {
+    //     Compare(attention_out, token_num * hidden_units_, Concat("attn_out", layer_id), compare_mode, stream_);
+    //     // dump(qkv_buf_3_, num_token * weights->output.input_dims, stream_, "qkv_buf_3");
+    // }
+
     if (is_free_buffer_after_forward_ == true) {
         freeBuffer();
     }
     sync_check_cuda_error();
+
+    // ++count;
+}
+
+template<typename T>
+void UnifiedAttentionLayer<T>::forward_mla(const T* inputs, int token_num, const WeightType& w)
+{
+    const int q_lora_rank  = w.q_a_proj.output_dims;
+    const int kv_lora_rank = w.kv_b_proj.input_dims;
+    const int qk_rope_dim  = w.kv_a_proj.output_dims - kv_lora_rank;
+    const int qk_nope_dim  = std::max(w.q_b_proj.output_dims, w.q_proj.output_dims) / local_head_num_ - qk_rope_dim;
+    const int v_head_dim   = w.kv_b_proj.output_dims / local_head_num_ - qk_nope_dim;
+
+    T* q{};
+
+    if (w.q_proj.kernel) {
+        deviceMalloc((T**)&q, (size_t)token_num * w.q_proj.output_dims, stream_);
+        linear_->forward(q, inputs, token_num, w.q_proj);
+        sync_check_cuda_error();
+    }
+    else {
+        T* q_a{};
+        deviceMalloc((T**)&q_a, (size_t)token_num * q_lora_rank, stream_);
+
+        linear_->forward(q_a, inputs, token_num, w.q_a_proj);
+        sync_check_cuda_error();
+
+        invokeRMSNorm(q_a,
+                      q_lora_rank,
+                      q_a,
+                      q_lora_rank,
+                      w.q_a_layernorm,
+                      q_lora_rank,
+                      token_num,
+                      model_param_.norm_eps,
+                      stream_);
+        sync_check_cuda_error();
+
+        deviceMalloc((T**)&q, (size_t)token_num * w.q_b_proj.output_dims, stream_);
+        linear_->forward(q, q_a, token_num, w.q_b_proj);
+        sync_check_cuda_error();
+
+        deviceFree(q_a, stream_);
+    }
+
+    T*        kv_a{};
+    const int kv_a_dim = w.kv_a_proj.output_dims;
+    deviceMalloc((T**)&kv_a, (size_t)token_num * kv_a_dim, stream_);
+
+    linear_->forward(kv_a, inputs, token_num, w.kv_a_proj);
+    sync_check_cuda_error();
+
+    invokeRMSNorm(
+        kv_a, kv_a_dim, kv_a, kv_a_dim, w.kv_a_layernorm, kv_lora_rank, token_num, model_param_.norm_eps, stream_);
+    sync_check_cuda_error();
+
+    T* kv_b{};
+    deviceMalloc((T**)&kv_b, (size_t)token_num * w.kv_b_proj.output_dims, stream_);
+    sync_check_cuda_error();
+
+    linear_->forward(kv_b, {kv_a, kv_a_dim}, token_num, w.kv_b_proj);
+    sync_check_cuda_error();
+
+    dispatchMLACopyQKV(qkv_buf_,
+                       q,
+                       kv_a,
+                       kv_b,
+                       token_num,
+                       local_head_num_,
+                       qk_nope_dim,
+                       qk_rope_dim,
+                       kv_lora_rank,
+                       v_head_dim,
+                       stream_);
+    sync_check_cuda_error();
+
+    deviceFree(q, stream_);
+    deviceFree(kv_a, stream_);
+    deviceFree(kv_b, stream_);
 }
 
 #ifdef ENABLE_FP32

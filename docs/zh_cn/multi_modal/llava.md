@@ -6,8 +6,8 @@ LMDeploy 支持以下 LLaVA 系列模型，具体如下表所示：
 | :----------------------------------: | :--: | :----------------: |
 | llava-hf/Llava-interleave-qwen-7b-hf |  7B  | TurboMind, PyTorch |
 |       llava-hf/llava-1.5-7b-hf       |  7B  | TurboMind, PyTorch |
-|   liuhaotian/llava-v1.6-vicuna-7b    |  7B  | TurboMind, PyTorch |
-|   liuhaotian/llava-v1.6-mistral-7b   |  7B  | TurboMind, PyTorch |
+|   liuhaotian/llava-v1.6-vicuna-7b    |  7B  |     TurboMind      |
+|   liuhaotian/llava-v1.6-mistral-7b   |  7B  |     TurboMind      |
 
 接下来的章节将演示如何使用 LMDeploy 部署 LLaVA 模型，并以 [llava-hf/llava-interleave](https://huggingface.co/llava-hf/llava-interleave-qwen-7b-hf) 为例。
 

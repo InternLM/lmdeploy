@@ -50,7 +50,12 @@ NORM_FCS_MAP = {
         'input_layernorm':
         ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
         'post_attention_layernorm': ['mlp.gate_proj', 'mlp.up_proj']
-    }
+    },
+    'MistralDecoderLayer': {
+        'input_layernorm':
+        ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
+        'post_attention_layernorm': ['mlp.gate_proj', 'mlp.up_proj']
+    },
 }
 
 FC_FCS_MAP = {
@@ -90,6 +95,10 @@ FC_FCS_MAP = {
         'block_sparse_moe.experts.{i}.w3': ['block_sparse_moe.experts.{i}.w2']
     },
     'Qwen2VLDecoderLayer': {
+        'self_attn.v_proj': ['self_attn.o_proj'],
+        'mlp.up_proj': ['mlp.down_proj']
+    },
+    'MistralDecoderLayer': {
         'self_attn.v_proj': ['self_attn.o_proj'],
         'mlp.up_proj': ['mlp.down_proj']
     }

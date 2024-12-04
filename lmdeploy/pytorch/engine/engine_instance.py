@@ -90,21 +90,10 @@ class EngineInstance:
     """
 
     def __init__(self, engine: Engine):
-
-        def __get_max_input_len(engine):
-            """get max input len."""
-            cache_config = engine.cache_config
-            max_input_len = (cache_config.block_size *
-                             cache_config.num_gpu_blocks)
-            window_size = cache_config.window_size
-            if window_size > 0 and window_size <= max_input_len:
-                max_input_len = (1 << 63) - 1
-            return max_input_len
-
         self.engine = engine
         self.req_sender = engine.req_manager.build_sender()
 
-        self.max_input_len = __get_max_input_len(self.engine)
+        self.max_input_len = self.engine.max_session_len
 
     def __del__(self):
         """Destructor."""

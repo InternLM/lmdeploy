@@ -71,7 +71,7 @@ class Qwen2VLModel(VisonModel):
         """refer to `super().preprocess()` for spec."""
         from qwen_vl_utils import process_vision_info
 
-        images = super().collect_images(messages)
+        images = self.collect_images(messages)
         optional_keys = {
             'resized_height', 'resized_width', 'min_pixels', 'max_pixels'
         }
