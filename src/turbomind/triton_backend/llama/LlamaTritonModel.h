@@ -43,12 +43,7 @@ struct LlamaTritonModel: public AbstractTransformerModel {
 
     ~LlamaTritonModel() override;
 
-    std::unique_ptr<AbstractTransformerModelInstance>
-    createModelInstance(int                                                       deviceId,
-                        int                                                       rank,
-                        cudaStream_t                                              stream,
-                        std::pair<std::vector<NcclParam>, std::vector<NcclParam>> nccl_params,
-                        std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm = nullptr) override;
+    std::unique_ptr<ModelRequest> createModelInstance(int deviceId) override;
 
     void createSharedWeights(int deviceId, int rank) override;
 

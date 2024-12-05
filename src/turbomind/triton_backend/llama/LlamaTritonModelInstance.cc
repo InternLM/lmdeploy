@@ -28,10 +28,14 @@
 #include <functional>
 #include <numeric>
 #include <sstream>
+#include <type_traits>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace turbomind {
+
+#if 0
 
 template<typename T>
 void triton_stream_callback(std::unordered_map<std::string, Tensor>* outputs, void* ctx)
@@ -212,5 +216,9 @@ template struct LlamaTritonModelInstance<half>;
 #ifdef ENABLE_BF16
 template struct LlamaTritonModelInstance<__nv_bfloat16>;
 #endif
+
+#endif
+
+
 
 }  // namespace turbomind

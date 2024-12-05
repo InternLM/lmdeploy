@@ -4,10 +4,12 @@ import copy
 import json
 import os.path as osp
 import sys
+import threading
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from itertools import repeat
-from queue import LifoQueue, Queue
+from queue import Queue
 from typing import Dict, Iterable, List
 
 import numpy as np
@@ -343,50 +345,11 @@ class TurboMindInstance:
         # create model instances
         self.model_inst = self._create_model_instance(0)
 
-        self.que = Queue()
-        self.executor: ThreadPoolExecutor = None
-        self.future = None
         self.config = config
 
     def _create_model_instance(self, device_id):
-        rank = self.node_id * self.gpu_count + device_id
-        model_inst = self.tm_model.model_comm.create_model_instance(
-            device_id, rank, self.cuda_stream_id, self.nccl_params)
+        model_inst = self.tm_model.model_comm.create_model_instance(device_id)
         return model_inst
-
-    def _forward_callback(self, result, ctx):
-        self.que.put((False, result))
-
-    def _forward_thread(self, inputs):
-
-        def _func():
-            try:
-                output = self.model_inst.forward(inputs)
-            except Exception as e:
-                logger.error(f'unhandled exception: {e}')
-                self.que.put((-1, None))
-                return
-            self.que.put((True, output))
-
-        self.executor = ThreadPoolExecutor(1)
-        self.future = self.executor.submit(_func)
-
-    def _async_forward_callback(self, result, ctx, que: LifoQueue):
-        que.put((False, result))
-
-    def _async_forward_thread(self, inputs, que: LifoQueue):
-
-        def _func():
-            try:
-                output = self.model_inst.forward(inputs)
-            except Exception as e:
-                logger.error(f'unhandled exception: {e}')
-                que.put((-1, None))
-                return
-            que.put((True, output))
-
-        self.executor = ThreadPoolExecutor(1)
-        self.future = self.executor.submit(_func)
 
     def _get_logprobs(self,
                       logprob_vals: torch.Tensor,
@@ -506,78 +469,23 @@ class TurboMindInstance:
         return input_embeddings, input_embedding_ranges
 
     def prepare_inputs(self,
-                       session_id,
                        input_ids,
                        gen_config: GenerationConfig,
                        input_embeddings=None,
-                       input_embedding_ranges=None,
-                       sequence_start: bool = True,
-                       sequence_end: bool = False,
-                       step=0,
-                       stop=False):
+                       input_embedding_ranges=None):
         """Convert inputs format."""
-        if len(input_ids) == 0:
-            input_ids = [[]]
-        if isinstance(input_ids[0], int):
-            input_ids = [input_ids]
+        assert isinstance(input_ids, Sequence)
 
-        batch_size = len(input_ids)
+        input_ids = torch.IntTensor(input_ids)
+        input_lengths = torch.IntTensor([len(input_ids)])
 
-        def _broadcast_np(data, dtype, shape=(batch_size, )):
-            if isinstance(data, Iterable):
-                assert len(data) == batch_size
-                return data
-
-            return np.full(shape, data, dtype=dtype)
-
-        input_ids = [torch.IntTensor(ids) for ids in input_ids]
-        input_lengths = torch.IntTensor([len(ids) for ids in input_ids])
-        input_ids = pad_sequence(input_ids,
-                                 batch_first=True,
-                                 padding_value=self.eos_id)
-
-        if isinstance(session_id, int):
-            session_id = [session_id]
-        assert len(session_id) == batch_size
-
-        step = _broadcast_np(step, np.int32)
-
-        inputs = dict(
-            input_ids=input_ids,
-            input_lengths=input_lengths,
-            request_output_len=np.full(input_lengths.shape,
-                                       gen_config.max_new_tokens,
-                                       dtype=np.uint32),
-            runtime_top_k=_broadcast_np(gen_config.top_k, np.uint32),
-            runtime_top_p=_broadcast_np(gen_config.top_p, np.float32),
-            runtime_min_p=_broadcast_np(gen_config.min_p, np.float32),
-            temperature=_broadcast_np(gen_config.temperature, np.float32),
-            repetition_penalty=_broadcast_np(gen_config.repetition_penalty,
-                                             np.float32),
-            step=step,
-
-            # session input
-            START=_broadcast_np((1 if sequence_start else 0), np.int32),
-            END=_broadcast_np((1 if sequence_end else 0), np.int32),
-            CORRID=np.array(session_id, dtype=np.uint64),
-            STOP=_broadcast_np((1 if stop else 0), np.int32))
+        inputs = dict(input_ids=input_ids, )
 
         input_embeddings, input_embedding_ranges = self.prepare_embeddings(
             input_embeddings, input_embedding_ranges)
         if input_embeddings is not None:
             inputs['input_embeddings'] = input_embeddings
             inputs['input_embedding_ranges'] = input_embedding_ranges
-
-        if gen_config.min_new_tokens is not None:
-            inputs['min_length'] = _broadcast_np(gen_config.min_new_tokens,
-                                                 np.int32)
-
-        if gen_config.logprobs is not None and gen_config.logprobs > 0:
-            if gen_config.logprobs > MAX_LOGPROBS:
-                gen_config.logprobs = MAX_LOGPROBS
-                logger.warning('logprobs shoudd be in range [1, 1024]'
-                               f'update logprobs={gen_config.logprobs}')
-            inputs['logprobs'] = _broadcast_np(gen_config.logprobs, np.int32)
 
         bad_words = []
         if gen_config.bad_token_ids is not None:
@@ -597,10 +505,16 @@ class TurboMindInstance:
         if bad_words is not None:
             inputs['bad_words_list'] = bad_words
 
-        if gen_config.random_seed is not None:
-            inputs['random_seed'] = _broadcast_np(gen_config.random_seed,
-                                                  np.uint64)
         return inputs, input_lengths
+
+    async def async_signal(self, state):
+        async with self.cond:
+            self.flag, self.state = 1, state
+            self.cond.notify()
+
+    def async_signal_cb(self, state):
+        coro = self.async_signal(state)
+        asyncio.run_coroutine_threadsafe(coro, self.event_loop)
 
     async def async_stream_infer(self,
                                  session_id,
@@ -631,99 +545,115 @@ class TurboMindInstance:
             kwargs (dict): kwargs for backward compatibility
         """
         # start forward thread
-        que = LifoQueue()
-        from functools import partial
-        _forward_callback = partial(self._async_forward_callback, que=que)
-        _forward_thread = partial(self._async_forward_thread, que=que)
-        if stream_output and not stop:
-            logger.info(f'Register stream callback for {session_id}')
-            self.model_inst.register_callback(_forward_callback)
 
-        inputs, input_lengths = self.prepare_inputs(
-            session_id=session_id,
+        self.event_loop = asyncio.get_running_loop()
+        self.cond = asyncio.Condition()
+        self.flag = 0
+
+        gen_cfg = self._get_generation_config(gen_config)
+
+        inputs, input_length = self.prepare_inputs(
             input_ids=input_ids,
             input_embeddings=input_embeddings,
             input_embedding_ranges=input_embedding_ranges,
-            sequence_start=sequence_start,
-            sequence_end=sequence_end,
-            step=step,
-            stop=stop,
             gen_config=gen_config)
 
-        tm_inputs = _np_dict_to_tm_dict(inputs)
-        _forward_thread(tm_inputs)
+        session = _tm.SessionParam(id=session_id,
+                                   step=step,
+                                   start=sequence_start,
+                                   end=sequence_end,
+                                   stop=stop)
 
-        seq_start = input_lengths + input_lengths.new_tensor(step)
+        inputs = _np_dict_to_tm_dict(inputs)
+
+        outputs = self.model_inst.forward(inputs, session, gen_cfg,
+                                          stream_output, self.async_signal_cb)
+
+        outputs = _tm_dict_to_torch_dict(outputs)
+
+        output_ids_buf = outputs['output_ids']
+
+        seq_start = step + input_length[0]
 
         out_logprobs = None
-        prev_len = 0
-        # generator
-        while True:
-            while que.qsize() == 0:  # let other requests in
-                await asyncio.sleep(0.002)
+        finish = False
 
-            finish, tm_outputs = que.get()
-            if finish < 0:
-                yield EngineOutput(status=ResponseType.INTERNAL_ENGINE_ERROR,
-                                   token_ids=[],
-                                   num_token=0)
-                self.executor.shutdown()
-                break
+        try:
+            # generator
+            while True:
+                async with self.cond:
+                    while not self.flag:
+                        await self.cond.wait()
+                    state, self.flag = self.state, 0
 
-            outputs = _tm_dict_to_torch_dict(tm_outputs)
+                status, seq_len = state.status, state.seq_len
 
-            output_ids = outputs['output_ids'][:, 0, :]
-            sequence_length = outputs['sequence_length'].long()[:, 0]
-            output_ids = [
-                output_id[s:l] for output_id, s, l in zip(
-                    output_ids, seq_start, sequence_length)
-            ]
-            sequence_length -= seq_start.to(sequence_length.device)
+                if status == 7:
+                    finish = True
+                    status = 0
+                elif status:
+                    yield self._get_error_output()
+                    break
 
-            if 'logprob_vals' in outputs:
-                logprob_vals = outputs['logprob_vals'][0, 0]
-                logprob_indexes = outputs['logprob_indexes'][0, 0]
-                logprob_nums = outputs['logprob_nums'][0, 0]
-                out_logprobs = self._get_logprobs(logprob_vals,
-                                                  logprob_indexes,
-                                                  logprob_nums, output_ids[0],
-                                                  gen_config.logprobs,
-                                                  sequence_length.cpu().item(),
-                                                  out_logprobs, session_id)
+                if seq_start == seq_len and not finish:
+                    continue
 
-            outputs = []
-            status = ResponseType.FINISH if finish else ResponseType.SUCCESS
-            for output, len_ in zip(output_ids, sequence_length):
-                output, len_ = output, len_.item()
-                if len(output) > 0 and output[-1].item() == self.eos_id \
-                        and not gen_config.ignore_eos:
-                    outputs = EngineOutput(status, output[:-1].tolist(),
-                                           len_ - 1)
-                elif len(output) > 0 and \
-                    gen_config.stop_token_ids is not None and \
-                        output[-1].item() in gen_config.stop_token_ids:
-                    outputs = EngineOutput(status, output[:-1].tolist(), len_)
-                else:
-                    outputs = EngineOutput(status, output.tolist(), len_)
-            if outputs.num_token < prev_len and not finish:
-                continue
-            else:
-                prev_len = outputs.num_token
+                output_ids = output_ids_buf[seq_start:seq_len]
+                gen_len = seq_len - seq_start
+                status = ResponseType.FINISH if finish else ResponseType.SUCCESS
+                output = EngineOutput(status, output_ids.tolist(), gen_len,
+                                      out_logprobs)
+                yield output
 
-            if out_logprobs:
-                output_token_len = len(outputs.token_ids)
-                outputs.logprobs = out_logprobs[:output_token_len]
+                if finish:
+                    break
 
-            yield outputs
+        except Exception as e:
+            logger.error(e)
+            yield self._get_error_output()
 
-            if finish:
-                self.future.result()
-                self.executor.shutdown()
-                break
+        finally:
+            async with self.cond:
+                # Contract: `notfiy` won't be called again if status is non-zero
+                # wait for status to be set as `finish` or `error`
+                while not state or state.status == 0:
+                    while not self.flag:
+                        await self.cond.wait()
+                    state = self.state
+            self.cond = None
+            self.event_loop = None
 
-        if stream_output and not stop:
-            logger.info(f'UN-register stream callback for {session_id}')
-            self.model_inst.unregister_callback()
+    def _get_error_output(self):
+        return EngineOutput(status=ResponseType.INTERNAL_ENGINE_ERROR,
+                            token_ids=[],
+                            num_token=0)
+
+    def _get_generation_config(self, cfg: GenerationConfig):
+        c = _tm.GenerationConfig()
+        c.max_new_tokens = cfg.max_new_tokens
+        c.top_k = cfg.top_k
+        c.top_p = cfg.top_p
+        c.min_p = cfg.min_p
+        c.temperature = cfg.temperature
+        c.repetition_penalty = cfg.repetition_penalty
+        if cfg.min_new_tokens:
+            c.min_new_tokens = cfg.min_new_tokens
+        if cfg.logprobs:
+            if cfg.logprobs > MAX_LOGPROBS:
+                cfg.logprobs = MAX_LOGPROBS
+                logger.warning(
+                    f'logprobs shoudd be in range [1, {MAX_LOGPROBS}]'
+                    f'update logprobs={cfg.logprobs}')
+            c.output_logprobs = cfg.logprobs
+        if cfg.random_seed is not None:
+            c.random_seed = cfg.random_seed
+        # print (c)
+        return c
+
+    def signal_cb(self, state):
+        with self.cond:
+            self.flag, self.state = 1, state
+            self.cond.notify()
 
     def stream_infer(self,
                      session_id,
@@ -753,96 +683,86 @@ class TurboMindInstance:
             stream_output (bool): indicator for stream output
             kwargs (dict): kwargs for backward compatibility
         """
-        if stream_output and not stop:
-            logger.info(f'Register stream callback for {session_id}')
-            self.model_inst.register_callback(self._forward_callback)
 
-        inputs, input_lengths = self.prepare_inputs(
-            session_id=session_id,
+        gen_cfg = self._get_generation_config(gen_config)
+
+        inputs, input_length = self.prepare_inputs(
             input_ids=input_ids,
             input_embeddings=input_embeddings,
             input_embedding_ranges=input_embedding_ranges,
-            sequence_start=sequence_start,
-            sequence_end=sequence_end,
-            step=step,
-            stop=stop,
             gen_config=gen_config)
 
-        tm_inputs = _np_dict_to_tm_dict(inputs)
-        # start forward thread
-        self.que = Queue()
-        self._forward_thread(tm_inputs)
+        inputs = _np_dict_to_tm_dict(inputs)
 
-        seq_start = input_lengths + input_lengths.new_tensor(step)
+        session = _tm.SessionParam(id=session_id,
+                                   step=step,
+                                   start=sequence_start,
+                                   end=sequence_end,
+                                   stop=stop)
+
+        self.cond = threading.Condition()
+        self.flag = 0
+
+        outputs = self.model_inst.forward(inputs, session, gen_cfg,
+                                          stream_output, self.signal_cb)
+
+        outputs = _tm_dict_to_torch_dict(outputs)
+
+        output_ids_buf = outputs['output_ids']
+
+        seq_start = step + input_length[0]
+
         out_logprobs = None
+        finish = False
+        state = None
 
-        # generator
-        while True:
-            while self.que.qsize() > 1:
-                self.que.get()
+        try:
+            # generator
+            while True:
+                with self.cond:
+                    while not self.flag:
+                        self.cond.wait()
+                    state = self.state
+                    self.flag = 0
 
-            finish, tm_outputs = self.que.get()
-            if finish < 0:
-                yield EngineOutput(status=ResponseType.INTERNAL_ENGINE_ERROR,
-                                   token_ids=[],
-                                   num_token=0)
-                self.executor.shutdown()
-                break
+                status, seq_len = state.status, state.seq_len
 
-            outputs = _tm_dict_to_torch_dict(tm_outputs)
+                if status == 7:  # TODO: use enum
+                    finish = True
+                    status = 0
+                elif status:
+                    yield self._get_error_output()
+                    break
 
-            output_ids = outputs['output_ids'][:, 0, :]
-            sequence_length = outputs['sequence_length'].long()[:, 0]
-            output_ids = [
-                output_id[s:l] for output_id, s, l in zip(
-                    output_ids, seq_start, sequence_length)
-            ]
-            sequence_length -= seq_start.to(sequence_length.device)
+                output_ids = output_ids_buf[seq_start:seq_len]
+                gen_len = seq_len - seq_start
 
-            if 'logprob_vals' in outputs:
-                logprob_vals = outputs['logprob_vals'][0, 0]
-                logprob_indexes = outputs['logprob_indexes'][0, 0]
-                logprob_nums = outputs['logprob_nums'][0, 0]
-                out_logprobs = self._get_logprobs(logprob_vals,
-                                                  logprob_indexes,
-                                                  logprob_nums, output_ids[0],
-                                                  gen_config.logprobs,
-                                                  sequence_length.cpu().item(),
-                                                  out_logprobs, session_id)
+                status = ResponseType.FINISH if finish else ResponseType.SUCCESS
+                output = EngineOutput(status, output_ids.tolist(), gen_len,
+                                      out_logprobs)
 
-            outputs = []
-            status = ResponseType.FINISH if finish else ResponseType.SUCCESS
-            for output, len_ in zip(output_ids, sequence_length):
-                output, len_ = output, len_.item()
-                if len(output) > 0 and output[-1].item() == self.eos_id \
-                        and not gen_config.ignore_eos:
-                    outputs = EngineOutput(status, output[:-1].tolist(),
-                                           len_ - 1, out_logprobs)
-                elif len(output) > 0 and \
-                    gen_config.stop_token_ids is not None and \
-                        output[-1].item() in gen_config.stop_token_ids:
-                    outputs = EngineOutput(status, output[:-1].tolist(), len_,
-                                           out_logprobs)
-                else:
-                    outputs = EngineOutput(status, output.tolist(), len_,
-                                           out_logprobs)
+                if out_logprobs:
+                    output_token_len = len(output.token_ids)
+                    output.logprobs = out_logprobs[:output_token_len]
 
-            if out_logprobs:
-                output_token_len = len(outputs.token_ids)
-                outputs.logprobs = out_logprobs[:output_token_len]
+                yield output
 
-            yield outputs
+                if finish:
+                    break
 
-            if finish:
-                self.future.result()
-                self.executor.shutdown()
-                while self.que.qsize() > 0:
-                    self.que.get()
-                break
+        except Exception as e:
+            logger.error(e)
+            yield self._get_error_output()
 
-        if stream_output and not stop:
-            logger.info(f'UN-register stream callback for {session_id}')
-            self.model_inst.unregister_callback()
+        finally:
+            with self.cond:
+                # Contract: `notfiy` won't be called again if status is non-zero
+                # wait for status to be set as `finish` or `error`
+                while not state or state.status == 0:
+                    while not self.flag:
+                        self.cond.wait()
+                    state = self.state
+            self.cond = None
 
     def decode(self,
                input_ids,

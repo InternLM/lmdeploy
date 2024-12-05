@@ -20,15 +20,17 @@
 
 #pragma once
 
+#include <cuda_bf16.h>
 #include <memory>
 
 #include "src/turbomind/models/llama/LlamaBatch.h"
 #include "src/turbomind/models/llama/LlamaV2.h"
 #include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
-#include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
+// #include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
 
 namespace turbomind {
 
+#if 0
 template<typename T>
 struct LlamaTritonModelInstance: AbstractTransformerModelInstance {
 
@@ -76,5 +78,9 @@ private:
     uint32_t*          h_total_output_lengths_ = nullptr;
     std::exception_ptr h_exception_            = nullptr;
 };
+
+#endif
+
+
 
 }  // namespace turbomind

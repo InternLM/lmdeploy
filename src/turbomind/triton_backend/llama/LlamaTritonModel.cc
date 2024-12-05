@@ -27,6 +27,7 @@
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
+#include "src/turbomind/triton_backend/model_request.h"
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
@@ -410,22 +411,14 @@ LlamaTritonModel<T>::createSharedModelInstance(int                              
 }
 
 template<typename T>
-std::unique_ptr<AbstractTransformerModelInstance>
-LlamaTritonModel<T>::createModelInstance(int          device_id,
-                                         int          rank,
-                                         cudaStream_t stream,
-                                         std::pair<std::vector<NcclParam>, std::vector<NcclParam>>,
-                                         std::shared_ptr<AbstractCustomComm>)
+std::unique_ptr<ModelRequest> LlamaTritonModel<T>::createModelInstance(int device_id)
 {
     check_cuda_error(cudaSetDevice(device_id));
 
     FT_CHECK(engines_[device_id] != nullptr);
 
-    auto allocator = std::make_unique<Allocator<AllocatorType::CUDA>>(device_id, false);
-
-    allocator->setStream(stream);
-
-    return std::make_unique<LlamaTritonModelInstance<T>>(*engines_[device_id], std::move(allocator), device_id);
+    return std::make_unique<ModelRequest>(
+        &shared_state_->request_queue, engine_param_.session_len, model_param_.vocab_size);
 }
 
 template<typename T>

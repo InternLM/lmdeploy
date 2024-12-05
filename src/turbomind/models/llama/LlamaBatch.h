@@ -2,6 +2,13 @@
 
 #pragma once
 
+#include <condition_variable>
+#include <mutex>
+#include <thread>
+#include <type_traits>
+
+#include <curand_kernel.h>
+
 #include "src/turbomind/models/llama/Barrier.h"
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/models/llama/Request.h"
@@ -12,10 +19,6 @@
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
 #include "src/turbomind/utils/cuda_utils.h"
-#include <condition_variable>
-#include <curand_kernel.h>
-#include <mutex>
-#include <type_traits>
 
 using ffi_api_lock_ctrl_t = std::function<void(int)>;
 
@@ -30,9 +33,6 @@ struct SharedState {
     std::atomic<size_t>                   free_size{std::numeric_limits<size_t>::max()};
 };
 
-struct Control {
-    Request::Callback callback;
-};
 
 struct BatchState {
     int*  h_prompt_length;  // history + input, ignore generated
@@ -121,10 +121,6 @@ public:
     ~LlamaBatch();
 
     void Start();
-
-    void Submit(std::unordered_map<std::string, Tensor>*       outputs,
-                const std::unordered_map<std::string, Tensor>* inputs,
-                Control                                        control);
 
     void set_ffi_lock(ffi_api_lock_ctrl_t func)
     {

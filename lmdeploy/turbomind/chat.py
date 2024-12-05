@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import asyncio
 import os
 import random
 
@@ -28,6 +29,40 @@ def input_prompt(model_name):
     return '\n'.join(iter(input, sentinel))
 
 
+def infer(generator, session_id, input_ids, gen_config, sequence_start,
+          sequence_end, step, stream_output, tokenizer, state):
+    for outputs in generator.stream_infer(session_id=session_id,
+                                          input_ids=input_ids,
+                                          gen_config=gen_config,
+                                          sequence_start=sequence_start,
+                                          sequence_end=sequence_end,
+                                          step=step,
+                                          stream_output=stream_output):
+        res, tokens = input_ids + outputs.token_ids, outputs.num_token
+        # decode res
+        response, state = tokenizer.detokenize_incrementally(res, state=state)
+        print(response, end='', flush=True)
+    return tokens
+
+
+async def async_infer(generator, session_id, input_ids, gen_config,
+                      sequence_start, sequence_end, step, stream_output,
+                      tokenizer, state):
+    async for output in generator.async_stream_infer(
+            session_id=session_id,
+            input_ids=input_ids,
+            gen_config=gen_config,
+            sequence_start=sequence_start,
+            sequence_end=sequence_end,
+            step=step,
+            stream_output=stream_output):
+        res, tokens = input_ids + output.token_ids, output.num_token
+        # decode res
+        response, state = tokenizer.detokenize_incrementally(res, state=state)
+        print(response, end='', flush=True)
+    return tokens
+
+
 def main(model_path: str,
          session_id: int = 1,
          top_k: float = 40,
@@ -47,6 +82,7 @@ def main(model_path: str,
          stream_output: bool = True,
          request_output_len: int = 1024,
          chat_template_config: ChatTemplateConfig = None,
+         use_async: bool = True,
          **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -163,20 +199,16 @@ def main(model_path: str,
 
             print(f'{prompt}', end='', flush=True)
             state = DetokenizeState(len(input_ids))
-            for outputs in generator.stream_infer(
-                    session_id=session_id,
-                    input_ids=[input_ids],
-                    gen_config=gen_config,
-                    sequence_start=sequence_start,
-                    sequence_end=sequence_end,
-                    step=step,
-                    stream_output=stream_output):
 
-                res, tokens = input_ids + outputs.token_ids, outputs.num_token
-                # decode res
-                response, state = tokenizer.detokenize_incrementally(
-                    res, state=state)
-                print(response, end='', flush=True)
+            if use_async:
+                coro = async_infer(generator, session_id, input_ids,
+                                   gen_config, sequence_start, sequence_end,
+                                   step, stream_output, tokenizer, state)
+                tokens = asyncio.run(coro)
+            else:
+                tokens = infer(generator, session_id, input_ids, gen_config,
+                               sequence_start, sequence_end, step,
+                               stream_output, tokenizer, state)
 
             # update step
             step += len(input_ids) + tokens

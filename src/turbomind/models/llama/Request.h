@@ -2,50 +2,123 @@
 
 #pragma once
 
-#include "src/turbomind/utils/Tensor.h"
+#include <atomic>
 #include <condition_variable>
 #include <cstdint>
-#include <future>
-#include <limits>
+#include <ostream>
 #include <queue>
-#include <unordered_map>
+
+#include "src/turbomind/utils/Tensor.h"
 
 namespace turbomind {
+
+struct GenerationConfig {
+    int max_new_tokens = 0;
+    int min_new_tokens = 0;
+
+    int   top_k       = 1;
+    float top_p       = 0.f;
+    float min_p       = 0.f;
+    float temperature = 1.f;
+
+    float repetition_penalty = 1.f;
+
+    uint64_t random_seed = 0;
+
+    int output_logprobs = 0;
+
+    // placeholders that are not implemented yet
+    bool output_hidden_states = false;
+    bool output_logits        = false;
+};
+
+inline std::ostream& operator<<(std::ostream& os, const GenerationConfig& c)
+{
+    os << "GenerationConfig { ";
+    os << "max_new_tokens=" << c.max_new_tokens;
+    os << ", min_new_tokens=" << c.min_new_tokens;
+    os << ", top_p=" << c.top_p;
+    os << ", top_k=" << c.top_k;
+    os << ", min_p=" << c.min_p;
+    os << ", temperature=" << c.temperature;
+    os << ", repetition_penalty=" << c.repetition_penalty;
+    os << ", random_seed=" << c.random_seed;
+    os << ", output_logprobs=" << c.output_logprobs;
+    os << ", output_hidden_states=" << c.output_hidden_states;
+    os << ", output_logits=" << c.output_logits;
+    os << " }";
+    return os;
+}
+
+struct SessionParam {
+    uint64_t id;
+
+    int step;
+
+    bool start_flag;
+    bool end_flag;
+    bool stop_flag;
+};
+
+struct RequestState {
+    int status;
+    int seq_len;
+};
+
+struct AtomicRequestState {
+
+    AtomicRequestState(): data(std::make_shared<RequestState>()) {}
+
+    void update(RequestState state)
+    {
+        std::atomic_store_explicit(&data, std::make_shared<RequestState>(std::move(state)), std::memory_order_release);
+    }
+
+    std::shared_ptr<RequestState> load()
+    {
+        return std::atomic_load_explicit(&data, std::memory_order_acquire);
+    }
+
+    std::shared_ptr<RequestState> data;
+};
 
 struct Request {
     uint64_t id;         // sequence id
     uint64_t unique_id;  // monotonic increasing
 
-    bool start_flag;
-    bool end_flag;
-    bool stop_flag;
+    SessionParam     session;
+    GenerationConfig gen_cfg;
 
-    // per rank inputs/outputs
+    bool stream_output;
+
+    // reference to IO tensors
     TensorMap inputs;
     TensorMap outputs;
 
-    using Callback = std::function<void(std::unordered_map<std::string, Tensor>*)>;
-    Callback stream_cb;
+    std::function<void(int)> cancel_cb;
+    std::function<void(int)> end_cb;
+
+    std::function<void(RequestState)> forward_cb;
 
     enum
     {
+        kOk       = 0,
         kInvalid  = 1,  // Sequence not exist or both `start` & `stop` (instead of `end`) is set
         kConflict = 2,  // Concurrent requests to the same sequence
         kBusy     = 3,  // Sequence is already running
         kInactive = 4,  // Sequence to `stop` is not active
         kFail     = 5,  // Can't find sequence for `stop` request or internal error during inference
-        kTooLong  = 6   // history + prompt > session_len
+        kTooLong  = 6,  // history + prompt > session_len,
+        kFinish   = 7,
     };
 
-    std::promise<int> signal;
+    // std::promise<int> signal;
 };
 
 class RequestQueue {
 public:
-    std::vector<std::future<int>> enqueue(std::vector<std::shared_ptr<Request>> requests)
+    void enqueue(std::vector<std::shared_ptr<Request>> requests)
     {
-        std::vector<std::future<int>> futures;
-        futures.reserve(requests.size());
         {
             std::lock_guard<std::mutex> lock(mutex_);
 
@@ -54,8 +127,8 @@ public:
             }
 
             for (auto& r : requests) {
-                futures.push_back(r->signal.get_future());
-                if (r->stop_flag) {
+                // futures.push_back(r->signal.get_future());
+                if (r->session.stop_flag) {
                     stop_queue_.push(std::move(r));
                 }
                 else {
@@ -64,7 +137,6 @@ public:
             }
         }
         cv_.notify_one();
-        return futures;
     }
 
     void dequeue(std::vector<std::shared_ptr<Request>>& stop_requests,
