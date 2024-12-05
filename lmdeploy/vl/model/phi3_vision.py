@@ -129,7 +129,6 @@ class Phi3VisionModel(LlavaHfVisionModel):
         if hasattr(processor, 'tokenizer'):
             del processor.tokenizer
             processor.tokenizer = None
-        self.processor = processor.image_processor
         self.processor = processor
 
     def build_model(self):
