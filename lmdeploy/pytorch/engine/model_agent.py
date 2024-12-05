@@ -276,8 +276,6 @@ class BaseModelAgent(AutoModelAgent):
                                     swap_in_map=swap_in_map,
                                     swap_out_map=swap_out_map)
         await asyncio.sleep(0)
-        while not self.stream.query():
-            await asyncio.sleep(0)
         return output
 
     def get_logits(self, hidden_states: torch.Tensor):

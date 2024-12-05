@@ -507,6 +507,9 @@ class Engine:
         cross_length = torch.tensor([msg.num_cross for msg in messages])
         history_cross_length = torch.tensor(
             [msg.num_history_cross for msg in messages])
+        if (cross_length + history_cross_length).max().item() == 0:
+            cross_length = None
+            history_cross_length = None
 
         return ModelInputs(
             input_ids=input_ids,
@@ -675,10 +678,10 @@ class Engine:
         ret['logits'] = logits
         return ret
 
-    def _make_infer_outputs(self, next_token_ids: torch.LongTensor,
-                            logits: torch.Tensor, stopped: torch.Tensor,
-                            model_metas: List[Dict[str, Any]],
-                            event: torch.cuda.Event):
+    async def _make_infer_outputs(self, next_token_ids: torch.LongTensor,
+                                  logits: torch.Tensor, stopped: torch.Tensor,
+                                  model_metas: List[Dict[str, Any]],
+                                  event: torch.cuda.Event):
         """make infer output."""
 
         def __get_out_token_ids(token: torch.Tensor, msg: SchedulerSequence,
@@ -699,8 +702,9 @@ class Engine:
             else:
                 return seq_length.cumsum(0) - seq_length
 
+        while not event.query():
+            await asyncio.sleep(0.001)
         with torch.cuda.stream(self._output_stream):
-            event.wait()
             next_token_ids = next_token_ids.cpu()
             stopped = stopped.cpu()
 
@@ -1004,7 +1008,7 @@ class Engine:
                     if isinstance(out, Exception):
                         raise out
                     (next_token_ids, logits, stopped, model_metas, event) = out
-                    step_outputs = self._make_infer_outputs(
+                    step_outputs = await self._make_infer_outputs(
                         next_token_ids, logits, stopped, model_metas, event)
                     __send_resps(step_outputs)
                 except Exception as e:
