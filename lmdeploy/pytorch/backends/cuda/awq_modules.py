@@ -53,8 +53,6 @@ class AwqLinearW4A16Impl(LinearW4A16Impl):
 
     def __init__(self, in_features: int, out_features: int, w_bit: int,
                  group_size: int):
-        from awq.modules.linear.gemm import AWQ_INSTALLED
-        assert AWQ_INSTALLED
         self.in_features = in_features
         self.out_features = out_features
         self.w_bit = w_bit
