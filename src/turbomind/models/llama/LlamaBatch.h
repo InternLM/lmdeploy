@@ -12,7 +12,6 @@
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
 #include "src/turbomind/utils/cuda_utils.h"
-#include "src/turbomind/utils/instance_comm.h"
 #include <condition_variable>
 #include <curand_kernel.h>
 #include <mutex>
@@ -32,8 +31,7 @@ struct SharedState {
 };
 
 struct Control {
-    AbstractInstanceComm* comm;
-    Request::Callback     callback;
+    Request::Callback callback;
 };
 
 struct BatchState {

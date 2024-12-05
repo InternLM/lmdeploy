@@ -70,15 +70,14 @@ class CudaGraphMixin:
         input_buffers['block_offsets'] = torch.zeros((max_batches, num_blocks),
                                                      dtype=torch.int64,
                                                      device=device)
-        input_buffers['q_start_loc'] = torch.zeros(max_batches,
-                                                   dtype=torch.int64,
-                                                   device=device)
-        input_buffers['q_seqlens'] = torch.zeros(max_batches,
-                                                 dtype=torch.int64,
-                                                 device=device)
-        input_buffers['kv_seqlens'] = torch.zeros(max_batches,
-                                                  dtype=torch.int64,
-                                                  device=device)
+
+        input_buffers['qkv_lens'] = torch.zeros(3,
+                                                max_batches,
+                                                dtype=torch.int64,
+                                                device=device)
+        input_buffers['q_start_loc'] = input_buffers['qkv_lens'][0]
+        input_buffers['q_seqlens'] = input_buffers['qkv_lens'][1]
+        input_buffers['kv_seqlens'] = input_buffers['qkv_lens'][2]
         input_buffers['local_adapter_ids'] = torch.zeros(max_batches,
                                                          dtype=torch.int64,
                                                          device=device)
@@ -111,13 +110,10 @@ class CudaGraphMixin:
         input_buffers['position_ids'][:, :num_tokens] = position_ids
         input_buffers[
             'block_offsets'][:batch_size, :num_blocks] = block_offsets
-        if q_seqlens.data_ptr() != input_buffers['q_seqlens'].data_ptr():
-            input_buffers['q_seqlens'].zero_()
-        input_buffers['q_seqlens'][:batch_size] = q_seqlens
-        if kv_seqlens.data_ptr() != input_buffers['kv_seqlens'].data_ptr():
-            input_buffers['kv_seqlens'].zero_()
-        input_buffers['kv_seqlens'][:batch_size] = kv_seqlens
-        input_buffers['q_start_loc'][:batch_size] = q_start_loc
+
+        qkv = torch.stack((q_start_loc, q_seqlens, kv_seqlens))
+        input_buffers['qkv_lens'].zero_()
+        input_buffers['qkv_lens'][:, :batch_size] = qkv
         if inputs_embeds is not None:
             emb_size = inputs_embeds.size(-1)
             if 'inputs_embeds' not in input_buffers:

@@ -1,12 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from typing import Literal
 
-import torch
 import triton
 import triton.language as tl
 from torch import Tensor
 
-from .triton_utils import get_kernel_meta, wrap_jit_func
+from .triton_utils import get_kernel_meta
 
 
 @triton.jit
@@ -38,37 +37,6 @@ def _quant_int4(val1, val2):
     return q_val, scales, zeros
 
 
-@wrap_jit_func(type_hint=dict(
-    KStates=Tensor,
-    VStates=Tensor,
-    KCaches=Tensor,
-    VCaches=Tensor,
-    QStartLoc=Tensor,
-    QSeqLens=Tensor,
-    KVSeqLens=Tensor,
-    BlockOffsets=Tensor,
-    num_heads=torch.int32,
-    head_dim=torch.int32,
-    stride_kss=int,
-    stride_ksh=int,
-    stride_ksd=int,
-    stride_vss=int,
-    stride_vsh=int,
-    stride_vsd=int,
-    stride_kcn=int,
-    stride_kcb=int,
-    stride_kch=int,
-    stride_kcd=int,
-    stride_vcn=int,
-    stride_vcb=int,
-    stride_vch=int,
-    stride_vcd=int,
-    stride_boff=int,
-    BLOCK=torch.int32,
-    BLOCK_D=torch.int32,
-    BLOCK_DV=torch.int32,
-    BLOCK_H=torch.int32,
-))
 @triton.jit
 def _fill_kv_cache_kernel(
     KStates,
@@ -79,7 +47,7 @@ def _fill_kv_cache_kernel(
     QSeqLens,
     KVSeqLens,
     BlockOffsets,
-    num_heads: tl.constexpr,
+    is_decoding: tl.constexpr,
     head_dim: tl.constexpr,
     head_dim_v: tl.constexpr,
     stride_kss,
@@ -100,108 +68,70 @@ def _fill_kv_cache_kernel(
     BLOCK: tl.constexpr,
     BLOCK_D: tl.constexpr,
     BLOCK_DV: tl.constexpr,
-    BLOCK_H: tl.constexpr,
 ):
     """fill kv cache kernel."""
-    batch_id = tl.program_id(0)
+    batch_id = tl.program_id(2)
+    head_id = tl.program_id(0)
     block_id = tl.program_id(1)
-
-    # initialize
-    h_off = tl.arange(0, BLOCK_H)
-    d_off = tl.arange(0, BLOCK_D)
 
     q_startloc = tl.load(QStartLoc + batch_id)
     q_seqlen = tl.load(QSeqLens + batch_id)
     kv_seqlen = tl.load(KVSeqLens + batch_id)
     history_seqlen = kv_seqlen - q_seqlen
 
-    block0_first_tokenloc = history_seqlen % BLOCK
+    kv_block_id = history_seqlen // BLOCK + block_id
 
-    state_token_offset = tl.maximum(block_id * BLOCK - block0_first_tokenloc,
-                                    0)
-    kv_block_id = _div_up(history_seqlen + 1, BLOCK) - 1 + block_id
-    kv_block_id = min(kv_block_id, stride_boff - 1)
+    if kv_seqlen <= 0:
+        return
+
+    if kv_block_id * BLOCK >= kv_seqlen:
+        return
+
+    if is_decoding:
+        page_offs = tl.full((1, ), history_seqlen % BLOCK, dtype=tl.int32)
+        kv_mask = tl.full((1, ), 1, dtype=tl.int1)
+        q_offs = tl.full((1, ), q_startloc, dtype=tl.int32)
+    else:
+        page_offs = tl.arange(0, BLOCK)
+        kv_offs = kv_block_id * BLOCK + page_offs
+        kv_mask = (kv_offs >= history_seqlen) & (kv_offs < kv_seqlen)
+        token_off = q_startloc + kv_block_id * BLOCK - history_seqlen
+        q_offs = token_off + page_offs
+
     block_off = tl.load(BlockOffsets + batch_id * stride_boff + kv_block_id)
 
-    cur_startloc = q_startloc + state_token_offset
-    ks_ptr = KStates + cur_startloc * stride_kss
-    vs_ptr = VStates + cur_startloc * stride_vss
+    d_off = tl.arange(0, BLOCK_D)
+    mask_ks = kv_mask[:, None]
+    mask_kc = mask_ks & (d_off[None, :] < head_dim)
+    d_off = d_off % head_dim
 
-    kc_ptr = KCaches + block_off * stride_kcn
-    vc_ptr = VCaches + block_off * stride_vcn
+    ks_ptr = KStates + head_id * stride_ksh
+    ks_ptrs = ks_ptr + q_offs[:,
+                              None] * stride_kss + d_off[None, :] * stride_ksd
+    kc_ptr = KCaches + block_off * stride_kcn + head_id * stride_kch
+    kc_ptrs = kc_ptr + page_offs[:, None] * stride_kcb + d_off[
+        None, :] * stride_kcd
 
-    c_first_tokenloc = block0_first_tokenloc
-    if block_id != 0:
-        c_first_tokenloc *= 0
-    c_last_tokenloc = tl.minimum(
-        BLOCK, q_seqlen + block0_first_tokenloc - block_id * BLOCK)
+    if BLOCK_DV > 0:
+        dv_off = tl.arange(0, BLOCK_DV)
+        mask_vs = kv_mask[:, None]
+        mask_vc = mask_vs & (dv_off[None, :] < head_dim_v)
+        dv_off = dv_off % head_dim_v
+        vs_ptr = VStates + head_id * stride_vsh
+        vs_ptrs = vs_ptr + q_offs[:, None] * stride_vss + dv_off[
+            None, :] * stride_vsd
+        vc_ptr = VCaches + block_off * stride_vcn + head_id * stride_vch
+        vc_ptrs = vc_ptr + page_offs[:, None] * stride_vcb + dv_off[
+            None, :] * stride_vcd
 
-    for bidx in range(c_first_tokenloc, c_last_tokenloc):
-        sidx = bidx - c_first_tokenloc
-        mask = (h_off[:, None] < num_heads) & (d_off[None, :] < head_dim)
-        k = tl.load(ks_ptr + sidx * stride_kss + h_off[:, None] * stride_ksh +
-                    d_off[None, :] * stride_ksd,
-                    mask=mask)
-        tl.store(kc_ptr + bidx * stride_kcb + h_off[:, None] * stride_kch +
-                 d_off[None, :] * stride_kcd,
-                 k,
-                 mask=mask)
-
-        if BLOCK_DV > 0:
-            dv_off = tl.arange(0, BLOCK_DV)
-            maskv = (h_off[:, None] < num_heads) & (dv_off[None, :] <
-                                                    head_dim_v)
-            v = tl.load(vs_ptr + sidx * stride_vss +
-                        h_off[:, None] * stride_vsh +
-                        dv_off[None, :] * stride_vsd,
-                        mask=maskv)
-            tl.store(vc_ptr + bidx * stride_vcb + h_off[:, None] * stride_vch +
-                     dv_off[None, :] * stride_vcd,
-                     v,
-                     mask=maskv)
+    k = tl.load(ks_ptrs, mask=mask_ks)
+    if BLOCK_DV > 0:
+        v = tl.load(vs_ptrs, mask=mask_vs)
+    tl.store(kc_ptrs, k, mask=mask_kc)
+    if BLOCK_DV > 0:
+        tl.store(vc_ptrs, v, mask=mask_vc)
 
 
-@wrap_jit_func(type_hint=dict(
-    KStates=Tensor,
-    VStates=Tensor,
-    KCaches=Tensor,
-    VCaches=Tensor,
-    KScalesZeros=Tensor,
-    VScalesZeros=Tensor,
-    QStartLoc=Tensor,
-    QSeqLens=Tensor,
-    KVSeqLens=Tensor,
-    BlockOffsets=Tensor,
-    num_heads=torch.int32,
-    head_dim=torch.int32,
-    stride_kss=int,
-    stride_ksh=int,
-    stride_ksd=int,
-    stride_vss=int,
-    stride_vsh=int,
-    stride_vsd=int,
-    stride_kcn=int,
-    stride_kcb=int,
-    stride_kch=int,
-    stride_kcd=int,
-    stride_vcn=int,
-    stride_vcb=int,
-    stride_vch=int,
-    stride_vcd=int,
-    stride_kszn=int,
-    stride_kszb=int,
-    stride_kszh=int,
-    stride_kszd=int,
-    stride_vszn=int,
-    stride_vszb=int,
-    stride_vszh=int,
-    stride_vszd=int,
-    stride_boff=int,
-    BLOCK=torch.int32,
-    BLOCK_D=torch.int32,
-    BLOCK_DV=torch.int32,
-    BLOCK_H=torch.int32,
-))
 @triton.jit
 def _fill_kv_cache_quant_kernel(
     KStates,
@@ -394,15 +324,19 @@ def fill_kv_cache(k_states: Tensor,
     num_heads = k_caches.size(h_dim)
     head_dim = k_caches.size(d_dim)
     head_dim_v = v_states.size(-1)
-    max_num_blocks = triton.cdiv(max_q_seq_length, block_size) + 1
+    if max_q_seq_length == 1:
+        max_num_blocks = 1
+    else:
+        max_num_blocks = triton.cdiv(max_q_seq_length, block_size) + 1
 
     BLOCK = block_size
     BLOCK_H = triton.next_power_of_2(num_heads)
     BLOCK_D = triton.next_power_of_2(head_dim)
     BLOCK_DV = triton.next_power_of_2(head_dim_v)
-    grid = [batch_size, max_num_blocks]
     kernel_meta = get_kernel_meta(k_states)
     if quant_policy == 0:
+        grid = [num_heads, max_num_blocks, batch_size]
+        is_decoding = max_num_blocks == 1
         _fill_kv_cache_kernel[grid](
             k_states,
             v_states,
@@ -412,7 +346,7 @@ def fill_kv_cache(k_states: Tensor,
             q_seq_length,
             kv_seq_length,
             block_offsets,
-            num_heads=num_heads,
+            is_decoding=is_decoding,
             head_dim=head_dim,
             head_dim_v=head_dim_v,
             stride_kss=k_states.stride(-3),
@@ -433,12 +367,12 @@ def fill_kv_cache(k_states: Tensor,
             BLOCK=BLOCK,
             BLOCK_D=BLOCK_D,
             BLOCK_DV=BLOCK_DV,
-            BLOCK_H=BLOCK_H,
             num_warps=4,
             num_stages=3,
             **kernel_meta,
         )
     else:
+        grid = [batch_size, max_num_blocks]
         _fill_kv_cache_quant_kernel[grid](
             k_states,
             v_states,

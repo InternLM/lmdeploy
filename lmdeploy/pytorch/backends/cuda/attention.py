@@ -95,7 +95,10 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         kv_seqlens = attn_metadata.kv_seqlens
         kv_flatten_size = attn_metadata.kv_flatten_size
         quant_policy = attn_metadata.quant_policy
-        max_q_seqlen = query.numel() // (query.size(-1) * query.size(-2))
+        if attn_metadata.is_decoding:
+            max_q_seqlen = 1
+        else:
+            max_q_seqlen = query.numel() // (query.size(-1) * query.size(-2))
         fill_max_q_seqlen = max_q_seqlen
         if attn_metadata.fill_seqlens is not None:
             fill_seqlens = attn_metadata.fill_seqlens

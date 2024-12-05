@@ -71,14 +71,44 @@ void unpack_awq_gemm(uint4_t* dst, const uint4_t* src, int rows, int cols, cudaS
     permute_u4<0, 1, 3, 2><<<512, 512, 0, st>>>((uint*)dst, (const uint*)src, shape);
 }
 
+__global__ void transpose_u4_kernel(uint4_t* dst, const uint4_t* src, int s, int c)
+{
+    const int idx_c = 8 * (threadIdx.x + blockIdx.x * blockDim.x);
+    const int idx_s = 8 * (threadIdx.y + blockIdx.y * blockDim.y);
+    if (idx_c >= c || idx_s >= s) {
+        return;
+    }
+    uint32_t ivec[8];
+    PRAGMA_UNROLL
+    for (int i = 0; i < 8; ++i) {
+        ivec[i] = ((const uint32_t*)src)[((idx_s + i) * c + idx_c) / 8];
+    }
+    uint32_t ovec[8]{};
+    PRAGMA_UNROLL
+    for (int i = 0; i < 8; ++i) {
+        PRAGMA_UNROLL
+        for (int j = 0; j < 8; ++j) {
+            ovec[i] |= (((ivec[j] >> (i * 4)) & 0xfu) << (j * 4));
+        }
+    }
+    PRAGMA_UNROLL
+    for (int i = 0; i < 8; ++i) {
+        ((uint32_t*)dst)[((idx_c + i) * s + idx_s) / 8] = ovec[i];
+    }
+}
+
 void transpose_u4(uint4_t* dst, const uint4_t* src, int s, int c, cudaStream_t st)
 {
     if (s % 8 || c % 8) {
         std::cerr << "transpose_u4: invalid shape (" << s << "," << c << "), must be multiple of 8" << std::endl;
         return;
     }
-    Array<int, 2> shape{s, c};
-    permute_u4<1, 0><<<512, 512, 0, st>>>((uint*)dst, (const uint*)src, shape);
+    // Array<int, 2> shape{s, c};
+    // permute_u4<1, 0><<<512, 512, 0, st>>>((uint*)dst, (const uint*)src, shape);
+
+    const dim3 block(16, 16);
+    const dim3 grid((c + 15) / 16, (s + 15) / 16);
+    transpose_u4_kernel<<<grid, block, 0, st>>>(dst, src, s, c);
 }
 
 // load -> unpack -> extend_to_u8 -> manipulation -> compat_to_u4 -> store

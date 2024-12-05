@@ -23,7 +23,7 @@ def get_turbomind_model_list(tp_num: int = None,
 
     quatization_case_config = config.get('turbomind_quatization')
     for key in config.get('turbomind_' + model_type):
-        if key not in quatization_case_config.get(
+        if key in case_list and key not in quatization_case_config.get(
                 'no_awq') and not is_quantization_model(key):
             case_list.append(key + '-inner-4bits')
     for key in quatization_case_config.get('gptq'):

@@ -14,13 +14,15 @@ void invokeMoeGate_V2(int*         f2n,
                       int*         en2f,
                       int*         offsets,
                       float*       scales,
-                      int*         masks,
+                      void*        masks,
                       int*         accum,
                       const float* logits,
                       int          tokens,
                       int          tokens_padded,
                       int          experts,
                       int          exp_per_tok,
+                      bool         norm_topk,
+                      float        routed_scale,
                       cudaStream_t st);
 
 template<class T>
@@ -49,10 +51,14 @@ void invokeMoeReduce(T*           dst,
                      const T*     src,
                      const float* scales,
                      const int*   en2f,
+                     const float* dst_scales,
                      int          tokens,
                      int          experts_per_token,
                      int          dims,
+                     float        dst_scale,
                      cudaStream_t st);
+
+void invokeMaskMoeTopKGroups(float* logits, int token_num, int expert_num, int group_size, int top_k, cudaStream_t st);
 
 // Sample `e` from `E` experts uniformly for every token
 std::vector<int> SampleUniform(int token_num, int expert_num, int exp_per_tok, std::mt19937& g);
