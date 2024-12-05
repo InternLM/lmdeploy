@@ -810,10 +810,12 @@ class Engine:
             num_ignore_eos = num_ignore_eos - 1
             if 'spec_logits' in output:
                 spec_logits = output['spec_logits']
-                cart_candidates, tree_candidates, medusa_attn_mask, medusa_position_ids, retrieve_indices = self.model_agent.generate_candidates(
-                    spec_logits, next_token_ids)
+                (cart_candidates, tree_candidates, medusa_attn_mask,
+                 medusa_position_ids,
+                 retrieve_indices) = self.model_agent.generate_candidates(
+                     spec_logits, next_token_ids)
                 bs, _, tree_decode_len = tree_candidates.shape
-                spec_inputs = copy.deepcopy(inputs)
+                spec_inputs = inputs
                 spec_inputs.input_ids = tree_candidates.flatten().unsqueeze(0)
                 spec_inputs.history_lengths += spec_inputs.seq_length
                 spec_inputs.seq_length = torch.ones_like(
@@ -826,22 +828,22 @@ class Engine:
                     swap_out_map=swap_out_map,
                     retrieve_indices=retrieve_indices)
                 # NOTE currently only greedy sampling supported
+                # besides, we used the bonus token id predicted during
+                # tree decoding while original Medusa did not
                 proposal_len = cart_candidates.shape[-1]
                 greedy_token_ids = logits.argmax(-1)
                 posterior_mask = cart_candidates[..., 1:] == greedy_token_ids[
                     ..., :-1]
                 accept_len, best_idx = torch.cumprod(posterior_mask,
                                                      dim=-1).sum(-1).max(-1)
-                # accept_len = torch.where(accept_len==proposal_len-1, proposal_len, accept_len)
-                next_token_ids = cart_candidates[torch.arange(bs), best_idx]
-                # bonus_token_ids = greedy_token_ids[torch.arange(bs),best_idx,-1:]
-                # next_token_ids = torch.cat([best_candidates, bonus_token_ids], -1)
+                greedy_token_ids = greedy_token_ids[torch.arange(bs), best_idx]
+                next_token_ids = torch.cat(
+                    [next_token_ids[:, None], greedy_token_ids], -1)
                 mask_idx = torch.arange(
-                    proposal_len,
+                    proposal_len + 1,
                     device=next_token_ids.device).expand_as(next_token_ids)
-                next_token_ids[mask_idx > accept_len[:, None]] = -1
-                # next_token_ids = next_token_ids[...,:-1] # to be removed
-                num_appendable_ids = num_appendable_ids - accept_len - 1
+                next_token_ids[mask_idx > (accept_len[:, None] + 1)] = -1
+                num_appendable_ids = num_appendable_ids - accept_len - 2
 
             # stopping criteria
             stopped, num_appendable_ids = self._batch_stopping_criteria(

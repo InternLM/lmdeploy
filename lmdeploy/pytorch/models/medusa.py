@@ -21,20 +21,71 @@ vicuna_7b_stage2 = [(0, ), (0, 0), (1, ), (0, 1), (0, 0, 0), (1, 0), (2, ),
                     (0, 1, 2), (8, ), (0, 4, 0), (0, 2, 1), (1, 3), (0, 0, 7),
                     (0, 0, 0, 2), (0, 0, 8), (1, 1, 0), (0, 1, 0, 0), (6, 0),
                     (9, ), (0, 1, 3), (0, 0, 0, 3), (1, 0, 2), (0, 5, 0),
-                    (3, 1), (0, 0, 2, 0), (7, 0), (1, 4)]  # noqa
+                    (3, 1), (0, 0, 2, 0), (7, 0), (1, 4)]
+
+vicuna_13b_stage2 = [(0, ), (0, 0), (1, ), (0, 0, 0), (0, 1), (1, 0), (2, ),
+                     (0, 2), (0, 0, 1), (0, 1, 0), (3, ), (0, 3), (2, 0),
+                     (0, 0, 2), (0, 0, 0, 0), (0, 4), (1, 0, 0), (1, 1), (4, ),
+                     (0, 0, 3), (0, 5), (0, 2, 0), (5, ), (3, 0), (0, 1, 1),
+                     (0, 6), (0, 0, 4), (0, 0, 0, 1),
+                     (0, 7), (0, 0, 5), (1, 2), (0, 0, 1, 0), (0, 3, 0),
+                     (1, 0, 1), (4, 0), (0, 0, 6), (0, 8), (2, 0, 0), (0, 9),
+                     (6, ), (7, ), (2, 1), (5, 0), (0, 1, 2), (0, 0, 0, 2),
+                     (8, ), (0, 4, 0), (0, 1, 0, 0), (0, 2, 1), (0, 0, 7),
+                     (1, 1, 0), (1, 3), (0, 0, 2, 0), (9, ), (0, 0, 8),
+                     (0, 5, 0), (0, 0, 0, 3), (0, 0, 9), (0, 1, 3), (1, 0, 2),
+                     (0, 0, 1, 1), (3, 0, 0), (1, 0, 0, 0)]
+
+vicuna_33b_stage2 = [(0, ), (0, 0), (1, ), (0, 1), (0, 0, 0), (1, 0), (2, ),
+                     (0, 2), (0, 0, 1), (0, 3), (3, ),
+                     (0, 1, 0), (2, 0), (0, 4), (4, ), (0, 0, 2), (1, 1),
+                     (1, 0, 0), (0, 5), (5, ), (0, 0, 0, 0), (0, 0, 3), (3, 0),
+                     (0, 2, 0), (0, 6), (0, 1, 1), (6, ), (0, 0, 4), (0, 7),
+                     (7, ), (1, 2), (4, 0), (8, ), (0, 3, 0), (0, 0, 5),
+                     (0, 0, 0, 1), (0, 8), (2, 1), (0, 9), (1, 0, 1),
+                     (2, 0, 0), (0, 0, 6), (5, 0), (0, 0, 1, 0), (1, 3),
+                     (0, 1, 2), (0, 4, 0), (0, 0, 7), (0, 2, 1), (9, ),
+                     (1, 1, 0), (0, 0, 0, 2), (6, 0), (0, 0, 8), (0, 1, 0, 0),
+                     (7, 0), (0, 1, 3), (0, 5, 0), (1, 4), (0, 0, 9), (3, 1),
+                     (1, 0, 2), (2, 2)]
+
+zephyr_stage2 = [(0, ), (0, 0), (1, ), (0, 1), (2, ),
+                 (0, 0, 0), (1, 0), (0, 2), (3, ), (0, 3), (4, ), (2, 0),
+                 (0, 0, 1), (0, 4), (5, ), (0, 5), (0, 1, 0), (1, 1), (6, ),
+                 (0, 0, 2), (3, 0), (0, 6), (7, ), (0, 7), (0, 8), (0, 0, 3),
+                 (1, 0, 0), (0, 9), (0, 2, 0), (1, 2), (4, 0), (8, ), (9, ),
+                 (2, 1), (0, 1, 1), (0, 0, 4), (0, 0, 0, 0), (5, 0), (0, 3, 0),
+                 (1, 3), (0, 0, 5), (0, 0, 6), (6, 0), (2, 0, 0), (1, 0, 1),
+                 (0, 1, 2), (0, 4, 0), (1, 4), (3, 1), (2, 2), (0, 0, 7),
+                 (7, 0), (0, 2, 1), (0, 0, 8), (0, 1, 3), (0, 5, 0), (1, 5),
+                 (0, 0, 9), (1, 1, 0), (0, 0, 0, 1), (0, 0, 1, 0), (4, 1),
+                 (2, 3)]
+mc_sim_7b_63 = [[0], [0, 0], [1], [0, 1], [2], [0, 0, 0], [1, 0], [0, 2], [3],
+                [0, 3], [4], [0, 4], [2, 0], [0, 5], [0, 0, 1], [5], [0,
+                                                                      6], [6],
+                [0, 7], [0, 1, 0], [1, 1], [7], [0, 8], [0, 0, 2], [3, 0],
+                [0, 9], [8], [9], [1, 0, 0], [0, 2, 0], [1, 2], [0, 0, 3],
+                [4, 0], [2, 1], [0, 0, 4], [0, 0, 5], [0, 0, 0, 0], [0, 1, 1],
+                [0, 0, 6], [0, 3, 0], [5, 0], [1, 3], [0, 0, 7], [0, 0, 8],
+                [0, 0, 9], [6, 0], [0, 4, 0], [1, 4], [7, 0], [0, 1, 2],
+                [2, 0, 0], [3, 1], [2, 2], [8, 0], [0, 5, 0], [1, 5],
+                [1, 0, 1], [0, 2, 1], [9, 0], [0, 6, 0], [0, 0, 0, 1], [1, 6],
+                [0, 7, 0]]
+
 TOPK = 10
 
 
 def pad_path(path, length, pad_value=-2):
     """Pad the given path list with a specific value up to a specified length.
 
-    Parameters:
-    - path (list): The original list that needs padding.
-    - length (int): The desired length of the padded list.
-    - pad_value (optional, default=-2): The value to use for padding.
+    Args:
+        path (list): The original list that needs padding.
+        length (int): The desired length of the padded list.
+        pad_value (optional, default=-2): The value to use for padding.
 
     Returns:
-    - list: A new list based on the original path but padded to the desired length.
+        list: A new list based on the original path but padded to the desired
+             length.
 
     Example:
     >>> pad_path([1,2,3], 5)
@@ -127,6 +178,14 @@ class MedusaModel(nn.Module, CudaGraphMixin):
         self.medusa_choices = None
         if 'vicuna-7b' in config.base_model_name_or_path:
             self.medusa_choices = vicuna_7b_stage2
+        elif 'vicuna-13b' in config.base_model_name_or_path:
+            self.medusa_choices = vicuna_13b_stage2
+        elif 'vicuna-33b' in config.base_model_name_or_path:
+            self.medusa_choices = vicuna_33b_stage2
+        elif 'zephyr' in config.base_model_name_or_path:
+            self.medusa_choices = zephyr_stage2
+        else:
+            self.medusa_choices = mc_sim_7b_63
         self.generate_medusa_buffers(device=device)
 
     def generate_medusa_buffers(self, device: torch.dtype = None):
@@ -155,7 +214,8 @@ class MedusaModel(nn.Module, CudaGraphMixin):
                                        key=lambda x: (len(x), x))
         medusa_len = len(sorted_medusa_choices) + 1
 
-        # Initialize depth_counts to keep track of how many choices have a particular depth
+        # Initialize depth_counts to keep track of how many choices have a
+        # particular depth
         depth_counts = []
         prev_depth = 0
         for path in sorted_medusa_choices:
@@ -248,20 +308,22 @@ class MedusaModel(nn.Module, CudaGraphMixin):
                 1. Cartesian candidates derived from the combined original and Medusa logits.
                 2. Tree candidates mapped from the Cartesian candidates using tree indices.
         """  # noqa
-        # Greedy decoding: Select the most probable candidate from the original logits.
-        # here we only implement greedy decoding
+        # Greedy decoding: Select the most probable candidate from the original
+        # logits. here we only implement greedy decoding
         bs = medusa_logits.shape[0]
         candidates_logit = base_token_id.unsqueeze(-1)
         # Extract the TOPK candidates from the medusa logits.
         candidates_medusa_logits = torch.topk(medusa_logits, TOPK,
                                               dim=-1).indices
 
-        # Combine the selected candidate from the original logits with the topk medusa logits.
+        # Combine the selected candidate from the original logits with the
+        # topk medusa logits.
         candidates = torch.cat(
             [candidates_logit,
              candidates_medusa_logits.view(bs, -1)], dim=-1)
 
-        # Map the combined candidates to the tree indices to get tree candidates.
+        # Map the combined candidates to the tree indices to get tree
+        # candidates.
         tree_candidates = candidates[:, self.tree_indices]
 
         # Extend the tree candidates by appending a zero.
@@ -278,7 +340,8 @@ class MedusaModel(nn.Module, CudaGraphMixin):
         # Unsqueeze the tree candidates for dimension consistency.
         tree_candidates = tree_candidates.unsqueeze(
             1)  # bs, 1, len(self.medusa_choices)
-        return cart_candidates, tree_candidates, self.medusa_attn_mask, self.medusa_position_ids, self.retrieve_indices
+        return (cart_candidates, tree_candidates, self.medusa_attn_mask,
+                self.medusa_position_ids, self.retrieve_indices)
 
     def support_cuda_graph(
         self,
