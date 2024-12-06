@@ -838,7 +838,7 @@ class Engine:
                  retrieve_indices) = self.model_agent.generate_candidates(
                      spec_logits, next_token_ids)
                 bs, _, tree_decode_len = tree_candidates.shape
-                spec_inputs = inputs
+                spec_inputs = copy.deepcopy(inputs)
                 spec_inputs.input_ids = tree_candidates.flatten().unsqueeze(0)
                 spec_inputs.history_lengths += spec_inputs.seq_length
                 spec_inputs.seq_length = torch.ones_like(
