@@ -8,6 +8,7 @@ from typing import Any, Dict
 
 import torch
 from transformers.configuration_utils import PretrainedConfig
+from transformers.modeling_utils import load_state_dict
 
 from lmdeploy.utils import get_logger
 
@@ -295,7 +296,9 @@ def add_adapters(model: torch.nn.Module,
     for name, path in adapters.items():
         adapter_id = adapter_id_map[name]
         checkpoint_path = f'{path}/adapter_model.bin'
-        state_dict = torch.load(checkpoint_path, map_location=device)
+        if not osp.exists(checkpoint_path):
+            checkpoint_path = f'{path}/adapter_model.safetensors'
+        state_dict = load_state_dict(checkpoint_path, map_location=device)
 
         if hasattr(model, 'load_lora_weights'):
             model.load_lora_weights(state_dict.items(), adapter_id=adapter_id)
