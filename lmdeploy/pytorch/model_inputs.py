@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Literal
 import torch
 
 from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.config import ModelConfig
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
 
 
@@ -210,6 +211,7 @@ class StepContext:
     dataclass provide these infos and tools.
     """
     input_ids: torch.LongTensor
+    model_config: ModelConfig
     block_offsets: torch.LongTensor
     position_ids: torch.LongTensor
     attention_mask: torch.LongTensor
@@ -237,6 +239,7 @@ class StepContext:
     def new(
         cls,
         inputs: ModelInputs,
+        model_config: ModelConfig,
         world_size: int = 1,
         kv_caches: List = None,
         kv_quant_policy: Literal[0, 4, 8] = 0,
@@ -290,6 +293,7 @@ class StepContext:
 
         ret = StepContext(
             input_ids=inputs.input_ids,
+            model_config=model_config,
             block_offsets=inputs.block_offsets,
             position_ids=position_ids,
             input_embeddings=input_embeddings,
@@ -336,6 +340,7 @@ class StepContextManager:
     @staticmethod
     def build_context(
         inputs: ModelInputs,
+        model_config: ModelConfig,
         world_size: int = 1,
         kv_caches: List = None,
         kv_quant_policy: Literal[0, 4, 8] = 0,
@@ -343,6 +348,7 @@ class StepContextManager:
         """build context."""
         return StepContext.new(
             inputs,
+            model_config,
             world_size,
             kv_caches,
             kv_quant_policy,
