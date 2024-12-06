@@ -44,7 +44,13 @@ class CacheEngine:
         self.num_layers = model_config.num_layers
         self.kv_cache_dtype = model_config.dtype
         if cache_config.quant_policy > 0:
-            self.kv_cache_dtype = torch.uint8
+            if self.cache_config.device_type in ['cuda']:
+                self.kv_cache_dtype = torch.uint8
+            elif self.cache_config.device_type in ['ascend', 'npu']:
+                self.kv_cache_dtype = torch.int8
+            else:
+                raise ValueError(
+                    f'unsupported device_type {self.cache_config.device_type}')
 
         # Initialize the cache.
         self.local_gpu_cache = self.allocate_gpu_cache()
