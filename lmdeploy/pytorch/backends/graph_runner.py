@@ -46,3 +46,26 @@ class GraphRunner:
             inputs_embeds,
             context,
         )
+
+    def update_model_metas(
+        self,
+        past_key_values: List[List[torch.Tensor]],
+        inputs_embeds: torch.Tensor = None,
+        context: StepContext = None,
+    ):
+        """prepare inputs."""
+        if hasattr(self.model, 'update_model_metas'):
+            return self.model.update_model_metas(
+                past_key_values,
+                inputs_embeds,
+                context,
+            )
+
+        return None
+
+    def get_input_processor(self):
+        """get input processor."""
+        if hasattr(self.model, 'get_input_processor'):
+            return self.model.get_input_processor()
+        else:
+            return None

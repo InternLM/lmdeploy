@@ -58,6 +58,7 @@ def check_env_torch():
         _handle_exception(e, 'PyTorch', logger)
 
 
+MIN_TRITON_VERSION = '3.0.0'
 MAX_TRITON_VERSION = '3.0.0'
 
 
@@ -74,8 +75,10 @@ def check_env_triton(device: str):
         logger.debug('Checking <Triton> environment.')
         import torch
         import triton
+        max_version = version.parse(MAX_TRITON_VERSION)
         triton_version = version.parse(triton.__version__)
-        if triton_version > version.parse(MAX_TRITON_VERSION):
+
+        if triton_version > max_version:
             logger.warning(
                 f'Engine has not been tested on triton>{MAX_TRITON_VERSION}.')
 
@@ -96,16 +99,12 @@ def check_env_triton(device: str):
         _handle_exception(e, 'Triton', logger, msg)
 
     if device == 'cuda':
-        device_cap = torch.cuda.get_device_capability()
-        TRITON_VER_231 = version.parse('2.3.1')
-
-        if device_cap[0] <= 7:
-            if triton_version <= TRITON_VER_231:
-                err = RuntimeError(
-                    'Attention triton kernel does not fully support '
-                    'triton<3.0.0 on device with capability<8. '
-                    'Please upgrade your triton version.')
-                _handle_exception(err, 'Triton', logger)
+        min_version = version.parse(MIN_TRITON_VERSION)
+        if triton_version < min_version:
+            msg = (f'triton>={MIN_TRITON_VERSION} is required. '
+                   f'Found triton=={triton_version}')
+            e = RuntimeError(msg)
+            _handle_exception(e, 'Triton', logger, msg)
 
 
 def check_env(device_type: str):

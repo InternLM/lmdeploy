@@ -10,7 +10,7 @@
 |        Llama2         |    7B - 70B    | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |        Llama3         |    8B, 70B     | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |       Llama3.1        |    8B, 70B     | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
-|       Llama3.2        |     1B, 3B     | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
+|       Llama3.2        |     1B, 3B     | LLM  |    Yes    |  Yes\*  |  Yes\*  |  Yes  |
 |       InternLM        |    7B - 20B    | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |       InternLM2       |    7B - 20B    | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |      InternLM2.5      |       7B       | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
@@ -18,7 +18,7 @@
 | InternLM-XComposer2.5 |       7B       | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |         Qwen          |   1.8B - 72B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |        Qwen1.5        |  1.8B - 110B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
-|         Qwen2         |   0.5B - 72B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
+|         Qwen2         |   0.5B - 72B   | LLM  |    Yes    |  Yes\*  |  Yes\*  |  Yes  |
 |        Mistral        |       7B       | LLM  |    Yes    |   Yes   |   Yes   |  No   |
 |        Mixtral        |  8x7B, 8x22B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |        Qwen-VL        |       7B       | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
@@ -29,7 +29,7 @@
 |          YI           |    6B - 34B    | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |    LLaVA(1.5,1.6)     |    7B - 34B    | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |       InternVL        |  v1.1 - v1.5   | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
-|       InternVL2       | 1-2B, 8B - 76B | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
+|       InternVL2       | 1-2B, 8B - 76B | MLLM |    Yes    |  Yes\*  |  Yes\*  |  Yes  |
 |        ChemVLM        |    8B - 26B    | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 | MiniCPM-Llama3-V-2_5  |       -        | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |     MiniCPM-V-2_6     |       -        | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
@@ -41,7 +41,8 @@
 “-” 表示还没有验证。
 
 ```{note}
-turbomind 引擎不支持 window attention。所以，对于应用了 window attention，并开启了对应的开关"use_sliding_window"的模型，比如 Mistral、Qwen1.5 等，在推理时，请选择 pytorch engine
+* turbomind 引擎不支持 window attention。所以，对于应用了 window attention，并开启了对应的开关"use_sliding_window"的模型，比如 Mistral、Qwen1.5 等，在推理时，请选择 pytorch engine
+* 当模型的 head_dim 非 128 时，turbomind 不支持它的 kv cache 4/8 bit 量化和推理。比如，llama3.2-1B，qwen2-0.5B，internvl2-1B 等等
 ```
 
 ## PyTorchEngine CUDA 平台

@@ -435,7 +435,3 @@ class Phi3ForCausalLM(nn.Module, CudaGraphMixin):
             else:
                 param = params_dict[name]
                 load_weight(param, loaded_weight)
-
-
-class Phi3VForCausalLM(Phi3ForCausalLM):
-    ...

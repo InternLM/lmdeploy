@@ -52,7 +52,7 @@ The TurboMind engine doesn't support window attention. Therefore, for models tha
 |     Llama2     |  7B - 70B   | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |     Llama3     |   8B, 70B   | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |    Llama3.1    |   8B, 70B   | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
-|    Llama3.2    |   1B, 3B    | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
+|    Llama3.2    |   1B, 3B    | LLM  |    Yes    |  Yes\*  |  Yes\*  | Yes  |  Yes  |
 |  Llama3.2-VL   |  11B, 90B   | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
 |    InternLM    |  7B - 20B   | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |   InternLM2    |  7B - 20B   | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
@@ -67,7 +67,7 @@ The TurboMind engine doesn't support window attention. Therefore, for models tha
 |      QWen      | 1.8B - 72B  | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |    QWen1.5     | 0.5B - 110B | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |  QWen1.5-MoE   |    A2.7B    | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
-|     QWen2      | 0.5B - 72B  | LLM  |    Yes    |   Yes   |   No    | Yes  |  Yes  |
+|     QWen2      | 0.5B - 72B  | LLM  |    Yes    |  Yes\*  |   No    | Yes  |  Yes  |
 |    QWen2-VL    |   2B, 7B    | MLLM |    Yes    |   Yes   |   No    |  No  |  No   |
 |  DeepSeek-MoE  |     16B     | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |  DeepSeek-V2   |  16B, 236B  | LLM  |    Yes    |   No    |   No    |  No  |  No   |
@@ -82,7 +82,7 @@ The TurboMind engine doesn't support window attention. Therefore, for models tha
 |  CogVLM2-Chat  |     19B     | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
 | LLaVA(1.5,1.6) |   7B-34B    | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
 | InternVL(v1.5) |   2B-26B    | MLLM |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
-|   InternVL2    |   1B-40B    | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
+|   InternVL2    |   1B-40B    | MLLM |    Yes    |  Yes\*  |  Yes\*  |  -   |   -   |
 | Mono-InternVL  |     2B      | MLLM |   Yes\*   |   Yes   |   Yes   |  -   |   -   |
 |    ChemVLM     |   8B-26B    | MLLM |    Yes    |   Yes   |   No    |  -   |   -   |
 |     Gemma2     |   9B-27B    | LLM  |    Yes    |   Yes   |   Yes   |  -   |   -   |
@@ -95,6 +95,7 @@ The TurboMind engine doesn't support window attention. Therefore, for models tha
 
 ```{note}
 * Currently Mono-InternVL does not support FP16 due to numerical instability. Please use BF16 instead.
+* When the head_dim of a model is not 128, such as llama3.2-1B, qwen2-0.5B and internvl2-1B, turbomind doesn't support its kv cache 4/8 bit quantization and inference
 ```
 
 ## PyTorchEngine on Huawei Ascend Platform
