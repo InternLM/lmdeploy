@@ -139,6 +139,10 @@ class SubCliServe:
                             type=str,
                             default=None,
                             help='The proxy url for api server.')
+        parser.add_argument('--metrics',
+                            action='store_true',
+                            default=False,
+                            help='Whether log stats to prometheus')
         # common args
         ArgumentHelper.backend(parser)
         ArgumentHelper.log_level(parser)
@@ -352,6 +356,7 @@ class SubCliServe:
                        ssl=args.ssl,
                        proxy_url=args.proxy_url,
                        max_log_len=args.max_log_len,
+                       metrics=args.metrics,
                        disable_fastapi_docs=args.disable_fastapi_docs)
 
     @staticmethod

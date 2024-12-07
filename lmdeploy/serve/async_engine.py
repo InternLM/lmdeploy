@@ -16,6 +16,7 @@ from lmdeploy.logger import RequestLogger
 from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig, Response,
                                ResponseType, TurbomindEngineConfig)
 from lmdeploy.model import MODELS, ChatTemplateConfig, best_match_model
+from lmdeploy.serve.metrics import IterTimer, Metrics
 from lmdeploy.serve.utils import LogitsMixin, _get_event_loop
 from lmdeploy.tokenizer import DetokenizeState
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_logger
@@ -101,6 +102,11 @@ class Session:
         return res
 
 
+def is_error(status: ResponseType):
+    """Whether is an error response."""
+    return status not in [ResponseType.SUCCESS, ResponseType.FINISH]
+
+
 class AsyncEngine(LogitsMixin):
     """Async inference engine. Maintaining a bunch of tm_model instances.
 
@@ -129,6 +135,7 @@ class AsyncEngine(LogitsMixin):
             Default to None.
         max_log_len (int): Max number of prompt characters or prompt tokens
             being printed in log. Default: Unlimited
+        metrics (bool): Whether log the stats to prometheus.
     """
 
     def __init__(self,
@@ -139,6 +146,7 @@ class AsyncEngine(LogitsMixin):
                                                 PytorchEngineConfig]] = None,
                  chat_template_config: Optional[ChatTemplateConfig] = None,
                  max_log_len: int = None,
+                 metrics: bool = False,
                  **kwargs) -> None:
         logger.info(
             f'input backend={backend}, backend_config={backend_config}')
@@ -186,6 +194,9 @@ class AsyncEngine(LogitsMixin):
             self.gens_set.add(self.engine.create_instance())
         self._session_id = count(0)
         self.request_logger = RequestLogger(max_log_len)
+
+        self.metrics = Metrics(metrics)
+        self.metrics.info(self.backend_config)
 
     def _build_turbomind(
             self,
@@ -243,6 +254,10 @@ class AsyncEngine(LogitsMixin):
                                 use_tqdm=use_tqdm,
                                 **kwargs)
 
+    async def handle_exception(self, session_id: int):
+        self.metrics.failure_frame()
+        await self.stop_session(session_id)
+
     async def stop_session(self, session_id: int):
         """Stop a session by a session_id."""
         if str(session_id) in self.id2generator:
@@ -267,7 +282,7 @@ class AsyncEngine(LogitsMixin):
             yield
         except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
             # TODO: find out why await would block the coroutine here
-            _get_event_loop().create_task(self.stop_session(session_id))
+            _get_event_loop().create_task(self.handle_exception(session_id))
             raise e
         if str(session_id) in self.id2generator:
             self.gens_set.add(self.id2generator[str(session_id)])
@@ -490,43 +505,52 @@ class AsyncEngine(LogitsMixin):
             do_preprocess (bool): whether pre-process the messages. Default to
                 True, which means chat_template will be applied.
         """
-        if str(session_id) not in self.id2step:
-            self.id2step[str(session_id)] = 0
-        if step != 0:
-            self.id2step[str(session_id)] = step
-        if gen_config is None:
-            gen_config = GenerationConfig()
-        else:
-            gen_config = deepcopy(gen_config)
-        gen_config.convert_stop_bad_words_to_ids(self.tokenizer)
-        if gen_config.stop_token_ids is None:
-            gen_config.stop_token_ids = self.stop_words
-        if not gen_config.do_sample:
-            logger.warn(f'GenerationConfig: {gen_config}')
-            logger.warn(
-                'Since v0.6.0, lmdeploy add `do_sample` in '
-                'GenerationConfig. It defaults to False, meaning greedy '
-                'decoding. Please set `do_sample=True` if sampling '
-                ' decoding is needed')
-            # greedy decode
-            gen_config.top_k = 1
-            # avoid unnecessary process
-            gen_config.temperature = 1.0
-            gen_config.repetition_penalty = 1.0
-        # set random if it is not set and sequence_start is True
-        elif gen_config.random_seed is None and sequence_start:
-            gen_config.random_seed = random.getrandbits(64)
-        if gen_config.n > 1:
-            logger.ERROR(f"n({gen_config.n}) > 1 hasn't been supported yet. "
-                         f'Fallback to 1')
-            gen_config.n = 1
-        prompt = messages
-        self.request_logger.log_prompt(session_id=session_id, prompt=prompt)
-        prompt_input = await self._get_prompt_input(prompt,
-                                                    do_preprocess,
-                                                    sequence_start,
-                                                    adapter_name,
-                                                    tools=tools)
+
+        async def get_inputs_genconfig(gen_config):
+            if str(session_id) not in self.id2step:
+                self.id2step[str(session_id)] = 0
+            if step != 0:
+                self.id2step[str(session_id)] = step
+            if gen_config is None:
+                gen_config = GenerationConfig()
+            else:
+                gen_config = deepcopy(gen_config)
+            gen_config.convert_stop_bad_words_to_ids(self.tokenizer)
+            if gen_config.stop_token_ids is None:
+                gen_config.stop_token_ids = self.stop_words
+            if not gen_config.do_sample:
+                logger.warn(f'GenerationConfig: {gen_config}')
+                logger.warn(
+                    'Since v0.6.0, lmdeploy add `do_sample` in '
+                    'GenerationConfig. It defaults to False, meaning greedy '
+                    'decoding. Please set `do_sample=True` if sampling '
+                    ' decoding is needed')
+                # greedy decode
+                gen_config.top_k = 1
+                # avoid unnecessary process
+                gen_config.temperature = 1.0
+                gen_config.repetition_penalty = 1.0
+            # set random if it is not set and sequence_start is True
+            elif gen_config.random_seed is None and sequence_start:
+                gen_config.random_seed = random.getrandbits(64)
+            if gen_config.n > 1:
+                logger.error(
+                    f"n({gen_config.n}) > 1 hasn't been supported yet. "
+                    f'Fallback to 1')
+                gen_config.n = 1
+            prompt = messages
+            self.request_logger.log_prompt(session_id=session_id,
+                                           prompt=prompt)
+            prompt_input = await self._get_prompt_input(prompt,
+                                                        do_preprocess,
+                                                        sequence_start,
+                                                        adapter_name,
+                                                        tools=tools)
+            return prompt_input, gen_config
+
+        arrival_frame = self.metrics.insert_frame()
+        prompt_input, gen_config = await get_inputs_genconfig(gen_config)
+        self.metrics.update_preprocess(arrival_frame)
         prompt = prompt_input['prompt']
         input_ids = prompt_input['input_ids']
         finish_reason = None
@@ -562,26 +586,26 @@ class AsyncEngine(LogitsMixin):
             if sequence_end is True and sequence_start is False:
                 await self.end_session(session_id)
         else:
-
-            def is_error(status):
-                return status not in [
-                    ResponseType.SUCCESS, ResponseType.FINISH
-                ]
-
+            start_frame = self.metrics.insert_frame()
             generator = await self.get_generator(False, session_id)
+            self.metrics.update_queue_waiting(start_frame)
+            iterator = generator.async_stream_infer(
+                session_id=session_id,
+                **prompt_input,
+                gen_config=gen_config,
+                adapter_name=adapter_name,
+                stream_output=stream_response,
+                sequence_start=sequence_start,
+                sequence_end=sequence_end,
+                step=self.id2step[str(session_id)])
+            if self.metrics.applied is True:
+                iterator = IterTimer(iterator)
             async with self.safe_run(session_id):
                 state = DetokenizeState(len(input_ids))
                 start_ids_offset = state.ids_offset
                 response = ''
-                async for outputs in generator.async_stream_infer(
-                        session_id=session_id,
-                        **prompt_input,
-                        gen_config=gen_config,
-                        adapter_name=adapter_name,
-                        stream_output=stream_response,
-                        sequence_start=sequence_start,
-                        sequence_end=sequence_end,
-                        step=self.id2step[str(session_id)]):
+                async for outputs in iterator:
+                    is_first_token = state.prev_tokens is None
                     # decode res
                     if is_error(outputs.status):
                         tokens = 0
@@ -601,7 +625,8 @@ class AsyncEngine(LogitsMixin):
                     if outputs.logprobs:
                         log_offset = ids_offset - start_ids_offset
                         logprobs = outputs.logprobs[log_offset:]
-
+                    if is_first_token:
+                        self.metrics.update_FTL(arrival_frame)
                     # response, history token len,
                     # input token len, gen token len
                     yield GenOut(response, self.id2step[str(session_id)],
@@ -633,6 +658,7 @@ class AsyncEngine(LogitsMixin):
                 # TODO modify pytorch or turbomind api
                 if self.backend == 'pytorch' and sequence_end:
                     await self.end_session(session_id)
+                self.metrics.last_token_frame(iterator)
 
     def parse_tool_response(self, text, tools, **kwargs):
         """Parse model response containing tool information.
