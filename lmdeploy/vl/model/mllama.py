@@ -2,8 +2,6 @@
 
 from typing import Dict, List
 
-import torch
-
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
 
 
@@ -17,9 +15,6 @@ class MllamaVLModel(VisonModel):
         from transformers import AutoProcessor
         self.processor = AutoProcessor.from_pretrained(self.model_path)
         self.image_token_id = 128256
-
-    def build_model(self):
-        assert 0, 'mllama is not supported by turbomind'
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """refer to the spec of `super().preprocess`"""
@@ -58,23 +53,8 @@ class MllamaVLModel(VisonModel):
         prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
         return prompt, IMAGE_TOKEN
 
-    @torch.no_grad()
-    def forward(self, messages: List[Dict]) -> List[Dict]:
-        """extract image feature. ONLY implement it when the backend is
-        turbomind engine.
-
-        Args:
-            messages(List[Dict]): the outputs of `preprocess`
-        Return:
-            the message list with forwarding results included
-        """
-        assert 0, 'cogvlm is not supported by turbomind'
-
     def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
         prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template,
                                                  sequence_start)
         return super().to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
                                       sequence_start)
-
-    def to_turbomind(self, messages, chat_template, sequence_start):
-        assert 0, 'mllama is not supported by turbomind'
