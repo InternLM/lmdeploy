@@ -167,16 +167,24 @@ class InternVLVisionModel(VisonModel):
         pixel_values = torch.stack(pixel_values)
         return pixel_values
 
-    def _forward_v1_5(self, inputs):
+    def _forward_v1_5(self, inputs, max_batch_size):
         """forward for internvl-chat-v1-5."""
         assert all(x.get('pixel_values') is not None for x in inputs)
-        outputs = [x['pixel_values'] for x in inputs]
-        split = [x['pixel_values'].shape[0] for x in inputs]
-        outputs = torch.cat(outputs, dim=0)
-        outputs = outputs.to(self.model.device, dtype=torch.float16)
-        outputs = self.model.extract_feature(outputs)
-        outputs = torch.split(outputs, split, dim=0)
-        outputs = [x.reshape(-1, x.shape[-1]) for x in outputs]
+        outputs = []
+        for idx in range(0, len(inputs), max_batch_size):
+            pixel_values = [
+                x['pixel_values'] for x in inputs[idx:idx + max_batch_size]
+            ]
+            split = [
+                x['pixel_values'].shape[0]
+                for x in inputs[idx:idx + max_batch_size]
+            ]
+            pixel_values = torch.cat(pixel_values, dim=0)
+            pixel_values = pixel_values.to(self.model.device,
+                                           dtype=torch.float16)
+            feats = self.model.extract_feature(pixel_values)
+            feats = torch.split(feats, split, dim=0)
+            outputs.extend([x.reshape(-1, x.shape[-1]) for x in feats])
         return outputs
 
     def _preprocess(self, image, params=None):
@@ -185,15 +193,20 @@ class InternVLVisionModel(VisonModel):
                                             return_tensors='pt').pixel_values
         return pixel_values
 
-    def _forward(self, inputs):
+    def _forward(self, inputs, max_batch_size):
         """forward for internvl-chat-v1-1, internvl-chat-v1-2."""
         assert all(x.get('pixel_values') is not None for x in inputs)
-        outputs = [x['pixel_values'] for x in inputs]
-        outputs = torch.cat(outputs, dim=0)
-        outputs = outputs.to(self.model.device, dtype=torch.float16)
-        outputs = self.model.extract_feature(outputs)
-        outputs = torch.split(outputs, 1, dim=0)
-        outputs = [x.squeeze() for x in outputs]
+        outputs = []
+        for idx in range(0, len(inputs), max_batch_size):
+            pixel_values = [
+                x['pixel_values'] for x in inputs[idx:idx + max_batch_size]
+            ]
+            pixel_values = torch.cat(outputs, dim=0)
+            pixel_values = pixel_values.to(self.model.device,
+                                           dtype=torch.float16)
+            feats = self.model.extract_feature(pixel_values)
+            feats = torch.split(feats, 1, dim=0)
+            outputs.extend([x.squeeze() for x in outputs])
         return outputs
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
@@ -214,18 +227,22 @@ class InternVLVisionModel(VisonModel):
         return messages
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict]) -> List[Dict]:
+    def forward(self,
+                messages: List[Dict],
+                max_batch_size: int = 1) -> List[Dict]:
         """extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
             messages(List[Dict]): the outputs of `preprocess`
+            max_batch_size(int): the max batch size when forwarding vision
+                model
         Return:
             the message list with forwarding results included
         """
         inputs = [x['content'] for x in messages if x['role'] == 'preprocess']
         inputs = inputs[0]
-        outputs = self._forward_func(inputs)
+        outputs = self._forward_func(inputs, max_batch_size)
         messages.append(dict(role='forward', content=outputs))
         return messages
 

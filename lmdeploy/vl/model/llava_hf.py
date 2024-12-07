@@ -75,36 +75,44 @@ class LlavaHfVisionModel(VisonModel):
         return messages
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict]) -> List[Dict]:
+    def forward(self,
+                messages: List[Dict],
+                max_batch_size: int = 1) -> List[Dict]:
         """extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
             messages(List[Dict]): the outputs of `preprocess`
+            max_batch_size(int): the max batch size when forwarding vision
+                model
         Return:
             the message list with forwarding results included
         """
         inputs = [x['content'] for x in messages if x['role'] == 'preprocess']
         inputs = inputs[0]
-        pixel_values = [x['pixel_values'] for x in inputs]
-        pixel_values = torch.cat(pixel_values, dim=0)
-        pixel_values = pixel_values.to(device=self.model.device,
-                                       dtype=self.model.dtype)
-        image_outputs = self.model.vision_tower.forward(
-            pixel_values, output_hidden_states=True)
-        image_features = image_outputs.hidden_states[
-            self.hf_config.vision_feature_layer]
-        if self.hf_config.vision_feature_select_strategy == 'default':
-            image_features = image_features[:, 1:]
-        elif self.hf_config.vision_feature_select_strategy == 'full':
-            image_features = image_features
-        else:
-            raise ValueError(
-                'Unexpected select feature strategy: '
-                f'{self.hf_config.vision_feature_select_strategy}')
-        image_features = self.model.multi_modal_projector(image_features)
-        outputs = torch.split(image_features, 1, dim=0)
-        outputs = [x.squeeze() for x in outputs]
+        outputs = []
+        for idx in range(0, len(inputs), max_batch_size):
+            pixel_values = [
+                x['pixel_values'] for x in inputs[idx:idx + max_batch_size]
+            ]
+            pixel_values = torch.cat(pixel_values, dim=0)
+            pixel_values = pixel_values.to(device=self.model.device,
+                                           dtype=self.model.dtype)
+            image_outputs = self.model.vision_tower.forward(
+                pixel_values, output_hidden_states=True)
+            image_features = image_outputs.hidden_states[
+                self.hf_config.vision_feature_layer]
+            if self.hf_config.vision_feature_select_strategy == 'default':
+                image_features = image_features[:, 1:]
+            elif self.hf_config.vision_feature_select_strategy == 'full':
+                image_features = image_features
+            else:
+                raise ValueError(
+                    'Unexpected select feature strategy: '
+                    f'{self.hf_config.vision_feature_select_strategy}')
+            image_features = self.model.multi_modal_projector(image_features)
+            image_features = torch.split(image_features, 1, dim=0)
+            outputs.extend([x.squeeze() for x in image_features])
         messages.append(dict(role='forward', content=outputs))
         return messages
 

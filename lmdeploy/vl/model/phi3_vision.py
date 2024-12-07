@@ -38,28 +38,3 @@ class Phi3VisionModel(LlavaHfVisionModel):
             outputs.append(result)
         messages.append(dict(role='preprocess', content=outputs))
         return messages
-
-    @classmethod
-    def proc_messages(cls, messages, chat_template, sequence_start):
-        """apply chat template to get the prompt."""
-        prompt_messages = []
-        IMAGE_TOKEN = '<IMAGE_TOKEN>'
-        for message in messages:
-            content = message['content']
-            if isinstance(content, str):
-                prompt_messages.append(message)
-                continue
-            elif message['role'] in ['preprocess', 'forward']:
-                continue
-            prompt = [x['text'] for x in content if x['type'] == 'text']
-            n_images = len([1 for x in content if x['type'] == 'image'])
-            prompt = ''.join([f'{IMAGE_TOKEN}\n'] * n_images) + prompt[0]
-            prompt_messages.append(dict(role='user', content=prompt))
-        prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
-        return prompt, IMAGE_TOKEN
-
-    def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template,
-                                                 sequence_start)
-        return super().to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
-                                      sequence_start)

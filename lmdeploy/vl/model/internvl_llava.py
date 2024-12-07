@@ -142,29 +142,37 @@ class InternVLLlavaVisionModel(LlavaVisionModel):
         return super().preprocess(messages)
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict]) -> List[Dict]:
+    def forward(self,
+                messages: List[Dict],
+                max_batch_size: int = 1) -> List[Dict]:
         """extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
             messages(List[Dict]): the outputs of `preprocess`
+            max_batch_size(int): the max batch size when forwarding vision
+                model
         Return:
             the message list with forwarding results included
         """
         inputs = [x['content'] for x in messages if x['role'] == 'preprocess']
         inputs = inputs[0]
-        pixel_values = [x['pixel_values'] for x in inputs]
-        split_sizes = [x.shape[0] for x in pixel_values]
-        pixel_values = torch.cat(pixel_values, dim=0)
-        pixel_values = pixel_values.to(device=self.vision_tower.device,
-                                       dtype=torch.float16)
-
-        if pixel_values.ndim == 5:
-            image_features = self.encode_images(pixel_values)
-            image_features = torch.split(image_features, split_sizes, dim=0)
-            image_features = [x.flatten(0, 1) for x in image_features]
-        else:
-            image_features = self.encode_images(pixel_values)
-            image_features = [x for x in image_features]
-        messages.append(dict(role='forward', content=image_features))
+        outputs = []
+        for idx in range(0, len(inputs), max_batch_size):
+            pixel_values = [
+                x['pixel_values'] for x in inputs[idx:idx + max_batch_size]
+            ]
+            split_sizes = [x.shape[0] for x in pixel_values]
+            pixel_values = torch.cat(pixel_values, dim=0)
+            pixel_values = pixel_values.to(device=self.vision_tower.device,
+                                           dtype=torch.float16)
+            if pixel_values.ndim == 5:
+                feats = self.encode_images(pixel_values)
+                feats = torch.split(feats, split_sizes, dim=0)
+                feats = [x.flatten(0, 1) for x in feats]
+            else:
+                feats = self.encode_images(pixel_values)
+                feats = [x for x in feats]
+            outputs.extend(feats)
+        messages.append(dict(role='forward', content=outputs))
         return messages

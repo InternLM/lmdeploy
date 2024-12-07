@@ -88,22 +88,30 @@ class QwenVisionModel(VisonModel):
         return messages
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict]) -> List[Dict]:
+    def forward(self,
+                messages: List[Dict],
+                max_batch_size: int = 1) -> List[Dict]:
         """extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
             messages(List[Dict]): the outputs of `preprocess`
+            max_batch_size(int): the max batch size when forwarding vision
+                model
         Return:
             the message list with forwarding results included
         """
         inputs = [x['content'] for x in messages if x['role'] == 'preprocess']
         inputs = inputs[0]
-        pixel_values = [x['pixel_values'] for x in inputs]
-        pixel_values = torch.stack(pixel_values, dim=0)
-        outputs = self.model(pixel_values)
-        outputs = torch.split(outputs, 1, dim=0)
-        outputs = [x.squeeze() for x in outputs]
+        outputs = []
+        for idx in range(0, len(messages), max_batch_size):
+            pixel_values = [
+                x['pixel_values'] for x in inputs[idx:idx + max_batch_size]
+            ]
+            pixel_values = torch.stack(pixel_values, dim=0)
+            feats = self.model(pixel_values)
+            feats = torch.split(feats, 1, dim=0)
+            outputs.extend([x.squeeze() for x in feats])
         messages.append(dict(role='forward', content=outputs))
         return messages
 

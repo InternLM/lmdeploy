@@ -160,12 +160,16 @@ class MiniCPMVModel(VisonModel):
         return messages
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict]) -> List[Dict]:
+    def forward(self,
+                messages: List[Dict],
+                max_batch_size: int = 1) -> List[Dict]:
         """extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
             messages(List[Dict]): the outputs of `preprocess`
+            max_batch_size(int): the max batch size when forwarding vision
+                model
         Return:
             the message list with forwarding results included
         """
