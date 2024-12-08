@@ -131,6 +131,7 @@ class DeepSeekVisionModel(VisonModel):
                 self.vision_model.parameters()).device,
                                            dtype=torch.float16)
             # [b x n_images, T2, D]
+            logger.info(f'vision forward shape: {pixel_values.shape}')
             feats = self.aligner(self.vision_model(pixel_values))
             feats = torch.split(feats, 1, dim=0)
             outputs.extend([x.squeeze() for x in feats])

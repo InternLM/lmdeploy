@@ -201,6 +201,7 @@ class MiniCPMVModel(VisonModel):
                                           device=self.model.device)
             for i in range(B):
                 patch_attn_mask[i, :tgt_sizes[i][0] * tgt_sizes[i][1]] = True
+            logger.info(f'vision forward shape: {pixel_values.shape}')
             if self.version == '2.5':
                 embeddings = self.model.vpm(
                     pixel_values.type(torch.half),

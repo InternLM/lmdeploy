@@ -5,8 +5,11 @@ from typing import Dict, List
 import torch
 from transformers import AutoModelForCausalLM
 
+from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
 from lmdeploy.vl.model.utils import disable_logging
+
+logger = get_logger('lmdeploy')
 
 
 @VISION_MODELS.register_module()
@@ -104,11 +107,12 @@ class QwenVisionModel(VisonModel):
         inputs = [x['content'] for x in messages if x['role'] == 'preprocess']
         inputs = inputs[0]
         outputs = []
-        for idx in range(0, len(messages), max_batch_size):
+        for idx in range(0, len(inputs), max_batch_size):
             pixel_values = [
                 x['pixel_values'] for x in inputs[idx:idx + max_batch_size]
             ]
             pixel_values = torch.stack(pixel_values, dim=0)
+            logger.info(f'vision forward shape: {pixel_values.shape}')
             feats = self.model(pixel_values)
             feats = torch.split(feats, 1, dim=0)
             outputs.extend([x.squeeze() for x in feats])

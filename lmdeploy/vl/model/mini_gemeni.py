@@ -7,10 +7,13 @@ from typing import Dict, List
 
 import torch
 
+from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
 from lmdeploy.vl.model.utils import (add_device_hook, disable_logging,
                                      disable_transformers_logging,
                                      hack_import_with)
+
+logger = get_logger('lmdeploy')
 
 
 def check_mini_gemini_install():
@@ -330,12 +333,13 @@ class MiniGeminiVisionModel(VisonModel):
                 image.to(self.model.device, dtype=torch.float16)
                 for image in image_tensor_aux
             ]
+            logger.info(f'vision forward bs: {len(image_tensor)}')
         else:
             image_tensor = image_tensor.to(self.model.device,
                                            dtype=torch.float16)
             image_tensor_aux = image_tensor_aux.to(self.model.device,
                                                    dtype=torch.float16)
-
+            logger.info(f'vision forward shape: {image_tensor.shape}')
         images_embeds = self.model.encode_images(image_tensor,
                                                  image_tensor_aux)
 

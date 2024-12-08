@@ -5,8 +5,11 @@ from typing import Dict, List
 import torch
 from transformers import AutoProcessor
 
+from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
 from lmdeploy.vl.model.utils import disable_logging
+
+logger = get_logger('lmdeploy')
 
 
 @VISION_MODELS.register_module()
@@ -98,6 +101,7 @@ class LlavaHfVisionModel(VisonModel):
             pixel_values = torch.cat(pixel_values, dim=0)
             pixel_values = pixel_values.to(device=self.model.device,
                                            dtype=self.model.dtype)
+            logger.info(f'vision forward shape: {pixel_values.shape}')
             image_outputs = self.model.vision_tower.forward(
                 pixel_values, output_hidden_states=True)
             image_features = image_outputs.hidden_states[

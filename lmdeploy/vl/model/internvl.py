@@ -182,6 +182,7 @@ class InternVLVisionModel(VisonModel):
             pixel_values = torch.cat(pixel_values, dim=0)
             pixel_values = pixel_values.to(self.model.device,
                                            dtype=torch.float16)
+            logger.info(f'vision forward shape: {pixel_values.shape}')
             feats = self.model.extract_feature(pixel_values)
             feats = torch.split(feats, split, dim=0)
             outputs.extend([x.reshape(-1, x.shape[-1]) for x in feats])
@@ -204,9 +205,10 @@ class InternVLVisionModel(VisonModel):
             pixel_values = torch.cat(outputs, dim=0)
             pixel_values = pixel_values.to(self.model.device,
                                            dtype=torch.float16)
+            logger.info(f'vision forward shape: {pixel_values.shape}')
             feats = self.model.extract_feature(pixel_values)
             feats = torch.split(feats, 1, dim=0)
-            outputs.extend([x.squeeze() for x in outputs])
+            outputs.extend([x.squeeze() for x in feats])
         return outputs
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:

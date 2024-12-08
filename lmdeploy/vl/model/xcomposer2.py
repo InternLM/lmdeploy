@@ -262,6 +262,7 @@ class Xcomposer2VisionModel(VisonModel):
                     x['pixel_values'] for x in inputs[idx:idx + max_batch_size]
                 ]
                 pixel_values = torch.cat(pixel_values, dim=0)
+                logger.info(f'vision forward shape: {pixel_values.shape}')
                 embeds = self.model.vit(pixel_values)
                 embeds = self.model.vision_proj(embeds)
                 embeds = torch.split(embeds, 1, dim=0)

@@ -166,6 +166,7 @@ class InternVLLlavaVisionModel(LlavaVisionModel):
             pixel_values = torch.cat(pixel_values, dim=0)
             pixel_values = pixel_values.to(device=self.vision_tower.device,
                                            dtype=torch.float16)
+            logger.info(f'vision forward shape: {pixel_values.shape}')
             if pixel_values.ndim == 5:
                 feats = self.encode_images(pixel_values)
                 feats = torch.split(feats, split_sizes, dim=0)

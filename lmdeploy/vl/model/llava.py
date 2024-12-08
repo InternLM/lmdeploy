@@ -352,12 +352,13 @@ class LlavaVisionModel(LlavaHfVisionModel):
             pixel_values = [
                 x['pixel_values'] for x in inputs[idx:idx + max_batch_size]
             ]
-            pixel_values = torch.cat(pixel_values, dim=0)
-            pixel_values = pixel_values.to(device=self.vision_tower.device,
-                                           dtype=torch.float16)
-            if pixel_values.ndim == 5:
-                split_sizes = [x.shape[0] for x in pixel_values]
-                pixel_values = torch.cat([x for x in pixel_values], dim=0)
+            if pixel_values[0].ndim == 5:
+                split_sizes = [x.shape[1] for x in pixel_values]
+                pixel_values = torch.cat([x for x in pixel_values], dim=1)
+                logger.info(f'vision forward shape: {pixel_values.shape}')
+                pixel_values = pixel_values.squeeze(0)
+                pixel_values = pixel_values.to(device=self.vision_tower.device,
+                                               dtype=torch.float16)
                 feats = self.encode_images(pixel_values)
                 feats = torch.split(feats, split_sizes, dim=0)
                 mm_patch_merge_type = getattr(self.config,
@@ -411,6 +412,10 @@ class LlavaVisionModel(LlavaHfVisionModel):
                     raise ValueError('Unexpected mm_patch_merge_type: '
                                      f'{self.config.mm_patch_merge_type}')
             else:
+                pixel_values = torch.cat(pixel_values, dim=0)
+                pixel_values = pixel_values.to(device=self.vision_tower.device,
+                                               dtype=torch.float16)
+                logger.info(f'vision forward shape: {pixel_values.shape}')
                 feats = self.encode_images(pixel_values)
                 outputs.extend([x for x in feats])
         messages.append(dict(role='forward', content=outputs))

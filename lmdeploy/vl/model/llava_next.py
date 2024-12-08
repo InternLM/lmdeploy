@@ -164,6 +164,7 @@ class LlavaNextVisionModel(LlavaHfVisionModel):
                 raise ValueError(
                     f'pixel_values of shape {pixel_values.shape}, '
                     'expect to be of 4 or 5 dimensions')
+            logger.info(f'vision forward shape: {pixel_values.shape}')
             image_outputs = self.model.vision_tower.forward(
                 pixel_values, output_hidden_states=True)
             image_features = image_outputs.hidden_states[
