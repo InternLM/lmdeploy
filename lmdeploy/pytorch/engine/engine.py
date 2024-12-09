@@ -78,6 +78,40 @@ def _check_finish(scheduler: Scheduler, current_iter: int):
     return False
 
 
+def _build_scheduler_config(engine_config: PytorchEngineConfig):
+    """build scheduler config."""
+    scheduler_config = SchedulerConfig(
+        max_batches=engine_config.max_batch_size,
+        max_session_len=engine_config.session_len,
+        prefill_interval=engine_config.prefill_interval)
+    return scheduler_config
+
+
+def _build_cache_config(engine_config: PytorchEngineConfig):
+    """build cache config."""
+    cache_config = CacheConfig(
+        max_batches=engine_config.max_batch_size,
+        block_size=engine_config.block_size,
+        num_cpu_blocks=engine_config.num_cpu_blocks,
+        num_gpu_blocks=engine_config.num_gpu_blocks,
+        cache_max_entry_count=engine_config.cache_max_entry_count,
+        max_prefill_token_num=engine_config.max_prefill_token_num,
+        enable_prefix_caching=engine_config.enable_prefix_caching,
+        quant_policy=engine_config.quant_policy,
+        device_type=engine_config.device_type,
+    )
+    return cache_config
+
+
+def _build_backend_config(engine_config: PytorchEngineConfig):
+    """build backend config."""
+    backend_config = BackendConfig(
+        eager_mode=engine_config.eager_mode,
+        device_type=engine_config.device_type,
+    )
+    return backend_config
+
+
 class Engine:
     """The inference engine of lmdeploy pytorch.
 
@@ -112,23 +146,6 @@ class Engine:
         self.device_context = DeviceContext(
             device_type=engine_config.device_type)
 
-        scheduler_config = SchedulerConfig(
-            max_batches=engine_config.max_batch_size,
-            max_session_len=engine_config.session_len,
-            prefill_interval=engine_config.prefill_interval)
-
-        cache_config = CacheConfig(
-            max_batches=engine_config.max_batch_size,
-            block_size=engine_config.block_size,
-            num_cpu_blocks=engine_config.num_cpu_blocks,
-            num_gpu_blocks=engine_config.num_gpu_blocks,
-            cache_max_entry_count=engine_config.cache_max_entry_count,
-            max_prefill_token_num=engine_config.max_prefill_token_num,
-            enable_prefix_caching=engine_config.enable_prefix_caching,
-            quant_policy=engine_config.quant_policy,
-            device_type=engine_config.device_type,
-        )
-
         if not os.path.exists(model_path):
             model_path = get_model(model_path, engine_config.download_dir,
                                    engine_config.revision)
@@ -137,10 +154,9 @@ class Engine:
         if adapters is not None and len(adapters) > 0:
             adapters = self._download_adapters(adapters, engine_config)
 
-        backend_config = BackendConfig(
-            eager_mode=engine_config.eager_mode,
-            device_type=engine_config.device_type,
-        )
+        scheduler_config = _build_scheduler_config(engine_config)
+        cache_config = _build_cache_config(engine_config)
+        backend_config = _build_backend_config(engine_config)
 
         with get_device_manager().context(self.device_context):
             self.model_agent = build_model_agent(
