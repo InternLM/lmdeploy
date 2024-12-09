@@ -12,7 +12,7 @@ class DeepseekV2ModelConfigBuilder(AutoModelConfigBuilder):
         return hf_config.model_type == 'deepseek_v2'
 
     @classmethod
-    def build(cls, hf_config, model_path: str = None):
+    def build(cls, hf_config, model_path: str = None, **kwargs):
         """build."""
         head_dim = (hf_config.kv_lora_rank + hf_config.qk_rope_head_dim)
         k_head_dim = head_dim

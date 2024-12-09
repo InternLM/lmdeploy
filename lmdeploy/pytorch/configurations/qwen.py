@@ -11,10 +11,10 @@ class QwenModelConfigBuilder(AutoModelConfigBuilder):
         return hf_config.model_type == 'qwen'
 
     @classmethod
-    def build(cls, hf_config, model_path: str = None):
+    def build(cls, hf_config, model_path: str = None, **kwargs):
         """build."""
         from lmdeploy.utils import is_bf16_supported
-        cfg = DefaultModelConfigBuilder.build(hf_config)
+        cfg = DefaultModelConfigBuilder.build(hf_config, model_path, **kwargs)
         if cfg.bos_token_id is None:
             cfg.bos_token_id = 151644
         if cfg.eos_token_id is None:

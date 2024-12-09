@@ -12,7 +12,7 @@ class MiniCPM3ModelConfigBuilder(AutoModelConfigBuilder):
         return hf_config.architectures[0] in ['MiniCPM3ForCausalLM']
 
     @classmethod
-    def build(cls, hf_config, model_path: str = None):
+    def build(cls, hf_config, model_path: str = None, **kwargs):
         """build."""
         head_dim = (hf_config.qk_nope_head_dim + hf_config.qk_rope_head_dim)
         k_head_dim = head_dim

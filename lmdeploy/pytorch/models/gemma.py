@@ -31,7 +31,8 @@ class GemmaAttention(nn.Module):
         num_key_value_heads = config.num_key_value_heads
         hidden_size = config.hidden_size
         head_dim = config.head_dim
-
+        num_replicate_kv_heads = getattr(config,
+                                         'num_replicate_key_value_heads', 1)
         # packed qkv
         self.qkv_proj = build_qkv_proj(
             hidden_size,
@@ -42,7 +43,7 @@ class GemmaAttention(nn.Module):
             quant_config=quantization_config,
             dtype=dtype,
             device=device,
-        )
+            num_replicate_kv_heads=num_replicate_kv_heads)
 
         # rotary embedding
         self.apply_rotary_pos_emb = ApplyRotaryEmb()
