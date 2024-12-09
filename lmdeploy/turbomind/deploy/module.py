@@ -229,6 +229,8 @@ class Attn(Module):
         if is_lora_a:
             qkv, o = map(transpose, qkvo)
         else:
+            if self.model.repeat_kv:
+                qkvo = self._repeat_kv(qkvo, kind)
             qkv, o = self._reorder_and_merge(qkvo)
         self.model.save_split(pack_fn(qkv),
                               self._attn.format(idx, 'w_qkv', kind),
