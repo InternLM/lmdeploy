@@ -77,6 +77,7 @@ class CacheConfig:
     max_prefill_token_num: int = 4096
     enable_prefix_caching: bool = False
     quant_policy: Literal[0, 4, 8] = 0
+    device_type: str = 'cuda'
 
     def __post_init__(self):
         """post init."""

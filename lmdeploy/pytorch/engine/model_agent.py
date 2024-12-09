@@ -120,9 +120,7 @@ def cache_swapping(cache_engine: CacheEngine, swap_in_map: dict,
         issued_cache_op = True
 
     if issued_cache_op:
-        cache_events = cache_engine.events
-        for event in cache_events:
-            event.wait()
+        cache_engine.events.wait()
 
 
 @torch.inference_mode()
@@ -141,6 +139,7 @@ def model_forward(
         ctx_mgr = model.ctx_mgr
         context = ctx_mgr.build_context(
             inputs=inputs,
+            model_config=cache_engine.model_config,
             world_size=world_size,
             kv_caches=cache_engine.gpu_cache,
             kv_quant_policy=cache_engine.cache_config.quant_policy,
@@ -164,23 +163,8 @@ class AutoModelAgent:
         self.model_config = model_config
         self.cache_config = cache_config
 
-    def get_block_numel(self):
-        """get block nelement."""
-        raise NotImplementedError('Not implemented')
-
     async def async_forward(self, inputs: ModelInputs, swap_in_map: SwapMap,
                             swap_out_map: SwapMap):
-        """model forward.
-
-        Args:
-            inputs (Dict): The input data comes from _make_inputs.
-            swap_in_map (SwapMap): Cache maps to swap in.
-            swap_out_map (SwapMap): Cache maps to swap out.
-        """
-        raise NotImplementedError('Not implemented.')
-
-    def forward(self, inputs: ModelInputs, swap_in_map: SwapMap,
-                swap_out_map: SwapMap):
         """model forward.
 
         Args:
@@ -257,11 +241,6 @@ class BaseModelAgent(AutoModelAgent):
                          device=device)
         return patched_model
 
-    def get_block_numel(self):
-        """get block nelement."""
-        k_cache = self.cache_engine.local_gpu_cache[0][0]
-        return k_cache[0].numel()
-
     def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap,
                       swap_out_map: SwapMap):
         cache_swapping(self.cache_engine,
@@ -276,21 +255,6 @@ class BaseModelAgent(AutoModelAgent):
         )
         return output
 
-    def forward(self, inputs: ModelInputs, swap_in_map: SwapMap,
-                swap_out_map: SwapMap):
-        """model forward.
-
-        Args:
-            inputs (Dict): The input data comes from _make_inputs.
-            swap_in_map (SwapMap): Cache maps to swap in.
-            swap_out_map (SwapMap): Cache maps to swap out.
-        """
-        output = self._forward_impl(inputs,
-                                    swap_in_map=swap_in_map,
-                                    swap_out_map=swap_out_map)
-        self.stream.synchronize()
-        return output
-
     async def async_forward(self, inputs: ModelInputs, swap_in_map: SwapMap,
                             swap_out_map: SwapMap):
         """model forward.
@@ -303,8 +267,9 @@ class BaseModelAgent(AutoModelAgent):
         output = self._forward_impl(inputs,
                                     swap_in_map=swap_in_map,
                                     swap_out_map=swap_out_map)
-        await asyncio.get_event_loop().run_in_executor(None,
-                                                       self.stream.synchronize)
+        await asyncio.sleep(0)
+        while not self.stream.query():
+            await asyncio.sleep(0)
         return output
 
     def get_logits(self, hidden_states: torch.Tensor):
@@ -690,11 +655,6 @@ class TPModelAgent(AutoModelAgent):
 
         return model, cache_engine, cache_config
 
-    def get_block_numel(self):
-        """get block nelement."""
-        k_cache = self.cache_engine.local_gpu_cache[0][0]
-        return k_cache[0].numel()
-
     def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap,
                       swap_out_map: SwapMap):
         """forward impl."""
@@ -715,21 +675,6 @@ class TPModelAgent(AutoModelAgent):
             )
         return output
 
-    def forward(self, inputs: ModelInputs, swap_in_map: SwapMap,
-                swap_out_map: SwapMap):
-        """model forward.
-
-        Args:
-            inputs (Dict): The input data comes from _make_inputs.
-            swap_in_map (SwapMap): Cache maps to swap in.
-            swap_out_map (SwapMap): Cache maps to swap out.
-        """
-        output = self._forward_impl(inputs,
-                                    swap_in_map=swap_in_map,
-                                    swap_out_map=swap_out_map)
-        self.stream.synchronize()
-        return output
-
     async def async_forward(self, inputs: ModelInputs, swap_in_map: SwapMap,
                             swap_out_map: SwapMap):
         """model forward.
@@ -742,8 +687,9 @@ class TPModelAgent(AutoModelAgent):
         output = self._forward_impl(inputs,
                                     swap_in_map=swap_in_map,
                                     swap_out_map=swap_out_map)
-        await asyncio.get_event_loop().run_in_executor(None,
-                                                       self.stream.synchronize)
+        await asyncio.sleep(0)
+        while not self.stream.query():
+            await asyncio.sleep(0)
         return output
 
     def get_logits(self, hidden_states: torch.Tensor):
