@@ -327,12 +327,16 @@ class LlavaVisionModel(LlavaHfVisionModel):
         return messages
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict]) -> List[Dict]:
+    def forward(self,
+                messages: List[Dict],
+                max_batch_size: int = 1) -> List[Dict]:
         """extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
             messages(List[Dict]): the outputs of `preprocess`
+            max_batch_size(int): the max batch size when forwarding vision
+                model
         Return:
             the message list with forwarding results included
         """
@@ -340,79 +344,79 @@ class LlavaVisionModel(LlavaHfVisionModel):
                                             unpad_image)
         inputs = [x['content'] for x in messages if x['role'] == 'preprocess']
         inputs = inputs[0]
-        image_sizes = [x['image_size'] for x in inputs]
-        pixel_values = [x['pixel_values'] for x in inputs]
-        pixel_values = torch.cat(pixel_values, dim=0)
-        pixel_values = pixel_values.to(device=self.vision_tower.device,
-                                       dtype=torch.float16)
-        if pixel_values.ndim == 5:
-            split_sizes = [x.shape[0] for x in pixel_values]
-            pixel_values = torch.cat([x for x in pixel_values], dim=0)
-            image_features = self.encode_images(pixel_values)
-            image_features = torch.split(image_features, split_sizes, dim=0)
-            mm_patch_merge_type = getattr(self.config, 'mm_patch_merge_type',
-                                          'flat')
-            image_aspect_ratio = getattr(self.config, 'image_aspect_ratio',
-                                         'square')
-            if mm_patch_merge_type == 'flat':
-                image_features = [x.flatten(0, 1) for x in image_features]
-            elif mm_patch_merge_type.startswith('spatial'):
-                new_image_features = []
-                for image_idx, image_feature in enumerate(image_features):
-                    if image_feature.shape[0] > 1:
-                        base_image_feature = image_feature[0]
-                        image_feature = image_feature[1:]
-                        height = width = self.vision_tower.num_patches_per_side
-                        assert height * width == base_image_feature.shape[0]
-                        if image_aspect_ratio == 'anyres':
-                            num_patch_width, num_patch_height = \
-                                get_anyres_image_grid_shape(
-                                    image_sizes[image_idx],
-                                    self.config.image_grid_pinpoints,
-                                    self.vision_tower.config.image_size)
-                            image_feature = image_feature.view(
-                                num_patch_height, num_patch_width, height,
-                                width, -1)
+        outputs = []
+        for idx in range(0, len(inputs), max_batch_size):
+            image_sizes = [
+                x['image_size'] for x in inputs[idx:idx + max_batch_size]
+            ]
+            pixel_values = [
+                x['pixel_values'] for x in inputs[idx:idx + max_batch_size]
+            ]
+            if pixel_values[0].ndim == 5:
+                split_sizes = [x.shape[1] for x in pixel_values]
+                pixel_values = torch.cat([x for x in pixel_values], dim=1)
+                logger.info(f'vision forward shape: {pixel_values.shape}')
+                pixel_values = pixel_values.squeeze(0)
+                pixel_values = pixel_values.to(device=self.vision_tower.device,
+                                               dtype=torch.float16)
+                feats = self.encode_images(pixel_values)
+                feats = torch.split(feats, split_sizes, dim=0)
+                mm_patch_merge_type = getattr(self.config,
+                                              'mm_patch_merge_type', 'flat')
+                image_aspect_ratio = getattr(self.config, 'image_aspect_ratio',
+                                             'square')
+                if mm_patch_merge_type == 'flat':
+                    outputs.expand([x.flatten(0, 1) for x in feats])
+                elif mm_patch_merge_type.startswith('spatial'):
+                    for img_idx, feat in enumerate(feats):
+                        if feat.shape[0] > 1:
+                            base_feat = feat[0]
+                            feat = feat[1:]
+                            height = self.vision_tower.num_patches_per_side
+                            width = self.vision_tower.num_patches_per_side
+                            assert height * width == base_feat.shape[0]
+                            if image_aspect_ratio == 'anyres':
+                                num_patch_width, num_patch_height = \
+                                    get_anyres_image_grid_shape(
+                                        image_sizes[img_idx],
+                                        self.config.image_grid_pinpoints,
+                                        self.vision_tower.config.image_size)
+                                feat = feat.view(num_patch_height,
+                                                 num_patch_width, height,
+                                                 width, -1)
+                            else:
+                                raise NotImplementedError
+                            if 'unpad' in mm_patch_merge_type:
+                                feat = feat.permute(4, 0, 2, 1, 3).contiguous()
+                                feat = feat.flatten(1, 2).flatten(2, 3)
+                                feat = unpad_image(feat, image_sizes[img_idx])
+                                feat = torch.cat(
+                                    (feat, self.model.
+                                     image_newline[:, None, None].expand(
+                                         *feat.shape[:-1], 1).to(feat.device)),
+                                    dim=-1)
+                                feat = feat.flatten(1, 2).transpose(0, 1)
+                            else:
+                                feat = feat.permute(0, 2, 1, 3, 4).contiguous()
+                                feat = feat.flatten(0, 3)
+                            feat = torch.cat((base_feat, feat), dim=0)
                         else:
-                            raise NotImplementedError
-                        if 'unpad' in mm_patch_merge_type:
-                            image_feature = image_feature.permute(
-                                4, 0, 2, 1, 3).contiguous()
-                            image_feature = image_feature.flatten(1,
-                                                                  2).flatten(
-                                                                      2, 3)
-                            image_feature = unpad_image(
-                                image_feature, image_sizes[image_idx])
-                            image_feature = torch.cat((
-                                image_feature,
-                                self.model.image_newline[:, None, None].expand(
-                                    *image_feature.shape[:-1], 1).to(
-                                        image_feature.device)),
-                                                      dim=-1)
-                            image_feature = image_feature.flatten(1,
-                                                                  2).transpose(
-                                                                      0, 1)
-                        else:
-                            image_feature = image_feature.permute(
-                                0, 2, 1, 3, 4).contiguous()
-                            image_feature = image_feature.flatten(0, 3)
-                        image_feature = torch.cat(
-                            (base_image_feature, image_feature), dim=0)
-                    else:
-                        image_feature = image_feature[0]
-                        if 'unpad' in mm_patch_merge_type:
-                            image_feature = torch.cat(
-                                (image_feature,
-                                 self.model.image_newline[None].to(
-                                     image_feature.device)),
-                                dim=0)
-                    new_image_features.append(image_feature)
-                image_features = new_image_features
+                            feat = feat[0]
+                            if 'unpad' in mm_patch_merge_type:
+                                feat = torch.cat(
+                                    (feat, self.model.image_newline[None].to(
+                                        feat.device)),
+                                    dim=0)
+                        outputs.append(feat)
+                else:
+                    raise ValueError('Unexpected mm_patch_merge_type: '
+                                     f'{self.config.mm_patch_merge_type}')
             else:
-                raise ValueError('Unexpected mm_patch_merge_type: '
-                                 f'{self.config.mm_patch_merge_type}')
-        else:
-            image_features = self.encode_images(pixel_values)
-            image_features = [x for x in image_features]
-        messages.append(dict(role='forward', content=image_features))
+                pixel_values = torch.cat(pixel_values, dim=0)
+                pixel_values = pixel_values.to(device=self.vision_tower.device,
+                                               dtype=torch.float16)
+                logger.info(f'vision forward shape: {pixel_values.shape}')
+                feats = self.encode_images(pixel_values)
+                outputs.extend([x for x in feats])
+        messages.append(dict(role='forward', content=outputs))
         return messages

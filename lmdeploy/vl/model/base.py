@@ -39,7 +39,6 @@ class VisonModel(ABC):
         """
         raise NotImplementedError()
 
-    @abstractmethod
     def build_model(self, ):
         """build model.
 
@@ -90,13 +89,16 @@ class VisonModel(ABC):
         """  # noqa
         raise NotImplementedError()
 
-    @abstractmethod
-    def forward(self, messages: List[Dict]) -> List[Dict]:
+    def forward(self,
+                messages: List[Dict],
+                max_batch_size: int = 1) -> List[Dict]:
         """extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
             messages(List[Dict]): the outputs of `preprocess`
+            max_batch_size(int): the max batch size when forwarding vision
+                model
         Return:
             the message list with forwarding results included, which is
             determined by the derived classes
@@ -104,7 +106,6 @@ class VisonModel(ABC):
         if self.backend == 'turbomind':
             raise NotImplementedError()
 
-    @abstractmethod
     def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
         """pack the preprocessing results in a format compatible with what is
         required by pytorch engine. ONLY implement it when the backend is
@@ -119,7 +120,6 @@ class VisonModel(ABC):
         if self.backend == 'pytorch':
             raise NotImplementedError()
 
-    @abstractmethod
     def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):
         """pack the forwarding results in a format compatible with what is
         required by turbomind engine. ONLY implement it when the backend is
