@@ -14,13 +14,13 @@ from lmdeploy.utils import (get_logger, get_max_batch_size, get_model,
                             logging_timer)
 
 from ..adapter.adapter import AdapterManager
-from ..check_env import check_adapters, check_env, check_model
 from ..config import BackendConfig, CacheConfig, SchedulerConfig
 from ..devices import DeviceContext, get_device_manager
 from ..messages import (InputEmbeddingRangeType, InputEmbeddingType,
                         MessageStatus, SchedulerSequence)
 from ..model_inputs import ModelInputs, MRopeModelInputs, VisionModelInputs
 from ..paging import Scheduler
+from .engine_checker import EngineChecker
 from .logits_process import FusedLogitsProcessor, SamplingInputs
 from .model_agent import build_model_agent
 from .request import Request, RequestManager, RequestType, Response
@@ -95,20 +95,17 @@ class Engine:
             engine_config = PytorchEngineConfig()
         else:
             engine_config = copy.deepcopy(engine_config)
-        check_env(engine_config.device_type)
-        check_model(model_path, trust_remote_code, engine_config.dtype,
-                    engine_config.device_type)
         if engine_config.max_batch_size is None:
             engine_config.max_batch_size = get_max_batch_size(
                 engine_config.device_type)
-        adapters = engine_config.adapters
-        if adapters is not None:
-            check_adapters(list(adapters.values()))
-        assert engine_config.max_batch_size > 0, 'max_batch_size should be' \
-            f' greater than 0, but got {engine_config.max_batch_size}'
-        assert engine_config.dtype in ['auto', 'float16', 'bfloat16'], \
-            f'unsupported specified data type {engine_config.dtype}'
 
+        checker = EngineChecker(model_path=model_path,
+                                engine_config=engine_config,
+                                trust_remote_code=trust_remote_code,
+                                logger=logger)
+        checker.check()
+
+        adapters = engine_config.adapters
         self.engine_config = engine_config
         self.tp = engine_config.tp
 
@@ -120,7 +117,6 @@ class Engine:
             max_session_len=engine_config.session_len,
             prefill_interval=engine_config.prefill_interval)
 
-        # block_size = 1 to enable unified paging
         cache_config = CacheConfig(
             max_batches=engine_config.max_batch_size,
             block_size=engine_config.block_size,
