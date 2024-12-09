@@ -83,12 +83,16 @@ class MolmoVisionModel(VisonModel):
         return messages
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict]) -> List[Dict]:
+    def forward(self,
+                messages: List[Dict],
+                max_batch_size: int = 1) -> List[Dict]:
         """extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
             messages(List[Dict]): the outputs of `preprocess`
+            max_batch_size(int): the max batch size when forwarding vision
+                model
         Return:
             the message list with forwarding results included
         """
@@ -113,6 +117,7 @@ class MolmoVisionModel(VisonModel):
             embeddings = self.model.model.transformer.wte(input_ids)
             images = images.to(self.model.dtype)
             image_masks = image_masks.to(self.model.dtype)
+            logger.info(f'vision forward shape: {images.shape}')
             image_features, _ = self.model.model.vision_backbone(
                 images, image_masks)
             num_image, num_patch = image_features.shape[1:3]

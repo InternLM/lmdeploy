@@ -228,35 +228,47 @@ class Xcomposer2VisionModel(VisonModel):
         return messages
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict]) -> List[Dict]:
+    def forward(self,
+                messages: List[Dict],
+                max_batch_size: int = 1) -> List[Dict]:
         """extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
             messages(List[Dict]): the outputs of `preprocess`
+            max_batch_size(int): the max batch size when forwarding vision
+                model
         Return:
             the message list with forwarding results included
         """
         inputs = [x['content'] for x in messages if x['role'] == 'preprocess']
         inputs = inputs[0]
-        if self.model_type in [
-                ModelType.XCOMPOSER2D5, ModelType.XCOMPOSER2_4KHD
-        ]:
-            pixel_values = [x['pixel_values'] for x in inputs]
-            embeds, split = self.model.vit(pixel_values,
-                                           self.model.plora_glb_GN,
-                                           self.model.plora_sub_GN)
-            embeds = self.model.vision_proj(embeds)
-            embeds = torch.split(embeds, split, dim=1)
-            embeds = [x.squeeze() for x in embeds]
-        else:
-            pixel_values = [x['pixel_values'] for x in inputs]
-            pixel_values = torch.cat(pixel_values, dim=0)
-            embeds = self.model.vit(pixel_values)
-            embeds = self.model.vision_proj(embeds)
-            embeds = torch.split(embeds, 1, dim=0)
-            embeds = [x.squeeze() for x in embeds]
-        messages.append(dict(role='forward', content=embeds))
+        outputs = []
+        for idx in range(0, len(inputs), max_batch_size):
+            if self.model_type in [
+                    ModelType.XCOMPOSER2D5, ModelType.XCOMPOSER2_4KHD
+            ]:
+                pixel_values = [
+                    x['pixel_values'] for x in inputs[idx:idx + max_batch_size]
+                ]
+                embeds, split = self.model.vit(pixel_values,
+                                               self.model.plora_glb_GN,
+                                               self.model.plora_sub_GN)
+                embeds = self.model.vision_proj(embeds)
+                embeds = torch.split(embeds, split, dim=1)
+                embeds = [x.squeeze() for x in embeds]
+            else:
+                pixel_values = [
+                    x['pixel_values'] for x in inputs[idx:idx + max_batch_size]
+                ]
+                pixel_values = torch.cat(pixel_values, dim=0)
+                logger.info(f'vision forward shape: {pixel_values.shape}')
+                embeds = self.model.vit(pixel_values)
+                embeds = self.model.vision_proj(embeds)
+                embeds = torch.split(embeds, 1, dim=0)
+                embeds = [x.squeeze() for x in embeds]
+            outputs.extend(embeds)
+        messages.append(dict(role='forward', content=outputs))
         return messages
 
     @classmethod

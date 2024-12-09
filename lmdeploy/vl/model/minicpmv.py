@@ -160,12 +160,16 @@ class MiniCPMVModel(VisonModel):
         return messages
 
     @torch.no_grad()
-    def forward(self, messages: List[Dict]) -> List[Dict]:
+    def forward(self,
+                messages: List[Dict],
+                max_batch_size: int = 1) -> List[Dict]:
         """extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
             messages(List[Dict]): the outputs of `preprocess`
+            max_batch_size(int): the max batch size when forwarding vision
+                model
         Return:
             the message list with forwarding results included
         """
@@ -197,6 +201,7 @@ class MiniCPMVModel(VisonModel):
                                           device=self.model.device)
             for i in range(B):
                 patch_attn_mask[i, :tgt_sizes[i][0] * tgt_sizes[i][1]] = True
+            logger.info(f'vision forward shape: {pixel_values.shape}')
             if self.version == '2.5':
                 embeddings = self.model.vpm(
                     pixel_values.type(torch.half),

@@ -1,13 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import warnings
 from typing import Dict, List
 
-import torch
 from transformers import AutoConfig
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
-from lmdeploy.vl.model.utils import disable_logging
 
 logger = get_logger('lmdeploy')
 
@@ -40,51 +37,6 @@ class GLM4VisionModel(VisonModel):
         patch_size = self.hf_config.vision_config['patch_size']
         self.n_token_per_image = 2 + (image_size // patch_size // 2)**2
 
-    def build_model(self):
-        from accelerate import init_empty_weights, load_checkpoint_and_dispatch
-        from accelerate.utils import infer_auto_device_map
-
-        with init_empty_weights(), warnings.catch_warnings():
-            warnings.simplefilter('ignore')
-            from transformers import AutoModelForCausalLM
-            self.model = AutoModelForCausalLM.from_config(
-                self.hf_config, trust_remote_code=True)
-            if not self.with_llm:
-                del self.model.transformer.embedding
-                del self.model.transformer.rotary_pos_emb
-                del self.model.transformer.encoder
-                del self.model.transformer.output_layer
-            else:
-                self.vl_model = self.model
-
-        no_split_module_classes = ['TransformerLayer']
-
-        device_map = infer_auto_device_map(
-            self.model,
-            no_split_module_classes=no_split_module_classes,
-            max_memory=self.max_memory,
-            dtype=torch.half)
-
-        same_device_keys = [
-            ('transformer.vision.linear_proj', 'transformer.vision.boi',
-             'transformer.vision.eoi')
-        ]
-        for keys in same_device_keys:
-            keys = [k for k in keys if k in device_map]
-            if len(keys) <= 1:
-                continue
-            for k in keys[1:]:
-                device_map[k] = device_map[keys[0]]
-
-        with disable_logging():
-            load_checkpoint_and_dispatch(
-                model=self.model,
-                checkpoint=self.model_path,
-                device_map=device_map if not self.with_llm else {'': 'cpu'},
-                no_split_module_classes=no_split_module_classes,
-                dtype=torch.half)
-        self.model.eval()
-
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """refers to the spec of `super.preprocess()"""
         images = self.collect_images(messages)
@@ -99,18 +51,6 @@ class GLM4VisionModel(VisonModel):
                      image_token_id=0))
         messages.append(dict(role='preprocess', content=outputs))
         return messages
-
-    @torch.no_grad()
-    def forward(self, messages: List[Dict]) -> List[Dict]:
-        """extract image feature. ONLY implement it when the backend is
-        turbomind engine.
-
-        Args:
-            messages(List[Dict]): the outputs of `preprocess`
-        Return:
-            the message list with forwarding results included
-        """
-        assert 0, 'glm4v is not supported by turbomind'
 
     @classmethod
     def proc_messages(cls, messages, chat_template, sequence_start):
@@ -136,6 +76,3 @@ class GLM4VisionModel(VisonModel):
                                                  sequence_start)
         return super().to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
                                       sequence_start)
-
-    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):
-        assert 0, 'glm4v is not supported by turbomind'
