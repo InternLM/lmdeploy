@@ -114,8 +114,8 @@ class Qwen2VLModel(VisonModel):
         """
         assert 0, 'TODO: support turbomind engine'
 
-    @classmethod
-    def proc_messages(cls, messages, chat_template, sequence_start):
+    @staticmethod
+    def proc_messages(messages, chat_template, sequence_start):
         """apply chat template to get the prompt."""
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
@@ -152,8 +152,8 @@ class Qwen2VLModel(VisonModel):
         """return to the information needed by pytorch engine."""
         prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template,
                                                  sequence_start)
-        return super().to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
-                                      sequence_start)
+        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
+                                   sequence_start)
 
     def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):
         assert 0, 'TODO: support turbomind engine'

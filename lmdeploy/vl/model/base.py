@@ -134,8 +134,8 @@ class VisonModel(ABC):
         if self.backend == 'turbomind':
             raise NotImplementedError()
 
-    @classmethod
-    def collect_images(cls, messages):
+    @staticmethod
+    def collect_images(messages):
         """gather all images along with their respective parameters from the
         messages and compile them into a single list. Each image is converted
         to RGB color space.
@@ -157,8 +157,8 @@ class VisonModel(ABC):
             ])
         return images
 
-    @classmethod
-    def to_pytorch_aux(cls, messages, prompt, IMAGE_TOKEN, tokenizer,
+    @staticmethod
+    def to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
                        sequence_start):
         """auxiliary function to pack the preprocessing results in a format
         compatible with what is required by pytorch engine.
@@ -196,8 +196,8 @@ class VisonModel(ABC):
 
         return dict(prompt=prompt, input_ids=input_ids, multimodal=preps)
 
-    @classmethod
-    def to_turbomind_aux(cls, messages, prompt, IMAGE_TOKEN, tokenizer,
+    @staticmethod
+    def to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
                          sequence_start):
         """auxiliary function to pack the forwarding results in a format
         compatible with what is required by turbomind engine.

@@ -144,7 +144,8 @@ class MolmoVisionModel(VisonModel):
                                   embeddings=embeddings)))
         return messages
 
-    def proc_messages(cls, messages):
+    @staticmethod
+    def proc_messages(messages):
         prompt = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
         for message in messages:
