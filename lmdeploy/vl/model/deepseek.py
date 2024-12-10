@@ -153,22 +153,28 @@ class DeepSeekVisionModel(VisonModel):
                 x['text'] for x in message['content'] if x['type'] == 'text'
             ]
             content = content[0]
-            if IMAGE_TOKEN not in content:
+            n_image = sum(
+                [1 for x in message['content'] if x['type'] == 'image'])
+            n_placeholder = content.count(IMAGE_TOKEN)
+            if n_placeholder == 0:
                 logger.warning(
                     f"""for deepseek-vl model, the user should insert the {IMAGE_TOKEN}
                     to user prompt manually, please read https://lmdeploy.readthedocs.io/en/latest/inference/vl_pipeline.html
                     for more details.""")  # noqa
-                n_images = len(
-                    [1 for x in message['content'] if x['type'] == 'image'])
-                if n_images == 1:
+            if n_placeholder != 0 and n_placeholder != n_image:
+                logger.error(
+                    f'unmatched placeholder and image: {n_placeholder} vs '
+                    f'{n_image}. Ignore the placeholder')
+                content = content.replace(IMAGE_TOKEN, '')
+                n_placeholder = 0
+            if n_placeholder == 0:
+                if n_image == 1:
                     content = f'{IMAGE_TOKEN}{content}'
                 else:
                     content = ''.join([
                         f'{IMAGE_TOKEN} is Figure {str(i)}.\n'
-                        for i in range(n_images)
+                        for i in range(n_image)
                     ]) + content
-            else:
-                logger.error('TODO deepseek-vl')
             prompt_messages.append(dict(role='user', content=content))
         prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
         return prompt, IMAGE_TOKEN

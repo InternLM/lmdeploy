@@ -39,16 +39,27 @@ class GLM4VisionModel(VisonModel):
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """refers to the spec of `super.preprocess()"""
-        images = self.collect_images(messages)
         outputs = []
-        for image, params in images:
-            image = image.convert('RGB')
-            pixel_values = self.image_transform(image)
-            outputs.append(
-                dict(pixel_values=pixel_values,
-                     image_size=image.size,
+        for message in messages:
+            if not isinstance(message['content'], List):
+                continue
+            images = [
+                x['image'] for x in message['content'] if x['type'] == 'image'
+            ]
+            if len(images) > 1:
+                logger.warning(
+                    f'glm4v does not support the input of multiple images'
+                    f' in a single chat round, but got {len(images)} images.')
+            # we still pass all the images to the model and let the
+            # model decide what to do
+            images = [x.convert('RGB') for x in images]
+            pixel_values = [self.image_transform(x) for x in images]
+            outputs.extend([
+                dict(pixel_values=_2,
+                     image_size=_1.size,
                      image_tokens=self.n_token_per_image,
-                     image_token_id=0))
+                     image_token_id=0) for _1, _2 in zip(images, pixel_values)
+            ])
         messages.append(dict(role='preprocess', content=outputs))
         return messages
 

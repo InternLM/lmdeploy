@@ -4,7 +4,6 @@ import warnings
 from typing import Dict, List
 
 import torch
-from transformers import AutoProcessor
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.llava_hf import VISION_MODELS, LlavaHfVisionModel
@@ -20,12 +19,7 @@ class LlavaNextVisionModel(LlavaHfVisionModel):
     _arch = 'LlavaNextForConditionalGeneration'
 
     def build_preprocessor(self):
-        processor = AutoProcessor.from_pretrained(self.model_path,
-                                                  trust_remote_code=True)
-        if hasattr(processor, 'tokenizer'):
-            del processor.tokenizer
-            processor.prtokenizer = None
-        self.processor = processor.image_processor
+        super().build_preprocessor()
         # build the model with empty weights. The model will be used in
         # `preprocess` to get the image token number
         from accelerate import init_empty_weights
@@ -94,10 +88,10 @@ class LlavaNextVisionModel(LlavaHfVisionModel):
                     patch_size=self.hf_config.vision_config.image_size,
                 ) for imsize in result['image_sizes']
             ]
-            # TODO(remove hardcode 576)
+
             hidden_size = self.hf_config.text_config.hidden_size
             fake_image_features = torch.zeros(
-                [image_num_patches[0], 576, hidden_size])
+                [image_num_patches[0], self.n_token_per_image, hidden_size])
             image_sizes = result['image_sizes']
             image_newline = torch.randn(self.hf_config.text_config.hidden_size)
             strategy = self.hf_config.vision_feature_select_strategy

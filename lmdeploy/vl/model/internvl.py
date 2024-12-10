@@ -175,10 +175,7 @@ class InternVLVisionModel(VisonModel):
             pixel_values = [
                 x['pixel_values'] for x in inputs[idx:idx + max_batch_size]
             ]
-            split = [
-                x['pixel_values'].shape[0]
-                for x in inputs[idx:idx + max_batch_size]
-            ]
+            split = [x.shape[0] for x in pixel_values]
             pixel_values = torch.cat(pixel_values, dim=0)
             pixel_values = pixel_values.to(self.model.device,
                                            dtype=torch.float16)
@@ -202,7 +199,7 @@ class InternVLVisionModel(VisonModel):
             pixel_values = [
                 x['pixel_values'] for x in inputs[idx:idx + max_batch_size]
             ]
-            pixel_values = torch.cat(outputs, dim=0)
+            pixel_values = torch.cat(pixel_values, dim=0)
             pixel_values = pixel_values.to(self.model.device,
                                            dtype=torch.float16)
             logger.info(f'vision forward shape: {pixel_values.shape}')

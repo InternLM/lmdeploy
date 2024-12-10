@@ -197,20 +197,24 @@ class Xcomposer2VisionModel(VisonModel):
     def _preprocess_2d5(self, image: Image, params: Dict) -> Dict:
         """image preprocessing for internlm-xcomposer2d5-7b."""
         hd_num = params.get('hd_num', 24)
-        pixel_values = self.HD_transform(image, hd_num=hd_num)
-        pixel_values = self.vis_processor(pixel_values).unsqueeze(0).half()
-        return pixel_values
+        image = self.HD_transform(image, hd_num=hd_num)
+        pixel_values = self.vis_processor(image).unsqueeze(0).half()
+        w, h = image.size
+        n_token_per_image = int((h * w + 1) * 400 + 1 + (h + 1) * 20)
+        return pixel_values, n_token_per_image
 
     def _preprocess_7b(self, image: Image, params: Dict) -> Dict:
         """image preprocessing for internlm-xcomposer2-7b."""
         pixel_values = self.vis_processor(image).unsqueeze(0).half()
-        return pixel_values
+        return pixel_values, 256
 
     def _preprocess_4khd_7b(self, image: Image, params: Dict) -> Dict:
         """image preprocessing for internlm-xcomposer2-4khd-7b."""
-        pixel_values = self.HD_transform(image, hd_num=25)
-        pixel_values = self.vis_processor(pixel_values).unsqueeze(0).half()
-        return pixel_values
+        image = self.HD_transform(image, hd_num=25)
+        pixel_values = self.vis_processor(image).unsqueeze(0).half()
+        w, h = image.size
+        n_token_per_image = int((h * w + 1) * 144 + 1 + (h + 1) * 12)
+        return pixel_values, n_token_per_image
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """refer to `super().preprocess() for spec."""
@@ -218,11 +222,11 @@ class Xcomposer2VisionModel(VisonModel):
         outputs = []
         for image, params in images:
             image = image.convert('RGB')
-            pixel_values = self.preprocess_func(image, params)
+            pixel_values, n_token = self.preprocess_func(image, params)
             outputs.append(
                 dict(pixel_values=pixel_values,
                      image_size=image.size,
-                     image_tokens=576,
+                     image_tokens=n_token,
                      image_token_id=0))
         messages.append(dict(role='preprocess', content=outputs))
         return messages
