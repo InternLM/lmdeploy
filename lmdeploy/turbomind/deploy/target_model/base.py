@@ -78,6 +78,17 @@ class BaseOutputModel(ABC):
             self.model_config.expert_inter_size = _pad_inter_size(
                 self.model_config.expert_inter_size,
                 self.model_config.group_size, self.tensor_para_size)
+
+        # head_num is divisble by tp but kv_head_num is not
+        # and tp is divisble by kv_head_num
+        assert self.model_config.head_num % self.tensor_para_size == 0
+        self.repeat_kv = 0
+        if (self.tensor_para_size > self.model_config.kv_head_num and
+                self.tensor_para_size % self.model_config.kv_head_num == 0):
+            self.repeat_kv = (self.tensor_para_size //
+                              self.model_config.kv_head_num)
+            self.model_config.kv_head_num = self.tensor_para_size
+
         self.model_config.verify()
         assert self.model_config.kv_head_num % self.tensor_para_size == 0
 
