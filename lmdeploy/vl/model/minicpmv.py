@@ -3,7 +3,6 @@ import itertools
 import warnings
 from typing import Dict, List
 
-import numpy as np
 import torch
 from PIL.Image import Image
 from transformers import AutoConfig, AutoModelForCausalLM
@@ -109,12 +108,13 @@ class MiniCPMVModel(VisonModel):
         # pixel_values, tgt_sizes are list of torch tensors
         pixel_values, tgt_sizes = self._reshape_by_patch(slice_images)
         num_patches = len(pixel_values)
-        return dict(pixel_values=pixel_values,
-                    tgt_sizes=tgt_sizes,
-                    best_grid=best_grid,
-                    num_patches=num_patches,
-                    image_tokens=1,
-                    image_token_id=0)
+        return dict(
+            pixel_values=pixel_values,  # a list
+            tgt_sizes=tgt_sizes,  # a list
+            best_grid=best_grid,
+            num_patches=num_patches,
+            image_tokens=1,
+            image_token_id=0)
 
     def _preprocess_v2_6(self, image: Image, params: Dict = None) -> Dict:
         """image preprocessing for MiniCPM-V-2_6."""
@@ -130,7 +130,6 @@ class MiniCPMVModel(VisonModel):
         tgt_sizes = [torch.as_tensor(x) for x in tgt_sizes]
         grid = self.image_processor.get_sliced_grid(
             image_size=image.size, max_slice_nums=max_slice_nums)
-
         return dict(
             pixel_values=pixel_values,  # a list
             tgt_sizes=tgt_sizes,  # a list
@@ -173,12 +172,24 @@ class MiniCPMVModel(VisonModel):
         Return:
             the message list with forwarding results included
         """
-        for i, message in enumerate(messages):
-            if 'preprocess' not in message.keys():
-                continue
-            inputs = message['preprocess']
-            tgt_sizes = [x['tgt_sizes'] for x in inputs]
-            pixel_values = [x['pixel_values'] for x in inputs]
+        # collect preprocess results into a list
+        inputs = []
+        inputs = [
+            x['preprocess'] for x in messages if 'preprocess' in x.keys()
+        ]
+        # flatten the list
+        inputs = list(itertools.chain(*inputs))
+        outputs = []
+        for idx in range(0, len(inputs), max_batch_size):
+            tgt_sizes = [
+                x['tgt_sizes'] for x in inputs[idx:idx + max_batch_size]
+            ]
+            pixel_values = [
+                x['pixel_values'] for x in inputs[idx:idx + max_batch_size]
+            ]
+            num_patches = [
+                x['num_patches'] for x in inputs[idx:idx + max_batch_size]
+            ]
             # flatten the list
             tgt_sizes = list(itertools.chain(*tgt_sizes))
             pixel_values = list(itertools.chain(*pixel_values))
@@ -207,6 +218,11 @@ class MiniCPMVModel(VisonModel):
                 embeddings = self.model.vpm(
                     pixel_values.type(torch.half),
                     patch_attention_mask=patch_attn_mask).last_hidden_state
+                embeddings = self.model.resampler(embeddings, tgt_sizes)
+                embeddings = torch.split(embeddings, num_patches, 0)
+                for embedding in embeddings:
+                    embedding = embedding.split(1, dim=0)
+                    outputs.extend([x.squeeze() for x in embedding])
             else:
                 for j in range(B):
                     patch_attn_mask[j, 0, :tgt_sizes[j][0] *
@@ -215,8 +231,12 @@ class MiniCPMVModel(VisonModel):
                     pixel_values.type(torch.half),
                     patch_attention_mask=patch_attn_mask,
                     tgt_sizes=tgt_sizes).last_hidden_state
-            embeddings = self.model.resampler(embeddings, tgt_sizes)
-            messages[i].update(dict(forward=embeddings))
+                embeddings = self.model.resampler(embeddings, tgt_sizes)
+                embeddings = torch.split(embeddings, num_patches, 0)
+                for embedding in embeddings:
+                    embedding = embedding.split(1, dim=0)
+                    outputs.extend([_ for _ in embedding])
+        messages.append(dict(role='forward', content=outputs))
         return messages
 
     def proc_messages(self, messages, chat_template, sequence_start):
@@ -230,6 +250,7 @@ class MiniCPMVModel(VisonModel):
                 continue
             if 'preprocess' not in message.keys():
                 continue
+            prompts = []
             for x in message['preprocess']:
                 prompt = f'<image>{IMAGE_TOKEN}</image>'
                 if x.get('use_image_id', False):
@@ -247,11 +268,12 @@ class MiniCPMVModel(VisonModel):
                             [f'<slice>{IMAGE_TOKEN}</slice>' * grid[0]] *
                             grid[1])
                         prompt = prompt + slice
-                prompt += '\n'
+                        prompt += '\n'
+                prompts.append(prompt)
             content = [
                 x['text'] for x in message['content'] if x['type'] == 'text'
             ]
-            prompt += content[0]
+            prompt = ''.join(prompts) + content[0]
             prompt_messages.append(dict(role='user', content=prompt))
         prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
         return prompt, IMAGE_TOKEN
@@ -265,45 +287,5 @@ class MiniCPMVModel(VisonModel):
     def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):
         prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template,
                                                  sequence_start)
-        features = []
-        for message in messages:
-            if 'preprocess' not in message.keys():
-                continue
-            assert 'forward' in message.keys()
-            inputs = message.pop('preprocess', None)
-            embeddings = message.pop('forward', None)
-            num_patches = [x['num_patches'] for x in inputs]
-            embeddings = torch.split(embeddings, num_patches, 0)
-            embeddings = [emmbedding.split(1) for emmbedding in embeddings]
-            embeddings = list(itertools.chain(*embeddings))
-            features.extend(embeddings)
-
-        # flatten the list
-        features = list(itertools.chain(*features))
-        features = [x.cpu().numpy() for x in features]
-
-        # split prompt into segments and validate data
-        segs = prompt.split(IMAGE_TOKEN)
-        assert len(segs) == len(features) + 1, (
-            f'the number of {IMAGE_TOKEN} is not equal '
-            f'to input images, {len(segs) - 1} vs {len(features)}')
-
-        # tokenizer prompt, and get input_embeddings and input_embedding_ranges
-        input_ids = []
-        begins = []
-        ends = []
-        IMAGE_DUMMY_TOKEN_INDEX = 0
-        for i, seg in enumerate(segs):
-            if i > 0 and i <= len(features):
-                image_dim = features[i - 1].shape[0]
-                begins.append(len(input_ids))
-                ends.append(begins[-1] + image_dim)
-                input_ids.extend([IMAGE_DUMMY_TOKEN_INDEX] * image_dim)
-            seg_ids = tokenizer.encode(seg,
-                                       add_bos=((i == 0) and sequence_start))
-            input_ids.extend(seg_ids)
-        ranges = np.stack([begins, ends], axis=1).tolist()
-        return dict(prompt=prompt,
-                    input_ids=input_ids,
-                    input_embeddings=features,
-                    input_embedding_ranges=ranges)
+        return super().to_turbomind_aux(messages, prompt, IMAGE_TOKEN,
+                                        tokenizer, sequence_start)
