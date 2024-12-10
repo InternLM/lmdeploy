@@ -218,11 +218,6 @@ class MiniCPMVModel(VisonModel):
                 embeddings = self.model.vpm(
                     pixel_values.type(torch.half),
                     patch_attention_mask=patch_attn_mask).last_hidden_state
-                embeddings = self.model.resampler(embeddings, tgt_sizes)
-                embeddings = torch.split(embeddings, num_patches, 0)
-                for embedding in embeddings:
-                    embedding = embedding.split(1, dim=0)
-                    outputs.extend([x.squeeze() for x in embedding])
             else:
                 for j in range(B):
                     patch_attn_mask[j, 0, :tgt_sizes[j][0] *
@@ -231,11 +226,12 @@ class MiniCPMVModel(VisonModel):
                     pixel_values.type(torch.half),
                     patch_attention_mask=patch_attn_mask,
                     tgt_sizes=tgt_sizes).last_hidden_state
-                embeddings = self.model.resampler(embeddings, tgt_sizes)
-                embeddings = torch.split(embeddings, num_patches, 0)
-                for embedding in embeddings:
-                    embedding = embedding.split(1, dim=0)
-                    outputs.extend([_ for _ in embedding])
+
+            embeddings = self.model.resampler(embeddings, tgt_sizes)
+            embeddings = torch.split(embeddings, num_patches, 0)
+            for embedding in embeddings:
+                embedding = embedding.split(1, dim=0)
+                outputs.extend([x.squeeze() for x in embedding])
         messages.append(dict(role='forward', content=outputs))
         return messages
 
@@ -269,6 +265,9 @@ class MiniCPMVModel(VisonModel):
                             grid[1])
                         prompt = prompt + slice
                         prompt += '\n'
+                else:
+                    prompt = (prompt +
+                              '\n' if self.version == '2.6' else prompt)
                 prompts.append(prompt)
             content = [
                 x['text'] for x in message['content'] if x['type'] == 'text'
