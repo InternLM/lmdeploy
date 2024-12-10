@@ -3,7 +3,7 @@ import asyncio
 import copy
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import torch
@@ -84,12 +84,14 @@ class Engine:
     Args:
         model_path (str): The hugging face model path.
         engine_config (PytorchEngineConfig): The config of the Engine.
+        speculative_model (str): The path of the speculative model.
         trust_remote_code (bool): Trust remote code.
     """
 
     def __init__(self,
                  model_path: str,
                  engine_config: PytorchEngineConfig = None,
+                 speculative_model: Optional[str] = None,
                  trust_remote_code: bool = True) -> None:
         if engine_config is None:
             engine_config = PytorchEngineConfig()
@@ -151,6 +153,7 @@ class Engine:
                 model_path,
                 cache_config=cache_config,
                 backend_config=backend_config,
+                speculative_model=speculative_model,
                 trust_remote_code=trust_remote_code,
                 adapters=adapters,
                 tp=self.tp,
@@ -179,6 +182,7 @@ class Engine:
     def from_pretrained(cls,
                         pretrained_model_name_or_path: str,
                         engine_config: PytorchEngineConfig = None,
+                        speculative_model: Optional[str] = None,
                         trust_remote_code: bool = True,
                         **kwargs):
         """lmdeploy python inference engine.
@@ -195,12 +199,14 @@ class Engine:
                       "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
                       and so on.
             engine_config (PytorchEngineConfig): Pytorch engine config.
+            speculative_model (str): The path of the speculative model.
             trust_remote_code (bool): Trust remote code
         """
         if len(kwargs) > 0:
             logger.debug(f'Get unexpected kwargs: {kwargs}')
         return cls(model_path=pretrained_model_name_or_path,
                    engine_config=engine_config,
+                   speculative_model=speculative_model,
                    trust_remote_code=trust_remote_code)
 
     @property
@@ -535,7 +541,10 @@ class Engine:
         # one more step to cache last token(stop word)
         stopped = num_appendable_ids < 0
         if stop_words is not None:
-            sw_stopped = (token_ids[:, None] == stop_words).any(1)
+            if len(token_ids.shape) == 1:
+                token_ids = token_ids[:, None]
+            # TODO speculative model supports multiple stop word
+            sw_stopped = (token_ids == stop_words).any(1)
             one_ids = torch.clamp_max(num_appendable_ids, 0)
             num_appendable_ids = torch.where(sw_stopped, one_ids,
                                              num_appendable_ids)
@@ -566,6 +575,17 @@ class Engine:
 
         return next_token_ids
 
+    def extract_tokens(self, token_ids, eos_token_ids):
+        """Token list containing eos."""
+        if not isinstance(token_ids, np.ndarray):
+            return [token_ids], token_ids in eos_token_ids
+        for i, token_id in enumerate(token_ids):
+            if token_id in eos_token_ids:
+                return token_ids[:i], True
+            if token_id == -1:
+                return token_ids[:i], False
+        return token_ids, False
+
     @logging_timer('UpdateRunning', logger)
     def update_running(self, running: SeqList, next_token_ids: torch.Tensor,
                        stopped: torch.Tensor):
@@ -575,12 +595,12 @@ class Engine:
         for token, msg, stop in zip(next_token_ids, running, stopped):
             if msg.status != MessageStatus.RUNNING:
                 continue
-            update_token = token
-            stop = stop or token in eos_token_id
+            update_token, eos_stop = self.extract_tokens(token, eos_token_id)
+            stop = stop or eos_stop
             if stop:
                 update_token = _EMPTY_TOKEN
             else:
-                msg.num_new_tokens += 1
+                msg.num_new_tokens += len(update_token)
             msg.update_token_ids(update_token)
             if stop:
                 msg.status = MessageStatus.STOPPED
@@ -663,14 +683,24 @@ class Engine:
             if not return_logits and not inputs.is_decoding:
                 last_token_loc = inputs.seq_length.cumsum(0) - 1
                 ret['hidden_states'] = ret['hidden_states'][:, last_token_loc]
+                if 'spec_hidden_states' in ret:
+                    ret['spec_hidden_states'] = ret[
+                        'spec_hidden_states'][:, last_token_loc]
         else:
             ret = await __long_context_single_forward(inputs)
             if not return_logits and not inputs.is_decoding:
                 last_token_loc = [-1]
                 ret['hidden_states'] = ret['hidden_states'][:, last_token_loc]
+                if 'spec_hidden_states' in ret:
+                    ret['spec_hidden_states'] = ret[
+                        'spec_hidden_states'][:, last_token_loc]
 
         hidden_states = ret.pop('hidden_states')
+        spec_hidden_states = ret.pop('spec_hidden_states', None)
         logits = self.model_agent.get_logits(hidden_states)
+        if spec_hidden_states is not None:
+            spec_logits = self.model_agent.get_spec_logits(spec_hidden_states)
+            ret['spec_logits'] = spec_logits
         ret['logits'] = logits
         return ret
 
@@ -682,11 +712,24 @@ class Engine:
         def __get_out_token_ids(token: torch.Tensor, msg: SchedulerSequence,
                                 stopped: bool):
             """check if output is necessary."""
-            if stopped:
-                return []
-            if token in msg.sampling_param.stop_words:
-                return []
-            return [token]
+            if isinstance(token, list):
+                idx = len(token)
+                for i, t in enumerate(token):
+                    if t == -1:
+                        idx = i
+                        break
+                if stopped:
+                    idx = min(
+                        idx,
+                        msg.sampling_param.max_new_tokens - msg.num_new_tokens)
+                token = token[:idx]
+            else:
+                if stopped:
+                    return []
+                if token in msg.sampling_param.stop_words:
+                    return []
+                token = [token]
+            return token
 
         def __get_q_start_loc():
             inputs = self._inputs
@@ -789,6 +832,42 @@ class Engine:
                 logits, all_ids, guided_input_ids, sampling_inputs, inputs,
                 num_ignore_eos > 0)
             num_ignore_eos = num_ignore_eos - 1
+            if 'spec_logits' in output:
+                spec_logits = output['spec_logits']
+                (cart_candidates, tree_candidates, medusa_attn_mask,
+                 medusa_position_ids,
+                 retrieve_indices) = self.model_agent.generate_candidates(
+                     spec_logits, next_token_ids)
+                bs, _, tree_decode_len = tree_candidates.shape
+                spec_inputs = copy.deepcopy(inputs)
+                spec_inputs.input_ids = tree_candidates.flatten().unsqueeze(0)
+                spec_inputs.history_lengths += spec_inputs.seq_length
+                spec_inputs.seq_length = torch.ones_like(
+                    spec_inputs.seq_length) * tree_decode_len
+                spec_inputs.medusa_attn_mask = medusa_attn_mask
+                spec_inputs.medusa_position_ids = medusa_position_ids
+                logits = await self.model_agent.tree_decoding(
+                    spec_inputs,
+                    swap_in_map=swap_in_map,
+                    swap_out_map=swap_out_map,
+                    retrieve_indices=retrieve_indices)
+                # NOTE currently only greedy sampling supported
+                # besides, we used the bonus token id predicted during
+                # tree decoding while original Medusa did not
+                proposal_len = cart_candidates.shape[-1]
+                greedy_token_ids = logits.argmax(-1)
+                posterior_mask = cart_candidates[..., 1:] == greedy_token_ids[
+                    ..., :-1]
+                accept_len, best_idx = torch.cumprod(posterior_mask,
+                                                     dim=-1).sum(-1).max(-1)
+                greedy_token_ids = greedy_token_ids[torch.arange(bs), best_idx]
+                next_token_ids = torch.cat(
+                    [next_token_ids[:, None], greedy_token_ids], -1)
+                mask_idx = torch.arange(
+                    proposal_len + 1,
+                    device=next_token_ids.device).expand_as(next_token_ids)
+                next_token_ids[mask_idx > (accept_len[:, None] + 1)] = -1
+                num_appendable_ids = num_appendable_ids - accept_len - 2
 
             # stopping criteria
             stopped, num_appendable_ids = self._batch_stopping_criteria(
@@ -953,6 +1032,8 @@ class Engine:
                 schedule_output = self.scheduler.schedule(
                     is_prefill=prefill, prealloc_size=prefill_interval)
 
+            if self.model_agent.speculative_model is not None:
+                prefill = True
             in_que.put_nowait((prefill, schedule_output))
             finish = False
             while not finish:
