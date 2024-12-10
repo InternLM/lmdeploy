@@ -4,16 +4,12 @@ import sys
 
 from setuptools import find_packages, setup
 
-npu_available = False
-try:
-    import torch_npu
-
-    npu_available = torch_npu.npu.is_available()
-except ImportError:
-    pass
-
 pwd = os.path.dirname(__file__)
 version_file = 'lmdeploy/version.py'
+
+
+def get_backend():
+    return os.getenv('LMDEPLOY_BACKEND', 'cuda')
 
 
 def readme():
@@ -154,16 +150,11 @@ if __name__ == '__main__':
         setup_requires=parse_requirements('requirements/build.txt'),
         tests_require=parse_requirements('requirements/test.txt'),
         install_requires=parse_requirements(
-            'requirements/runtime_ascend.txt'
-            if npu_available else 'requirements/runtime.txt'),
+            f'requirements/runtime_{get_backend()}.txt'),
         extras_require={
-            'all':
-            parse_requirements('requirements_ascend.txt'
-                               if npu_available else 'requirements.txt'),
-            'lite':
-            parse_requirements('requirements/lite.txt'),
-            'serve':
-            parse_requirements('requirements/serve.txt')
+            'all': parse_requirements(f'requirements_{get_backend()}.txt'),
+            'lite': parse_requirements('requirements/lite.txt'),
+            'serve': parse_requirements('requirements/serve.txt')
         },
         has_ext_modules=check_ext_modules,
         classifiers=[
