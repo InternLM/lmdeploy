@@ -17,6 +17,7 @@ void invokeProcessKV_v2(char**       blocks,
                         const int*   cu_k_len,
                         const int*   cu_block_num,
                         const T*     cos_sin,
+                        const int*   q2p,
                         int          rope_dim,
                         int64_t      stride_b,
                         int64_t      stride_c,
@@ -43,6 +44,7 @@ void invokeProcessKV_v2_(const AttentionParams<T>& params)
                        params.cu_k_len,
                        params.block_iter_params.cu_block_nums,
                        params.cos_sin,
+                       params.q2p,
                        params.rotary_embedding_dim,
                        0,                                     // stride b
                        params.stride / params.size_per_head,  // stride c

@@ -221,7 +221,7 @@ struct AttentionUniversal {
                     }
                     if (params.cos_sin) {
                         T*            cos_sin = params.cos_sin;
-                        const int64_t index   = qi * params.rotary_embedding_dim + di;
+                        const int64_t index   = params.q2p[qi] * params.rotary_embedding_dim + di;
                         Ldg(vec_cs[s][c], &cos_sin[index]);
                     }
                 }

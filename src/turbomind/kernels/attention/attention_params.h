@@ -57,9 +57,10 @@ struct AttentionParams {
     float inv_sqrt_dh;
 
     // rotary embedding
-    T*  cos_sin;
-    int rotary_embedding_dim;
-    int max_position_embeddings;
+    T*   cos_sin;
+    int* q2p;
+    int  rotary_embedding_dim;
+    int  max_position_embeddings;
     // log(n) attention
     bool use_logn_attn;
 

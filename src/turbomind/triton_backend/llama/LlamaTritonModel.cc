@@ -399,7 +399,7 @@ LlamaTritonModel<T>::createSharedModelInstance(int                              
                                               lora_param_,
                                               tensor_para,
                                               *ctx,
-                                              engine_param_.max_batch_size,
+                                              engine_param_,
                                               weights_[device_id]);
 
     auto engine = std::make_unique<Engine<T>>(engine_param_,  //

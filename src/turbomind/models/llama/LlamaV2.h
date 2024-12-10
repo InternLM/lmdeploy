@@ -49,7 +49,7 @@ public:
             const LoraParam&                lora,
             const NcclParam&                tp,
             const Context<T>&               ctx,
-            int                             max_batch_size,
+            const EngineParam&              engine,
             std::shared_ptr<LlamaWeight<T>> weights);
 
     size_t vocab_size() const noexcept

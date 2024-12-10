@@ -65,7 +65,7 @@ LlamaV2<T>::LlamaV2(const ModelParam&               model,
                     const LoraParam&                lora,
                     const NcclParam&                tp,
                     const Context<T>&               ctx,
-                    int                             max_batch_size,
+                    const EngineParam&              engine,
                     std::shared_ptr<LlamaWeight<T>> weights):
     param_(model),
     attn_param_(attn),
@@ -93,7 +93,7 @@ LlamaV2<T>::LlamaV2(const ModelParam&               model,
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
-    unified_decoder_ = std::make_unique<UnifiedDecoder<T>>(model, attn, moe, lora, tp, ctx);
+    unified_decoder_ = std::make_unique<UnifiedDecoder<T>>(model, attn, moe, lora, tp, engine, ctx);
 
     dynamic_decode_layer_ = std::make_unique<DynamicDecodeLayer<float>>(vocab_size_,
                                                                         vocab_size_padded_,
@@ -104,7 +104,7 @@ LlamaV2<T>::LlamaV2(const ModelParam&               model,
                                                                         is_free_buffer_after_forward_,
                                                                         (cudaDeviceProp*)&ctx.cuda_device_prop);
 
-    unified_decoder_->allocateBuffer(max_batch_size);
+    unified_decoder_->allocateBuffer(engine.max_batch_size);
 }
 
 template<typename T>

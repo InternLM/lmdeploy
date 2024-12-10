@@ -21,6 +21,7 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**      blocks,
                                                     const int*  cu_k_len,
                                                     const int*  cu_block_num,
                                                     const T*    cos_sin,
+                                                    const int*  q2p,
                                                     int         rope_dim,
                                                     int64_t     stride_b,
                                                     int64_t     stride_c,
@@ -123,7 +124,7 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**      blocks,
             PRAGMA_UNROLL
             for (int c = 0; c < ITER_C; ++c) {
                 const int     di    = offset.x + c * Map::kDeltaC;
-                const int64_t index = (qi_beg + qi) * rope_dim + di;
+                const int64_t index = q2p[qi_beg + qi] * rope_dim + di;
                 if (qi < q_len) {
                     Ldg(vec_cs[s][c], &cos_sin[index]);
                 }
@@ -205,6 +206,7 @@ void invokeProcessKV_v2(char**       blocks,
                         const int*   cu_k_len,
                         const int*   cu_block_num,
                         const T*     cos_sin,
+                        const int*   q2p,
                         int          rope_dim,
                         int64_t      stride_b,
                         int64_t      stride_c,
@@ -242,6 +244,7 @@ void invokeProcessKV_v2(char**       blocks,
                                                                               cu_k_len,
                                                                               cu_block_num,
                                                                               cos_sin,
+                                                                              q2p,
                                                                               rope_dim,
                                                                               stride_b,
                                                                               stride_c,
@@ -285,6 +288,7 @@ void invokeProcessKV_v2(char**       blocks,
                                      const int*   cu_k_len,                                                            \
                                      const int*   cu_block_num,                                                        \
                                      const type*  cos_sin,                                                             \
+                                     const int*   q2p,                                                                 \
                                      int          rope_dim,                                                            \
                                      int64_t      stride_b,                                                            \
                                      int64_t      stride_c,                                                            \

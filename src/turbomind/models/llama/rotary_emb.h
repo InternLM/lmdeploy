@@ -10,7 +10,10 @@ RopeType GetRoPEType(const std::string& type);
 struct RotaryEmbeddingV2Param {
     float* rope_theta;
     int*   q_len;
-    int*   k_ken;
+    int*   k_len;
+    int*   h_q_len;
+    int*   h_k_len;
+    int    dc_size;
     int    batch_size;
     int    token_num;
 };
@@ -31,16 +34,22 @@ struct InnerLlama3RopeParam {
 template<typename T>
 struct RotaryEmbeddingV2 {
 
-    RotaryEmbeddingV2(const AttentionParam& param, cudaStream_t stream, IAllocator* allocator);
+    RotaryEmbeddingV2(const AttentionParam& param, int session_len, cudaStream_t stream, IAllocator* allocator);
+
+    void computeCache(int session_len);
+
+    void updateCache(const RotaryEmbeddingV2Param& params);
 
     void freeBuffer();
 
-    void allocateBuffer(size_t token_num);
+    void allocateBuffer(int token_num);
 
     ~RotaryEmbeddingV2()
     {
         freeBuffer();
     }
+
+    void updateMapping(const RotaryEmbeddingV2Param& params);
 
     void forward(const RotaryEmbeddingV2Param& params);
 
@@ -56,8 +65,16 @@ struct RotaryEmbeddingV2 {
         InnerLlama3RopeParam llama3_;
     };
 
+    int*   q2b_;
+    void*  d_temp_storage_{nullptr};
+    size_t temp_storage_bytes_{};
+    float  rope_base_{};
+    int    cached_len_{};
+
     // output
-    T* cos_sin_;  // num_token x dim, (cos, sin, ...)
+    T* cos_sin_;  // num_token  x dim, (cos, sin, ...) for dynamic
+                  // cached_len x dim, (cos, sin, ...) for other rope
+    int* q2p_;
 };
 
 };  // namespace turbomind

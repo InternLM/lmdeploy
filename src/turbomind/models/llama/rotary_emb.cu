@@ -1,23 +1,13 @@
 // Copyright (c) OpenMMLab. All rights reserved.
+#include "src/turbomind/kernels/core/array.h"
+#include "src/turbomind/kernels/core/array_ops.h"
+#include "src/turbomind/kernels/core/math.h"
+#include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/rotary_emb.h"
+#include <cub/device/device_scan.cuh>
 #include <map>
 
 namespace turbomind {
-
-__device__ int get_batch_id(int qi, int* q_len, int batch_size)
-{
-    int result{};
-    int end = (batch_size + blockDim.x - 1) / blockDim.x * blockDim.x;
-    for (int i = threadIdx.x; i < end; i += blockDim.x) {
-        int  prefix_sum = (i < batch_size) ? q_len[i + 1] : q_len[batch_size];
-        auto count      = __syncthreads_count(prefix_sum > qi);
-        if (count != 0) {
-            result = i / blockDim.x * blockDim.x + blockDim.x - count + 1;
-            break;
-        }
-    }
-    return result;
-}
 
 __inline__ __device__ float compute_default_parameters(float base, float dim, int di, float factor)
 {
@@ -26,86 +16,124 @@ __inline__ __device__ float compute_default_parameters(float base, float dim, in
     return inv_freq;
 }
 
-template<typename T>
-__global__ void rotaryEmbeddingDefault(
-    const float* rope_base, int* q_len, int* k_len, int token_num, int batch_size, int dim, float factor, T* cos_sin)
+struct CosSinDefault {
+    __device__ float2 operator()(float base, float dim, float di, float factor, float p)
+    {
+        float c, s;
+        float inv_freq = compute_default_parameters(base, dim, di, factor);
+        sincosf(p * inv_freq, &s, &c);
+        return {c, s};
+    }
+};
+
+struct CosSinLlama3 {
+    InnerLlama3RopeParam param_;
+    CosSinLlama3(InnerLlama3RopeParam param): param_(param) {}
+    __device__ float2 operator()(float base, float dim, float di, float factor, float p)
+    {
+        float c, s;
+        float inv_freq = compute_default_parameters(base, dim, di, factor);
+        auto  smooth   = fmaxf(0.f, fminf(1.f, param_.alpha * inv_freq - param_.beta));
+        inv_freq       = (1 - smooth) * inv_freq * param_.inv_scaling_factor + smooth * inv_freq;
+        sincosf(p * inv_freq, &s, &c);
+        return {c, s};
+    }
+};
+
+struct CosSinYarn {
+    InnerYarnRopeParam param_;
+    CosSinYarn(InnerYarnRopeParam param): param_(param) {}
+    __device__ float2 operator()(float base, float dim, float di, float factor, float p)
+    {
+        float c, s;
+        float inv_freq = compute_default_parameters(base, dim, di, factor);
+        float alpha    = 2 * di * param_.ramp_inv_factor_div_2 - param_.ramp_inv_factor_mul_min;
+        alpha          = fmaxf(0.f, fminf(1.f, alpha));
+        inv_freq       = inv_freq - inv_freq * alpha * param_.inv_scaling_factor;
+        sincosf(p * inv_freq, &s, &c);
+        c *= param_.attention_factor;
+        s *= param_.attention_factor;
+        return {c, s};
+    }
+};
+
+template<typename T, int items_per_thread, class Func>
+__global__ void rotaryEmbedding(const float rope_base, int token_num, int dim, float factor, Func func, T* cos_sin)
 {
-    int qi = blockIdx.x;
-    int di = threadIdx.x;
+    int thread_id      = threadIdx.x + blockIdx.x * blockDim.x;
+    int thread_per_tok = dim / items_per_thread;
+    int pi             = thread_id / thread_per_tok;
+    int di             = thread_id % thread_per_tok * items_per_thread;
+    if (pi >= token_num || di >= dim) {
+        return;
+    }
 
-    int   bid         = get_batch_id(qi, q_len, batch_size);
-    int   history_len = (k_len[bid] - k_len[bid - 1]) - (q_len[bid] - q_len[bid - 1]);
-    float base        = rope_base[bid - 1];
-    float ti          = history_len + qi - q_len[bid - 1];
-
-    float inv_freq = compute_default_parameters(base, dim, di * 2, factor);
-    float c, s;
-    sincosf(ti * inv_freq, &s, &c);
-    cos_sin[dim * qi + 2 * di]     = (T)c;
-    cos_sin[dim * qi + 2 * di + 1] = (T)s;
+    Array<T, items_per_thread> cs;
+    for (int i = 0; i < items_per_thread; i += 2) {
+        float2 v  = func(rope_base, dim, di + i, factor, pi);
+        cs[i]     = (T)v.x;
+        cs[i + 1] = (T)v.y;
+    }
+    Store(&cos_sin[dim * pi + di], cs);
 }
 
-template<typename T>
-__global__ void rotaryEmbeddingLlama3(const float* rope_base,
-                                      int*         q_len,
-                                      int*         k_len,
-                                      int          token_num,
-                                      int          batch_size,
-                                      int          dim,
-                                      float        inv_scaling_factor,
-                                      float        alpha,
-                                      float        beta,
-                                      T*           cos_sin)
+__global__ void computeQ2B(int* q2b, int* q_len, int token_num, int batch_size)
 {
-    int qi = blockIdx.x;
-    int di = threadIdx.x;
-
-    int   bid         = get_batch_id(qi, q_len, batch_size);
-    int   history_len = (k_len[bid] - k_len[bid - 1]) - (q_len[bid] - q_len[bid - 1]);
-    float base        = rope_base[bid - 1];
-    float ti          = history_len + qi - q_len[bid - 1];
-
-    float inv_freq = compute_default_parameters(base, dim, di * 2, 1.0f);
-    auto  smooth   = fmaxf(0.f, fminf(1.f, alpha * inv_freq - beta));
-    inv_freq       = (1 - smooth) * inv_freq * inv_scaling_factor + smooth * inv_freq;
-    float c, s;
-    sincosf(ti * inv_freq, &s, &c);
-    cos_sin[dim * qi + 2 * di]     = (T)c;
-    cos_sin[dim * qi + 2 * di + 1] = (T)s;
+    for (int i = threadIdx.x + blockIdx.x * blockDim.x; i < token_num; i += blockDim.x * gridDim.x) {
+        q2b[i] = 0;
+    }
+    int b = threadIdx.x + blockIdx.x * blockDim.x;
+    if (b < batch_size) {
+        q2b[q_len[b]] = b;
+    }
 }
 
-template<typename T>
-__global__ void rotaryEmbeddingYarn(const float* rope_base,
-                                    int*         q_len,
-                                    int*         k_len,
-                                    int          token_num,
-                                    int          batch_size,
-                                    int          dim,
-                                    float        ramp_inv_factor_div_2,
-                                    float        ramp_inv_factor_mul_min,
-                                    float        inv_scaling_factor,
-                                    float        attention_scaling,
-                                    T*           cos_sin)
+template<int iterms_per_thread>
+__global__ void computeQ2P(const int* q2b, const int* q_len, const int* k_len, int token_num, int* q2p)
 {
-    int qi = blockIdx.x;
-    int di = threadIdx.x;
+    Array<int, iterms_per_thread> p;
 
-    int   bid         = get_batch_id(qi, q_len, batch_size);
-    int   history_len = (k_len[bid] - k_len[bid - 1]) - (q_len[bid] - q_len[bid - 1]);
-    float base        = rope_base[bid - 1];
-    float ti          = history_len + qi - q_len[bid - 1];
+    size_t thread_id = threadIdx.x + blockIdx.x * blockDim.x;
+    size_t index     = thread_id * iterms_per_thread;
+    for (int i = 0; i < iterms_per_thread; ++i) {
+        int qi = index + i;
+        if (qi < token_num) {
+            int bid         = q2b[qi] + 1;
+            int history_len = (k_len[bid] - k_len[bid - 1]) - (q_len[bid] - q_len[bid - 1]);
+            int pi          = history_len + qi - q_len[bid - 1];
+            p[i]            = pi;
+        }
+    }
+    if (index < token_num) {
+        Store(&q2p[index], p);
+    }
+}
 
-    float inv_freq = compute_default_parameters(base, dim, di * 2, 1.0f);
-    float alpha    = 2 * di * ramp_inv_factor_div_2 - ramp_inv_factor_mul_min;
-    alpha          = fmaxf(0.f, fminf(1.f, alpha));
-    inv_freq       = inv_freq - inv_freq * alpha * inv_scaling_factor;
+template<typename T, int items_per_thread>
+__global__ void rotaryEmbeddingDynamic(
+    const int* q2b, const int* q2p, const float* rope_base, int token_num, int dim, float factor, T* cos_sin)
+{
+    int thread_id      = threadIdx.x + blockIdx.x * blockDim.x;
+    int thread_per_tok = dim / items_per_thread;
+    int qi             = thread_id / thread_per_tok;
+    int di             = thread_id % thread_per_tok * items_per_thread;
+    if (qi >= token_num || di >= dim) {
+        return;
+    }
 
-    float c, s;
-    sincosf(ti * inv_freq, &s, &c);
-    c *= attention_scaling;
-    s *= attention_scaling;
-    cos_sin[dim * qi + 2 * di]     = (T)c;
-    cos_sin[dim * qi + 2 * di + 1] = (T)s;
+    int   bid  = q2b[qi] + 1;
+    float base = rope_base[bid - 1];
+    float ti   = (float)q2p[qi];
+
+    Array<T, items_per_thread> cs;
+    float                      c, s;
+    for (int i = 0; i < items_per_thread; i += 2) {
+        float inv_freq = compute_default_parameters(base, dim, di + i, factor);
+        sincosf(ti * inv_freq, &s, &c);
+        cs[i]     = (T)c;
+        cs[i + 1] = (T)s;
+    }
+    Store(&cos_sin[dim * qi + di], cs);
 }
 
 RopeType GetRoPEType(const std::string& type)
@@ -122,20 +150,34 @@ template<typename T>
 void RotaryEmbeddingV2<T>::freeBuffer()
 {
     allocator_->free((void**)&cos_sin_);
+    allocator_->free((void**)&q2b_);
+    allocator_->free((void**)&q2p_);
+    allocator_->free((void**)&d_temp_storage_);
+    cached_len_         = 0;
+    temp_storage_bytes_ = 0;
 }
 
 template<typename T>
-void RotaryEmbeddingV2<T>::allocateBuffer(size_t token_num)
+void RotaryEmbeddingV2<T>::allocateBuffer(int token_num)
 {
-    cos_sin_ = (T*)allocator_->reMalloc(cos_sin_, sizeof(T) * token_num * dim_);
+    int token_num_padded = round_up(token_num, 4);
+    q2p_                 = (int*)allocator_->reMalloc(q2p_, sizeof(int) * token_num_padded);
+    q2b_                 = (int*)allocator_->reMalloc(q2b_, sizeof(int) * token_num);
+    cub::DeviceScan::InclusiveScan(
+        nullptr, temp_storage_bytes_, (int*)nullptr, (int*)nullptr, cub::Max{}, token_num, stream_);
+    d_temp_storage_ = allocator_->reMalloc(d_temp_storage_, temp_storage_bytes_);
 }
 
 template<typename T>
-RotaryEmbeddingV2<T>::RotaryEmbeddingV2(const AttentionParam& param, cudaStream_t stream, IAllocator* allocator):
+RotaryEmbeddingV2<T>::RotaryEmbeddingV2(const AttentionParam& param,
+                                        int                   session_len,
+                                        cudaStream_t          stream,
+                                        IAllocator*           allocator):
     stream_(stream), allocator_(allocator)
 {
-    type_ = param.rope.type;
-    dim_  = param.rope.dim;
+    type_      = param.rope.type;
+    dim_       = param.rope.dim;
+    rope_base_ = param.rope.base;
 
     switch (type_) {
         case RopeType::kDefault:
@@ -190,58 +232,98 @@ RotaryEmbeddingV2<T>::RotaryEmbeddingV2(const AttentionParam& param, cudaStream_
             FT_CHECK(0);
             break;
     }
+
+    cos_sin_ = (T*)allocator_->reMalloc(cos_sin_, sizeof(T) * session_len * dim_);
+    allocateBuffer(session_len);
+    computeCache(session_len);
+}
+
+template<typename T>
+void RotaryEmbeddingV2<T>::computeCache(int session_len)
+{
+    const int items_per_thread = 8;
+    const int block            = 256;
+    const int grid             = (dim_ / items_per_thread * session_len + block - 1) / block;
+
+    switch (type_) {
+        case RopeType::kDefault:
+        case RopeType::kLinear:
+        case RopeType::kDynamic:
+            rotaryEmbedding<T, items_per_thread>
+                <<<grid, block, 0, stream_>>>(rope_base_, session_len, dim_, inv_factor_, CosSinDefault{}, cos_sin_);
+            break;
+        case RopeType::kLlama3:
+            rotaryEmbedding<T, items_per_thread><<<grid, block, 0, stream_>>>(
+                rope_base_, session_len, dim_, inv_factor_, CosSinLlama3{llama3_}, cos_sin_);
+            break;
+        case RopeType::kYarn:
+            rotaryEmbedding<T, items_per_thread>
+                <<<grid, block, 0, stream_>>>(rope_base_, session_len, dim_, inv_factor_, CosSinYarn{yarn_}, cos_sin_);
+            break;
+        default:
+            FT_CHECK(0);
+    }
+
+    cached_len_ = session_len;
+}
+
+template<typename T>
+void RotaryEmbeddingV2<T>::updateCache(const RotaryEmbeddingV2Param& params)
+{
+    if (type_ == RopeType::kDynamic) {
+        cos_sin_                   = (T*)allocator_->reMalloc(cos_sin_, sizeof(T) * params.token_num * dim_);
+        const int items_per_thread = 8;
+        const int block            = 256;
+        const int grid             = (dim_ / items_per_thread * params.token_num + block - 1) / block;
+        rotaryEmbeddingDynamic<T, items_per_thread>
+            <<<grid, block, 0, stream_>>>(q2b_, q2p_, params.rope_theta, params.token_num, dim_, inv_factor_, cos_sin_);
+    }
+    else {
+        int sess_len = 0;
+        for (int i = 0; i < params.batch_size; ++i) {
+            sess_len = std::max(sess_len, (params.h_k_len[i + 1] - params.h_k_len[i]));
+        }
+        if (sess_len > cached_len_) {
+            cos_sin_ = (T*)allocator_->reMalloc(cos_sin_, sizeof(T) * sess_len * dim_);
+            computeCache(sess_len);
+        }
+    }
+}
+
+template<typename T>
+void RotaryEmbeddingV2<T>::updateMapping(const RotaryEmbeddingV2Param& params)
+{
+    // q2b
+    {
+        const size_t block = 512;
+        const size_t grid  = (params.token_num + block - 1) / block;
+        FT_CHECK(block * grid >= (size_t)params.batch_size);
+        computeQ2B<<<grid, block, 0, stream_>>>(q2b_, params.q_len, params.token_num, params.batch_size);
+        if (params.dc_size != params.batch_size) {
+            cub::DeviceScan::InclusiveScan(
+                d_temp_storage_, temp_storage_bytes_, q2b_, q2b_, cub::Max{}, params.token_num, stream_);
+        }
+    }
+
+    // q2p
+    {
+        const int    iterms_per_thread = 4;
+        const size_t block             = 256;
+        const int    tokens_per_block  = block * iterms_per_thread;
+        const size_t grid              = (params.token_num + tokens_per_block - 1) / tokens_per_block;
+        computeQ2P<iterms_per_thread>
+            <<<grid, block, 0, stream_>>>(q2b_, params.q_len, params.k_len, params.token_num, q2p_);
+    }
 }
 
 template<typename T>
 void RotaryEmbeddingV2<T>::forward(const RotaryEmbeddingV2Param& params)
 {
     allocateBuffer(params.token_num);
-
-    const int grid  = params.token_num;
-    const int block = dim_ / 2;
-
-    switch (type_) {
-        case RopeType::kDefault:
-        case RopeType::kLinear:
-        case RopeType::kDynamic:
-            rotaryEmbeddingDefault<<<grid, block, 0, stream_>>>(params.rope_theta,
-                                                                params.q_len,
-                                                                params.k_ken,
-                                                                params.token_num,
-                                                                params.batch_size,
-                                                                dim_,
-                                                                inv_factor_,
-                                                                cos_sin_);
-            break;
-        case RopeType::kLlama3:
-            rotaryEmbeddingLlama3<<<grid, block, 0, stream_>>>(params.rope_theta,
-                                                               params.q_len,
-                                                               params.k_ken,
-                                                               params.token_num,
-                                                               params.batch_size,
-                                                               dim_,
-                                                               llama3_.inv_scaling_factor,
-                                                               llama3_.alpha,
-                                                               llama3_.beta,
-                                                               cos_sin_);
-            break;
-        case RopeType::kYarn:
-            rotaryEmbeddingYarn<<<grid, block, 0, stream_>>>(params.rope_theta,
-                                                             params.q_len,
-                                                             params.k_ken,
-                                                             params.token_num,
-                                                             params.batch_size,
-                                                             dim_,
-                                                             yarn_.ramp_inv_factor_div_2,
-                                                             yarn_.ramp_inv_factor_mul_min,
-                                                             yarn_.inv_scaling_factor,
-                                                             yarn_.attention_factor,
-                                                             cos_sin_);
-            break;
-        default:
-            FT_CHECK(0);
-    }
+    updateMapping(params);
+    updateCache(params);
 }
+
 #ifdef ENABLE_FP32
 template class RotaryEmbeddingV2<float>;
 #endif

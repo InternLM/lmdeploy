@@ -57,6 +57,7 @@ public:
                    const MoeParam&       moe,
                    const LoraParam&      lora,
                    const NcclParam&      tp,
+                   const EngineParam&    engine,
                    const Context<T>&     ctx);
 
     void allocateBuffer(size_t max_batch_size);

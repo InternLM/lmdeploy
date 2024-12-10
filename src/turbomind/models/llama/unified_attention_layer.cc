@@ -187,7 +187,8 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     bool*  is_finished = inputs->getPtr<bool>("finished");
     float* rope_theta  = inputs->getPtr<float>("rope_theta");
 
-    T* cos_sin = inputs->getPtr<T>("cos_sin", nullptr);
+    T*   cos_sin = inputs->getPtr<T>("cos_sin", nullptr);
+    int* q2p     = inputs->getPtr<int>("q2p");
 
     void** block_ptrs     = outputs->getPtr<void*>("block_ptrs");
     int*   cu_block_count = inputs->getPtr<int>("cu_block_counts");
@@ -316,6 +317,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         params.rotary_embedding_dim    = param_.rope.dim;
         params.max_position_embeddings = param_.rope.max_position_embeddings;
         params.cos_sin                 = cos_sin;
+        params.q2p                     = q2p;
         params.use_logn_attn           = param_.use_logn_attn;
 
         // Decoding use only for now
