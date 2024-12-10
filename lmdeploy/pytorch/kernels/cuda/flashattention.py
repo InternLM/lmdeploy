@@ -149,6 +149,8 @@ def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs,
 
         k_ptrs = tl.advance(k_ptrs, (0, BLOCK_N))
         v_ptrs = tl.advance(v_ptrs, (BLOCK_N, 0))
+        if apply_mask:
+            attn_mask_ptr = tl.advance(attn_mask_ptr, (0, BLOCK_N))
         if BLOCK_DK1:
             k1_ptrs = tl.advance(k1_ptrs, (0, BLOCK_N))
 

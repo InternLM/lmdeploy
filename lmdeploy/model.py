@@ -310,7 +310,7 @@ class Vicuna(BaseChatTemplate):
             eosys=' ',
             user='USER: ',
             eoh=' ',
-            assistant='ASSISTANT:',
+            assistant='ASSISTANT: ',
             eoa='</s>',
             stop_words=['</s>'],
             **kwargs):
