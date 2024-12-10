@@ -199,14 +199,18 @@ class MiniCPMVModel(VisonModel):
             patch_attn_mask = torch.zeros((B, 1, max_patches),
                                           dtype=torch.bool,
                                           device=self.model.device)
-            for i in range(B):
-                patch_attn_mask[i, :tgt_sizes[i][0] * tgt_sizes[i][1]] = True
             logger.info(f'vision forward shape: {pixel_values.shape}')
             if self.version == '2.5':
+                for j in range(B):
+                    patch_attn_mask[j, :tgt_sizes[j][0] *
+                                    tgt_sizes[j][1]] = True
                 embeddings = self.model.vpm(
                     pixel_values.type(torch.half),
                     patch_attention_mask=patch_attn_mask).last_hidden_state
             else:
+                for j in range(B):
+                    patch_attn_mask[j, 0, :tgt_sizes[j][0] *
+                                    tgt_sizes[j][1]] = True
                 embeddings = self.model.vpm(
                     pixel_values.type(torch.half),
                     patch_attention_mask=patch_attn_mask,
