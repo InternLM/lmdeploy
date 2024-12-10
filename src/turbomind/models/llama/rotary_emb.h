@@ -13,7 +13,7 @@ struct RotaryEmbeddingV2Param {
     int*   k_len;
     int*   h_q_len;
     int*   h_k_len;
-    int    dc_size;
+    int    dc_size{};
     int    batch_size;
     int    token_num;
 };

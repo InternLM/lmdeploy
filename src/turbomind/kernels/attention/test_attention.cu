@@ -387,7 +387,7 @@ int test_attention()
     attn_param.rope.base   = kRoPEBase;
     attn_param.rope.dim    = kRoPEDim;
     attn_param.rope.factor = 1.0f;
-    auto rotary_emb        = std::make_unique<RotaryEmbeddingV2<T>>(attn_param, kInputLen, nullptr, allocator.get());
+    auto rotary_emb        = std::make_unique<RotaryEmbeddingV2<T>>(attn_param, 0, nullptr, allocator.get());
 
     RotaryEmbeddingV2Param rotary_param;
     rotary_param.rope_theta = rope_base.data().get();
