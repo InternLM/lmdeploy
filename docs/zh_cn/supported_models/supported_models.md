@@ -18,7 +18,7 @@
 | InternLM-XComposer2.5 |       7B       | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |         Qwen          |   1.8B - 72B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |        Qwen1.5        |  1.8B - 110B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
-|         Qwen2         |   0.5B - 72B   | LLM  |    Yes    |  Yes\*  |   No    |  Yes  |
+|         Qwen2         |   0.5B - 72B   | LLM  |    Yes    |  Yes\*  |  Yes\*  |  Yes  |
 |       Qwen2-MoE       |    57BA14B     | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |        Qwen2.5        |   0.5B - 72B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |        Mistral        |       7B       | LLM  |    Yes    |   Yes   |   Yes   |  No   |
@@ -34,7 +34,6 @@
 |    LLaVA(1.5,1.6)     |    7B - 34B    | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |       InternVL        |  v1.1 - v1.5   | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |       InternVL2       | 1-2B, 8B - 76B | MLLM |    Yes    |  Yes\*  |  Yes\*  |  Yes  |
-|     Mono-InternVL     |       2B       | MLLM |   Yes\*   |   Yes   |   Yes   |   -   |
 |        ChemVLM        |    8B - 26B    | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 | MiniCPM-Llama3-V-2_5  |       -        | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |     MiniCPM-V-2_6     |       -        | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
