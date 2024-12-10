@@ -969,11 +969,13 @@ class Engine:
         loop_background = asyncio.get_event_loop().create_task(
             self._async_loop_background(in_que, out_que),
             name='MainLoopBackground')
-        loop_background = asyncio.get_event_loop().create_task(
+        loop_background.add_done_callback(_raise_exception_on_finish)
+
+        loop_msg_proc = asyncio.get_event_loop().create_task(
             self._async_loop_preprocess_message(self._msg_preprocess_inque,
                                                 self._msg_preprocess_outque),
             name='MainLoopPreprocessMessage')
-        loop_background.add_done_callback(_raise_exception_on_finish)
+        loop_msg_proc.add_done_callback(_raise_exception_on_finish)
 
         def __send_resp(out: InferOutput):
             """send response."""
