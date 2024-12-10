@@ -902,7 +902,8 @@ class LlavaNextForConditionalGeneration(LlavaForConditionalGeneration):
             if len(img_mms) > 0:
                 image_token_id = img_mms[0].meta['image_token_id']
                 image_mask = input_ids == image_token_id
-                pixel_values = torch.cat([data.data for data in img_mms])
+                pixel_values = torch.cat(
+                    [data.data.flatten(0, 1) for data in img_mms])
                 image_sizes = torch.cat(
                     [data.meta['image_sizes'] for data in img_mms])
             else:

@@ -831,6 +831,9 @@ class Engine:
                 req_data = req.data
                 if req_data.get('input_multimodals', None) is None:
                     continue
+                elif self.input_processor is None:
+                    logger.warning('Do not support Multimodal inputs.')
+                    continue
                 input_ids = req_data['token_ids']
                 input_multimodals = req_data['input_multimodals']
                 if len(input_multimodals) == 0:
