@@ -75,9 +75,3 @@ class EngineChecker(BaseChecker):
                 mod_name='Engine',
                 message='max_batch_size should be'
                 f' greater than 0, but got {engine_config.max_batch_size}')
-
-        if engine_config.dtype not in ['auto', 'float16', 'bfloat16']:
-            self.log_and_exit(
-                mod_name='Engine',
-                message=(
-                    f'unsupported specified data type {engine_config.dtype}'))

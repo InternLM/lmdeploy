@@ -7,3 +7,8 @@ def check_env_deeplink(device_type: str):
     from .deeplink import DeeplinkChecker
     checker = DeeplinkChecker(device_type)
     checker.handle()
+
+
+def try_import_deeplink(device_type: str):
+    """check Deeplink environment."""
+    check_env_deeplink(device_type)
