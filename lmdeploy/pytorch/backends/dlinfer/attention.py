@@ -16,6 +16,7 @@ class DlinferAttentionMetadata(AttentionMetadata):
     max_q_seq_len: int = 1
     max_kv_seq_len: int = 1
     quant_meta: Dict = None
+    cu_seq_lens_kv: Optional[Tensor] = None
 
 
 class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
@@ -76,6 +77,8 @@ class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
         max_q_seq_len = attn_metadata.max_q_seq_len
         max_kv_seq_len = attn_metadata.max_kv_seq_len
         quant_bits = attn_metadata.quant_policy
+        cu_seq_lens_kv = attn_metadata.cu_seq_lens_kv
+
         if attn_metadata.quant_meta is not None:
             k_scales_zeros = [
                 next(attn_metadata.quant_meta['k_scales']),
@@ -123,6 +126,7 @@ class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
             v_cache,
             block_offsets,
             q_start_loc=q_start_loc,
+            cu_seq_lens_kv=cu_seq_lens_kv,
             q_seqlens=q_seqlens,
             kv_seqlens=kv_seqlens,
             max_q_seq_len=max_q_seq_len,

@@ -33,6 +33,7 @@ def try_import_deeplink(device_type: str):
         'ascend',
         'npu',
         'maca',
+        'camb',
     ]
     if device_type in deeplink_device_type_list:
         logger = get_logger('lmdeploy')

@@ -6,9 +6,11 @@ LMDEPLOY_PYTORCH_MODEL_PATH = 'lmdeploy.pytorch.models'
 MODULE_MAP = dict()
 ASCEND_MODULE_MAP = dict()
 MACA_MODULE_MAP = dict()
+CAMB_MODULE_MAP = dict()
 
 DEVICE_SPECIAL_MODULE_MAP = dict(ascend=ASCEND_MODULE_MAP,
-                                 maca=MACA_MODULE_MAP)
+                                 maca=MACA_MODULE_MAP,
+                                 camb=CAMB_MODULE_MAP)
 
 # llama
 MODULE_MAP.update({
