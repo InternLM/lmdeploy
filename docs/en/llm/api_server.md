@@ -251,24 +251,40 @@ lmdeploy serve gradio api_server_url --server-name ${gradio_ui_ip} --server-port
 
 ## Launch multiple api servers
 
-Following is a possible way to launch multiple api servers through torchrun. Just create a python script with the following codes.
-Launch the script through `torchrun --nproc_per_node 2 script.py InternLM/internlm2-chat-1_8b`.
+Following are two steps to launch multiple api servers through torchrun. Just create a python script with the following codes.
+
+1. Launch the proxy server through `lmdeploy serve proxy`. Get the correct proxy server url.
+2. Launch the script through `torchrun --nproc_per_node 2 script.py InternLM/internlm2-chat-1_8b http://{proxy_node_name}:{proxy_node_port}`.**Note**: Please do not use `0.0.0.0:8000` here, instead, we input the real ip name, `11.25.34.55:8000` for example.
 
 ```python
+import os
+import socket
 from typing import List
+
 import fire
 
-import os
+
+def get_host_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('8.8.8.8', 80))
+        ip = s.getsockname()[0]
+    finally:
+        s.close()
+    return ip
+
 
 def main(model_path: str,
+         proxy_url: str = 'http://0.0.0.0:8000',
          port: int = 23333):
     local_rank = int(os.environ.get('LOCAL_RANK', -1))
+    local_ip = get_host_ip()
     if isinstance(port, List):
         assert len(port) == int(os.environ.get('WORLD_SIZE', -1))
         port = port[local_rank]
     else:
-        port += local_rank*10
-    command = f'CUDA_VISIBLE_DEVICES={local_rank} lmdeploy serve api_server {model_path} --server-port {port}'
+        port += local_rank * 10
+    command = f'CUDA_VISIBLE_DEVICES={local_rank} lmdeploy serve api_server {model_path} --server-name {local_ip} --server-port {port} --proxy-url {proxy_url}'
     os.system(command)
 
 

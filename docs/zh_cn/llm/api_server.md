@@ -260,23 +260,40 @@ curl http://{server_ip}:{server_port}/v1/chat/interactive \
 
 ## 同时启动多个 api_server
 
-下面是一个可以用 torchrun 启动的脚本。用下面的代码跑 torchrun： `torchrun --nproc_per_node 2 script.py InternLM/internlm2-chat-1_8b`.
+两步直接启动多机多卡服务。先用下面的代码创建一个启动脚本。然后：
+
+1. 启动代理服务 `lmdeploy serve proxy`。
+2. torchrun 启动脚本 `torchrun --nproc_per_node 2 script.py InternLM/internlm2-chat-1_8b http://{proxy_node_name}:{proxy_node_port}`. **注意**： 多级多卡不要用默认 url `0.0.0.0:8000`，我们需要输入真实ip对应的地址，如：`11.25.34.55:8000`。
 
 ```python
+import os
+import socket
 from typing import List
+
 import fire
 
-import os
+
+def get_host_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('8.8.8.8', 80))
+        ip = s.getsockname()[0]
+    finally:
+        s.close()
+    return ip
+
 
 def main(model_path: str,
+         proxy_url: str = 'http://0.0.0.0:8000',
          port: int = 23333):
     local_rank = int(os.environ.get('LOCAL_RANK', -1))
+    local_ip = get_host_ip()
     if isinstance(port, List):
         assert len(port) == int(os.environ.get('WORLD_SIZE', -1))
         port = port[local_rank]
     else:
-        port += local_rank*10
-    command = f'CUDA_VISIBLE_DEVICES={local_rank} lmdeploy serve api_server {model_path} --server-port {port}'
+        port += local_rank * 10
+    command = f'CUDA_VISIBLE_DEVICES={local_rank} lmdeploy serve api_server {model_path} --server-name {local_ip} --server-port {port} --proxy-url {proxy_url}'
     os.system(command)
 
 
