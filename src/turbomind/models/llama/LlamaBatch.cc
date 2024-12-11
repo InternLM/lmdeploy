@@ -22,6 +22,7 @@
 #include "src/turbomind/utils/logger.h"
 #include "src/turbomind/utils/nccl_utils.h"
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -1392,20 +1393,26 @@ auto LlamaBatch<T>::Finish(GenerationState& g) -> std::vector<Signal>
 
     std::vector<Signal> signals;
     {
-        NvtxScope _("stream_and_completion_signal");
+        NvtxScope   _("stream_and_completion_signal");
+        const float tok_per_tick = shared_state_->tok_per_tick.load();
+        const int   tpt          = std::min(std::max(1, (int)std::round(tok_per_tick)), 8);
         for (int i = 0; i < batch_size - g.partial; ++i) {
             if (state_->requests[i]) {
+                auto& r = state_->requests[i];
                 if (state_->h_finished[i]) {
                     // Interrupt finished sequences and move the request handle into the signal closure
                     signals.push_back(Interrupt(i));
                     ++g.finished_count;
                 }
-                else if (state_->requests[i]->stream_output) {
-                    // Create signals by copying the request handles for non-finished streaming requests
-                    signals.push_back([this, r = state_->requests[i]] {
-                        if (rank_ == 0) {
+                else if (r->stream_output && rank_ == 0) {
+                    const auto seq_len = r->outputs.getVal<int>("sequence_length");
+                    const auto v       = r->flag->load(std::memory_order_relaxed) < 1;
+                    if (v) {
+                        r->flag->fetch_add(1, std::memory_order_relaxed);
+                        // Create signals by copying the request handles for non-finished streaming requests
+                        signals.push_back([this, r, seq_len] {
                             try {
-                                r->forward_cb({Request::kOk, r->outputs.getVal<int>("sequence_length")});
+                                r->forward_cb({Request::kOk, seq_len});
                             }
                             catch (const std::bad_function_call& e) {
                                 TM_LOG_ERROR("Null stream callback for (%s)", std::to_string(r->id).c_str());
@@ -1414,8 +1421,8 @@ auto LlamaBatch<T>::Finish(GenerationState& g) -> std::vector<Signal>
                                 TM_LOG_ERROR("Unknown exception invoking stream callback for (%s)",
                                              std::to_string(r->id).c_str());
                             }
-                        }
-                    });
+                        });
+                    }
                 }
             }
         }

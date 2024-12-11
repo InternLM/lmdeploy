@@ -67,19 +67,19 @@ struct RequestState {
 
 struct AtomicRequestState {
 
-    AtomicRequestState(): data(std::make_shared<RequestState>()) {}
+    std::atomic<RequestState*> data_;
 
-    void update(RequestState state)
+    static_assert(std::atomic<RequestState*>::is_always_lock_free);
+
+    ~AtomicRequestState()
     {
-        std::atomic_store_explicit(&data, std::make_shared<RequestState>(std::move(state)), std::memory_order_release);
+        auto data = exchange(nullptr);
     }
 
-    std::shared_ptr<RequestState> load()
+    std::unique_ptr<RequestState> exchange(RequestState* data)
     {
-        return std::atomic_load_explicit(&data, std::memory_order_acquire);
+        return std::unique_ptr<RequestState>{data_.exchange(data, std::memory_order_acq_rel)};
     }
-
-    std::shared_ptr<RequestState> data;
 };
 
 struct Request {
@@ -100,8 +100,12 @@ struct Request {
 
     std::function<void(RequestState)> forward_cb;
 
-    enum
-    {
+    // std::atomic_flag* flag;
+    std::atomic<int>* flag;
+
+    std::atomic<int>* seq_len;
+
+    enum {
         kOk       = 0,
         kInvalid  = 1,  // Sequence not exist or both `start` & `stop` (instead of `end`) is set
         kConflict = 2,  // Concurrent requests to the same sequence

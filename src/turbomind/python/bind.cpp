@@ -335,8 +335,8 @@ PYBIND11_MODULE(_turbomind, m)
         .def_readonly("status", &ft::RequestState::status)
         .def_readonly("seq_len", &ft::RequestState::seq_len);
 
-    py::class_<ft::AtomicRequestState, std::shared_ptr<ft::AtomicRequestState>>(m, "AtomicRequestState")
-        .def("load", [](ft::AtomicRequestState& s) { return s.load(); });
+    // py::class_<ft::AtomicRequestState, std::shared_ptr<ft::AtomicRequestState>>(m, "AtomicRequestState")
+    //     .def("load", [](ft::AtomicRequestState& s) { return s.load(); });
 
     // data type
     py::enum_<ft::DataType>(m, "DataType")
@@ -492,7 +492,11 @@ PYBIND11_MODULE(_turbomind, m)
                 model_request->End(std::move(cb));  //
             },
             py::call_guard<py::gil_scoped_release>(),
-            "cb"_a);
+            "cb"_a)
+        .def(
+            "report_tokens_per_tick",
+            [](ModelRequest* model_request, int tok_per_tick) { model_request->ReportTokensPerTick(tok_per_tick); },
+            "tokens_per_tick"_a);
 
     // transformer model
     using ft::AbstractTransformerModel;

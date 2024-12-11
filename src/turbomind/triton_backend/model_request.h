@@ -13,7 +13,7 @@ class ModelRequest {
 public:
     virtual ~ModelRequest() = default;
 
-    ModelRequest(RequestQueue* queue, int session_len, int vocab_size);
+    ModelRequest(RequestQueue* queue, std::atomic<float>* tok_per_tick, int session_len, int vocab_size);
 
     // Cancel running request, calls `cb` when done
     void Cancel(bool end, std::function<void(int)> cb);
@@ -38,8 +38,16 @@ public:
 
     OutputParam Forward(InputParam param, std::function<void(RequestState)> cb);
 
+    void ReportTokensPerTick(int observed);
+
 protected:
-    RequestQueue* queue_;
+    RequestQueue*       queue_;
+    std::atomic<float>* tok_per_tick_;
+
+    // std::atomic_flag flag_;
+    std::atomic<int> flag_;
+
+    std::atomic<int> seq_len_;
 
     uint64_t session_id_;
 

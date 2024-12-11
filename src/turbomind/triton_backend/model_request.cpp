@@ -1,6 +1,7 @@
 
 
 #include <algorithm>
+#include <atomic>
 #include <functional>
 #include <numeric>
 #include <type_traits>
@@ -54,8 +55,8 @@ static T get(const std::unordered_map<std::string, ManagedTensor>& m, const std:
     return fallback;
 }
 
-ModelRequest::ModelRequest(RequestQueue* queue, int session_len, int vocab_size):
-    queue_{queue}, session_len_{session_len}, vocab_size_{vocab_size}
+ModelRequest::ModelRequest(RequestQueue* queue, std::atomic<float>* tok_per_tick, int session_len, int vocab_size):
+    queue_{queue}, tok_per_tick_{tok_per_tick}, session_len_{session_len}, vocab_size_{vocab_size}
 {
 }
 
@@ -144,10 +145,44 @@ auto ModelRequest::Forward(InputParam param, std::function<void(RequestState)> c
     r->gen_cfg       = param.gen_cfg;
     r->stream_output = param.stream_output;
     r->forward_cb    = std::move(cb);
+    r->flag          = &flag_;
+
+    // flag_.clear(std::memory_order_release);
+    flag_.store(0);
 
     queue_->enqueue({std::move(r)});
 
     return OutputParam{outputs_};
+}
+
+void ModelRequest::ReportTokensPerTick(int observed)
+{
+    // flag_.clear(std::memory_order_release);
+
+    flag_.fetch_sub(1, std::memory_order_relaxed);
+
+#if 0
+    constexpr float decay = 0.525;
+
+    float value = (float)observed;
+    // value -= std::max(0.f, std::min(decay, value - 1.f));
+
+    float old = tok_per_tick_->load();
+    float cur{};
+    auto  update = [&]() mutable {
+        float alpha = old > value ? 0.001 : 0.002;
+        cur         = old * (1 - alpha) + value * alpha;
+    };
+    update();
+    while (!tok_per_tick_->compare_exchange_weak(old, cur)) {
+        update();
+    }
+
+    static int count = 0;
+    if (++count % 100 == 0) {
+        std::cerr << cur << std::endl;
+    }
+#endif
 }
 
 }  // namespace turbomind

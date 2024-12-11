@@ -132,6 +132,9 @@ class TurboMind:
         self.session_len = self.config.session_len
         self.eos_id = self.tokenizer.eos_token_id
 
+        self.pending_num = 0
+        self.pending_cond = asyncio.Condition()
+
     def _create_weight(self, model_comm):
         """Allocate weight buffer, load params if from_workspace."""
 
@@ -511,10 +514,17 @@ class TurboMindInstance:
         async with self.cond:
             self.flag, self.state = 1, state
             self.cond.notify()
+        # self.flag, self.state = 1, state
+        # self.state_ready.set()
 
     def async_signal_cb(self, state):
         coro = self.async_signal(state)
         asyncio.run_coroutine_threadsafe(coro, self.event_loop)
+
+    def add_pending(self, n: int = 1):
+        # self.tm_model.pending_event.clear()
+        # self.tm_model.pending_num += n
+        self.tm_model.pending_num += n
 
     async def async_stream_infer(self,
                                  session_id,
@@ -548,6 +558,7 @@ class TurboMindInstance:
 
         self.event_loop = asyncio.get_running_loop()
         self.cond = asyncio.Condition()
+        # self.state_ready = asyncio.Event()
         self.flag = 0
 
         gen_cfg = self._get_generation_config(gen_config)
@@ -573,14 +584,30 @@ class TurboMindInstance:
 
         output_ids_buf = outputs['output_ids']
 
-        seq_start = step + input_length[0]
+        # seq_start = step + input_length[0]
 
         out_logprobs = None
         finish = False
 
+        # async with self.tm_model.pending_cond:
+        #     self.tm_model.pending_num -= 1
+        #     if self.tm_model.pending_num == 0:
+        #         self.tm_model.pending_cond.notify_all()
+
+        # self.tm_model.pending_num -= 1
+        # if self.tm_model.pending_num == 0:
+        #     self.tm_model.pending_event.set()
+        output_ids = []
+        output_len = 0
+        prev_len = step + input_length[0]
         try:
             # generator
             while True:
+                # async with self.tm_model.pending_cond:
+                #     while self.tm_model.pending_num > 0:
+                #         await self.tm_model.pending_cond.wait()
+                # await self.tm_model.pending_event.wait()
+
                 async with self.cond:
                     while not self.flag:
                         await self.cond.wait()
@@ -595,14 +622,20 @@ class TurboMindInstance:
                     yield self._get_error_output()
                     break
 
-                if seq_start == seq_len and not finish:
+                if seq_len == prev_len and not finish:
                     continue
 
-                output_ids = output_ids_buf[seq_start:seq_len]
-                gen_len = seq_len - seq_start
+                output_ids += output_ids_buf[prev_len:seq_len]
+                output_len += seq_len - prev_len
+
+                self.model_inst.report_tokens_per_tick(seq_len - prev_len)
+
                 status = ResponseType.FINISH if finish else ResponseType.SUCCESS
-                output = EngineOutput(status, output_ids.tolist(), gen_len,
+                output = EngineOutput(status, output_ids, output_len.item(),
                                       out_logprobs)
+
+                prev_len = seq_len
+
                 yield output
 
                 if finish:

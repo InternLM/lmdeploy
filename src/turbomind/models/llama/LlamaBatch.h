@@ -28,11 +28,11 @@ struct SharedState {
     std::vector<std::shared_ptr<Request>> infer_requests;
     std::vector<std::shared_ptr<Request>> stop_requests;
     RequestQueue                          request_queue;
+    std::atomic<float>                    tok_per_tick{1};
     std::shared_ptr<Barrier>              barrier;
     bool                                  abort;
     std::atomic<size_t>                   free_size{std::numeric_limits<size_t>::max()};
 };
-
 
 struct BatchState {
     int*  h_prompt_length;  // history + input, ignore generated
