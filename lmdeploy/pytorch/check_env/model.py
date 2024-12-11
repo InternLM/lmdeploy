@@ -90,11 +90,14 @@ class ModelChecker(BaseChecker):
 
         try:
             import awq_ext  # noqa
-        except Exception:
+        except Exception as e:
             logger.debug('Exception:', exc_info=1)
-            logger.warning('Failed to import `awq_ext`. '
-                           'Try reinstall it from source: '
-                           'https://github.com/casper-hansen/AutoAWQ_kernels')
+            self.log_and_exit(
+                e,
+                'awq_ext',
+                message='Failed to import `awq_ext`. '
+                'Try reinstall it from source: '
+                'https://github.com/casper-hansen/AutoAWQ_kernels')
 
     def check(self):
         """check."""

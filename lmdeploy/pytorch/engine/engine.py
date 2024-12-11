@@ -137,7 +137,7 @@ class Engine:
                                 engine_config=engine_config,
                                 trust_remote_code=trust_remote_code,
                                 logger=logger)
-        checker.check()
+        checker.handle()
 
         adapters = engine_config.adapters
         self.engine_config = engine_config
