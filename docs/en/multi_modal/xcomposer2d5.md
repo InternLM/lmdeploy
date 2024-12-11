@@ -8,7 +8,7 @@
 
 ### Installation
 
-Please install LMDeploy by following the [installation guide](../installation.md), and install other packages that InternLM-XComposer-2.5 needs
+Please install LMDeploy by following the [installation guide](../get_started/installation.md), and install other packages that InternLM-XComposer-2.5 needs
 
 ```shell
 pip install decord

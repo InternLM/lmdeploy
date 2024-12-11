@@ -150,7 +150,12 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
                            rope_dim,
                            1.,
                            0.,
+                           0.,
                            1.0,
+                           1.0,
+                           0.0,
+                           0.0,
+                           0.0,
                            1.0,
                            2 * head_num * seq_len,
                            0,
@@ -179,7 +184,12 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
                            rope_dim,
                            1.,
                            0.,
+                           0.,
                            1.0,
+                           1.0,
+                           0.0,
+                           0.0,
+                           0.0,
                            1.0,
                            2 * head_num * seq_len,
                            0,
@@ -208,14 +218,14 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
 
 #define KV_INT4 0
 
-#define DECODING 1
+#define DECODING 0
 
 template<class T>
 int test_attention()
 {
     AttentionParams<T> params{};
 
-    constexpr size_t kHeadDim = 128;
+    constexpr size_t kHeadDim = 192;
 
 #if DECODING
     // constexpr size_t kHeadNum   = 32;
@@ -229,11 +239,11 @@ int test_attention()
     // constexpr size_t kSequenceLen = 511;
     // constexpr size_t kSequenceLen = 2047;
     // constexpr size_t kSequenceLen = 4095;
-    // constexpr size_t kSequenceLen = 8191;
+    constexpr size_t kSequenceLen = 8191;
     // constexpr size_t kSequenceLen = 32767;
     // constexpr size_t kSequenceLen = 65535;
     // constexpr size_t kSequenceLen = 131071;
-    constexpr size_t kSequenceLen = 200000;
+    // constexpr size_t kSequenceLen = 200000;
     // constexpr size_t kSequenceLen = 262143;
     // constexpr size_t kSequenceLen = (1 << 20) - 1;  // 1M
     // constexpr size_t kSequenceLen = (1 << 22) - 1;  // 4M
@@ -441,6 +451,10 @@ int test_attention()
     params.qk = qk_buf.data().get();
     params.pr = pr_buf.data().get();
 
+    params.attention_scaling          = 1.f;
+    params.llama3_inv_scaling_factor  = 0;
+    params.yarn_ramp_inv_factor_div_2 = 0;
+
     Reference<T> reference(kDump ? Reference<T>::kUNFUSED : Reference<T>::kFLASH_ATTENTION, {});
     // Reference<T> reference(Reference<T>::kUNFUSED, {});
     reference.Reshape(kInputLen, kContextLen, kHeadNum, kHeadDim, KvHeadNum, kBatchSize);
@@ -538,7 +552,12 @@ int test_attention()
                        kRoPEDim,
                        1.,
                        0.,
+                       0.,
                        1.0,
+                       1.0,
+                       0.0,
+                       0.0,
+                       0.0,
                        1.0,
                        KvHeadNum * kContextLen,
                        0,

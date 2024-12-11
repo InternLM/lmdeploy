@@ -5,7 +5,7 @@ import random
 from typing import List, Optional
 
 from lmdeploy.archs import get_model_arch
-from lmdeploy.messages import EngineGenerationConfig, PytorchEngineConfig
+from lmdeploy.messages import GenerationConfig, PytorchEngineConfig
 from lmdeploy.model import ChatTemplateConfig
 from lmdeploy.serve.async_engine import get_names_from_model
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
@@ -52,7 +52,7 @@ def _stop_words(stop_words: List[str], tokenizer: Tokenizer):
 
 def run_chat(model_path: str,
              engine_config: PytorchEngineConfig,
-             gen_config: EngineGenerationConfig = None,
+             gen_config: GenerationConfig = None,
              session_id: int = 1,
              trust_remote_code: bool = True,
              chat_template_config: Optional[ChatTemplateConfig] = None):
@@ -62,7 +62,7 @@ def run_chat(model_path: str,
     Args:
         model_path (str): the huggingface model path.
         engine_config (PytorchEngineConfig): Config of engine.
-        gen_config (EngineGenerationConfig): Config of generation.
+        gen_config (GenerationConfig): Config of generation.
         session_id (int): the identical id of a session.
         trust_remote_code (bool): trust remote code.
     """
@@ -77,7 +77,7 @@ def run_chat(model_path: str,
         adapter_name = next(iter(engine_config.adapters.keys()))
 
     if gen_config is None:
-        gen_config = EngineGenerationConfig()
+        gen_config = GenerationConfig()
 
     nth_round = 1
     step = 0
@@ -113,7 +113,7 @@ def run_chat(model_path: str,
             print(f'{prompt}', end='', flush=True)
             state = DetokenizeState(len(input_ids))
             gen_config.random_seed = seed
-            gen_config.stop_words = stop_words
+            gen_config.stop_token_ids = stop_words
             for outputs in generator.stream_infer(session_id=session_id,
                                                   input_ids=input_ids,
                                                   gen_config=gen_config,
@@ -162,12 +162,12 @@ def main(model_path: str,
     if adapter is not None:
         adapters = dict(default=adapter)
     engine_config = PytorchEngineConfig(tp=tp, adapters=adapters)
-    gen_config = EngineGenerationConfig(max_new_tokens=512,
-                                        top_k=top_k,
-                                        top_p=top_p,
-                                        temperature=temperature,
-                                        repetition_penalty=repetition_penalty,
-                                        ignore_eos=False)
+    gen_config = GenerationConfig(max_new_tokens=512,
+                                  top_k=top_k,
+                                  top_p=top_p,
+                                  temperature=temperature,
+                                  repetition_penalty=repetition_penalty,
+                                  ignore_eos=False)
     chat_template_config = None
     if chat_template is not None and os.path.exists(chat_template):
         chat_template_config = ChatTemplateConfig.from_json(chat_template)

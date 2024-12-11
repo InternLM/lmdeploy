@@ -4,7 +4,7 @@ Turbomind 使用 C++ 实现，不像 Python 一样易于调试。该文档提供
 
 ## 前置工作
 
-首先，根据构建[命令](../installation.md)完成源码编译和安装。
+首先，根据构建[命令](../get_started/installation.md)完成源码编译和安装。
 
 ## 配置 Python 调试环境
 
@@ -129,7 +129,7 @@ Reading symbols from python3...
 
 # (可选) 使用 https://github.com/InternLM/lmdeploy/blob/main/benchmark/profile_restful_api.py 发送请求
 
-python3 profile_restful_api.py --server_addr 127.0.0.1:23333 --tokenizer_path /workdir/Llama-2-13b-chat-hf --dataset /workdir/ShareGPT_V3_unfiltered_cleaned_split.json --concurrency 1 --num_prompts 1
+python3 profile_restful_api.py --backend lmdeploy --dataset-path ./ShareGPT_V3_unfiltered_cleaned_split.json
 ````
 
 ## 使用 GDB

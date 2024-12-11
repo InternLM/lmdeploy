@@ -2,18 +2,19 @@
 
 LMDeploy 支持 InternVL 系列模型，具体如下：
 
-|    Model    |    Size    | Supported Inference Engine |
-| :---------: | :--------: | :------------------------: |
-|  InternVL   |  13B-19B   |         TurboMind          |
-| InternVL1.5 |   2B-26B   |     TurboMind, PyTorch     |
-|  InternVL2  |   1B, 4B   |          PyTorch           |
-|  InternVL2  | 2B, 8B-76B |     TurboMind, PyTorch     |
+|     Model     |    Size    | Supported Inference Engine |
+| :-----------: | :--------: | :------------------------: |
+|   InternVL    |  13B-19B   |         TurboMind          |
+|  InternVL1.5  |   2B-26B   |     TurboMind, PyTorch     |
+|   InternVL2   |   1B, 4B   |          PyTorch           |
+|   InternVL2   | 2B, 8B-76B |     TurboMind, PyTorch     |
+| Mono-InternVL |     2B     |          PyTorch           |
 
-本文将以[InternVL2-8B](https://huggingface.co/OpenGVLab/InternVL2-8B)为例，演示使用 LMDeploy 部署 InternVL 系列模型的方法
+本文将以[InternVL2-8B](https://huggingface.co/OpenGVLab/InternVL2-8B)为例，演示使用 LMDeploy 部署 InternVL 系列模型的方法。
 
 ## 安装
 
-请参考[安装文档](../installation.md)安装 LMDeploy，并安装上游 InternVL 模型库需的依赖。
+请参考[安装文档](../get_started/installation.md)安装 LMDeploy，并安装上游 InternVL 模型库需的依赖。
 
 ```shell
 pip install timm
@@ -64,7 +65,7 @@ from lmdeploy.vl.constants import IMAGE_TOKEN
 pipe = pipeline('OpenGVLab/InternVL2-8B', log_level='INFO')
 messages = [
     dict(role='user', content=[
-        dict(type='text', text=f'<img>{IMAGE_TOKEN}{IMAGE_TOKEN}</img>\nDescribe the two images in detail.'),
+        dict(type='text', text=f'{IMAGE_TOKEN}{IMAGE_TOKEN}\nDescribe the two images in detail.'),
         dict(type='image_url', image_url=dict(max_dynamic_patch=12, url='https://raw.githubusercontent.com/OpenGVLab/InternVL/main/internvl_chat/examples/image1.jpg')),
         dict(type='image_url', image_url=dict(max_dynamic_patch=12, url='https://raw.githubusercontent.com/OpenGVLab/InternVL/main/internvl_chat/examples/image2.jpg'))
     ])
@@ -90,7 +91,7 @@ from lmdeploy.vl.constants import IMAGE_TOKEN
 pipe = pipeline('OpenGVLab/InternVL2-8B', log_level='INFO')
 messages = [
     dict(role='user', content=[
-        dict(type='text', text=f'Image-1: <img>{IMAGE_TOKEN}</img>\nImage-2: <img>{IMAGE_TOKEN}</img>\nDescribe the two images in detail.'),
+        dict(type='text', text=f'Image-1: {IMAGE_TOKEN}\nImage-2: {IMAGE_TOKEN}\nDescribe the two images in detail.'),
         dict(type='image_url', image_url=dict(max_dynamic_patch=12, url='https://raw.githubusercontent.com/OpenGVLab/InternVL/main/internvl_chat/examples/image1.jpg')),
         dict(type='image_url', image_url=dict(max_dynamic_patch=12, url='https://raw.githubusercontent.com/OpenGVLab/InternVL/main/internvl_chat/examples/image2.jpg'))
     ])
@@ -151,7 +152,7 @@ imgs = load_video(video_path, num_segments=8)
 
 question = ''
 for i in range(len(imgs)):
-    question = question + f'Frame{i+1}: <img>{IMAGE_TOKEN}</img>\n'
+    question = question + f'Frame{i+1}: {IMAGE_TOKEN}\n'
 
 question += 'What is the red panda doing?'
 

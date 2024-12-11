@@ -11,7 +11,8 @@ def pipeline(model_path: str,
              backend_config: Optional[Union[TurbomindEngineConfig,
                                             PytorchEngineConfig]] = None,
              chat_template_config: Optional[ChatTemplateConfig] = None,
-             log_level='ERROR',
+             log_level: str = 'WARNING',
+             max_log_len: int = None,
              **kwargs):
     """
     Args:
@@ -32,7 +33,10 @@ def pipeline(model_path: str,
             config instance. Default to None.
         chat_template_config (ChatTemplateConfig): chat template configuration.
             Default to None.
-        log_level(str): set log level whose value among [CRITICAL, ERROR, WARNING, INFO, DEBUG]
+        log_level(str): set log level whose value among [CRITICAL, ERROR,
+            WARNING, INFO, DEBUG]
+        max_log_len(int): Max number of prompt characters or prompt tokens
+            being printed in log
 
     Examples:
         >>> # LLM
@@ -65,7 +69,11 @@ def pipeline(model_path: str,
             if backend_config is not None else None
         model_path = get_model(model_path, download_dir, revision)
 
-    _, pipeline_class = get_task(model_path)
+    task, pipeline_class = get_task(model_path)
+    if task == 'vlm':
+        if backend_config and backend_config.enable_prefix_caching:
+            backend_config.enable_prefix_caching = False
+            logger.warning('VLM does not support prefix caching.')
 
     if type(backend_config) is not PytorchEngineConfig:
         # set auto backend mode
@@ -78,6 +86,7 @@ def pipeline(model_path: str,
                           backend=backend,
                           backend_config=backend_config,
                           chat_template_config=chat_template_config,
+                          max_log_len=max_log_len,
                           **kwargs)
 
 

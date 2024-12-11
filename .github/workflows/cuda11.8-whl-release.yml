@@ -46,11 +46,12 @@ jobs:
           sed -i 's/docker run --rm -it/docker run --rm/g' builder/manywheel/build_wheel.sh
           bash builder/manywheel/build_wheel.sh ${PYTHON_VERSION} ${PLAT_NAME} ${DOCKER_TAG} ${OUTPUT_FOLDER}
       - name: Upload Artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           if-no-files-found: error
           path: builder/manywheel/${{ env.OUTPUT_FOLDER }}/*
           retention-days: 1
+          name: linux-${{ matrix.pyver }}
 
   windows-build:
     strategy:
@@ -89,11 +90,12 @@ jobs:
           rm build -Force -Recurse
           python setup.py bdist_wheel -d build/wheel
       - name: Upload Artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           if-no-files-found: error
           path: build/wheel/*
           retention-days: 1
+          name: windows-${{ matrix.pyver }}
 
   publish:
     runs-on: ubuntu-latest
@@ -105,11 +107,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
       - name: Download artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
+        with:
+          path: artifact
+          merge-multiple: true
       - name: Add cuda version to package name
         run: |
           ver=$(cat lmdeploy/version.py | grep '__version__ =' | cut -d\' -f2)
           cuver=$ver+cu118
+          ls -lh
           cd artifact
           for file in *; do
             mv "$file" "`echo $file | sed "s/$ver/$cuver/g"`";

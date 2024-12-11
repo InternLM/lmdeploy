@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include "src/turbomind/kernels/gemm/test/test_utils.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/context.h"
@@ -41,7 +42,7 @@ public:
     static constexpr int kMaxWorkspaceTokens = 4096;
 
     void freeBuffer();
-    void allocateBuffer(size_t q_count, size_t k_count, size_t batch_size, const WeightType* weights);
+    void allocateBuffer(size_t q_count, size_t k_count, size_t batch_size, size_t qkv_lora_rank);
 
     void allocateWorkspace();
     void freeWorkspace();
@@ -69,7 +70,7 @@ public:
                           const NcclParam&      tp,
                           const Context<T>&     context);
 
-    void forward(TensorMap* outputs, const TensorMap* inputs, const LlamaAttentionWeight<T>* weights);
+    void forward(TensorMap* outputs, const TensorMap* inputs, const WeightType* weights);
 
     void prefill(T*                output,
                  T*                tmp_kv_buffer,
@@ -107,6 +108,9 @@ public:
                 const WeightType* weights);
 
 private:
+    void forward_mla(const T* inputs, int token_num, const WeightType& weights);
+
+private:
     const size_t head_num_;
     const size_t kv_head_num_;
     const size_t size_per_head_;
@@ -132,6 +136,8 @@ private:
     cudaEvent_t  aux_event_;
 
     std::array<cudaStream_t, 2> streams_;
+
+    RNG rng_;
 
     T*     qkv_buf_{};
     T*     q_buf_2_{};

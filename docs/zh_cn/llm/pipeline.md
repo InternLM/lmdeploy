@@ -136,6 +136,10 @@ logits = pipe.get_logits(input_ids)
 ppl = pipe.get_ppl(input_ids)
 ```
 
+```{note}
+get_ppl 返回的是 cross entropy loss，没有在之后加 exp 操作
+```
+
 - **使用 pytorch 后端**
 
 需要先安装 triton
@@ -165,7 +169,7 @@ response = pipe(prompts, gen_config=gen_config)
 print(response)
 ```
 
-- **一个 slora 的例子**
+- **一个 lora 的例子**
 
 ```python
 from lmdeploy import pipeline, GenerationConfig, PytorchEngineConfig

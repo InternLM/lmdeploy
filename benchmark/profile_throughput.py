@@ -1,19 +1,19 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import argparse
+import asyncio
 import csv
 import json
 import os
 import random
 import time
 from queue import Queue
-from threading import Thread
 from typing import List, Tuple, Union
 
 import numpy as np
 from tqdm import tqdm
 
 from lmdeploy.cli.utils import ArgumentHelper, DefaultsAndTypesHelpFormatter
-from lmdeploy.messages import (EngineGenerationConfig, PytorchEngineConfig,
+from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
                                TurbomindEngineConfig)
 from lmdeploy.pytorch.engine import EngineInstance
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
@@ -86,15 +86,15 @@ class Engine:
         self.csv = csv
         self.pbar = None
 
-    def _inference(self, req_queue: Queue, res_queue: Queue, session_id: int,
-                   temperature: float, top_p: float, top_k: int,
-                   stream_output: bool):
+    async def _inference(self, req_queue: Queue, res_queue: Queue,
+                         session_id: int, temperature: float, top_p: float,
+                         top_k: int, stream_output: bool):
         model_inst = self.tm_model.create_instance()
         stats = []
         # get each generated token's latency
         per_token_latency_stats = []
         for prompt, input_seqlen, output_seqlen in iter(
-                req_queue.get, [None, None, None]):
+                req_queue.get_nowait, [None, None, None]):
             _per_token_latency_stats = [0] * (output_seqlen + 1)
             prev = time.perf_counter()
             n_prev_token = 0
@@ -102,15 +102,14 @@ class Engine:
             input_ids = self.tokenizer(prompt).input_ids
             state = DetokenizeState(len(input_ids))
 
-            for outputs in model_inst.stream_infer(
+            async for outputs in model_inst.async_stream_infer(
                     session_id,
                     input_ids=input_ids,
-                    gen_config=EngineGenerationConfig(
-                        max_new_tokens=output_seqlen,
-                        temperature=temperature,
-                        top_p=top_p,
-                        top_k=top_k,
-                        ignore_eos=True),
+                    gen_config=GenerationConfig(max_new_tokens=output_seqlen,
+                                                temperature=temperature,
+                                                top_p=top_p,
+                                                top_k=top_k,
+                                                ignore_eos=True),
                     sequence_start=True,
                     sequence_end=True,
                     stream_output=stream_output):
@@ -124,7 +123,7 @@ class Engine:
                 prev = now
             # for pytorch engine to restart a session
             if isinstance(model_inst, EngineInstance):
-                model_inst.end(session_id)
+                await model_inst.async_end(session_id)
             assert output_seqlen <= n_token <= output_seqlen + 1, \
                 f'Error. session_id({session_id}) request {output_seqlen} ' \
                 f'tokens, but generate {n_token} tokens.\n' \
@@ -140,13 +139,12 @@ class Engine:
             # skip the first token latency
             per_token_latency_stats.append(_per_token_latency_stats[1:])
             self.pbar.update(1)
-        res_queue.put((session_id, stats, per_token_latency_stats))
+        res_queue.put_nowait((session_id, stats, per_token_latency_stats))
 
     def process_request(self, requests, concurrency, temperature, top_p, top_k,
                         stream_output):
         res_queue = Queue()
         req_queue = Queue()
-        threads = []
 
         self.pbar = tqdm(total=len(requests))
 
@@ -158,18 +156,20 @@ class Engine:
 
         start = time.time()
 
-        # start threads
-        for i in range(concurrency):
-            t = Thread(target=self._inference,
-                       args=(req_queue, res_queue, i, temperature, top_p,
-                             top_k, stream_output),
-                       daemon=True)
-            t.start()
-            threads.append(t)
+        event_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(event_loop)
 
-        # wait for finish
-        for t in threads:
-            t.join()
+        # start threads
+        tasks = []
+        for i in range(concurrency):
+            task = self._inference(req_queue, res_queue, i, temperature, top_p,
+                                   top_k, stream_output)
+            tasks.append(task)
+
+        async def _gather_tasks(tasks):
+            return await asyncio.gather(*tasks)
+
+        event_loop.run_until_complete(_gather_tasks(tasks))
 
         elapsed_time = time.time() - start
 
@@ -282,11 +282,15 @@ def parse_args():
 
     # pytorch engine args
     pt_group = parser.add_argument_group('PyTorch engine arguments')
+    ArgumentHelper.eager_mode(pt_group)
+
     tp_act = ArgumentHelper.tp(pt_group)
     session_len_act = ArgumentHelper.session_len(pt_group, default=4096)
     cache_count_act = ArgumentHelper.cache_max_entry_count(pt_group)
     cache_block_seq_len_act = ArgumentHelper.cache_block_seq_len(pt_group)
     prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
+    quant_policy_act = ArgumentHelper.quant_policy(pt_group, default=0)
+    dtype_act = ArgumentHelper.dtype(pt_group)
 
     # turbomind engine args
     tb_group = parser.add_argument_group('TurboMind engine argument')
@@ -295,8 +299,10 @@ def parse_args():
     tb_group._group_actions.append(cache_count_act)
     tb_group._group_actions.append(cache_block_seq_len_act)
     tb_group._group_actions.append(prefix_caching_act)
+    tb_group._group_actions.append(quant_policy_act)
+    tb_group._group_actions.append(dtype_act)
+
     ArgumentHelper.model_format(tb_group, default='hf')
-    ArgumentHelper.quant_policy(tb_group, default=0)
     ArgumentHelper.num_tokens_per_iter(tb_group)
     ArgumentHelper.max_prefill_iters(tb_group)
 
@@ -319,6 +325,7 @@ def main():
             num_tokens_per_iter=args.num_tokens_per_iter,
             max_prefill_iters=args.max_prefill_iters,
             enable_prefix_caching=args.enable_prefix_caching,
+            dtype=args.dtype,
         )
     elif args.backend == 'pytorch':
         engine_config = PytorchEngineConfig(
@@ -327,8 +334,10 @@ def main():
             block_size=args.cache_block_seq_len,
             max_batch_size=args.concurrency,
             tp=args.tp,
-            thread_safe=True,
+            eager_mode=args.eager_mode,
             enable_prefix_caching=args.enable_prefix_caching,
+            quant_policy=args.quant_policy,
+            dtype=args.dtype,
         )
 
     engine = Engine(args.model_path, engine_config, csv=args.csv)

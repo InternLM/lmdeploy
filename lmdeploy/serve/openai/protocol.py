@@ -87,6 +87,25 @@ class StreamOptions(BaseModel):
     include_usage: Optional[bool] = False
 
 
+class JsonSchema(BaseModel):
+    name: str
+    # description is not used since it depends on model
+    description: Optional[str] = None
+    # use alias since pydantic does not support the OpenAI key `schema`
+    json_schema: Optional[Dict[str, Any]] = Field(default=None,
+                                                  alias='schema',
+                                                  examples=[None])
+    # strict is not used
+    strict: Optional[bool] = False
+
+
+class ResponseFormat(BaseModel):
+    # regex_schema is extended by lmdeploy to support regex output
+    type: Literal['text', 'json_object', 'json_schema', 'regex_schema']
+    json_schema: Optional[JsonSchema] = None
+    regex_schema: Optional[str] = None
+
+
 class ChatCompletionRequest(BaseModel):
     """Chat completion request."""
     model: str
@@ -95,11 +114,11 @@ class ChatCompletionRequest(BaseModel):
     temperature: Optional[float] = 0.7
     top_p: Optional[float] = 1.0
     tools: Optional[List[Tool]] = Field(default=None, examples=[None])
-    tool_choice: Union[ToolChoice, Literal['auto', 'required','none']] = Field(default='auto', examples=['none'])  # noqa
+    tool_choice: Union[ToolChoice, Literal['auto', 'required', 'none']] = Field(default='auto', examples=['none'])  # noqa
     logprobs: Optional[bool] = False
     top_logprobs: Optional[int] = None
     n: Optional[int] = 1
-    logit_bias: Optional[Dict[str, float]] = None
+    logit_bias: Optional[Dict[str, float]] = Field(default=None, examples=[None])  # noqa
     max_tokens: Optional[int] = Field(default=None, examples=[None])
     stop: Optional[Union[str, List[str]]] = Field(default=None, examples=[None])  # noqa
     # yapf: enable
@@ -109,6 +128,8 @@ class ChatCompletionRequest(BaseModel):
     presence_penalty: Optional[float] = 0.0
     frequency_penalty: Optional[float] = 0.0
     user: Optional[str] = None
+    response_format: Optional[ResponseFormat] = Field(default=None,
+                                                      examples=[None])  # noqa
     # additional argument of lmdeploy
     repetition_penalty: Optional[float] = 1.0
     session_id: Optional[int] = -1
@@ -116,6 +137,8 @@ class ChatCompletionRequest(BaseModel):
     skip_special_tokens: Optional[bool] = True
     top_k: Optional[int] = 40
     seed: Optional[int] = None
+    min_new_tokens: Optional[int] = Field(default=None, examples=[None])
+    min_p: float = 0.0
 
 
 class FunctionResponse(BaseModel):
@@ -219,7 +242,6 @@ class CompletionRequest(BaseModel):
     stream_options: Optional[StreamOptions] = Field(default=None,
                                                     examples=[None])
     top_p: Optional[float] = 1.0
-    logprobs: Optional[int] = None
     echo: Optional[bool] = False
     presence_penalty: Optional[float] = 0.0
     frequency_penalty: Optional[float] = 0.0
@@ -318,6 +340,8 @@ class GenerateRequest(BaseModel):
     cancel: Optional[bool] = False  # cancel a responding request
     adapter_name: Optional[str] = Field(default=None, examples=[None])
     seed: Optional[int] = None
+    min_new_tokens: Optional[int] = Field(default=None, examples=[None])
+    min_p: float = 0.0
 
 
 class GenerateResponse(BaseModel):

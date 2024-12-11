@@ -31,7 +31,7 @@
 #include <cuda_fp16.h>
 #include <mutex>
 
-namespace ft = turbomind;
+namespace turbomind {
 
 template<typename T>
 struct LlamaTritonModel: public AbstractTransformerModel {
@@ -44,27 +44,25 @@ struct LlamaTritonModel: public AbstractTransformerModel {
     ~LlamaTritonModel() override;
 
     std::unique_ptr<AbstractTransformerModelInstance>
-    createModelInstance(int                                                               deviceId,
-                        int                                                               rank,
-                        cudaStream_t                                                      stream,
-                        std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>> nccl_params,
-                        std::shared_ptr<ft::AbstractCustomComm> custom_all_reduce_comm = nullptr) override;
+    createModelInstance(int                                                       deviceId,
+                        int                                                       rank,
+                        cudaStream_t                                              stream,
+                        std::pair<std::vector<NcclParam>, std::vector<NcclParam>> nccl_params,
+                        std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm = nullptr) override;
 
     void createSharedWeights(int deviceId, int rank) override;
 
-    TensorMap getParams(int deviceId, int rank) override;
+    std::unordered_map<std::string, Tensor> getParams(int deviceId, int rank) override;
 
     void processWeights(int deviceId, int rank) override;
 
-    void createEngine(int                                                               device_id,
-                      int                                                               rank,
-                      std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>> nccl_params,
-                      std::shared_ptr<ft::AbstractCustomComm>) override;
+    void createEngine(int                                                       device_id,
+                      int                                                       rank,
+                      std::pair<std::vector<NcclParam>, std::vector<NcclParam>> nccl_params,
+                      std::shared_ptr<AbstractCustomComm>) override;
 
-    void createCustomComms(std::vector<std::shared_ptr<ft::AbstractCustomComm>>* custom_all_reduce_comms,
-                           int                                                   world_size) override;
-
-    std::unique_ptr<ft::AbstractInstanceComm> createInstanceComm(int size) override;
+    void createCustomComms(std::vector<std::shared_ptr<AbstractCustomComm>>* custom_all_reduce_comms,
+                           int                                               world_size) override;
 
     void handleMissingParams();
 
@@ -78,26 +76,24 @@ struct LlamaTritonModel: public AbstractTransformerModel {
     int         getPipelineParaSize() override;
 
 private:
-    std::unique_ptr<ft::Engine<T>>
-    createSharedModelInstance(int                                                               deviceId,
-                              int                                                               rank,
-                              std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>> nccl_params,
-                              std::shared_ptr<ft::AbstractCustomComm> custom_all_reduce_comm = nullptr);
+    std::unique_ptr<Engine<T>>
+    createSharedModelInstance(int                                                       deviceId,
+                              int                                                       rank,
+                              std::pair<std::vector<NcclParam>, std::vector<NcclParam>> nccl_params,
+                              std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm = nullptr);
 
-    ft::ModelParam     model_param_;
-    ft::AttentionParam attn_param_;
-    ft::LoraParam      lora_param_;
-    ft::EngineParam    engine_param_;
-    size_t             tensor_para_size_;
-    size_t             pipeline_para_size_;
-    ft::WeightType     weight_type_;
-    bool               attn_bias_;
-    int                group_size_;
+    ModelParam     model_param_;
+    AttentionParam attn_param_;
+    MoeParam       moe_param_;
+    LoraParam      lora_param_;
+    EngineParam    engine_param_;
+    size_t         tensor_para_size_;
+    size_t         pipeline_para_size_;
 
-    std::shared_ptr<ft::SharedState> shared_state_;
+    std::shared_ptr<SharedState> shared_state_;
     // Weights & engine instances for the ranks
-    std::vector<std::shared_ptr<ft::LlamaWeight<T>>> weights_;
-    std::vector<std::shared_ptr<ft::Engine<T>>>      engines_;
+    std::vector<std::shared_ptr<LlamaWeight<T>>> weights_;
+    std::vector<std::shared_ptr<Engine<T>>>      engines_;
 
     bool is_fp16_;
     int  enable_custom_all_reduce_ = 0;
@@ -107,3 +103,5 @@ private:
 
     ffi_api_lock_ctrl_t ffi_lock_ = nullptr;
 };
+
+}  // namespace turbomind

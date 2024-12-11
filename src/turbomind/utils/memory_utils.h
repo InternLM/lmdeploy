@@ -23,16 +23,13 @@
 namespace turbomind {
 
 template<typename T>
-void deviceMalloc(T** ptr, size_t size, bool is_random_initialize = true);
+void deviceMalloc(T** ptr, size_t size, cudaStream_t st, bool is_random_initialize = false);
 
 template<typename T>
-void deviceMemSetZero(T* ptr, size_t size);
+void deviceFree(T*& ptr, cudaStream_t st);
 
 template<typename T>
-void deviceFree(T*& ptr);
-
-template<typename T>
-void deviceFill(T* devptr, size_t size, T value, cudaStream_t stream = 0);
+void deviceFill(T* devptr, size_t size, T value, cudaStream_t stream = {});
 
 template<typename T>
 void cudaD2Hcpy(T* tgt, const T* src, const size_t size);
@@ -44,25 +41,18 @@ template<typename T>
 void cudaD2Dcpy(T* tgt, const T* src, const size_t size);
 
 template<typename T>
-void cudaAutoCpy(T* tgt, const T* src, const size_t size, cudaStream_t stream = NULL);
+void cudaAutoCpy(T* tgt, const T* src, const size_t size, cudaStream_t stream = {});
 
 template<typename T>
-void cudaRandomUniform(T* buffer, const size_t size);
-
-struct ConcateSlice {
-    std::vector<std::pair<size_t, size_t>> slices;
-};
+void cudaRandomUniform(T* buffer, const size_t size, cudaStream_t stream = {});
 
 template<typename T>
-int loadWeightFromBin(T*                        ptr,
-                      std::vector<size_t>       shape,
-                      std::string               filename,
-                      FtCudaDataType            model_file_type = FtCudaDataType::FP32,
-                      std::vector<ConcateSlice> slices          = std::vector<ConcateSlice>());
+int loadWeightFromBin(T*                  ptr,
+                      std::vector<size_t> shape,
+                      std::string         filename,
+                      FtCudaDataType      model_file_type = FtCudaDataType::FP32);
 
-std::vector<float> loadArrayFromBin(std::vector<size_t>       shape,
-                                    std::string               filename,
-                                    std::vector<ConcateSlice> slices = std::vector<ConcateSlice>());
+std::vector<float> loadArrayFromBin(std::vector<size_t> shape, std::string filename);
 
 // template<typename T>
 // int loadWeightFromBinAndQuantizeForWeightOnly(int8_t*             quantized_weight_ptr,
@@ -115,7 +105,8 @@ template<typename T>
 void invokeInPlaceTranspose0213(T* data, T* workspace, const int dim0, const int dim1, const int dim2, const int dim3);
 
 template<typename T>
-void invokeInPlaceTranspose102(T* data, T* workspace, const int dim0, const int dim1, const int dim2);
+void invokeInPlaceTranspose102(
+    T* data, T* workspace, const int dim0, const int dim1, const int dim2, bool copy = true, cudaStream_t stream = 0);
 
 template<typename T>
 void invokeMultiplyScale(T* tensor, float scale, const size_t size, cudaStream_t stream);

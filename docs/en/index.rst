@@ -38,11 +38,12 @@ Documentation
 
 .. _get_started:
 .. toctree::
-   :maxdepth: 2
+   :maxdepth: 1
    :caption: Get Started
 
-   installation.md
-   get_started.md
+   get_started/installation.md
+   get_started/get_started.md
+   get_started/index.rst
 
 .. _supported_models:
 .. toctree::
@@ -101,6 +102,7 @@ Documentation
    advance/long_context.md
    advance/chat_template.md
    advance/debug_turbomind.md
+   advance/structed_output.md
 
 .. toctree::
    :maxdepth: 1

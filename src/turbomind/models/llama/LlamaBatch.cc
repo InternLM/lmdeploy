@@ -3,6 +3,7 @@
 #include "src/turbomind/models/llama/LlamaBatch.h"
 #include "src/turbomind/kernels/core/data_type.h"
 #include "src/turbomind/kernels/decoding_kernels.h"
+#include "src/turbomind/kernels/gemm/tuner/params.h"
 #include "src/turbomind/kernels/sampling_topk_kernels.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/models/llama/BlockManager.h"
@@ -19,6 +20,7 @@
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/debug_utils.h"
 #include "src/turbomind/utils/logger.h"
+#include "src/turbomind/utils/nccl_utils.h"
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -29,6 +31,7 @@
 #include <iterator>
 #include <mutex>
 #include <numeric>
+#include <random>
 #include <sstream>
 #include <unordered_map>
 #include <utility>
@@ -775,6 +778,7 @@ void LlamaBatch<T>::AllocatePersistantBuffer(size_t max_batch_size, int cache_bl
     h_min_length_    = (int*)allocator_->reMalloc(h_min_length_, sizeof(int) * max_batch_size, true, true);
     h_runtime_top_k_ = (int*)allocator_->reMalloc(h_runtime_top_k_, sizeof(int) * max_batch_size, true, true);
     h_runtime_top_p_ = (float*)allocator_->reMalloc(h_runtime_top_p_, sizeof(float) * max_batch_size, true, true);
+    h_runtime_min_p_ = (float*)allocator_->reMalloc(h_runtime_min_p_, sizeof(float) * max_batch_size, true, true);
     h_temperature_   = (float*)allocator_->reMalloc(h_temperature_, sizeof(float) * max_batch_size, true, true);
     h_repetition_penalty_ =
         (float*)allocator_->reMalloc(h_repetition_penalty_, sizeof(float) * max_batch_size, true, true);
@@ -798,6 +802,7 @@ void LlamaBatch<T>::AllocatePersistantBuffer(size_t max_batch_size, int cache_bl
         {"min_length", (std::byte*)h_min_length_, nullptr},
         {"runtime_top_k", (std::byte*)h_runtime_top_k_, nullptr},
         {"runtime_top_p", (std::byte*)h_runtime_top_p_, nullptr},
+        {"runtime_min_p", (std::byte*)h_runtime_min_p_, nullptr},
         {"temperature", (std::byte*)h_temperature_, nullptr},
         {"repetition_penalty", (std::byte*)h_repetition_penalty_, nullptr},
     };
@@ -958,11 +963,6 @@ LlamaBatch<T>::~LlamaBatch()
     model_.reset();
     sequence_manager_.reset();
     context_.reset();  // This destroy all objects in context except for `stream`
-
-    check_cuda_error(cudaStreamSynchronize(stream_));
-
-    // Destroy the stream in context
-    check_cuda_error(cudaStreamDestroy(stream_));
 }
 
 template<typename T>
@@ -1042,6 +1042,9 @@ LlamaBatch<T>::LlamaBatch(const EngineParam&           param,
 
     AllocateBuffer(max_batch_size_, session_len_, cache_block_seq_len);
     AllocatePersistantBuffer(max_batch_size_, cache_block_seq_len);
+
+    // Wait for allocations
+    check_cuda_error(cudaStreamSynchronize(stream_));
 }
 
 template<typename T>
@@ -1889,6 +1892,126 @@ void LlamaBatch<T>::Submit(std::unordered_map<std::string, Tensor>*       output
             ss << (i ? "" : " ") << error_codes[i];
         }
         throw std::runtime_error(ss.str());
+    }
+}
+
+namespace {
+
+template<class First, class Last>
+std::string Join(First first, Last last, const std::string& delim)
+{
+    if (first == last) {
+        return {};
+    }
+    std::ostringstream oss;
+    oss << *first++;
+    while (first != last) {
+        oss << delim << *first++;
+    }
+    return oss.str();
+}
+
+template<class T>
+struct TuningContext {
+    LlamaLinear<T>& linear_;
+    cudaStream_t    stream_;
+    TuningContext(LlamaLinear<T>& linear, cudaStream_t stream): linear_{linear}, stream_{stream}
+    {
+        isTuning() = true;
+        linear_.set_measure(true);
+    }
+    ~TuningContext()
+    {
+        linear_.set_measure(false);
+        isTuning() = false;
+        // This will catch async errors during tuning
+        check_cuda_error(cudaStreamSynchronize(stream_));
+    }
+};
+
+}  // namespace
+
+template<class T>
+void LlamaBatch<T>::tune()
+{
+    auto& linear = *context_->linear;
+    if (auto str = std::getenv("TM_GEMM_IMPORT")) {
+        std::ifstream ifs(str);
+        const int     n_imported = linear.Import(ifs);
+        if (rank_ == 0) {
+            TM_LOG_INFO("[Gemm2] %d records imported", n_imported);
+        }
+        return;
+    }
+
+    std::vector<int> bss = linear.GetTuningSeq();
+    if (bss.empty()) {
+        bss = gemm::GenerateTuningSequence(gemm::GetDefaultTuningGenerators());
+    }
+
+    // remove bs that is too large
+    bss.erase(std::remove_if(bss.begin(), bss.end(), [&](auto x) { return x > max_forward_token_num_; }), bss.end());
+
+    if (rank_ == 0) {
+        auto str = Join(bss.begin(), bss.end(), ", ");
+        TM_LOG_INFO("[Gemm2] Tuning sequence: %s", str.c_str());
+    }
+
+    if (!bss.empty()) {
+        const auto                         max_bs = *std::max_element(bss.begin(), bss.end());
+        std::vector<int>                   input_ids(max_bs);
+        std::mt19937                       g{};
+        std::uniform_int_distribution<int> d{0, (int)model_->vocab_size_ - 1};
+        for (auto& x : input_ids) {
+            x = d(g);
+        }
+        Copy(input_ids.data(), max_bs, context_decoder_ids_buf_);
+        check_cuda_error(cudaStreamSynchronize(stream_));
+
+        TuningContext context{linear, stream_};
+
+        auto tick = std::chrono::steady_clock::now();
+
+        /// NOTE: No explicit barrier can be used here as internal threads are waiting on it now
+        for (auto bs : bss) {
+            if (rank_ == 0) {
+                TM_LOG_INFO("[Gemm2] %d", bs);
+            }
+            const int input_length = bs;
+            model_->forwardUnified(decoder_output_buf_,
+                                   context_decoder_output_buf_,
+                                   context_decoder_input_buf_,
+                                   (void**)block_ptrs_,  // invalid data
+                                   cu_block_counts_,     // invalid data
+                                   context_decoder_ids_buf_,
+                                   &input_length,
+                                   &input_length,
+                                   rope_theta_,    // invalid data
+                                   finished_buf_,  // invalid data
+                                   bs,
+                                   0,
+                                   1,
+                                   nullptr,
+                                   nullptr);
+            // implicit barrier for TP
+            ftNcclStreamSynchronize(model_->tensor_para_, {}, stream_);
+        }
+
+        auto tock = std::chrono::steady_clock::now();
+
+        if (rank_ == 0) {
+            TM_LOG_INFO("[Gemm2] Tuning finished in %.2f seconds.",
+                        std::chrono::duration<float, std::ratio<1, 1>>(tock - tick).count());
+        }
+    }
+
+    // Only rank-0 exports the dispatch cache
+    if (rank_ == 0) {
+        if (auto path = std::getenv("TM_GEMM_EXPORT")) {
+            std::ofstream ofs(path);
+            const auto    n_records = context_->linear->Export(ofs);
+            TM_LOG_INFO("[Gemm2] %d records exported.", n_records);
+        }
     }
 }
 

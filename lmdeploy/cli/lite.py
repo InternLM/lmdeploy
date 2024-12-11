@@ -35,6 +35,11 @@ class SubCliLite(object):
         ArgumentHelper.calib_seqlen(parser)
         ArgumentHelper.calib_batchsize(parser)
         ArgumentHelper.calib_search_scale(parser)
+        parser.add_argument(
+            '--device',
+            type=str,
+            default='cuda',
+            help='Device for weight quantization (cuda or npu)')
         parser.add_argument('--w-bits',
                             type=int,
                             default=4,
@@ -42,6 +47,34 @@ class SubCliLite(object):
         parser.add_argument('--w-sym',
                             action='store_true',
                             help='Whether to do symmetric quantization')
+        parser.add_argument(
+            '--w-group-size',
+            type=int,
+            default=128,
+            help='Group size for weight quantization statistics')
+
+    @staticmethod
+    def add_parser_auto_gptq():
+        """Add parser for auto_gptq command."""
+        parser = SubCliLite.subparsers.add_parser(
+            'auto_gptq',
+            formatter_class=DefaultsAndTypesHelpFormatter,
+            description=SubCliLite.auto_gptq.__doc__,
+            help=SubCliLite.auto_gptq.__doc__)
+        parser.set_defaults(run=SubCliLite.auto_gptq)
+        parser.add_argument('model',
+                            type=str,
+                            help='The path of model in hf format')
+        ArgumentHelper.revision(parser)
+        ArgumentHelper.work_dir(parser)
+        ArgumentHelper.calib_dataset(parser)
+        ArgumentHelper.calib_samples(parser)
+        ArgumentHelper.calib_seqlen(parser)
+        ArgumentHelper.calib_batchsize(parser)
+        parser.add_argument('--w-bits',
+                            type=int,
+                            default=4,
+                            help='Bit number for weight quantization')
         parser.add_argument(
             '--w-group-size',
             type=int,
@@ -98,6 +131,13 @@ class SubCliLite(object):
         auto_awq(**kwargs)
 
     @staticmethod
+    def auto_gptq(args):
+        """Perform weight quantization using GPTQ algorithm."""
+        from lmdeploy.lite.apis.gptq import auto_gptq
+        kwargs = convert_args(args)
+        auto_gptq(**kwargs)
+
+    @staticmethod
     def calibrate(args):
         """Perform calibration on a given dataset."""
         from lmdeploy.lite.apis.calibrate import calibrate
@@ -115,5 +155,6 @@ class SubCliLite(object):
     def add_parsers():
         """Add all parsers."""
         SubCliLite.add_parser_auto_awq()
+        SubCliLite.add_parser_auto_gptq()
         SubCliLite.add_parser_calibrate()
         SubCliLite.add_parser_smooth_quant()

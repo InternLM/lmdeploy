@@ -13,7 +13,7 @@ ARG PYTHON_VERSION=3.10
 ARG TORCH_VERSION=2.3.0
 ARG TORCHVISION_VERSION=0.18.0
 
-RUN apt-get update -y && apt-get install -y software-properties-common wget vim git curl &&\
+RUN apt-get update -y && apt-get install -y software-properties-common wget vim git curl openssh-server ssh sudo &&\
     curl https://sh.rustup.rs -sSf | sh -s -- -y &&\
     add-apt-repository ppa:deadsnakes/ppa -y && apt-get update -y && apt-get install -y --no-install-recommends \
     ninja-build rapidjson-dev libgoogle-glog-dev gdb python${PYTHON_VERSION} python${PYTHON_VERSION}-dev python${PYTHON_VERSION}-venv \
@@ -28,6 +28,19 @@ RUN wget https://download.open-mpi.org/release/open-mpi/v4.1/openmpi-4.1.5.tar.g
 
 ENV PATH=$PATH:/usr/local/openmpi/bin
 ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/openmpi/lib
+
+# install nccl manually for cuda11.8
+RUN if [ "$CUDA_VERSION_SHORT" = "cu118" ]; then \
+    git clone --depth=1 --branch v2.22.3-1 https://github.com/NVIDIA/nccl.git &&\
+    cd nccl && make -j$(nproc) src.build &&\
+    mv build/include/* /usr/local/include &&\
+    mkdir -p /usr/local/nccl/lib &&\
+    mv build/lib/lib* /usr/local/nccl/lib/ &&\
+    cd .. && rm -rf nccl ; \
+    fi
+
+ENV LD_LIBRARY_PATH=/usr/local/nccl/lib:$LD_LIBRARY_PATH
+
 
 RUN --mount=type=cache,target=/root/.cache/pip python3 -m pip install --upgrade pip setuptools==69.5.1 &&\
     python3 -m pip install torch==${TORCH_VERSION} torchvision==${TORCHVISION_VERSION} --index-url https://download.pytorch.org/whl/${CUDA_VERSION_SHORT} &&\
@@ -48,6 +61,9 @@ RUN --mount=type=cache,target=/root/.cache/pip cd /opt/lmdeploy &&\
     cd .. &&\
     python3 -m pip install -e . &&\
     rm -rf build
+
+# use locally built nccl for cuda11.8
+RUN if [ "$CUDA_VERSION_SHORT" = "cu118" ]; then python3 -m pip uninstall -y nvidia-nccl-cu11 ; fi
 
 ENV LD_LIBRARY_PATH=/opt/lmdeploy/install/lib:$LD_LIBRARY_PATH
 ENV PATH=/opt/lmdeploy/install/bin:$PATH

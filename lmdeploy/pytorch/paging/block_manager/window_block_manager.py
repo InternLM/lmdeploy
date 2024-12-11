@@ -1,9 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Union
-
 import numpy as np
 
-from ...adapter.adapter import AdapterManager, SchedulerAdapter
 from ...block import LogicalTokenBlocks
 from ...messages import SchedulerSequence
 from .default_block_manager import DefaultBlockManager
@@ -44,19 +41,16 @@ class WindowBlockManager(DefaultBlockManager):
         num_cpu_blocks (int): number of cpu blocks.
     """
 
-    def __init__(self,
-                 num_gpu_blocks: int,
-                 num_cpu_blocks: int,
-                 window_size: int,
-                 adapter_manager: AdapterManager = None):
-        super().__init__(num_gpu_blocks, num_cpu_blocks, adapter_manager)
+    def __init__(self, num_gpu_blocks: int, num_cpu_blocks: int,
+                 window_size: int):
+        super().__init__(num_gpu_blocks, num_cpu_blocks)
         assert window_size > 0, ('expect window size > 0, '
                                  f'but get window_size = {window_size}')
         self.window_size = window_size
 
     @classmethod
     def num_required_blocks(cls,
-                            obj: Union[SchedulerSequence, SchedulerAdapter],
+                            obj: SchedulerSequence,
                             prealloc_size: int = 0):
         """get num required blocks."""
 
@@ -71,17 +65,7 @@ class WindowBlockManager(DefaultBlockManager):
             num_req_tokens = max(0, num_input_tokens - lb_remain_tokens)
             return _div_up(num_req_tokens, block_size)
 
-        def __num_req_adapter(adapter: SchedulerAdapter):
-            """get num required adapter blocks."""
-            if adapter.is_actived():
-                return 0
-            else:
-                return obj.num_required_blocks
-
-        if isinstance(obj, SchedulerSequence):
-            return __num_req_seq(obj)
-        else:
-            return __num_req_adapter(obj)
+        return __num_req_seq(obj)
 
     @classmethod
     def last_block_size(cls, seq: SchedulerSequence) -> int:
@@ -96,9 +80,6 @@ class WindowBlockManager(DefaultBlockManager):
         num_drop_blocks = _num_blocks_to_drop(msg, self.window_size)
         num_required_blocks = self.num_required_blocks(msg, prealloc_size)
         num_free_phy = self.get_num_free_gpu_blocks()
-        if msg.adapter_name is not None:
-            adapter = self.adapter_manager.get_adapter(msg.adapter_name)
-            num_required_blocks += self.num_required_blocks(adapter)
         return num_required_blocks <= num_free_phy + num_drop_blocks
 
     def allocate_msg(self, msg: SchedulerSequence, prealloc_size: int = 0):

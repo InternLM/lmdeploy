@@ -27,7 +27,11 @@ void Registry::f16_u4g128_f16_tnt_sm75_simt()
                             Transform_HMMA_SIMT_B,
                             Operand_V,
                             kRowMajor,
-                            half>;
+                            half,
+                            Striding::kFlat,
+                            Striding::kFlat,
+                            Striding::kFlat,
+                            GemmScheduler<kColMajor>>;
 
         // clang-format off
         Add<C::Type<128, 128, 16, 8, 1, 1, D, D, 2, true, 1, 128>>();

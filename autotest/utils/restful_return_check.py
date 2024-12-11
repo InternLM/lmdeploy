@@ -69,6 +69,7 @@ def assert_chat_completions_stream_return(output,
                                           is_last: bool = False,
                                           check_logprobs: bool = False,
                                           logprobs_num: int = 5):
+    print(output)
     assert output.get('id') is not None
     assert output.get('object') == 'chat.completion.chunk'
     assert output.get('model') == model_name
@@ -81,10 +82,9 @@ def assert_chat_completions_stream_return(output,
         if not is_last:
             assert message.get('finish_reason') is None
             if check_logprobs:
-                assert (len(message.get('logprobs').get('content')) == 1)
-                assert_logprobs(
-                    message.get('logprobs').get('content')[0], logprobs_num)
-
+                assert (len(message.get('logprobs').get('content')) >= 1)
+                for content in message.get('logprobs').get('content'):
+                    assert_logprobs(content, logprobs_num)
         if is_last is True:
             assert len(message.get('delta').get('content')) == 0
             assert message.get('finish_reason') in ['stop', 'length']
@@ -97,6 +97,7 @@ def assert_completions_stream_return(output,
                                      is_last: bool = False,
                                      check_logprobs: bool = False,
                                      logprobs_num: int = 5):
+    print(output)
     assert output.get('id') is not None
     assert output.get('object') == 'text_completion'
     assert output.get('model') == model_name
@@ -108,9 +109,9 @@ def assert_completions_stream_return(output,
         if is_last is False:
             assert message.get('finish_reason') is None
             if check_logprobs:
-                assert (len(message.get('logprobs').get('content')) == 1)
-                assert_logprobs(
-                    message.get('logprobs').get('content')[0], logprobs_num)
+                assert (len(message.get('logprobs').get('content')) >= 1)
+                for content in message.get('logprobs').get('content'):
+                    assert_logprobs(content, logprobs_num)
 
         if is_last is True:
             assert len(message.get('text')) == 0

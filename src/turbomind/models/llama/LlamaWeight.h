@@ -22,26 +22,18 @@
 
 #include "src/turbomind/models/llama/LlamaDecoderLayerWeight.h"
 #include "src/turbomind/models/llama/llama_params.h"
-#include "src/turbomind/utils/memory_utils.h"
 
 namespace turbomind {
 
 template<typename T>
 struct LlamaWeight {
     LlamaWeight() = default;
-    LlamaWeight(size_t     head_num,
-                size_t     kv_head_num,
-                size_t     size_per_head,
-                size_t     hidden_units,
-                size_t     inter_size,
-                size_t     vocab_size,
-                size_t     num_layer,
-                bool       attn_bias,
-                WeightType weight_type,
-                int        group_size,
-                LoraParam  lora_param,
-                size_t     tensor_para_size,
-                size_t     tensor_para_rank);
+
+    LlamaWeight(const ModelParam& model_param,
+                const LoraParam&  lora_param,
+                const MoeParam&   moe_param,
+                size_t            tp_size,
+                size_t            tp_rank);
 
     ~LlamaWeight();
 
@@ -55,21 +47,24 @@ struct LlamaWeight {
     void prepare(const cudaDeviceProp& prop);
 
     std::vector<LlamaDecoderLayerWeight<T>*> decoder_layer_weights;
-    const T*                                 pre_decoder_embedding_table{};
-    const T*                                 output_norm_weight{};
-    const T*                                 post_decoder_embedding_kernel{};
+
+    T* pre_decoder_embedding_table{};
+    T* output_norm_weight{};
+    T* post_decoder_embedding_kernel{};
 
 private:
-    void mallocWeights();
-
     size_t     hidden_units_;
-    size_t     inter_size_;
     size_t     vocab_size_;
     size_t     vocab_size_padded_;
+    size_t     embedding_size_;
     size_t     num_layer_;
     WeightType weight_type_;
     size_t     tensor_para_size_;
     size_t     tensor_para_rank_;
+
+    std::vector<int> inter_size_;
+
+    cudaStream_t stream_;
 };
 
 }  // namespace turbomind

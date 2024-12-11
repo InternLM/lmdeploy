@@ -15,9 +15,17 @@ from utils.restful_return_check import get_repeat_times
 
 from lmdeploy import (GenerationConfig, PytorchEngineConfig,
                       TurbomindEngineConfig, pipeline)
+from lmdeploy.utils import is_bf16_supported
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
+def init_pipeline(model_path, backend_config):
+    if not is_bf16_supported() and isinstance(backend_config,
+                                              PytorchEngineConfig):
+        backend_config.dtype = 'float16'
+    return pipeline(model_path, backend_config=backend_config)
+
+
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
 @pytest.mark.parametrize('backend',
                          [TurbomindEngineConfig, PytorchEngineConfig])
 def test_return_with_prompt(config, model, backend, worker_id):
@@ -26,7 +34,7 @@ def test_return_with_prompt(config, model, backend, worker_id):
 
         model_path = '/'.join([config.get('model_path'), model])
         backend_config = backend(tp=2)
-        pipe = pipeline(model_path, backend_config=backend_config)
+        pipe = init_pipeline(model_path, backend_config=backend_config)
         response = pipe('Hi, pls intro yourself')
         result, msg = assert_pipeline_single_return(response)
         save_pipeline_common_log(config, file_name, result, response, msg)
@@ -47,7 +55,7 @@ def test_return_with_prompt(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
 @pytest.mark.parametrize('backend',
                          [TurbomindEngineConfig, PytorchEngineConfig])
 def test_return_with_prompt_stream(config, model, backend, worker_id):
@@ -56,7 +64,7 @@ def test_return_with_prompt_stream(config, model, backend, worker_id):
 
         model_path = '/'.join([config.get('model_path'), model])
         backend_config = backend(tp=2)
-        pipe = pipeline(model_path, backend_config=backend_config)
+        pipe = init_pipeline(model_path, backend_config=backend_config)
         response = []
         for item in pipe.stream_infer('Hi, pls intro yourself'):
             response.append(item)
@@ -79,7 +87,7 @@ def test_return_with_prompt_stream(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
 @pytest.mark.parametrize('backend',
                          [TurbomindEngineConfig, PytorchEngineConfig])
 def test_return_with_multi_prompt(config, model, backend, worker_id):
@@ -88,7 +96,7 @@ def test_return_with_multi_prompt(config, model, backend, worker_id):
 
         model_path = '/'.join([config.get('model_path'), model])
         backend_config = backend(tp=2)
-        pipe = pipeline(model_path, backend_config=backend_config)
+        pipe = init_pipeline(model_path, backend_config=backend_config)
         response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
         result, msg = assert_pipeline_batch_return(response, 2)
         save_pipeline_common_log(config, file_name, result, response, msg)
@@ -109,7 +117,7 @@ def test_return_with_multi_prompt(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
 @pytest.mark.parametrize('backend',
                          [TurbomindEngineConfig, PytorchEngineConfig])
 def test_return_with_multi_prompt_stream(config, model, backend, worker_id):
@@ -118,7 +126,7 @@ def test_return_with_multi_prompt_stream(config, model, backend, worker_id):
 
         model_path = '/'.join([config.get('model_path'), model])
         backend_config = backend(tp=2)
-        pipe = pipeline(model_path, backend_config=backend_config)
+        pipe = init_pipeline(model_path, backend_config=backend_config)
         response = []
         for item in pipe.stream_infer(['Pls intro yourself', 'Shanghai is']):
             response.append(item)
@@ -141,7 +149,7 @@ def test_return_with_multi_prompt_stream(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
 @pytest.mark.parametrize('backend',
                          [TurbomindEngineConfig, PytorchEngineConfig])
 def test_return_with_message(config, model, backend, worker_id):
@@ -149,7 +157,7 @@ def test_return_with_message(config, model, backend, worker_id):
     def run_pipeline_testcase(config, model, backend, file_name):
         model_path = '/'.join([config.get('model_path'), model])
         backend_config = backend(tp=2)
-        pipe = pipeline(model_path, backend_config=backend_config)
+        pipe = init_pipeline(model_path, backend_config=backend_config)
         prompts = [[{'role': 'user', 'content': 'Hi, pls intro yourself'}]]
         response = pipe(prompts)
         print(response)
@@ -172,7 +180,7 @@ def test_return_with_message(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
 @pytest.mark.parametrize('backend',
                          [TurbomindEngineConfig, PytorchEngineConfig])
 def test_return_with_message_stream(config, model, backend, worker_id):
@@ -180,7 +188,7 @@ def test_return_with_message_stream(config, model, backend, worker_id):
     def run_pipeline_testcase(config, model, backend, file_name):
         model_path = '/'.join([config.get('model_path'), model])
         backend_config = backend(tp=2)
-        pipe = pipeline(model_path, backend_config=backend_config)
+        pipe = init_pipeline(model_path, backend_config=backend_config)
         prompts = [[{'role': 'user', 'content': 'Hi, pls intro yourself'}]]
         response = []
         for item in pipe.stream_infer(prompts):
@@ -204,7 +212,7 @@ def test_return_with_message_stream(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
 @pytest.mark.parametrize('backend',
                          [TurbomindEngineConfig, PytorchEngineConfig])
 def test_return_with_message_batch(config, model, backend, worker_id):
@@ -212,7 +220,7 @@ def test_return_with_message_batch(config, model, backend, worker_id):
     def run_pipeline_testcase(config, model, backend, file_name):
         model_path = '/'.join([config.get('model_path'), model])
         backend_config = backend(tp=2)
-        pipe = pipeline(model_path, backend_config=backend_config)
+        pipe = init_pipeline(model_path, backend_config=backend_config)
         prompts = [[{
             'role': 'user',
             'content': 'Hi, pls intro yourself'
@@ -241,7 +249,7 @@ def test_return_with_message_batch(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
 @pytest.mark.parametrize('backend',
                          [TurbomindEngineConfig, PytorchEngineConfig])
 def test_return_with_message_batch_stream(config, model, backend, worker_id):
@@ -249,7 +257,7 @@ def test_return_with_message_batch_stream(config, model, backend, worker_id):
     def run_pipeline_testcase(config, model, backend, file_name):
         model_path = '/'.join([config.get('model_path'), model])
         backend_config = backend(tp=2)
-        pipe = pipeline(model_path, backend_config=backend_config)
+        pipe = init_pipeline(model_path, backend_config=backend_config)
         prompts = [[{
             'role': 'user',
             'content': 'Hi, pls intro yourself'
@@ -279,7 +287,7 @@ def test_return_with_message_batch_stream(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig])
 def test_return_check_logprobs(config, model, backend, worker_id):
 
@@ -287,8 +295,11 @@ def test_return_check_logprobs(config, model, backend, worker_id):
 
         model_path = '/'.join([config.get('model_path'), model])
         backend_config = backend(tp=2)
-        pipe = pipeline(model_path, backend_config=backend_config)
-        gen_config = GenerationConfig(logprobs=10, max_new_tokens=5, top_k=40)
+        pipe = init_pipeline(model_path, backend_config=backend_config)
+        gen_config = GenerationConfig(logprobs=10,
+                                      max_new_tokens=5,
+                                      top_k=40,
+                                      do_sample=True)
         response = pipe('Hi, pls intro yourself', gen_config=gen_config)
         result, msg = assert_pipeline_single_return(response, logprobs_num=10)
         save_pipeline_common_log(config, file_name, result, response, msg)
@@ -309,7 +320,7 @@ def test_return_check_logprobs(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig])
 def test_return_check_logprobs_stream(config, model, backend, worker_id):
 
@@ -317,8 +328,11 @@ def test_return_check_logprobs_stream(config, model, backend, worker_id):
 
         model_path = '/'.join([config.get('model_path'), model])
         backend_config = backend(tp=2)
-        pipe = pipeline(model_path, backend_config=backend_config)
-        gen_config = GenerationConfig(logprobs=10, max_new_tokens=5, top_k=40)
+        pipe = init_pipeline(model_path, backend_config=backend_config)
+        gen_config = GenerationConfig(logprobs=10,
+                                      max_new_tokens=5,
+                                      top_k=40,
+                                      do_sample=True)
         response = []
         for item in pipe.stream_infer('Hi, pls intro yourself',
                                       gen_config=gen_config):
@@ -343,7 +357,7 @@ def test_return_check_logprobs_stream(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
 @pytest.mark.parametrize('backend',
                          [TurbomindEngineConfig, PytorchEngineConfig])
 def test_backend_config_session_len(config, model, backend, worker_id):
@@ -352,7 +366,7 @@ def test_backend_config_session_len(config, model, backend, worker_id):
 
         model_path = '/'.join([config.get('model_path'), model])
         backend_config = backend(session_len=10, tp=2)
-        pipe = pipeline(model_path, backend_config=backend_config)
+        pipe = init_pipeline(model_path, backend_config=backend_config)
         response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
 
         result = True
@@ -377,7 +391,7 @@ def test_backend_config_session_len(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
 @pytest.mark.parametrize('backend',
                          [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_min_new_tokens(config, model, backend, worker_id):
@@ -386,7 +400,7 @@ def test_gen_config_min_new_tokens(config, model, backend, worker_id):
 
         model_path = '/'.join([config.get('model_path'), model])
         backend_config = backend(tp=2)
-        pipe = pipeline(model_path, backend_config=backend_config)
+        pipe = init_pipeline(model_path, backend_config=backend_config)
         # test min_new_tokens
         gen_config = GenerationConfig(min_new_tokens=200, ignore_eos=True)
         response = pipe(['Hi, pls intro yourself', 'Shanghai is'],
@@ -413,7 +427,7 @@ def test_gen_config_min_new_tokens(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
 @pytest.mark.parametrize('backend',
                          [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_stop_words(config, model, backend, worker_id):
@@ -422,11 +436,9 @@ def test_gen_config_stop_words(config, model, backend, worker_id):
 
         model_path = '/'.join([config.get('model_path'), model])
         backend_config = backend(tp=2)
-        pipe = pipeline(model_path, backend_config=backend_config)
+        pipe = init_pipeline(model_path, backend_config=backend_config)
         # test stop_words
-        gen_config = GenerationConfig(stop_words=[' and', '浦', ' to'],
-                                      random_seed=1,
-                                      temperature=0.01)
+        gen_config = GenerationConfig(stop_words=[' and', '浦', ' to'])
         response = pipe(['Hi, pls intro yourself', 'Shanghai is'],
                         gen_config=gen_config)
         result = True
@@ -435,7 +447,7 @@ def test_gen_config_stop_words(config, model, backend, worker_id):
             result &= ' and' not in response[
                 i].text and ' to ' not in response[i].text
             result &= response[i].finish_reason == 'stop' and response[
-                i].generate_token_len < 20
+                i].generate_token_len < 50
         save_pipeline_common_log(config, file_name, result, response)
         del pipe
         torch.cuda.empty_cache()
@@ -454,7 +466,7 @@ def test_gen_config_stop_words(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
 @pytest.mark.parametrize('backend',
                          [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_bad_words(config, model, backend, worker_id):
@@ -463,11 +475,9 @@ def test_gen_config_bad_words(config, model, backend, worker_id):
 
         model_path = '/'.join([config.get('model_path'), model])
         backend_config = backend(tp=2)
-        pipe = pipeline(model_path, backend_config=backend_config)
+        pipe = init_pipeline(model_path, backend_config=backend_config)
         # test bad_words
-        gen_config = GenerationConfig(bad_words=[' and', '浦', ' to'],
-                                      temperature=0.01,
-                                      random_seed=1)
+        gen_config = GenerationConfig(bad_words=[' and', '浦', ' to'])
         response = pipe(['Hi, pls intro yourself', 'Shanghai is'],
                         gen_config=gen_config)
         result = '蒲' in response[0].text
@@ -492,7 +502,7 @@ def test_gen_config_bad_words(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
 @pytest.mark.parametrize('backend',
                          [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_special_words_false(config, model, backend, worker_id):
@@ -500,7 +510,7 @@ def test_gen_config_special_words_false(config, model, backend, worker_id):
     def run_pipeline_testcase_special_words(config, model, backend, file_name):
         model_path = '/'.join([config.get('model_path'), model])
         backend_config = backend(tp=2)
-        pipe = pipeline(model_path, backend_config=backend_config)
+        pipe = init_pipeline(model_path, backend_config=backend_config)
         # test special_words
         prompt = '<|im_start|>system\n当开启工具以及代码时，根据需求选择合适的工具进行调用\n' + \
             '<|im_end|><|im_start|>system name=<|interpreter|>\n你现在已经' + \
@@ -533,7 +543,7 @@ def test_gen_config_special_words_false(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
 @pytest.mark.parametrize('backend',
                          [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_special_words_true(config, model, backend, worker_id):
@@ -541,7 +551,7 @@ def test_gen_config_special_words_true(config, model, backend, worker_id):
     def run_pipeline_testcase_special_words(config, model, backend, file_name):
         model_path = '/'.join([config.get('model_path'), model])
         backend_config = backend(tp=2)
-        pipe = pipeline(model_path, backend_config=backend_config)
+        pipe = init_pipeline(model_path, backend_config=backend_config)
         # test special_words
         prompt = '<|im_start|>system\n当开启工具以及代码时，根据需求选择合适的工具进行调用\n' + \
             '<|im_end|><|im_start|>system name=<|interpreter|>\n你现在已经' + \
@@ -574,7 +584,7 @@ def test_gen_config_special_words_true(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
 @pytest.mark.parametrize('backend',
                          [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_minimum_repetition_penalty(config, model, backend,
@@ -585,13 +595,16 @@ def test_gen_config_minimum_repetition_penalty(config, model, backend,
 
         model_path = '/'.join([config.get('model_path'), model])
         backend_config = backend(tp=2)
-        pipe = pipeline(model_path, backend_config=backend_config)
+        pipe = init_pipeline(model_path, backend_config=backend_config)
         # test repetition_penalty
-        gen_config = GenerationConfig(repetition_penalty=0.01, random_seed=1)
+        gen_config = GenerationConfig(repetition_penalty=0.01,
+                                      random_seed=1,
+                                      do_sample=True)
         response = pipe('Shanghai is', gen_config=gen_config)
 
-        result = 'a 上海 is a 上海, ' * 10 in response.text or get_repeat_times(
-            response.text, 'Shanghai is') > 5
+        result = get_repeat_times(response.text,
+                                  'is a name') > 5 or get_repeat_times(
+                                      response.text, 'Shanghai is') > 5
         save_pipeline_common_log(config, file_name, result, response)
         del pipe
         torch.cuda.empty_cache()
@@ -610,7 +623,7 @@ def test_gen_config_minimum_repetition_penalty(config, model, backend,
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
 @pytest.mark.parametrize('backend',
                          [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_repetition_penalty_bigger_than_1(config, model, backend,
@@ -621,7 +634,7 @@ def test_gen_config_repetition_penalty_bigger_than_1(config, model, backend,
 
         model_path = '/'.join([config.get('model_path'), model])
         backend_config = backend(tp=2)
-        pipe = pipeline(model_path, backend_config=backend_config)
+        pipe = init_pipeline(model_path, backend_config=backend_config)
         # test repetition_penalty
         gen_config = GenerationConfig(repetition_penalty=1.2, random_seed=1)
         response = pipe('Shanghai is', gen_config=gen_config)
@@ -644,7 +657,7 @@ def test_gen_config_repetition_penalty_bigger_than_1(config, model, backend,
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
 @pytest.mark.parametrize('backend',
                          [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_minimun_topp(config, model, backend, worker_id):
@@ -653,7 +666,7 @@ def test_gen_config_minimun_topp(config, model, backend, worker_id):
 
         model_path = '/'.join([config.get('model_path'), model])
         backend_config = backend(tp=2)
-        pipe = pipeline(model_path, backend_config=backend_config)
+        pipe = init_pipeline(model_path, backend_config=backend_config)
         # test repetition_penalty
         gen_config = GenerationConfig(top_p=0.1, random_seed=1)
         response = pipe('Shanghai is', gen_config=gen_config)
@@ -676,7 +689,7 @@ def test_gen_config_minimun_topp(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
 @pytest.mark.parametrize('backend',
                          [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_minimun_topk(config, model, backend, worker_id):
@@ -685,9 +698,11 @@ def test_gen_config_minimun_topk(config, model, backend, worker_id):
 
         model_path = '/'.join([config.get('model_path'), model])
         backend_config = backend(tp=2)
-        pipe = pipeline(model_path, backend_config=backend_config)
+        pipe = init_pipeline(model_path, backend_config=backend_config)
         # test repetition_penalty
-        gen_config = GenerationConfig(top_k=1, max_new_tokens=20)
+        gen_config = GenerationConfig(top_k=1,
+                                      max_new_tokens=20,
+                                      do_sample=True)
         response_list = []
         for i in range(3):
             response_list.append(pipe('Shanghai is', gen_config=gen_config))
@@ -711,7 +726,7 @@ def test_gen_config_minimun_topk(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
 @pytest.mark.parametrize('backend',
                          [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_diff_random_seed(config, model, backend, worker_id):
@@ -720,12 +735,13 @@ def test_gen_config_diff_random_seed(config, model, backend, worker_id):
 
         model_path = '/'.join([config.get('model_path'), model])
         backend_config = backend(tp=2)
-        pipe = pipeline(model_path, backend_config=backend_config)
+        pipe = init_pipeline(model_path, backend_config=backend_config)
         response_list = []
         for i in range(3):
             gen_config = GenerationConfig(random_seed=i,
                                           temperature=1.0,
-                                          top_k=40)
+                                          top_k=40,
+                                          do_sample=True)
             response_list.append(pipe('Shanghai is', gen_config=gen_config))
         result = response_list[0].text != response_list[
             1].text and response_list[1].text != response_list[2].text
@@ -747,7 +763,7 @@ def test_gen_config_diff_random_seed(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
 @pytest.mark.parametrize('backend',
                          [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_same_random_seed(config, model, backend, worker_id):
@@ -756,8 +772,8 @@ def test_gen_config_same_random_seed(config, model, backend, worker_id):
 
         model_path = '/'.join([config.get('model_path'), model])
         backend_config = backend(tp=2)
-        pipe = pipeline(model_path, backend_config=backend_config)
-        gen_config = GenerationConfig(random_seed=1, top_k=40)
+        pipe = init_pipeline(model_path, backend_config=backend_config)
+        gen_config = GenerationConfig(random_seed=1, top_k=40, do_sample=True)
         response_list = []
         for i in range(3):
             response_list.append(pipe('Shanghai is', gen_config=gen_config))
@@ -781,7 +797,41 @@ def test_gen_config_same_random_seed(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
+@pytest.mark.parametrize('backend',
+                         [TurbomindEngineConfig, PytorchEngineConfig])
+def test_gen_config_do_sample_batch(config, model, backend, worker_id):
+
+    def run_pipeline_testcase(config, model, backend, file_name):
+
+        model_path = '/'.join([config.get('model_path'), model])
+        backend_config = backend(tp=2)
+        pipe = init_pipeline(model_path, backend_config=backend_config)
+        gen_config = GenerationConfig(temperature=1.0,
+                                      top_k=40,
+                                      do_sample=True)
+        response = pipe(['Shanghai is'] * 3, gen_config=gen_config)
+        result = response[0].text != response[1].text and response[
+            1].text != response[2].text
+        save_pipeline_common_log(config, file_name, result, response)
+        del pipe
+        torch.cuda.empty_cache()
+
+    file_name = f'pipeline_log_{worker_id}.txt'
+    if 'gw' in worker_id:
+        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id,
+                                                                     tp_num=2)
+    p = Process(target=run_pipeline_testcase,
+                args=(config, model, backend, file_name))
+
+    p.start()
+    p.join()
+    assert_pipeline_common_log(config, file_name)
+    if 'gw' in worker_id:
+        del os.environ['CUDA_VISIBLE_DEVICES']
+
+
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
 @pytest.mark.parametrize('backend',
                          [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_max_new_tokens(config, model, backend, worker_id):
@@ -791,7 +841,7 @@ def test_gen_config_max_new_tokens(config, model, backend, worker_id):
 
         model_path = '/'.join([config.get('model_path'), model])
         backend_config = backend(tp=2)
-        pipe = pipeline(model_path, backend_config=backend_config)
+        pipe = init_pipeline(model_path, backend_config=backend_config)
         # test max_new_tokens
         gen_config = GenerationConfig(max_new_tokens=5)
         response = pipe(['Hi, pls intro yourself', 'Shanghai is'],
@@ -819,7 +869,7 @@ def test_gen_config_max_new_tokens(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
 @pytest.mark.parametrize('backend',
                          [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_ignore_eos(config, model, backend, worker_id):
@@ -828,7 +878,7 @@ def test_gen_config_ignore_eos(config, model, backend, worker_id):
 
         model_path = '/'.join([config.get('model_path'), model])
         backend_config = backend(tp=2)
-        pipe = pipeline(model_path, backend_config=backend_config)
+        pipe = init_pipeline(model_path, backend_config=backend_config)
         # test max_new_tokens with ignore_eos
         gen_config = GenerationConfig(ignore_eos=True, max_new_tokens=256)
         response = pipe(['Hi, pls intro yourself', 'Shanghai is'],
@@ -856,7 +906,7 @@ def test_gen_config_ignore_eos(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
 @pytest.mark.parametrize('backend',
                          [TurbomindEngineConfig, PytorchEngineConfig])
 def test_backend_config_input_validation(config, model, backend, worker_id):
@@ -865,7 +915,7 @@ def test_backend_config_input_validation(config, model, backend, worker_id):
                                                                      tp_num=2)
     model_path = '/'.join([config.get('model_path'), model])
     backend_config = backend(tp=2)
-    pipe = pipeline(model_path, backend_config=backend_config)
+    pipe = init_pipeline(model_path, backend_config=backend_config)
     with pytest.raises(AssertionError):
         gen_config = GenerationConfig(top_p=0)
         pipe('Shanghai is', gen_config=gen_config)
@@ -896,7 +946,7 @@ def test_backend_config_input_validation(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig])
 def test_backend_config_validate_turbomind(config, model, backend, worker_id):
     if 'gw' in worker_id:
@@ -908,7 +958,9 @@ def test_backend_config_validate_turbomind(config, model, backend, worker_id):
         backend_config = backend(tp=0)
         pipeline(model_path, backend_config=backend_config)
 
-    with pytest.raises(pydantic.ValidationError):
+    with pytest.raises(
+            AssertionError,
+            match='max_batch_size should be greater than 0, but got 0'):
         backend_config = backend(max_batch_size=0)
         pipeline(model_path, backend_config=backend_config)
 
@@ -936,7 +988,7 @@ def test_backend_config_validate_turbomind(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
 @pytest.mark.parametrize('backend', [PytorchEngineConfig])
 def test_backend_config_validate_pytorch(config, model, backend, worker_id):
     if 'gw' in worker_id:
@@ -945,38 +997,38 @@ def test_backend_config_validate_pytorch(config, model, backend, worker_id):
     model_path = '/'.join([config.get('model_path'), model])
     with pytest.raises(AssertionError):
         backend_config = backend(tp=0)
-        pipeline(model_path, backend_config=backend_config)
+        init_pipeline(model_path, backend_config=backend_config)
 
     with pytest.raises(AssertionError):
         backend_config = backend(max_batch_size=0)
-        pipeline(model_path, backend_config=backend_config)
+        init_pipeline(model_path, backend_config=backend_config)
 
     with pytest.raises(AssertionError):
         backend_config = backend(cache_max_entry_count=0)
-        pipeline(model_path, backend_config=backend_config)
+        init_pipeline(model_path, backend_config=backend_config)
 
     with pytest.raises(AssertionError):
         backend_config = backend(num_cpu_blocks=-1)
-        pipeline(model_path, backend_config=backend_config)
+        init_pipeline(model_path, backend_config=backend_config)
 
     with pytest.raises(AssertionError):
         backend_config = backend(num_gpu_blocks=-1)
-        pipeline(model_path, backend_config=backend_config)
+        init_pipeline(model_path, backend_config=backend_config)
 
     if 'gw' in worker_id:
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2-chat-20b'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig])
 def test_backend_config_tp(config, model, backend, worker_id):
-    with pytest.raises(AssertionError, match='tp should be 2\\^n'):
+    with pytest.raises(AssertionError):
         if 'gw' in worker_id:
             os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(
                 worker_id, tp_num=2)
         model_path = '/'.join([config.get('model_path'), model])
         backend_config = backend(tp=100)
-        pipe = pipeline(model_path, backend_config=backend_config)
+        pipe = init_pipeline(model_path, backend_config=backend_config)
         del pipe
         torch.cuda.empty_cache()
         if 'gw' in worker_id:

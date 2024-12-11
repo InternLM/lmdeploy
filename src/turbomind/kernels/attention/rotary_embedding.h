@@ -74,17 +74,24 @@ struct FastRoPE {
 
     Array<float, N / 2> inv_freq_;
     bool                is_valid_;
+    float               attention_scaling_;
 
     __device__ FastRoPE(int   idx,
                         D     dims,
                         float base,
                         float ti_scale,
+                        float factor,
                         float llama3_inv_scaling_factor,
                         float llama3_alpha,
                         float llama3_beta,
+                        float yarn_ramp_inv_factor_div_2,
+                        float yarn_ramp_inv_factor_mul_min,
+                        float yarn_inv_scaling_factor,
+                        float attention_scaling,
                         std::integral_constant<int, N>)
     {
-        is_valid_ = idx < dims;
+        is_valid_          = idx < dims;
+        attention_scaling_ = attention_scaling;
         /// TODO: Take this away from device code
         const float scale_factor = -log2f(base) / dims;
         PRAGMA_UNROLL
@@ -110,15 +117,27 @@ struct FastRoPE {
                 inv_freq_[i / 2] = (1 - smooth) * freq * llama3_inv_scaling_factor + smooth * freq;
             }
         }
+        if (yarn_ramp_inv_factor_div_2) {
+            PRAGMA_UNROLL
+            for (int i = 0; i < N; i += 2) {
+                auto  freq       = inv_freq_[i / 2];
+                float alpha      = (idx + i) * yarn_ramp_inv_factor_div_2 - yarn_ramp_inv_factor_mul_min;
+                alpha            = fmaxf(0.f, fminf(1.f, alpha));
+                inv_freq_[i / 2] = freq - freq * alpha * yarn_inv_scaling_factor;
+            }
+        }
     }
 
     template<typename T>
     __device__ void apply(Array<T, N>& x, float timestep)
     {
+#if 0
         PRAGMA_UNROLL
         for (int i = 0; i < N; i += 2) {
             float c, s;
             sincosf(timestep * inv_freq_[i / 2], &s, &c);
+            s *= attention_scaling_;
+            c *= attention_scaling_;
             float tmp0 = c * (float)x[i] - s * (float)x[i + 1];
             float tmp1 = c * (float)x[i + 1] + s * (float)x[i];
             if (is_valid_) {
@@ -126,6 +145,22 @@ struct FastRoPE {
                 x[i + 1] = (T)tmp1;
             }
         }
+#else
+        // Most models apply rotary embedding in half precision
+        PRAGMA_UNROLL
+        for (int i = 0; i < N; i += 2) {
+            float c, s;
+            sincosf(timestep * inv_freq_[i / 2], &s, &c);
+            s *= attention_scaling_;
+            c *= attention_scaling_;
+            T tmp0 = (T)c * x[i] - (T)s * x[i + 1];
+            T tmp1 = (T)c * x[i + 1] + (T)s * x[i];
+            if (is_valid_) {
+                x[i]     = tmp0;
+                x[i + 1] = tmp1;
+            }
+        }
+#endif
     }
 };
 

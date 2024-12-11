@@ -1,8 +1,8 @@
 # Serving LoRA
 
-## Launch S-LoRA
+## Launch LoRA
 
-S-LoRA is currently only supported by the PyTorch backend. Its deployment process is similar to that of other models, and you can view the commands using lmdeploy `serve api_server -h`. Among the parameters supported by the PyTorch backend, there are configuration options for S-LoRA.
+LoRA is currently only supported by the PyTorch backend. Its deployment process is similar to that of other models, and you can view the commands using lmdeploy `serve api_server -h`. Among the parameters supported by the PyTorch backend, there are configuration options for LoRA.
 
 ```txt
 PyTorch engine arguments:

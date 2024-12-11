@@ -1,3 +1,4 @@
+import json
 import os
 from multiprocessing import Process
 
@@ -19,7 +20,7 @@ SESSION_LEN_PASSKEY_1M = 1048576
 @pytest.mark.gpu_num_1
 @pytest.mark.parametrize('model', [
     'internlm/internlm2-chat-7b', 'internlm/internlm2_5-7b',
-    'internlm/internlm2-chat-1_8b', 'internlm/internlm2-1_8b'
+    'internlm/internlm2-chat-1_8b'
 ])
 def test_history_issue_tp1(config, model, worker_id):
     log_name = ''.join(['pipeline_longtext_issue_', worker_id, '.log'])
@@ -33,10 +34,9 @@ def test_history_issue_tp1(config, model, worker_id):
 
 
 @pytest.mark.gpu_num_2
-@pytest.mark.parametrize('model', [
-    'internlm/internlm2-chat-20b', 'internlm/internlm2-chat-20b-inner-4bits',
-    'internlm/internlm2-20b', 'internlm/internlm2-20b-inner-4bits'
-])
+@pytest.mark.parametrize(
+    'model',
+    ['internlm/internlm2-chat-20b', 'internlm/internlm2-chat-20b-inner-4bits'])
 def test_history_issue_tp2(config, model, worker_id):
     log_name = ''.join(['pipeline_longtext_issue_', worker_id, '.log'])
     if 'gw' in worker_id:
@@ -147,7 +147,6 @@ def passkey_retrival(config,
                                                    tp=tp_num)
         else:
             backend_config = TurbomindEngineConfig(session_len=session_len,
-                                                   use_logn_attn=True,
                                                    tp=tp_num)
     else:
         if 'internlm2_5' in model and '-1m' in model:
@@ -158,6 +157,9 @@ def passkey_retrival(config,
         else:
             backend_config = PytorchEngineConfig(session_len=session_len,
                                                  tp=tp_num)
+    # add config according to https://huggingface.co/Qwen/Qwen2.5-7B-Instruct
+    if 'qwen' in model.lower():
+        add_config_Qwen(model_path)
 
     pipe = pipeline(model_path, backend_config=backend_config)
 
@@ -165,6 +167,11 @@ def passkey_retrival(config,
     # inference
     pass_key, prompt = get_passkey_prompt(pipe, session_len)
     response = pipe(prompt, gen_config=gen_config)
+
+    # remove config, https://huggingface.co/Qwen/Qwen2.5-7B-Instruct
+    if 'qwen' in model.lower():
+        remove_config_Qwen(model_path)
+
     save_pipeline_common_log(config, log_name,
                              str(pass_key) in response.text, str(response))
 
@@ -204,3 +211,31 @@ def get_passkey_prompt(pipe, session_len):
     # inference
     prompt = ' '.join(lines)
     return pass_key, prompt
+
+
+def add_config_Qwen(model_path):
+    data = {
+        'rope_scaling': {
+            'factor': 4.0,
+            'original_max_position_embeddings': 32768,
+            'type': 'yarn'
+        }
+    }
+
+    with open('/'.join([model_path, 'config.json']), 'r') as f:
+        config = json.load(f)
+    if 'rope_scaling' not in config:
+        config.update(data)
+        with open('/'.join([model_path, 'config.json']), 'w') as f:
+            json.dump(config, f, indent=4)
+
+
+def remove_config_Qwen(model_path):
+    with open('/'.join([model_path, 'config.json']), 'r') as f:
+        config = json.load(f)
+
+    if 'rope_scaling' in config:
+        del config['rope_scaling']
+
+    with open('/'.join([model_path, 'config.json']), 'w') as f:
+        json.dump(config, f, indent=4)

@@ -1,6 +1,6 @@
 # Tools
 
-LMDeploy 支持 InternLM2, InternLM2.5 和 Llama3.1 模型的工具调用。
+LMDeploy 支持 InternLM2, InternLM2.5, Llama3.1 和 Qwen2.5模型的工具调用。
 
 ## 单轮调用
 
@@ -241,3 +241,156 @@ messages += [
 assistant_response = request_llama3_1_service(messages)
 print(assistant_response)
 ```
+
+### Qwen2.5
+
+Qwen2.5 支持了多工具调用，这意味着可以在一次请求中可能发起多个工具请求
+
+```python
+from openai import OpenAI
+import json
+
+def get_current_temperature(location: str, unit: str = "celsius"):
+    """Get current temperature at a location.
+
+    Args:
+        location: The location to get the temperature for, in the format "City, State, Country".
+        unit: The unit to return the temperature in. Defaults to "celsius". (choices: ["celsius", "fahrenheit"])
+
+    Returns:
+        the temperature, the location, and the unit in a dict
+    """
+    return {
+        "temperature": 26.1,
+        "location": location,
+        "unit": unit,
+    }
+
+
+def get_temperature_date(location: str, date: str, unit: str = "celsius"):
+    """Get temperature at a location and date.
+
+    Args:
+        location: The location to get the temperature for, in the format "City, State, Country".
+        date: The date to get the temperature for, in the format "Year-Month-Day".
+        unit: The unit to return the temperature in. Defaults to "celsius". (choices: ["celsius", "fahrenheit"])
+
+    Returns:
+        the temperature, the location, the date and the unit in a dict
+    """
+    return {
+        "temperature": 25.9,
+        "location": location,
+        "date": date,
+        "unit": unit,
+    }
+
+def get_function_by_name(name):
+    if name == "get_current_temperature":
+        return get_current_temperature
+    if name == "get_temperature_date":
+        return get_temperature_date
+
+tools = [{
+    'type': 'function',
+    'function': {
+        'name': 'get_current_temperature',
+        'description': 'Get current temperature at a location.',
+        'parameters': {
+            'type': 'object',
+            'properties': {
+                'location': {
+                    'type': 'string',
+                    'description': 'The location to get the temperature for, in the format \'City, State, Country\'.'
+                },
+                'unit': {
+                    'type': 'string',
+                    'enum': [
+                        'celsius',
+                        'fahrenheit'
+                    ],
+                    'description': 'The unit to return the temperature in. Defaults to \'celsius\'.'
+                }
+            },
+            'required': [
+                'location'
+            ]
+        }
+    }
+}, {
+    'type': 'function',
+    'function': {
+        'name': 'get_temperature_date',
+        'description': 'Get temperature at a location and date.',
+        'parameters': {
+            'type': 'object',
+            'properties': {
+                'location': {
+                    'type': 'string',
+                    'description': 'The location to get the temperature for, in the format \'City, State, Country\'.'
+                },
+                'date': {
+                    'type': 'string',
+                    'description': 'The date to get the temperature for, in the format \'Year-Month-Day\'.'
+                },
+                'unit': {
+                    'type': 'string',
+                    'enum': [
+                        'celsius',
+                        'fahrenheit'
+                    ],
+                    'description': 'The unit to return the temperature in. Defaults to \'celsius\'.'
+                }
+            },
+            'required': [
+                'location',
+                'date'
+            ]
+        }
+    }
+}]
+messages = [{'role': 'user', 'content': 'Today is 2024-11-14, What\'s the temperature in San Francisco now? How about tomorrow?'}]
+
+client = OpenAI(api_key='YOUR_API_KEY', base_url='http://0.0.0.0:23333/v1')
+model_name = client.models.list().data[0].id
+response = client.chat.completions.create(
+    model=model_name,
+    messages=messages,
+    temperature=0.8,
+    top_p=0.8,
+    stream=False,
+    tools=tools)
+print(response.choices[0].message.tool_calls)
+messages.append(response.choices[0].message)
+
+for tool_call in response.choices[0].message.tool_calls:
+    tool_call_args = json.loads(tool_call.function.arguments)
+    tool_call_result =  get_function_by_name(tool_call.function.name)(**tool_call_args)
+    messages.append({
+        'role': 'tool',
+        'name': tool_call.function.name,
+        'content': tool_call_result,
+        'tool_call_id': tool_call.id
+    })
+
+response = client.chat.completions.create(
+    model=model_name,
+    messages=messages,
+    temperature=0.8,
+    top_p=0.8,
+    stream=False,
+    tools=tools)
+print(response.choices[0].message.content)
+
+```
+
+使用Qwen2.5-14B-Instruct，可以得到以下类似结果
+
+```
+[ChatCompletionMessageToolCall(id='0', function=Function(arguments='{"location": "San Francisco, California, USA"}', name='get_current_temperature'), type='function'),
+ ChatCompletionMessageToolCall(id='1', function=Function(arguments='{"location": "San Francisco, California, USA", "date": "2024-11-15"}', name='get_temperature_date'), type='function')]
+
+The current temperature in San Francisco, California, USA is 26.1°C. For tomorrow, 2024-11-15, the temperature is expected to be 25.9°C.
+```
+
+需要注意的是，多工具调用的情况下，工具调用的结果顺序会影响回答的效果，tool_call_id并没有正确给到LLM.

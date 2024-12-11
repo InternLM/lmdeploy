@@ -4,7 +4,7 @@ Turbomind is implemented in C++, which is not as easy to debug as Python. This d
 
 ## Prerequisite
 
-First, complete the local compilation according to the commands in [Install from source](../installation.md).
+First, complete the local compilation according to the commands in [Install from source](../get_started/installation.md).
 
 ## Configure Python debug environment
 
@@ -129,7 +129,7 @@ Reading symbols from python3...
 
 # (Optional) Use https://github.com/InternLM/lmdeploy/blob/main/benchmark/profile_restful_api.py to send a request
 
-python3 profile_restful_api.py --server_addr 127.0.0.1:23333 --tokenizer_path /workdir/Llama-2-13b-chat-hf --dataset /workdir/ShareGPT_V3_unfiltered_cleaned_split.json --concurrency 1 --num_prompts 1
+python3 profile_restful_api.py --backend lmdeploy --dataset-path /workdir/ShareGPT_V3_unfiltered_cleaned_split.json --num_prompts 1
 ````
 
 ## Using GDB

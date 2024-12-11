@@ -10,6 +10,7 @@ from lmdeploy.lite.quantization.awq import (FC_FCS_MAP, NORM_FCS_MAP,
                                             awq_layers, quant_weights,
                                             smooth_layers)
 from lmdeploy.lite.utils import collect_target_modules
+from lmdeploy.pytorch.check_env import try_import_deeplink
 
 from .calibrate import LAYER_TYPE_MAP, NORM_TYPE_MAP, calibrate
 
@@ -79,6 +80,7 @@ def auto_awq(model: str,
         download_dir (str): Directory to download and load the weights,
             default to the default cache directory of huggingface.
     """
+    try_import_deeplink(device)
     if not osp.exists(model):
         print(f'can\'t find model from local_path {model}, '
               'try to download from remote')
@@ -99,7 +101,7 @@ def auto_awq(model: str,
     layer_type = LAYER_TYPE_MAP[type(model).__name__]
     fc2fcs = FC_FCS_MAP[layer_type]
     norm2fcs = NORM_FCS_MAP[layer_type]
-    input_stats = torch.load(work_dir / 'inputs_stats.pth')
+    input_stats = torch.load(osp.join(work_dir, 'inputs_stats.pth'))
     layers = collect_target_modules(model, layer_type)
     fcs = {}
     for l_name, layer in layers.items():
@@ -115,13 +117,7 @@ def auto_awq(model: str,
         act_scales = input_stats['absmax']
         smooth_layers(layers, fc2fcs, norm2fcs, act_scales, w_group_size,
                       device)
-    quant_weights(model,
-                  fcs,
-                  w_bits,
-                  w_sym,
-                  w_group_size,
-                  device,
-                  skip_if_contains='lora')  # TODO quant lora weight
+    quant_weights(model, fcs, w_bits, w_sym, w_group_size, device)
     quantization_config = dict(quant_method='awq',
                                version='gemm',
                                bits=w_bits,

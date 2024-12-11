@@ -6,13 +6,15 @@ from time import sleep, time
 
 import allure
 import psutil
-from pytest import assume
+from openai import OpenAI
+from pytest_assume.plugin import assume
 from utils.config_utils import get_cuda_prefix_by_workerid, get_workerid
 from utils.get_run_config import get_command_with_extra
 from utils.rule_condition_assert import assert_result
 from utils.run_client_chat import command_line_test
 
 from lmdeploy.serve.openai.api_client import APIClient
+from lmdeploy.utils import is_bf16_supported
 
 BASE_HTTP_URL = 'http://localhost'
 DEFAULT_PORT = 23333
@@ -60,11 +62,16 @@ def start_restful_api(config, param, model, model_path, backend_type,
             cmd += ' --model-format gptq'
     if backend_type == 'pytorch':
         cmd += ' --backend pytorch'
+        if not is_bf16_supported():
+            cmd += ' --dtype float16'
     if 'llava' in model:
         cmd += ' --model-name vicuna'
-    if backend_type == 'turbomind' and 'quant_policy' in param.keys():
+    if 'quant_policy' in param.keys() and param['quant_policy'] is not None:
         quant_policy = param['quant_policy']
         cmd += f' --quant-policy {quant_policy}'
+
+    if not is_bf16_supported():
+        cmd += ' --cache-max-entry-count 0.5'
 
     start_log = os.path.join(
         log_path, 'start_restful_' + model.split('/')[1] + worker_id + '.log')
@@ -81,21 +88,26 @@ def start_restful_api(config, param, model, model_path, backend_type,
                                     text=True,
                                     encoding='utf-8')
         pid = startRes.pid
-    allure.attach.file(start_log, attachment_type=allure.attachment_type.TEXT)
 
     http_url = BASE_HTTP_URL + ':' + str(port)
     with open(start_log, 'r') as file:
         content = file.read()
         print(content)
     start_time = int(time())
+
+    start_timeout = 300
+    if not is_bf16_supported():
+        start_timeout = 600
+
     sleep(5)
-    for i in range(300):
+    for i in range(start_timeout):
         sleep(1)
         end_time = int(time())
         total_time = end_time - start_time
         result = health_check(http_url)
-        if result or total_time >= 300:
+        if result or total_time >= start_timeout:
             break
+    allure.attach.file(start_log, attachment_type=allure.attachment_type.TEXT)
     return pid, startRes
 
 
@@ -267,3 +279,61 @@ def get_model(url):
         return model_name.split('/')[-1]
     except Exception:
         return None
+
+
+PIC = 'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg'  # noqa E501
+PIC2 = 'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/demo/resources/human-pose.jpg'  # noqa E501
+
+
+def run_vl_testcase(config, port: int = DEFAULT_PORT):
+    http_url = BASE_HTTP_URL + ':' + str(port)
+    log_path = config.get('log_path')
+
+    client = OpenAI(api_key='YOUR_API_KEY', base_url=http_url + '/v1')
+    model_name = client.models.list().data[0].id
+
+    restful_log = os.path.join(
+        log_path,
+        'restful_vl_' + model_name.split('/')[-1] + str(port) + '.log')
+    file = open(restful_log, 'w')
+
+    prompt_messages = [{
+        'role':
+        'user',
+        'content': [{
+            'type': 'text',
+            'text': 'Describe the image please',
+        }, {
+            'type': 'image_url',
+            'image_url': {
+                'url': PIC,
+            },
+        }, {
+            'type': 'image_url',
+            'image_url': {
+                'url': PIC2,
+            },
+        }],
+    }]
+
+    response = client.chat.completions.create(model=model_name,
+                                              messages=prompt_messages,
+                                              temperature=0.8,
+                                              top_p=0.8)
+    file.writelines(str(response).lower() + '\n')
+
+    api_client = APIClient(http_url)
+    model_name = api_client.available_models[0]
+    for item in api_client.chat_completions_v1(model=model_name,
+                                               messages=prompt_messages):
+        continue
+    file.writelines(str(item) + '\n')
+
+    allure.attach.file(restful_log,
+                       attachment_type=allure.attachment_type.TEXT)
+
+    assert 'tiger' in str(response).lower() or '虎' in str(
+        response).lower() or 'ski' in str(response).lower() or '滑雪' in str(
+            response).lower(), response
+    assert 'tiger' in str(item).lower() or '虎' in str(item).lower(
+    ) or 'ski' in str(item).lower() or '滑雪' in str(item).lower(), item

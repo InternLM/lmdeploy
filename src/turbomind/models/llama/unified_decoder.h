@@ -4,6 +4,7 @@
 #include "src/turbomind/models/llama/LlamaFfnLayer.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
+#include "src/turbomind/models/llama/moe_ffn_layer.h"
 #include "src/turbomind/models/llama/unified_attention_layer.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -21,7 +22,9 @@ private:
     const float        rmsnorm_eps_;
     cudaStream_t const stream_;
     IAllocator* const  allocator_;
+    const NcclParam    tp_;
     const DataType     dtype_;
+    const int          tune_layer_num_;
     bool               is_free_buffer_after_forward_{};
 
     int* cu_q_len_{};
@@ -32,22 +35,24 @@ private:
 
     std::unique_ptr<UnifiedAttentionLayer<T>> attn_layer_;
     std::unique_ptr<LlamaFfnLayer<T>>         ffn_layer_;
+    std::unique_ptr<MoeFfnLayer<T>>           moe_ffn_layer_;
 
     cudaEvent_t ev_h_cu_x_{};
 
     using WeightType = LlamaDecoderLayerWeight<T>;
 
-    void forwardSelfAttn(T*                             attn_io,
-                         TensorMap*                     _outputs,
-                         const TensorMap*               _inputs,
-                         size_t                         token_num,
-                         size_t                         batch_size,
-                         int                            layer_id,
-                         const LlamaAttentionWeight<T>* weight);
+    void forwardSelfAttn(T*                attn_io,
+                         TensorMap*        _outputs,
+                         const TensorMap*  _inputs,
+                         size_t            token_num,
+                         size_t            batch_size,
+                         int               layer_id,
+                         const WeightType* weight);
 
 public:
     UnifiedDecoder(const ModelParam&     model,
                    const AttentionParam& attn,
+                   const MoeParam&       moe,
                    const LoraParam&      lora,
                    const NcclParam&      tp,
                    const Context<T>&     ctx);

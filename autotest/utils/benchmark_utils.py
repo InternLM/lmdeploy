@@ -2,9 +2,12 @@ import os
 import subprocess
 from subprocess import PIPE, Popen
 
+import allure
 import psutil
 from utils.config_utils import get_workerid
 from utils.run_restful_chat import health_check
+
+from lmdeploy.utils import is_bf16_supported
 
 DEFAULT_PORT = 23333
 GENERATION_CONFIG = ' -c 8 256 -ct 128 128 2048 128 -pt 1 128 128 2048'
@@ -24,7 +27,8 @@ def generation_test(config,
     model_path = '/'.join([config.get('model_path'), model])
     log_path = config.get('log_path')
     benchmark_log = os.path.join(
-        log_path, 'benchmark_' + model.split('/')[1] + worker_id + '.log')
+        log_path,
+        'benchmark_generation_' + model.split('/')[1] + worker_id + '.log')
     benchmark_path = '/'.join([
         config.get('benchmark_path'), run_id, model,
         f'benchmark-generation-{backend}'
@@ -39,6 +43,8 @@ def generation_test(config,
     run_config = ''
     if backend == 'pytorch':
         command += ' --backend pytorch'
+        if not is_bf16_supported():
+            command += ' --dtype float16'
     else:
         if '4bit' in model:
             command += ' --model-format awq'
@@ -59,10 +65,11 @@ def generation_test(config,
     ])
 
     returncode, stderr = run_testcase(cmd, benchmark_log)
-
+    allure.attach.file(benchmark_log,
+                       attachment_type=allure.attachment_type.TEXT)
     if returncode == 0 and not os.path.isfile(csv_path):
-        return False, benchmark_log, 'result is empty'
-    return returncode == 0, benchmark_log, stderr
+        return False, 'result is empty'
+    return returncode == 0, stderr
 
 
 def throughput_test(config,
@@ -80,7 +87,8 @@ def throughput_test(config,
     log_path = config.get('log_path')
     dataset_path = config.get('dataset_path')
     benchmark_log = os.path.join(
-        log_path, 'benchmark_' + model.split('/')[1] + worker_id + '.log')
+        log_path,
+        'benchmark_throughput_' + model.split('/')[1] + worker_id + '.log')
     if backend == 'turbomind' and quant_policy != 0:
         benchmark_path = '/'.join([
             config.get('benchmark_path'), run_id, model,
@@ -103,6 +111,8 @@ def throughput_test(config,
         run_config = '--num-prompts 3000'
     if backend == 'pytorch':
         command += ' --backend pytorch'
+        if not is_bf16_supported():
+            command += ' --dtype float16'
     else:
         if '4bit' in model:
             command += ' --model-format awq'
@@ -118,12 +128,15 @@ def throughput_test(config,
         ])
 
         returncode, stderr = run_testcase(cmd, benchmark_log)
+        allure.attach.file(benchmark_log,
+                           attachment_type=allure.attachment_type.TEXT)
 
         if returncode == 0 and not os.path.isfile(csv_path):
-            return False, benchmark_log, 'result is empty'
+            return False, 'result is empty'
         if returncode != 0:
-            return returncode == 0, benchmark_log, stderr
-    return returncode == 0, benchmark_log, stderr
+            return returncode == 0, stderr
+
+    return returncode == 0, stderr
 
 
 def restful_test(config,
@@ -139,7 +152,8 @@ def restful_test(config,
     log_path = config.get('log_path')
     dataset_path = config.get('dataset_path')
     benchmark_log = os.path.join(
-        log_path, 'benchmark_' + model.split('/')[1] + worker_id + '.log')
+        log_path,
+        'benchmark_restful_' + model.split('/')[1] + worker_id + '.log')
     if backend == 'turbomind' and quant_policy != 0:
         benchmark_path = '/'.join([
             config.get('benchmark_path'), run_id, model,
@@ -161,13 +175,13 @@ def restful_test(config,
 
     http_url = f'http://localhost:{port}'
     if not health_check(http_url):
-        return False, None, 'server not start'
+        return False, 'server not start'
 
-    command = f'python3 benchmark/profile_restful_api.py localhost:{port} {model_path} {dataset_path} --stream-output True '  # noqa: F401, E501
+    command = f'python3 /nvme/qa_test_models/offline_pkg/profile_restful_api.py localhost:{port} {model_path} {dataset_path} --stream-output True '  # noqa: F401, E501
     if is_smoke:
-        command += ' --num-prompts 300'
+        command += ' --num-prompts 200'
     else:
-        command += ' --num-prompts 2000'
+        command += ' --num-prompts 5000'
 
     for batch in [128, 256]:
         csv_path = f'{benchmark_path}/restful_batch_{batch}_1th.csv'
@@ -186,13 +200,19 @@ def restful_test(config,
                                            text=True,
                                            encoding='utf-8')
             f.writelines(benchmark_res.stderr)
+        allure.attach.file(benchmark_log,
+                           attachment_type=allure.attachment_type.TEXT)
     if benchmark_res.returncode == 0 and not os.path.isfile(csv_path):
-        return False, benchmark_log, 'result is empty'
-    return benchmark_res.returncode == 0, benchmark_log, benchmark_res.stderr
+        return False, 'result is empty'
+    return benchmark_res.returncode == 0, benchmark_res.stderr
 
 
 def run_testcase(cmd, benchmark_log):
-    with open(benchmark_log, 'w') as f:
+    if os.path.isfile(benchmark_log):
+        write_type = 'a'
+    else:
+        write_type = 'w'
+    with open(benchmark_log, write_type) as f:
         f.writelines('reproduce command: ' + cmd + '\n')
         print('reproduce command: ' + cmd)
         with Popen([cmd],
@@ -236,8 +256,8 @@ def create_multi_level_directory(path):
 
 
 def get_max_cache_entry(model, backend):
-    if backend != 'turbomind':
-        return ''
+    if backend == 'pytorch':
+        return '--cache-max-entry-count 0.8'
     if 'Llama-2' in model:
         return '--cache-max-entry-count 0.95'
     elif 'internlm2' in model:

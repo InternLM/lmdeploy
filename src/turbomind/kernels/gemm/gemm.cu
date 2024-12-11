@@ -1,5 +1,6 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
+#include "src/turbomind/kernels/gemm/context.h"
 #include "src/turbomind/kernels/gemm/desc.h"
 #include "src/turbomind/kernels/gemm/dispatch_cache.h"
 #include "src/turbomind/kernels/gemm/gemm.h"
@@ -34,16 +35,6 @@ std::vector<int> ArgSort(size_t size, const Cmp& cmp)
     return idxs;
 }
 
-inline int get_batch_dim(const GemmDesc& desc)
-{
-    return desc.batch_dim == 0 ? desc.m : desc.n;
-}
-
-inline int get_batch_dim(const KernelDesc& desc, int batch_dim)
-{
-    return batch_dim == 0 ? desc.cta_tile.x : desc.cta_tile.y;
-}
-
 }  // namespace
 
 struct Gemm::Impl {
@@ -52,7 +43,8 @@ struct Gemm::Impl {
         props_{GetCudaDeviceProps()},
         arch_{props_->major * 100 + props_->minor * 10},
         registry_{props_},
-        cache_{registry_.kernels()}
+        cache_{registry_.kernels()},
+        default_ctx_(*props_)
     {
         if (auto str = std::getenv("TM_GEMM_TUNE")) {
             try {
@@ -67,7 +59,7 @@ struct Gemm::Impl {
     }
 
     // find launch spec in dispatch cache, dispatch by heuristic on cache miss
-    LaunchSpec Dispatch(DispatchPolicy policy, GemmDesc desc, size_t barriers_size, size_t partials_size)
+    LaunchSpec Dispatch(Context& ctx, DispatchPolicy policy, GemmDesc desc, size_t barriers_size, size_t partials_size)
     {
         if (policy & DispatchPolicy::kReuse) {
             if (auto spec = cache_.LowerBound(desc)) {
@@ -80,7 +72,7 @@ struct Gemm::Impl {
             return *spec;
         }
 
-        auto specs = Find(desc, barriers_size, partials_size, 1);
+        auto specs = Find(ctx, desc, barriers_size, partials_size, 1);
         if (!specs.empty()) {
             cache_.Insert(desc, specs.front());
             return specs.front();
@@ -88,7 +80,8 @@ struct Gemm::Impl {
         return {};
     }
 
-    std::vector<LaunchSpec> Find(const GemmDesc& desc, size_t barrier_size, size_t partials_size, int top_k)
+    std::vector<LaunchSpec>
+    Find(Context& ctx, const GemmDesc& desc, size_t barrier_size, size_t partials_size, int top_k)
     {
         std::vector<Kernel*> feasible;
         std::copy_if(registry_.kernels().begin(), registry_.kernels().end(), std::back_inserter(feasible), [&](auto p) {
@@ -98,21 +91,7 @@ struct Gemm::Impl {
             return {};
         }
 
-        if (1) {
-            int max_batch_size = 0;
-            for (const auto& k : feasible) {
-                max_batch_size = std::max(get_batch_dim(k->desc(), desc.batch_dim), max_batch_size);
-            }
-            const int batch_size = get_batch_dim(desc);
-            for (const auto& k : feasible) {
-                const auto x = get_batch_dim(k->desc(), desc.batch_dim);
-                if (x >= batch_size) {
-                    max_batch_size = std::min(max_batch_size, x);
-                }
-            }
-            auto pred = [&](auto k) { return get_batch_dim(k->desc(), desc.batch_dim) > max_batch_size; };
-            feasible.erase(std::remove_if(feasible.begin(), feasible.end(), pred), feasible.end());
-        }
+        feasible = ctx.Filter(feasible);
 
         std::vector<std::vector<LaunchSpec>> clusters;
         {
@@ -131,46 +110,44 @@ struct Gemm::Impl {
             proxies.push_back(c.front().kernel);
         }
 
-        //             cluster_id, splits, metrics
-        std::vector<std::tuple<int, int, KernelMetric>> metrics;
+        std::vector<std::pair<int, LaunchSpec>> specs;
+
+        PopulateParam param{};
+        param.max_splits    = tuning_.max_splits;
+        param.max_waves     = tuning_.max_waves;
+        param.swizzle       = tuning_.swizzle.at(0);
+        param.barriers_size = barrier_size;
+        param.partials_size = partials_size;
 
         for (int cluster_id = 0; cluster_id < (int)proxies.size(); ++cluster_id) {
-            auto&     kernel     = *proxies[cluster_id];
-            const int max_splits = kernel.GetMaxSplits(desc.m, desc.n, desc.k, barrier_size, partials_size);
+            auto& kernel = *proxies[cluster_id];
 
-            auto ms = kernel.Estimate_v2({desc.m, desc.n, desc.k},  //
-                                         std::min(max_splits, tuning_.max_splits),
-                                         tuning_.max_waves,
-                                         props_->multiProcessorCount);
-
-            for (const auto& [splits, metric] : ms) {
-                metrics.emplace_back(cluster_id, splits, metric);
+            auto tmp = ctx.Populate(kernel, param);
+            for (const auto& s : tmp) {
+                specs.emplace_back(cluster_id, s);
             }
         }
 
         // std::cerr << "#kernel: " << kernels.size() << ", #cluster: " << clusters.size()
         //           << ", #metric: " << metrics.size() << "\n";
 
-        std::vector<int64_t> mio_cost;
-        std::vector<int64_t> mma_cost;
-        for (const auto& [_, s, m] : metrics) {
-            mio_cost.push_back(m.mio_cost);
-            mma_cost.push_back(m.mma_cost);
+        int64_t mio_max = 0;
+        int64_t mma_max = 0;
+        for (const auto& [_, s] : specs) {
+            auto& [mio, mma] = s.estimated;
+            mio_max          = std::max(mio_max, mio);
+            mma_max          = std::max(mma_max, mma);
         }
-
-        const auto mio_max = *std::max_element(mio_cost.begin(), mio_cost.end());
-        const auto mma_max = *std::max_element(mma_cost.begin(), mma_cost.end());
-
         std::vector<float> mio_ratio;
         std::vector<float> mma_ratio;
         std::vector<float> avg_ratio;
-        for (size_t i = 0; i < metrics.size(); ++i) {
-            mio_ratio.push_back(static_cast<float>(mio_cost[i]) / mio_max);
-            mma_ratio.push_back(static_cast<float>(mma_cost[i]) / mma_max);
-            avg_ratio.push_back(.5f * (mio_ratio.back() + mma_ratio.back()));
+        for (const auto& [_, s] : specs) {
+            auto& [mio, mma] = s.estimated;
+            mio_ratio.push_back((float)mio / mio_max);
+            mma_ratio.push_back((float)mma / mma_max);
+            avg_ratio.push_back(.5 * (mio_ratio.back() + mma_ratio.back()));
         }
-
-        auto idxs = ArgSort(metrics.size(), [&](int i, int j) {  //
+        auto idxs = ArgSort(specs.size(), [&](int i, int j) {  //
             return avg_ratio[i] < avg_ratio[j];
         });
 
@@ -185,10 +162,12 @@ struct Gemm::Impl {
         std::vector<LaunchSpec> ret;
         ret.reserve(top_k);
         for (int i = 0; i < top_k; ++i) {
-            const auto& [cluster_id, splits, cost] = metrics[idxs[i]];
+            const auto& [cluster_id, spec] = specs[idxs[i]];
             // Apply `splits` to all kernels in the cluster
             for (const auto& s : clusters[cluster_id]) {
-                ret.push_back(LaunchSpec{s.kernel, tuning_.swizzle.at(0), splits});
+                auto tmp   = spec;
+                tmp.kernel = s.kernel;
+                ret.push_back(tmp);
             }
         }
 
@@ -196,7 +175,8 @@ struct Gemm::Impl {
     }
 
     template<class LaunchFunc>
-    int Measure(const GemmDesc& desc,
+    int Measure(Context&        ctx,
+                const GemmDesc& desc,
                 size_t          barriers_size,
                 size_t          partials_size,
                 int             top_k,
@@ -209,16 +189,13 @@ struct Gemm::Impl {
         }
         // std::cerr << "GEMM: " << desc.m << "x" << desc.n << "x" << desc.k << "\n";
 
-        const auto tmp = Find(desc, barriers_size, partials_size, tuning_.top_k);
+        const auto tmp = Find(ctx, desc, barriers_size, partials_size, tuning_.top_k);
 
         std::vector<LaunchSpec> specs;
         for (const auto& spec : tmp) {
             // populate swizzle parameters
-            const auto swis = FilterSwizzleParam(*spec.kernel, desc.m, desc.n, desc.k, tuning_.swizzle);
-            for (const auto& swi : swis) {
-                specs.push_back(spec);
-                specs.back().swizzle = swi;
-            }
+            const auto swis = ctx.Swizzle(spec, tuning_.swizzle);
+            specs.insert(specs.end(), swis.begin(), swis.end());
         }
 
         specs = Sampler{*measurer_, tuning_.clusters}.Run(specs, launch_func, st);
@@ -239,30 +216,6 @@ struct Gemm::Impl {
         }
 
         return 0;
-    }
-
-    std::vector<int> FilterSwizzleParam(Kernel& kernel, int m, int n, int k, const std::vector<int>& swis)
-    {
-        std::vector<int> swizzles;
-        for (const auto& swi : swis) {
-            // To use splits=1 here, swizzling must not depends on split count
-            swizzles.push_back(kernel.GetSwizzle(m, n, k, 1, swi));
-        }
-        if (swizzles.size() == 1) {
-            return swizzles;
-        }
-
-        // De-duplicate possible swizzles while keep the order
-        std::sort(swizzles.begin(), swizzles.end());
-        swizzles.erase(std::unique(swizzles.begin(), swizzles.end()), swizzles.end());
-
-        std::vector<int> tmp;
-        std::copy_if(swis.begin(), swis.end(), std::back_inserter(tmp), [&](int swi) {
-            return std::find(swizzles.begin(), swizzles.end(), swi) != swizzles.end();
-        });
-        tmp.swap(swizzles);
-
-        return swizzles;
     }
 
     /// TODO: move to cuda utils
@@ -286,6 +239,8 @@ struct Gemm::Impl {
     std::optional<Measurer> measurer_;
 
     DispatchCache cache_;
+
+    StaticGemmContext default_ctx_;
 };
 
 // implementation of GEMM interfaces
@@ -313,33 +268,14 @@ int Gemm::Run(const Operation&    operation,
               cudaStream_t        stream)
 {
 
-    if (Adesc.rows != Ddesc.rows || Bdesc.cols != Ddesc.cols || Adesc.cols != Bdesc.rows) {
+    Context& context = operation.context ? *operation.context : (Context&)impl_->default_ctx_;
+
+    const auto desc = context.Init(operation, Adesc, Udesc, Bdesc, Vdesc, Cdesc, Ddesc);
+
+    if (!desc) {
+        fprintf(stderr, "invalid argument.\n");
         return -1;
     }
-
-    const int m = Ddesc.rows;
-    const int n = Ddesc.cols;
-    const int k = Adesc.cols;
-
-    const GemmDesc desc{
-        impl_->arch_,
-        Adesc.type,
-        Bdesc.type,
-        Ddesc.type,
-        Adesc.order,
-        Bdesc.order,
-        Ddesc.order,
-        Adesc.pack,
-        Bdesc.pack,
-        Udesc.pack,
-        Vdesc.pack,
-        operation.quant_a,
-        operation.quant_b,
-        operation.epilogue,
-        m,
-        n,
-        k,
-    };
 
     const auto launch = [=](LaunchSpec spec, cudaStream_t st) {
         auto _workspace = workspace;
@@ -365,7 +301,7 @@ int Gemm::Run(const Operation&    operation,
     };
 
     if (operation.reserved) {
-        auto specs = impl_->Find(desc, workspace.barriers_size, workspace.partials_size, 0);
+        auto specs = impl_->Find(context, *desc, workspace.barriers_size, workspace.partials_size, 0);
         auto cases = (std::vector<std::function<LaunchSpec()>>*)operation.reserved;
         for (const auto& spec : specs) {
             cases->push_back([=] {
@@ -379,10 +315,10 @@ int Gemm::Run(const Operation&    operation,
     LaunchSpec spec{};
 
     if (operation.dispatch & DispatchPolicy::kMeasure) {
-        impl_->Measure(desc, workspace.barriers_size, workspace.partials_size, 1, launch, stream);
+        impl_->Measure(context, *desc, workspace.barriers_size, workspace.partials_size, 1, launch, stream);
     }
 
-    spec = impl_->Dispatch(operation.dispatch, desc, workspace.barriers_size, workspace.partials_size);
+    spec = impl_->Dispatch(context, operation.dispatch, *desc, workspace.barriers_size, workspace.partials_size);
 
     if (spec.kernel) {
         // std::cout << "[Gemm] dispatch: " << spec.kernel->name()  //
@@ -391,7 +327,7 @@ int Gemm::Run(const Operation&    operation,
         return launch(spec, stream);
     }
 
-    printf("No feasible kernel found for the problem.\n");
+    fprintf(stderr, "No feasible kernel found for the problem.\n");
 
     return -1;
 }

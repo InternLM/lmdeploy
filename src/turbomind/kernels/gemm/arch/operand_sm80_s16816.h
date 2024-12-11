@@ -65,7 +65,7 @@ struct Operand_A {
 };
 
 // (n, k)
-template<class T, Order order, int N>
+template<class T, Order order, int N = 16>
 struct Operand_B {
     using Dtype = T;
 
@@ -156,11 +156,11 @@ struct GetSmemLayout_Pack {
     }
 };
 
-template<class T, Order order>
+template<class T, Order order, int Pack_M_>
 struct Operand_A_Pack {
     using Dtype = T;
 
-    static constexpr int Pack_M = 2;
+    static constexpr int Pack_M = Pack_M_;
 
     static constexpr Pack  kPack  = HMMA_16816 | OPERAND_A | Pack_M;
     static constexpr Order kOrder = order;
@@ -173,11 +173,11 @@ struct Operand_A_Pack {
     using GetGmemIter   = GetGmemIter;
 };
 
-template<class T, Order order>
+template<class T, Order order, int Pack_M_>
 struct Operand_B_Pack {
     using Dtype = T;
 
-    static constexpr int Pack_M = 2;
+    static constexpr int Pack_M = Pack_M_;
 
     static constexpr Pack  kPack  = HMMA_16816 | OPERAND_B | Pack_M;
     static constexpr Order kOrder = order;

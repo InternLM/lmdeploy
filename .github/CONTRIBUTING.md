@@ -1,6 +1,6 @@
-## Contributing to InternLM
+## Contributing to LMDeploy
 
-Welcome to the InternLM community, all kinds of contributions are welcomed, including but not limited to
+Welcome to the LMDeploy community, all kinds of contributions are welcomed, including but not limited to
 
 **Fix bug**
 
@@ -56,7 +56,7 @@ upstream	git@github.com:InternLM/lmdeploy.git (push)
 
 #### 2. Configure pre-commit
 
-You should configure [pre-commit](https://pre-commit.com/#intro) in the local development environment to make sure the code style matches that of InternLM. **Note**: The following code should be executed under the lmdeploy directory.
+You should configure [pre-commit](https://pre-commit.com/#intro) in the local development environment to make sure the code style matches that of LMDeploy. **Note**: The following code should be executed under the lmdeploy directory.
 
 ```shell
 pip install -U pre-commit
@@ -96,7 +96,7 @@ git checkout -b yhc/refactor_contributing_doc
 In subsequent development, if the master branch of the local repository is behind the master branch of "upstream", we need to pull the upstream for synchronization, and then execute the above command:
 
 ```shell
-git pull upstream master
+git pull upstream main
 ```
 
 #### 4. Commit the code and pass the unit test
@@ -151,7 +151,7 @@ Find more details about Pull Request description in [pull request guidelines](#p
 
 <img src="https://user-images.githubusercontent.com/57566630/167307490-f9ebf9fa-63c0-4d83-8ba1-081ea169eb3a.png" width="1200">
 
-IternLM will run unit test for the posted Pull Request on different platforms (Linux, Window, Mac), based on different versions of Python, PyTorch, CUDA to make sure the code is correct. We can see the specific test information by clicking `Details` in the above image so that we can modify the code.
+LMDeploy will run unit test for the posted Pull Request on different platforms (Linux, Window, Mac), based on different versions of Python, PyTorch, CUDA to make sure the code is correct. We can see the specific test information by clicking `Details` in the above image so that we can modify the code.
 
 (3) If the Pull Request passes the CI, then you can wait for the review from other developers. You'll modify the code based on the reviewer's comments, and repeat the steps [4](#4-commit-the-code-and-pass-the-unit-test)-[5](#5-push-the-code-to-remote) until all reviewers approve it. Then, we will merge it ASAP.
 
@@ -163,14 +163,14 @@ If your local branch conflicts with the latest master branch of "upstream", you'
 
 ```shell
 git fetch --all --prune
-git rebase upstream/master
+git rebase upstream/main
 ```
 
 or
 
 ```shell
 git fetch --all --prune
-git merge upstream/master
+git merge upstream/main
 ```
 
 If you are very good at handling conflicts, then you can use rebase to resolve conflicts, as this will keep your commit logs tidy. If you are not familiar with `rebase`, then you can use `merge` to resolve conflicts.

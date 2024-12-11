@@ -74,13 +74,15 @@ class FilterDuplicateWarning(logging.Filter):
         return False
 
 
-def get_logger(
-    name: Optional[str] = None,
-    log_file: Optional[str] = None,
-    log_level: int = logging.INFO,
-    file_mode: str = 'w',
-    log_formatter: str = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-) -> Logger:
+_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d' \
+          ' - %(message)s'
+
+
+def get_logger(name: Optional[str] = None,
+               log_file: Optional[str] = None,
+               log_level: int = logging.INFO,
+               file_mode: str = 'w',
+               log_formatter: str = _FORMAT) -> Logger:
     """Initialize and get a logger by name.
 
     If the logger has not been initialized, this method will initialize the
@@ -184,10 +186,12 @@ def get_model(pretrained_model_name_or_path: str,
               download_dir: str = None,
               revision: str = None,
               token: str = None):
-    """Get model from huggingface or modelscope."""
+    """Get model from huggingface, modelscope or openmind_hub."""
     import os
     if os.getenv('LMDEPLOY_USE_MODELSCOPE', 'False').lower() == 'true':
         from modelscope import snapshot_download
+    elif os.getenv('LMDEPLOY_USE_OPENMIND_HUB', 'False').lower() == 'true':
+        from openmind_hub import snapshot_download
     else:
         from huggingface_hub import snapshot_download
 
@@ -200,6 +204,7 @@ def get_model(pretrained_model_name_or_path: str,
         download_kwargs['token'] = token
 
     model_path = snapshot_download(pretrained_model_name_or_path,
+                                   ignore_patterns=['*.pth'],
                                    **download_kwargs)
     return model_path
 
@@ -260,7 +265,7 @@ def _get_and_verify_max_len(
         return max_model_len if max_model_len else session_len
 
     # vl configs hide session-len inside llm configs
-    llm_keys = ['language_config', 'llm_config']
+    llm_keys = ['language_config', 'llm_config', 'text_config']
     for key in llm_keys:
         hf_tm_config = getattr(hf_tm_config, key, hf_tm_config)
 
@@ -318,3 +323,69 @@ def _get_and_verify_max_len(
                 f'({max_len_key}={derived_max_model_len} or model_max_length='
                 f"{model_max_length} in model's config.json).")
     return int(max_model_len)
+
+
+def get_max_batch_size(device_type: str):
+    """Get the max inference batch size for LLM models according to the device
+    type.
+
+    Args:
+        device_type (str): the type of device
+    """
+    assert device_type in ['cuda', 'ascend', 'maca']
+    if device_type == 'cuda':
+        max_batch_size_map = {
+            'a100': 256,
+            'a800': 256,
+            'h100': 512,
+            'h800': 512
+        }
+        import torch
+        device_name = torch.cuda.get_device_name(0).lower()
+        for name, size in max_batch_size_map.items():
+            if name in device_name:
+                return size
+        # for devices that are not in `max_batch_size_map`, set
+        # the max_batch_size 128
+        return 128
+    elif device_type == 'ascend':
+        return 16
+    elif device_type == 'maca':
+        return 128
+
+
+def is_bf16_supported(device_type: str = 'cuda'):
+    """Check if device support bfloat16.
+
+    Args:
+        device_type (str): the type of device
+    """
+
+    if device_type == 'cuda':
+        import torch
+        device = torch.cuda.current_device()
+
+        # Check for CUDA version and device compute capability.
+        # This is a fast way to check for it.
+        cuda_version = torch.version.cuda
+        if (cuda_version is not None and int(cuda_version.split('.')[0]) >= 11
+                and torch.cuda.get_device_properties(device).major >= 8):
+            return True
+        else:
+            return False
+    elif device_type == 'ascend':
+        # The following API doesn't work somehow in multi-npu devices. Due to
+        # the `ascend910` device's capability to support bfloat16, we are
+        # returning true as a workaround
+        return True
+        # import torch_npu
+        # device_name = torch_npu.npu.get_device_name(0)[:10]
+        # device_name = device_name.lower()
+        # if device_name.startwith('ascend910'):
+        #     return True
+        # else:
+        #     return False
+    elif device_type == 'maca':
+        return True
+    else:
+        return False

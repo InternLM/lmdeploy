@@ -34,11 +34,11 @@ class TestAutoBackend:
             ('01-ai/Yi-34B-Chat', True, True),
             ('codellama/CodeLlama-7b-Instruct-hf', True, True),
             ('mistralai/Mistral-7B-Instruct-v0.1', True, True),
-            ('mistralai/Mixtral-8x7B-Instruct-v0.1', True, False),
+            ('mistralai/Mixtral-8x7B-Instruct-v0.1', True, True),
             ('Qwen/Qwen-7B-Chat', True, True),
             ('Qwen/Qwen-VL-Chat', False, True),
             ('Qwen/Qwen1.5-4B-Chat', True, True),
-            ('Qwen/Qwen1.5-0.5B-Chat', True, False),
+            ('Qwen/Qwen1.5-0.5B-Chat', True, True),
         ]
         return models
 
@@ -64,22 +64,3 @@ class TestAutoBackend:
             target = 'turbomind' if is_support_turbomind else 'pytorch'
             backend = autoget_backend(model)
             assert backend == target
-
-    def test_autoget_backend_config(self, turbomind_workspace):
-        from lmdeploy.archs import autoget_backend_config
-        from lmdeploy.messages import (PytorchEngineConfig,
-                                       TurbomindEngineConfig)
-        assert type(autoget_backend_config(
-            turbomind_workspace)) is TurbomindEngineConfig
-        assert type(autoget_backend_config(
-            'internlm/internlm-chat-7b')) is TurbomindEngineConfig
-        assert type(
-            autoget_backend_config(
-                'mistralai/Mixtral-8x7B-Instruct-v0.1')) is PytorchEngineConfig
-        backend_config = TurbomindEngineConfig(max_batch_size=64,
-                                               cache_block_seq_len=128)
-        config = autoget_backend_config('mistralai/Mixtral-8x7B-Instruct-v0.1',
-                                        backend_config)
-        assert type(config) is PytorchEngineConfig
-        assert config.max_batch_size == 64
-        assert config.block_size == 128

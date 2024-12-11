@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from typing import List
 
-from lmdeploy.messages import EngineGenerationConfig, EngineOutput
+from lmdeploy.messages import EngineOutput, GenerationConfig
 from lmdeploy.utils import get_logger
 
 from ..messages import (InputEmbeddingRangeType, InputEmbeddings,
@@ -89,21 +89,10 @@ class EngineInstance:
     """
 
     def __init__(self, engine: Engine):
-
-        def __get_max_input_len(engine):
-            """get max input len."""
-            cache_config = engine.cache_config
-            max_input_len = (cache_config.block_size *
-                             cache_config.num_gpu_blocks)
-            window_size = cache_config.window_size
-            if window_size > 0 and window_size <= max_input_len:
-                max_input_len = (1 << 63) - 1
-            return max_input_len
-
         self.engine = engine
         self.req_sender = engine.req_manager.build_sender()
 
-        self.max_input_len = __get_max_input_len(self.engine)
+        self.max_input_len = self.engine.max_session_len
 
     def __del__(self):
         """Destructor."""
@@ -129,7 +118,7 @@ class EngineInstance:
             self,
             session_id: int,
             input_ids: List[int],
-            gen_config: EngineGenerationConfig = None,
+            gen_config: GenerationConfig = None,
             adapter_name: str = None,
             input_embeddings: InputEmbeddingType = None,
             input_embedding_ranges: InputEmbeddingRangeType = None,
@@ -139,7 +128,7 @@ class EngineInstance:
         Args:
             session_id (int): The session id.
             input_ids (List[int]): The input token ids.
-            gen_config (EngineGenerationConfig): The sampling parameters.
+            gen_config (GenerationConfig): The sampling parameters.
             adapter_name (str): The lora adapter name.
 
         Yields:
@@ -150,7 +139,7 @@ class EngineInstance:
         if len(input_ids) > self.max_input_len:
             yield EngineOutput(ResponseType.INPUT_LENGTH_ERROR, [], 0)
             return
-        gen_config = gen_config or EngineGenerationConfig()
+        gen_config = gen_config or GenerationConfig()
         sampling_param = SamplingParam.from_gen_config(gen_config=gen_config)
         await self.req_sender.async_send_async(
             RequestType.ADD_SESSION, dict(session_id=session_id,
@@ -166,7 +155,10 @@ class EngineInstance:
                    session_id=session_id,
                    sampling_param=sampling_param,
                    adapter_name=adapter_name,
-                   input_embeddings=input_embeddings_new)
+                   input_embeddings=input_embeddings_new,
+                   mrope_position_ids=kwargs.get('mrope_position_ids'),
+                   mrope_position_delta=kwargs.get('mrope_position_delta'),
+                   cross_attention_states=kwargs.get('cross_attention_states'))
         req_id = await self.req_sender.async_send_async(
             RequestType.ADD_MESSAGE, msg)
 
@@ -191,7 +183,7 @@ class EngineInstance:
             self,
             session_id: int,
             input_ids: List[int] = None,
-            gen_config: EngineGenerationConfig = None,
+            gen_config: GenerationConfig = None,
             input_embeddings: InputEmbeddingType = None,
             input_embedding_ranges: InputEmbeddingRangeType = None,
             **kwargs):
@@ -200,7 +192,7 @@ class EngineInstance:
         Args:
             session_id (int): The session id.
             input_ids (List[int]): The input token ids.
-            gen_config (EngineGenerationConfig): The sampling parameters.
+            gen_config (GenerationConfig): The sampling parameters.
 
         Returns:
             int: Error flags. 0 if success.
@@ -225,7 +217,7 @@ class EngineInstance:
     def stream_infer(self,
                      session_id: int,
                      input_ids: List[int],
-                     gen_config: EngineGenerationConfig = None,
+                     gen_config: GenerationConfig = None,
                      adapter_name: str = None,
                      input_embeddings: InputEmbeddingType = None,
                      input_embedding_ranges: InputEmbeddingRangeType = None,
@@ -235,7 +227,7 @@ class EngineInstance:
         Args:
             session_id (int): The session id.
             input_ids (List[int]): The input token ids.
-            gen_config (EngineGenerationConfig): The sampling parameters.
+            gen_config (GenerationConfig): The sampling parameters.
             adapter_name (str): The lora adapter name.
 
         Yields:
@@ -268,7 +260,7 @@ class EngineInstance:
             yield from __call_async()
             return
 
-        gen_config = gen_config or EngineGenerationConfig()
+        gen_config = gen_config or GenerationConfig()
         sampling_param = SamplingParam.from_gen_config(gen_config=gen_config)
         self.req_sender.send_async(RequestType.ADD_SESSION,
                                    dict(session_id=session_id, response=False))
@@ -308,7 +300,7 @@ class EngineInstance:
     def infer(self,
               session_id: int,
               input_ids: List[int] = None,
-              gen_config: EngineGenerationConfig = None,
+              gen_config: GenerationConfig = None,
               input_embeddings: InputEmbeddingType = None,
               input_embedding_ranges: InputEmbeddingRangeType = None,
               **kwargs):
@@ -317,7 +309,7 @@ class EngineInstance:
         Args:
             session_id (int): The session id.
             input_ids (List[int]): The input token ids.
-            gen_config (EngineGenerationConfig): The sampling parameters.
+            gen_config (GenerationConfig): The sampling parameters.
 
         Returns:
             int: Error flags. 0 if success.
@@ -343,7 +335,7 @@ class EngineInstance:
         self,
         session_ids: List[int],
         token_ids: List[List[int]] = None,
-        gen_config: EngineGenerationConfig = None,
+        gen_config: GenerationConfig = None,
         adapter_names: List[str] = None,
         keep_cache: bool = False,
         input_embeddings: List[InputEmbeddingType] = None,
@@ -354,7 +346,7 @@ class EngineInstance:
         Args:
             session_ids (List[int]): The session id.
             token_ids (List[int]): The input token ids.
-            gen_config (EngineGenerationConfig): The sampling parameters.
+            gen_config (GenerationConfig): The sampling parameters.
             adapter_names (List[str]): The name of the adapters.
             keep_cache (bool): Keep kv cache after infer.
 
@@ -443,7 +435,7 @@ class EngineInstance:
         self,
         session_ids: List[int],
         token_ids: List[List[int]] = None,
-        gen_config: EngineGenerationConfig = None,
+        gen_config: GenerationConfig = None,
         adapter_names: List[str] = None,
         keep_cache: bool = False,
         input_embeddings: List[InputEmbeddingType] = None,

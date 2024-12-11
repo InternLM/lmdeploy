@@ -19,135 +19,67 @@
 
 namespace turbomind {
 
-void invokeTopPInitialize(int*         topp_id_val_buf,
-                          int*         topp_offset_buf,
-                          int*         begin_topp_offset_buf_,
-                          const size_t batch_size,
-                          const int    n,
-                          cudaStream_t stream);
+void invokeTopPSortInitialize(const int    vocab_size_padded,
+                              const int    vocab_size,
+                              const size_t batch_size,
+                              const int*   top_ks,
+                              int*         topp_id_val_buf,
+                              int*         begin_offet_buf,
+                              int*         end_offset_buf,
+                              cudaStream_t stream);
 
 template<typename T>
-void invokeTopPSampling(void*           workspace,
-                        size_t&         workspace_size,
-                        size_t&         cub_temp_storage_size,
-                        int*            output_ids,
-                        int*            sequence_length,
-                        bool*           finished_buf,
-                        float*          cum_log_probs,
-                        float*          output_log_probs,
-                        const T*        log_probs,
-                        const int*      id_vals,
-                        int*            offset_buf,
-                        int*            begin_offset_buf,
-                        curandState_t*  curandstate,
-                        const int       batch_size,
-                        const size_t    vocab_size_padded,
-                        const int*      end_ids,
-                        const float     top_p,
-                        cudaStream_t    stream,
-                        cudaDeviceProp* cuda_device_prop,
-                        const bool*     skip_decode);
+void invokeSoftmax(T*           logits,
+                   const int    vocab_size_padded,
+                   const int    vocab_size,
+                   const int    batch_size,
+                   const int*   kept,
+                   cudaStream_t stream);
+
+struct BlockPrefixCallbackOp {
+    // Running prefix
+    float running_total;
+    // Constructor
+    __device__ BlockPrefixCallbackOp(float running_total): running_total(running_total) {}
+    // Callback operator to be entered by the first warp of threads in the block.
+    // Thread-0 is responsible for returning a value for seeding the block-wide scan.
+    __device__ float operator()(float block_aggregate)
+    {
+        float old_prefix = running_total;
+        running_total += block_aggregate;
+        return old_prefix;
+    }
+};
+
+struct TopPSortParams {
+    void*  workspace;
+    size_t workspace_size;
+    void*  logits;
+    void*  sorted_logits;
+    int*   sorted_indices;
+    int*   kept;
+    int*   top_ks;
+    float* top_ps;
+    int    batch_size;
+    int    vocab_size;
+    int    vocab_size_padded;
+};
 
 template<typename T>
-void invokeBatchTopPSampling(void*           workspace,
-                             size_t&         workspace_size,
-                             size_t&         cub_temp_storage_size,
-                             int*            output_ids,
-                             int*            sequence_length,
-                             bool*           finished_buf,
-                             float*          cum_log_probs,
-                             float*          output_log_probs,
-                             const T*        log_probs,
-                             float*          sampled_logprobs,
-                             uint32_t*       sampled_indexes,
-                             uint32_t*       sampled_nums,
-                             const int*      id_vals,
-                             int*            offset_buf,
-                             int*            begin_offset_buf,
-                             curandState_t*  curandstate,
-                             const int       batch_size,
-                             const size_t    vocab_size_padded,
-                             const int*      end_ids,
-                             const float     max_top_p,
-                             const float*    top_ps,
-                             cudaStream_t    stream,
-                             cudaDeviceProp* cuda_device_prop,
-                             const bool*     skip_decode);
+void invokeTopPSort(TopPSortParams& params, cudaStream_t stream);
+
+struct TopPMinPFilterParams {
+    void*  sorted_logits;
+    int*   sorted_indices;
+    int*   kept;
+    float* top_ps;
+    float* min_ps;
+    int    batch_size;
+    int    vocab_size;
+    int    vocab_size_padded;
+};
 
 template<typename T>
-void invokeAddBiasSoftMax(T*           logits,
-                          const T*     bias,
-                          const int*   end_ids,
-                          const bool*  finished,
-                          const int    m,
-                          const int    n_padded,
-                          const int    n,
-                          cudaStream_t stream);
-
-namespace segmented_topp_impl {
-enum DType_t
-{
-    kFLOAT,
-    kHALF,
-    kINT8
-};
-
-template<typename Key_Data_Type_   = float,
-         typename Value_Data_Type_ = int32_t,
-         int BLOCK_THREADS_        = 256,
-         int KEYS_PER_LDG_         = 1>
-struct Segmented_topk_kernel_params {
-    typedef Key_Data_Type_   Key_Data_Type;
-    typedef Value_Data_Type_ Value_Data_Type;
-    enum
-    {
-        BLOCK_THREADS = BLOCK_THREADS_
-    };
-    enum
-    {
-        ITEMS_INCREMENT = 32
-    };
-    // enum { KEYS_PER_LDG = 2 * 4 / sizeof(Key_Data_Type_) };
-    enum
-    {
-        KEYS_PER_LDG = KEYS_PER_LDG_
-    };
-};
-
-struct TopKPerSegmentContext {
-    TopKPerSegmentContext(): sm_count(0), sm_shared_size(0), sm_version(0){};
-    int sm_count;
-    int sm_shared_size;
-    int sm_version;
-};
-
-struct TopKPerSegmentParams {
-    // input/output keys and values
-    void *gmem_src_keys, *gmem_dst_keys, *gmem_dst_vals;
-    // not used in the custom implementation
-    void* gmem_src_vals;
-    // int array of size num_segments
-    int* gmem_active_count_per_segment;
-    int* gmem_active_count_total;
-    int* gmem_begin_offsets;
-    // gmem_end_offsets will be populated
-    int*  gmem_end_offsets;
-    void* workspace;
-    // total number of items for all segments
-    int num_items;
-    int num_segments;
-    // top_k per segment
-    int   num_top_k;
-    float top_p;
-    float confidence_threshold;
-};
-
-int topPPerSegment(const TopKPerSegmentContext& context,
-                   TopKPerSegmentParams&        params,
-                   const DType_t                DT_SCORE,
-                   void*                        temp_storage,
-                   size_t&                      temp_storage_bytes,
-                   cudaStream_t                 stream);
-}  // namespace segmented_topp_impl
+void invokeTopPMinPFilter(TopPMinPFilterParams& params, cudaStream_t stream);
 
 }  // namespace turbomind

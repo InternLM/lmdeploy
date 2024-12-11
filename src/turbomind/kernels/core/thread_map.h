@@ -3,6 +3,7 @@
 #pragma once
 
 #include "src/turbomind/kernels/core/common.h"
+#include "src/turbomind/kernels/core/math.h"
 
 #include <iostream>
 
@@ -51,7 +52,7 @@ struct ThreadMapQ {
     }
 };
 
-template<int DimC, int DimS, int AccessC, int WarpCount, int WarpThreadC = DimC / AccessC>
+template<int DimC, int DimS, int AccessC, int WarpCount, int WarpThreadC = lowbit(DimC) / AccessC>
 struct RakedThreadMap {
     static constexpr int kDimC = DimC;
     static constexpr int kDimS = DimS;

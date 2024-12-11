@@ -11,12 +11,13 @@ from lmdeploy.messages import TurbomindEngineConfig
 from lmdeploy.model import MODELS, best_match_model
 from lmdeploy.utils import get_logger, get_model
 
-from ...utils import _get_and_verify_max_len
+from ...utils import _get_and_verify_max_len, is_bf16_supported
 from ..supported_models import SUPPORTED_ARCHS, is_supported
-from .exporter import get_exporter_factory
+from .config import TurbomindModelConfig
+from .module import Transformer
 from .policy import get_input_policy
 from .source_model.base import INPUT_MODELS
-from .target_model.base import OUTPUT_MODELS, TurbomindModelConfig
+from .target_model.base import OUTPUT_MODELS
 
 SUPPORTED_FORMATS = ['meta_llama', 'hf', 'awq', 'gptq', None]
 logger = get_logger('lmdeploy')
@@ -84,7 +85,7 @@ def copy_tokenizer(model_path: str, tokenizer_path: str,
 
 
 def get_output_model_registered_name_and_config(model_path: str,
-                                                model_format: str,
+                                                model_format: str, dtype: str,
                                                 group_size: int):
     """Get the registered name of the turbomind model and its configuration
     according to the input model path, format and user-input config. The name
@@ -93,47 +94,59 @@ def get_output_model_registered_name_and_config(model_path: str,
     Args:
         model_path (str): the path of the input model
         model_format (str): the format of the model, which can be one of
-            ['meta_llama',  'hf', 'awq']
+            ['meta_llama',  'hf', 'awq', 'gptq']
+        dtype (str): the data type of the model's weights and activations
         group_size (int): the size of group used by awq model
     """
     register_name = 'tm'
-    turbomind_model_arch = 'llama'
-    weight_type = 'fp16'
+    weight_type = 'float16'
 
-    config = TurbomindModelConfig.from_dict({}, allow_none=True)
+    config = TurbomindModelConfig.from_dict()
 
     if model_format == 'meta_llama':
         session_len = 2048
     else:  # hf, awq, None
         model_arch, model_config = get_model_arch(model_path)
-        turbomind_model_arch = SUPPORTED_ARCHS[model_arch]
         session_len = _get_and_verify_max_len(model_config, None)
         if model_format in ['awq', 'gptq']:
             weight_type = 'int4'
             group_size = 128 if group_size == 0 else group_size
         else:
             torch_dtype = getattr(model_config, 'torch_dtype', 'float16')
-            TORCH_DTYPE_MAP = {torch.bfloat16: 'bf16', torch.float16: 'fp16'}
-            weight_type = TORCH_DTYPE_MAP.get(torch_dtype, 'fp16')
+            TORCH_DTYPE_MAP = {
+                torch.bfloat16: 'bfloat16',
+                torch.float16: 'float16'
+            }
+            weight_type = TORCH_DTYPE_MAP.get(torch_dtype, 'float16')
 
             # Qwen-1 didn't set torch_dtype. It used bf16 as default
             if model_arch == 'QWenLMHeadModel':
-                weight_type = 'bf16'
-            if not torch.cuda.is_bf16_supported():
-                print(
-                    'Device does not support bfloat16. Set float16 forcefully')
-                weight_type = 'fp16'
+                weight_type = 'bfloat16'
 
-    config.model_arch = model_arch
-    config.session_len = session_len + 8
-    config.weight_type = weight_type
-    config.group_size = group_size
+    if dtype == 'auto':
+        weight_type = weight_type if weight_type in [
+            'float16', 'bfloat16', 'int4'
+        ] else 'float16'
+    elif dtype in ['float16', 'bfloat16']:
+        if weight_type == 'int4':
+            logger.warn(f'The model {model_path} is a quantized model, so the '
+                        f'specified data type {dtype} is ignored')
+        else:
+            weight_type = dtype
+    else:
+        assert 0, f'unsupported specified data type {dtype}'
 
-    lora_type = 'plora' if turbomind_model_arch == 'xcomposer2' else ''
+    if weight_type == 'bfloat16' and not is_bf16_supported():
+        logger.warn('data type fallback to float16 since '
+                    'torch.cuda.is_bf16_supported is False')
+        weight_type = 'float16'
+    config.model_config.model_arch = model_arch
+    config.model_config.weight_type = weight_type
+    config.model_config.model_format = model_format
+    config.model_config.group_size = group_size
+    config.model_config.session_len = session_len
 
-    exporter_factory = get_exporter_factory(weight_type, lora_type)
-
-    return register_name, config, exporter_factory
+    return register_name, config
 
 
 def pack_model_repository(workspace_path: str):
@@ -181,7 +194,7 @@ def find_quantization_config(nested, target_key):
 def get_tm_model(model_path,
                  model_name,
                  chat_template_name,
-                 engine_config,
+                 engine_config: TurbomindEngineConfig,
                  group_size: int = None,
                  out_dir: str = None):
     """Create turbomind model.
@@ -211,12 +224,9 @@ def get_tm_model(model_path,
             f'mismatched quant method: user input ' \
             f'"{engine_config.model_format}" ' \
             f'vs model quant_config "{quant_method}"'
-        assert group_size is None or group_size == _group_size, \
+        assert not group_size or group_size == _group_size, \
             f'mismatched quant group size: user input "{group_size}" ' \
             f'vs model quant_config "{_group_size}"'
-
-        engine_config.model_format = quant_method
-        group_size = _group_size
 
         if quant_method == 'awq':
             assert version == 'gemm', \
@@ -228,11 +238,13 @@ def get_tm_model(model_path,
         else:
             assert 0, f'unsupported quant_config: {quant_config}'
 
-    # Compatible to awq models that are quantized by lmdeploy (<=v0.3.0)
-    if not group_size:
-        group_size = 128
+        engine_config.model_format = quant_method
+        group_size = _group_size
 
     if engine_config.model_format in ['awq', 'gptq']:
+        # Compatible to awq models that are quantized by lmdeploy (<=v0.3.0)
+        if not group_size:
+            group_size = 128
         assert group_size == 128, \
             f'model format is "{engine_config.model_format}" ' \
             f'but group_size is {group_size}. Currently, only 128 ' \
@@ -245,38 +257,30 @@ def get_tm_model(model_path,
                                                      tokenizer_path=model_path,
                                                      input_policy=input_policy)
 
-    output_model_name, cfg, exporter_factory = \
+    output_model_name, tm_cfg = \
         get_output_model_registered_name_and_config(
             model_path=model_path,
             model_format=engine_config.model_format,
+            dtype=engine_config.dtype,
             group_size=group_size)
 
-    cfg.chat_template = chat_template_name
-    cfg.model_name = model_name
-    cfg.tensor_para_size = engine_config.tp
+    tm_cfg.model_config.chat_template = chat_template_name
+    tm_cfg.model_config.model_name = model_name
+    tm_cfg.model_config.tp = engine_config.tp
 
     output_model = OUTPUT_MODELS.get(output_model_name)(
         input_model=input_model,
-        cfg=cfg,
-        exporter_factory=exporter_factory,
+        cfg=tm_cfg,
+        model_cls=Transformer,
         out_dir=out_dir)
-    if engine_config.rope_scaling_factor == 0:
-        # to avoid `rope_scaling_factor` from engine_config override
-        # the rope_scaling_factor in TurbomindModelConfig
-        engine_config.rope_scaling_factor = None
-    output_model.cfg.update_from_engine_config(engine_config)
-    # cast bool to int, otherwise, the bool variables will be saved to
-    # config.ini as string
-    # TODO(lvhan): change config.ini to config.yaml
-    output_model.cfg.enable_prefix_caching = int(
-        output_model.cfg.enable_prefix_caching)
-    output_model.cfg.use_logn_attn = int(output_model.cfg.use_logn_attn)
+
     return output_model
 
 
 def main(model_name: str,
          model_path: str,
-         model_format: str = None,
+         model_format: str = 'hf',
+         dtype: str = 'auto',
          chat_template: str = None,
          tokenizer_path: str = None,
          dst_path: str = 'workspace',
@@ -291,10 +295,14 @@ def main(model_name: str,
         model_name (str): unused any longer
         model_path (str): the directory path of the model
         model_format (str): the format of the model, should choose from
-            ['meta_llama', 'hf', 'awq', None]. 'meta_llama' stands for META's
-            llama format, 'hf' means huggingface llama format, and 'awq' means
-            llama(hf) model quantized by lmdeploy/lite/quantization/awq.py.
-            The default value is None
+            ['meta_llama', 'hf', 'awq', 'gptq']. 'meta_llama' stands for META's
+            llama format, 'hf' means huggingface model, and 'awq', `gptq`
+            means models quantized by `autoawq` and `autogptq` respectively.
+            The default value is hf
+        dtype (str): data type for model weights and activations. It can be
+            one of the following values, ['auto', 'float16', 'bfloat16']
+            The `auto` option will use FP16 precision for FP32 and FP16
+            models, and BF16 precision for BF16 models.
         chat_template (str): the name of the built-in chat template.
         tokenizer_path (str): the path of tokenizer model
         dst_path (str): the destination path that saves outputs
@@ -341,7 +349,9 @@ def main(model_name: str,
 
     tm_weight_path, tm_tokenizer_path = create_workspace(dst_path)
     copy_tokenizer(model_path, tokenizer_path, tm_tokenizer_path)
-    engine_config = TurbomindEngineConfig(tp=tp, model_format=model_format)
+    engine_config = TurbomindEngineConfig(tp=tp,
+                                          model_format=model_format,
+                                          dtype=dtype)
     tm_model = get_tm_model(model_path, model_name, chat_template,
                             engine_config, group_size, tm_weight_path)
     tm_model.export()

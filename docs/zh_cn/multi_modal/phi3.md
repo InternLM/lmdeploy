@@ -13,7 +13,7 @@
 
 ## 安装
 
-请参考[安装文档](../installation.md)安装 LMDeploy，并安装该模型的依赖。
+请参考[安装文档](../get_started/installation.md)安装 LMDeploy，并安装该模型的依赖。
 
 ```shell
 # 建议从https://github.com/Dao-AILab/flash-attention/releases寻找和环境匹配的whl包

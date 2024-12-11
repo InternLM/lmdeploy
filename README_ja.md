@@ -8,7 +8,7 @@
 [![open issues](https://img.shields.io/github/issues-raw/InternLM/lmdeploy)](https://github.com/InternLM/lmdeploy/issues)
 
 [📘Documentation](https://lmdeploy.readthedocs.io/en/latest/) |
-[🛠️Quick Start](https://lmdeploy.readthedocs.io/en/latest/get_started.html) |
+[🛠️Quick Start](https://lmdeploy.readthedocs.io/en/latest/get_started/get_started.html) |
 [🤔Reporting Issues](https://github.com/InternLM/lmdeploy/issues/new/choose)
 
 [English](README.md) | [简体中文](README_zh-CN.md) | 日本語
@@ -114,6 +114,7 @@ LMDeploy TurboMindエンジンは卓越した推論能力を持ち、さまざ�
   <li>Llama2 (7B - 70B)</li>
   <li>Llama3 (8B, 70B)</li>
   <li>Llama3.1 (8B, 70B)</li>
+  <li>Llama3.2 (1B, 3B)</li>
   <li>InternLM (7B - 20B)</li>
   <li>InternLM2 (7B - 20B)</li>
   <li>InternLM2.5 (7B)</li>
@@ -139,6 +140,7 @@ LMDeploy TurboMindエンジンは卓越した推論能力を持ち、さまざ�
   <li>Phi-3-mini (3.8B)</li>
   <li>Phi-3.5-mini (3.8B)</li>
   <li>Phi-3.5-MoE (16x3.8B)</li>
+  <li>MiniCPM3 (4B)</li>
 </ul>
 </td>
 <td>
@@ -150,6 +152,8 @@ LMDeploy TurboMindエンジンは卓越した推論能力を持ち、さまざ�
   <li>DeepSeek-VL (7B)</li>
   <li>InternVL-Chat (v1.1-v1.5)</li>
   <li>InternVL2 (1B-76B)</li>
+  <li>Mono-InternVL (2B)</li>
+  <li>ChemVLM (8B-26B)</li>
   <li>MiniGeminiLlama (7B)</li>
   <li>CogVLM-Chat (17B)</li>
   <li>CogVLM2-Chat (19B)</li>
@@ -158,6 +162,8 @@ LMDeploy TurboMindエンジンは卓越した推論能力を持ち、さまざ�
   <li>Phi-3-vision (4.2B)</li>
   <li>Phi-3.5-vision (4.2B)</li>
   <li>GLM-4V (9B)</li>
+  <li>Llama3.2-vision (11B, 90B)</li>
+  <li>Molmo (7B-D,72B)</li>
 </ul>
 </td>
 </tr>
@@ -181,7 +187,7 @@ pip install lmdeploy
 ```
 
 v0.3.0から、デフォルトの事前構築済みパッケージはCUDA 12でコンパイルされています。
-CUDA 11+プラットフォームでのインストールに関する情報、またはソースからのビルド手順については、[インストールガイドを](docs/en/installation.md)参照してください。
+CUDA 11+プラットフォームでのインストールに関する情報、またはソースからのビルド手順については、[インストールガイドを](docs/en/get_started/installation.md)参照してください。
 
 ## オフラインバッチ推論
 
@@ -196,12 +202,16 @@ print(response)
 > デフォルトでは、LMDeployはHuggingFaceからモデルをダウンロードします。ModelScopeからモデルを使用する場合は、`pip install modelscope`コマンドでModelScopeをインストールし、環境変数を設定してください：
 >
 > `export LMDEPLOY_USE_MODELSCOPE=True`
+>
+> openMind Hubからモデルを使用する場合は、`pip install openmind_hub`コマンドでopenMind Hubをインストールし、環境変数を設定してください：
+>
+> `export LMDEPLOY_USE_OPENMIND_HUB=True`
 
 推論パイプラインに関する詳細情報は[こちら](./docs/en/llm/pipeline.md)を参照してください。
 
 # チュートリアル
 
-LMDeployの基本的な使用方法については、[getting_started](./docs/en/get_started.md)セクションを参照してください。
+LMDeployの基本的な使用方法については、[getting_started](docs/en/get_started/get_started.md)セクションを参照してください。
 
 詳細なユーザーガイドと高度なガイドについては、[チュートリアル](https://lmdeploy.readthedocs.io/en/latest/)を参照してください：
 

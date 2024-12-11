@@ -48,8 +48,8 @@ def process_gptq(x: torch.Tensor, kind: str):
 
 def get_input_policy(model_format):
     if model_format == 'awq':
-        return ('qweight', process_awq_gemm)
+        return process_awq_gemm
     elif model_format == 'gptq':
-        return ('qweight', process_gptq)
+        return process_gptq
     else:
-        return ('weight', to_cuda)
+        return to_cuda

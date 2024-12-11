@@ -31,13 +31,17 @@ class LlavaHfVisionModel(VisonModel):
             else:
                 self.vl_model = model
 
+        # fix for llava-hf/llava-interleave-qwen-7b-hf
+        setattr(model.config, 'tie_word_embeddings', False)
         with disable_logging():
             load_checkpoint_and_dispatch(
                 model=model,
                 max_memory=self.max_memory,
                 checkpoint=self.model_path,
                 device_map='auto' if not self.with_llm else {'': 'cpu'},
-                no_split_module_classes=['CLIPEncoderLayer'],
+                no_split_module_classes=[
+                    'CLIPEncoderLayer', 'SiglipEncoderLayer'
+                ],
                 dtype=torch.half)
         model.eval()
         self.model = model
@@ -52,8 +56,9 @@ class LlavaHfVisionModel(VisonModel):
     @torch.no_grad()
     def forward(self, images: List[Image]) -> List[torch.Tensor]:
         """forward."""
-        pixel_values = self.processor(images,
-                                      return_tensors='pt')['pixel_values']
+        pixel_values = self.processor(
+            images, return_tensors='pt',
+            input_data_format='channels_last')['pixel_values']
         pixel_values = pixel_values.to(device=self.model.device,
                                        dtype=self.model.dtype)
         image_outputs = self.model.vision_tower.forward(

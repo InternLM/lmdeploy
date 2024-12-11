@@ -24,16 +24,12 @@ def make_model_inputs(input_ids: torch.Tensor,
     else:
         assert len(history_length) == len(seq_length)
     is_decoding = max_seq_len == 1
-    max_q_seq_length = seq_length.max().item()
-    max_history_length = history_length.max().item()
 
     num_ignored_history = torch.zeros_like(seq_length)
     return ModelInputs(input_ids=input_ids,
                        seq_length=seq_length,
                        history_lengths=history_length,
                        block_offsets=block_offsets,
-                       max_q_seq_length=max_q_seq_length,
-                       max_history_length=max_history_length,
                        is_decoding=is_decoding,
                        num_ignored_history=num_ignored_history)
 
@@ -53,7 +49,7 @@ def make_step_context(
     from torch.nn.utils.rnn import pad_sequence
 
     from lmdeploy.pytorch.engine.cache_engine import CacheEngine
-    from lmdeploy.pytorch.engine.model_agent import StepContext
+    from lmdeploy.pytorch.model_inputs import StepContext
 
     if model_config is None:
         model_config = ModelConfig(hidden_size=4096,
@@ -82,6 +78,7 @@ def make_step_context(
         num_blocks_per_seq = (total_length + block_size - 1) // block_size
         num_blocks = sum(num_blocks_per_seq).item()
         cache_config = CacheConfig(
+            max_batches=128,
             block_size=block_size,
             num_cpu_blocks=0,
             num_gpu_blocks=num_blocks,
@@ -139,7 +136,6 @@ def make_step_context(
     return StepContext.new(
         inputs=model_inputs,
         world_size=world_size,
-        device=device,
         kv_caches=kv_caches,
     )
 

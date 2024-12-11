@@ -1,11 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
 import torch
-import torch.nn.functional as F
 import triton
 import triton.language as tl
 
-from .triton_utils import get_kernel_meta, wrap_jit_func
+from .activation import silu_and_mul
+from .triton_utils import get_kernel_meta
 
 
 def get_cuda_autotune_config():
@@ -13,101 +13,39 @@ def get_cuda_autotune_config():
         triton.Config(
             {
                 'BLOCK_SIZE_M': 128,
+                'BLOCK_SIZE_N': 128,
+                'BLOCK_SIZE_K': 32,
+                'GROUP_SIZE_M': 1,
+            },
+            num_stages=4,
+            num_warps=4),
+        triton.Config(
+            {
+                'BLOCK_SIZE_M': 64,
                 'BLOCK_SIZE_N': 256,
+                'BLOCK_SIZE_K': 32,
+                'GROUP_SIZE_M': 1,
+            },
+            num_stages=4,
+            num_warps=4),
+        triton.Config(
+            {
+                'BLOCK_SIZE_M': 64,
+                'BLOCK_SIZE_N': 128,
                 'BLOCK_SIZE_K': 64,
-            },
-            num_stages=3,
-            num_warps=8),
-        triton.Config(
-            {
-                'BLOCK_SIZE_M': 64,
-                'BLOCK_SIZE_N': 256,
-                'BLOCK_SIZE_K': 32,
+                'GROUP_SIZE_M': 1,
             },
             num_stages=4,
             num_warps=4),
-        triton.Config(
-            {
-                'BLOCK_SIZE_M': 128,
-                'BLOCK_SIZE_N': 128,
-                'BLOCK_SIZE_K': 32,
-            },
-            num_stages=4,
-            num_warps=4),
-        triton.Config(
-            {
-                'BLOCK_SIZE_M': 128,
-                'BLOCK_SIZE_N': 64,
-                'BLOCK_SIZE_K': 32,
-            },
-            num_stages=4,
-            num_warps=4),
-        triton.Config(
-            {
-                'BLOCK_SIZE_M': 64,
-                'BLOCK_SIZE_N': 128,
-                'BLOCK_SIZE_K': 32,
-            },
-            num_stages=4,
-            num_warps=4),
-        triton.Config(
-            {
-                'BLOCK_SIZE_M': 128,
-                'BLOCK_SIZE_N': 32,
-                'BLOCK_SIZE_K': 32,
-            },
-            num_stages=4,
-            num_warps=4),
-        triton.Config(
-            {
-                'BLOCK_SIZE_M': 64,
-                'BLOCK_SIZE_N': 32,
-                'BLOCK_SIZE_K': 32,
-            },
-            num_stages=5,
-            num_warps=2),
-        triton.Config(
-            {
-                'BLOCK_SIZE_M': 32,
-                'BLOCK_SIZE_N': 64,
-                'BLOCK_SIZE_K': 32,
-            },
-            num_stages=5,
-            num_warps=2),
     ]
 
 
 @triton.autotune(
     configs=get_cuda_autotune_config(),
-    key=['N', 'K'],
+    key=['N', 'K', 'M_NP2'],
+    warmup=10,
+    rep=25,
 )
-@wrap_jit_func(type_hint=dict(
-    A=torch.Tensor,
-    B=torch.Tensor,
-    C=torch.Tensor,
-    SortedIdx=torch.Tensor,
-    ExpStart=torch.Tensor,
-    ExpEnd=torch.Tensor,
-    Weights=torch.Tensor,
-    N=int,
-    K=int,
-    stride_am=int,
-    stride_ak=int,
-    stride_be=int,
-    stride_bn=int,
-    stride_bk=int,
-    stride_cm=int,
-    stride_cn=int,
-    BLOCK_SIZE_M=torch.int32,
-    BLOCK_SIZE_N=torch.int32,
-    BLOCK_SIZE_K=torch.int32,
-    GROUP_SIZE_M=torch.int32,
-    ENABLE_WEIGHTS=bool,
-    top_k=torch.int32,
-    expert_offset=torch.int32,
-    reindex_a=bool,
-    reindex_c=bool,
-))
 @triton.jit
 def fused_moe_kernel(
     A,
@@ -119,17 +57,18 @@ def fused_moe_kernel(
     Weights,
     N: tl.constexpr,
     K: tl.constexpr,
-    stride_am: int,
+    stride_am: tl.constexpr,
     stride_ak: tl.constexpr,
     stride_be: tl.constexpr,
     stride_bn: tl.constexpr,
     stride_bk: tl.constexpr,
-    stride_cm: int,
+    stride_cm: tl.constexpr,
     stride_cn: tl.constexpr,
     BLOCK_SIZE_M: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
     BLOCK_SIZE_K: tl.constexpr,
     GROUP_SIZE_M: tl.constexpr,
+    M_NP2: tl.constexpr,
     ENABLE_WEIGHTS: tl.constexpr,
     top_k: tl.constexpr,
     expert_offset: tl.constexpr,
@@ -137,8 +76,8 @@ def fused_moe_kernel(
     reindex_c: tl.constexpr,
 ):
     """fused moe kernel."""
-    exp_id = tl.program_id(0)
-    pid = tl.program_id(1)
+    exp_id = tl.program_id(1)
+    pid = tl.program_id(0)
 
     exp_start = tl.load(ExpStart + exp_id + expert_offset)
     exp_end = tl.load(ExpEnd + exp_id + expert_offset)
@@ -146,16 +85,23 @@ def fused_moe_kernel(
     if M <= 0:
         return
 
-    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+    num_pid_m = tl.cdiv(M_NP2, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
-    num_pid_in_group = GROUP_SIZE_M * num_pid_n
-    group_id = pid // num_pid_in_group
-    first_pid_m = group_id * GROUP_SIZE_M
-    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-    pid_m = first_pid_m + (pid % group_size_m)
-    pid_n = (pid % num_pid_in_group) // group_size_m
 
-    if pid_m * BLOCK_SIZE_M >= M:
+    if GROUP_SIZE_M == 1:
+        pid_m = pid % num_pid_m
+        pid_n = pid // num_pid_m
+        # pid_m = pid // num_pid_n
+        # pid_n = pid % num_pid_n
+    else:
+        num_pid_in_group = GROUP_SIZE_M * num_pid_n
+        group_id = pid // num_pid_in_group
+        first_pid_m = group_id * GROUP_SIZE_M
+        group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+        pid_m = first_pid_m + (pid % group_size_m)
+        pid_n = (pid % num_pid_in_group) // group_size_m
+
+    if pid_m * BLOCK_SIZE_M >= M or pid_n * BLOCK_SIZE_N >= N:
         return
 
     offs_sid = exp_start + pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
@@ -169,9 +115,11 @@ def fused_moe_kernel(
         offs_am = offs_sid
     a_ptrs = A + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
+    offs_bn = tl.max_contiguous(tl.multiple_of(offs_bn, BLOCK_SIZE_N),
+                                BLOCK_SIZE_N)
 
     # deepseek has 160 experts, exp index would overflow int32
-    exp_off = tl.full((1, ), stride_be, dtype=tl.int64) * exp_id
+    exp_off = stride_be * exp_id.to(tl.int64)
     b_ptrs = B + exp_off + (offs_k[:, None] * stride_bk +
                             offs_bn[None, :] * stride_bn)
 
@@ -198,11 +146,9 @@ def fused_moe_kernel(
     if reindex_c:
         offs_cm = sid
     else:
-        offs_cm = exp_start + pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-    offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
-    c_ptrs = C + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
-    c_mask = mask_sid[:, None] & (offs_cn[None, :] < N)
-    tl.store(c_ptrs, c, mask=c_mask)
+        offs_cm = offs_sid
+    c_ptrs = C + stride_cm * offs_cm[:, None] + stride_cn * offs_bn[None, :]
+    tl.store(c_ptrs, c, mask=mask_sid[:, None])
 
 
 def fused_moe_kernel_launcher(
@@ -224,17 +170,15 @@ def fused_moe_kernel_launcher(
 
     if num_tokens is None:
         num_tokens = A.size(0)
+    M_NP2 = triton.next_power_of_2(num_tokens)
+    M_NP2 = max(64, M_NP2)
     E, N, K = B.shape
 
     def _grid_fn(META):
-        grid = (
-            E,
-            triton.cdiv(num_tokens, META['BLOCK_SIZE_M']) *
-            triton.cdiv(N, META['BLOCK_SIZE_N']),
-        )
+        grid = (triton.cdiv(M_NP2, META['BLOCK_SIZE_M']) *
+                triton.cdiv(N, META['BLOCK_SIZE_N']), E)
         return grid
 
-    GROUP_SIZE_M = 1
     A = A.flatten(0, -2)
     C = C.flatten(0, -2)
 
@@ -262,18 +206,11 @@ def fused_moe_kernel_launcher(
         expert_offset=expert_offset,
         reindex_a=reindex_a,
         reindex_c=reindex_c,
-        GROUP_SIZE_M=GROUP_SIZE_M,
+        M_NP2=M_NP2,
         **kernel_meta,
     )
 
 
-@wrap_jit_func(type_hint=dict(TopkIdx=torch.Tensor,
-                              SortedIdx=torch.Tensor,
-                              ExpStart=torch.Tensor,
-                              ExpEnd=torch.Tensor,
-                              len_sorted_idx=int,
-                              num_experts=torch.int32,
-                              BLOCK=torch.int32))
 @triton.jit
 def _start_end_kernel(TopkIdx, SortedIdx, ExpStart, ExpEnd,
                       len_sorted_idx: int, num_experts: tl.constexpr,
@@ -389,8 +326,10 @@ def fused_moe(hidden_states: torch.Tensor,
     )
 
     # activate
-    gate_cache, up_cache = intermediate_cache1.chunk(2, -1)
-    gate_cache = F.silu(gate_cache, inplace=True) * up_cache
+    unflat_size = intermediate_cache1.shape[:-1]
+    intermediate_cache1 = intermediate_cache1.flatten(0, -2)
+    gate_cache = silu_and_mul(intermediate_cache1)
+    gate_cache = gate_cache.unflatten(0, unflat_size)
 
     if full_exp:
         intermediate_cache2 = hidden_states.new_empty((M, topk, w2.shape[1]))

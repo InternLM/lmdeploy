@@ -3,6 +3,7 @@ from typing import Dict, List, Optional, Union
 
 import numpy as np
 
+from lmdeploy.pytorch.check_env import try_import_deeplink
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.constants import IMAGE_DUMMY_TOKEN_INDEX, IMAGE_TOKEN
@@ -18,6 +19,8 @@ class VLAsyncEngine(AsyncEngine):
     def __init__(self, model_path: str, **kwargs) -> None:
         vision_config = kwargs.pop('vision_config', None)
         backend_config = kwargs.get('backend_config', None)
+        if kwargs.get('backend', '') == 'pytorch':
+            try_import_deeplink(backend_config.device_type)
         self.vl_encoder = ImageEncoder(model_path,
                                        vision_config,
                                        backend_config=backend_config)
@@ -60,6 +63,11 @@ class VLAsyncEngine(AsyncEngine):
 
         results = {}
         input_ids = []
+        from lmdeploy.vl.templates import (MllamaTempateWrapper,
+                                           MolmoChatTemplateWrapper,
+                                           Qwen2VLChatTemplateWrapper)
+        ranges = None
+        grid_thws = None
         if len(segs) > 1:
             # yapf: disable
             images_with_kwargs = await self.vl_prompt_template.async_collect_pil_images(prompt)  # noqa: E501
@@ -75,6 +83,26 @@ class VLAsyncEngine(AsyncEngine):
                     decorated, features = self.vl_prompt_template.update_image_token(  # noqa: E501
                         decorated, features)
                     segs = decorated.split(IMAGE_TOKEN)
+
+                if isinstance(self.vl_prompt_template,
+                              Qwen2VLChatTemplateWrapper):
+                    grid_thws = [x['grid_thw'] for x in features]
+                    features = [x['embeddings'] for x in features]
+
+                if isinstance(self.vl_prompt_template, MllamaTempateWrapper):
+                    # llama3.2 just encode <|image|> and inference
+                    decorated = decorated.replace(IMAGE_TOKEN, '<|image|>')
+                    input_ids = self.tokenizer.encode(decorated,
+                                                      add_bos=sequence_start)
+                    results['input_ids'] = input_ids
+                    results['prompt'] = decorated
+                    assert len(features)
+                    results['cross_attention_states'] = features[0]
+                    return results
+
+                if isinstance(self.vl_prompt_template,
+                              MolmoChatTemplateWrapper):
+                    return features[0]
 
             features = [x.cpu().numpy() for x in features]
             input_ids = []
@@ -101,6 +129,15 @@ class VLAsyncEngine(AsyncEngine):
         else:
             input_ids = self.tokenizer.encode(decorated,
                                               add_bos=sequence_start)
+
+        if isinstance(self.vl_prompt_template, Qwen2VLChatTemplateWrapper):
+            # TODO: refactor _get_prompt_input function
+            mrope_position_ids, mrope_position_delta = \
+                self.vl_prompt_template.get_mrope_info(
+                    len(input_ids), grid_thws=grid_thws,
+                    embedding_ranges=ranges)
+            results['mrope_position_ids'] = mrope_position_ids
+            results['mrope_position_delta'] = mrope_position_delta
 
         results['input_ids'] = input_ids
         results['prompt'] = decorated
