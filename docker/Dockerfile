@@ -12,7 +12,6 @@ ARG PYTHON_VERSION=3.10
 
 ARG TORCH_VERSION=2.3.0
 ARG TORCHVISION_VERSION=0.18.0
-ARG TRITON_VERSION=3.0.0
 
 RUN apt-get update -y && apt-get install -y software-properties-common wget vim git curl openssh-server ssh sudo &&\
     curl https://sh.rustup.rs -sSf | sh -s -- -y &&\
@@ -45,7 +44,7 @@ ENV LD_LIBRARY_PATH=/usr/local/nccl/lib:$LD_LIBRARY_PATH
 
 RUN --mount=type=cache,target=/root/.cache/pip python3 -m pip install --upgrade pip setuptools==69.5.1 &&\
     python3 -m pip install torch==${TORCH_VERSION} torchvision==${TORCHVISION_VERSION} --index-url https://download.pytorch.org/whl/${CUDA_VERSION_SHORT} &&\
-    python3 -m pip install cmake packaging wheel triton==${TRITON_VERSION}
+    python3 -m pip install cmake packaging wheel
 
 ENV NCCL_LAUNCH_MODE=GROUP
 
