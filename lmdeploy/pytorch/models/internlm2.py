@@ -395,6 +395,32 @@ class InternLM2ForCausalLM(nn.Module, CudaGraphMixin):
             inputs_embeds=inputs_embeds,
         )
 
+    def load_lora_weights(self, weights: Iterable[Tuple[str, torch.Tensor]],
+                          adapter_id: int):
+        """load lora weights."""
+
+        from lmdeploy.pytorch.adapter.adapter import load_lora_weights
+
+        num_heads = self.config.num_attention_heads
+        num_key_value_heads = self.config.num_key_value_heads
+        hidden_size = self.config.hidden_size
+        head_dim = hidden_size // num_heads
+        group_size = num_heads // num_key_value_heads
+
+        def _rearange_wqkv(weights):
+            for name, loaded_weight in weights:
+                if 'wqkv.lora_B' in name:
+                    loaded_weight = loaded_weight.unflatten(
+                        0, (-1, 2 + group_size, head_dim))
+                    q = loaded_weight[:, :-2].flatten(0, 2)
+                    k = loaded_weight[:, -2].flatten(0, 1)
+                    v = loaded_weight[:, -1].flatten(0, 1)
+                    loaded_weight = torch.cat([q, k, v], dim=0)
+                yield name, loaded_weight
+
+        weights_iter = _rearange_wqkv(weights)
+        load_lora_weights(self, weights_iter, adapter_id)
+
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
         """load weights."""
         # modify from vllm
