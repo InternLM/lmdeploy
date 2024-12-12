@@ -10,7 +10,7 @@ on:
       - "3rdparty/**"
       - "lmdeploy/**"
       - "requirements/**"
-      - "requirements.txt"
+      - "requirements_cuda.txt"
       - "CMakeLists.txt"
       - "setup.py"
   push:
@@ -24,7 +24,7 @@ on:
       - "3rdparty/**"
       - "lmdeploy/**"
       - "requirements/**"
-      - "requirements.txt"
+      - "requirements_cuda.txt"
       - "CMakeLists.txt"
       - "setup.py"
     tags:
@@ -78,7 +78,7 @@ jobs:
           python3 -m pip install pynvml packaging protobuf transformers_stream_generator
           # manually install flash attn
           python3 -m pip install /root/packages/flash_attn-2.6.3+cu118torch2.3cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
-          python3 -m pip install -r requirements.txt -r requirements/test.txt
+          python3 -m pip install -r requirements_cuda.txt -r requirements/test.txt
           python3 -m pip install .
       - name: Check env
         run: |

@@ -10,7 +10,7 @@ on:
       - "3rdparty/**"
       - "lmdeploy/**"
       - "requirements/**"
-      - "requirements.txt"
+      - "requirements_cuda.txt"
       - "CMakeLists.txt"
       - "setup.py"
   workflow_dispatch:
@@ -68,7 +68,7 @@ jobs:
           export PATH=$PATH:/usr/local/openmpi/bin
           export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/openmpi/lib
           python3 -m pip install cmake packaging wheel transformers_stream_generator transformers datasets openai einops timm decord
-          python3 -m pip install -r requirements.txt -r requirements/test.txt -r requirements/build.txt
+          python3 -m pip install -r requirements_cuda.txt -r requirements/test.txt -r requirements/build.txt
           mkdir -p build && cd build &&\
           sh ../generate.sh &&\
           ninja -j$(nproc) && ninja install &&\

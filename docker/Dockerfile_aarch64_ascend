@@ -122,4 +122,4 @@ WORKDIR /opt/lmdeploy
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     sed -i '/triton/d' requirements/runtime.txt && \
-    pip3 install -v --no-build-isolation -e .
+    LMDEPLOY_TARGET_DEVICE=ascend pip3 install -v --no-build-isolation -e .
