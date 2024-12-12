@@ -847,7 +847,7 @@ Reminder:
 - Only call one function at a time
 - Put the entire function call reply on one line"
 - Always add your sources when using search results to answer the user query\n\n""",  # noqa
-            knowledge='Cutting Knowledge Date: December 2023\nToday Date: 23 Jul 2024\n\n',
+            knowledge='Cutting Knowledge Date: December 2023\nToday Date: 26 Jul 2024\n\n',
             meta_instruction='You are a helpful assistant.',
             ipython='<|start_header_id|>ipython<|end_header_id|>\n\n',
             eoi='<|eot_id|>',
