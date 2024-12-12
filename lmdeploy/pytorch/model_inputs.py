@@ -123,6 +123,9 @@ class ModelInputs:
     mrope_inputs: MRopeModelInputs = None
     cross_attention_states: torch.Tensor = None
     history_cross_kv_seqlens: torch.LongTensor = None
+    last_hidden_states: torch.Tensor = None
+    medusa_attn_mask: torch.Tensor = None
+    medusa_position_ids: torch.Tensor = None
 
     def update(self, input_ids: torch.LongTensor):
         """update input ids."""
@@ -219,6 +222,8 @@ class StepContext:
     cross_attention_states: torch.Tensor = None
     cross_kv_seqlens: torch.LongTensor = None
     kv_quant_policy: Literal[0, 4, 8] = 0
+    last_hidden_states: torch.Tensor = None
+    medusa_attn_mask: torch.Tensor = None
 
     _outputs: Dict = field(default_factory=dict)
 
@@ -254,6 +259,8 @@ class StepContext:
             mrope_position_ids = inputs.mrope_inputs.get_inputs(
                 history_seqlens, q_seqlens)
 
+        # for speculative decoding
+        last_hidden_states = inputs.last_hidden_states
         # kv_seqlens
         cross_attention_states = inputs.cross_attention_states
         if inputs.is_decoding:
@@ -273,6 +280,9 @@ class StepContext:
         # seq_len + history_length
         kv_seqlens = q_seqlens + history_seqlens
         kv_seqlens -= inputs.num_ignored_history
+        # medusa
+        if inputs.medusa_position_ids is not None:
+            position_ids = inputs.medusa_position_ids.reshape(1, -1)
 
         ret = StepContext(
             input_ids=inputs.input_ids,
@@ -292,6 +302,8 @@ class StepContext:
             vision_inputs=inputs.vision_inputs,
             mrope_position_ids=mrope_position_ids,
             cross_attention_states=cross_attention_states,
+            last_hidden_states=last_hidden_states,
+            medusa_attn_mask=inputs.medusa_attn_mask,
             cross_kv_seqlens=inputs.history_cross_kv_seqlens,
             kv_quant_policy=kv_quant_policy,
         )

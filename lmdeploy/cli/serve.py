@@ -159,6 +159,7 @@ class SubCliServe:
         pt_group = parser.add_argument_group('PyTorch engine arguments')
 
         ArgumentHelper.adapters(pt_group)
+        ArgumentHelper.speculative_model(pt_group)
         ArgumentHelper.device(pt_group)
         ArgumentHelper.eager_mode(pt_group)
 
@@ -337,6 +338,7 @@ class SubCliServe:
         vision_config = VisionConfig(args.vision_max_batch_size)
         run_api_server(args.model_path,
                        model_name=args.model_name,
+                       speculative_model=args.speculative_model,
                        backend=backend,
                        backend_config=backend_config,
                        chat_template_config=chat_template_config,

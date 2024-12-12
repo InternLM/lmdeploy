@@ -14,11 +14,11 @@ class TestScheduler:
 
     @pytest.fixture
     def num_cpu_blocks(self):
-        yield 4
+        yield 12
 
     @pytest.fixture
     def num_gpu_blocks(self):
-        yield 4
+        yield 12
 
     @pytest.fixture
     def cache_config(self, block_size, num_cpu_blocks, num_gpu_blocks):
@@ -60,9 +60,9 @@ class TestScheduler:
         assert seq.status == MessageStatus.RUNNING
         assert seq in output.running
         assert len(block_tables) == 1
-        assert len(block_tables[0]) == num_blocks
-        assert block_manager.get_num_free_gpu_blocks(
-        ) == num_gpu_blocks - num_blocks
+        assert len(block_tables[0]) == num_blocks + 4  # medusa needs 4 more
+        assert block_manager.get_num_free_gpu_blocks() == num_gpu_blocks - (
+            num_blocks + 4)
 
         assert scheduler.has_unfinished()
 
@@ -99,7 +99,8 @@ class TestScheduler:
         assert session_id1 in scheduler.sessions
         assert seq1 not in scheduler.running
         assert seq1 not in scheduler.hanging
-        assert block_manager.get_num_free_gpu_blocks() == num_gpu_blocks - 2
+        assert block_manager.get_num_free_gpu_blocks() == num_gpu_blocks - (2 +
+                                                                            4)
 
         # stop session
         scheduler.stop_session(session_id2)
@@ -136,7 +137,8 @@ class TestScheduler:
         assert seq1.status == MessageStatus.RUNNING
         assert seq2.status == MessageStatus.RUNNING
         assert seq3.status == MessageStatus.WAITING
-        assert block_manager.get_num_free_gpu_blocks() == num_gpu_blocks - 3
+        assert block_manager.get_num_free_gpu_blocks() == num_gpu_blocks - (
+            3 + 4 * 2)
 
         # test: waiting alloc
         seq2.status = MessageStatus.STOPPED
@@ -180,4 +182,4 @@ class TestScheduler:
         # seq3: 3 nan
         assert seq1.status == MessageStatus.WAITING
         assert seq2.status == MessageStatus.RUNNING
-        assert block_manager.get_num_free_gpu_blocks() == 0
+        assert block_manager.get_num_free_gpu_blocks() == 4
