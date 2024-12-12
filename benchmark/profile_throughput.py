@@ -89,7 +89,7 @@ class Engine:
 
     async def _inference(self, req_queue: Queue, session_id: int,
                          temperature: float, top_p: float, top_k: int,
-                         stream_output: bool, pretokenize: bool,
+                         stream_output: bool, skip_tokenize: bool,
                          skip_detokenize: bool):
         model_inst = self.tm_model.create_instance()
         counters = []
@@ -99,12 +99,15 @@ class Engine:
             ts = [time.perf_counter()]
             ns = [0]
 
-            if pretokenize:
+            if skip_tokenize:
                 input_ids = prompt
             else:
                 input_ids = self.tokenizer(prompt).input_ids
 
             state = DetokenizeState(len(input_ids))
+
+            prev_len = 0
+            token_ids = input_ids.copy()
 
             async for outputs in model_inst.async_stream_infer(
                     session_id,
@@ -117,16 +120,15 @@ class Engine:
                     sequence_start=True,
                     sequence_end=True,
                     stream_output=stream_output):
-                res, n_token = input_ids + outputs.token_ids, outputs.num_token
-                if not skip_detokenize:
-                    _, state = self.tokenizer.detokenize_incrementally(
-                        res, state)
-                # The following does not help
-                # await asyncio.sleep(0)
-                # _, state = await loop.run_in_executor(None, self.tokenizer.detokenize_incrementally, res, state)
-
-                ts.append(time.perf_counter())
-                ns.append(n_token)
+                n_token = outputs.num_token
+                if n_token > prev_len:
+                    token_ids += outputs.token_ids[prev_len - n_token:]
+                    if not skip_detokenize:
+                        _, state = self.tokenizer.detokenize_incrementally(
+                            token_ids, state)
+                    ts.append(time.perf_counter())
+                    ns.append(n_token)
+                    prev_len = n_token
 
             # for pytorch engine to restart a session
             if isinstance(model_inst, EngineInstance):
@@ -138,21 +140,17 @@ class Engine:
         return counters
 
     def process_request(self, requests, concurrency, temperature, top_p, top_k,
-                        stream_output, pretokenize, skip_detokenize):
+                        stream_output, skip_tokenize, skip_detokenize):
         req_queue = Queue()
-
-        self.pbar = tqdm(total=len(requests))
 
         # feed request to q
         for req in requests:
-            if pretokenize:
+            if skip_tokenize:
                 req_queue.put((self.tokenizer.encode(req[0]), *req[1:]))
             else:
                 req_queue.put(req)
         for i in range(concurrency):
             req_queue.put([None, None, None])
-
-        start = time.time()
 
         event_loop = asyncio.new_event_loop()
         asyncio.set_event_loop(event_loop)
@@ -161,17 +159,22 @@ class Engine:
         tasks = []
         for i in range(concurrency):
             task = self._inference(req_queue, i, temperature, top_p, top_k,
-                                   stream_output, pretokenize, skip_detokenize)
+                                   stream_output, skip_tokenize,
+                                   skip_detokenize)
             tasks.append(task)
 
         async def _gather_tasks(tasks):
             return await asyncio.gather(*tasks)
 
+        self.pbar = tqdm(total=len(requests))
+
+        start = time.time()
+
         counters = asyncio.run(_gather_tasks(tasks))
 
-        self.pbar.close()
-
         elapsed_time = time.time() - start
+
+        self.pbar.close()
 
         ttfts: List[float] = []
         tpots: List[float] = []
@@ -183,9 +186,6 @@ class Engine:
         total_input = 0
 
         for ts, ns, input_len in itertools.chain.from_iterable(counters):
-            # print (ts)
-            # print (ns)
-            # assert 0
             total_output += ns[-1]
             total_input += input_len
             e2es.append(ts[-1] - ts[0])
@@ -197,7 +197,7 @@ class Engine:
             t_dif = np.subtract(ts[1:], ts[:-1])
             n_dif = np.subtract(ns[1:], ns[:-1])
             itls.extend(t_dif[1:])
-            tpts.extend(n_dif[1:])
+            tpts.extend(n_dif)
 
         output_throughput = total_output / elapsed_time
         input_throughput = total_input / elapsed_time
@@ -232,8 +232,8 @@ class Engine:
         tab_row('Total requests', len(requests))
         tab_row('Concurrency', concurrency)
         tab_row('Stream output', str(stream_output).lower())
-        tab_row('Pre-tokenization', str(pretokenize).lower())
-        tab_row('Skip detokenization', str(skip_detokenize).lower())
+        tab_row('Skip tokenize', str(skip_tokenize).lower())
+        tab_row('Skip detokenize', str(skip_detokenize).lower())
         tab_row('Total input tokens', total_input)
         tab_row('Total generated tokens', total_output)
         tab_row('Input token throughput (tok/s)', input_throughput)
@@ -275,7 +275,7 @@ def parse_args():
     parser.add_argument('--no-stream-output',
                         action='store_true',
                         help='Use stream output')
-    parser.add_argument('--pre-tokenize',
+    parser.add_argument('--skip-tokenize',
                         action='store_true',
                         help='Pre-tokenize input prompts before starting')
     parser.add_argument('--skip-detokenize',
@@ -366,7 +366,7 @@ def main():
                            top_k=args.top_k,
                            concurrency=args.concurrency,
                            stream_output=not args.no_stream_output,
-                           pretokenize=args.pre_tokenize,
+                           skip_tokenize=args.skip_tokenize,
                            skip_detokenize=args.skip_detokenize)
 
 

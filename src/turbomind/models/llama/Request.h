@@ -98,12 +98,9 @@ struct Request {
     std::function<void(int)> cancel_cb;
     std::function<void(int)> end_cb;
 
-    std::function<void(RequestState)> forward_cb;
+    std::function<void()> forward_cb;
 
-    // std::atomic_flag* flag;
-    std::atomic<int>* flag;
-
-    std::atomic<int>* seq_len;
+    std::shared_ptr<AtomicRequestState> state;
 
     enum {
         kOk       = 0,
@@ -115,8 +112,6 @@ struct Request {
         kTooLong  = 6,  // history + prompt > session_len,
         kFinish   = 7,
     };
-
-    // std::promise<int> signal;
 };
 
 class RequestQueue {

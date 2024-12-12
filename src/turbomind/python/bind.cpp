@@ -331,12 +331,12 @@ PYBIND11_MODULE(_turbomind, m)
             return oss.str();
         });
 
-    py::class_<ft::RequestState, std::shared_ptr<ft::RequestState>>(m, "RequestState")
+    py::class_<ft::RequestState, std::unique_ptr<ft::RequestState>>(m, "RequestState")
         .def_readonly("status", &ft::RequestState::status)
         .def_readonly("seq_len", &ft::RequestState::seq_len);
 
-    // py::class_<ft::AtomicRequestState, std::shared_ptr<ft::AtomicRequestState>>(m, "AtomicRequestState")
-    //     .def("load", [](ft::AtomicRequestState& s) { return s.load(); });
+    py::class_<ft::AtomicRequestState, std::shared_ptr<ft::AtomicRequestState>>(m, "AtomicRequestState")
+        .def("consume", [](ft::AtomicRequestState& s) { return s.exchange(nullptr); });
 
     // data type
     py::enum_<ft::DataType>(m, "DataType")
@@ -451,26 +451,26 @@ PYBIND11_MODULE(_turbomind, m)
     py::class_<ModelRequest>(m, "ModelRequest")
         .def(
             "forward",
-            [](ModelRequest*                         model_request,
-               std::shared_ptr<TensorMap>            input_tensors,
-               const ft::SessionParam&               session,
-               const ft::GenerationConfig&           gen_cfg,
-               bool                                  stream_output,
-               std::function<void(ft::RequestState)> cb) {
+            [](ModelRequest*               model_request,
+               std::shared_ptr<TensorMap>  input_tensors,
+               const ft::SessionParam&     session,
+               const ft::GenerationConfig& gen_cfg,
+               bool                        stream_output,
+               std::function<void()>       cb) {
                 ModelRequest::InputParam param{};
                 param.tensors       = std::move(input_tensors);
                 param.session       = session;
                 param.gen_cfg       = gen_cfg;
                 param.stream_output = stream_output;
-                auto ret = model_request->Forward(std::move(param), [cb = std::move(cb)](ft::RequestState s) {
+                auto ret            = model_request->Forward(std::move(param), [cb = std::move(cb)]() {
                     try {
-                        cb(s);
+                        cb();
                     }
                     catch (const py::error_already_set& e) {
                         std::cerr << e.what() << std::endl;
                     }
                 });
-                return ret.tensors;
+                return std::make_tuple(std::move(ret.tensors), std::move(ret.state));
             },
             py::call_guard<py::gil_scoped_release>(),
             "input_tensors"_a,

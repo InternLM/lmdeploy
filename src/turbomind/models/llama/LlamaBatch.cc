@@ -1406,13 +1406,15 @@ auto LlamaBatch<T>::Finish(GenerationState& g) -> std::vector<Signal>
                 }
                 else if (r->stream_output && rank_ == 0) {
                     const auto seq_len = r->outputs.getVal<int>("sequence_length");
-                    const auto v       = r->flag->load(std::memory_order_relaxed) < 1;
-                    if (v) {
-                        r->flag->fetch_add(1, std::memory_order_relaxed);
+                    if (true) {
                         // Create signals by copying the request handles for non-finished streaming requests
                         signals.push_back([this, r, seq_len] {
                             try {
-                                r->forward_cb({Request::kOk, seq_len});
+                                auto new_state = new RequestState{Request::kOk, seq_len};
+                                auto old_state = r->state->exchange(new_state);
+                                if (!old_state) {
+                                    r->forward_cb();
+                                }
                             }
                             catch (const std::bad_function_call& e) {
                                 TM_LOG_ERROR("Null stream callback for (%s)", std::to_string(r->id).c_str());
@@ -1494,11 +1496,14 @@ auto LlamaBatch<T>::Interrupt(int index, bool force_stop, bool force_end) -> Sig
 
     auto ec = std::exchange(state_->errors[index], Request::kOk);
 
+    const auto len = state_->requests[index]->outputs.getVal<int>("sequence_length");
     // move the request handle into the signal
-    return [this, ec, r = std::move(state_->requests[index])] {
+    return [this, ec, len, r = std::move(state_->requests[index])] {
         if (rank_ == 0) {
-            if (r->forward_cb) {
-                r->forward_cb({Request::kFinish, r->outputs.getVal<int>("sequence_length")});
+            auto new_state = new RequestState{Request::kFinish, len};
+            auto old_state = r->state->exchange(new_state);
+            if (!old_state) {
+                r->forward_cb();
             }
         }
     };

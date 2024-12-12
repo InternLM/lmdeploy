@@ -48,6 +48,8 @@ def infer(generator, session_id, input_ids, gen_config, sequence_start,
 async def async_infer(generator, session_id, input_ids, gen_config,
                       sequence_start, sequence_end, step, stream_output,
                       tokenizer, state):
+    token_ids = input_ids.copy()
+    prev_len = 0
     async for output in generator.async_stream_infer(
             session_id=session_id,
             input_ids=input_ids,
@@ -56,10 +58,13 @@ async def async_infer(generator, session_id, input_ids, gen_config,
             sequence_end=sequence_end,
             step=step,
             stream_output=stream_output):
-        res, tokens = input_ids + output.token_ids, output.num_token
-        # decode res
-        response, state = tokenizer.detokenize_incrementally(res, state=state)
-        print(response, end='', flush=True)
+        tokens = output.num_token
+        if tokens > prev_len:
+            token_ids += output.token_ids[prev_len - tokens:]
+            response, state = tokenizer.detokenize_incrementally(token_ids,
+                                                                 state=state)
+            prev_len = tokens
+            print(response, end='', flush=True)
     return tokens
 
 

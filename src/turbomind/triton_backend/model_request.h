@@ -33,10 +33,11 @@ public:
     };
 
     struct OutputParam {
-        std::shared_ptr<TensorMap_> tensors;
+        std::shared_ptr<TensorMap_>         tensors;
+        std::shared_ptr<AtomicRequestState> state;
     };
 
-    OutputParam Forward(InputParam param, std::function<void(RequestState)> cb);
+    OutputParam Forward(InputParam param, std::function<void()> cb);
 
     void ReportTokensPerTick(int observed);
 
@@ -44,10 +45,7 @@ protected:
     RequestQueue*       queue_;
     std::atomic<float>* tok_per_tick_;
 
-    // std::atomic_flag flag_;
     std::atomic<int> flag_;
-
-    std::atomic<int> seq_len_;
 
     uint64_t session_id_;
 

@@ -84,7 +84,7 @@ void ModelRequest::End(std::function<void(int)> cb)
     queue_->enqueue({std::move(r)});
 }
 
-auto ModelRequest::Forward(InputParam param, std::function<void(RequestState)> cb) -> OutputParam
+auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> OutputParam
 {
     inputs_  = std::make_shared<TensorMap_>();
     outputs_ = std::make_shared<TensorMap_>();
@@ -140,19 +140,20 @@ auto ModelRequest::Forward(InputParam param, std::function<void(RequestState)> c
         r->outputs.insert(k, *v);
     }
 
+    auto state = std::make_shared<AtomicRequestState>();
+
     r->id            = param.session.id;
     r->session       = param.session;
     r->gen_cfg       = param.gen_cfg;
     r->stream_output = param.stream_output;
     r->forward_cb    = std::move(cb);
-    r->flag          = &flag_;
+    r->state         = state;
 
-    // flag_.clear(std::memory_order_release);
     flag_.store(0);
 
     queue_->enqueue({std::move(r)});
 
-    return OutputParam{outputs_};
+    return OutputParam{outputs_, state};
 }
 
 void ModelRequest::ReportTokensPerTick(int observed)
