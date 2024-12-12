@@ -770,8 +770,7 @@ class Engine:
         logger.debug('<ForwardTask>: '
                      f'batch_size={inputs.seq_length.size(0)} '
                      f'num_tokens={inputs.input_ids.size(-1)}')
-        if self.gpu_count == 1:
-            inputs = inputs.to_device('cuda')
+        inputs = inputs.to_device('cuda')
         is_decoding = inputs.is_decoding
         if all_ids is not None:
             all_ids = all_ids.cuda()
