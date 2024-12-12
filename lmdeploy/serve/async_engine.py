@@ -223,7 +223,7 @@ class AsyncEngine(LogitsMixin):
         """Inference a batch of prompts.
 
         Args:
-            prompts (List[str] | str | List[Dict] | List[Dict]): a batch of
+            prompts (List[str] | str | List[Dict] | List[List[Dict]]]): a batch of
                 prompts. It accepts: string prompt, a list of string prompts,
                 a chat history in OpenAI format or a list of chat history.
             gen_config (GenerationConfig | None): a instance of
@@ -297,7 +297,7 @@ class AsyncEngine(LogitsMixin):
         """Inference a batch of prompts.
 
         Args:
-            prompts (List[str] | str | List[Dict] | List[Dict]): a batch of
+            prompts (List[str] | str | List[Dict] | List[List[Dict]]]): a batch of
                 prompts. It accepts: string prompt, a list of string prompts,
                 a chat history in OpenAI format or a list of chat history.
             gen_config (GenerationConfig | None): a instance of or a list of
@@ -374,7 +374,7 @@ class AsyncEngine(LogitsMixin):
         """Inference a batch of prompts with stream mode.
 
         Args:
-            prompts (List[str] | str | List[Dict] | List[Dict]): a batch of
+            prompts (List[str] | str | List[Dict] | List[List[Dict]]]): a batch of
                 prompts. It accepts: string prompt, a list of string prompts,
                 a chat history in OpenAI format or a list of chat history.
             gen_config (GenerationConfig | None): a instance of or a list of
