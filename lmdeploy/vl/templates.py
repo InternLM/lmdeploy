@@ -518,7 +518,7 @@ def get_vl_prompt_template(model_path: str, chat_template: BaseModel,
         return QwenVLChatTemplateWrapper(chat_template)
     elif arch in [
             'LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM',
-            'LlavaForConditionalGeneration',
+            'LlavaQwenForCausalLM', 'LlavaForConditionalGeneration',
             'LlavaNextForConditionalGeneration', 'Phi3VForCausalLM'
     ]:
         return LlavaVLChatTemplateWrapper(chat_template)
