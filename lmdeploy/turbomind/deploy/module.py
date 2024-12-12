@@ -108,7 +108,8 @@ class Ffn(Module):
                 w123,
                 kind: str,
                 pack_fn,
-                apply_gs=False):
+                apply_gs=False,
+                enable_ep=False):
         is_lora_a, is_lora_b = get_lora_flags(kind)
         w1, w2, w3 = map(transpose, w123)
 
@@ -122,15 +123,15 @@ class Ffn(Module):
         w1, w2, w3 = map(pack_fn, (w1, w2, w3))
         self.model.save_split(w1,
                               fmt.format(idx, 'w1', kind),
-                              split_dim=-1,
+                              split_dim=-1 if not enable_ep else None,
                               copy=is_lora_a)
         self.model.save_split(w3,
                               fmt.format(idx, 'w3', kind),
-                              split_dim=-1,
+                              split_dim=-1 if not enable_ep else None,
                               copy=is_lora_a)
         self.model.save_split(w2,
                               fmt.format(idx, 'w2', kind),
-                              split_dim=0,
+                              split_dim=0 if not enable_ep else None,
                               copy=is_lora_b)
 
     def apply(self, i: int, r: BaseReader):
@@ -163,7 +164,8 @@ class MoeFfn(Ffn):
         for p in get_params(r.moe_ffn_expert()):
             for e in range(self.expert_num[i]):
                 fmt = self._moe_ffn_expert.replace('E', str(e))
-                p(partial(self._export, self.inter_size, fmt),
+                # TODO: pass enable_ep
+                p(partial(self._export, self.inter_size, fmt, enable_ep=True),
                   partial(r.moe_ffn_expert, e, i), i)
 
         gate = transpose(r.moe_ffn_gate(i))

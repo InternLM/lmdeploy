@@ -397,11 +397,22 @@ TensorMap LlamaDecoderLayerWeight<T>::getParams(std::string prefix)
             concat(prefix, "moe_ffn.gate.weight"),
             Tensor{MEMORY_GPU, getTensorType<T>(), {moe_weights.gate.kernel_size()}, moe_weights.gate.kernel});
         auto& experts = moe_weights.experts;
+
+        auto moe_prefix = [=](const std::string name, int moe_tp) {
+            return moe_tp == -1 ? name : concat(name, moe_tp);
+        };
+
+        int moe_start_id = 0;
+        int moe_tp       = tensor_para_rank_;
+        if (moe_weights.enable_ep) {
+            moe_start_id = experts.size() * tensor_para_rank_;
+            moe_tp       = -1;
+        }
         for (size_t i = 0; i < experts.size(); ++i) {
-            const std::string name = "moe_ffn.experts." + std::to_string(i);
-            getWeightTensor(experts[i].gating, false, get_prefix(concat(name, "w1")), output);
-            getWeightTensor(experts[i].intermediate, false, get_prefix(concat(name, "w3")), output);
-            getWeightTensor(experts[i].output, false, get_prefix(concat(name, "w2")), output);
+            const std::string name = "moe_ffn.experts." + std::to_string(moe_start_id + i);
+            getWeightTensor(experts[i].gating, false, moe_prefix(concat(prefix, name, "w1"), moe_tp), output);
+            getWeightTensor(experts[i].intermediate, false, moe_prefix(concat(prefix, name, "w3"), moe_tp), output);
+            getWeightTensor(experts[i].output, false, moe_prefix(concat(prefix, name, "w2"), moe_tp), output);
         }
         if (moe_weights.shared_gate.kernel) {
             output.insert(concat(prefix, "moe_ffn.shared_gate.weight"),

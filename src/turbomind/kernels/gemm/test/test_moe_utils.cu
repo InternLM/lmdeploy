@@ -224,6 +224,7 @@ bool test_moe_gate(int                     tokens,  //
                          experts_per_token,
                          false,
                          1.f,
+                         {0, expert_num},  // expert_offset
                          nullptr);
     }
 

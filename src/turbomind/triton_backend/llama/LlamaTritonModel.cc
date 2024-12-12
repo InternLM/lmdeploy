@@ -314,6 +314,7 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     lora_param_.scale_pattern = getLoraPattern<float>(lora_reader["lora_scale_pattern"].as<std::string>(""),
                                                       [](const std::string& s) { return std::stof(s); });
 
+    moe_param_.enable_ep         = model_reader["enable_ep"].as<bool>(false);
     moe_param_.experts_per_token = model_reader["experts_per_token"].as<int>(0);
     moe_param_.inter_size        = model_reader["expert_inter_size"].as<int>(0);
     moe_param_.shared_gate       = model_reader["moe_shared_gate"].as<bool>();
