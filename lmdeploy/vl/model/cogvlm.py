@@ -42,8 +42,8 @@ class CogVLMVisionModel(VisonModel):
         messages.append(dict(role='preprocess', content=outputs))
         return messages
 
-    @classmethod
-    def proc_messages(cls, messages, chat_template, sequence_start):
+    @staticmethod
+    def proc_messages(messages, chat_template, sequence_start):
         """apply chat template to get the prompt."""
         prompt_messages = []
         for message in messages:
@@ -83,5 +83,5 @@ class CogVLMVisionModel(VisonModel):
     def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
         prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template,
                                                  sequence_start)
-        return super().to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
-                                      sequence_start)
+        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
+                                   sequence_start)

@@ -280,11 +280,11 @@ class MiniCPMVModel(VisonModel):
     def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
         prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template,
                                                  sequence_start)
-        return super().to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
-                                      sequence_start)
+        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
+                                   sequence_start)
 
     def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):
         prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template,
                                                  sequence_start)
-        return super().to_turbomind_aux(messages, prompt, IMAGE_TOKEN,
-                                        tokenizer, sequence_start)
+        return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
+                                     sequence_start)

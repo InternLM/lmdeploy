@@ -275,8 +275,8 @@ class Xcomposer2VisionModel(VisonModel):
         messages.append(dict(role='forward', content=outputs))
         return messages
 
-    @classmethod
-    def proc_messages(cls, messages, chat_template, sequence_start):
+    @staticmethod
+    def proc_messages(messages, chat_template, sequence_start):
         """apply chat template to get the prompt."""
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
@@ -300,11 +300,11 @@ class Xcomposer2VisionModel(VisonModel):
     def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
         prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template,
                                                  sequence_start)
-        return super().to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
-                                      sequence_start)
+        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
+                                   sequence_start)
 
     def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):
         prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template,
                                                  sequence_start)
-        return super().to_turbomind_aux(messages, prompt, IMAGE_TOKEN,
-                                        tokenizer, sequence_start)
+        return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
+                                     sequence_start)
