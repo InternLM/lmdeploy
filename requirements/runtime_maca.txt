@@ -1,4 +1,4 @@
-accelerate>=0.29.3
+accelerate==0.32.1
 einops
 fastapi
 fire
