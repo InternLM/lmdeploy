@@ -28,7 +28,8 @@ class InternLMAttention(nn.Module):
         num_key_value_heads = config.num_key_value_heads
         hidden_size = config.hidden_size
         head_dim = getattr(config, 'head_dim', hidden_size // num_heads)
-
+        num_replicate_kv_heads = getattr(config,
+                                         'num_replicate_key_value_heads', 1)
         # packed qkv
         self.qkv_proj = build_qkv_proj(
             hidden_size,
@@ -39,7 +40,7 @@ class InternLMAttention(nn.Module):
             quant_config=quantization_config,
             dtype=dtype,
             device=device,
-        )
+            num_replicate_kv_heads=num_replicate_kv_heads)
 
         # rotary embedding
         self.apply_rotary_pos_emb = ApplyRotaryEmb()
