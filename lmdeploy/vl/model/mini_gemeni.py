@@ -347,8 +347,8 @@ class MiniGeminiVisionModel(VisonModel):
         outputs = [x.squeeze() for x in outputs]
         messages.append(dict(role='forward', cotent=outputs))
 
-    @classmethod
-    def proc_messages(cls, messages, chat_template, sequence_start):
+    @staticmethod
+    def proc_messages(messages, chat_template, sequence_start):
         """apply chat template to get the prompt."""
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
@@ -375,5 +375,5 @@ class MiniGeminiVisionModel(VisonModel):
     def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):
         prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template,
                                                  sequence_start)
-        return super().to_turbomind_aux(messages, prompt, IMAGE_TOKEN,
-                                        tokenizer, sequence_start)
+        return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
+                                     sequence_start)
