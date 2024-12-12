@@ -7,45 +7,7 @@ import torch
 
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.config import ModelConfig
-
-
-@dataclass
-class MRopeModelInputs:
-    """Multimodal rotary position inputs."""
-    position_ids: List[torch.LongTensor] = None
-    deltas: List[torch.LongTensor] = None
-
-    def get_inputs(self, history_lengths: torch.Tensor,
-                   seq_lengths: torch.Tensor):
-        mrope_position_ids = []
-        for (his_len, seq_len, pos_ids,
-             delta) in zip(history_lengths, seq_lengths, self.position_ids,
-                           self.deltas):
-            assert pos_ids.dim() == 2, 'invalid mrope_position_ids'
-            if his_len + seq_len <= pos_ids.shape[1]:
-                mrope_position_ids.append(pos_ids[:,
-                                                  his_len:his_len + seq_len])
-            else:
-                mrope_position_ids.append(
-                    torch.tensor([his_len], device=delta.device).expand(3, -1)
-                    + delta)
-
-        mrope_position_ids = torch.cat(mrope_position_ids, dim=-1)
-        return mrope_position_ids
-
-    def to_device(self, device: str):
-        """to device."""
-        out_dict = dict()
-        for f in fields(self):
-            k = f.name
-            v = getattr(self, k)
-            if isinstance(v, torch.Tensor):
-                v = v.to(device)
-            elif isinstance(v, list):
-                v = [x.to(device) for x in v]
-            out_dict[k] = v
-
-        return MRopeModelInputs(**out_dict)
+from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
 
 
 @dataclass
@@ -57,6 +19,7 @@ class VisionModelInputs:
     input_embeddings: List[List[torch.Tensor]] = None
     input_embedding_ranges: List[torch.LongTensor] = None
     input_embedding_indexing: torch.BoolTensor = None
+    input_multimodals: List[MultiModalTensor] = None
 
     def to_device(self, device: str):
         """to device."""
@@ -64,12 +27,19 @@ class VisionModelInputs:
         for f in fields(self):
             k = f.name
             v = getattr(self, k)
+            if v is None:
+                continue
             if isinstance(v, torch.Tensor):
                 v = v.to(device)
-            elif k == 'input_embedding_ranges' and v is not None:
+            elif k == 'input_embedding_ranges':
                 v = [e.to(device) for e in v]
-            elif k == 'input_embeddings' and v is not None:
+            elif k == 'input_embeddings':
                 v = [[e.to(device) for e in li] for li in v]
+            elif k == 'input_multimodals':
+                for mm_datas in v:
+                    for modal_type, data in mm_datas.items():
+                        data = [d.to_device(device) for d in data]
+                        mm_datas[modal_type] = data
             out_dict[k] = v
 
         return VisionModelInputs(**out_dict)
@@ -120,9 +90,9 @@ class ModelInputs:
     num_ignored_history: torch.LongTensor
     local_adapter_ids: torch.LongTensor = None
     vision_inputs: VisionModelInputs = None
-    mrope_inputs: MRopeModelInputs = None
-    cross_attention_states: torch.Tensor = None
-    history_cross_kv_seqlens: torch.LongTensor = None
+    cross_length: torch.LongTensor = None
+    history_cross_length: torch.LongTensor = None
+    model_metas: List[Dict[str, Any]] = None
 
     def update(self, input_ids: torch.LongTensor):
         """update input ids."""
@@ -133,44 +103,88 @@ class ModelInputs:
         self.input_ids = input_ids
         return self
 
-    def split(self, split_size: int, block_size: int):
+    def split(self, split_size: int):
         """split inputs."""
         assert len(
             self.seq_length) == 1, ('Can not perform split on batched input.')
-        assert split_size % block_size == 0, (
-            'split_size should be multi of block_size.')
 
         input_ids = self.input_ids
         if input_ids.numel() < split_size:
             return self
 
-        num_blocks = split_size // block_size
-        overlap = (self.history_lengths[0] % block_size != 0)
+        flatten_mms = []
+        vision_inputs = self.vision_inputs
+        if vision_inputs is not None:
+            if vision_inputs.input_multimodals is not None:
+                input_mms = vision_inputs.input_multimodals[0]
+
+                flatten_mms = []
+                for k, mms in input_mms.items():
+                    mms = [(k, mm) for mm in mms]
+                    flatten_mms += mms
+
+                flatten_mms = sorted(flatten_mms, key=lambda mm: mm[1].start)
+
         max_seq_len = self.seq_length[0].item()
         ret = []
-        block_start = 0
-        for i in range(0, max_seq_len, split_size):
-            start = i
-            end = min(max_seq_len, i + split_size)
-            block_end = block_start + num_blocks
-            if overlap:
-                block_end += 1
+        start = 0
+        history_cross_length = self.history_cross_length
+        cross_length = None
+        if history_cross_length is not None:
+            cross_length = self.history_cross_length.clone()
+        while start < max_seq_len:
+            vision_inputs = None
+            if len(flatten_mms) > 0:
+                mm_start = flatten_mms[0][1].start
+                mm_end = flatten_mms[0][1].end
+                if mm_start > self.history_lengths + start:
+                    end = min(mm_start - self.history_lengths,
+                              start + split_size)
+                else:
+                    input_mms = dict()
+                    key, mm = flatten_mms.pop(0)
+                    input_mms.setdefault(key, [])
+                    input_mms[key].append(mm)
+                    end = start + mm.end - mm.start
+                    while len(flatten_mms) > 0:
+                        next_mm = flatten_mms[0]
+                        next_start = next_mm[1].start
+                        next_end = next_mm[1].end
+                        if next_start < mm_end:
+                            key = next_mm[0]
+                            input_mms.setdefault(key, [])
+                            input_mms[key].append(next_mm[1])
+                            end += max(0, next_end - mm_end)
+                            flatten_mms.pop(0)
 
-            block_offsets = self.block_offsets
+                            if cross_length is not None:
+                                encoder_len = next_mm[1].encoder_len
+                                if encoder_len is not None:
+                                    cross_length += encoder_len
+                        else:
+                            break
+                    vision_inputs = VisionModelInputs(
+                        input_multimodals=[input_mms], )
+            else:
+                end = min(max_seq_len, start + split_size)
+
             inp = ModelInputs(
                 input_ids=self.input_ids[:, start:end],
                 seq_length=input_ids.new_tensor([end - start]),
-                block_offsets=block_offsets,
+                block_offsets=self.block_offsets,
                 history_lengths=self.history_lengths + start,
                 is_decoding=self.is_decoding,
                 num_ignored_history=self.num_ignored_history,
                 local_adapter_ids=self.local_adapter_ids,
-                vision_inputs=self.vision_inputs,
-                mrope_inputs=self.mrope_inputs,
-                cross_attention_states=self.cross_attention_states,
+                vision_inputs=vision_inputs,
+                model_metas=self.model_metas,
+                cross_length=cross_length,
+                history_cross_length=history_cross_length,
             )
             ret.append(inp)
-            block_start += num_blocks
+            history_cross_length = cross_length
+
+            start = end
 
         return ret
 
@@ -183,8 +197,6 @@ class ModelInputs:
             if isinstance(v, torch.Tensor):
                 v = v.to(device)
             elif isinstance(v, VisionModelInputs):
-                v = v.to_device(device)
-            elif isinstance(v, MRopeModelInputs):
                 v = v.to_device(device)
             out_dict[k] = v
 
@@ -212,13 +224,14 @@ class StepContext:
     local_adapter_ids: torch.LongTensor = None
     input_embeddings: torch.Tensor = None
     input_embedding_indexing: torch.Tensor = None
+    input_multimodals: List[MultiModalTensor] = None
     vision_inputs: VisionModelInputs = None
-    mrope_position_ids: torch.Tensor = None
     attn_metadata: Any = None
-    cross_attn_metadata: Any = None
-    cross_attention_states: torch.Tensor = None
+    cross_seqlens: torch.LongTensor = None
     cross_kv_seqlens: torch.LongTensor = None
+    cross_attn_metadata: Any = None
     kv_quant_policy: Literal[0, 4, 8] = 0
+    model_metas: List[Dict[str, Any]] = None
 
     _outputs: Dict = field(default_factory=dict)
 
@@ -242,24 +255,21 @@ class StepContext:
         history_seqlens = inputs.history_lengths
         device = q_seqlens.device
 
+        input_multimodals = None
+        if inputs.vision_inputs is not None:
+            input_multimodals = inputs.vision_inputs.input_multimodals
+
         # for vlm
         input_embeddings, input_embedding_indexing = None, None
         if (inputs.vision_inputs is not None
                 and inputs.vision_inputs.input_embeddings is not None):
             input_embeddings, input_embedding_indexing = \
                 inputs.vision_inputs.get_inputs(history_seqlens, q_seqlens)
-        # for mrope
-        mrope_position_ids = None
-        if inputs.mrope_inputs is not None:
-            mrope_position_ids = inputs.mrope_inputs.get_inputs(
-                history_seqlens, q_seqlens)
 
         # kv_seqlens
-        cross_attention_states = inputs.cross_attention_states
         if inputs.is_decoding:
             attention_mask = torch.ones_like(q_seqlens)[:, None]
-            position_ids = history_seqlens.unsqueeze(-1)
-            cross_attention_states = None
+            position_ids = history_seqlens.unsqueeze(-1).clone()
         else:
             max_q_seqlen = q_seqlens.max().item()
             mask_range = torch.arange(max_q_seqlen, device=device)[None, :]
@@ -267,6 +277,13 @@ class StepContext:
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids += history_seqlens.unsqueeze(-1)
         q_start_loc = q_seqlens.cumsum(0) - q_seqlens
+
+        # cross
+        cross_seqlens = inputs.cross_length
+        cross_kv_seqlens = None
+        if inputs.cross_length is not None:
+            cross_kv_seqlens = (inputs.cross_length +
+                                inputs.history_cross_length)
 
         # position ids 1d
         position_ids = cls.get_position_ids_1d(position_ids, q_seqlens)[None]
@@ -281,6 +298,7 @@ class StepContext:
             position_ids=position_ids,
             input_embeddings=input_embeddings,
             input_embedding_indexing=input_embedding_indexing,
+            input_multimodals=input_multimodals,
             attention_mask=attention_mask,
             q_seqlens=q_seqlens,
             kv_seqlens=kv_seqlens,
@@ -290,10 +308,10 @@ class StepContext:
             world_size=world_size,
             local_adapter_ids=inputs.local_adapter_ids,
             vision_inputs=inputs.vision_inputs,
-            mrope_position_ids=mrope_position_ids,
-            cross_attention_states=cross_attention_states,
-            cross_kv_seqlens=inputs.history_cross_kv_seqlens,
             kv_quant_policy=kv_quant_policy,
+            model_metas=inputs.model_metas,
+            cross_seqlens=cross_seqlens,
+            cross_kv_seqlens=cross_kv_seqlens,
         )
 
         ret = get_backend().update_step_context(ret)
