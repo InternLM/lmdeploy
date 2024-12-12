@@ -14,13 +14,13 @@ from lmdeploy.utils import (get_logger, get_max_batch_size, get_model,
                             logging_timer)
 
 from ..adapter.adapter import AdapterManager
-from ..check_env import check_adapters, check_env, check_model
 from ..config import BackendConfig, CacheConfig, SchedulerConfig
 from ..devices import DeviceContext, get_device_manager
 from ..messages import (InputEmbeddingRangeType, InputEmbeddingType,
                         MessageStatus, SchedulerSequence)
 from ..model_inputs import ModelInputs, MRopeModelInputs, VisionModelInputs
 from ..paging import Scheduler
+from .engine_checker import EngineChecker
 from .logits_process import FusedLogitsProcessor, SamplingInputs
 from .model_agent import build_model_agent
 from .request import Request, RequestManager, RequestType, Response
@@ -78,6 +78,40 @@ def _check_finish(scheduler: Scheduler, current_iter: int):
     return False
 
 
+def _build_scheduler_config(engine_config: PytorchEngineConfig):
+    """build scheduler config."""
+    scheduler_config = SchedulerConfig(
+        max_batches=engine_config.max_batch_size,
+        max_session_len=engine_config.session_len,
+        prefill_interval=engine_config.prefill_interval)
+    return scheduler_config
+
+
+def _build_cache_config(engine_config: PytorchEngineConfig):
+    """build cache config."""
+    cache_config = CacheConfig(
+        max_batches=engine_config.max_batch_size,
+        block_size=engine_config.block_size,
+        num_cpu_blocks=engine_config.num_cpu_blocks,
+        num_gpu_blocks=engine_config.num_gpu_blocks,
+        cache_max_entry_count=engine_config.cache_max_entry_count,
+        max_prefill_token_num=engine_config.max_prefill_token_num,
+        enable_prefix_caching=engine_config.enable_prefix_caching,
+        quant_policy=engine_config.quant_policy,
+        device_type=engine_config.device_type,
+    )
+    return cache_config
+
+
+def _build_backend_config(engine_config: PytorchEngineConfig):
+    """build backend config."""
+    backend_config = BackendConfig(
+        eager_mode=engine_config.eager_mode,
+        device_type=engine_config.device_type,
+    )
+    return backend_config
+
+
 class Engine:
     """The inference engine of lmdeploy pytorch.
 
@@ -95,43 +129,22 @@ class Engine:
             engine_config = PytorchEngineConfig()
         else:
             engine_config = copy.deepcopy(engine_config)
-        check_env(engine_config.device_type)
-        check_model(model_path, trust_remote_code, engine_config.dtype,
-                    engine_config.device_type)
         if engine_config.max_batch_size is None:
             engine_config.max_batch_size = get_max_batch_size(
                 engine_config.device_type)
-        adapters = engine_config.adapters
-        if adapters is not None:
-            check_adapters(list(adapters.values()))
-        assert engine_config.max_batch_size > 0, 'max_batch_size should be' \
-            f' greater than 0, but got {engine_config.max_batch_size}'
-        assert engine_config.dtype in ['auto', 'float16', 'bfloat16'], \
-            f'unsupported specified data type {engine_config.dtype}'
 
+        checker = EngineChecker(model_path=model_path,
+                                engine_config=engine_config,
+                                trust_remote_code=trust_remote_code,
+                                logger=logger)
+        checker.handle()
+
+        adapters = engine_config.adapters
         self.engine_config = engine_config
         self.tp = engine_config.tp
 
         self.device_context = DeviceContext(
             device_type=engine_config.device_type)
-
-        scheduler_config = SchedulerConfig(
-            max_batches=engine_config.max_batch_size,
-            max_session_len=engine_config.session_len,
-            prefill_interval=engine_config.prefill_interval)
-
-        # block_size = 1 to enable unified paging
-        cache_config = CacheConfig(
-            max_batches=engine_config.max_batch_size,
-            block_size=engine_config.block_size,
-            num_cpu_blocks=engine_config.num_cpu_blocks,
-            num_gpu_blocks=engine_config.num_gpu_blocks,
-            cache_max_entry_count=engine_config.cache_max_entry_count,
-            max_prefill_token_num=engine_config.max_prefill_token_num,
-            enable_prefix_caching=engine_config.enable_prefix_caching,
-            quant_policy=engine_config.quant_policy,
-            device_type=engine_config.device_type,
-        )
 
         if not os.path.exists(model_path):
             model_path = get_model(model_path, engine_config.download_dir,
@@ -141,10 +154,9 @@ class Engine:
         if adapters is not None and len(adapters) > 0:
             adapters = self._download_adapters(adapters, engine_config)
 
-        backend_config = BackendConfig(
-            eager_mode=engine_config.eager_mode,
-            device_type=engine_config.device_type,
-        )
+        scheduler_config = _build_scheduler_config(engine_config)
+        cache_config = _build_cache_config(engine_config)
+        backend_config = _build_backend_config(engine_config)
 
         with get_device_manager().context(self.device_context):
             self.model_agent = build_model_agent(
