@@ -17,13 +17,11 @@ class VisonModel(ABC):
 
     def __init__(self,
                  model_path: str,
-                 with_llm: bool = False,
                  max_memory: Dict[int, int] = None,
                  hf_config: AutoConfig = None,
                  backend: str = ''):
         """init."""
         self.model_path = model_path
-        self.with_llm = with_llm
         self.max_memory = max_memory
         self.backend = backend
         if hf_config is None:
@@ -34,8 +32,8 @@ class VisonModel(ABC):
     def build_preprocessor(self, ):
         """build the preprocessor.
 
-        When the derived class implements this method, try not to introduce the
-        upper stream model repo as a thirdparty package
+        NOTE: When the derived class implements this method, try not to
+        introduce the upper stream model repo as a thirdparty package
         """
         raise NotImplementedError()
 

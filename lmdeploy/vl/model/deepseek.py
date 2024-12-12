@@ -40,10 +40,7 @@ class DeepSeekVisionModel(VisonModel):
         with init_empty_weights():
             warnings.simplefilter('ignore')
             model = AutoModelForCausalLM.from_pretrained(self.model_path)
-            if not self.with_llm:
-                del model.language_model
-            else:
-                self.vl_model = model
+            del model.language_model
 
         from accelerate.utils import get_balanced_memory, infer_auto_device_map
         max_memory = get_balanced_memory(model,
@@ -77,11 +74,10 @@ class DeepSeekVisionModel(VisonModel):
 
         from accelerate import load_checkpoint_and_dispatch
         with disable_logging():
-            load_checkpoint_and_dispatch(
-                model=model,
-                checkpoint=self.model_path,
-                device_map=device_map if not self.with_llm else {'': 'cpu'},
-                dtype=torch.half)
+            load_checkpoint_and_dispatch(model=model,
+                                         checkpoint=self.model_path,
+                                         device_map=device_map,
+                                         dtype=torch.half)
 
         self.vision_model = model.vision_model.eval()
         self.aligner = model.aligner.eval()

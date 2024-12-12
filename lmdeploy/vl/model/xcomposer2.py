@@ -96,11 +96,10 @@ class Xcomposer2VisionModel(VisonModel):
 
     def __init__(self,
                  model_path: str,
-                 with_llm: bool = False,
                  max_memory: Dict[int, int] = None,
                  hf_config: AutoConfig = None,
                  backend: str = ''):
-        super().__init__(model_path, with_llm, max_memory, hf_config, backend)
+        super().__init__(model_path, max_memory, hf_config, backend)
         check_xcomposer_install()
         self.model_type, self.module = get_xcomposer_type(self.model_path)
         logger.info(f'matching type of {self.model_type}')
@@ -156,11 +155,8 @@ class Xcomposer2VisionModel(VisonModel):
             model.vit.resize_pos()
             model.vit.vision_tower.vision_model.post_layernorm.to_empty(
                 device='cpu').half()
-            if not self.with_llm:
-                del model.model
-                del model.output
-            else:
-                self.vl_model = model
+            del model.model
+            del model.output
 
         from accelerate.utils import get_balanced_memory, infer_auto_device_map
         max_memory = get_balanced_memory(
@@ -182,7 +178,7 @@ class Xcomposer2VisionModel(VisonModel):
             load_checkpoint_and_dispatch(
                 model=model,
                 checkpoint=self.model_path,
-                device_map=device_map if not self.with_llm else {'': 'cpu'},
+                device_map=device_map,
                 no_split_module_classes=['CLIPEncoderLayer'],
                 dtype=torch.half)
 

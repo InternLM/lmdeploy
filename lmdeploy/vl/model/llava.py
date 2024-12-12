@@ -24,7 +24,7 @@ def check_llava_install():
     except ImportError:
         raise ImportError(
             'To use LlavaVLModel, please install llava by '
-            'pip install git+https://github.com/haotian-liu/LLaVA.git --no-deps'  # noqa: E501
+            '`pip install git+https://github.com/haotian-liu/LLaVA.git --no-deps`'  # noqa: E501
         )
 
 
@@ -271,15 +271,11 @@ class LlavaVisionModel(LlavaHfVisionModel):
             model = AutoModelForCausalLM.from_config(self.config,
                                                      trust_remote_code=True)
 
-        if not self.with_llm:
-            # remove the LLM part from llava model.
-            # Instead, Load the LLM part to turbomind engine
-            del model.lm_head
-            del model.model.embed_tokens
-            del model.model.layers
-            del model.model.norm
-        else:
-            self.vl_model = model
+        # remove the LLM part from llava model.
+        del model.lm_head
+        del model.model.embed_tokens
+        del model.model.layers
+        del model.model.norm
 
         # init empty vision_tower, the embedding layer in CLIPVisionModel
         # can't init right under init_empty_weights
@@ -296,7 +292,7 @@ class LlavaVisionModel(LlavaHfVisionModel):
                 model=model,
                 max_memory=self.max_memory,
                 checkpoint=self.model_path,
-                device_map='auto' if not self.with_llm else {'': 'cpu'},
+                device_map='auto',
                 no_split_module_classes=['CLIPEncoderLayer'],
                 dtype=torch.half)
 
