@@ -21,6 +21,9 @@
 
 #pragma once
 
+#include <limits>
+#include <unordered_map>
+
 #include "src/turbomind/layers/DynamicDecodeLayer.h"
 #include "src/turbomind/models/llama/Barrier.h"
 #include "src/turbomind/models/llama/LlamaBatch.h"
@@ -31,10 +34,7 @@
 #include "src/turbomind/models/llama/unified_decoder.h"
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
-#include "src/turbomind/utils/instance_comm.h"
 #include "src/turbomind/utils/nccl_utils.h"
-#include <limits>
-#include <unordered_map>
 
 namespace turbomind {
 

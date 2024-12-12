@@ -294,8 +294,11 @@ class PytorchEngineConfig:
         assert self.device_type in [
             'cuda', 'ascend', 'maca'
         ], (f'invalid device_type: {self.device_type}')
-        if self.quant_policy > 0 and self.device_type != 'cuda':
-            assert False, 'kv cache quantization only works for CUDA.'
+        if self.quant_policy > 0 and self.device_type not in [
+                'cuda', 'ascend'
+        ]:
+            assert False, \
+                   'kv cache quantization only works for CUDA and ASCEND.'
 
 
 class ResponseType(enum.Enum):

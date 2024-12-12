@@ -68,6 +68,28 @@ LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(int               layer_id,
     tensor_para_size_(tp_size),
     tensor_para_rank_(tp_rank)
 {
+    self_attn_weights = LlamaAttentionWeight<T>{hidden_units_,
+                                                size_per_head_,
+                                                head_num_,
+                                                kv_head_num_,
+                                                model.mla,
+                                                attn_bias_,
+                                                tensor_para_size_,
+                                                weight_type_,
+                                                model.group_size};
+
+    ffn_weights = LlamaFfnWeight<T>{
+        hidden_units_,
+        inter_size_,
+        tensor_para_size_,
+        weight_type_,
+        model.group_size,
+        weight_type_ == WeightType::kINT4 && is_fuse_silu_act(),
+    };
+
+    moe_weights = MoeFfnWeight<T>{
+        layer_id, moe_param, hidden_units_, weight_type_, model.group_size, tensor_para_size_, is_fuse_silu_act()};
+
     if (lora_param.policy == LoraPolicy::kPlora) {
         std::vector<std::string> keys = {
             "attention.w_qkv", "attention.wo", "feed_forward.w1", "feed_forward.w2", "feed_forward.w3"};
@@ -106,28 +128,6 @@ LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(int               layer_id,
     }
 
     fused_up_and_gate_ = ffn_weights.gating.lora.policy != LoraPolicy::kPlora;
-
-    self_attn_weights = LlamaAttentionWeight<T>{hidden_units_,
-                                                size_per_head_,
-                                                head_num_,
-                                                kv_head_num_,
-                                                model.mla,
-                                                attn_bias_,
-                                                tensor_para_size_,
-                                                weight_type_,
-                                                model.group_size};
-
-    ffn_weights = LlamaFfnWeight<T>{
-        hidden_units_,
-        inter_size_,
-        tensor_para_size_,
-        weight_type_,
-        model.group_size,
-        weight_type_ == WeightType::kINT4 && is_fuse_silu_act(),
-    };
-
-    moe_weights = MoeFfnWeight<T>{
-        layer_id, moe_param, hidden_units_, weight_type_, model.group_size, tensor_para_size_, is_fuse_silu_act()};
 }
 
 template<typename T>
