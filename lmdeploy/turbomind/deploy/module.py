@@ -157,6 +157,7 @@ class MoeFfn(Ffn):
         self.expert_num = model.model_config.expert_num
         self.inter_size = model.model_config.expert_inter_size
         self.shared_gate = model.model_config.moe_shared_gate
+        self.enable_ep = model.tm_config.model_config.enable_ep
 
     def apply(self, i: int, r: BaseReader):
         if self.expert_num[i] == 0:
@@ -164,9 +165,12 @@ class MoeFfn(Ffn):
         for p in get_params(r.moe_ffn_expert()):
             for e in range(self.expert_num[i]):
                 fmt = self._moe_ffn_expert.replace('E', str(e))
-                # TODO: pass enable_ep
-                p(partial(self._export, self.inter_size, fmt, enable_ep=True),
-                  partial(r.moe_ffn_expert, e, i), i)
+                p(
+                    partial(self._export,
+                            self.inter_size,
+                            fmt,
+                            enable_ep=self.enable_ep),
+                    partial(r.moe_ffn_expert, e, i), i)
 
         gate = transpose(r.moe_ffn_gate(i))
         self.model.save_split(gate, self._moe_ffn_gate.format(i))

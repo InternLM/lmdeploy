@@ -267,6 +267,7 @@ def get_tm_model(model_path,
     tm_cfg.model_config.chat_template = chat_template_name
     tm_cfg.model_config.model_name = model_name
     tm_cfg.model_config.tp = engine_config.tp
+    tm_cfg.model_config.enable_ep = engine_config.enable_ep
 
     output_model = OUTPUT_MODELS.get(output_model_name)(
         input_model=input_model,
