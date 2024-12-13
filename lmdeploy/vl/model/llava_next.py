@@ -28,17 +28,11 @@ class LlavaNextVisionModel(LlavaHfVisionModel):
             from transformers import LlavaNextForConditionalGeneration
             self.model = LlavaNextForConditionalGeneration._from_config(
                 self.hf_config)
+            del self.model.language_model
 
     def build_model(self):
         from accelerate import load_checkpoint_and_dispatch
         from accelerate.utils import get_balanced_memory, infer_auto_device_map
-
-        if not self.with_llm:
-            del self.model.language_model
-            for key in ['language_model']:
-                setattr(self.model, key, None)
-        else:
-            self.vl_model = self.model
 
         no_split_module_classes = ['CLIPEncoderLayer']
         max_memory = get_balanced_memory(
@@ -64,7 +58,7 @@ class LlavaNextVisionModel(LlavaHfVisionModel):
             load_checkpoint_and_dispatch(
                 model=self.model,
                 checkpoint=self.model_path,
-                device_map=device_map if not self.with_llm else {'': 'cpu'},
+                device_map=device_map,
                 no_split_module_classes=no_split_module_classes,
                 dtype=torch.half)
         self.model.eval()

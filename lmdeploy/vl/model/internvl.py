@@ -80,11 +80,10 @@ class InternVLVisionModel(VisonModel):
 
     def __init__(self,
                  model_path: str,
-                 with_llm: bool = False,
                  max_memory: Dict[int, int] = None,
                  hf_config: AutoConfig = None,
                  backend: str = ''):
-        super().__init__(model_path, with_llm, max_memory, hf_config, backend)
+        super().__init__(model_path, max_memory, hf_config, backend)
 
     def build_preprocessor(self):
         self.config = self.hf_config
@@ -131,17 +130,15 @@ class InternVLVisionModel(VisonModel):
             # transformers below 4.37.0 may raise error about flash_attn
             self.config.llm_config.attn_implementation = 'eager'
             model = AutoModel.from_config(self.config, trust_remote_code=True)
-            if not self.with_llm:
-                del model.language_model
-            else:
-                self.vl_model = model
+            del model.language_model
+
         model.half()
         from accelerate import load_checkpoint_and_dispatch
         with disable_logging():
             load_checkpoint_and_dispatch(
                 model=model,
                 checkpoint=self.model_path,
-                device_map='auto' if not self.with_llm else {'': 'cpu'},
+                device_map='auto',
                 max_memory=self.max_memory,
                 no_split_module_classes=['InternVisionEncoderLayer'],
                 dtype=torch.half)

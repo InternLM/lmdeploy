@@ -98,13 +98,10 @@ class InternVLLlavaVisionModel(LlavaVisionModel):
             }  # disable vision part quantization
             model = AutoModelForCausalLM.from_config(self.config,
                                                      trust_remote_code=True)
-            if not self.with_llm:
-                del model.lm_head
-                del model.model.embed_tokens
-                del model.model.layers
-                del model.model.norm
-            else:
-                self.vl_model = model
+            del model.lm_head
+            del model.model.embed_tokens
+            del model.model.layers
+            del model.model.norm
 
             with init_empty_vit():
                 vision_tower = model.get_vision_tower()
@@ -129,7 +126,7 @@ class InternVLLlavaVisionModel(LlavaVisionModel):
                 model=model,
                 max_memory=self.max_memory,
                 checkpoint=self.model_path,
-                device_map='auto' if not self.with_llm else {'': 'cpu'},
+                device_map='auto',
                 no_split_module_classes=['InternVisionEncoderLayer'],
                 dtype=torch.half)
 

@@ -4,7 +4,6 @@ from typing import Dict, List
 import torch
 
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
-from lmdeploy.vl.model.utils import disable_logging
 
 
 def check_qwen_vl_deps_install():
@@ -13,7 +12,7 @@ def check_qwen_vl_deps_install():
         import qwen_vl_utils  # noqa: F401
     except ImportError:
         raise ImportError(
-            'please install qwen_vl_utils by pip install qwen_vl_utils'  # noqa: E501
+            'please install qwen_vl_utils by `pip install qwen_vl_utils`'  # noqa: E501
         )
     try:
         from transformers import Qwen2VLForConditionalGeneration  # noqa: F401
@@ -33,39 +32,6 @@ class Qwen2VLModel(VisonModel):
         check_qwen_vl_deps_install()
         from transformers import AutoProcessor
         self.processor = AutoProcessor.from_pretrained(self.model_path)
-
-    def build_model(self):
-        from transformers import Qwen2VLForConditionalGeneration
-        if self.with_llm:
-            model = Qwen2VLForConditionalGeneration.from_pretrained(
-                self.hf_config._name_or_path, trust_remote_code=True)
-            model.half()
-            self.vl_model = model
-        else:
-            from accelerate import init_empty_weights
-            with init_empty_weights():
-                config = self.hf_config
-                config.quantization_config = {
-                }  # disable vision part quantization
-                # disable accelerate check_tied_parameters_in_config
-                # for Qwen2-VL-2B-Instruct
-                config.tie_word_embeddings = False
-
-                model = Qwen2VLForConditionalGeneration._from_config(config)
-                del model.model
-                del model.lm_head
-                model.half()
-            from accelerate import load_checkpoint_and_dispatch
-            with disable_logging():
-                load_checkpoint_and_dispatch(
-                    model=model,
-                    checkpoint=self.model_path,
-                    device_map='auto' if not self.with_llm else {'': 'cpu'},
-                    max_memory=self.max_memory,
-                    no_split_module_classes=['Qwen2VLVisionBlock'],
-                    dtype=torch.half)
-
-        self.model = model.eval()
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """refer to `super().preprocess()` for spec."""
@@ -154,6 +120,3 @@ class Qwen2VLModel(VisonModel):
                                                  sequence_start)
         return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
                                    sequence_start)
-
-    def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):
-        assert 0, 'TODO: support turbomind engine'

@@ -38,12 +38,9 @@ class QwenVisionModel(VisonModel):
             config.quantization_config = {}  # disable vision part quantization
             model = AutoModelForCausalLM.from_config(config,
                                                      trust_remote_code=True)
-            if not self.with_llm:
-                del model.lm_head
-                for key in ['wte', 'h', 'ln_f']:
-                    setattr(model.transformer, key, None)
-            else:
-                self.vl_model = model
+            del model.lm_head
+            for key in ['wte', 'h', 'ln_f']:
+                setattr(model.transformer, key, None)
 
         from accelerate.utils import get_balanced_memory, infer_auto_device_map
         max_memory = get_balanced_memory(
@@ -69,7 +66,7 @@ class QwenVisionModel(VisonModel):
             load_checkpoint_and_dispatch(
                 model=model,
                 checkpoint=self.model_path,
-                device_map=device_map if not self.with_llm else {'': 'cpu'},
+                device_map=device_map,
                 no_split_module_classes=['VisualAttentionBlock'],
                 dtype=torch.half)
 

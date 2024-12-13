@@ -38,25 +38,20 @@ class LlavaHfVisionModel(VisonModel):
             warnings.simplefilter('ignore')
             from transformers import LlavaForConditionalGeneration
             model = LlavaForConditionalGeneration._from_config(self.hf_config)
-            if not self.with_llm:
-                del model.language_model
-                for key in ['language_model']:
-                    setattr(model, key, None)
-            else:
-                self.vl_model = model
+            del model.language_model
 
         # fix for llava-hf/llava-interleave-qwen-7b-hf
         setattr(model.config, 'tie_word_embeddings', False)
         with disable_logging():
-            load_checkpoint_and_dispatch(
-                model=model,
-                max_memory=self.max_memory,
-                checkpoint=self.model_path,
-                device_map='auto' if not self.with_llm else {'': 'cpu'},
-                no_split_module_classes=[
-                    'CLIPEncoderLayer', 'SiglipEncoderLayer'
-                ],
-                dtype=torch.half)
+            load_checkpoint_and_dispatch(model=model,
+                                         max_memory=self.max_memory,
+                                         checkpoint=self.model_path,
+                                         device_map='auto',
+                                         no_split_module_classes=[
+                                             'CLIPEncoderLayer',
+                                             'SiglipEncoderLayer'
+                                         ],
+                                         dtype=torch.half)
         model.eval()
         self.model = model
 
