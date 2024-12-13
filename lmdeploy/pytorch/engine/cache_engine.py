@@ -208,7 +208,7 @@ class CacheEngine:
 
     def allocate_cpu_cache(self):
         """allocate caches on Host."""
-        caches = self._allocate_cache(self.num_gpu_blocks, 'cpu')
+        caches = self._allocate_cache(self.num_cpu_blocks, 'cpu')
 
         self.full_cpu_cache = caches
         self.local_cpu_cache = list(zip(*caches))
