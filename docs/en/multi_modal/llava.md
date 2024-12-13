@@ -10,7 +10,6 @@ LMDeploy supports the following llava series of models, which are detailed in th
 |   llava-hf/llava-v1.6-vicuna-7b-hf   |  7B  |          PyTorch           |
 |   liuhaotian/llava-v1.6-mistral-7b   |  7B  |         TurboMind          |
 |   liuhaotian/llava-v1.6-vicuna-7b    |  7B  |         TurboMind          |
-|   liuhaotian/llava-v1.6-mistral-7b   |  7B  |         TurboMind          |
 
 The next chapter demonstrates how to deploy an Llava model using LMDeploy, with [llava-hf/llava-interleave](https://huggingface.co/llava-hf/llava-interleave-qwen-7b-hf) as an example.
 
