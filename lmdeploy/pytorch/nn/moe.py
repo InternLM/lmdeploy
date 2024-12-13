@@ -142,8 +142,6 @@ class FusedMoE(nn.Module):
         impl_builder = get_backend().get_layer_impl_builder(OpType.FusedMoE)
         self.impl = impl_builder.build(top_k, num_experts, renormalize)
 
-        self.expert_list = None
-        self.expert_map = None
         enable_ep = enable_ep and self.impl.support_ep()
         if enable_ep:
             world_size, rank = get_world_rank()
@@ -152,12 +150,14 @@ class FusedMoE(nn.Module):
         else:
             hidden_dim, ffn_dim = _update_args(hidden_dim, ffn_dim)
             expert_list = None
+        self.expert_list = expert_list
         self.gate_up = LinearWeights(num_experts,
                                      hidden_dim,
                                      ffn_dim * 2,
                                      weight_type='gate_up',
                                      dtype=dtype,
                                      device=device,
+                                     expert_list=expert_list,
                                      ep=enable_ep)
         self.down = LinearWeights(
             num_experts,
@@ -166,6 +166,7 @@ class FusedMoE(nn.Module):
             weight_type='down',
             dtype=dtype,
             device=device,
+            expert_list=expert_list,
             ep=enable_ep,
         )
 
@@ -249,10 +250,7 @@ class LinearWeightsW8A8(LinearWeights):
             weight = loaded_weight.chunk(world_size, dim=0)[rank]
         elif shard_id == 'down':
             param_data = param.data[expert_id]
-            if rank == 0:
-                weight = loaded_weight
-            else:
-                weight = torch.zeros_like(loaded_weight)
+            weight = loaded_weight
         else:
             raise RuntimeError(f'Unknown shard_id: {shard_id}')
         param_data.copy_(weight)
@@ -280,8 +278,6 @@ class FusedMoEW8A8(nn.Module):
             OpType.FusedMoEW8A8)
         self.impl = impl_builder.build(top_k, num_experts, renormalize, dtype)
 
-        self.expert_list = None
-        self.expert_map = None
         enable_ep = enable_ep and self.impl.support_ep()
         if enable_ep:
             world_size, rank = get_world_rank()
@@ -290,6 +286,7 @@ class FusedMoEW8A8(nn.Module):
         else:
             hidden_dim, ffn_dim = _update_args(hidden_dim, ffn_dim)
             expert_list = None
+        self.expert_list = expert_list
 
         self.gate_up = LinearWeightsW8A8(num_experts,
                                          hidden_dim,
