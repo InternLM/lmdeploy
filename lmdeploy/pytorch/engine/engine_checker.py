@@ -26,7 +26,6 @@ class EngineChecker(BaseChecker):
 
         # pytorch
         torch_checker = TorchChecker(logger=logger)
-        self.register_required_checker(torch_checker)
 
         if device_type == 'cuda':
             # triton
@@ -39,6 +38,7 @@ class EngineChecker(BaseChecker):
             from ..check_env.deeplink import DeeplinkChecker
             dl_checker = DeeplinkChecker(device_type, logger=logger)
             self.register_required_checker(dl_checker)
+            self.register_required_checker(torch_checker)
 
         # transformers
 
