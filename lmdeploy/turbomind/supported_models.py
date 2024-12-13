@@ -26,6 +26,7 @@ SUPPORTED_ARCHS = dict(
     # llava
     LlavaLlamaForCausalLM='llama',
     LlavaMistralForCausalLM='llama',
+    LlavaQwenForCausalLM='qwen2',
     LlavaForConditionalGeneration='llava',
     # xcomposer2
     InternLMXComposer2ForCausalLM='xcomposer2',
@@ -90,7 +91,10 @@ def is_supported(model_path: str):
                 if num_attn_head == 40:
                     # baichuan-13B, baichuan2-13B not supported by turbomind
                     support_by_turbomind = False
-            elif arch in ['Qwen2ForCausalLM', 'LlamaForCausalLM']:
+            elif arch in [
+                    'Qwen2ForCausalLM', 'LlamaForCausalLM',
+                    'LlavaQwenForCausalLM'
+            ]:
                 support_by_turbomind = _is_head_dim_supported(cfg)
             elif arch in ('ChatGLMModel', 'ChatGLMForConditionalGeneration'):
                 # chatglm1/2/3 is not working yet
