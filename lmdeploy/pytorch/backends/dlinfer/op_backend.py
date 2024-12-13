@@ -22,7 +22,7 @@ class DlinferOpsBackend(DefaultOpsBackend):
     @classmethod
     def get_layer_impl_builder(cls, layer_type: OpType):
         """get dlinfer layer builder."""
-        if layer_type == OpType.Attention:
+        if layer_type == OpType.PagedAttention:
             from .attention import DlinferAttentionBuilder
             return DlinferAttentionBuilder
         elif layer_type == OpType.ApplyRotaryEmb:
