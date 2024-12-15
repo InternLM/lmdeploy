@@ -2,14 +2,13 @@
 
 import warnings
 from contextlib import contextmanager
-from typing import List, Union
+from typing import Dict, List
 
 import torch
-from PIL.Image import Image
 from transformers import AutoConfig, AutoModelForCausalLM
 
 from lmdeploy.utils import get_logger
-from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
+from lmdeploy.vl.model.llava import VISION_MODELS, LlavaVisionModel
 from lmdeploy.vl.model.utils import rewrite_ctx
 
 from .utils import disable_logging, disable_transformers_logging
@@ -18,14 +17,13 @@ logger = get_logger('lmdeploy')
 
 
 def check_llava_install():
-    """check llava install."""
     try:
         from llava.model.multimodal_encoder.clip_encoder import \
             InternVisionModel  # noqa: F401
     except ImportError:
         raise ImportError(
             'To use LlavaVLModel, please install llava by '
-            'pip install "git+https://github.com/OpenGVLab/InternVL#subdirectory=internvl_chat_llava" --no-deps'  # noqa: E501
+            '`pip install git+https://github.com/OpenGVLab/InternVL#subdirectory=internvl_chat_llava --no-deps`'  # noqa: E501
         )
 
 
@@ -65,7 +63,7 @@ def init_empty_vit():
 
 
 @VISION_MODELS.register_module()
-class InternVLLlavaVisionModel(VisonModel):
+class InternVLLlavaVisionModel(LlavaVisionModel):
     """Llava visual model."""
 
     @classmethod
@@ -78,9 +76,11 @@ class InternVLLlavaVisionModel(VisonModel):
                 return True
         return False
 
+    def build_preprocessor(self):
+        return super().build_preprocessor()
+
     def build_model(self):
         """build model & load weights."""
-        # check llava install
         check_llava_install()
         # currently, only support llava llama
         from llava.model.language_model.llava_llama import (  # noqa
@@ -98,13 +98,10 @@ class InternVLLlavaVisionModel(VisonModel):
             }  # disable vision part quantization
             model = AutoModelForCausalLM.from_config(self.config,
                                                      trust_remote_code=True)
-            if not self.with_llm:
-                del model.lm_head
-                del model.model.embed_tokens
-                del model.model.layers
-                del model.model.norm
-            else:
-                self.vl_model = model
+            del model.lm_head
+            del model.model.embed_tokens
+            del model.model.layers
+            del model.model.norm
 
             with init_empty_vit():
                 vision_tower = model.get_vision_tower()
@@ -129,7 +126,7 @@ class InternVLLlavaVisionModel(VisonModel):
                 model=model,
                 max_memory=self.max_memory,
                 checkpoint=self.model_path,
-                device_map='auto' if not self.with_llm else {'': 'cpu'},
+                device_map='auto',
                 no_split_module_classes=['InternVisionEncoderLayer'],
                 dtype=torch.half)
 
@@ -137,42 +134,43 @@ class InternVLLlavaVisionModel(VisonModel):
         self.vision_tower = model.model.vision_tower.eval()
         self.mm_projector = model.model.mm_projector.eval()
 
-    def encode_images(self, images: torch.Tensor) -> torch.Tensor:
-        """encode images."""
-        image_features = self.vision_tower(images)
-        image_features = self.mm_projector(image_features)
-        return image_features
-
-    def preprocess(
-            self,
-            images: List[Image]) -> Union[torch.Tensor, List[torch.Tensor]]:
-        """preprocess."""
-        # TODO: gpu processor
-        from llava.mm_utils import process_images
-        images = [x.convert('RGB') for x in images]
-        image_processor = self.vision_tower.image_processor
-        outputs = process_images(images, image_processor, self.config)
-        return outputs
+    def preprocess(self, messages: List[Dict]) -> List[Dict]:
+        """refer to `super().preprocess() for spec."""
+        return super().preprocess(messages)
 
     @torch.no_grad()
-    def forward(self, images: List[Image]) -> List[torch.Tensor]:
-        """forward."""
-        images = self.preprocess(images)
-        if isinstance(images, list):
-            images = [
-                x.to(self.vision_tower.device, dtype=torch.float16)
-                for x in images
-            ]
-        else:
-            images = images.to(self.vision_tower.device, dtype=torch.float16)
+    def forward(self,
+                messages: List[Dict],
+                max_batch_size: int = 1) -> List[Dict]:
+        """extract image feature. ONLY implement it when the backend is
+        turbomind engine.
 
-        if type(images) is list or images.ndim == 5:
-            concat_images = torch.cat([image for image in images], dim=0)
-            image_features = self.encode_images(concat_images)
-            split_sizes = [image.shape[0] for image in images]
-            image_features = torch.split(image_features, split_sizes, dim=0)
-            image_features = [x.flatten(0, 1) for x in image_features]
-        else:
-            image_features = self.encode_images(images)
-            image_features = [x for x in image_features]
-        return image_features
+        Args:
+            messages(List[Dict]): the outputs of `preprocess`
+            max_batch_size(int): the max batch size when forwarding vision
+                model
+        Return:
+            the message list with forwarding results included
+        """
+        inputs = [x['content'] for x in messages if x['role'] == 'preprocess']
+        inputs = inputs[0]
+        outputs = []
+        for idx in range(0, len(inputs), max_batch_size):
+            pixel_values = [
+                x['pixel_values'] for x in inputs[idx:idx + max_batch_size]
+            ]
+            split_sizes = [x.shape[0] for x in pixel_values]
+            pixel_values = torch.cat(pixel_values, dim=0)
+            pixel_values = pixel_values.to(device=self.vision_tower.device,
+                                           dtype=torch.float16)
+            logger.info(f'vision forward shape: {pixel_values.shape}')
+            if pixel_values.ndim == 5:
+                feats = self.encode_images(pixel_values)
+                feats = torch.split(feats, split_sizes, dim=0)
+                feats = [x.flatten(0, 1) for x in feats]
+            else:
+                feats = self.encode_images(pixel_values)
+                feats = [x for x in feats]
+            outputs.extend(feats)
+        messages.append(dict(role='forward', content=outputs))
+        return messages
