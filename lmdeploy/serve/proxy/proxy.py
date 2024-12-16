@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import asyncio
 import copy
 import json
 import os
@@ -18,6 +19,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
+from requests.exceptions import RequestException
 
 from lmdeploy.serve.openai.api_server import (check_api_key,
                                               create_error_response)
@@ -87,6 +89,9 @@ class NodeManager:
             with open(self.config_path, 'r') as config_file:
                 self.nodes = yaml.safe_load(config_file)['nodes']
                 for url, status in self.nodes.items():
+                    latency = deque(status.get('latency', []),
+                                    maxlen=LATENCY_DEEQUE_LEN)
+                    status['latency'] = latency
                     status = Status(**status)
                     self.nodes[url] = status
         self.heart_beat_thread = threading.Thread(target=heart_beat_controller,
@@ -99,7 +104,7 @@ class NodeManager:
         nodes = copy.deepcopy(self.nodes)
         for url, status in nodes.items():
             nodes[url] = status.model_dump()
-            nodes[url]['latency'] = list(status.latency)
+            nodes[url]['latency'] = list(status.latency)[-LATENCY_DEEQUE_LEN:]
         with open(self.config_path, 'w') as config_file:  # update cfg yml
             yaml.dump(dict(nodes=nodes), config_file)
 
@@ -262,7 +267,7 @@ class NodeManager:
         """Handle the api time out."""
         logger.warn(f'api timeout: {node_url}')
         ret = {
-            'error_code': ErrorCodes.API_TIMEOUT,
+            'error_code': ErrorCodes.API_TIMEOUT.value,
             'text': err_msg[ErrorCodes.API_TIMEOUT],
         }
         return json.dumps(ret).encode() + b'\n'
@@ -286,9 +291,8 @@ class NodeManager:
                                              delimiter=b'\n'):
                 if chunk:
                     yield chunk + b'\n\n'
-        except requests.exceptions.RequestException as e:  # noqa
+        except (Exception, GeneratorExit, RequestException) as e:  # noqa
             # exception happened, reduce unfinished num
-            self.nodes[node_url].unfinished -= 1
             yield self.handle_api_timeout(node_url)
 
     async def generate(self, request: Dict, node_url: str, node_path: str):
@@ -306,9 +310,7 @@ class NodeManager:
                                              json=request,
                                              timeout=API_TIMEOUT_LEN)
                 return response.text
-        except requests.exceptions.RequestException as e:  # noqa
-            # exception happened, reduce unfinished num
-            self.nodes[node_url].unfinished -= 1
+        except (Exception, GeneratorExit, RequestException, asyncio.CancelledError) as e:  # noqa  # yapf: disable
             return self.handle_api_timeout(node_url)
 
     def pre_call(self, node_url):
@@ -385,7 +387,9 @@ def add_node(node: Node, raw_request: Request = None):
         RPM or other metric. All the values of nodes should be the same metric.
     """
     try:
-        node_manager.add(node.url, node.status)
+        res = node_manager.add(node.url, node.status)
+        if res is not None:
+            return res
         return 'Added successfully'
     except:  # noqa
         return 'Failed to add, please check the input url.'
