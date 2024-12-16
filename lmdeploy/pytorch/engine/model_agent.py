@@ -139,17 +139,23 @@ def model_forward(
         ctx_mgr = model.ctx_mgr
         context = ctx_mgr.build_context(
             inputs=inputs,
+            model_config=cache_engine.model_config,
             world_size=world_size,
             kv_caches=cache_engine.gpu_cache,
             kv_quant_policy=cache_engine.cache_config.quant_policy,
         )
         with ctx_mgr.context(context):
+            model_metas = None
+            model_metas = model.update_model_metas(
+                past_key_values=cache_engine.gpu_cache,
+                context=context,
+            )
             input_dict = model.prepare_inputs_for_generation(
                 past_key_values=cache_engine.gpu_cache,
                 context=context,
             )
             output = model(**input_dict)
-    return dict(hidden_states=output)
+    return dict(hidden_states=output, model_metas=model_metas)
 
 
 SwapMap = Dict[int, int]
@@ -175,6 +181,10 @@ class AutoModelAgent:
 
     def get_logits(self, hidden_states: torch.Tensor):
         """get logits of model output."""
+        raise NotImplementedError('Not implemented.')
+
+    def get_input_processor(self):
+        """get input processor."""
         raise NotImplementedError('Not implemented.')
 
 
@@ -267,13 +277,15 @@ class BaseModelAgent(AutoModelAgent):
                                     swap_in_map=swap_in_map,
                                     swap_out_map=swap_out_map)
         await asyncio.sleep(0)
-        while not self.stream.query():
-            await asyncio.sleep(0)
         return output
 
     def get_logits(self, hidden_states: torch.Tensor):
         """get logits of model output."""
         return self.patched_model.get_logits(hidden_states)
+
+    def get_input_processor(self):
+        """get input processor.."""
+        return self.patched_model.get_input_processor()
 
 
 @torch.inference_mode()
@@ -694,6 +706,10 @@ class TPModelAgent(AutoModelAgent):
     def get_logits(self, hidden_states: torch.Tensor):
         """get logits of model output."""
         return self.patched_model.get_logits(hidden_states)
+
+    def get_input_processor(self):
+        """get input processor.."""
+        return self.patched_model.get_input_processor()
 
 
 def _exit_handler(agent: TPModelAgent):

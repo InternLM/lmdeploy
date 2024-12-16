@@ -133,3 +133,9 @@ lmdeploy lite auto_awq $HF_MODEL --work-dir $WORK_DIR --device npu
 ```
 
 支持的模型列表请参考[支持的模型](../../supported_models/supported_models.md)。
+
+### int8 KV-cache 量化
+
+昇腾后端现在支持了在eager模式下的离线int8 KV-cache量化。
+
+详细使用方式请请参考这篇[文章](https://github.com/DeepLink-org/dlinfer/blob/main/docs/quant/ascend_kv_quant.md)。

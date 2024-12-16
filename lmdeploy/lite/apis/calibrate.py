@@ -241,21 +241,25 @@ def calibrate(model: str,
 
     model_type, _ = get_task(model)
     make_compatible_internvl_config(model)
-    if model_type == 'llm':
-        # Load tokenizer and configuration
-        tokenizer = AutoTokenizer.from_pretrained(model,
-                                                  trust_remote_code=True)
 
-        model = load_hf_from_pretrained(model,
-                                        dtype=dtype,
-                                        trust_remote_code=True)
-        vl_model = None
-    elif model_type == 'vlm':
-        from lmdeploy.vl.model.builder import vl_model_with_tokenizer
-        vl_model, model, tokenizer = vl_model_with_tokenizer(model_path=model,
-                                                             dtype=dtype)
+    # Load tokenizer and configuration
+    tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=True)
 
-    model.config.use_cache = False
+    model = load_hf_from_pretrained(model, dtype=dtype, trust_remote_code=True)
+    vl_model = None
+    if model_type == 'vlm':
+        vl_model = model
+        if hasattr(model, 'language_model'):
+            model = model.language_model
+        if hasattr(model, 'llm'):
+            model = model.llm
+        model.config.use_cache = False
+        if dtype == 'float16':
+            model.half()
+        elif dtype == 'bfloat16':
+            model.to(torch.bfloat16)
+        model.eval()
+
     model_type = type(model).__name__
     if model_type not in LAYER_TYPE_MAP or model_type not in NORM_TYPE_MAP:
         raise RuntimeError(
