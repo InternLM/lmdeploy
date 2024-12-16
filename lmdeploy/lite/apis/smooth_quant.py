@@ -6,7 +6,8 @@ from torch import nn
 from lmdeploy.lite.apis.calibrate import (LAYER_TYPE_MAP, NORM_TYPE_MAP,
                                           calibrate)
 from lmdeploy.lite.quantization.awq import (FC_FCS_MAP, NORM_FCS_MAP,
-                                            awq_layers, smooth_layers)
+                                            awq_layers, skipped_module,
+                                            smooth_layers)
 from lmdeploy.lite.utils import collect_target_modules
 from lmdeploy.pytorch.models import QLinear, QRMSNorm
 
@@ -19,6 +20,7 @@ def smooth_quant(model: str,
                  search_scale: bool = False,
                  batch_size: int = 1,
                  w_bits: int = 8,
+                 dtype: str = 'auto',
                  device: str = 'cuda'):
 
     model_path = model
@@ -31,6 +33,7 @@ def smooth_quant(model: str,
                                                      w_bits=w_bits,
                                                      w_group_size=-1,
                                                      search_scale=search_scale,
+                                                     dtype=dtype,
                                                      batch_size=batch_size)
 
     # calibrate function exports the calibration statistics
@@ -76,6 +79,8 @@ def smooth_quant(model: str,
     rmsnorms = collect_target_modules(model, norm_type)
 
     for name, linear in fcs.items():
+        if skipped_module(name):
+            continue
         linear.to(device)
         q_linear = QLinear.from_float(linear)
         parent_name, _, child_name = name.rpartition('.')
@@ -84,6 +89,8 @@ def smooth_quant(model: str,
         linear.to('cpu')
 
     for name, norm in rmsnorms.items():
+        if skipped_module(name):
+            continue
         norm.to(device)
         q_norm = QRMSNorm.from_float(norm)
         parent_name, _, child_name = name.rpartition('.')

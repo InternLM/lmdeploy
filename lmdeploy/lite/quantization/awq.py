@@ -43,8 +43,10 @@ NORM_FCS_MAP = {
     'MixtralDecoderLayer': {
         'input_layernorm':
         ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
-        'post_attention_layernorm':
-        ['block_sparse_moe.experts.{i}.w1', 'block_sparse_moe.experts.{i}.w3']
+        'post_attention_layernorm': [
+            'block_sparse_moe.gate', 'block_sparse_moe.experts.{i}.w1',
+            'block_sparse_moe.experts.{i}.w3'
+        ]
     },
     'Qwen2VLDecoderLayer': {
         'input_layernorm':

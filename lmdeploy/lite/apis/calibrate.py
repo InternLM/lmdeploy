@@ -204,6 +204,7 @@ def calibrate(model: str,
               w_bits: int = 4,
               w_group_size: int = 128,
               search_scale: bool = False,
+              dtype: str = 'auto',
               batch_size: int = 1) -> None:
     """The main function for loading the model and performing calibration on a
     given dataset.
@@ -224,6 +225,7 @@ def calibrate(model: str,
         w_group_size (int): Group size for weight quantization statistics.
         search_scale (bool): Whether search scale ratio. Default to False,
             which means only smooth quant with 0.5 ratio will be applied.
+        dtype (str): Data type for loading model weights and calib infer.
         batch_size (int): The batch size for running the calib samples.
             Low GPU mem requires small batch_size. Large batch_size
             reduces the calibration time while costs more VRAM.
@@ -245,12 +247,13 @@ def calibrate(model: str,
                                                   trust_remote_code=True)
 
         model = load_hf_from_pretrained(model,
-                                        torch_dtype=torch.float16,
+                                        dtype=dtype,
                                         trust_remote_code=True)
         vl_model = None
     elif model_type == 'vlm':
         from lmdeploy.vl.model.builder import vl_model_with_tokenizer
-        vl_model, model, tokenizer = vl_model_with_tokenizer(model_path=model)
+        vl_model, model, tokenizer = vl_model_with_tokenizer(model_path=model,
+                                                             dtype=dtype)
 
     model.config.use_cache = False
     model_type = type(model).__name__

@@ -35,6 +35,7 @@ class SubCliLite(object):
         ArgumentHelper.calib_seqlen(parser)
         ArgumentHelper.calib_batchsize(parser)
         ArgumentHelper.calib_search_scale(parser)
+        ArgumentHelper.dtype(parser)
         parser.add_argument(
             '--device',
             type=str,
@@ -99,6 +100,7 @@ class SubCliLite(object):
         ArgumentHelper.calib_seqlen(parser)
         ArgumentHelper.calib_batchsize(parser)
         ArgumentHelper.calib_search_scale(parser)
+        ArgumentHelper.dtype(parser)
 
     @staticmethod
     def add_parser_smooth_quant():
@@ -122,6 +124,7 @@ class SubCliLite(object):
         ArgumentHelper.calib_seqlen(parser)
         ArgumentHelper.calib_batchsize(parser)
         ArgumentHelper.calib_search_scale(parser)
+        ArgumentHelper.dtype(parser)
 
     @staticmethod
     def auto_awq(args):

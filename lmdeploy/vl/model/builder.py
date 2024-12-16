@@ -1,6 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
-from typing import Optional, Union
+from typing import Literal, Optional, Union
+
+import torch
 
 from lmdeploy.archs import get_model_arch
 from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig
@@ -70,7 +72,10 @@ def load_vl_model(model_path: str,
     raise ValueError(f'unsupported vl model with config {hf_config}')
 
 
-def vl_model_with_tokenizer(model_path: str, with_llm: bool = True):
+def vl_model_with_tokenizer(model_path: str,
+                            with_llm: bool = True,
+                            dtype: Literal['float16', 'bfloat16',
+                                           'auto'] = 'auto'):
     """load visual model."""
     vl_model = load_vl_model(model_path, with_llm).vl_model
     llm = vl_model
@@ -79,7 +84,11 @@ def vl_model_with_tokenizer(model_path: str, with_llm: bool = True):
     if hasattr(vl_model, 'llm'):  # MiniCPMV
         llm = vl_model.llm
     llm.config.use_cache = False
-    llm.half().eval()
+    if dtype == 'float16':
+        llm.half()
+    elif dtype == 'bfloat16':
+        llm.to(torch.bfloat16)
+    llm.eval()
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained(model_path,
                                               trust_remote_code=True)
