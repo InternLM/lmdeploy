@@ -21,7 +21,7 @@ class RMSNormBuilder(ABC):
 
     @staticmethod
     @abstractmethod
-    def build(hidden_size: int, eps: float = 1e-6):
+    def build(hidden_size: int, eps: float = 1e-6, **kwargs):
         """build."""
         raise NotImplementedError
 

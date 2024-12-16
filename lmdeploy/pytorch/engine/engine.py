@@ -1003,9 +1003,29 @@ class Engine:
             for out in step_outputs.values():
                 __send_resp(out)
 
+        def __do_prefill():
+            # decoding if no waiting
+            if not self.scheduler.has_waiting():
+                return False
+
+            num_running = len(self.scheduler.running)
+            num_waiting = len(self.scheduler.waiting)
+            max_batches = self.scheduler_config.max_batches
+
+            # prefill if too much waiting
+            if num_waiting >= 4:
+                return True
+
+            # prefill if no enough running
+            if num_running < max_batches * 0.5:
+                return True
+
+            # decoding
+            return False
+
         async def __step():
             """step decoding."""
-            prefill = self.scheduler.has_waiting()
+            prefill = __do_prefill()
             schedule_output = self.scheduler.schedule(
                 is_prefill=prefill, prealloc_size=prefill_interval)
             # schedule decoding if no valid prefill reqs.

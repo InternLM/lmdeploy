@@ -9,14 +9,15 @@ from ..backends import OpType, get_backend
 
 def _is_w8a8(quant_config: Any):
     """is w8a8."""
-    if quant_config is None:
-        return False
-    else:
+    quant_dtype = None
+    w8a8_flag = False
+    if quant_config is not None:
         quant_method = quant_config['quant_method']
-        if quant_method == 'w8a8':
-            return True
-        else:
-            return False
+        if quant_method == 'smooth_quant':
+            w8a8_flag = True
+            quant_dtype = quant_config.get('quant_dtype', 'int8')
+            quant_dtype = eval(f'torch.{quant_dtype}')
+    return w8a8_flag, quant_dtype
 
 
 class RMSNorm(nn.Module):
@@ -30,13 +31,15 @@ class RMSNorm(nn.Module):
                  quant_config: Any = None):
         super().__init__()
         backend = get_backend()
-        if _is_w8a8(quant_config):
+
+        w8a8_flag, quant_dtype = _is_w8a8(quant_config)
+        if w8a8_flag:
             builder = backend.get_layer_impl_builder(OpType.RMSNormW8A8)
         else:
             builder = backend.get_layer_impl_builder(OpType.RMSNorm)
         self.register_parameter('weight',
                                 self.create_weight(hidden_size, dtype, device))
-        self.impl = builder.build(hidden_size, eps)
+        self.impl = builder.build(hidden_size, eps, quant_dtype=quant_dtype)
 
     @staticmethod
     def create_weight(hidden_size: int,

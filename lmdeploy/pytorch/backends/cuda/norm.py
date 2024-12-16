@@ -9,7 +9,7 @@ from ..norm import RMSNormBuilder, RMSNormImpl
 class TritonRMSNormImpl(RMSNormImpl):
     """triton RMS norm implementation."""
 
-    def __init__(self, hidden_size: int, eps: float = 1e-6):
+    def __init__(self, hidden_size: int, eps: float = 1e-6, **kwargs):
         self.hidden_size = hidden_size
         self.eps = eps
 
@@ -30,6 +30,6 @@ class TritonRMSNormBuilder(RMSNormBuilder):
     """triton RMS norm implementation builder."""
 
     @staticmethod
-    def build(weight: torch.Tensor, eps: float = 1e-6):
+    def build(weight: torch.Tensor, eps: float = 1e-6, **kwargs):
         """build."""
-        return TritonRMSNormImpl(weight, eps)
+        return TritonRMSNormImpl(weight, eps, **kwargs)

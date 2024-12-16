@@ -60,8 +60,10 @@ def per_channel_quant(x: torch.Tensor, n_bits: int, dtype: torch.dtype):
                       num_warps=4)
     ],
     key=['N', 'K'],
+    warmup=5,
+    rep=20,
 )
-@triton.jit
+@triton.jit(do_not_specialize=['M'])
 def _linear(
     A,
     B,
@@ -142,8 +144,10 @@ def _linear(
                       num_warps=4)
     ],
     key=['N', 'K'],
+    warmup=5,
+    rep=20,
 )
-@triton.jit
+@triton.jit(do_not_specialize=['M'])
 def _linear_add(A, B, C, residual_ptr, M, N, K, stride_am, stride_ak,
                 stride_bk, stride_bn, stride_cm, stride_cn,
                 BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
@@ -281,7 +285,8 @@ def _per_token_quant_int8(
         y_ptr,
         y_q_ptr,
         y_s_ptr,
-        y_stride,
+        y_stride: tl.constexpr,
+        yq_stride: tl.constexpr,
         N,  # number of columns in X
         eps: tl.constexpr,  # epsilon to avoid division by zero
         BLOCK: tl.constexpr,
@@ -296,7 +301,7 @@ def _per_token_quant_int8(
     # Map the program id to the row of X and Y it should compute.
     row = tl.program_id(0)
     y_ptr += row * y_stride
-    y_q_ptr += row * y_stride
+    y_q_ptr += row * yq_stride
     y_s_ptr += row
 
     cols = tl.arange(0, BLOCK)  # N <= BLOCK
@@ -333,15 +338,20 @@ def per_token_quant_int8(x, eps, quant_dtype=torch.int8):
     BLOCK = triton.next_power_of_2(N)
     # heuristics for number of warps
     num_warps = min(max(BLOCK // 256, 1), 8)
+
+    if x.dim() > 2:
+        x = x.flatten(0, -2)
+    assert x.stride(-1) == 1
     # enqueue kernel
     kernel_meta = get_kernel_meta(x)
     _per_token_quant_int8[(M, )](
         x,
         x_q,
         x_s,
-        x.stride(-2),
-        N,
-        eps,
+        y_stride=x.stride(-2),
+        yq_stride=x_q.stride(-2),
+        N=N,
+        eps=eps,
         BLOCK=BLOCK,
         Q_MAX=q_max,
         IS_FLOATING_POINT=quant_dtype.is_floating_point,
@@ -352,46 +362,98 @@ def per_token_quant_int8(x, eps, quant_dtype=torch.int8):
 
 
 @triton.jit
-def _rms_norm_fwd_fused_dynamic_symmetric(
-    X,  # pointer to the input
-    Y,  # pointer to the output
-    W,  # pointer to the weights
-    Scale,  # pointer to the scales of the output activation
-    stride,  # how much to increase the pointer when moving by 1 row
-    N,  # number of columns in X
-    eps: tl.constexpr,  # epsilon to avoid division by zero
-    BLOCK_SIZE: tl.constexpr,
+def _compute_rms_norm(x, w, eps: tl.constexpr, N_COLS: tl.constexpr):
+    """compute rms norm."""
+    xf = x.to(tl.float32)
+
+    var = tl.sum(xf * xf, 0) * float(1.0 / N_COLS)
+    out = xf * tl.math.rsqrt(var + eps)
+    out = (w * out).to(x.dtype)
+    return out
+
+
+@triton.jit
+def rms_norm_quant_kernel(
+    input,
+    weight,
+    output,
+    out_scale,
+    input_row_stride: tl.constexpr,
+    eps: tl.constexpr,
+    N_COLS: tl.constexpr,
+    BLOCK_N: tl.constexpr,
     Q_MIN: tl.constexpr,
     Q_MAX: tl.constexpr,
     IS_FLOATING_POINT: tl.constexpr,
 ):
-    """A Triton kernel that calculates Root Mean Square (RMS) normalization
-    with fused dynamic symmetric quantization."""
-    row = tl.program_id(0)
-    Y += row * stride
-    X += row * stride
+    """rms norm kernel."""
+    prog_id = tl.program_id(0)
+    offsets = tl.arange(0, BLOCK_N)
 
-    cols = tl.arange(0, BLOCK_SIZE)
-    mask = cols < N
-    x = tl.load(X + cols, mask=mask, other=0.).to(tl.float32)
-    _var = x * x
-    var = tl.sum(_var, axis=0) / N
-    rstd = tl.math.rsqrt(var + eps)
+    w = tl.load(weight + offsets, mask=offsets < N_COLS)
 
-    w = tl.load(W + cols, mask=mask)
-    x_hat = x * rstd
-    y = x_hat * w
+    x_ptr = input + prog_id * input_row_stride
+    x = tl.load(x_ptr + offsets, mask=offsets < N_COLS)
+    out = _compute_rms_norm(x, w, eps, N_COLS)
 
-    scale = tl.max(tl.abs(y)).to(tl.float32) / Q_MAX
-    tl.store(Scale + row, scale)
-    y = y / scale
+    scale = tl.max(tl.abs(out)).to(tl.float32) / Q_MAX
+    out_s_ptr = out_scale + prog_id
+    tl.store(out_s_ptr, scale)
+    out = out / scale
     if not IS_FLOATING_POINT:
-        y = tl_round(y)
-    y = tl.clamp(y, Q_MIN, Q_MAX)
-    tl.store(Y + cols, y, mask=mask)
+        out = tl_round(out)
+    out = tl.clamp(out, Q_MIN, Q_MAX)
+    out_ptr = output + prog_id * input_row_stride
+    tl.store(out_ptr + offsets, out, mask=offsets < N_COLS)
 
 
-def rms_norm_dynamic_quant(x, w, eps, quant_dtype=torch.int8):
+@triton.jit
+def add_rms_norm_quant_kernel(
+    input,
+    weight,
+    residual,
+    output,
+    out_scale,
+    out_residual,
+    input_row_stride: tl.constexpr,
+    residual_row_stride: tl.constexpr,
+    eps: tl.constexpr,
+    N_COLS: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    Q_MIN: tl.constexpr,
+    Q_MAX: tl.constexpr,
+    IS_FLOATING_POINT: tl.constexpr,
+):
+    """rms norm kernel."""
+    prog_id = tl.program_id(0)
+    offsets = tl.arange(0, BLOCK_N)
+
+    w = tl.load(weight + offsets, mask=offsets < N_COLS)
+
+    x_ptr = input + prog_id * input_row_stride
+    x = tl.load(x_ptr + offsets, mask=offsets < N_COLS)
+
+    res_ptr = residual + prog_id * residual_row_stride
+    res = tl.load(res_ptr + offsets, mask=offsets < N_COLS)
+
+    new_x = x + res
+    out_res_ptr = out_residual + prog_id * residual_row_stride
+    tl.store(out_res_ptr + offsets, new_x, mask=offsets < N_COLS)
+
+    out = _compute_rms_norm(new_x, w, eps, N_COLS)
+
+    scale = tl.max(tl.abs(out)).to(tl.float32) / Q_MAX
+    out_s_ptr = out_scale + prog_id
+    tl.store(out_s_ptr, scale)
+    out = out / scale
+    if not IS_FLOATING_POINT:
+        out = tl_round(out)
+    out = tl.clamp(out, Q_MIN, Q_MAX)
+    out_ptr = output + prog_id * input_row_stride
+    tl.store(out_ptr + offsets, out, mask=offsets < N_COLS)
+
+
+def rms_norm_dynamic_quant(x, w, eps, residual=None, quant_dtype=torch.int8):
     """Performs RMS normalization with dynamic quantization.
 
     The function reshapes the input tensor `x`, creates an empty tensor `y`
@@ -401,32 +463,52 @@ def rms_norm_dynamic_quant(x, w, eps, quant_dtype=torch.int8):
     qdtype_info = torch.finfo(
         quant_dtype) if quant_dtype.is_floating_point else torch.iinfo(
             quant_dtype)
-    x_arg = x.flatten(0, -2)
     y = torch.empty_like(x, dtype=quant_dtype)
-    M, K = x_arg.shape
-    MAX_FUSED_SIZE = 65536 // x.element_size()
-    BLOCK_SIZE = min(MAX_FUSED_SIZE, triton.next_power_of_2(K))
-    if K > BLOCK_SIZE:
-        raise RuntimeError(
-            "This rms norm doesn't support feature dim >= 64KB.")
-    num_warps = min(max(BLOCK_SIZE // 256, 1), 8)
     scale = x.new_empty(x.shape[:-1] + (1, ), dtype=torch.float32)
-    kernel_meta = get_kernel_meta(x_arg)
-    _rms_norm_fwd_fused_dynamic_symmetric[(M, )](
-        x_arg,
-        y,
-        w,
-        scale,
-        x_arg.stride(0),
-        K,
-        eps,
-        BLOCK_SIZE=BLOCK_SIZE,
-        Q_MIN=qdtype_info.min,
-        Q_MAX=qdtype_info.max,
-        IS_FLOATING_POINT=quant_dtype.is_floating_point,
-        num_warps=num_warps,
-        **kernel_meta)
-    return y, scale
+
+    feat_size = w.shape[0]
+    seq_len = x.numel() // x.size(-1)
+    input_stride = x.stride(-2)
+    BLOCK_N = triton.next_power_of_2(feat_size)
+    grid = (seq_len, )
+
+    if residual is None:
+        rms_norm_quant_kernel[grid](
+            x,
+            w,
+            y,
+            scale,
+            input_row_stride=input_stride,
+            eps=eps,
+            N_COLS=feat_size,
+            BLOCK_N=BLOCK_N,
+            Q_MIN=qdtype_info.min,
+            Q_MAX=qdtype_info.max,
+            IS_FLOATING_POINT=quant_dtype.is_floating_point,
+            num_warps=4,
+            num_stages=2)
+        return y, scale
+    else:
+        out_residual = torch.empty_like(x)
+        res_stride = residual.stride(-2)
+        add_rms_norm_quant_kernel[grid](
+            x,
+            w,
+            residual,
+            y,
+            scale,
+            out_residual,
+            input_row_stride=input_stride,
+            residual_row_stride=res_stride,
+            eps=eps,
+            N_COLS=feat_size,
+            BLOCK_N=BLOCK_N,
+            Q_MIN=qdtype_info.min,
+            Q_MAX=qdtype_info.max,
+            IS_FLOATING_POINT=quant_dtype.is_floating_point,
+            num_warps=4,
+            num_stages=2)
+        return y, scale, out_residual
 
 
 def test_rms_and_linear(x,

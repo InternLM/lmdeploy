@@ -29,15 +29,23 @@ class TritonRMSNormW8A8Impl(RMSNormW8A8Impl):
                 weight: torch.Tensor,
                 residual: torch.Tensor = None):
         """forward."""
-        if residual is not None:
-            x = x + residual
-            residual = x
-        hidden_states_quant, rms_scale = rms_norm_dynamic_quant(
-            x, weight, self.eps, quant_dtype=self.quant_dtype)
-        x = QTensor(hidden_states_quant, rms_scale)
         if residual is None:
+            (x,
+             rms_scale) = rms_norm_dynamic_quant(x,
+                                                 weight,
+                                                 self.eps,
+                                                 quant_dtype=self.quant_dtype)
+            x = QTensor(x, rms_scale)
             return x
-        return x, residual
+        else:
+            (x, rms_scale,
+             residual) = rms_norm_dynamic_quant(x,
+                                                weight,
+                                                self.eps,
+                                                residual=residual,
+                                                quant_dtype=self.quant_dtype)
+            x = QTensor(x, rms_scale)
+            return x, residual
 
 
 class TritonRMSNormBuilder(RMSNormW8A8Builder):
@@ -70,7 +78,6 @@ class TritonLinearW8A8Impl(LinearW8A8Impl):
                 all_reduce: bool = False):
         """forward."""
         if isinstance(x, torch.Tensor):
-            x = x.contiguous()
             input_quant, input_scale = per_token_quant_int8(
                 x, 1e-7, quant_dtype=self.quant_dtype)
         else:
