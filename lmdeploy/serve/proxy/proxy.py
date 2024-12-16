@@ -251,7 +251,7 @@ class NodeManager:
         Args:
             model_name (str): the model in the request.
         """
-        logger.info(f'no model name: {model_name}')
+        logger.warn(f'no model name: {model_name}')
         ret = {
             'error_code': ErrorCodes.MODEL_NOT_FOUND,
             'text': err_msg[ErrorCodes.MODEL_NOT_FOUND],
@@ -260,11 +260,13 @@ class NodeManager:
 
     def handle_api_timeout(self, node_url):
         """Handle the api time out."""
-        logger.info(f'api timeout: {node_url}')
+        logger.warn(f'api timeout: {node_url}')
         ret = {
             'error_code': ErrorCodes.API_TIMEOUT,
             'text': err_msg[ErrorCodes.API_TIMEOUT],
         }
+        # exception happened, reduce unfinished num
+        self.nodes[node_url].unfinished -= 1
         return json.dumps(ret).encode() + b'\n'
 
     def stream_generate(self, request: Dict, node_url: str, node_path: str):
@@ -517,6 +519,7 @@ def proxy(server_name: str = '0.0.0.0',
                             'min_observed_latency'] = 'min_expected_latency',
           api_keys: Optional[Union[List[str], str]] = None,
           ssl: bool = False,
+          log_level: str = 'INFO',
           **kwargs):
     """To launch the proxy server.
 
@@ -540,6 +543,7 @@ def proxy(server_name: str = '0.0.0.0',
     if ssl:
         ssl_keyfile = os.environ['SSL_KEYFILE']
         ssl_certfile = os.environ['SSL_CERTFILE']
+    logger.setLevel(log_level)
     uvicorn.run(app=app,
                 host=server_name,
                 port=server_port,
