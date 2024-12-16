@@ -265,8 +265,6 @@ class NodeManager:
             'error_code': ErrorCodes.API_TIMEOUT,
             'text': err_msg[ErrorCodes.API_TIMEOUT],
         }
-        # exception happened, reduce unfinished num
-        self.nodes[node_url].unfinished -= 1
         return json.dumps(ret).encode() + b'\n'
 
     def stream_generate(self, request: Dict, node_url: str, node_path: str):
@@ -289,6 +287,8 @@ class NodeManager:
                 if chunk:
                     yield chunk + b'\n\n'
         except requests.exceptions.RequestException as e:  # noqa
+            # exception happened, reduce unfinished num
+            self.nodes[node_url].unfinished -= 1
             yield self.handle_api_timeout(node_url)
 
     async def generate(self, request: Dict, node_url: str, node_path: str):
@@ -307,6 +307,8 @@ class NodeManager:
                                              timeout=API_TIMEOUT_LEN)
                 return response.text
         except requests.exceptions.RequestException as e:  # noqa
+            # exception happened, reduce unfinished num
+            self.nodes[node_url].unfinished -= 1
             return self.handle_api_timeout(node_url)
 
     def pre_call(self, node_url):
