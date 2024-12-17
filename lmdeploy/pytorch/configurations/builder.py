@@ -51,3 +51,16 @@ class AutoModelConfigBuilder(ABC):
             cfg.hf_config = hf_config
 
         return cfg
+
+    @classmethod
+    def update_num_kv_heads(cls, hf_config, tp, num_key_value_heads):
+        """update num kv heads."""
+        # update num_kv_heads for tp mode
+        if tp > 1 and tp > num_key_value_heads:
+            assert tp % num_key_value_heads == 0
+            n_replicate = tp // num_key_value_heads
+            hf_config.num_replicate_key_value_heads = n_replicate
+            num_key_value_heads = tp
+
+        hf_config.num_key_value_heads = num_key_value_heads
+        return num_key_value_heads

@@ -25,12 +25,8 @@ class DefaultModelConfigBuilder(AutoModelConfigBuilder):
                                      sliding_window) or -1
         tp = kwargs.get('tp', 1)
         # update num_kv_heads for tp mode
-        if tp > 1 and tp > num_key_value_heads:
-            assert tp % num_key_value_heads == 0
-            n_replicate = tp // num_key_value_heads
-            hf_config.num_replicate_key_value_heads = n_replicate
-            num_key_value_heads = tp
-            hf_config.num_key_value_heads = tp
+        num_key_value_heads = cls.update_num_kv_heads(hf_config, tp,
+                                                      num_key_value_heads)
 
         return ModelConfig(
             hidden_size=hf_config.hidden_size,

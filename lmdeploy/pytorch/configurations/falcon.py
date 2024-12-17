@@ -24,6 +24,12 @@ class FalconModelConfigBuilder(AutoModelConfigBuilder):
         else:
             # rw-1b, MHA
             kv_head = num_attention_heads
+
+        tp = kwargs.get('tp', 1)
+        # update num_kv_heads for tp mode
+        kv_head = cls.update_num_kv_heads(hf_config, tp, kv_head)
+        hf_config.num_kv_heads = kv_head
+
         head_dim = hf_config.hidden_size // num_attention_heads
         return ModelConfig(
             hidden_size=hf_config.hidden_size,
@@ -33,6 +39,5 @@ class FalconModelConfigBuilder(AutoModelConfigBuilder):
             bos_token_id=hf_config.bos_token_id,
             eos_token_id=hf_config.eos_token_id,
             head_dim=head_dim,
-            multi_query_attention=hf_config.multi_query,
             vocab_size=hf_config.vocab_size,
         )

@@ -19,15 +19,15 @@ class ChatGLMModelConfigBuilder(AutoModelConfigBuilder):
         if bos_token_id is None:
             bos_token_id = hf_config.pad_token_id
 
-        num_key_value_heads = hf_config.multi_query_group_num
+        if hf_config.multi_query_attention:
+            num_key_value_heads = hf_config.multi_query_group_num
+        else:
+            num_key_value_heads = hf_config.num_attention_heads
+
         tp = kwargs.get('tp', 1)
         # update num_kv_heads for tp mode
-        if tp > 1 and tp > num_key_value_heads:
-            assert tp % num_key_value_heads == 0
-            n_replicate = tp // num_key_value_heads
-            hf_config.num_replicate_key_value_heads = n_replicate
-            num_key_value_heads = tp
-            hf_config.multi_query_group_num = tp
+        num_key_value_heads = cls.update_num_kv_heads(hf_config, tp,
+                                                      num_key_value_heads)
 
         cfg = ModelConfig(hidden_size=hf_config.hidden_size,
                           num_layers=hf_config.num_layers,

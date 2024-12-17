@@ -104,7 +104,6 @@ class ModelConfig:
     v_head_dim: int = None
     sliding_window: int = -1
     dtype: torch.dtype = torch.float16
-    multi_query_attention: bool = False
     vocab_size: int = 40000
     hf_config: Any = None
     cogvlm_style: bool = False

@@ -59,9 +59,7 @@ class SamplingParam:
         stop_words = gen_config.stop_token_ids or []
         bad_words = gen_config.bad_token_ids or []
         if gen_config.ignore_eos:
-            if len(self.bad_words) > 1:
-                logger.warn(f'Ignore stop_words={stop_words} '
-                            'when ignore_eos=True')
+            bad_words += stop_words
             stop_words = []
 
         top_k = gen_config.top_k
