@@ -122,6 +122,7 @@ jobs:
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
+          pip install triton==3.0.0 --no-deps
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env

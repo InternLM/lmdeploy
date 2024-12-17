@@ -166,7 +166,7 @@ jobs:
           pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
-          pip install transformers
+          pip install triton==3.0.0 --no-deps
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
@@ -261,6 +261,7 @@ jobs:
           pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
+          pip install triton==3.0.0 --no-deps
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
@@ -361,6 +362,7 @@ jobs:
           pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
+          pip install triton==3.0.0 --no-deps
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
@@ -453,6 +455,7 @@ jobs:
           pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
+          pip install triton==3.0.0 --no-deps
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
@@ -514,6 +517,7 @@ jobs:
           pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
+          pip install triton==3.0.0 --no-deps
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
@@ -583,6 +587,7 @@ jobs:
           echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
       - name: Check env
         run: |
+          pip install triton==3.0.0 --no-deps
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
