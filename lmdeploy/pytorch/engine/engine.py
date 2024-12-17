@@ -563,13 +563,11 @@ class Engine:
         if model_metas is None:
             model_metas = [None] * len(running)
         next_token_ids = next_token_ids.numpy()
-        eos_token_id = self.model_config.eos_token_id
         for token, msg, stop, model_meta in zip(next_token_ids, running,
                                                 stopped, model_metas):
             if msg.status != MessageStatus.RUNNING:
                 continue
             update_token = token
-            stop = stop or token in eos_token_id
             if stop:
                 update_token = _EMPTY_TOKEN
             else:
@@ -959,6 +957,27 @@ class Engine:
                 await forward_event.wait()
             __send_resps(resps)
 
+    @staticmethod
+    def _add_loop_tasks_done_callback(tasks: List[asyncio.Task]):
+        """add loop tasks done callback."""
+
+        def __task_callback(task: asyncio.Task) -> None:
+            """raise exception on finish."""
+            task_name = task.get_name()
+            try:
+                task.result()
+            except asyncio.CancelledError:
+                logger.debug(f'Task <{task_name}> cancelled.')
+                return
+            except Exception:
+                logger.exception(f'Task <{task_name}> failed')
+                for task in tasks:
+                    if not task.cancelled():
+                        task.cancel()
+
+        for task in tasks:
+            task.add_done_callback(__task_callback)
+
     @torch.inference_mode()
     async def _async_loop(self):
         """Main loop of the engine.
@@ -966,9 +985,9 @@ class Engine:
         Each engine instance would communicate with the engine by queue.
         """
         event_loop = asyncio.get_event_loop()
+        prefill_interval = self.scheduler_config.prefill_interval
 
         # forward task
-        prefill_interval = self.scheduler_config.prefill_interval
         in_que = asyncio.Queue()
         out_que = asyncio.Queue()
         forward_event = asyncio.Event()
@@ -991,31 +1010,31 @@ class Engine:
                                                 name='MainLoopResponse')
 
         loop_main = asyncio.current_task()
-
         loop_tasks: List[asyncio.Task] = [
             loop_main, loop_background, loop_msg_proc, loop_send_resp
         ]
+        self._add_loop_tasks_done_callback(loop_tasks)
 
-        def __task_callback(task: asyncio.Task) -> None:
-            """raise exception on finish."""
-            task_name = task.get_name()
-            try:
-                task.result()
-            except asyncio.CancelledError:
-                logger.debug(f'Task <{task_name}> cancelled.')
-                return
-            except Exception:
-                logger.exception(f'Task <{task_name}> failed')
-                for task in loop_tasks:
-                    if not task.cancelled():
-                        task.cancel()
-
-        for task in loop_tasks:
-            task.add_done_callback(__task_callback)
+        def __do_prefill():
+            # decoding if no waiting
+            if not self.scheduler.has_waiting():
+                return False
+            num_running = self.scheduler.num_running()
+            num_waiting = self.scheduler.num_waiting()
+            max_batches = self.scheduler_config.max_batches
+            # prefill if too much waiting
+            if num_waiting >= 4:
+                return True
+            # prefill if no enough running
+            if num_running < max_batches * 0.5:
+                return True
+            # decoding
+            return False
 
         async def __step():
             """step decoding."""
-            prefill = self.scheduler.has_waiting()
+            # prefill = self.scheduler.has_waiting()
+            prefill = __do_prefill()
             schedule_output = self.scheduler.schedule(
                 is_prefill=prefill, prealloc_size=prefill_interval)
             # schedule decoding if no valid prefill reqs.
