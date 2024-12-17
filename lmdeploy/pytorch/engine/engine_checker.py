@@ -64,11 +64,11 @@ class EngineChecker(BaseChecker):
     def check(self):
         """check."""
         engine_config = self.engine_config
-        logger = self.get_logger()
 
         if engine_config.thread_safe:
-            logger.warning('thread safe mode has been deprecated and'
-                           ' it would be removed in the future.')
+            self.log_and_exit(
+                mod_name='Engine',
+                message='thread safe mode is no longer supported.')
 
         if engine_config.max_batch_size <= 0:
             self.log_and_exit(

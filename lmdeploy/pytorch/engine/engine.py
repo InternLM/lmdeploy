@@ -45,9 +45,8 @@ class InferOutput:
     """The output of the model inference."""
 
     session_id: int
+    resp: Response
     token_ids: List[int]
-    sender_id: int
-    req_id: int
     meta: Any = None
     finish: bool = False
     logits: torch.Tensor = None
@@ -250,7 +249,7 @@ class Engine:
 
     def _bind_request_manager(self):
         """bind request manager."""
-        req_manager = RequestManager(self.engine_config.thread_safe)
+        req_manager = RequestManager()
         req_manager.bind_func(RequestType.ADD_SESSION, self._on_add_session)
         req_manager.bind_func(RequestType.STOP_SESSION, self._on_stop_session)
         req_manager.bind_func(RequestType.END_SESSION, self._on_end_session)
@@ -262,18 +261,15 @@ class Engine:
         return self.req_manager.start_loop(self.async_loop)
 
     def _response(self,
+                  resp: Response,
                   resp_type: ResponseType,
-                  sender_id: int,
-                  req_id: int,
                   data: Any = None,
                   err_msg: str = ''):
         """response."""
-        self.req_manager.response(
-            Response(type=resp_type,
-                     sender_id=sender_id,
-                     req_id=req_id,
-                     data=data,
-                     err_msg=err_msg))
+        resp.type = resp_type
+        resp.data = data
+        resp.err_msg = err_msg
+        self.req_manager.response(resp)
 
     def _get_max_session_len(self):
         """get max session len."""
@@ -299,7 +295,7 @@ class Engine:
                 self.scheduler.add_session(session_id)
                 resp_type = ResponseType.SUCCESS
             if resp:
-                self._response(resp_type, req.sender_id, req.req_id)
+                self._response(req.resp, resp_type)
 
     def _on_stop_session(self, reqs: Request, **kwargs):
         """on stop session callback."""
@@ -311,7 +307,7 @@ class Engine:
                 self.scheduler.stop_session(session_id)
                 resp_type = ResponseType.SUCCESS
             if resp:
-                self._response(resp_type, req.sender_id, req.req_id)
+                self._response(req.resp, resp_type)
 
     def _on_end_session(self, reqs: Request, **kwargs):
         """on end session callback."""
@@ -323,11 +319,10 @@ class Engine:
                 self.scheduler.end_session(session_id)
                 resp_type = ResponseType.SUCCESS
             if resp:
-                self._response(resp_type, req.sender_id, req.req_id)
+                self._response(req.resp, resp_type)
 
     def _on_add_message(self, reqs: Request, **kwargs):
         """on add message callback."""
-
         self._msg_preprocess_inque.put_nowait(reqs)
 
     def _add_message(self, que):
@@ -361,8 +356,7 @@ class Engine:
         for req in reqs:
             session_id = req.data['session_id']
             if session_id not in self.scheduler.sessions:
-                self._response(ResponseType.SESSION_NOT_EXIST, req.sender_id,
-                               req.req_id)
+                self._response(req.resp, ResponseType.SESSION_NOT_EXIST)
                 continue
             session_id = req.data['session_id']
             sess = self.scheduler.sessions[session_id]
@@ -396,8 +390,7 @@ class Engine:
                 __update_bad_words(msg)
                 __update_max_new_tokens(msg)
 
-            msg.sender_id = req.sender_id
-            msg.req_id = req.req_id
+            msg.resp = req.resp
 
     @property
     def model_config(self):
@@ -733,16 +726,15 @@ class Engine:
         for idx, msg in enumerate(running):
             if not is_run[idx]:
                 continue
-            token_ids = __get_out_token_ids(next_token_ids[idx], msg,
-                                            stopped[idx])
+            token_ids = msg.all_ids[-msg.num_new_tokens:]
             finish = msg.status == MessageStatus.STOPPED
             if not finish and len(token_ids) == 0:
                 continue
             session_id = msg.session_id
+            resp = msg.resp
             out = InferOutput(
                 session_id=session_id,
-                sender_id=msg.sender_id,
-                req_id=msg.req_id,
+                resp=resp,
                 finish=finish,
                 token_ids=token_ids,
             )
@@ -993,9 +985,8 @@ class Engine:
             """send response."""
             resp_type = (ResponseType.FINISH
                          if out.finish else ResponseType.SUCCESS)
-            self._response(resp_type,
-                           sender_id=out.sender_id,
-                           req_id=out.req_id,
+            self._response(out.resp,
+                           resp_type,
                            data=dict(token_ids=out.token_ids,
                                      logits=out.logits))
 
