@@ -619,7 +619,7 @@ jobs:
       BENCHMARK_REPORT_DIR: /nvme/qa_test_models/benchmark-reports/${{ github.run_id }}
     steps:
       - name: Clone repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v2
         with:
           repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
           ref: ${{github.event.inputs.repo_ref || 'main'}}
