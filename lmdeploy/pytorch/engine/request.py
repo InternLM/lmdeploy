@@ -10,15 +10,6 @@ from lmdeploy.utils import get_logger
 logger = get_logger('lmdeploy')
 
 
-def _raise_exception_on_finish(task: asyncio.Task) -> None:
-    try:
-        task.result()
-    except asyncio.CancelledError:
-        return
-    except Exception as e:
-        logger.exception(f'Engine loop failed with error: {e}')
-
-
 class RequestType(enum.Enum):
     """Request type."""
 
@@ -130,7 +121,7 @@ class RequestSender:
                             sender_id=self.sender_id,
                             event=event,
                             data=None,
-                            err_msg='response has not been received.')
+                            err_msg=None)
             req = Request(type=rtype,
                           sender_id=self.sender_id,
                           data=rdata,
@@ -153,7 +144,14 @@ class RequestSender:
     async def async_recv(self, resp: Response) -> Response:
         """receive response of given request id async."""
         event = resp.event
-        await event.wait()
+        while not event.is_set():
+            try:
+                await asyncio.wait_for(event.wait(), 1)
+            except asyncio.TimeoutError:
+                if self.is_loop_alive():
+                    continue
+                logger.debug('Engine main loop failed.')
+                break
         event.clear()
         return resp
 
@@ -201,7 +199,6 @@ class RequestManager:
             'Please set loop task with manager.start_loop')
         loop_unshielded = event_loop.create_task(self._loop_coro(),
                                                  name='EngineMainLoop')
-        loop_unshielded.add_done_callback(_raise_exception_on_finish)
         self._loop_task = asyncio.shield(loop_unshielded)
         self.requests = asyncio.Queue()
         return self._loop_task
@@ -217,6 +214,10 @@ class RequestManager:
     def start_loop(self, loop: asyncio.Task):
         """start main loop."""
         self._loop_coro = loop
+
+    def stop_loop(self):
+        if self.is_loop_alive():
+            self._loop_task.cancel()
 
     def is_loop_alive(self):
         """check if main loop is alive."""
@@ -282,10 +283,10 @@ class RequestManager:
         else:
             # TODO: send error message
             for req in reqs:
-                resp = Response(ResponseType.HANDLER_NOT_EXIST,
-                                sender_id=req.sender_id,
-                                err_msg=(f'callback for {req_type}'
-                                         ' not exists.'))
+                resp = req.resp
+                resp.type = ResponseType.HANDLER_NOT_EXIST
+                resp.err_msg = (f'callback for {req_type}'
+                                ' not exists.')
                 self.response(resp)
 
     def step(self, **kwargs):
