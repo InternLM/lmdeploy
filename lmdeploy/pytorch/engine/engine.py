@@ -313,7 +313,29 @@ class Engine:
 
     def _on_add_message(self, reqs: Request, **kwargs):
         """on add message callback."""
-        self._msg_preprocess_inque.put_nowait(reqs)
+        for req in reqs:
+            req_data = req.data
+            if req_data.get('input_multimodals', None) is None:
+                continue
+            elif self.input_processor is None:
+                logger.warning('Do not support Multimodal inputs.')
+                continue
+            input_ids = req_data['token_ids']
+            input_multimodals = req_data['input_multimodals']
+            if len(input_multimodals) == 0:
+                req_data['input_multimodals'] = None
+                continue
+            result = self.input_processor.preprocess_input(
+                input_ids, input_multimodals)
+
+            input_ids = result.input_ids
+            input_multimodals = result.input_multimodals
+
+            req_data['token_ids'] = input_ids
+            req_data['input_multimodals'] = input_multimodals
+
+        if len(reqs) > 0:
+            self._add_message(reqs)
 
     def _add_message(self, reqs):
 
@@ -531,11 +553,12 @@ class Engine:
         return stopped, num_appendable_ids
 
     @logging_timer('SamplingLogits', logger)
-    def async_sampling_logits(self, logits: torch.Tensor,
-                              all_ids: torch.Tensor,
-                              guided_input_ids: torch.Tensor,
-                              sampling_inputs: SamplingInputs,
-                              inputs: ModelInputs, ignore_eos: torch.Tensor):
+    async def async_sampling_logits(self, logits: torch.Tensor,
+                                    all_ids: torch.Tensor,
+                                    guided_input_ids: torch.Tensor,
+                                    sampling_inputs: SamplingInputs,
+                                    inputs: ModelInputs,
+                                    ignore_eos: torch.Tensor):
         """sampling logits."""
 
         def __get_last_logits():
@@ -550,7 +573,8 @@ class Engine:
         split_logits = __get_last_logits()
         logits_processor = FusedLogitsProcessor(sampling_inputs, ignore_eos,
                                                 self.tokenizer.model.model)
-        logits = logits_processor(all_ids, guided_input_ids, split_logits)
+        logits = await logits_processor(all_ids, guided_input_ids,
+                                        split_logits)
         next_token_ids = logits_processor.sampling(logits)
 
         return next_token_ids
@@ -770,7 +794,7 @@ class Engine:
             logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
 
             # sampling
-            next_token_ids = self.async_sampling_logits(
+            next_token_ids = await self.async_sampling_logits(
                 logits, all_ids, guided_input_ids, sampling_inputs, inputs,
                 num_ignore_eos > 0)
             num_ignore_eos = num_ignore_eos - 1
@@ -800,38 +824,14 @@ class Engine:
                 __update_inputs(next_token_ids)
 
     @torch.inference_mode()
-    async def _async_loop_preprocess_message(self, inque,
+    async def _async_loop_preprocess_message(self,
                                              forward_event: asyncio.Event):
         """preprocess msg."""
         while True:
-            reqs = await inque.get()
-
             if self.scheduler.has_unfinished():
                 await forward_event.wait()
-
-            for req in reqs:
-                req_data = req.data
-                if req_data.get('input_multimodals', None) is None:
-                    continue
-                elif self.input_processor is None:
-                    logger.warning('Do not support Multimodal inputs.')
-                    continue
-                input_ids = req_data['token_ids']
-                input_multimodals = req_data['input_multimodals']
-                if len(input_multimodals) == 0:
-                    req_data['input_multimodals'] = None
-                    continue
-                result = self.input_processor.preprocess_input(
-                    input_ids, input_multimodals)
-
-                input_ids = result.input_ids
-                input_multimodals = result.input_multimodals
-
-                req_data['token_ids'] = input_ids
-                req_data['input_multimodals'] = input_multimodals
-
-            if len(reqs) > 0:
-                self._add_message(reqs)
+            self.req_manager.step()
+            await asyncio.sleep(0)
 
     @torch.inference_mode()
     async def _async_loop_background(self, in_que: asyncio.Queue,
@@ -997,10 +997,8 @@ class Engine:
                                                  name='MainLoopBackground')
 
         # preprocess task
-        self._msg_preprocess_inque = asyncio.Queue()
         loop_msg_proc = event_loop.create_task(
-            self._async_loop_preprocess_message(self._msg_preprocess_inque,
-                                                forward_event),
+            self._async_loop_preprocess_message(forward_event),
             name='MainLoopPreprocessMessage')
 
         # response task
@@ -1046,18 +1044,11 @@ class Engine:
             in_que.put_nowait((prefill, schedule_output))
             finish = False
             while not finish:
-                if self.req_manager.has_requests():
-                    self.req_manager.step()
                 finish, out = await out_que.get()
-                (next_token_ids, logits, stopped, model_metas, event) = out
-                step_outputs = await self._make_infer_outputs(
-                    next_token_ids, logits, stopped, model_metas, event)
+                step_outputs = await self._make_infer_outputs(*out)
                 resp_que.put_nowait(step_outputs)
 
         while True:
-            if self.req_manager.has_requests():
-                self.req_manager.step()
-
             if not self.scheduler.has_unfinished():
                 await asyncio.sleep(0.01)
                 continue
