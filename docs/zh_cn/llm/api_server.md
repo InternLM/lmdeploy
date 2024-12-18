@@ -263,7 +263,7 @@ curl http://{server_ip}:{server_port}/v1/chat/interactive \
 两步直接启动多机多卡服务。先用下面的代码创建一个启动脚本。然后：
 
 1. 启动代理服务 `lmdeploy serve proxy`。
-2. torchrun 启动脚本 `torchrun --nproc_per_node 2 script.py InternLM/internlm2-chat-1_8b http://{proxy_node_name}:{proxy_node_port}`. **注意**： 多级多卡不要用默认 url `0.0.0.0:8000`，我们需要输入真实ip对应的地址，如：`11.25.34.55:8000`。
+2. torchrun 启动脚本 `torchrun --nproc_per_node 2 script.py InternLM/internlm2-chat-1_8b http://{proxy_node_name}:{proxy_node_port}`. **注意**： 多机多卡不要用默认 url `0.0.0.0:8000`，我们需要输入真实ip对应的地址，如：`11.25.34.55:8000`。
 
 ```python
 import os
