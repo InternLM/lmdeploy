@@ -69,7 +69,7 @@ class EngineChecker(BaseChecker):
             self.log_and_exit(
                 mod_name='Engine',
                 message='thread safe mode is no longer supported.\n'
-                'Read https://github.com/InternLM/lmdeploy/blob/main/docs/en/advance/chat_template.md for more details.',  # noqa: E501
+                'Read https://github.com/InternLM/lmdeploy/blob/main/docs/en/advance/pytorch_multithread.md for more details.',  # noqa: E501
             )
 
         if engine_config.max_batch_size <= 0:
