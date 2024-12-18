@@ -210,9 +210,9 @@ class Attn(Module):
 
         def _repeat(x):
             dim = hidden_dim if kind != 'bias' else 1
-            x = x.t().reshape(-1, head_dim, dim)
-            x = x.repeat(1, self.model.repeat_kv, 1)
-            x = x.reshape(-1, dim).t()
+            x = x.reshape(dim, -1, head_dim)
+            x = x.repeat(1, 1, self.model.repeat_kv)
+            x = x.reshape(dim, -1)
             return x
 
         k, v = map(_repeat, (k, v))
