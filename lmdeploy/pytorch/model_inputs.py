@@ -4,10 +4,19 @@ from dataclasses import dataclass, field, fields
 from typing import Any, Dict, List, Literal
 
 import torch
+from torch import distributed as dist
 
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.config import ModelConfig
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
+
+
+def _broadcast_tensor(value: torch.Tensor, src: int = 0, device: str = 'cuda'):
+    """broadcast tensor."""
+    if value.device.type == 'meta':
+        value = torch.empty_like(value, device=device)
+    dist.broadcast(value, src)
+    return value
 
 
 @dataclass
@@ -36,10 +45,45 @@ class VisionModelInputs:
             elif k == 'input_embeddings':
                 v = [[e.to(device) for e in li] for li in v]
             elif k == 'input_multimodals':
+                new_v = []
                 for mm_datas in v:
+                    new_mm_datas = dict()
                     for modal_type, data in mm_datas.items():
                         data = [d.to_device(device) for d in data]
-                        mm_datas[modal_type] = data
+                        new_mm_datas[modal_type] = data
+                    new_v.append(new_mm_datas)
+                v = new_v
+            out_dict[k] = v
+
+        return VisionModelInputs(**out_dict)
+
+    def broadcast(self):
+        """broadcast inputs.
+
+        Do `dist.broadcast_object_list(inputs.to_device('meta'))`
+        before broadcast tensors.
+        """
+        out_dict = dict()
+        for f in fields(self):
+            k = f.name
+            v = getattr(self, k)
+            if v is None:
+                continue
+            if isinstance(v, torch.Tensor):
+                v = _broadcast_tensor(v)
+            elif k == 'input_embedding_ranges':
+                v = [_broadcast_tensor(e) for e in v]
+            elif k == 'input_embeddings':
+                v = [[_broadcast_tensor(e) for e in li] for li in v]
+            elif k == 'input_multimodals':
+                new_v = []
+                for mm_datas in v:
+                    new_mm_datas = dict()
+                    for modal_type, data in mm_datas.items():
+                        data = [d.broadcast() for d in data]
+                        new_mm_datas[modal_type] = data
+                    new_v.append(new_mm_datas)
+                v = new_v
             out_dict[k] = v
 
         return VisionModelInputs(**out_dict)
@@ -198,6 +242,24 @@ class ModelInputs:
                 v = v.to(device)
             elif isinstance(v, VisionModelInputs):
                 v = v.to_device(device)
+            out_dict[k] = v
+
+        return ModelInputs(**out_dict)
+
+    def broadcast(self):
+        """broadcast inputs.
+
+        Do `dist.broadcast_object_list(inputs.to_device('meta'))`
+        before broadcast tensors.
+        """
+        out_dict = dict()
+        for f in fields(self):
+            k = f.name
+            v = getattr(self, k)
+            if isinstance(v, torch.Tensor):
+                v = _broadcast_tensor(v)
+            elif isinstance(v, VisionModelInputs):
+                v = v.broadcast()
             out_dict[k] = v
 
         return ModelInputs(**out_dict)
