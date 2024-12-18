@@ -80,10 +80,11 @@ class InternVLVisionModel(VisonModel):
 
     def __init__(self,
                  model_path: str,
+                 with_llm: bool = False,
                  max_memory: Dict[int, int] = None,
                  hf_config: AutoConfig = None,
                  backend: str = ''):
-        super().__init__(model_path, max_memory, hf_config, backend)
+        super().__init__(model_path, with_llm, max_memory, hf_config, backend)
 
     def build_preprocessor(self):
         self.config = self.hf_config
@@ -124,13 +125,16 @@ class InternVLVisionModel(VisonModel):
             (force_image_size // patch_size)**2 * (downsample_ratio**2))
 
     def build_model(self):
-        """Load model."""
+        """build the vision part of a VLM model when backend is turbomind, or
+        load the whole VLM model when `self.with_llm==True`"""
         from accelerate import init_empty_weights
         with init_empty_weights():
             # transformers below 4.37.0 may raise error about flash_attn
             self.config.llm_config.attn_implementation = 'eager'
             model = AutoModel.from_config(self.config, trust_remote_code=True)
-            del model.language_model
+            self.vl_model = model
+            if not self.with_llm:
+                del model.language_model
 
         model.half()
         from accelerate import load_checkpoint_and_dispatch
@@ -138,7 +142,7 @@ class InternVLVisionModel(VisonModel):
             load_checkpoint_and_dispatch(
                 model=model,
                 checkpoint=self.model_path,
-                device_map='auto',
+                device_map='auto' if not self.with_llm else {'': 'cpu'},
                 max_memory=self.max_memory,
                 no_split_module_classes=['InternVisionEncoderLayer'],
                 dtype=torch.half)

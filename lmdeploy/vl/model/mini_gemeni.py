@@ -178,6 +178,8 @@ class MiniGeminiVisionModel(VisonModel):
         pass
 
     def build_model(self):
+        """build the vision part of a VLM model when backend is turbomind, or
+        load the whole VLM model when `self.with_llm==True`"""
         check_mini_gemini_install()
         # empty init
         from accelerate import init_empty_weights
@@ -201,10 +203,12 @@ class MiniGeminiVisionModel(VisonModel):
                 vision_tower.load_model()
                 vision_tower_aux = model.get_vision_tower_aux()
                 vision_tower_aux.load_model()
-                del model.lm_head
-                del model.model.embed_tokens
-                del model.model.layers
-                del model.model.norm
+                self.vl_model = model
+                if not self.with_llm:
+                    del model.lm_head
+                    del model.model.embed_tokens
+                    del model.model.layers
+                    del model.model.norm
 
         from accelerate.utils import get_balanced_memory, infer_auto_device_map
         max_memory = get_balanced_memory(
@@ -230,7 +234,7 @@ class MiniGeminiVisionModel(VisonModel):
             load_checkpoint_and_dispatch(
                 model=model,
                 checkpoint=self.model_path,
-                device_map=device_map,
+                device_map=device_map if not self.with_llm else {'': 'cpu'},
                 no_split_module_classes=['CLIPEncoderLayer', 'ConvNeXtStage'],
                 dtype=torch.half)
 

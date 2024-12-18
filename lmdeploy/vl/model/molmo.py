@@ -25,27 +25,30 @@ class MolmoVisionModel(VisonModel):
                                                        device_map='auto')
 
     def build_model(self):
-        """Load model."""
+        """build the vision part of a VLM model when backend is turbomind, or
+        load the whole VLM model when `self.with_llm==True`"""
         from accelerate import init_empty_weights, load_checkpoint_and_dispatch
         with init_empty_weights():
             model = AutoModelForCausalLM.from_config(self.hf_config,
                                                      trust_remote_code=True)
 
-            # Remove nn modules other than embedding from the LLM model
-            for key in ['emb_drop', 'ln_f', 'blocks', 'ff_out']:
-                del model.model.transformer[key]
+            self.vl_model = model
+            if not self.with_llm:
+                # Remove nn modules other than embedding from the LLM model
+                for key in ['emb_drop', 'ln_f', 'blocks', 'ff_out']:
+                    del model.model.transformer[key]
             self.token_embedding = model.model.transformer.wte
 
         with disable_logging():
-            load_checkpoint_and_dispatch(model=model,
-                                         checkpoint=self.model_path,
-                                         device_map='auto',
-                                         max_memory=self.max_memory,
-                                         no_split_module_classes=[
-                                             'ResidualAttentionBlock',
-                                             'Embedding'
-                                         ],
-                                         dtype=torch.half)
+            load_checkpoint_and_dispatch(
+                model=model,
+                checkpoint=self.model_path,
+                device_map='auto' if not self.with_llm else {'': 'cpu'},
+                max_memory=self.max_memory,
+                no_split_module_classes=[
+                    'ResidualAttentionBlock', 'Embedding'
+                ],
+                dtype=torch.half)
 
         # We need eval mode to freeze the weights in model, thus,
         # avoid randomness in inference.
