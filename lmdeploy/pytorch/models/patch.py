@@ -251,6 +251,10 @@ def add_adapters(model: torch.nn.Module,
         ranks, scalings = get_ranks_and_scalings(target_name,
                                                  adapter_cfgs,
                                                  device=device)
+        # split in case target_name has '.' like 'attention.wo'
+        # which cannot be used as name of a module
+        # and it's not aligned with key in model.packed_modules_mapping
+        target_name = target_name.split('.')[-1]
         found_mods, pack_idx = find_all_target(model, target_name)
         sum_rank = ranks.sum().item()
 
