@@ -46,6 +46,7 @@ struct MoeParam {
         kFused
     } method;
 
+    bool  enable_ep;
     int   experts_per_token;
     int   inter_size;
     bool  norm_topk_prob;
