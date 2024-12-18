@@ -124,7 +124,7 @@ class VLAsyncEngine(AsyncEngine):
         def _inner_call(i, in_messages, out_messages):
             role = in_messages[i]['role']
             content = in_messages[i]['content']
-            assert role in ['sytem', 'user', 'assistant'], \
+            assert role in ['system', 'user', 'assistant'], \
                 f'unsupported role "{role}"'
             if role != 'user' or isinstance(content, str):
                 # the content is a user's prompt or an assistant's prompt,
