@@ -9,12 +9,11 @@ from ..backends.attention import AttentionMetadata
 from .utils import get_distribute_size
 
 
-def _update_num_heads(num_heads: int, num_kv_heads: int, replicate_kv: bool):
+def _update_num_heads(num_heads: int, num_kv_heads: int):
     """update heads."""
     world_size, rank = get_world_rank()
     num_heads = get_distribute_size(num_heads, world_size, rank)
-    if not replicate_kv:
-        num_kv_heads = get_distribute_size(num_kv_heads, world_size, rank)
+    num_kv_heads = get_distribute_size(num_kv_heads, world_size, rank)
     return num_heads, num_kv_heads
 
 
@@ -31,7 +30,6 @@ class Attention(nn.Module):
         alibi: bool = False,
         sliding_window: int = None,
         logit_softcapping: float = None,
-        replicate_kv: bool = False,
         causal: bool = True,
         **kwargs,
     ):
@@ -40,8 +38,7 @@ class Attention(nn.Module):
             num_kv_heads = num_heads
         if v_head_size is None:
             v_head_size = head_size
-        num_heads, num_kv_heads = _update_num_heads(num_heads, num_kv_heads,
-                                                    replicate_kv)
+        num_heads, num_kv_heads = _update_num_heads(num_heads, num_kv_heads)
 
         layer_backend = get_backend()
         impl_builder = layer_backend.get_layer_impl_builder(
@@ -99,7 +96,6 @@ class FlashAttention(nn.Module):
         causal: bool = True,
         sliding_window: int = None,
         logit_softcapping: float = None,
-        replicate_kv: bool = False,
         **kwargs,
     ):
         super().__init__()
@@ -107,8 +103,7 @@ class FlashAttention(nn.Module):
             num_kv_heads = num_heads
         if v_head_dim is None:
             v_head_dim = head_dim
-        num_heads, num_kv_heads = _update_num_heads(num_heads, num_kv_heads,
-                                                    replicate_kv)
+        num_heads, num_kv_heads = _update_num_heads(num_heads, num_kv_heads)
 
         layer_backend = get_backend()
 
