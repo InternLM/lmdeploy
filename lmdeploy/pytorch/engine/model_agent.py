@@ -756,7 +756,7 @@ def build_model_agent(model_path: str,
         custom_module_map (str): customized nn module map
     """
     model_config = ModelConfig.from_pretrained(
-        model_path, trust_remote_code=trust_remote_code, dtype=dtype)
+        model_path, trust_remote_code=trust_remote_code, dtype=dtype, tp=tp)
     model_config.custom_module_map = custom_module_map
     if tp == 1:
         model_agent = BaseModelAgent(model_path,
