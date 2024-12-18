@@ -258,6 +258,50 @@ curl http://{server_ip}:{server_port}/v1/chat/interactive \
   }'
 ```
 
+## 同时启动多个 api_server
+
+两步直接启动多机多卡服务。先用下面的代码创建一个启动脚本。然后：
+
+1. 启动代理服务 `lmdeploy serve proxy`。
+2. torchrun 启动脚本 `torchrun --nproc_per_node 2 script.py InternLM/internlm2-chat-1_8b http://{proxy_node_name}:{proxy_node_port}`. **注意**： 多机多卡不要用默认 url `0.0.0.0:8000`，我们需要输入真实ip对应的地址，如：`11.25.34.55:8000`。
+
+```python
+import os
+import socket
+from typing import List, Literal
+import fire
+def get_host_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('8.8.8.8', 80))
+        ip = s.getsockname()[0]
+    finally:
+        s.close()
+    return ip
+def main(model_path: str,
+         tp: int=1,
+         proxy_url: str = 'http://0.0.0.0:8000',
+         port: int = 23333,
+         backend: Literal['turbomind', 'pytorch']='turbomind'):
+    local_rank = int(os.environ.get('LOCAL_RANK', -1))
+    world_size = int(os.environ.get('WORLD_SIZE', -1))
+    local_ip = get_host_ip()
+    if isinstance(port, List):
+        assert len(port) == world_size
+        port = port[local_rank]
+    else:
+        port += local_rank * 10
+    if (world_size-local_rank)%tp==0:
+        rank_list = ','.join([str(local_rank+i) for i in range(tp)])
+        command = f'CUDA_VISIBLE_DEVICES={rank_list} lmdeploy serve api_server {model_path} '\
+                  f'--server-name {local_ip} --server-port {port} --tp {tp} '\
+                  f'--proxy-url {proxy_url} --backend {backend}'
+        print(f'running command: {command}')
+        os.system(command)
+if __name__ == '__main__':
+    fire.Fire(main)
+```
+
 ## 接入 WebUI
 
 LMDeploy 提供 gradio 和 [OpenAOE](https://github.com/InternLM/OpenAOE) 两种方式，为 api_server 接入 WebUI。
