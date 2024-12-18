@@ -47,13 +47,8 @@ class DlinferFusedMoEImpl(FusedMoEImpl):
                 down_weights: torch.Tensor,
                 expert_list: List[int] = None):
         """forward."""
-        return fused_moe(hidden_states,
-                         gate_up_weights,
-                         down_weights,
-                         topk_weights=topk_weights,
-                         topk_ids=topk_ids,
-                         topk=self.top_k,
-                         renormalize=self.renormalize)
+        return fused_moe(hidden_states, gate_up_weights, down_weights,
+                         topk_weights, topk_ids, self.top_k, self.renormalize)
 
 
 class DlinferFusedMoEBuilder(FusedMoEBuilder):
