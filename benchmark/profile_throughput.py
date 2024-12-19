@@ -345,12 +345,14 @@ def main():
     requests = sample_requests(args.dataset, args.num_prompts,
                                engine.tokenizer)
 
-    engine.process_request(requests,
-                           temperature=args.temperature,
-                           top_p=args.top_p,
-                           top_k=args.top_k,
-                           concurrency=args.concurrency,
-                           stream_output=True)
+    engine.process_request(
+        requests,
+        temperature=args.temperature,
+        top_p=args.top_p,
+        top_k=args.top_k,
+        concurrency=args.concurrency
+        if args.concurrency < args.num_prompts else args.num_prompts,
+        stream_output=True)
 
 
 if __name__ == '__main__':
