@@ -187,6 +187,9 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     bool*  is_finished = inputs->getPtr<bool>("finished");
     float* rope_theta  = inputs->getPtr<float>("rope_theta");
 
+    T*   cos_sin = inputs->getPtr<T>("cos_sin", nullptr);
+    int* q2p     = inputs->getPtr<int>("q2p");
+
     void** block_ptrs     = outputs->getPtr<void*>("block_ptrs");
     int*   cu_block_count = inputs->getPtr<int>("cu_block_counts");
 
@@ -310,53 +313,12 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
             params.inv_sqrt_dh /= std::sqrt((float)params.size_per_head);
         }
 
-        params.rotary_embedding_dim    = param_.rotary_embedding_dim;
-        params.rotary_embedding_base   = param_.rotary_embedding_base;
-        params.max_position_embeddings = param_.max_position_embeddings;
-        params.rope_scaling_factor     = param_.rope_scaling_factor;
-        params.attention_scaling       = 1.0;
-        params.rope_ti_scale           = 1.f;
-        if (param_.rope_scaling_type == "linear") {
-            params.rope_ti_scale /= param_.rope_scaling_factor;
-        }
-        if (param_.rope_scaling_type == "llama3") {
-            const double PI                   = 3.14159265358979323846;
-            float        inv_diff_freq_factor = 1.0 / (param_.high_freq_factor - param_.low_freq_factor);
-            params.llama3_inv_scaling_factor  = 1.0 / param_.rope_scaling_factor;
-            params.llama3_alpha = param_.original_max_position_embeddings / (2 * PI) * inv_diff_freq_factor;
-            params.llama3_beta  = param_.low_freq_factor * inv_diff_freq_factor;
-        }
-        if (param_.rope_scaling_type == "yarn") {
-            const double PI                  = 3.14159265358979323846;
-            auto         find_correction_dim = [&](float num_rotations) {
-                return (param_.rotary_embedding_dim
-                        * std::log(param_.max_position_embeddings / (num_rotations * 2 * PI)))
-                       / (2 * std::log(param_.rotary_embedding_base));
-            };
-            auto find_correction_range = [&](float low_rot, float high_rot, float& low, float& high) {
-                low  = std::floor(find_correction_dim(low_rot));
-                high = std::ceil(find_correction_dim(high_rot));
-                low  = std::max(low, 0.f);
-                high = std::min(high, param_.rotary_embedding_dim - 1.f);
-            };
-            float low, high;
-            find_correction_range(param_.beta_fast, param_.beta_slow, low, high);
-            // https://github.com/huggingface/transformers/blob/6c3f168b36882f0beebaa9121eafa1928ba29633/src/transformers/modeling_rope_utils.py#L216
-            if (low == high) {
-                high += 0.001f;
-            }
-            params.yarn_ramp_inv_factor_div_2   = 1.0 / (high - low) / 2.0;
-            params.yarn_ramp_inv_factor_mul_min = 1.0 / (high - low) * low;
-            params.yarn_inv_scaling_factor      = (1 - 1.0 / param_.rope_scaling_factor);
-            if (param_.attention_factor < 0) {
-                params.attention_scaling = 0.1 * std::log(param_.rope_scaling_factor) + 1.0;
-            }
-            else {
-                params.attention_scaling = param_.attention_factor;
-            }
-        }
-
-        params.use_logn_attn = param_.use_logn_attn;
+        // rope
+        params.rotary_embedding_dim    = param_.rope.dim;
+        params.max_position_embeddings = param_.rope.max_position_embeddings;
+        params.cos_sin                 = cos_sin;
+        params.q2p                     = q2p;
+        params.use_logn_attn           = param_.use_logn_attn;
 
         // Decoding use only for now
         FT_CHECK(barriers_);
