@@ -202,7 +202,7 @@ def gemm_fp8(A: Tensor,
     BLOCK_K = max(group_ak, group_bk)
     BLOCK_N = min(64, group_bn)
     num_warps = 4
-    num_stages = 4
+    num_stages = 3
     _gemm_fp8_kernel[grid](
         A,
         A_scale,
