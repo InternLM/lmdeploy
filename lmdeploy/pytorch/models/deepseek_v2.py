@@ -4,6 +4,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import torch
 import torch.distributed as dist
+import torch.nn.functional as F
 from torch import nn
 
 from lmdeploy.pytorch.distributed import get_world_rank
@@ -270,6 +271,104 @@ class DeepseekV2Attention(nn.Module):
         return attn_output
 
 
+class MoEGate(nn.Module):
+    """Deepseek Gate."""
+
+    def __init__(self,
+                 config: Any,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        self.config = config
+        self.top_k = config.num_experts_per_tok
+        self.n_routed_experts = config.n_routed_experts
+        self.routed_scaling_factor = config.routed_scaling_factor
+        self.scoring_func = config.scoring_func
+        self.alpha = config.aux_loss_alpha
+        self.seq_aux = config.seq_aux
+        self.topk_method = config.topk_method
+        self.n_group = config.n_group
+        self.topk_group = config.topk_group
+        self.norm_topk_prob = config.norm_topk_prob
+        self.renormalize = self.top_k > 1 and self.norm_topk_prob
+
+        # topk selection algorithm
+        self.norm_topk_prob = config.norm_topk_prob
+        self.gating_dim = config.hidden_size
+        self.weight = nn.Parameter(
+            torch.empty((self.n_routed_experts, self.gating_dim),
+                        dtype=dtype,
+                        device=device))
+        if self.topk_method == 'noaux_tc':
+            self.e_score_correction_bias = nn.Parameter(
+                torch.empty((self.n_routed_experts, ),
+                            dtype=dtype,
+                            device=device))
+        self.softmax_topk = SoftmaxTopK(self.top_k)
+
+    def _compute_scores(self, logits: torch.Tensor):
+        """compute scores."""
+        if self.scoring_func == 'softmax':
+            scores = logits.softmax(dim=-1, dtype=torch.float32)
+        elif self.scoring_func == 'sigmoid':
+            scores = logits.sigmoid()
+        else:
+            raise NotImplementedError('insupportable scoring function '
+                                      f'for MoE gating: {self.scoring_func}')
+        return scores
+
+    def forward(self, hidden_states: torch.Tensor):
+        """forward."""
+        sequence_length, hidden_dim = hidden_states.shape
+        router_logits = F.linear(hidden_states, self.weight)
+
+        if self.topk_method == 'greedy':
+            topk_weight, topk_idx = self.softmax_topk(router_logits)
+        elif self.topk_method == 'group_limited_greedy':
+            scores = self._compute_scores(router_logits)
+            grouped_logits = scores.unflatten(-1, (self.n_group, -1))
+            group_scores = (grouped_logits.max(-1).values)
+            group_idx = torch.topk(group_scores,
+                                   k=self.topk_group,
+                                   dim=-1,
+                                   sorted=False)[1]  # [n, top_k_group]
+            group_mask = torch.zeros_like(group_scores)  # [n, n_group]
+            group_mask.scatter_(1, group_idx, 1)  # [n, n_group]
+            group_mask = ~group_mask.bool()[..., None]
+            grouped_logits = grouped_logits.masked_fill(group_mask, 0.0)
+            scores = grouped_logits.flatten(1, 2)
+            topk_weight, topk_idx = self.softmax_topk(scores)
+        elif self.topk_method == 'noaux_tc':
+            scores = self._compute_scores(router_logits)
+            scores_for_choice = scores.view(
+                sequence_length, -1) + self.e_score_correction_bias[None]
+            group_scores = (scores_for_choice.view(
+                sequence_length, self.n_group,
+                -1).topk(2, dim=-1)[0].sum(dim=-1))  # [n, n_group]
+            group_idx = torch.topk(group_scores,
+                                   k=self.topk_group,
+                                   dim=-1,
+                                   sorted=False)[1]  # [n, top_k_group]
+            group_mask = torch.zeros_like(group_scores)  # [n, n_group]
+            group_mask.scatter_(1, group_idx, 1)  # [n, n_group]
+            score_mask = (group_mask.unsqueeze(-1).expand(
+                sequence_length, self.n_group,
+                self.n_routed_experts // self.n_group).reshape(
+                    sequence_length, -1))  # [n, e]
+            tmp_scores = scores_for_choice.masked_fill(~score_mask.bool(),
+                                                       0.0)  # [n, e]
+            _, topk_idx = torch.topk(tmp_scores,
+                                     k=self.top_k,
+                                     dim=-1,
+                                     sorted=False)
+            topk_weight = scores.gather(1, topk_idx)
+        else:
+            raise RuntimeError(f'Unsupported topk_method: {self.topk_method}')
+        if not self.renormalize:
+            topk_weight = topk_weight * self.routed_scaling_factor
+        return topk_weight, topk_idx
+
+
 class DeepseekV2MoE(nn.Module):
     """Deepseek v2 MoE."""
 
@@ -289,16 +388,7 @@ class DeepseekV2MoE(nn.Module):
         self.n_group = config.n_group
         self.topk_group = config.topk_group
 
-        self.gate = build_rowwise_linear(
-            self.hidden_dim,
-            self.num_experts,
-            bias=False,
-            dtype=dtype,
-            device=device,
-            is_tp=False,
-        )
-
-        self.softmax_topk = SoftmaxTopK(self.top_k)
+        self.gate = MoEGate(config, dtype=dtype, device=device)
 
         self.experts = build_fused_moe(
             self.hidden_dim,
@@ -333,27 +423,8 @@ class DeepseekV2MoE(nn.Module):
         """forward."""
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
-        router_logits = self.gate(hidden_states)
+        topk_weights, topk_ids = self.gate(hidden_states)
 
-        if self.topk_method == 'greedy':
-            topk_weights, topk_ids = self.softmax_topk(router_logits)
-        elif self.topk_method == 'group_limited_greedy':
-            grouped_logits = router_logits.unflatten(-1, (self.n_group, -1))
-            group_scores = (grouped_logits.max(-1).values)
-            group_idx = torch.topk(group_scores,
-                                   k=self.topk_group,
-                                   dim=-1,
-                                   sorted=False)[1]  # [n, top_k_group]
-            group_mask = torch.zeros_like(group_scores)  # [n, n_group]
-            group_mask.scatter_(1, group_idx, 1)  # [n, n_group]
-            group_mask = ~group_mask.bool()[..., None]
-            grouped_logits = grouped_logits.masked_fill(group_mask, 0.0)
-            router_logits = grouped_logits.flatten(1, 2)
-            topk_weights, topk_ids = self.softmax_topk(router_logits)
-        else:
-            raise RuntimeError(f'Unsupported topk_method: {self.topk_method}')
-        if not self.renormalize:
-            topk_weights = topk_weights * self.routed_scaling_factor
         out_states = self.experts(
             hidden_states,
             topk_weights,
