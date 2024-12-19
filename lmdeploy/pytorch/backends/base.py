@@ -28,6 +28,7 @@ class OpType(Enum):
     LinearW4A16 = auto()
     SoftmaxTopK = auto()
     FusedMoE = auto()
+    FusedMoEW8A8 = auto()
 
 
 class OpsBackend(ABC):

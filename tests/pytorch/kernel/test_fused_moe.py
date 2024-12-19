@@ -250,3 +250,54 @@ class TestFusedMoe:
                            topk=top_k,
                            renormalize=renormalize)
         torch.testing.assert_close(output, gt, atol=1e-3, rtol=1e-3)
+
+
+class TestFusedMoeW8A8(TestFusedMoe):
+
+    @pytest.fixture
+    def quant_states(self, hidden_states):
+        from lmdeploy.pytorch.kernels.cuda.w8a8_triton_kernels import \
+            per_token_quant_int8
+        states_i8, states_scale = per_token_quant_int8(hidden_states, 1e-7)
+        yield states_i8, states_scale
+
+    def quant_weight(self, w):
+        from lmdeploy.pytorch.kernels.cuda.w8a8_triton_kernels import \
+            per_channel_quant
+        num_experts, num_outs, _ = w.shape
+        w = w.flatten(0, -2)
+        w_i8, w_scale = per_channel_quant(w, 8, torch.int8)
+        w_i8 = w_i8.view(num_experts, num_outs, -1)
+        w_scale = w_scale.view(num_experts, num_outs, -1)
+        return w_i8, w_scale
+
+    @pytest.fixture
+    def quant_w1(self, w1):
+        w_i8, w_scale = self.quant_weight(w1)
+        yield w_i8, w_scale
+
+    @pytest.fixture
+    def quant_w2(self, w2):
+        w_i8, w_scale = self.quant_weight(w2)
+        yield w_i8, w_scale
+
+    @torch.inference_mode()
+    def test_fused_moe(self, quant_states, quant_w1, quant_w2, topk_weights,
+                       topk_idx, top_k, renormalize, gt):
+        from lmdeploy.pytorch.kernels.cuda.w8a8_fused_moe import fused_moe_w8a8
+        state_i8, state_scale = quant_states
+        w1_i8, w1_scale = quant_w1
+        w2_i8, w2_scale = quant_w2
+
+        output = fused_moe_w8a8(state_i8,
+                                state_scale,
+                                w1_i8,
+                                w1_scale,
+                                w2_i8,
+                                w2_scale,
+                                topk_weights=topk_weights,
+                                topk_ids=topk_idx,
+                                topk=top_k,
+                                out_dtype=torch.float16,
+                                renormalize=renormalize)
+        torch.testing.assert_close(output, gt, atol=5e-3, rtol=1e-3)
