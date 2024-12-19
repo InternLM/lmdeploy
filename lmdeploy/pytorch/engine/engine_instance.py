@@ -43,8 +43,8 @@ async def async_try_add_session(req_sender: RequestSender, session_id: int):
 
 async def async_end(req_sender: RequestSender, session_id: int):
     """End the given session."""
-    await req_sender.async_send_async(
-        RequestType.END_SESSION, dict(session_id=session_id, response=False))
+    req_sender.send_async(RequestType.END_SESSION,
+                          dict(session_id=session_id, response=False))
 
 
 async def async_cancel(req_sender: RequestSender, session_id: int):
@@ -140,9 +140,8 @@ class EngineInstance:
             return
         gen_config = gen_config or GenerationConfig()
         sampling_param = SamplingParam.from_gen_config(gen_config=gen_config)
-        await self.req_sender.async_send_async(
-            RequestType.ADD_SESSION, dict(session_id=session_id,
-                                          response=False))
+        self.req_sender.send_async(RequestType.ADD_SESSION,
+                                   dict(session_id=session_id, response=False))
         msg = dict(
             token_ids=input_ids,
             session_id=session_id,
@@ -150,20 +149,16 @@ class EngineInstance:
             adapter_name=adapter_name,
             input_multimodals=multimodal,
         )
-        req_id = await self.req_sender.async_send_async(
-            RequestType.ADD_MESSAGE, msg)
+        resp = self.req_sender.send_async(RequestType.ADD_MESSAGE, msg)
 
-        token_ids = []
         while True:
-            resp = await self.req_sender.async_recv(req_id)
+            resp = await self.req_sender.async_recv(resp)
 
-            if resp.req_id != req_id:
-                continue
             if resp.type == ResponseType.SUCCESS:
-                token_ids += resp.data['token_ids']
+                token_ids = resp.data['token_ids'].tolist()
                 yield EngineOutput(resp.type, token_ids, len(token_ids))
             elif resp.type == ResponseType.FINISH:
-                token_ids += resp.data['token_ids']
+                token_ids = resp.data['token_ids'].tolist()
                 yield EngineOutput(resp.type, token_ids, len(token_ids))
                 break
             else:
@@ -240,39 +235,7 @@ class EngineInstance:
                 except StopAsyncIteration:
                     break
 
-        if not self.req_sender.is_thread_safe():
-            yield from __call_async()
-            return
-
-        gen_config = gen_config or GenerationConfig()
-        sampling_param = SamplingParam.from_gen_config(gen_config=gen_config)
-        self.req_sender.send_async(RequestType.ADD_SESSION,
-                                   dict(session_id=session_id, response=False))
-        msg = dict(
-            token_ids=input_ids,
-            session_id=session_id,
-            sampling_param=sampling_param,
-            adapter_name=adapter_name,
-            input_multimodals=multimodal,
-        )
-        req_id = self.req_sender.send_async(RequestType.ADD_MESSAGE, msg)
-
-        token_ids = []
-        while True:
-            resp = self.req_sender.recv(req_id)
-
-            if resp.req_id != req_id:
-                continue
-            if resp.type == ResponseType.SUCCESS:
-                token_ids += resp.data['token_ids']
-                yield EngineOutput(resp.type, token_ids, len(token_ids))
-            elif resp.type == ResponseType.FINISH:
-                token_ids += resp.data['token_ids']
-                yield EngineOutput(resp.type, token_ids, len(token_ids))
-                break
-            else:
-                yield EngineOutput(resp.type, [], 0)
-                break
+        yield from __call_async()
 
     def infer(self,
               session_id: int,
@@ -365,9 +328,9 @@ class EngineInstance:
                            return_logits=True)
                 add_msgs.append(msg)
             req_types = [RequestType.ADD_MESSAGE] * batch_size
-            req_ids = self.req_sender.batched_send_async(req_types,
-                                                         data=add_msgs)
-            return req_ids
+            resps = self.req_sender.batched_send_async(req_types,
+                                                       data=add_msgs)
+            return resps
 
         if steps is not None:
             assert batch_size == len(steps)
@@ -384,21 +347,14 @@ class EngineInstance:
                                      dict(session_id=sid))
                 self._try_add_session(sid)
 
-        req_ids = __add_messages(session_ids, input_ids, adapter_names,
-                                 multimodal)
-        req_idx_map = dict(zip(req_ids, range(len(req_ids))))
+        resps = __add_messages(session_ids, input_ids, adapter_names,
+                               multimodal)
 
-        finish_count = batch_size
-        ret = [None] * batch_size
-        while finish_count > 0:
-            resp = self.req_sender.recv_any()
-            if resp.req_id not in req_ids:
-                continue
-
+        ret = []
+        for resp in resps:
+            resp = self.req_sender.recv(resp)
             assert resp.type == ResponseType.FINISH
-            idx = req_idx_map[resp.req_id]
-            ret[idx] = resp.data['logits']
-            finish_count -= 1
+            ret.append(resp.data['logits'])
 
         ret = pad_sequence(ret, True)
 

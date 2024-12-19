@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import asyncio
 import json
 from dataclasses import asdict, dataclass
 from typing import Dict, List, Optional, Tuple
@@ -298,9 +299,15 @@ class FusedLogitsProcessor(LogitsWarper):
         self.ignore_eos = ignore_eos
         self.tokenizer = tokenizer
 
-    def __call__(self, all_ids: torch.LongTensor,
-                 guided_input_ids: torch.LongTensor,
-                 scores: torch.FloatTensor) -> torch.FloatTensor:
+    async def _wait_stream_once(self):
+        """wait stream once."""
+        stream = torch.cuda.current_stream()
+        if not stream.query():
+            await asyncio.sleep(0)
+
+    async def __call__(self, all_ids: torch.LongTensor,
+                       guided_input_ids: torch.LongTensor,
+                       scores: torch.FloatTensor) -> torch.FloatTensor:
         r"""
         Args:
             all_ids (torch.LongTensor): All the token ids.
@@ -320,6 +327,7 @@ class FusedLogitsProcessor(LogitsWarper):
 
         custom_logits_processors = self.sampling_inputs.logits_processors
         if any(custom_logits_processors):
+            await self._wait_stream_once()
             scores = _apply_custom_logits_processors(custom_logits_processors,
                                                      all_ids, scores)
 
@@ -343,8 +351,10 @@ class FusedLogitsProcessor(LogitsWarper):
             stop_mask = torch.where(self.ignore_eos[:, None], stop_mask, False)
             scores = _process_bad_words_(scores, stop_words, stop_mask)
 
-        scores = _guided_sampling(sampling_inputs.response_formats, scores,
-                                  guided_input_ids, self.tokenizer)
+        if guided_input_ids is not None:
+            await self._wait_stream_once()
+            scores = _guided_sampling(sampling_inputs.response_formats, scores,
+                                      guided_input_ids, self.tokenizer)
         return scores
 
     @torch.inference_mode()
