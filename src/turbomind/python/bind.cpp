@@ -12,10 +12,9 @@
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 
-#include "src/turbomind/models/llama/Request.h"
 #include "src/turbomind/python/dlpack.h"
 #include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
-#include "src/turbomind/triton_backend/model_request.h"
+#include "src/turbomind/engine/model_request.h"
 #include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -281,6 +280,26 @@ static void safe_memcpy(void* dst, const void* src, size_t size)
     }
 }
 
+namespace {
+
+struct ScopedGIL {
+    ScopedGIL(const ScopedGIL&)            = delete;
+    ScopedGIL& operator=(const ScopedGIL&) = delete;
+    ScopedGIL(ScopedGIL&&)                 = delete;
+    ScopedGIL& operator=(ScopedGIL&&)      = delete;
+    ScopedGIL()
+    {
+        state = PyGILState_Ensure();
+    }
+    ~ScopedGIL()
+    {
+        PyGILState_Release(state);
+    }
+    PyGILState_STATE state;
+};
+
+}  // namespace
+
 PYBIND11_MODULE(_turbomind, m)
 {
     // nccl param
@@ -292,25 +311,25 @@ PYBIND11_MODULE(_turbomind, m)
     (void)py::class_<ft::AbstractCustomComm, std::shared_ptr<ft::AbstractCustomComm>>(m, "AbstractCustomComm");
 
     py::class_<ft::SessionParam>(m, "SessionParam")
-        .def(py::init([](uint64_t id, int step, bool start, bool end, bool stop) {
+        .def(py::init([](uint64_t id, int step, bool start, bool end) {
+                 if (!start && end) {
+                     throw std::logic_error("unsupported arguments: start=false, end=true");
+                 }
                  ft::SessionParam param{};
                  param.id         = id;
                  param.step       = step;
                  param.start_flag = start;
                  param.end_flag   = end;
-                 param.stop_flag  = stop;
                  return param;
              }),
              "id"_a,
              "step"_a,
              "start"_a,
-             "end"_a,
-             "stop"_a)
+             "end"_a)
         .def_readwrite("id", &ft::SessionParam::id)
         .def_readwrite("step", &ft::SessionParam::step)
         .def_readwrite("start", &ft::SessionParam::start_flag)
-        .def_readwrite("end", &ft::SessionParam::end_flag)
-        .def_readwrite("stop", &ft::SessionParam::stop_flag);
+        .def_readwrite("end", &ft::SessionParam::end_flag);
 
     py::class_<ft::GenerationConfig>(m, "GenerationConfig")
         .def(py::init())
@@ -480,23 +499,15 @@ PYBIND11_MODULE(_turbomind, m)
             "cb"_a)
         .def(
             "cancel",
-            [](ModelRequest* model_request, bool end, std::function<void(int)> cb) {
-                model_request->Cancel(end, std::move(cb));  //
-            },
-            py::call_guard<py::gil_scoped_release>(),
-            "end"_a,
-            "cb"_a)
+            [](ModelRequest* model_request) { model_request->Cancel(); },
+            py::call_guard<py::gil_scoped_release>())
         .def(
             "end",
             [](ModelRequest* model_request, std::function<void(int)> cb) {
                 model_request->End(std::move(cb));  //
             },
             py::call_guard<py::gil_scoped_release>(),
-            "cb"_a)
-        .def(
-            "report_tokens_per_tick",
-            [](ModelRequest* model_request, int tok_per_tick) { model_request->ReportTokensPerTick(tok_per_tick); },
-            "tokens_per_tick"_a);
+            "cb"_a);
 
     // transformer model
     using ft::AbstractTransformerModel;
@@ -510,25 +521,19 @@ PYBIND11_MODULE(_turbomind, m)
                size_t      pipeline_para_size,
                int         enable_custom_all_reduce,
                std::string data_type) -> std::shared_ptr<AbstractTransformerModel> {
-                auto gil_control = [state = PyGILState_STATE{}](int op) mutable {
-                    if (op) {
-                        state = PyGILState_Ensure();
-                    }
-                    else {
-                        PyGILState_Release(state);
-                    }
+                auto gil_factory = [] {  //
+                    // erase the type
+                    return std::static_pointer_cast<void>(std::make_shared<ScopedGIL>());
                 };
                 if (data_type == "half" || data_type == "fp16" || data_type == "float16" || data_type == "int4") {
                     auto model = std::make_shared<LlamaTritonModel<half>>(
-                        tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir, config);
-                    model->set_ffi_lock(gil_control);
+                        tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir, config, gil_factory);
                     return model;
                 }
                 else if (data_type == "bf16" || data_type == "bfloat16") {
 #ifdef ENABLE_BF16
                     auto model = std::make_shared<LlamaTritonModel<__nv_bfloat16>>(
-                        tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir, config);
-                    model->set_ffi_lock(gil_control);
+                        tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir, config, gil_factory);
                     return model;
 #else
                     throw std::runtime_error("Error: turbomind has not been built with bf16 support.");
@@ -537,8 +542,7 @@ PYBIND11_MODULE(_turbomind, m)
                 else {
 #ifdef ENABLE_FP32
                     auto model = std::make_shared<LlamaTritonModel<float>>(
-                        tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir, config);
-                    model->set_ffi_lock(gil_control);
+                        tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir, config, gil_factory);
                     return model;
 #else
                     throw std::runtime_error("Error: turbomind has not been built with fp32 support.");

@@ -24,16 +24,16 @@
 #include <cuda_runtime.h>
 #include <yaml-cpp/yaml.h>
 
+#include "src/turbomind/engine/gateway.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
+#include "src/turbomind/models/llama/LlamaV2.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
-#include "src/turbomind/triton_backend/model_request.h"
+#include "src/turbomind/engine/model_request.h"
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 #include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
-#include "src/turbomind/triton_backend/llama/LlamaTritonModelInstance.h"
-#include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
 
 namespace turbomind {
 
@@ -59,56 +59,6 @@ static std::optional<MoeParam::Method> get_moe_method()
         return {};
     }();
     return value;
-}
-
-std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createLlamaModel(std::string config_file)
-{
-    YAML::Node reader;
-    try {
-        reader = YAML::Load(config_file);
-    }
-    catch (const YAML::Exception& e) {
-        std::cerr << "Error reading YAML config: " << e.what() << std::endl;
-        FT_CHECK(false);
-    }
-
-    const auto        ft_instance_hyperparameter = reader["ft_instance_hyperparameter"];
-    const std::string data_type                  = ft_instance_hyperparameter["data_type"].as<std::string>();
-    int               tensor_para_size           = ft_instance_hyperparameter["tensor_para_size"].as<int>();
-    std::string       model_dir                  = ft_instance_hyperparameter["model_dir"].as<std::string>();
-
-    if (data_type == "half" || data_type == "fp16" || data_type == "float16") {
-        return std::make_shared<LlamaTritonModel<half>>(
-            ft_instance_hyperparameter["tensor_para_size"].as<int>(),
-            ft_instance_hyperparameter["pipeline_para_size"].as<int>(),
-            ft_instance_hyperparameter["enable_custom_all_reduce"].as<int>(0),
-            model_dir);
-    }
-    else if (data_type == "bf16" || data_type == "bfloat16") {
-#ifdef ENABLE_BF16
-        return std::make_shared<LlamaTritonModel<__nv_bfloat16>>(
-            ft_instance_hyperparameter["tensor_para_size"].as<int>(),
-            ft_instance_hyperparameter["pipeline_para_size"].as<int>(),
-            ft_instance_hyperparameter["enable_custom_all_reduce"].as<int>(0),
-            model_dir);
-#else
-        TM_LOG_ERROR("[ERROR] Turbomind is not built with ENABLE_BF16");
-        FT_CHECK(false);
-#endif
-    }
-    else {
-#ifdef ENABLE_FP32
-        return std::make_shared<LlamaTritonModel<float>>(
-            ft_instance_hyperparameter["tensor_para_size"].as<int>(),
-            ft_instance_hyperparameter["pipeline_para_size"].as<int>(),
-            ft_instance_hyperparameter["enable_custom_all_reduce"].as<int>(0),
-            model_dir);
-#else
-        TM_LOG_ERROR("[ERROR] Turbomind is not built with ENABLE_BF32");
-        FT_CHECK(false);
-#endif
-    }
-    return nullptr;
 }
 
 template<typename T>
@@ -208,6 +158,9 @@ template<typename T>
 LlamaTritonModel<T>::~LlamaTritonModel()
 {
     FT_CHECK(weights_.size() == engines_.size());
+
+    gateway_->shutdown();
+
     for (int device_id = 0; device_id < (int)engines_.size(); ++device_id) {
         // Set device id before destructing CUDA resources
         check_cuda_error(cudaSetDevice(device_id));
@@ -217,11 +170,12 @@ LlamaTritonModel<T>::~LlamaTritonModel()
 }
 
 template<typename T>
-LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
-                                      size_t      pipeline_para_size,
-                                      int         enable_custom_all_reduce,
-                                      std::string model_dir,
-                                      std::string config):
+LlamaTritonModel<T>::LlamaTritonModel(size_t                                 tensor_para_size,
+                                      size_t                                 pipeline_para_size,
+                                      int                                    enable_custom_all_reduce,
+                                      std::string                            model_dir,
+                                      std::string                            config,
+                                      std::function<std::shared_ptr<void>()> ffi_ctx_factory):
     tensor_para_size_(tensor_para_size),
     pipeline_para_size_(pipeline_para_size),
     weights_(getDeviceCount()),
@@ -334,6 +288,8 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     shared_state_          = std::make_shared<SharedState>();
     shared_state_->barrier = std::make_shared<Barrier>(tensor_para_size);
 
+    gateway_ = std::make_shared<Gateway>(ffi_ctx_factory);
+
     const auto device_count = getDeviceCount();
     engines_.resize(device_count);
 
@@ -399,6 +355,7 @@ LlamaTritonModel<T>::createSharedModelInstance(int                              
                                               std::move(model),
                                               std::move(ctx),
                                               shared_state_,
+                                              gateway_,
                                               device_id);
 
     // Wait for pinned buffers to be allocated for all ranks, otherwise tuning will hang
@@ -417,10 +374,7 @@ std::unique_ptr<ModelRequest> LlamaTritonModel<T>::createModelInstance(int devic
 
     FT_CHECK(engines_[device_id] != nullptr);
 
-    return std::make_unique<ModelRequest>(&shared_state_->request_queue,
-                                          &shared_state_->tok_per_tick,
-                                          engine_param_.session_len,
-                                          model_param_.vocab_size);
+    return std::make_unique<ModelRequest>(gateway_.get(), engine_param_.session_len, model_param_.vocab_size);
 }
 
 template<typename T>
@@ -478,7 +432,6 @@ void LlamaTritonModel<T>::createEngine(int                                      
 {
 
     auto engine = createSharedModelInstance(device_id, rank, nccl_params, custom_all_reduce_comm);
-    engine->set_ffi_lock(ffi_lock_);
 
     engine->tune();
 

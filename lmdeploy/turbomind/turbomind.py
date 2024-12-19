@@ -384,38 +384,43 @@ class TurboMindInstance:
             out_logprobs.append(tok_res)
         return out_logprobs
 
-    def end(self, session_id: int):
-        """End the given session."""
-        input_ids = [self.tm_model.tokenizer.eos_token_id]
-        end_generator = self.tm_model.create_instance()
-        for outputs in end_generator.stream_infer(
-                session_id,
-                input_ids,
-                sequence_start=False,
-                sequence_end=True,
-                gen_config=GenerationConfig(max_new_tokens=0)):
-            pass
+    def async_end_cb(self, status: int):
 
-    async def async_end(self, session_id: int):
-        """End the given session."""
-        self.end(session_id)
+        async def _signal():
+            print(f'session ended, status = {status}')
+            self.end_event.set()
 
-    def cancel(self, session_id: int):
-        """Stop current streaming inference."""
-        input_ids = [self.tm_model.tokenizer.eos_token_id]
-        stop_generator = self.tm_model.create_instance()
-        for outputs in stop_generator.stream_infer(
-                session_id,
-                input_ids,
-                sequence_start=False,
-                sequence_end=False,
-                stop=True,
-                gen_config=GenerationConfig(max_new_tokens=0)):
-            pass
+        asyncio.run_coroutine_threadsafe(_signal(), self.event_loop)
 
-    async def async_cancel(self, session_id: int):
+    async def async_end(self, session_id):
+        await self.done_event.wait()
+        self.end_event = asyncio.Event()
+        self.event_loop = asyncio.get_running_loop()
+        self.model_inst.end(self.async_end_cb)
+        await self.end_event.wait()
+
+    def end_cb(self, status: int):
+        print(f'session ended, status = {status}')
+        self.end_event.set()
+
+    def end(self):
+        self.done_event.wait()
+        self.end_event = threading.Event()
+        self.model_inst.end(self.end_cb)
+        self.end_event.wait()
+
+    def cancel(self, session_id: int, blocking: bool = True):
+        self.model_inst.cancel()
+        if blocking:
+            self.done_event.wait()
+
+    async def async_cancel(self, session_id: int, blocking: bool = True):
         """End the given session."""
-        self.cancel(session_id)
+        if not self.is_canceled:
+            self.model_inst.cancel()
+            self.is_canceled = True
+        if blocking:
+            await self.done_event.wait()
 
     def prepare_embeddings(self,
                            input_embeddings=None,
@@ -524,7 +529,6 @@ class TurboMindInstance:
                                  sequence_start: bool = True,
                                  sequence_end: bool = False,
                                  step=0,
-                                 stop=False,
                                  gen_config: GenerationConfig = None,
                                  stream_output=False,
                                  **kwargs):
@@ -544,11 +548,10 @@ class TurboMindInstance:
             stream_output (bool): indicator for stream output
             kwargs (dict): kwargs for backward compatibility
         """
-        # start forward thread
-
         self.event_loop = asyncio.get_running_loop()
         self.cond = asyncio.Condition()
-        # self.state_ready = asyncio.Event()
+        self.done_event = asyncio.Event()
+        self.is_canceled = False
         self.flag = 0
 
         gen_cfg = self._get_generation_config(gen_config)
@@ -562,8 +565,7 @@ class TurboMindInstance:
         session = _tm.SessionParam(id=session_id,
                                    step=step,
                                    start=sequence_start,
-                                   end=sequence_end,
-                                   stop=stop)
+                                   end=sequence_end)
 
         inputs = _np_dict_to_tm_dict(inputs)
 
@@ -576,6 +578,7 @@ class TurboMindInstance:
 
         out_logprobs = None
         finish = False
+        state = None
 
         output_ids = []
         output_len = 0
@@ -590,7 +593,6 @@ class TurboMindInstance:
                     self.flag = 0
 
                 state = shared_state.consume()
-
                 status, seq_len = state.status, state.seq_len
 
                 if status == 7:
@@ -605,8 +607,6 @@ class TurboMindInstance:
 
                 output_ids += output_ids_buf[prev_len:seq_len].tolist()
                 output_len += seq_len - prev_len
-
-                self.model_inst.report_tokens_per_tick(seq_len - prev_len)
 
                 status = ResponseType.FINISH if finish else ResponseType.SUCCESS
                 output = EngineOutput(status, output_ids, output_len.item(),
@@ -630,7 +630,9 @@ class TurboMindInstance:
                 while not state or state.status == 0:
                     while not self.flag:
                         await self.cond.wait()
-                    state = self.state
+                    self.flag = 0
+                    state = shared_state.consume()
+            self.done_event.set()
             self.cond = None
             self.event_loop = None
 
@@ -661,9 +663,9 @@ class TurboMindInstance:
         # print (c)
         return c
 
-    def signal_cb(self, state):
+    def signal_cb(self):
         with self.cond:
-            self.flag, self.state = 1, state
+            self.flag = 1
             self.cond.notify()
 
     def stream_infer(self,
@@ -713,19 +715,22 @@ class TurboMindInstance:
 
         self.cond = threading.Condition()
         self.flag = 0
+        self.done_event = threading.Event()
 
-        outputs = self.model_inst.forward(inputs, session, gen_cfg,
-                                          stream_output, self.signal_cb)
+        outputs, shared_state = self.model_inst.forward(
+            inputs, session, gen_cfg, stream_output, self.signal_cb)
 
         outputs = _tm_dict_to_torch_dict(outputs)
 
         output_ids_buf = outputs['output_ids']
 
-        seq_start = step + input_length[0]
-
         out_logprobs = None
         finish = False
         state = None
+
+        output_ids = []
+        output_len = 0
+        prev_len = step + input_length[0]
 
         try:
             # generator
@@ -733,9 +738,9 @@ class TurboMindInstance:
                 with self.cond:
                     while not self.flag:
                         self.cond.wait()
-                    state = self.state
                     self.flag = 0
 
+                state = shared_state.consume()
                 status, seq_len = state.status, state.seq_len
 
                 if status == 7:  # TODO: use enum
@@ -745,12 +750,17 @@ class TurboMindInstance:
                     yield self._get_error_output()
                     break
 
-                output_ids = output_ids_buf[seq_start:seq_len]
-                gen_len = seq_len - seq_start
+                if seq_len == prev_len and not finish:
+                    continue
+
+                output_ids += output_ids_buf[prev_len:seq_len].tolist()
+                output_len += seq_len - prev_len
 
                 status = ResponseType.FINISH if finish else ResponseType.SUCCESS
-                output = EngineOutput(status, output_ids.tolist(), gen_len,
+                output = EngineOutput(status, output_ids, output_len.item(),
                                       out_logprobs)
+
+                prev_len = seq_len
 
                 if out_logprobs:
                     output_token_len = len(output.token_ids)
@@ -772,7 +782,7 @@ class TurboMindInstance:
                 while not state or state.status == 0:
                     while not self.flag:
                         self.cond.wait()
-                    state = self.state
+                    state = shared_state.consume()
             self.cond = None
 
     def decode(self,

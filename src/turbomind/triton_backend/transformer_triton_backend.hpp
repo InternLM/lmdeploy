@@ -32,7 +32,7 @@
 #include "src/turbomind/utils/custom_ar_comm.h"
 #include "src/turbomind/utils/nccl_utils.h"
 
-#include "src/turbomind/triton_backend/model_request.h"
+#include "src/turbomind/engine/model_request.h"
 
 namespace turbomind {
 
@@ -64,7 +64,6 @@ struct AbstractTransformerModelInstance {
 };
 
 struct AbstractTransformerModel {
-    static std::shared_ptr<AbstractTransformerModel> createLlamaModel(std::string model_dir);
 
     virtual ~AbstractTransformerModel() = default;
 

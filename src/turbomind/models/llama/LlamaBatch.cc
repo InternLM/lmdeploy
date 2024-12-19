@@ -1,19 +1,42 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
-#include "src/turbomind/models/llama/LlamaBatch.h"
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <cuda_runtime.h>
+#include <functional>
+#include <iomanip>
+#include <memory>
+#include <memory_resource>
+#include <numeric>
+#include <random>
+#include <sstream>
+#include <thread>
+#include <unordered_map>
+#include <utility>
+
+#include "src/turbomind/macro.h"
+
+#include "src/turbomind/engine/gateway.h"
+#include "src/turbomind/engine/request.h"
+
 #include "src/turbomind/kernels/core/data_type.h"
 #include "src/turbomind/kernels/decoding_kernels.h"
 #include "src/turbomind/kernels/gemm/tuner/params.h"
 #include "src/turbomind/kernels/sampling_topk_kernels.h"
-#include "src/turbomind/macro.h"
+
 #include "src/turbomind/models/llama/BlockManager.h"
+#include "src/turbomind/models/llama/LlamaBatch.h"
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/models/llama/LlamaV2.h"
-#include "src/turbomind/models/llama/Request.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/models/llama/copy.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_utils.h"
+
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/constant.h"
@@ -21,21 +44,6 @@
 #include "src/turbomind/utils/debug_utils.h"
 #include "src/turbomind/utils/logger.h"
 #include "src/turbomind/utils/nccl_utils.h"
-#include <algorithm>
-#include <atomic>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <cuda_runtime.h>
-#include <functional>
-#include <iomanip>
-#include <iterator>
-#include <mutex>
-#include <numeric>
-#include <random>
-#include <sstream>
-#include <unordered_map>
-#include <utility>
 
 namespace turbomind {
 
@@ -85,162 +93,88 @@ void DropEmbeddings(const Sequence& seq)
 }
 
 template<typename T>
-void LlamaBatch<T>::RejectInvalidRequests(Requests& stop_reqs, Requests& infer_reqs)
+void LlamaBatch<T>::MarkConflictRequests(Requests& infer_reqs, Requests& kill_reqs)
 {
-    std::unordered_map<uint64_t, int> occurrence;
+    std::pmr::monotonic_buffer_resource    mbr;
+    std::pmr::unordered_map<uint64_t, int> occur(&mbr);
 
-    auto count_occurrence = [&occurrence](const Requests& rs) {
-        for (const auto& r : rs) {
-            ++occurrence[r->id];
+    auto count = [&occur](const auto& reqs) {
+        for (const auto& r : reqs) {
+            ++occur[r->id];
         }
     };
 
-    auto reject = [](const char* type, std::shared_ptr<Request>& req, int ec) {
-        TM_LOG_WARNING(
-            "[RejectInvalidRequests] Skipping invalid %s request for id %ld, code = %d", type, (long)req->id, ec);
-        /// FIXME: make these signals
-        if (req->cancel_cb) {
-            req->cancel_cb(ec);
-        }
-        else if (req->end_cb) {
-            req->end_cb(ec);
-        }
-        else if (req->forward_cb) {
-            FT_CHECK(0);  // not implemtented
-        }
-        req.reset();
-    };
-
-    auto handle_conflict_or_invalid = [this, &occurrence, &reject](Requests& rs, const char* type) {
-        for (auto& r : rs) {
-            if (r) {
-                int ec = 0;
-
-                const int  input_length = r->inputs.at("input_ids").shape[0];
-                const auto get_offset   = [&](int token_count) {
-                    const int step = r->session.step < 0 ? token_count : r->session.step;
-                    return std::max(0, std::min(token_count, r->session.step));
-                };
-
-                if (occurrence[r->id] != 1) {
-                    ec = Request::kConflict;
-                }
-                else if (r->session.start_flag && r->session.stop_flag) {
-                    ec = Request::kInvalid;
-                }
-                else if (input_length > session_len_) {
-                    ec = Request::kTooLong;
-                }
-                else if (!r->session.start_flag) {
-                    if (auto seq = sequence_manager_->Get(r->id); seq == nullptr) {
-                        ec = Request::kInvalid;
-                    }
-                    else if (get_offset(seq->tokens.size()) + input_length > session_len_) {
-                        ec = Request::kTooLong;
-                    }
-                }
-
-                if (ec) {
-                    reject(type, r, ec);
-                }
+    auto validate = [&occur](auto& reqs, const char* type) {
+        for (const auto& r : reqs) {
+            if (occur[r->id] > 1) {
+                TM_LOG_ERROR("Skip conflicting %s request for ID %lu", type, r->id);
+                r->ec = Request::kConflict;
             }
         }
     };
 
-    auto drop_invalid = [](Requests& rs) {
-        int count = 0;
-        for (int i = 0; i < rs.size(); ++i) {
-            if (rs[i]) {
-                rs[count++] = std::move(rs[i]);
-            }
+    for (int i = 0; i < state_->size; ++i) {
+        if (state_->requests[i]) {
+            ++occur[state_->requests[i]->id];
         }
-        rs.resize(count);
-    };
-
-    count_occurrence(stop_reqs);
-    count_occurrence(infer_reqs);
-
-    if (!stop_reqs.empty()) {
-        handle_conflict_or_invalid(stop_reqs, "stop");
-
-        // invalidate stop-only requests for inactive sequences
-        for (auto& r : stop_reqs) {
-            if (r && r->session.end_flag == false) {
-                int ec = Request::kInactive;
-                for (int i = 0; i < state_->size; ++i) {
-                    if (state_->requests[i] && state_->requests[i]->id == r->id) {
-                        ec = 0;
-                        break;
-                    }
-                }
-                if (ec) {
-                    reject("stop", r, ec);
-                }
-            }
-        }
-
-        drop_invalid(stop_reqs);
     }
 
-    if (!infer_reqs.empty()) {
-        handle_conflict_or_invalid(infer_reqs, "infer");
+    count(kill_reqs);
+    count(infer_reqs);
 
-        // invalidate requests for busy sequences
-        for (auto& r : infer_reqs) {
-            if (r) {
-                for (int i = 0; i < state_->size; ++i) {
-                    if (state_->requests[i] && state_->requests[i]->id == r->id) {
-                        reject("infer", r, Request::kBusy);
-                        break;
-                    }
-                }
-            }
+    validate(kill_reqs, "kill");
+    validate(infer_reqs, "infer");
+}
+
+template<class T>
+void LlamaBatch<T>::BroadcastCancelFlags()
+{
+    for (int i = 0; i < state_->size; ++i) {
+        const auto& r = state_->requests[i];
+        if (r && r->cancel_flag.load(std::memory_order_acquire) == -1) {
+            r->is_canceled = true;
         }
-
-        drop_invalid(infer_reqs);
     }
 }
 
-template<typename T>
-auto LlamaBatch<T>::ProcessStopRequests(const Requests& requests) -> std::vector<Signal>
+template<class T>
+void LlamaBatch<T>::ProcessCancelRequests(std::vector<Signal>& signals)
 {
-    NvtxScope           scope("stop_request");
-    std::vector<Signal> signals;
-    int                 count = 0;
-    for (const auto& r : requests) {
-        int ec = Request::kFail;
-        // find matching active sequence
-        for (int i = 0; i < state_->size; ++i) {
-            // stop & optionally erase active sequence
-            if (state_->requests[i] && state_->requests[i]->id == r->id) {
-                ec = 0;
-                signals.push_back(Interrupt(i, true, r->session.end_flag));
-                ++count;
-                break;
-            }
+    int count = 0;
+    for (int i = 0; i < state_->size; ++i) {
+        const auto& r = state_->requests[i];
+        if (r && r->is_canceled) {
+            ++count;
+            signals.push_back(Interrupt(i, true));
         }
-        // mismatch, try erase inactive sequence, in this case there is no active request to interrupt
-        if (ec && r->session.end_flag) {
-            if (sequence_manager_->Erase(r->id)) {
-                ec = 0;
-            }
-        }
-        signals.push_back([=] {
-            if (rank_ == 0) {
-                if (r->cancel_cb) {
-                    r->cancel_cb(ec);
-                }
-            }
-        });
     }
     if (count) {
         check_cuda_error(cudaStreamSynchronize(stream_));
     }
-    return signals;
+}
+
+template<class T>
+void LlamaBatch<T>::ProcessKillRequests(const Requests& kill_reqs, std::vector<Signal>& signals)
+{
+    for (auto& r : kill_reqs) {
+        if (r) {
+            int ec = r->ec;
+            if (!ec) {
+                if (!sequence_manager_->Erase(r->id)) {
+                    ec = Request::kInvalid;
+                }
+            }
+            signals.push_back([=] {
+                if (r->end_cb) {
+                    r->end_cb(ec);
+                }
+            });
+        }
+    }
 }
 
 template<typename T>
-void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
+void LlamaBatch<T>::ProcessInferRequests(const Requests& reqs, std::vector<Signal>& signals)
 {
     NvtxScope scope("infer_request");
     auto&     state = *incoming_;
@@ -251,35 +185,63 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
     std::vector<int> existing_idx;
 
     int idx = 0;
-    for (const auto& r : requests) {
-        FT_CHECK(!state.requests[idx]);
+    for (const auto& r : reqs) {
 
         if (rank_ == 0) {
             TM_LOG_INFO("[ProcessInferRequests] Request for %ld received.", (long)r->id);
         }
 
-        state.requests[idx] = r;
+        if (r->ec) {
+            signals.push_back([r] { UpdateState(*r, r->ec, 0); });
+            continue;
+        }
 
-        // get sequence for the request
-        state.sequences[idx] = r->session.start_flag ? sequence_manager_->Create(r->id) : sequence_manager_->Get(r->id);
-        FT_CHECK(state.sequences[idx]);
+        const int input_length = r->inputs.at("input_ids").shape[0];
+
+        if (input_length > session_len_) {
+            signals.push_back([r] { UpdateState(*r, Request::kTooLong, 0); });
+            continue;
+        }
+
+        auto ptr = r->session.start_flag ? sequence_manager_->Create(r->id) : sequence_manager_->Get(r->id);
+        if (!ptr) {
+            signals.push_back([r] { UpdateState(*r, Request::kInvalid, 0); });
+            continue;
+        }
+
+        const int step = [&] {
+            int s = r->session.step;
+            if (s < 0) {
+                s = ptr->tokens.size();
+            }
+            else if (s > ptr->tokens.size()) {
+                if (rank_ == 0) {
+                    TM_LOG_WARNING("[ProcessInferRequests] Skipping invalid step (%d) setting for ID %lu", s, ptr->id);
+                }
+                s = ptr->tokens.size();
+            }
+            return s;
+        }();
+
+        if (step + input_length > session_len_) {
+            signals.push_back([r] { UpdateState(*r, Request::kTooLong, 0); });
+            continue;
+        }
+
+        FT_CHECK(!state.requests[idx]);
+
+        state.requests[idx]  = r;
+        state.sequences[idx] = ptr;
 
         auto& seq = *state.sequences[idx];
 
-        if (int step = r->session.step; step >= 0) {
-            if (step <= seq.tokens.size()) {
-                seq.tokens.resize(step);
-                seq.cache_len = std::min(seq.cache_len, step);
-                DropEmbeddings(seq);
-            }
-            else if (rank_ == 0) {
-                TM_LOG_WARNING(
-                    "[ProcessInferRequests] Skipping invalid step (%d) setting for ID %ld", step, (long)seq.id);
-            }
+        if (step < seq.tokens.size()) {
+            seq.tokens.resize(step);
+            seq.cache_len = std::min(seq.cache_len, step);
+            DropEmbeddings(seq);
         }
 
-        const int  input_length = r->inputs.at("input_ids").shape[0];
-        const int* input_ids    = r->inputs.getPtr<int>("input_ids");
+        const int* input_ids = r->inputs.getPtr<int>("input_ids");
 
         {
             // `output_ids` contains all token ids of the sequences
@@ -403,7 +365,7 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
 
         if (r->session.start_flag) {
             // prepare to initialize random state for new sequence
-            h_random_seed_[idx] = r->inputs.getVal<unsigned long long>("random_seed", 0);
+            h_random_seed_[idx] = r->gen_cfg.random_seed;
         }
         else {
             // Recover device states if not a new sequence
@@ -948,18 +910,8 @@ template<typename T>
 LlamaBatch<T>::~LlamaBatch()
 {
     TM_LOG_DEBUG("~LlamaBatch()");
-    shared_state_->request_queue.close();
 
     internal_thread_.join();
-
-    if (output_thread_.joinable()) {
-        {
-            std::lock_guard lock{output_mutex_};
-            output_stop_token_ = true;
-        }
-        output_cv_.notify_one();
-        output_thread_.join();
-    }
 
     // The dtor maybe called from unknown thread, set device id before CUDA calls
     check_cuda_error(cudaSetDevice(device_id_));
@@ -977,8 +929,10 @@ LlamaBatch<T>::LlamaBatch(const EngineParam&           param,
                           std::unique_ptr<LlamaV2<T>>  model,  // ! This is moved
                           std::unique_ptr<Context<T>>  ctx,    // ! This is moved
                           std::shared_ptr<SharedState> state,
+                          std::shared_ptr<Gateway>     gateway,
                           int                          device_id):
     param_(param),
+    gateway_(gateway),
     shared_state_(state),
     max_batch_size_(param.max_batch_size),
     max_forward_token_num_(param.max_prefill_token_num + param.max_batch_size),
@@ -1393,9 +1347,7 @@ auto LlamaBatch<T>::Finish(GenerationState& g) -> std::vector<Signal>
 
     std::vector<Signal> signals;
     {
-        NvtxScope   _("stream_and_completion_signal");
-        const float tok_per_tick = shared_state_->tok_per_tick.load();
-        const int   tpt          = std::min(std::max(1, (int)std::round(tok_per_tick)), 8);
+        NvtxScope _("stream_and_completion_signal");
         for (int i = 0; i < batch_size - g.partial; ++i) {
             if (state_->requests[i]) {
                 auto& r = state_->requests[i];
@@ -1406,25 +1358,10 @@ auto LlamaBatch<T>::Finish(GenerationState& g) -> std::vector<Signal>
                 }
                 else if (r->stream_output && rank_ == 0) {
                     const auto seq_len = r->outputs.getVal<int>("sequence_length");
-                    if (true) {
-                        // Create signals by copying the request handles for non-finished streaming requests
-                        signals.push_back([this, r, seq_len] {
-                            try {
-                                auto new_state = new RequestState{Request::kOk, seq_len};
-                                auto old_state = r->state->exchange(new_state);
-                                if (!old_state) {
-                                    r->forward_cb();
-                                }
-                            }
-                            catch (const std::bad_function_call& e) {
-                                TM_LOG_ERROR("Null stream callback for (%s)", std::to_string(r->id).c_str());
-                            }
-                            catch (...) {
-                                TM_LOG_ERROR("Unknown exception invoking stream callback for (%s)",
-                                             std::to_string(r->id).c_str());
-                            }
-                        });
-                    }
+                    // Create signals by copying the request handles for non-finished streaming requests
+                    signals.push_back([this, r, seq_len] {  //
+                        UpdateState(*r, Request::kOk, seq_len);
+                    });
                 }
             }
         }
@@ -1498,14 +1435,8 @@ auto LlamaBatch<T>::Interrupt(int index, bool force_stop, bool force_end) -> Sig
 
     const auto len = state_->requests[index]->outputs.getVal<int>("sequence_length");
     // move the request handle into the signal
-    return [this, ec, len, r = std::move(state_->requests[index])] {
-        if (rank_ == 0) {
-            auto new_state = new RequestState{Request::kFinish, len};
-            auto old_state = r->state->exchange(new_state);
-            if (!old_state) {
-                r->forward_cb();
-            }
-        }
+    return [this, len, r = std::move(state_->requests[index])] {  //
+        UpdateState(*r, Request::kFinish, len);
     };
 }
 
@@ -1518,33 +1449,27 @@ void LlamaBatch<T>::InternalThreadEntry()
     // Initialize `AnomalyHandler`
     AnomalyHandler::instance().Init(rank_, model_->vocab_size_padded_, model_->end_id_, max_batch_size_, stream_);
 
-    auto& request_queue  = shared_state_->request_queue;
-    auto& infer_requests = shared_state_->infer_requests;
-    auto& stop_requests  = shared_state_->stop_requests;
+    // auto& request_queue = shared_state_->request_queue;
+    auto& infer_reqs = shared_state_->infer_reqs;
+    auto& kill_reqs  = shared_state_->kill_reqs;
 
     GenerationState g{};
 
-    constexpr int request_interval = 1;
-    long          request_counter  = 0;
-
     while (1) {
+
         if (rank_ == 0) {
             const int  free_slot_count = max_batch_size_ - state_->size + g.finished_count;
             const bool is_empty        = (free_slot_count == max_batch_size_);
-            stop_requests.clear();
-            infer_requests.clear();
-            if (is_empty || request_counter % request_interval == 0) {
-                // Block if batch is empty
-                request_queue.dequeue(stop_requests, infer_requests, free_slot_count, is_empty, shared_state_->abort);
-                if (!shared_state_->abort) {
-                    RejectInvalidRequests(stop_requests, infer_requests);
-                }
-            }
+            // Block if batch is empty
+            gateway_->pop(infer_reqs, kill_reqs, free_slot_count, is_empty, shared_state_->abort);
+            // Mark reqs to the same session_id as invalid (which are dangerous to the engine)
+            MarkConflictRequests(infer_reqs, kill_reqs);
         }
 
         NvtxScope scope("mainloop");
 
-        // wait while rank-0 is dequeueing
+        // 1. Wait while rank-0 is dequeueing
+        // 2. Broadcast `ec` from rank-0
         shared_state_->barrier->wait();
 
         if (shared_state_->abort) {
@@ -1552,15 +1477,27 @@ void LlamaBatch<T>::InternalThreadEntry()
             return;
         }
 
-        auto signals = ProcessStopRequests(stop_requests);
+        std::vector<Signal> signals;
+
+        ProcessKillRequests(kill_reqs, signals);
 
         // Shared `priority` field will be assigned by rank-0
-        ProcessInferRequests(infer_requests);
+        ProcessInferRequests(infer_reqs, signals);
 
-        // Wait while shared `requests` is being used
+        // is_canceled <- cancel_flag.load()
+        if (rank_ == 0) {
+            BroadcastCancelFlags();
+        }
+
+        // 1. Wait while shared `requests` is being used
+        // 2. Broadcast modifcations from rank-0
         shared_state_->barrier->wait();
 
-        SendSignals(std::move(signals));
+        ProcessCancelRequests(signals);
+
+        if (rank_ == 0) {
+            gateway_->notify(std::move(signals));
+        }
 
         Initialize(g);
 
@@ -1575,29 +1512,15 @@ void LlamaBatch<T>::InternalThreadEntry()
                     // resources
                     shared_state_->barrier->wait();
                 }
-                SendSignals(std::move(signals));
+                if (rank_ == 0) {
+                    gateway_->notify(std::move(signals));
+                }
             }
         }
-
-        ++request_counter;
     }
 
+    // Unreachable
     FT_CHECK(0);
-}
-
-template<typename T>
-void LlamaBatch<T>::SendSignals(std::vector<Signal> signals)
-{
-    if (rank_ != 0 || signals.empty()) {
-        return;
-    }
-    {
-        std::lock_guard lock{output_mutex_};
-        output_signals_.insert(output_signals_.end(),  //
-                               std::move_iterator{signals.begin()},
-                               std::move_iterator{signals.end()});
-    }
-    output_cv_.notify_one();
 }
 
 template<typename T>
@@ -1605,37 +1528,6 @@ void LlamaBatch<T>::Start()
 {
     TM_LOG_INFO("LlamaBatch<T>::Start()");
     internal_thread_ = std::thread(&LlamaBatch::InternalThreadEntry, this);
-    if (rank_ == 0) {
-        output_thread_ = std::thread(&LlamaBatch::OutputThreadEntry, this);
-    }
-}
-
-template<typename T>
-void LlamaBatch<T>::OutputThreadEntry()
-{
-    while (true) {
-        std::vector<Signal> signals;
-        {
-            // Wait for signals to come
-            std::unique_lock lock(output_mutex_);
-            output_cv_.wait(lock, [&] { return !output_signals_.empty() || output_stop_token_; });
-            if (output_stop_token_) {
-                TM_LOG_INFO("[OutputThreadEntry] stop requested.");
-                return;
-            }
-            signals = std::move(output_signals_);
-        }
-        if (rank_ == 0 && ffi_lock_) {
-            ffi_lock_(1);
-        }
-        // send all bufferred signals
-        for (const auto& s : signals) {
-            s();
-        }
-        if (rank_ == 0 && ffi_lock_) {
-            ffi_lock_(0);
-        }
-    }
 }
 
 template<typename T>

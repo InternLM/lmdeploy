@@ -1,16 +1,16 @@
 
 
 #include <algorithm>
-#include <atomic>
 #include <functional>
+#include <memory>
 #include <numeric>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
-#include "src/turbomind/models/llama/Request.h"
-#include "src/turbomind/triton_backend/model_request.h"
+#include "src/turbomind/engine/request.h"
+#include "src/turbomind/engine/model_request.h"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/constant.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -31,7 +31,6 @@ static ManagedTensor create(DataType dtype, MemoryType where, const std::vector<
 
     ManagedTensor ret;
     ret.tensor = Tensor{where, dtype, std::vector<size_t>(size.begin(), size.end()), data};
-    // FT_CHECK_WITH_INFO(byte_size == ret.tensor.sizeBytes(), fmtstr("%ld vs %ld", byte_size, ret.tensor.sizeBytes()));
     ret.data_holder.reset((void*)nullptr, [data, where](auto) {
         // std::cerr << "turbomind tensor deallocate" << std::endl;
         if (where == MEMORY_GPU) {
@@ -55,33 +54,29 @@ static T get(const std::unordered_map<std::string, ManagedTensor>& m, const std:
     return fallback;
 }
 
-ModelRequest::ModelRequest(RequestQueue* queue, std::atomic<float>* tok_per_tick, int session_len, int vocab_size):
-    queue_{queue}, tok_per_tick_{tok_per_tick}, session_len_{session_len}, vocab_size_{vocab_size}
+ModelRequest::ModelRequest(Gateway* gateway, int session_len, int vocab_size):
+    gateway_{gateway}, session_len_{session_len}, vocab_size_{vocab_size}
 {
 }
 
-void ModelRequest::Cancel(bool end, std::function<void(int)> cb)
+void ModelRequest::Cancel()
 {
-    auto r = std::make_shared<Request>();
-
-    r->id = session_id_;
-    // r->stop_flag = true;
-
-    r->cancel_cb = std::move(cb);
-
-    queue_->enqueue({std::move(r)});
+    // request is finished if lock failed
+    if (auto r = request_.lock()) {
+        gateway_->cancel(std::move(r));
+    }
 }
 
 void ModelRequest::End(std::function<void(int)> cb)
 {
     auto r = std::make_shared<Request>();
 
-    r->id = session_id_;
-    // r->end_flag = true;
+    r->id = r->session.id = session_id_;
+    r->session.kill_flag  = true;
 
     r->end_cb = std::move(cb);
 
-    queue_->enqueue({std::move(r)});
+    gateway_->kill(std::move(r));
 }
 
 auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> OutputParam
@@ -142,6 +137,10 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
 
     auto state = std::make_shared<AtomicRequestState>();
 
+    if (param.session.start_flag) {
+        session_id_ = param.session.id;
+    }
+
     r->id            = param.session.id;
     r->session       = param.session;
     r->gen_cfg       = param.gen_cfg;
@@ -149,41 +148,12 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
     r->forward_cb    = std::move(cb);
     r->state         = state;
 
-    flag_.store(0);
+    // Keep a weak reference for canceling the request
+    request_ = r;
 
-    queue_->enqueue({std::move(r)});
+    gateway_->push({std::move(r)});
 
     return OutputParam{outputs_, state};
-}
-
-void ModelRequest::ReportTokensPerTick(int observed)
-{
-    // flag_.clear(std::memory_order_release);
-
-    flag_.fetch_sub(1, std::memory_order_relaxed);
-
-#if 0
-    constexpr float decay = 0.525;
-
-    float value = (float)observed;
-    // value -= std::max(0.f, std::min(decay, value - 1.f));
-
-    float old = tok_per_tick_->load();
-    float cur{};
-    auto  update = [&]() mutable {
-        float alpha = old > value ? 0.001 : 0.002;
-        cur         = old * (1 - alpha) + value * alpha;
-    };
-    update();
-    while (!tok_per_tick_->compare_exchange_weak(old, cur)) {
-        update();
-    }
-
-    static int count = 0;
-    if (++count % 100 == 0) {
-        std::cerr << cur << std::endl;
-    }
-#endif
 }
 
 }  // namespace turbomind

@@ -4,7 +4,7 @@
 
 #include <memory>
 
-#include "src/turbomind/models/llama/Request.h"
+#include "src/turbomind/engine/gateway.h"
 #include "src/turbomind/utils/Tensor.h"
 
 namespace turbomind {
@@ -13,10 +13,10 @@ class ModelRequest {
 public:
     virtual ~ModelRequest() = default;
 
-    ModelRequest(RequestQueue* queue, std::atomic<float>* tok_per_tick, int session_len, int vocab_size);
+    ModelRequest(Gateway* gateway, int session_len, int vocab_size);
 
-    // Cancel running request, calls `cb` when done
-    void Cancel(bool end, std::function<void(int)> cb);
+    // Cancel running request
+    void Cancel();
 
     // Reset the channel to uninitailized state, calls `notify` when done
     void End(std::function<void(int)> cb);
@@ -39,18 +39,15 @@ public:
 
     OutputParam Forward(InputParam param, std::function<void()> cb);
 
-    void ReportTokensPerTick(int observed);
-
 protected:
-    RequestQueue*       queue_;
-    std::atomic<float>* tok_per_tick_;
-
-    std::atomic<int> flag_;
+    Gateway* gateway_;
 
     uint64_t session_id_;
 
     int session_len_;
     int vocab_size_;
+
+    std::weak_ptr<Request> request_;
 
     std::shared_ptr<TensorMap_> inputs_;   // owned by caller
     std::shared_ptr<TensorMap_> outputs_;  // owned by `this`

@@ -3,10 +3,8 @@
 #pragma once
 
 #include <atomic>
-#include <condition_variable>
 #include <cstdint>
 #include <ostream>
-#include <queue>
 
 #include "src/turbomind/utils/Tensor.h"
 
@@ -57,7 +55,7 @@ struct SessionParam {
 
     bool start_flag;
     bool end_flag;
-    bool stop_flag;
+    bool kill_flag;
 };
 
 struct RequestState {
@@ -95,12 +93,15 @@ struct Request {
     TensorMap inputs;
     TensorMap outputs;
 
-    std::function<void(int)> cancel_cb;
     std::function<void(int)> end_cb;
+    std::function<void()>    forward_cb;
 
-    std::function<void()> forward_cb;
-
+    std::atomic<int>                    cancel_flag;
     std::shared_ptr<AtomicRequestState> state;
+
+    bool is_canceled{};
+
+    int ec;
 
     enum {
         kOk       = 0,
@@ -111,76 +112,25 @@ struct Request {
         kFail     = 5,  // Can't find sequence for `stop` request or internal error during inference
         kTooLong  = 6,  // history + prompt > session_len,
         kFinish   = 7,
+        kCancel   = 8,
     };
 };
 
-class RequestQueue {
-public:
-    void enqueue(std::vector<std::shared_ptr<Request>> requests)
-    {
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-
-            if (closed_) {
-                throw std::runtime_error("Queue is closed");
-            }
-
-            for (auto& r : requests) {
-                // futures.push_back(r->signal.get_future());
-                if (r->session.stop_flag) {
-                    stop_queue_.push(std::move(r));
-                }
-                else {
-                    infer_queue_.push(std::move(r));
-                }
-            }
-        }
-        cv_.notify_one();
-    }
-
-    void dequeue(std::vector<std::shared_ptr<Request>>& stop_requests,
-                 std::vector<std::shared_ptr<Request>>& infer_requests,
-                 unsigned                               max_infer_count,
-                 bool                                   blocking,
-                 bool&                                  abort)
-    {
-        std::unique_lock<std::mutex> lock(mutex_);
-        if (blocking) {
-            cv_.wait(lock, [this] { return !(stop_queue_.empty() && infer_queue_.empty()) || closed_; });
-            if (closed_) {
-                abort = true;
-                return;
-            }
-        }
-
-        stop_requests.clear();
-        while (!stop_queue_.empty()) {
-            stop_requests.push_back(std::move(stop_queue_.front()));
-            stop_queue_.pop();
-        }
-
-        infer_requests.clear();
-        while (!infer_queue_.empty() && infer_requests.size() < max_infer_count) {
-            infer_requests.push_back(std::move(infer_queue_.front()));
-            infer_queue_.pop();
+inline void UpdateState(Request& r, int status, int seq_len)
+{
+    try {
+        auto new_state = new RequestState{status, seq_len};
+        auto old_state = r.state->exchange(new_state);
+        if (!old_state && r.forward_cb) {
+            r.forward_cb();
         }
     }
-
-    void close()
-    {
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            closed_ = true;
-        }
-        cv_.notify_all();
+    catch (const std::exception& e) {
+        TM_LOG_ERROR("Error invoking callback for (%lu): %s", r.id, e.what());
     }
-
-private:
-    std::queue<std::shared_ptr<Request>> stop_queue_;
-    std::queue<std::shared_ptr<Request>> infer_queue_;
-    std::mutex                           mutex_;
-    std::condition_variable              cv_;
-    bool                                 closed_{false};
-};
+    catch (...) {
+        TM_LOG_ERROR("Unknown error invoking callback for (%lu)", r.id);
+    }
+}
 
 }  // namespace turbomind

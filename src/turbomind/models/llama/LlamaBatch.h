@@ -2,33 +2,26 @@
 
 #pragma once
 
-#include <condition_variable>
-#include <mutex>
-#include <thread>
-#include <type_traits>
-
 #include <curand_kernel.h>
 
+#include "src/turbomind/engine/gateway.h"
+#include "src/turbomind/engine/request.h"
+
 #include "src/turbomind/models/llama/Barrier.h"
-#include "src/turbomind/models/llama/LlamaNcclGuard.h"
-#include "src/turbomind/models/llama/Request.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_params.h"
+
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
-using ffi_api_lock_ctrl_t = std::function<void(int)>;
-
 namespace turbomind {
 
 struct SharedState {
-    std::vector<std::shared_ptr<Request>> infer_requests;
-    std::vector<std::shared_ptr<Request>> stop_requests;
-    RequestQueue                          request_queue;
-    std::atomic<float>                    tok_per_tick{1};
+    std::vector<std::shared_ptr<Request>> infer_reqs;
+    std::vector<std::shared_ptr<Request>> kill_reqs;
     std::shared_ptr<Barrier>              barrier;
     bool                                  abort;
     std::atomic<size_t>                   free_size{std::numeric_limits<size_t>::max()};
@@ -87,11 +80,11 @@ public:
     using Requests = std::vector<std::shared_ptr<Request>>;
     using Signal   = std::function<void()>;
 
-    void RejectInvalidRequests(Requests& stop_reqs, Requests& infer_reqs);
+    void MarkConflictRequests(Requests& infer_reqs, Requests& kill_reqs);
 
-    [[nodiscard]] auto ProcessStopRequests(const Requests& requests) -> std::vector<Signal>;
+    void ProcessKillRequests(const Requests& reqs, std::vector<Signal>& signals);
 
-    void ProcessInferRequests(const Requests& requests);
+    void ProcessInferRequests(const Requests& reqs, std::vector<Signal>& signals);
 
     int AdjustMaxInputCount(GenerationState&                    g,
                             const std::vector<const Sequence*>& sequences,
@@ -116,16 +109,12 @@ public:
                         std::unique_ptr<LlamaV2<T>>  model,
                         std::unique_ptr<Context<T>>  ctx,
                         std::shared_ptr<SharedState> state,
+                        std::shared_ptr<Gateway>     gateway,
                         int                          device_id);
 
     ~LlamaBatch();
 
     void Start();
-
-    void set_ffi_lock(ffi_api_lock_ctrl_t func)
-    {
-        ffi_lock_ = func;
-    }
 
     LlamaV2<T>& model() noexcept
     {
@@ -140,13 +129,15 @@ public:
     void tune();
 
 private:
+    void BroadcastCancelFlags();
+
+    void ProcessCancelRequests(std::vector<Signal>& signals);
+
     void InternalThreadEntry();
 
     void OutputThreadEntry();
 
     void CopyState(const std::vector<std::tuple<BatchState*, BatchState*, int, int>>& desc);
-
-    void SendSignals(std::vector<Signal> signals);
 
     // analogs to `std::copy_n`
     template<typename U>
@@ -207,6 +198,7 @@ private:
 private:
     const EngineParam param_;
 
+    const std::shared_ptr<Gateway>     gateway_;
     const std::shared_ptr<SharedState> shared_state_;
 
     const int      max_batch_size_;
@@ -318,14 +310,6 @@ private:
     std::vector<std::tuple<std::string, std::byte*, std::byte*>> sampling_params_;
 
     std::thread internal_thread_;
-
-    // async stream callback utils
-    std::thread             output_thread_;
-    std::mutex              output_mutex_;
-    std::condition_variable output_cv_;
-    std::vector<Signal>     output_signals_;
-    bool                    output_stop_token_{false};
-    ffi_api_lock_ctrl_t     ffi_lock_;
 
     int* h_output_ids_{};
 };

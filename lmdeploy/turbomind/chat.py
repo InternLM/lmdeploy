@@ -29,13 +29,13 @@ def input_prompt(model_name):
     return '\n'.join(iter(input, sentinel))
 
 
-def infer(generator, session_id, input_ids, gen_config, sequence_start,
-          sequence_end, step, stream_output, tokenizer, state):
+def infer(generator, session_id, input_ids, gen_config, sequence_start, step,
+          stream_output, tokenizer, state):
     for outputs in generator.stream_infer(session_id=session_id,
                                           input_ids=input_ids,
                                           gen_config=gen_config,
                                           sequence_start=sequence_start,
-                                          sequence_end=sequence_end,
+                                          sequence_end=False,
                                           step=step,
                                           stream_output=stream_output):
         res, tokens = input_ids + outputs.token_ids, outputs.num_token
@@ -46,8 +46,7 @@ def infer(generator, session_id, input_ids, gen_config, sequence_start,
 
 
 async def async_infer(generator, session_id, input_ids, gen_config,
-                      sequence_start, sequence_end, step, stream_output,
-                      tokenizer, state):
+                      sequence_start, step, stream_output, tokenizer, state):
     token_ids = input_ids.copy()
     prev_len = 0
     async for output in generator.async_stream_infer(
@@ -55,7 +54,7 @@ async def async_infer(generator, session_id, input_ids, gen_config,
             input_ids=input_ids,
             gen_config=gen_config,
             sequence_start=sequence_start,
-            sequence_end=sequence_end,
+            sequence_end=False,
             step=step,
             stream_output=stream_output):
         tokens = output.num_token
@@ -65,6 +64,8 @@ async def async_infer(generator, session_id, input_ids, gen_config,
                                                                  state=state)
             prev_len = tokens
             print(response, end='', flush=True)
+            # if 'I' in response:
+            #     await generator.async_cancel(0, blocking=False)
     return tokens
 
 
@@ -179,7 +180,10 @@ def main(model_path: str,
         if prompt == 'exit':
             exit(0)
         elif prompt == 'end':
-            generator.end(session_id)
+            if use_async:
+                asyncio.run(generator.async_end(session_id))
+            else:
+                generator.end(session_id)
             nth_round = 1
             step = 0
             seed = random.getrandbits(64)
@@ -190,10 +194,8 @@ def main(model_path: str,
 
             if model.capability == 'chat':
                 sequence_start = (nth_round == 1)
-                sequence_end = False
             else:
                 sequence_start = True
-                sequence_end = True
                 step = 0
 
             if step + len(
@@ -207,13 +209,13 @@ def main(model_path: str,
 
             if use_async:
                 coro = async_infer(generator, session_id, input_ids,
-                                   gen_config, sequence_start, sequence_end,
-                                   step, stream_output, tokenizer, state)
+                                   gen_config, sequence_start, step,
+                                   stream_output, tokenizer, state)
                 tokens = asyncio.run(coro)
             else:
                 tokens = infer(generator, session_id, input_ids, gen_config,
-                               sequence_start, sequence_end, step,
-                               stream_output, tokenizer, state)
+                               sequence_start, step, stream_output, tokenizer,
+                               state)
 
             # update step
             step += len(input_ids) + tokens
