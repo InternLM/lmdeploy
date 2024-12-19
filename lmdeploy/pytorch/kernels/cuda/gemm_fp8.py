@@ -127,10 +127,12 @@ def _gemm_fp8_kernel(
     a_ptrs = A + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = B + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
 
-    offs_bsn = offs_bn // group_bn
+    offs_bsn = pid_n * BLOCK_N // group_bn
     as_ptrs = a_scale_ptr + offs_am * stride_asm
     bs_ptrs = b_scale_ptr + offs_bsn * stride_bsn
 
+    a_scale_p = tl.full((BLOCK_M, ), 1, dtype=tl.float32)
+    b_scale_p = 1.0
     accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
     for k in range(0, tl.cdiv(K, BLOCK_K)):
         a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_K, other=0.0)
@@ -143,11 +145,19 @@ def _gemm_fp8_kernel(
         a_scale = tl.load(as_ptrs + offs_ksa * stride_ask)
         b_scale = tl.load(bs_ptrs + offs_ksb * stride_bsk)
 
-        accumulator += tl.dot(a, b) * a_scale[:, None] * b_scale[None, :]
+        a_ratio = a_scale_p / a_scale
+        b_ratio = b_scale_p / b_scale
+
+        a_scale_p = a_scale
+        b_scale_p = b_scale
+
+        accumulator = tl.dot(a,
+                             b,
+                             acc=accumulator * (a_ratio[:, None] * b_ratio))
 
         a_ptrs += BLOCK_K * stride_ak
         b_ptrs += BLOCK_K * stride_bk
-    c = accumulator.to(tl.float32)
+    c = accumulator * (a_scale_p[:, None] * b_scale_p)
 
     offs_cm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     offs_cn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
@@ -190,7 +200,7 @@ def gemm_fp8(A: Tensor,
         BLOCK_M = max(BLOCK_M, 16)
 
     BLOCK_K = max(group_ak, group_bk)
-    BLOCK_N = 64
+    BLOCK_N = min(64, group_bn)
     num_warps = 4
     num_stages = 4
     _gemm_fp8_kernel[grid](
