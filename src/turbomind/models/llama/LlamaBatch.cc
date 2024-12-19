@@ -96,7 +96,7 @@ void LlamaBatch<T>::RejectInvalidRequests(Requests& stop_reqs, Requests& infer_r
 
     auto reject = [](const char* type, std::shared_ptr<Request>& req, int ec) {
         TM_LOG_WARNING(
-            "[RejectInvalidRequests] Skipping invalid %s request for id %ld, code = %d", type, (long)req->id, ec);
+            "[RejectInvalidRequests] Skipping invalid %s request %ld, code = %d", type, (long)req->id, ec);
         req->signal.set_value(ec);
         req.reset();
     };
@@ -242,7 +242,7 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& requests)
         FT_CHECK(!state.requests[idx]);
 
         if (rank_ == 0) {
-            TM_LOG_INFO("[ProcessInferRequests] Request for %ld received.", (long)r->id);
+            TM_LOG_INFO("[ProcessInferRequests] Request %ld received.", (long)r->id);
         }
 
         state.requests[idx] = r;
@@ -1369,6 +1369,9 @@ auto LlamaBatch<T>::Finish(GenerationState& g) -> std::vector<Signal>
             if (state_->requests[i]) {
                 if (state_->h_finished[i]) {
                     // Interrupt finished sequences and move the request handle into the signal closure
+                    if (rank_ == 0) {
+                        TM_LOG_INFO("[Interrupt] finished request %d, finished %d", state_->requests[i]->id, state_->h_finished[i]);
+                    }
                     signals.push_back(Interrupt(i));
                     ++g.finished_count;
                 }
@@ -1410,7 +1413,8 @@ template<typename T>
 auto LlamaBatch<T>::Interrupt(int index, bool force_stop, bool force_end) -> Signal
 {
     if (rank_ == 0) {
-        TM_LOG_INFO("[Interrupt] slot = %d, id = %lu", index, (long)state_->requests[index]->id);
+        TM_LOG_INFO("[Interrupt] slot %d, request %lu, stop %d, end %d", \
+            index, (long)state_->requests[index]->id, force_stop, force_end);
     }
 
     if (debug_ && rank_ == 0) {
@@ -1861,7 +1865,7 @@ void LlamaBatch<T>::Submit(std::unordered_map<std::string, Tensor>*       output
     std::vector<int> error_codes;
     bool             has_error = 0;
 
-    TM_LOG_INFO("[forward] Enqueue requests");
+    TM_LOG_INFO("[forward] Enqueue %d requests", batch_size);
 
     std::vector<uint64_t> ids;
     for (const auto& r : requests) {
@@ -1872,9 +1876,8 @@ void LlamaBatch<T>::Submit(std::unordered_map<std::string, Tensor>*       output
 
     FT_CHECK_WITH_INFO(ids.size() == futures.size(), "check failed");
 
-    TM_LOG_INFO("[forward] Wait for requests to complete ...");
-
     for (int i = 0; i < futures.size(); ++i) {
+        TM_LOG_INFO("[forward] Wait for request %ld to complete ...", ids[i]);
         auto ec = futures[i].get();
         error_codes.push_back(ec);
         if (ec) {
