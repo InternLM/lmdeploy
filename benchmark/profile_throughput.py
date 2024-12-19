@@ -349,7 +349,8 @@ def main():
                            temperature=args.temperature,
                            top_p=args.top_p,
                            top_k=args.top_k,
-                           concurrency=args.concurrency,
+                           concurrency=args.concurrency if args.concurrency < \
+                            args.num_prompts else args.num_prompts,
                            stream_output=True)
 
 
