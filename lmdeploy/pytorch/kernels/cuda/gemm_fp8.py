@@ -82,6 +82,19 @@ def quant_fp8(A: Tensor,
     return out, scales
 
 
+@triton.autotune(configs=[
+    triton.Config({
+        'BLOCK_M': 64,
+        'BLOCK_N': 128,
+    }, num_stages=3, num_warps=4),
+    triton.Config({
+        'BLOCK_M': 128,
+        'BLOCK_N': 64,
+    }, num_stages=3, num_warps=4)
+],
+                 key=['N', 'K'],
+                 warmup=5,
+                 rep=10)
 @triton.jit
 def _gemm_fp8_kernel(
     A,
@@ -99,9 +112,9 @@ def _gemm_fp8_kernel(
     stride_ak: tl.constexpr,
     stride_asm,
     stride_ask: tl.constexpr,
-    stride_bk,
+    stride_bk: tl.constexpr,
     stride_bn: tl.constexpr,
-    stride_bsk,
+    stride_bsk: tl.constexpr,
     stride_bsn: tl.constexpr,
     stride_cm,
     stride_cn: tl.constexpr,
@@ -131,33 +144,36 @@ def _gemm_fp8_kernel(
     as_ptrs = a_scale_ptr + offs_am * stride_asm
     bs_ptrs = b_scale_ptr + offs_bsn * stride_bsn
 
-    a_scale_p = tl.full((BLOCK_M, ), 1, dtype=tl.float32)
-    b_scale_p = 1.0
+    acc_scale = tl.load(as_ptrs) * tl.load(bs_ptrs)
+    acc_ratio = 1 / acc_scale
     accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
     for k in range(0, tl.cdiv(K, BLOCK_K)):
-        a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_K, other=0.0)
-        b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_K, other=0.0)
-
-        k_start = k * BLOCK_K
+        # load scales
+        k_start = (k + 1) * BLOCK_K
         offs_ksa = k_start // group_ak
         offs_ksb = k_start // group_bk
+        a_scale = tl.load(as_ptrs + offs_ksa * stride_ask,
+                          mask=k_start < K,
+                          other=1.0)
+        b_scale = tl.load(bs_ptrs + offs_ksb * stride_bsk,
+                          mask=k_start < K,
+                          other=1.0)
 
-        a_scale = tl.load(as_ptrs + offs_ksa * stride_ask)
-        b_scale = tl.load(bs_ptrs + offs_ksb * stride_bsk)
+        # load ab
+        a = tl.load(a_ptrs)
+        b = tl.load(b_ptrs)
 
-        a_ratio = a_scale_p / a_scale
-        b_ratio = b_scale_p / b_scale
+        # mma
+        accumulator = tl.dot(a, b, acc=accumulator * acc_ratio[:, None])
 
-        a_scale_p = a_scale
-        b_scale_p = b_scale
-
-        accumulator = tl.dot(a,
-                             b,
-                             acc=accumulator * (a_ratio[:, None] * b_ratio))
+        # update scales and ratio
+        new_acc_scale = a_scale * b_scale
+        acc_ratio = acc_scale / new_acc_scale
+        acc_scale = new_acc_scale
 
         a_ptrs += BLOCK_K * stride_ak
         b_ptrs += BLOCK_K * stride_bk
-    c = accumulator * (a_scale_p[:, None] * b_scale_p)
+    c = accumulator * (acc_ratio * acc_scale)[:, None]
 
     offs_cm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     offs_cn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
@@ -174,7 +190,8 @@ def gemm_fp8(A: Tensor,
     """gemm fp8."""
 
     def grid(META):
-        return (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, META['BLOCK_N']), )
+        return (triton.cdiv(M, META['BLOCK_M']) *
+                triton.cdiv(N, META['BLOCK_N']), )
 
     assert A.dim() == 2
     assert A_scale.dim() == 2
@@ -194,15 +211,8 @@ def gemm_fp8(A: Tensor,
 
     C = A.new_empty(M, N, dtype=out_dtype)
 
-    BLOCK_M = 128
-    if M < BLOCK_M:
-        BLOCK_M = triton.next_power_of_2(M)
-        BLOCK_M = max(BLOCK_M, 16)
-
     BLOCK_K = max(group_ak, group_bk)
-    BLOCK_N = min(64, group_bn)
-    num_warps = 4
-    num_stages = 3
+
     _gemm_fp8_kernel[grid](
         A,
         A_scale,
@@ -225,12 +235,8 @@ def gemm_fp8(A: Tensor,
         stride_bsn=B_scale.stride(1),
         stride_cm=C.stride(0),
         stride_cn=C.stride(1),
-        BLOCK_M=BLOCK_M,
-        BLOCK_N=BLOCK_N,
         BLOCK_K=BLOCK_K,
         GROUP_M=8,
-        num_warps=num_warps,
-        num_stages=num_stages,
     )
 
     return C
