@@ -128,7 +128,7 @@ jobs:
         if: ${{inputs.offline_mode}}
         run: rm ${{env.TEST_CODE_PATH}}/lmdeploy-*.whl -f && cp ${{env.OFFLINE_CODE_PATH}}/lmdeploy-*.whl ${{env.TEST_CODE_PATH}}
       - name: Get torch_version
-        if: get_torch_version
+        id: get_torch_version
         run: echo "torch_version=$(pip list | grep torch | grep -v torchvision | awk -F 'torch' '{print $2}' | awk -F ' ' '{print $1}' | awk -F '.' '{print $1"."$2}')" >> "$GITHUB_OUTPUT"
 
   test_quantization:
