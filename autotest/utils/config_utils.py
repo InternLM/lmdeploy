@@ -218,6 +218,7 @@ def get_benchmark_model_list(tp_num,
     else:
         case_list_base = config.get('benchmark_model')
     quatization_case_config = config.get('turbomind_quatization')
+    pytorch_quatization_case_config = config.get('pytorch_quatization')
 
     case_list = copy.deepcopy(case_list_base)
     for key in case_list_base:
@@ -225,6 +226,12 @@ def get_benchmark_model_list(tp_num,
                              ) and key not in quatization_case_config.get(
                                  'no_awq') and not is_quantization_model(key):
             case_list.append(key + '-inner-4bits')
+
+    for key in case_list_base:
+        if key in config.get('pytorch_chat_model'
+                             ) and key in pytorch_quatization_case_config.get(
+                                 'w8a8') and not is_quantization_model(key):
+            case_list.append(key + '-inner-w8a8')
 
     model_list = [
         item for item in case_list if get_tp_num(config, item) == tp_num

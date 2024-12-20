@@ -84,6 +84,8 @@ with read_base():
         models as hf_mistral_chat_7b  # noqa: F401, E501
     from opencompass.configs.models.mistral.hf_mixtral_8x7b_instruct_v0_1 import \
         models as hf_mixtral_chat_8x7b  # noqa: F401, E501
+    from opencompass.configs.models.qwen2_5.lmdeploy_qwen2_5_7b_instruct import \
+        models as lmdeploy_qwen2_5_7b_instruct  # noqa: F401, E501
     from opencompass.configs.models.qwen.hf_qwen1_5_7b_chat import \
         models as hf_qwen1_5_chat_7b  # noqa: F401, E501
     from opencompass.configs.models.qwen.hf_qwen1_5_moe_a2_7b_chat import \
@@ -150,6 +152,7 @@ turbomind_internlm2_5_7b_chat_batch1 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
 turbomind_internlm2_5_7b_chat_batch1_4bits = deepcopy(
     *lmdeploy_internlm2_5_7b_chat)
 pytorch_internlm2_5_7b_chat = deepcopy(*lmdeploy_internlm2_5_7b_chat)
+pytorch_internlm2_5_7b_chat_w8a8 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
 
 # ===== Configs for internlm/internlm2_5_20b_chat =====
 turbomind_internlm2_5_20b_chat = deepcopy(*lmdeploy_internlm2_5_20b_chat)
@@ -182,24 +185,10 @@ turbomind_qwen_7b_chat_kvint8 = deepcopy(*lmdeploy_qwen_7b_chat)
 pytorch_qwen_7b_chat = deepcopy(*lmdeploy_qwen_7b_chat)
 
 # ===== Configs for meta-llama/Llama-2-7b-chat-hf =====
-turbomind_llama2_7b_chat = dict(type=TurboMindModel,
-                                abbr='tb_llama2_chat_7b',
-                                path='meta-llama/Llama-2-7b-chat-hf',
-                                engine_config=dict(session_len=MAX_SESSION_LEN,
-                                                   max_batch_size=128),
-                                gen_config=dict(top_k=1,
-                                                top_p=0.8,
-                                                temperature=1.0,
-                                                max_new_tokens=MAX_NEW_TOKENS),
-                                max_out_len=MAX_NEW_TOKENS,
-                                max_seq_len=MAX_SESSION_LEN,
-                                batch_size=128,
-                                meta_template=llama2_meta_template,
-                                run_cfg=dict(num_gpus=1),
-                                end_str='[INST]')
-turbomind_llama2_7b_chat_4bits = deepcopy(turbomind_llama2_7b_chat)
-turbomind_llama2_7b_chat_kvint4 = deepcopy(turbomind_llama2_7b_chat)
-turbomind_llama2_7b_chat_kvint8 = deepcopy(turbomind_llama2_7b_chat)
+turbomind_llama2_7b_chat = deepcopy(*lmdeploy_llama2_7b_chat)
+turbomind_llama2_7b_chat_4bits = deepcopy(*lmdeploy_llama2_7b_chat)
+turbomind_llama2_7b_chat_kvint4 = deepcopy(*lmdeploy_llama2_7b_chat)
+turbomind_llama2_7b_chat_kvint8 = deepcopy(*lmdeploy_llama2_7b_chat)
 
 # ===== Configs for meta-llama/Meta-Llama-3-8B-Instruct =====
 turbomind_llama3_8b_instruct = deepcopy(*lmdeploy_llama3_8b_instruct)
@@ -218,6 +207,7 @@ turbomind_llama3_1_8b_instruct_kvint4 = deepcopy(
 turbomind_llama3_1_8b_instruct_kvint8 = deepcopy(
     turbomind_llama3_1_8b_instruct)
 pytorch_llama3_1_8b_instruct = deepcopy(turbomind_llama3_1_8b_instruct)
+pytorch_llama3_1_8b_instruct_w8a8 = deepcopy(turbomind_llama3_1_8b_instruct)
 
 # ===== Configs for Qwen/Qwen2-7B-Instruct =====
 turbomind_qwen2_7b_instruct = deepcopy(*lmdeploy_qwen2_7b_instruct)
@@ -225,16 +215,29 @@ turbomind_qwen2_7b_instruct_4bits = deepcopy(*lmdeploy_qwen2_7b_instruct)
 turbomind_qwen2_7b_instruct_kvint4 = deepcopy(*lmdeploy_qwen2_7b_instruct)
 turbomind_qwen2_7b_instruct_kvint8 = deepcopy(*lmdeploy_qwen2_7b_instruct)
 pytorch_qwen2_7b_instruct = deepcopy(*lmdeploy_qwen2_7b_instruct)
+pytorch_qwen2_7b_instruct_w8a8 = deepcopy(*lmdeploy_qwen2_7b_instruct)
+
+# ===== Configs for Qwen/Qwen25-7B-Instruct =====
+turbomind_qwen2_5_7b_instruct = deepcopy(*lmdeploy_qwen2_5_7b_instruct)
+turbomind_qwen2_5_7b_instruct_4bits = deepcopy(*lmdeploy_qwen2_5_7b_instruct)
+turbomind_qwen2_5_7b_instruct_kvint4 = deepcopy(*lmdeploy_qwen2_5_7b_instruct)
+turbomind_qwen2_5_7b_instruct_kvint8 = deepcopy(*lmdeploy_qwen2_5_7b_instruct)
+pytorch_qwen2_5_7b_instruct = deepcopy(*lmdeploy_qwen2_5_7b_instruct)
+pytorch_qwen2_5_7b_instruct_w8a8 = deepcopy(*lmdeploy_qwen2_5_7b_instruct)
 
 for model in [v for k, v in locals().items() if k.startswith('turbomind_')]:
-    model['engine_config']['max_batch_size'] = 128
+    model['engine_config']['max_batch_size'] = 256
     model['gen_config']['do_sample'] = False
-    model['batch_size'] = 128
+    model['batch_size'] = 500
 
 for model in [v for k, v in locals().items() if k.endswith('_4bits')]:
     model['engine_config']['model_format'] = 'awq'
     model['abbr'] = model['abbr'] + '_4bits'
     model['path'] = model['path'] + '-inner-4bits'
+
+for model in [v for k, v in locals().items() if k.endswith('_w8a8')]:
+    model['abbr'] = model['abbr'] + '_w8a8'
+    model['path'] = model['path'] + '-inner-w8a8'
 
 for model in [v for k, v in locals().items() if k.endswith('_kvint4')]:
     model['engine_config']['quant_policy'] = 4
@@ -247,9 +250,9 @@ for model in [v for k, v in locals().items() if k.endswith('_kvint8')]:
 for model in [v for k, v in locals().items() if k.startswith('pytorch_')]:
     model['abbr'] = model['abbr'].replace('turbomind', 'pytorch')
     model['backend'] = 'pytorch'
-    model['engine_config']['max_batch_size'] = 64
+    model['engine_config']['max_batch_size'] = 128
     model['gen_config']['do_sample'] = False
-    model['batch_size'] = 64
+    model['batch_size'] = 500
 
 for model in [v for k, v in locals().items() if '_batch1' in k]:
     model['abbr'] = model['abbr'] + '_batch1'
@@ -276,6 +279,13 @@ pytorch_qwen1_5_moe_2_7b_chat['path'] = 'Qwen/Qwen1.5-MoE-A2.7B-Chat'
 pytorch_gemma_2_9b_it = deepcopy(basic_pytorch_chat_tp1)
 pytorch_gemma_2_9b_it['abbr'] = 'pytorch_gemma_2_9b_it'
 pytorch_gemma_2_9b_it['path'] = 'google/gemma-2-9b-it'
+
+# ===== Configs for google/gemma2-27b-it =====
+pytorch_gemma_2_27b_it = deepcopy(basic_pytorch_chat_tp1)
+pytorch_gemma_2_27b_it['abbr'] = 'pytorch_gemma_2_27b_it'
+pytorch_gemma_2_27b_it['path'] = 'google/gemma-2-27b-it'
+pytorch_gemma_2_27b_it['run_cfg']['num_gpus'] = 2
+pytorch_gemma_2_27b_it['engine_config']['tp'] = 2
 
 race_datasets = [race_datasets[1]]
 
