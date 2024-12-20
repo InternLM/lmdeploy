@@ -69,6 +69,7 @@ turbomind_chat_model:
     - THUDM/glm-4-9b-chat
     - openbmb/MiniCPM-Llama3-V-2_5
     - openbmb/MiniCPM-V-2_6
+    - allenai/Molmo-7B-D-0924
 
 pytorch_chat_model:
     - meta-llama/Meta-Llama-3-8B-Instruct
@@ -179,6 +180,7 @@ turbomind_quatization:
         - deepseek-ai/deepseek-coder-1.3b-instruct
         - deepseek-ai/DeepSeek-V2-Lite-Chat
         - codellama/CodeLlama-7b-Instruct-hf
+        - allenai/Molmo-7B-D-0924
     gptq:
         - internlm/internlm2_5-7b-chat
     no_kvint4:
@@ -269,3 +271,4 @@ benchmark_model:
     - mistralai/Mistral-7B-Instruct-v0.3
     - mistralai/Mixtral-8x7B-Instruct-v0.1
     - deepseek-ai/DeepSeek-V2-Lite-Chat
+    - allenai/Molmo-7B-D-0924
