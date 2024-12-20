@@ -94,6 +94,8 @@ jobs:
     needs: linux-build
     if: ${{!cancelled()}}
     runs-on: [self-hosted, linux-a100]
+    outputs:
+      torch_version: ${{ steps.get_torch_version.outputs.torch_version }}
     timeout-minutes: 50
     container:
       image: openmmlab/lmdeploy:latest-cu11
@@ -125,6 +127,9 @@ jobs:
       - name: Copy Artifacts - offline
         if: ${{inputs.offline_mode}}
         run: rm ${{env.TEST_CODE_PATH}}/lmdeploy-*.whl -f && cp ${{env.OFFLINE_CODE_PATH}}/lmdeploy-*.whl ${{env.TEST_CODE_PATH}}
+      - name: Get torch_version
+        if: get_torch_version
+        run: echo "torch_version=$(pip list | grep torch | grep -v torchvision | awk -F 'torch' '{print $2}' | awk -F ' ' '{print $1}' | awk -F '.' '{print $1"."$2}')" >> "$GITHUB_OUTPUT"
 
   test_quantization:
     needs: download_pkgs
@@ -151,12 +156,11 @@ jobs:
       - name: Copy repository and Artifacts
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
-          echo "TORCH_VERSION=$(pip list | grep torch | grep -v torchvision | awk -F 'torch' '{print $2}' | awk -F ' ' '{print $1}' | awk -F '.' '{print $1"."$2}')" >> "$GITHUB_ENV"
       - name: Install lmdeploy - dependency
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.2.post1/flash_attn-2.7.2.post1+cu11torch${TORCH_VERSION}cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+          python3 -m pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.2.post1/flash_attn-2.7.2.post1+cu11torch${{needs.download_pkgs.outputs.torch_version}}cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
           python3 -m pip install -e /root/packages/AutoAWQ_kernels
           python3 -m pip install xformers --index-url https://download.pytorch.org/whl/cu118 --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
@@ -246,12 +250,11 @@ jobs:
       - name: Copy repository and Artifacts
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
-          echo "TORCH_VERSION=$(pip list | grep torch | grep -v torchvision | awk -F 'torch' '{print $2}' | awk -F ' ' '{print $1}' | awk -F '.' '{print $1"."$2}')" >> "$GITHUB_ENV"
       - name: Install lmdeploy - dependency
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.2.post1/flash_attn-2.7.2.post1+cu11torch${TORCH_VERSION}cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+          python3 -m pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.2.post1/flash_attn-2.7.2.post1+cu11torch{{needs.download_pkgs.outputs.torch_version}}cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
           python3 -m pip install -e /root/packages/AutoAWQ_kernels
           python3 -m pip install xformers --index-url https://download.pytorch.org/whl/cu118 --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
@@ -348,12 +351,11 @@ jobs:
       - name: Copy repository and Artifacts
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
-          echo "TORCH_VERSION=$(pip list | grep torch | grep -v torchvision | awk -F 'torch' '{print $2}' | awk -F ' ' '{print $1}' | awk -F '.' '{print $1"."$2}')" >> "$GITHUB_ENV"
       - name: Install lmdeploy - dependency
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.2.post1/flash_attn-2.7.2.post1+cu11torch${TORCH_VERSION}cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+          python3 -m pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.2.post1/flash_attn-2.7.2.post1+cu11torch{{needs.download_pkgs.outputs.torch_version}}cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
           python3 -m pip install -e /root/packages/AutoAWQ_kernels
           python3 -m pip install xformers --index-url https://download.pytorch.org/whl/cu118 --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
@@ -441,12 +443,11 @@ jobs:
       - name: Copy repository and Artifacts
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
-          echo "TORCH_VERSION=$(pip list | grep torch | grep -v torchvision | awk -F 'torch' '{print $2}' | awk -F ' ' '{print $1}' | awk -F '.' '{print $1"."$2}')" >> "$GITHUB_ENV"
       - name: Install lmdeploy - dependency
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.2.post1/flash_attn-2.7.2.post1+cu11torch${TORCH_VERSION}cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+          python3 -m pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.2.post1/flash_attn-2.7.2.post1+cu11torch{{needs.download_pkgs.outputs.torch_version}}cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
           python3 -m pip install -e /root/packages/AutoAWQ_kernels
           python3 -m pip install xformers --index-url https://download.pytorch.org/whl/cu118 --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
@@ -503,12 +504,11 @@ jobs:
       - name: Copy repository and Artifacts
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
-          echo "TORCH_VERSION=$(pip list | grep torch | grep -v torchvision | awk -F 'torch' '{print $2}' | awk -F ' ' '{print $1}' | awk -F '.' '{print $1"."$2}')" >> "$GITHUB_ENV"
       - name: Install lmdeploy - dependency
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.2.post1/flash_attn-2.7.2.post1+cu11torch${TORCH_VERSION}cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+          python3 -m pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.2.post1/flash_attn-2.7.2.post1+cu11torch{{needs.download_pkgs.outputs.torch_version}}cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
           python3 -m pip install -e /root/packages/AutoAWQ_kernels
           python3 -m pip install xformers --index-url https://download.pytorch.org/whl/cu118 --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
@@ -567,12 +567,11 @@ jobs:
       - name: Copy repository and Artifacts
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
-          echo "TORCH_VERSION=$(pip list | grep torch | grep -v torchvision | awk -F 'torch' '{print $2}' | awk -F ' ' '{print $1}' | awk -F '.' '{print $1"."$2}')" >> "$GITHUB_ENV"
       - name: Install lmdeploy - dependency
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.2.post1/flash_attn-2.7.2.post1+cu11torch${TORCH_VERSION}cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+          python3 -m pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.2.post1/flash_attn-2.7.2.post1+cu11torch{{needs.download_pkgs.outputs.torch_version}}cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
           python3 -m pip install -e /root/packages/AutoAWQ_kernels
           python3 -m pip install xformers --index-url https://download.pytorch.org/whl/cu118 --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
