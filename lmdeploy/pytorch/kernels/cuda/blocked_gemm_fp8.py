@@ -182,7 +182,7 @@ def _gemm_fp8_kernel(
     tl.store(c_ptrs, c, mask=c_mask)
 
 
-def gemm_fp8(A: Tensor,
+def blocked_gemm_fp8(A: Tensor,
              A_scale: Tensor,
              B: Tensor,
              B_scale: torch.Tensor,
