@@ -1,296 +1,132 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, Dict, List, Tuple
+from typing import Tuple
 
 import torch
-from torch import Tensor
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
-from lmdeploy.pytorch.model_inputs import StepContext
-from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMeta
 from lmdeploy.utils import get_logger
 
-from ...graph_runner import GraphRunner
+from ..op_backend import DlinferOpsBackend
 
 logger = get_logger('lmdeploy')
 
-BuffType = Dict[str, Tensor]
 
+class CambOpsBackend(DlinferOpsBackend):
+    """camb layer backend."""
+    total_slots = None
 
-def round_up_to_multiple_of_8(n: int):
-    return (n + 7) // 8 * 8 + 8
+    @staticmethod
+    def get_name() -> str:
+        """backend name."""
+        return 'camb'
 
-
-def _false(*args, **kwargs):
-    """default value of not support cuda graph."""
-    return False
-
-
-class CAMBSingleGraphRunner:
-    """camb single graph runner."""
-
-    def __init__(
-        self,
-        model: torch.nn.Module,
-        max_batches: int,
-        max_tokens: int,
-        num_blocks: int,
-        pool: Tuple[int, int],
-        device: torch.device,
-    ):
-        self.model = model
-        self.ctx_mgr = model.ctx_mgr
-        self.meta = CudaGraphMeta(
-            max_batchs=max_batches,
-            max_tokens=max_tokens,
-            num_blocks=num_blocks,
-            is_decoding=True,
-            device=device,
-            input_buffers=dict(),
-            output_buffers=dict(),
-        )
-        self.device = device
-        self.max_batches = max_batches
-        self.max_tokens = max_tokens
-        self.num_blocks = num_blocks
-        self.pool = pool
-        self._graph: torch.mlu.CUDAGraph = None
-
-    def capture(self, **kwargs):
-        """capture graph."""
-        self.meta.input_buffers = self.make_camb_buffers(self.meta, **kwargs)
-        padded_kwargs = self.update_camb_buffer(self.meta, **kwargs)
-
-        context = self.ctx_mgr.current_context()
-        self.update_camb_context(self.meta, context)
-        current_stream = torch.mlu.current_stream()
-
-        # warmup
-        output = self.model(**padded_kwargs)
-
-        self._graph = torch.mlu.CUDAGraph()
-        # unsafe kernel call in other thread might invalid the capture
-        # so we set thread_safe capture mode here.
-        with torch.mlu.graph(self._graph,
-                             pool=self.pool,
-                             stream=current_stream,
-                             capture_error_mode='thread_local'):
-            output = self.model(**padded_kwargs)
-
-        output_buffers = dict(logits=output)
-        self.meta.output_buffers = output_buffers
-        return output
-
-    def make_camb_buffers(self, graph_meta: CudaGraphMeta, *args,
-                          **kwargs) -> BuffType:
-        """make cudagraph buffers from forward inputs."""
-        max_batches = graph_meta.max_batchs
-        max_tokens = graph_meta.max_tokens
-        num_blocks = graph_meta.num_blocks
-        device = graph_meta.device
-
-        input_buffers: BuffType = dict()
-        input_buffers['input_ids'] = torch.zeros(1,
-                                                 max_tokens,
-                                                 dtype=torch.int32,
-                                                 device=device)
-        input_buffers['position_ids'] = torch.ones((1, max_tokens),
-                                                   dtype=torch.int32,
-                                                   device=device)
-
-        input_buffers['block_offsets'] = torch.zeros((max_batches, num_blocks),
-                                                     dtype=torch.int32,
-                                                     device=device)
-
-        input_buffers['q_start_loc'] = torch.arange(max_batches,
-                                                    dtype=torch.int32,
-                                                    device=device)
-
-        input_buffers['q_seqlens'] = torch.ones(max_batches,
-                                                dtype=torch.int32,
-                                                device=device)
-
-        input_buffers['kv_seqlens'] = torch.ones(max_batches,
-                                                 dtype=torch.int32,
-                                                 device=device)
-
-        input_buffers['kv_start_indices'] = torch.ones(
-            (max_batches * max_tokens), dtype=torch.int32, device=device)
-
-        input_buffers['local_adapter_ids'] = torch.zeros(max_batches,
-                                                         dtype=torch.int32,
-                                                         device=device)
-        return input_buffers
-
-    def update_camb_buffer(self, graph_meta: CudaGraphMeta, input_ids: Tensor,
-                           position_ids: Tensor, past_key_values: List,
-                           attn_metadata: Any, inputs_embeds: Tensor,
-                           **kwargs) -> Dict[str, Tensor]:
-        """fill cudagraph buffers from forward inputs."""
-        block_offsets: Tensor = attn_metadata.block_offsets
-        q_start_loc: Tensor = attn_metadata.q_start_loc
-        q_seqlens: Tensor = attn_metadata.q_seqlens
-        kv_seqlens: Tensor = attn_metadata.kv_seqlens
-        kv_start_indices: Tensor = attn_metadata.kv_start_indices
-
-        input_buffers: BuffType = graph_meta.input_buffers
-
-        batch_size, num_blocks = block_offsets.size()
-        num_tokens = input_ids.size(-1)
-        # fill buffer
-        input_buffers['input_ids'][:, :num_tokens] = input_ids
-        input_buffers['position_ids'][:, :num_tokens] = position_ids
-        input_buffers[
-            'block_offsets'][:batch_size, :num_blocks] = block_offsets
-        input_buffers['q_seqlens'][:batch_size] = q_seqlens
-        input_buffers['kv_seqlens'][:batch_size] = kv_seqlens
-        input_buffers['q_start_loc'][:batch_size + 1] = q_start_loc
-        input_buffers[
-            'kv_start_indices'][:num_tokens] = kv_start_indices[:num_tokens]
-
-        if inputs_embeds is not None:
-            emb_size = inputs_embeds.size(-1)
-            if 'inputs_embeds' not in input_buffers:
-                max_num_tokens = input_buffers['input_ids'].size(-1)
-                input_buffers['inputs_embeds'] = inputs_embeds.new_zeros(
-                    1, max_num_tokens, emb_size)
-            input_buffers['inputs_embeds'][:, :num_tokens] = inputs_embeds
-
-        # create inputs
-        new_num_tokens = round_up_to_multiple_of_8(num_tokens)
-        new_batch_size = new_num_tokens
-
-        attn_metadata.block_offsets = input_buffers[
-            'block_offsets'][:new_batch_size]
-        attn_metadata.q_start_loc = input_buffers[
-            'q_start_loc'][:new_batch_size]
-        attn_metadata.q_seqlens = input_buffers['q_seqlens'][:new_batch_size]
-        attn_metadata.kv_seqlens = input_buffers['kv_seqlens'][:new_batch_size]
-
-        attn_metadata.kv_start_indices = input_buffers[
-            'kv_start_indices'][:new_num_tokens]
-        new_inputs = dict(
-            past_key_values=past_key_values,
-            attn_metadata=attn_metadata,
+    @staticmethod
+    def get_k_block_shape(
+        block_size: int,
+        num_heads: int,
+        head_size: int,
+        dtype: torch.dtype,
+    ) -> Tuple[int, ...]:
+        return (
+            num_heads,
+            block_size,
+            head_size,
         )
 
-        # is_decoding:
-        new_inputs['input_ids'] = input_buffers[
-            'input_ids'][:, :new_batch_size]
-        new_inputs['position_ids'] = input_buffers[
-            'position_ids'][:, :new_batch_size]
+    @staticmethod
+    def get_v_block_shape(
+        block_size: int,
+        num_heads: int,
+        head_size: int,
+        dtype: torch.dtype,
+    ) -> Tuple[int, ...]:
+        return (
+            num_heads,
+            block_size,
+            head_size,
+        )
 
-        if inputs_embeds is not None:
-            new_inputs['inputs_embeds'] = input_buffers[
-                'inputs_embeds'][:, :new_batch_size]
+    @classmethod
+    def update_step_context(cls, step_context):
+        """update step context."""
 
-        new_inputs.update(kwargs)
-        return new_inputs
+        def get_total_slots():
+            if cls.total_slots is None:
+                cls.total_slots = torch.arange(
+                    block_num * block_size,
+                    dtype=torch.int32,
+                    device=step_context.block_offsets.device)
+                cls.total_slots = cls.total_slots.view(block_num, block_size)
+            return cls.total_slots
 
-    def update_camb_context(self, graph_meta, context):
-        """update step context with input buffers."""
-        input_buffers = graph_meta.input_buffers
-        local_adapter_ids = context.local_adapter_ids
-        if local_adapter_ids is not None:
-            if input_buffers['local_adapter_ids'].data_ptr(
-            ) != local_adapter_ids.data_ptr():
-                input_buffers['local_adapter_ids'].fill_(0)
-            batch_size = local_adapter_ids.size(0)
-            input_buffers['local_adapter_ids'][:batch_size] = local_adapter_ids
-            context.local_adapter_ids = input_buffers['local_adapter_ids']
-        context.q_seqlens = input_buffers['q_seqlens']
-        context.kv_seqlens = input_buffers['kv_seqlens']
-        context.q_start_loc = input_buffers['q_start_loc']
-        context.kv_start_indices = input_buffers['kv_start_indices']
+        kv_start_indices = []
+        block_num, _, block_size, _ = step_context.kv_caches[0][0].shape
 
-    def forward(self, **kwargs):
-        """forward."""
-        num_tokens = kwargs['input_ids'].size(-1)
-        assert self._graph is not None
-        self.update_camb_buffer(self.meta, **kwargs)
-        context = self.ctx_mgr.current_context()
-        self.update_camb_context(self.meta, context)
+        is_unpaged_prefill = False
+        q_start_loc = step_context.q_start_loc
+        q_seqlens = step_context.q_seqlens
+        kv_seqlens = step_context.kv_seqlens.to(torch.int32)
+        block_offsets = step_context.block_offsets.to(torch.int32)
+        max_q_seq_len = torch.max(q_seqlens).cpu().item()
+        max_kv_seq_len = torch.max(kv_seqlens).cpu().item()
 
-        self._graph.replay()
+        cu_seqlens = torch.cat(
+            (q_start_loc, q_seqlens.sum().unsqueeze(0))).int()
+        cu_seq_lens_kv = None
 
-        output = self.meta.output_buffers['logits'][:, :num_tokens]
-        return output
-
-    def __del__(self):
-        """del."""
-        del self._graph
-
-
-class CAMBGraphRunner(GraphRunner):
-    """CAMB graph runner."""
-
-    def __init__(self, model: torch.nn.Module, model_config: ModelConfig,
-                 cache_config: CacheConfig, backend_config: BackendConfig,
-                 device: torch.device):
-        super().__init__(model, model_config, cache_config, backend_config,
-                         device)
-        self.max_batches = cache_config.max_batches
-        self.max_tokens = cache_config.max_prefill_token_num
-        self.num_blocks = cache_config.num_gpu_blocks
-
-        self.enable_graph = self.check_enable_graph()
-
-        self.graph_pool_handle = torch.mlu.graph_pool_handle()
-        self._runner_map: Dict[Any, CAMBSingleGraphRunner] = dict()
-
-    def check_enable_graph(self):
-        """check enable graph."""
-        if self.backend_config.eager_mode:
-            return _false
-
-        return getattr(self.model, 'support_cuda_graph', _false)
-
-    def get_graph_key(self, input_ids: torch.Tensor,
-                      position_ids: torch.Tensor, past_key_values: List,
-                      attn_metadata: Any, inputs_embeds: torch.Tensor,
-                      **kwargs):
-        """get graph key."""
-        context = self.ctx_mgr.current_context()
-        is_decoding = context.is_decoding
-        num_tokens = input_ids.numel()
-        new_num_tokens = round_up_to_multiple_of_8(num_tokens)
-        return (new_num_tokens, is_decoding)
-
-    def __call__(self, **kwargs):
-        """call."""
-        enable_graph = self.enable_graph(**kwargs)
-        graph_key = self.get_graph_key(**kwargs)
-        max_tokens = graph_key[0]
-        is_decoding = graph_key[1]
-
-        # only enable graph when decoding
-        if (not enable_graph) or (not is_decoding):
-            return self.model(**kwargs)
-
-        if graph_key not in self._runner_map:
-            max_batches = max_tokens
-            runner = CAMBSingleGraphRunner(self.model,
-                                           max_batches=max_batches,
-                                           max_tokens=max_tokens,
-                                           num_blocks=self.num_blocks,
-                                           pool=self.graph_pool_handle,
-                                           device=self.device)
-            runner.capture(**kwargs)
-            self._runner_map[graph_key] = runner
+        q_seqlens_list = step_context.q_seqlens.tolist()
+        kv_seqlens_list = step_context.kv_seqlens.tolist()
+        if not step_context.is_decoding:
+            is_unpaged_prefill = q_seqlens_list == kv_seqlens_list
+            # get kv_indices
+            for i in range(q_start_loc.size(0)):
+                q_seq_len = q_seqlens_list[i]
+                kv_seq_len = kv_seqlens_list[i]
+                # collect kv start indices.
+                history_length = kv_seq_len - q_seq_len
+                total_slots = get_total_slots()
+                slot_tables = total_slots[block_offsets[i]].view(-1)
+                slots = slot_tables[history_length:kv_seq_len]
+                kv_start_indices.append(slots)
+            kv_start_indices = torch.cat(kv_start_indices)
+            if not is_unpaged_prefill:
+                cu_seq_lens_kv = torch.cat(
+                    (torch.tensor([0], device=kv_seqlens.device),
+                     kv_seqlens.cumsum(0))).int()
         else:
-            runner = self._runner_map[graph_key]
+            # collect kv_start_indices without using a for-loop,
+            # (fill kv-cache for just ONE token during the decoding phase)
+            idx = (step_context.kv_seqlens - 1) % block_size
+            block_num = (step_context.kv_seqlens - 1) // block_size
+            last_block = block_offsets.gather(  # dtype of gather must be int64
+                1, block_num.view(-1, 1)).view(-1)
+            kv_start_indices = (last_block * block_size + idx).to(torch.int32)
 
-        output = runner.forward(**kwargs)
-        return output
-
-    def prepare_inputs_for_generation(
-        self,
-        past_key_values: List[List[torch.Tensor]],
-        inputs_embeds: torch.Tensor = None,
-        context: StepContext = None,
-    ):
-        """prepare inputs."""
-        return self.model.prepare_inputs_for_generation(
-            past_key_values=past_key_values,
-            inputs_embeds=inputs_embeds,
-            context=context,
+        attn_meta_cls = cls.get_attention_metadata_cls()
+        attn_metadata = attn_meta_cls(
+            step_context.is_decoding,
+            block_offsets,
+            q_start_loc=cu_seqlens,
+            cu_seq_lens_kv=cu_seq_lens_kv,
+            q_seqlens=q_seqlens,
+            kv_seqlens=kv_seqlens,
+            kv_start_indices=kv_start_indices,
+            block_size=block_size,
+            attention_mask=None,
+            is_unpaged_prefill=is_unpaged_prefill,
+            max_q_seq_len=max_q_seq_len,
+            max_kv_seq_len=max_kv_seq_len,
         )
+
+        step_context.attn_metadata = attn_metadata
+        return step_context
+
+    @staticmethod
+    def build_graph_runner(model: torch.nn.Module, model_config: ModelConfig,
+                           cache_config: CacheConfig,
+                           backend_config: BackendConfig,
+                           device: torch.device):
+        """build graph runner."""
+        from .graph_runner import CAMBGraphRunner
+        return CAMBGraphRunner(model, model_config, cache_config,
+                               backend_config, device)

@@ -34,7 +34,6 @@ class CAMBSingleGraphRunner:
         max_batches: int,
         max_tokens: int,
         num_blocks: int,
-        is_decoding: bool,
         pool: Tuple[int, int],
         device: torch.device,
     ):
@@ -44,7 +43,7 @@ class CAMBSingleGraphRunner:
             max_batchs=max_batches,
             max_tokens=max_tokens,
             num_blocks=num_blocks,
-            is_decoding=is_decoding,
+            is_decoding=True,
             device=device,
             input_buffers=dict(),
             output_buffers=dict(),
@@ -53,7 +52,6 @@ class CAMBSingleGraphRunner:
         self.max_batches = max_batches
         self.max_tokens = max_tokens
         self.num_blocks = num_blocks
-        self.is_decoding = is_decoding
         self.pool = pool
         self._graph: torch.mlu.CUDAGraph = None
 
@@ -115,7 +113,7 @@ class CAMBSingleGraphRunner:
                                                  dtype=torch.int32,
                                                  device=device)
 
-        input_buffers['kv_start_indices'] = -torch.ones(
+        input_buffers['kv_start_indices'] = torch.ones(
             (max_batches * max_tokens), dtype=torch.int32, device=device)
 
         input_buffers['local_adapter_ids'] = torch.zeros(max_batches,
@@ -128,7 +126,6 @@ class CAMBSingleGraphRunner:
                            attn_metadata: Any, inputs_embeds: Tensor,
                            **kwargs) -> Dict[str, Tensor]:
         """fill cudagraph buffers from forward inputs."""
-        is_decoding = graph_meta.is_decoding
         block_offsets: Tensor = attn_metadata.block_offsets
         q_start_loc: Tensor = attn_metadata.q_start_loc
         q_seqlens: Tensor = attn_metadata.q_seqlens
@@ -144,15 +141,9 @@ class CAMBSingleGraphRunner:
         input_buffers['position_ids'][:, :num_tokens] = position_ids
         input_buffers[
             'block_offsets'][:batch_size, :num_blocks] = block_offsets
-        # if q_seqlens.data_ptr() != input_buffers['q_seqlens'].data_ptr():
-        #     input_buffers['q_seqlens'].zero_()
         input_buffers['q_seqlens'][:batch_size] = q_seqlens
-        # if kv_seqlens.data_ptr() != input_buffers['kv_seqlens'].data_ptr():
-        #     input_buffers['kv_seqlens'].zero_()
         input_buffers['kv_seqlens'][:batch_size] = kv_seqlens
-        # import pdb; pdb.set_trace()
         input_buffers['q_start_loc'][:batch_size + 1] = q_start_loc
-
         input_buffers[
             'kv_start_indices'][:num_tokens] = kv_start_indices[:num_tokens]
 
@@ -165,8 +156,8 @@ class CAMBSingleGraphRunner:
             input_buffers['inputs_embeds'][:, :num_tokens] = inputs_embeds
 
         # create inputs
-        new_batch_size = round_up_to_multiple_of_8(batch_size)
         new_num_tokens = round_up_to_multiple_of_8(num_tokens)
+        new_batch_size = new_num_tokens
 
         attn_metadata.block_offsets = input_buffers[
             'block_offsets'][:new_batch_size]
@@ -182,21 +173,15 @@ class CAMBSingleGraphRunner:
             attn_metadata=attn_metadata,
         )
 
-        if is_decoding:
-            new_inputs['input_ids'] = input_buffers[
-                'input_ids'][:, :new_batch_size]
-            new_inputs['position_ids'] = input_buffers[
-                'position_ids'][:, :new_batch_size]
-        else:
-            new_inputs['input_ids'] = input_buffers['input_ids']
-            new_inputs['position_ids'] = input_buffers['position_ids']
+        # is_decoding:
+        new_inputs['input_ids'] = input_buffers[
+            'input_ids'][:, :new_batch_size]
+        new_inputs['position_ids'] = input_buffers[
+            'position_ids'][:, :new_batch_size]
 
         if inputs_embeds is not None:
-            if is_decoding:
-                new_inputs['inputs_embeds'] = input_buffers[
-                    'inputs_embeds'][:, :new_batch_size]
-            else:
-                new_inputs['inputs_embeds'] = input_buffers['inputs_embeds']
+            new_inputs['inputs_embeds'] = input_buffers[
+                'inputs_embeds'][:, :new_batch_size]
 
         new_inputs.update(kwargs)
         return new_inputs
@@ -277,16 +262,16 @@ class CAMBGraphRunner(GraphRunner):
         max_tokens = graph_key[0]
         is_decoding = graph_key[1]
 
+        # only enable graph when decoding
         if (not enable_graph) or (not is_decoding):
             return self.model(**kwargs)
 
         if graph_key not in self._runner_map:
-            max_batches = max_tokens if is_decoding else self.max_batches
+            max_batches = max_tokens
             runner = CAMBSingleGraphRunner(self.model,
                                            max_batches=max_batches,
                                            max_tokens=max_tokens,
                                            num_blocks=self.num_blocks,
-                                           is_decoding=is_decoding,
                                            pool=self.graph_pool_handle,
                                            device=self.device)
             runner.capture(**kwargs)
