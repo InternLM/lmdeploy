@@ -158,8 +158,8 @@ jobs:
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
-          python3 -m pip install /root/packages/xformers-0.0.28.post1-cp310-cp310-manylinux_2_28_x86_64.whl --no-deps
+          python3 -m pip install /root/packages/autoawq-*.whl --no-deps
+          python3 -m pip install /root/packages/xformers-*.whl --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
@@ -245,8 +245,8 @@ jobs:
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
-          python3 -m pip install /root/packages/xformers-0.0.28.post1-cp310-cp310-manylinux_2_28_x86_64.whl --no-deps
+          python3 -m pip install /root/packages/autoawq-*.whl --no-deps
+          python3 -m pip install /root/packages/xformers-*.whl --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
@@ -345,8 +345,8 @@ jobs:
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
-          python3 -m pip install /root/packages/xformers-0.0.28.post1-cp310-cp310-manylinux_2_28_x86_64.whl --no-deps
+          python3 -m pip install /root/packages/autoawq-*.whl --no-deps
+          python3 -m pip install /root/packages/xformers-*.whl --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
@@ -437,8 +437,8 @@ jobs:
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
-          python3 -m pip install /root/packages/xformers-0.0.28.post1-cp310-cp310-manylinux_2_28_x86_64.whl --no-deps
+          python3 -m pip install /root/packages/autoawq-*.whl --no-deps
+          python3 -m pip install /root/packages/xformers-*.whl --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
@@ -498,8 +498,8 @@ jobs:
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
-          python3 -m pip install /root/packages/xformers-0.0.28.post1-cp310-cp310-manylinux_2_28_x86_64.whl --no-deps
+          python3 -m pip install /root/packages/autoawq-*.whl --no-deps
+          python3 -m pip install /root/packages/xformers-*.whl --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
@@ -560,8 +560,8 @@ jobs:
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
-          python3 -m pip install /root/packages/xformers-0.0.28.post1-cp310-cp310-manylinux_2_28_x86_64.whl --no-deps
+          python3 -m pip install /root/packages/autoawq-*.whl --no-deps
+          python3 -m pip install /root/packages/xformers-*.whl --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
