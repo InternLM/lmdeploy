@@ -133,9 +133,9 @@ jobs:
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          export TORCH_VERSION=$(pip list | grep torch | grep -v torchvision | awk -F 'torch' '{print $2}' | awk -F ' ' '{print $1}' | awk -F '.' '{print $1"."$2}')
-          python3 -m pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.2.post1/flash_attn-2.7.2.post1+cu11torch${{TORCH_VERSION}}cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
-          python3 -m pip install xformers --index-url https://download.pytorch.org/whl/cu118 --no-deps
+          python3 -m pip install /root/packages/flash_attn-*.whl
+          python3 -m pip install -e /root/packages/AutoAWQ_kernels
+          python3 -m pip install /root/packages/xformers-*.whl --no-deps
           python3 -m pip install -r /root/models/offline_pkg/requirements.txt
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
