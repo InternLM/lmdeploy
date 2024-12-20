@@ -31,34 +31,31 @@ class FalconAttention(torch.nn.Module):
 
         self.hidden_size = config.hidden_size
         self.num_attention_heads = config.num_attention_heads
-        self.num_kv_heads = self.num_attention_heads
+        self.num_kv_heads = getattr(config, 'num_kv_heads',
+                                    config.num_attention_heads)
+        num_replicate_kv_heads = getattr(config,
+                                         'num_replicate_key_value_heads', 1)
         self.head_size = (self.hidden_size // config.num_attention_heads)
-        self.multi_query_attention = config.multi_query
-        if self.multi_query_attention:
-            self.num_kv_heads = 1
         self.query_key_value = build_qkv_proj(
             config.hidden_size,
             num_q_heads=self.num_attention_heads,
             num_kv_heads=self.num_kv_heads,
             head_size=self.head_size,
             bias=config.bias,
-            replicate_kv=self.multi_query_attention,
             quant_config=quantization_config,
             dtype=dtype,
             device=device,
-        )
+            num_replicate_kv_heads=num_replicate_kv_heads)
 
         # apply rotary
         self.apply_rotary_pos_emb = ApplyRotaryEmb()
         self.rotary = config.rotary
 
         # attention
-        self.attn_fwd = Attention(
-            self.num_attention_heads,
-            self.head_size,
-            num_kv_heads=self.num_kv_heads,
-            alibi=config.alibi,
-        )
+        self.attn_fwd = Attention(self.num_attention_heads,
+                                  self.head_size,
+                                  num_kv_heads=self.num_kv_heads,
+                                  alibi=config.alibi)
 
         # o_proj
         self.dense = build_rowwise_linear(self.hidden_size,
