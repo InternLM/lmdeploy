@@ -16,7 +16,7 @@ class DefaultMultinomialSamplingImpl(MultinomialSamplingImpl):
         """forward."""
         sampled_index = torch.multinomial(scores,
                                           num_samples=1,
-                                          replacement=False)
+                                          replacement=True)
         outputs = torch.gather(indices, dim=1, index=sampled_index)
         return outputs.view(-1)
 
