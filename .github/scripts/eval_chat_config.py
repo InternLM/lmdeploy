@@ -1,7 +1,7 @@
 from copy import deepcopy
 
 from mmengine.config import read_base
-from opencompass.models import TurboMindModel, TurboMindModelwithChatTemplate
+from opencompass.models import TurboMindModelwithChatTemplate
 
 with read_base():
     # choose a list of datasets
