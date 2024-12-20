@@ -11,7 +11,10 @@ def get_distribute_size(feature_size: int,
     """update feature size."""
     assert feature_size % align == 0
     aligned_size = feature_size // align
-    align_per_rank = div_up(aligned_size, world_size)
-    prev_feats = align_per_rank * rank
-    updated_aligned_size = min(align_per_rank, aligned_size - prev_feats)
+    # try to make every rank has same amount of feats
+    updated_aligned_size = aligned_size // world_size
+    # if there are still some remain, given them to
+    # each rank
+    if rank < aligned_size % world_size:
+        updated_aligned_size += 1
     return updated_aligned_size * align

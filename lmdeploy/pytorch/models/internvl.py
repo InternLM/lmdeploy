@@ -141,7 +141,8 @@ class InternAttention(nn.Module):
                                          quant_config=quantization_config,
                                          dtype=dtype,
                                          device=device,
-                                         is_tp=True)
+                                         is_tp=True,
+                                         tp_align_size=self.head_dim)
 
     def forward(self, hidden_states):
         """forward."""
