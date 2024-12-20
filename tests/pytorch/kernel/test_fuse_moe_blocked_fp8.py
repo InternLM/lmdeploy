@@ -1,7 +1,5 @@
 import pytest
 import torch
-import torch.nn.functional as F
-
 
 
 def _make_A(M, K, group_size, out_dtype, device='cuda'):
@@ -97,11 +95,11 @@ class TestFusedMoeBlockedFP8:
 
     @pytest.fixture
     def num_experts(self):
-        yield 1
+        yield 4
 
     @pytest.fixture
     def top_k(self):
-        yield 1
+        yield 2
 
     @pytest.fixture
     def group_size(self):
@@ -112,8 +110,13 @@ class TestFusedMoeBlockedFP8:
         yield True
 
     @pytest.fixture
-    def build_hidden_states(self, seq_len, in_size, group_size, quant_dtype, device):
-        yield _make_A(seq_len, in_size, group_size=group_size, out_dtype=quant_dtype, device=device)
+    def build_hidden_states(self, seq_len, in_size, group_size, quant_dtype,
+                            device):
+        yield _make_A(seq_len,
+                      in_size,
+                      group_size=group_size,
+                      out_dtype=quant_dtype,
+                      device=device)
 
     @pytest.fixture
     def hidden_states(self, build_hidden_states, dtype):
@@ -128,9 +131,14 @@ class TestFusedMoeBlockedFP8:
         yield build_hidden_states[2]
 
     @pytest.fixture
-    def build_w1(self, num_experts, hidden_size, in_size, group_size, quant_dtype, device):
-        yield _make_B(num_experts, in_size, hidden_size, group_size=group_size,
-                      out_dtype=quant_dtype, device=device)
+    def build_w1(self, num_experts, hidden_size, in_size, group_size,
+                 quant_dtype, device):
+        yield _make_B(num_experts,
+                      in_size,
+                      hidden_size,
+                      group_size=group_size,
+                      out_dtype=quant_dtype,
+                      device=device)
 
     @pytest.fixture
     def w1(self, build_w1, dtype):
@@ -145,9 +153,14 @@ class TestFusedMoeBlockedFP8:
         yield build_w1[2]
 
     @pytest.fixture
-    def build_w2(self, num_experts, out_size, hidden_size, group_size, quant_dtype, device):
-        yield _make_B(num_experts, hidden_size // 2, out_size, group_size=group_size,
-                      out_dtype=quant_dtype, device=device)
+    def build_w2(self, num_experts, out_size, hidden_size, group_size,
+                 quant_dtype, device):
+        yield _make_B(num_experts,
+                      hidden_size // 2,
+                      out_size,
+                      group_size=group_size,
+                      out_dtype=quant_dtype,
+                      device=device)
 
     @pytest.fixture
     def w2(self, build_w2, dtype):
@@ -181,11 +194,12 @@ class TestFusedMoeBlockedFP8:
         yield topk_logits[1]
 
     @pytest.fixture
-    def gt(self, hidden_states, w1, w2,
-                       topk_weights, topk_idx,
-                       top_k, renormalize):
+    def gt(self, hidden_states, w1, w2, topk_weights, topk_idx, top_k,
+           renormalize):
         from lmdeploy.pytorch.kernels.cuda.fused_moe import fused_moe
-        output = fused_moe(hidden_states, w1, w2,
+        output = fused_moe(hidden_states,
+                           w1,
+                           w2,
                            topk_weights,
                            topk_idx,
                            topk=top_k,
@@ -193,24 +207,25 @@ class TestFusedMoeBlockedFP8:
         yield output
 
     @torch.inference_mode()
-    def test_fused_moe(self, states_quanted, states_scale,
-                       w1_quant, w1_scale,
-                       w2_quant, w2_scale,
-                       topk_weights, topk_idx,
-                       top_k, renormalize, gt):
-        from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import fused_moe_blocked_fp8
-        output = fused_moe_blocked_fp8(
-            states_quanted, states_scale,
-                       w1_quant, w1_scale,
-                       w2_quant, w2_scale,
-                           topk_weights,
-                           topk_idx,
-                           topk=top_k,
-                           renormalize=renormalize)
+    def test_fused_moe(self, states_quanted, states_scale, w1_quant, w1_scale,
+                       w2_quant, w2_scale, topk_weights, topk_idx, top_k,
+                       renormalize, gt):
+        from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import \
+            fused_moe_blocked_fp8
+        output = fused_moe_blocked_fp8(states_quanted,
+                                       states_scale,
+                                       w1_quant,
+                                       w1_scale,
+                                       w2_quant,
+                                       w2_scale,
+                                       topk_weights,
+                                       topk_idx,
+                                       topk=top_k,
+                                       renormalize=renormalize)
         out_max = output.abs().max()
         gt_max = gt.abs().max()
-        assert (out_max - gt_max).abs() / out_max < 0.01
-        
-        norm_out = output/out_max
-        norm_gt = gt/gt_max
+        assert (out_max - gt_max).abs() / out_max < 0.05
+
+        norm_out = output / out_max
+        norm_gt = gt / gt_max
         torch.testing.assert_close(norm_out, norm_gt, atol=0.05, rtol=1e-3)

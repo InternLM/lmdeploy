@@ -5,26 +5,24 @@ import triton
 import triton.language as tl
 
 from .activation import silu_and_mul
-from .fused_moe import _get_sorted_idx, _make_intermediate, _renormalize
 from .blocked_gemm_fp8 import quant_fp8
+from .fused_moe import _get_sorted_idx, _make_intermediate, _renormalize
 
 
 def get_cuda_autotune_config():
     return [
-        triton.Config(
-            {
-                'BLOCK_SIZE_M': 128,
-                'BLOCK_SIZE_N': 64,
-            },
-            num_stages=3,
-            num_warps=4),
-        triton.Config(
-            {
-                'BLOCK_SIZE_M': 64,
-                'BLOCK_SIZE_N': 128,
-            },
-            num_stages=3,
-            num_warps=4),
+        triton.Config({
+            'BLOCK_SIZE_M': 128,
+            'BLOCK_SIZE_N': 64,
+        },
+                      num_stages=3,
+                      num_warps=4),
+        triton.Config({
+            'BLOCK_SIZE_M': 64,
+            'BLOCK_SIZE_N': 128,
+        },
+                      num_stages=3,
+                      num_warps=4),
     ]
 
 
@@ -120,7 +118,7 @@ def fused_moe_blocked_f8_kernel(
     exp_off = stride_be * exp_id
     b_ptrs = B + exp_off + (offs_k[:, None] * stride_bk +
                             offs_bn[None, :] * stride_bn)
-    
+
     offs_bsn = pid_n * BLOCK_SIZE_N // group_bn
     as_ptrs = A_scale + offs_am * stride_asm
     bs_ptrs = B_scale + stride_bse * exp_id + offs_bsn * stride_bsn
@@ -264,18 +262,18 @@ def fused_moe_blocked_fp8_kernel_launcher(
 
 
 def fused_moe_blocked_fp8(input: torch.Tensor,
-                   input_scale: torch.Tensor,
-                   w1: torch.Tensor,
-                   w1_scale: torch.Tensor,
-                   w2: torch.Tensor,
-                   w2_scale: torch.Tensor,
-                   topk_weights: torch.Tensor,
-                   topk_ids: torch.Tensor,
-                   topk: int,
-                   out_dtype: torch.dtype = torch.float16,
-                   expert_offset: int = 0,
-                   num_experts: int = None,
-                   renormalize: bool = False) -> torch.Tensor:
+                          input_scale: torch.Tensor,
+                          w1: torch.Tensor,
+                          w1_scale: torch.Tensor,
+                          w2: torch.Tensor,
+                          w2_scale: torch.Tensor,
+                          topk_weights: torch.Tensor,
+                          topk_ids: torch.Tensor,
+                          topk: int,
+                          out_dtype: torch.dtype = torch.float16,
+                          expert_offset: int = 0,
+                          num_experts: int = None,
+                          renormalize: bool = False) -> torch.Tensor:
     """fused moe."""
     device = input.device
     M = input.size(0)
@@ -315,7 +313,9 @@ def fused_moe_blocked_fp8(input: torch.Tensor,
     intermediate_cache1 = intermediate_cache1.flatten(0, -2)
     gate_cache = silu_and_mul(intermediate_cache1)
     del intermediate_cache1
-    gate_cache, gate_scale = quant_fp8(gate_cache, group_size, dtype=input.dtype)
+    gate_cache, gate_scale = quant_fp8(gate_cache,
+                                       group_size,
+                                       dtype=input.dtype)
 
     intermediate_cache2 = _make_intermediate((M, topk, w2.shape[1]),
                                              dtype=out_dtype,
