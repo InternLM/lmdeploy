@@ -183,10 +183,10 @@ def _gemm_fp8_kernel(
 
 
 def blocked_gemm_fp8(A: Tensor,
-             A_scale: Tensor,
-             B: Tensor,
-             B_scale: torch.Tensor,
-             out_dtype: torch.dtype = torch.float16):
+                     A_scale: Tensor,
+                     B: Tensor,
+                     B_scale: torch.Tensor,
+                     out_dtype: torch.dtype = torch.float16):
     """gemm fp8."""
 
     def grid(META):
