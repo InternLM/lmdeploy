@@ -12,7 +12,7 @@ from lmdeploy.utils import get_logger
 
 from ..backends import OpType, get_backend
 from ..backends.lora import AdapterInfo
-from .utils import div_up, get_distribute_size
+from .utils import get_distribute_size
 
 logger = get_logger('lmdeploy')
 
@@ -32,9 +32,11 @@ def _chunk_align(weight: torch.Tensor, chunks: int, dim: int, align: int):
     size = weight.size(dim)
     assert size % align == 0
     aligned_size = size // align
-    align_per_chunk = div_up(aligned_size, chunks)
-    sections = [align_per_chunk] * (chunks - 1)
-    sections += [aligned_size - align_per_chunk * (chunks - 1)]
+
+    # try best to evenly split chunks
+    align_per_chunk = aligned_size // chunks
+    remain = aligned_size % chunks
+    sections = [align_per_chunk + int(c < remain) for c in range(chunks)]
     sections = [sec * align for sec in sections]
     return weight.split(sections, dim=dim)
 
