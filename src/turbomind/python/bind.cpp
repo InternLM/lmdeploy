@@ -12,9 +12,9 @@
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 
+#include "src/turbomind/engine/model_request.h"
 #include "src/turbomind/python/dlpack.h"
 #include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
-#include "src/turbomind/engine/model_request.h"
 #include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -499,8 +499,11 @@ PYBIND11_MODULE(_turbomind, m)
             "cb"_a)
         .def(
             "cancel",
-            [](ModelRequest* model_request) { model_request->Cancel(); },
-            py::call_guard<py::gil_scoped_release>())
+            [](ModelRequest* model_request, std::function<void(int)> cb) {
+                model_request->Cancel(std::move(cb));  //
+            },
+            py::call_guard<py::gil_scoped_release>(),
+            "cb"_a)
         .def(
             "end",
             [](ModelRequest* model_request, std::function<void(int)> cb) {

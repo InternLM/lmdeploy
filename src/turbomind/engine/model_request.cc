@@ -59,10 +59,12 @@ ModelRequest::ModelRequest(Gateway* gateway, int session_len, int vocab_size):
 {
 }
 
-void ModelRequest::Cancel()
+void ModelRequest::Cancel(std::function<void(int)> cb)
 {
     // request is finished if lock failed
     if (auto r = request_.lock()) {
+        // the cb will be synced to engine via release-acquire semantics
+        r->cancel_cb = std::move(cb);
         gateway_->cancel(std::move(r));
     }
 }

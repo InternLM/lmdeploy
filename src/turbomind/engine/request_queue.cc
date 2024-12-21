@@ -34,6 +34,9 @@ void RequestQueue::cancel(std::shared_ptr<Request> r)
         // not picked by engine yet, skip directly
         gateway_->notify({[r = std::move(r)] {  //
             UpdateState(*r, Request::kCancel, 0);
+            if (r->cancel_cb) {
+                r->cancel_cb(0);
+            }
         }});
     }
 }

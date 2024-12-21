@@ -417,13 +417,22 @@ class TurboMindInstance:
         if blocking:
             self.done_event.wait()
 
-    async def async_cancel(self, session_id: int, blocking: bool = False):
+    def async_cancel_cb(self, status: int):
+
+        async def _signal():
+            print(f'session canceled, status = {status}')
+            self.cancel_event.set()
+
+        asyncio.run_coroutine_threadsafe(_signal(), self.event_loop)
+
+
+    async def async_cancel(self, session_id: int = None):
         """End the given session."""
         if not self.is_canceled:
-            self.model_inst.cancel()
+            self.cancel_event = asyncio.Event()
+            self.model_inst.cancel(self.async_cancel_cb)
             self.is_canceled = True
-        if blocking:
-            await self.done_event.wait()
+        await self.cancel_event.wait()
 
     def prepare_embeddings(self,
                            input_embeddings=None,

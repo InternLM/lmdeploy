@@ -65,7 +65,7 @@ async def async_infer(generator, session_id, input_ids, gen_config,
             prev_len = tokens
             print(response, end='', flush=True)
             # if 'I' in response:
-            #     await generator.async_cancel(0, blocking=False)
+            #     await generator.async_cancel()
     return tokens
 
 
