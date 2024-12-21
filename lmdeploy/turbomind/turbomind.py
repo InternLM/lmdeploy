@@ -347,6 +347,9 @@ class TurboMindInstance:
 
         self.config = config
 
+        self.cond = None
+        self.done_event = None
+
     def _create_model_instance(self, device_id):
         model_inst = self.tm_model.model_comm.create_model_instance(device_id)
         return model_inst
@@ -414,7 +417,7 @@ class TurboMindInstance:
         if blocking:
             self.done_event.wait()
 
-    async def async_cancel(self, session_id: int, blocking: bool = True):
+    async def async_cancel(self, session_id: int, blocking: bool = False):
         """End the given session."""
         if not self.is_canceled:
             self.model_inst.cancel()
@@ -549,8 +552,14 @@ class TurboMindInstance:
             kwargs (dict): kwargs for backward compatibility
         """
         self.event_loop = asyncio.get_running_loop()
-        self.cond = asyncio.Condition()
-        self.done_event = asyncio.Event()
+
+        if self.done_event is not None:
+            await self.done_event.wait()
+            self.done_event.clear()
+        else:
+            self.cond = asyncio.Condition()
+            self.done_event = asyncio.Event()
+            
         self.is_canceled = False
         self.flag = 0
 
@@ -633,7 +642,6 @@ class TurboMindInstance:
                     self.flag = 0
                     state = shared_state.consume()
             self.done_event.set()
-            self.cond = None
             self.event_loop = None
 
     def _get_error_output(self):

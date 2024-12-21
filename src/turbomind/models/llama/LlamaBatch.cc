@@ -93,8 +93,10 @@ void DropEmbeddings(const Sequence& seq)
 }
 
 template<typename T>
-void LlamaBatch<T>::MarkConflictRequests(Requests& infer_reqs, Requests& kill_reqs)
+void LlamaBatch<T>::DisableConflictRequests(Requests& infer_reqs, Requests& kill_reqs)
 {
+    NvtxScope _("disable conflict");
+
     std::pmr::monotonic_buffer_resource    mbr;
     std::pmr::unordered_map<uint64_t, int> occur(&mbr);
 
@@ -146,6 +148,8 @@ void LlamaBatch<T>::ProcessCancelRequests(std::vector<Signal>& signals)
         if (r && r->is_canceled) {
             ++count;
             signals.push_back(Interrupt(i, true));
+            // Interrupt should reset r
+            FT_CHECK(!r);
         }
     }
     if (count) {
@@ -236,6 +240,7 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& reqs, std::vector<Signa
         auto& seq = *state.sequences[idx];
 
         if (step < seq.tokens.size()) {
+            // resize sequence tokens to match step
             seq.tokens.resize(step);
             seq.cache_len = std::min(seq.cache_len, step);
             DropEmbeddings(seq);
@@ -246,20 +251,23 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& reqs, std::vector<Signa
         {
             // `output_ids` contains all token ids of the sequences
             const auto output_ids_base = state.output_ids + session_len_ * idx;
-            auto       output_ids      = output_ids_base;
+            auto       d_output_ids    = output_ids_base;
+            auto       h_output_ids    = r->output_ids.getPtr<int>();
             // copy history tokens
             if (!seq.tokens.empty()) {
-                output_ids = Copy(seq.tokens.data(), seq.tokens.size(), output_ids);
+                d_output_ids = Copy(seq.tokens.data(), seq.tokens.size(), d_output_ids);
+                h_output_ids = std::copy_n(seq.tokens.data(), seq.tokens.size(), h_output_ids);
             }
 
             // copy input tokens
             if (input_length) {
-                output_ids = Copy(input_ids, input_length, output_ids);
+                d_output_ids = Copy(input_ids, input_length, d_output_ids);
+                h_output_ids = std::copy_n(input_ids, input_length, h_output_ids);
             }
 
             // total context length (history + input)
-            state.h_prompt_length[idx]  = output_ids - output_ids_base;
-            state.h_context_length[idx] = output_ids - output_ids_base;
+            state.h_prompt_length[idx]  = d_output_ids - output_ids_base;
+            state.h_context_length[idx] = d_output_ids - output_ids_base;
             state.h_finished[idx]       = false;
         }
 
@@ -1029,7 +1037,7 @@ void LlamaBatch<T>::InitializeSampling(const GenerationState& g)
     sync_check_cuda_error();
 
     Clear(token_ids_buf_, batch_size * session_len_);
-    invokeTransposeAxis01(token_ids_buf_, state_->output_ids, batch_size, session_len_, 1, stream_);
+    invokeTranspose2D(token_ids_buf_, state_->output_ids, batch_size, session_len_, stream_);
     sync_check_cuda_error();
 
     // token_ids_buf_[s, b]
@@ -1247,10 +1255,12 @@ void LlamaBatch<T>::OutputContextLogits(T*                                  cont
 }
 
 template<typename T>
-auto LlamaBatch<T>::Finish(GenerationState& g) -> std::vector<Signal>
+void LlamaBatch<T>::Finish(GenerationState& g, std::vector<Signal>& signals)
 {
     NvtxScope scope("Finish");
     const int batch_size = state_->active_size;
+
+    signals.reserve(batch_size);
 
     if (batch_size - g.partial) {
         FT_CHECK(g.step >= 0);
@@ -1267,13 +1277,22 @@ auto LlamaBatch<T>::Finish(GenerationState& g) -> std::vector<Signal>
         sync_check_cuda_error();
     }
 
-    Copy(state_->output_ids, batch_size * session_len_, h_output_ids_);
+    Copy(token_ids_buf_ + (g.step - 1) * (batch_size - g.partial), batch_size - g.partial, h_output_ids_);
     Copy(finished_buf_, batch_size, state_->h_finished);
     Copy(sequence_lengths_, batch_size, state_->h_context_length);
 
-    Copy(sampled_logprobs_, batch_size * kMaxLogProb, h_sampled_logprobs_);
-    Copy(sampled_indexes_, batch_size * kMaxLogProb, h_sampled_indexes_);
-    Copy(sampled_nums_, batch_size, h_sampled_nums_);
+    bool output_logprobs = false;
+    for (int i = 0; i < batch_size - g.partial; ++i) {
+        if (state_->requests[i]->gen_cfg.output_logprobs) {
+            output_logprobs = true;
+            break;
+        }
+    }
+    if (output_logprobs) {
+        Copy(sampled_logprobs_, batch_size * kMaxLogProb, h_sampled_logprobs_);
+        Copy(sampled_indexes_, batch_size * kMaxLogProb, h_sampled_indexes_);
+        Copy(sampled_nums_, batch_size, h_sampled_nums_);
+    }
 
     check_cuda_error(cudaStreamSynchronize(stream_));
 
@@ -1284,13 +1303,14 @@ auto LlamaBatch<T>::Finish(GenerationState& g) -> std::vector<Signal>
     }
 
     // ! Only rank-0 writes to output
-    if (rank_ == 0) {
+    if (rank_ == 0 && output_logprobs) {
+        NvtxScope scope("logprobs");
         // output logprobs, should be set before sequence_length
         float*    sampled_logprobs_ptr = h_sampled_logprobs_;
         uint32_t* sampled_indexes_ptr  = h_sampled_indexes_;
         uint32_t* sampled_nums_ptr     = h_sampled_nums_;
         for (int i = 0; i < batch_size - g.partial; ++i) {
-            if (state_->requests[i] && state_->requests[i]->inputs.isExist("logprobs")) {
+            if (state_->requests[i] && state_->requests[i]->gen_cfg.output_logprobs) {
                 auto logprob_vals    = state_->requests[i]->outputs.getPtr<float>("logprob_vals");
                 auto logprob_indexes = state_->requests[i]->outputs.getPtr<uint32_t>("logprob_indexes");
                 auto logprob_nums    = state_->requests[i]->outputs.getPtr<uint32_t>("logprob_nums");
@@ -1312,19 +1332,37 @@ auto LlamaBatch<T>::Finish(GenerationState& g) -> std::vector<Signal>
 
     // ! Only rank-0 writes to output
     if (rank_ == 0) {
-        // set output tokens ids and sequence length
-        int* output_ptr = h_output_ids_;
-        for (int i = 0; i < batch_size - g.partial; ++i) {
-            if (state_->requests[i] && (state_->requests[i]->stream_output || state_->h_finished[i])) {
-                auto      output_ids = state_->requests[i]->outputs.getPtr<int>("output_ids");
-                auto      output_len = state_->requests[i]->outputs.getPtr<int>("sequence_length");
-                const int count      = state_->h_context_length[i];
-                FT_CHECK(state_->requests[i]->outputs.at("output_ids").shape[0] >= count);
-                // TODO: sync history output tokens at when receiving the request and copy the last token here
-                std::copy(output_ptr, output_ptr + count, output_ids);
-                *output_len = count;
+        NvtxScope scope("output_ids");
+        if constexpr (0) {
+            // set output tokens ids and sequence length
+            int* output_ptr = h_output_ids_;
+            for (int i = 0; i < batch_size - g.partial; ++i) {
+                if (auto& r = state_->requests[i]) {
+                    auto      output_ids = static_cast<int*>(r->output_ids.data);
+                    auto      output_len = static_cast<int*>(r->sequence_length.data);
+                    const int count      = state_->h_context_length[i];
+                    if (r->stream_output) {
+                        output_ids[count - 1] = output_ptr[count - 1];
+                        *output_len           = count;
+                    }
+                    else if (state_->h_finished[i]) {
+                        std::copy(output_ptr, output_ptr + count, output_ids);
+                        *output_len = count;
+                    }
+                }
+                output_ptr += session_len_;
             }
-            output_ptr += session_len_;
+        }
+        else {
+            for (int i = 0; i < batch_size - g.partial; ++i) {
+                if (auto& r = state_->requests[i]) {
+                    auto      output_ids  = static_cast<int*>(r->output_ids.data);
+                    auto      output_len  = static_cast<int*>(r->sequence_length.data);
+                    const int count       = state_->h_context_length[i];
+                    output_ids[count - 1] = h_output_ids_[i];
+                    *output_len           = count;
+                }
+            }
         }
     }
 
@@ -1345,30 +1383,46 @@ auto LlamaBatch<T>::Finish(GenerationState& g) -> std::vector<Signal>
         }
     }
 
-    std::vector<Signal> signals;
     {
-        NvtxScope _("stream_and_completion_signal");
+        NvtxScope _("count and sync");
+        bool      need_sync = false;
         for (int i = 0; i < batch_size - g.partial; ++i) {
-            if (state_->requests[i]) {
-                auto& r = state_->requests[i];
-                if (state_->h_finished[i]) {
-                    // Interrupt finished sequences and move the request handle into the signal closure
-                    signals.push_back(Interrupt(i));
-                    ++g.finished_count;
-                }
-                else if (r->stream_output && rank_ == 0) {
-                    const auto seq_len = r->outputs.getVal<int>("sequence_length");
-                    // Create signals by copying the request handles for non-finished streaming requests
-                    signals.push_back([this, r, seq_len] {  //
-                        UpdateState(*r, Request::kOk, seq_len);
-                    });
+            if (state_->h_finished[i]) {
+                ++g.finished_count;
+                if (!state_->requests[i]->session.end_flag) {
+                    need_sync = true;
                 }
             }
         }
-        if (g.finished_count) {
-            // synchronize for interrupted sequences
-            check_cuda_error(cudaStreamSynchronize(stream_));
+        if (need_sync) {
+            // Release updates on request output buffers to all ranks (`Interrupt` will use it)
+            shared_state_->barrier->wait();
         }
+    }
+
+    {
+        NvtxScope _("stream_and_completion_signal");
+        for (int i = 0; i < batch_size - g.partial; ++i) {
+            auto& r = state_->requests[i];
+            if (state_->h_finished[i]) {
+                // Interrupt finished sequences and move the request handle into the signal closure
+                signals.push_back(Interrupt(i));
+                // Interrupt should reset r
+                FT_CHECK(!r);
+            }
+            else if (r->stream_output && rank_ == 0) {
+                const auto seq_len = r->sequence_length.getVal<int>();
+                // Create signals by copying the request handles for non-finished streaming requests
+                signals.push_back([this, r, seq_len] {  //
+                    UpdateState(*r, Request::kOk, seq_len);
+                });
+            }
+        }
+    }
+
+    if (g.finished_count) {
+        // synchronize for interrupted sequences
+        check_cuda_error(cudaStreamSynchronize(stream_));
     }
 
     if (g.partial) {
@@ -1376,8 +1430,6 @@ auto LlamaBatch<T>::Finish(GenerationState& g) -> std::vector<Signal>
         // recover full context length of partial
         state_->h_context_length[i] = g.partial_context_legnth;
     }
-
-    return signals;
 }
 
 template<typename T>
@@ -1408,17 +1460,10 @@ auto LlamaBatch<T>::Interrupt(int index, bool force_stop, bool force_end) -> Sig
 
         // Update token IDs
         seq.tokens.resize(output_len);
-        const auto output_ids_data = [&] {
-            if (force_stop) {
-                // `h_output_ids_` is UNDEFINED at `ProcessStopRequests`
-                return state_->requests[index]->outputs.at("output_ids").getPtr<int>();
-            }
-            else {
-                // `h_output_ids_` just updated by `Finish`, but `outputs` is NOT synced atm
-                return h_output_ids_ + index * (size_t)session_len_;
-            }
-        }();
-        std::copy_n(output_ids_data, output_len, seq.tokens.data());
+
+        // output_ids is updated & synced in `Finish`
+        const auto output_ids = state_->requests[index]->output_ids.getPtr<int>();
+        std::copy_n(output_ids, output_len, seq.tokens.data());
 
         // Save random state in host memory
         seq.random_state.resize(sizeof(curandState_t));
@@ -1433,7 +1478,7 @@ auto LlamaBatch<T>::Interrupt(int index, bool force_stop, bool force_end) -> Sig
 
     auto ec = std::exchange(state_->errors[index], Request::kOk);
 
-    const auto len = state_->requests[index]->outputs.getVal<int>("sequence_length");
+    const auto len = state_->requests[index]->sequence_length.getVal<int>();
     // move the request handle into the signal
     return [this, len, r = std::move(state_->requests[index])] {  //
         UpdateState(*r, Request::kFinish, len);
@@ -1458,12 +1503,15 @@ void LlamaBatch<T>::InternalThreadEntry()
     while (1) {
 
         if (rank_ == 0) {
-            const int  free_slot_count = max_batch_size_ - state_->size + g.finished_count;
-            const bool is_empty        = (free_slot_count == max_batch_size_);
-            // Block if batch is empty
-            gateway_->pop(infer_reqs, kill_reqs, free_slot_count, is_empty, shared_state_->abort);
+            {
+                NvtxScope  _("pop");
+                const int  free_slot_count = max_batch_size_ - state_->size + g.finished_count;
+                const bool is_empty        = (free_slot_count == max_batch_size_);
+                // Block if batch is empty
+                gateway_->pop(infer_reqs, kill_reqs, free_slot_count, is_empty, shared_state_->abort);
+            }
             // Mark reqs to the same session_id as invalid (which are dangerous to the engine)
-            MarkConflictRequests(infer_reqs, kill_reqs);
+            DisableConflictRequests(infer_reqs, kill_reqs);
         }
 
         NvtxScope scope("mainloop");
@@ -1503,18 +1551,19 @@ void LlamaBatch<T>::InternalThreadEntry()
 
         if (state_->active_size) {
             //
-            (void)Forward(g);
-            //
-            if (auto signals = Finish(g); !signals.empty()) {
-                if (g.finished_count) {
-                    // Finished requests and corresponding output tensors will be released when notified
-                    // wait for all ranks to ensure no rank (except for output thread) will access related
-                    // resources
-                    shared_state_->barrier->wait();
-                }
-                if (rank_ == 0) {
-                    gateway_->notify(std::move(signals));
-                }
+            Forward(g);
+
+            Finish(g, signals);
+
+            if (g.finished_count) {
+                // Finished requests and corresponding output tensors will be released when notified
+                // wait for all ranks to ensure no rank (except for output thread) will access related
+                // resources
+                shared_state_->barrier->wait();
+            }
+
+            if (rank_ == 0) {
+                gateway_->notify(std::move(signals));
             }
         }
     }
@@ -1661,10 +1710,9 @@ bool LlamaBatch<T>::Forward(GenerationState& g)
 
     // `SequenceManager` needs real-time value of cache length
     for (int i = 0; i < active_size; ++i) {
-        if (state_->requests[i]) {
-            FT_CHECK(state_->sequences[i]);
-            state_->sequences[i]->cache_len += state_->sequences[i]->input_length;
-        }
+        FT_CHECK((bool)state_->requests[i]);
+        FT_CHECK(state_->sequences[i]);
+        state_->sequences[i]->cache_len += state_->sequences[i]->input_length;
     }
 
     if (active_size > g.partial) {

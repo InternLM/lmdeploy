@@ -9,8 +9,8 @@
 #include <utility>
 #include <vector>
 
-#include "src/turbomind/engine/request.h"
 #include "src/turbomind/engine/model_request.h"
+#include "src/turbomind/engine/request.h"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/constant.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -147,6 +147,9 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
     r->stream_output = param.stream_output;
     r->forward_cb    = std::move(cb);
     r->state         = state;
+
+    r->output_ids      = *outputs_->at("output_ids");
+    r->sequence_length = *outputs_->at("sequence_length");
 
     // Keep a weak reference for canceling the request
     request_ = r;

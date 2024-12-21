@@ -80,7 +80,7 @@ public:
     using Requests = std::vector<std::shared_ptr<Request>>;
     using Signal   = std::function<void()>;
 
-    void MarkConflictRequests(Requests& infer_reqs, Requests& kill_reqs);
+    void DisableConflictRequests(Requests& infer_reqs, Requests& kill_reqs);
 
     void ProcessKillRequests(const Requests& reqs, std::vector<Signal>& signals);
 
@@ -94,9 +94,9 @@ public:
 
     void InitializeSampling(const GenerationState& g);
 
-    [[nodiscard]] bool Forward(GenerationState& g);
+    bool Forward(GenerationState& g);
 
-    [[nodiscard]] auto Finish(GenerationState& g) -> std::vector<Signal>;
+    void Finish(GenerationState& g, std::vector<Signal>& signals);
 
     [[nodiscard]] Signal Interrupt(int index, bool force_stop = false, bool force_end = false);
 

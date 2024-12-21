@@ -103,6 +103,10 @@ struct Request {
 
     int ec;
 
+    // fast path for accessing common output buffers
+    Tensor output_ids;
+    Tensor sequence_length;
+
     enum {
         kOk       = 0,
         kInvalid  = 1,  // Sequence not exist or both `start` & `stop` (instead of `end`) is set
