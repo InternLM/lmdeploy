@@ -242,7 +242,8 @@ class LlavaVisionModel(LlavaHfVisionModel):
             self.n_token_per_image += 1
 
     def build_model(self):
-        """build model & load weights."""
+        """build the vision part of a VLM model when backend is turbomind, or
+        load the whole VLM model when `self.with_llm==True`"""
         check_llava_install()
 
         self.arch = self.hf_config.architectures[0]
@@ -271,11 +272,13 @@ class LlavaVisionModel(LlavaHfVisionModel):
             model = AutoModelForCausalLM.from_config(self.config,
                                                      trust_remote_code=True)
 
-        # remove the LLM part from llava model.
-        del model.lm_head
-        del model.model.embed_tokens
-        del model.model.layers
-        del model.model.norm
+        self.vl_model = model
+        if not self.with_llm:
+            # remove the LLM part from llava model.
+            del model.lm_head
+            del model.model.embed_tokens
+            del model.model.layers
+            del model.model.norm
 
         # init empty vision_tower, the embedding layer in CLIPVisionModel
         # can't init right under init_empty_weights
@@ -292,7 +295,7 @@ class LlavaVisionModel(LlavaHfVisionModel):
                 model=model,
                 max_memory=self.max_memory,
                 checkpoint=self.model_path,
-                device_map='auto',
+                device_map='auto' if not self.with_llm else {'': 'cpu'},
                 no_split_module_classes=['CLIPEncoderLayer'],
                 dtype=torch.half)
 

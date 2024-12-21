@@ -22,10 +22,11 @@ class MiniCPMVModel(VisonModel):
 
     def __init__(self,
                  model_path: str,
+                 with_llm: bool = False,
                  max_memory: Dict[int, int] = None,
                  hf_config: AutoConfig = None,
                  backend: str = ''):
-        super().__init__(model_path, max_memory, hf_config, backend)
+        super().__init__(model_path, with_llm, max_memory, hf_config, backend)
         if not hasattr(self.hf_config, 'version'):
             raise ValueError('Can not find `version` in config.json. '
                              'Please checkout the latest model')
@@ -44,7 +45,8 @@ class MiniCPMVModel(VisonModel):
                                  else self._preprocess_v2_6)
 
     def build_model(self):
-        """build model & load weights."""
+        """build the vision part of a VLM model when backend is turbomind, or
+        load the whole VLM model when `self.with_llm==True`"""
         from accelerate import init_empty_weights
         with init_empty_weights(), warnings.catch_warnings():
             warnings.simplefilter('ignore')
@@ -53,19 +55,21 @@ class MiniCPMVModel(VisonModel):
             config.quantization_config = {}  # disable vision part quantization
             model = AutoModelForCausalLM.from_config(config,
                                                      trust_remote_code=True)
-        del model.llm
+        self.vl_model = model
+        if not self.with_llm:
+            del model.llm
 
         from accelerate import load_checkpoint_and_dispatch
         with disable_logging():
-            load_checkpoint_and_dispatch(model=model,
-                                         max_memory=self.max_memory,
-                                         checkpoint=self.model_path,
-                                         device_map='auto',
-                                         no_split_module_classes=[
-                                             'Idefics2EncoderLayer',
-                                             'Resampler', 'SiglipEncoderLayer'
-                                         ],
-                                         dtype=torch.half)
+            load_checkpoint_and_dispatch(
+                model=model,
+                max_memory=self.max_memory,
+                checkpoint=self.model_path,
+                device_map='auto' if not self.with_llm else {'': 'cpu'},
+                no_split_module_classes=[
+                    'Idefics2EncoderLayer', 'Resampler', 'SiglipEncoderLayer'
+                ],
+                dtype=torch.half)
 
         model.resampler.pos_embed = model.resampler.pos_embed.to(
             device=model.resampler.proj.device)

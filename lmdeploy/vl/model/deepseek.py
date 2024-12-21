@@ -36,11 +36,15 @@ class DeepSeekVisionModel(VisonModel):
             self.model_path).image_processor
 
     def build_model(self):
+        """build the vision part of a VLM model when backend is turbomind, or
+        load the whole VLM model when `self.with_llm==True`"""
         from accelerate import init_empty_weights
         with init_empty_weights():
             warnings.simplefilter('ignore')
             model = AutoModelForCausalLM.from_pretrained(self.model_path)
-            del model.language_model
+            self.vl_model = model
+            if not self.with_llm:
+                del model.language_model
 
         from accelerate.utils import get_balanced_memory, infer_auto_device_map
         max_memory = get_balanced_memory(model,
@@ -74,11 +78,13 @@ class DeepSeekVisionModel(VisonModel):
 
         from accelerate import load_checkpoint_and_dispatch
         with disable_logging():
-            load_checkpoint_and_dispatch(model=model,
-                                         checkpoint=self.model_path,
-                                         device_map=device_map,
-                                         dtype=torch.half)
+            load_checkpoint_and_dispatch(
+                model=model,
+                checkpoint=self.model_path,
+                device_map=device_map if not self.with_llm else {'': 'cpu'},
+                dtype=torch.half)
 
+        self.model = model.eval()
         self.vision_model = model.vision_model.eval()
         self.aligner = model.aligner.eval()
 

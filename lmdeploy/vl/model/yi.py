@@ -113,7 +113,8 @@ class YiVisionModel(LlavaVisionModel):
             self.n_token_per_image += 1
 
     def build_model(self):
-        """build model & load weights."""
+        """build the vision part of a VLM model when backend is turbomind, or
+        load the whole VLM model when `self.with_llm==True`"""
         check_llava_install()
 
         global _model_path
