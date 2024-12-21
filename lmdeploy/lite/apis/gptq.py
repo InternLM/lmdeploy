@@ -29,9 +29,6 @@ def auto_gptq(model: str,
         calib_seqlen (int): The sequence length for calibration.
         w_bits (int): Bit number for weight quantization.
         w_group_size (int): Group size for weight quantization statistics.
-        search_scale (bool): Whether search scale ratio. Default to False,
-            which means only smooth quant with 0.5 ratio will be applied.
-        device (str): Device type of running.
         revision (str): The specific model version to use. It can be a
             branch name, a tag name, or a commit id. If unspecified,
             will use the default version.

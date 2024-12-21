@@ -2,6 +2,7 @@
 import os
 import os.path as osp
 import shutil
+from typing import Literal
 
 import torch
 from torch import nn
@@ -56,6 +57,7 @@ def auto_awq(model: str,
              search_scale: bool = False,
              device: str = 'cuda',
              revision: str = None,
+             dtype: Literal['float16', 'bfloat16', 'auto'] = 'auto',
              download_dir: str = None):
     """Perform weight quantization using AWQ algorithm.
 
@@ -96,6 +98,7 @@ def auto_awq(model: str,
                                                      w_bits=w_bits,
                                                      w_group_size=w_group_size,
                                                      search_scale=search_scale,
+                                                     dtype=dtype,
                                                      batch_size=batch_size)
 
     layer_type = LAYER_TYPE_MAP[type(model).__name__]

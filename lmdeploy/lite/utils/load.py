@@ -1,5 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+from typing import Literal
+
 import torch
 from transformers import AutoConfig, AutoModelForCausalLM
 
@@ -7,8 +9,8 @@ from lmdeploy.pytorch.accel import LoadNoInit
 
 
 def load_hf_from_pretrained(pretrained_model_name_or_path,
-                            dtype=torch.float16,
-                            **kwargs):
+                            dtype: Literal['float16', 'bfloat16',
+                                           'auto'], **kwargs):
 
     if dtype == torch.bfloat16 and not torch.cuda.is_bf16_supported():
         raise RuntimeError('Your device does not supports bf16(bfloat16), '
@@ -21,10 +23,14 @@ def load_hf_from_pretrained(pretrained_model_name_or_path,
                                            trust_remote_code=True)
 
     # HACK hard code for qwen, other configs do not have the `fp16` attribute.
-    if dtype == torch.float16:
-        hf_config.fp16 = True
-    elif dtype == torch.bfloat16:
-        hf_config.bf16 = True
+    if hasattr(hf_config, 'fp16') or hasattr(hf_config, 'bf16'):
+        if dtype == 'bfloat16':
+            hf_config.bf16 = True
+        else:
+            hf_config.fp16 = True
+
+    if dtype != 'auto':
+        setattr(hf_config, 'torch_dtype', dtype)
 
     with LoadNoInit():
         # Load model
