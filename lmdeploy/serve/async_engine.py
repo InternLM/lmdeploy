@@ -180,10 +180,10 @@ class AsyncEngine(LogitsMixin):
         self.tokenizer = self.engine.tokenizer
         self.id2step = {}
         self.id2generator = {}
-        self.running_session_ids = set()
-        self.gens_set = set()
-        for i in range(self.instance_num):
-            self.gens_set.add(self.engine.create_instance())
+        self.free_gens = None
+        self.instances = [
+            self.engine.create_instance() for _ in range(self.instance_num)
+        ]
         self._session_id = count(0)
         self.request_logger = RequestLogger(max_log_len)
 
@@ -247,18 +247,12 @@ class AsyncEngine(LogitsMixin):
         """Stop a session by a session_id."""
         if str(session_id) in self.id2generator:
             await self.id2generator[str(session_id)].async_cancel(session_id)
-            self.gens_set.add(self.id2generator[str(session_id)])
-
-        self.running_session_ids.discard(session_id)
 
     async def end_session(self, session_id: int):
         """Clear a session by a session_id."""
         if str(session_id) in self.id2generator:
             await self.id2generator[str(session_id)].async_end(session_id)
             self.id2step[str(session_id)] = 0
-            self.gens_set.add(self.id2generator[str(session_id)])
-
-        self.running_session_ids.discard(session_id)
 
     @asynccontextmanager
     async def safe_run(self, session_id: Optional[int] = None):
@@ -266,23 +260,17 @@ class AsyncEngine(LogitsMixin):
         try:
             yield
         except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
+            print(f'exception caught: {e}')
             # TODO: find out why await would block the coroutine here
-            _get_event_loop().create_task(self.stop_session(session_id))
-            raise e
+            await self.stop_session(session_id)
         if str(session_id) in self.id2generator:
-            self.gens_set.add(self.id2generator[str(session_id)])
-        self.running_session_ids.discard(session_id)
+            self.free_gens.put_nowait(self.id2generator[str(session_id)])
 
     async def get_generator(self, stop: bool, session_id: int):
         """Only return the model instance if it is available."""
-        if stop:
-            return self.engine.create_instance()
-        # waiting no generator is available or the same session_id is running
-        while self.gens_set == set() or session_id in self.running_session_ids:
-            await asyncio.sleep(0.1)
-        generator = self.gens_set.pop()
+        assert not stop, 'not implemented'
+        generator = await self.free_gens.get()
         self.id2generator[str(session_id)] = generator
-        self.running_session_ids.add(session_id)
         return generator
 
     def batch_infer(self,
@@ -567,6 +555,12 @@ class AsyncEngine(LogitsMixin):
                 return status not in [
                     ResponseType.SUCCESS, ResponseType.FINISH
                 ]
+
+            if self.free_gens is None:
+                # `asyncio.Queue` must be created in an async context
+                self.free_gens = asyncio.Queue()
+                for inst in self.instances:
+                    self.free_gens.put_nowait(inst)
 
             generator = await self.get_generator(False, session_id)
             async with self.safe_run(session_id):

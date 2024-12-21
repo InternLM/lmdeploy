@@ -425,7 +425,6 @@ class TurboMindInstance:
 
         asyncio.run_coroutine_threadsafe(_signal(), self.event_loop)
 
-
     async def async_cancel(self, session_id: int = None):
         """End the given session."""
         if not self.is_canceled:
@@ -568,7 +567,7 @@ class TurboMindInstance:
         else:
             self.cond = asyncio.Condition()
             self.done_event = asyncio.Event()
-            
+
         self.is_canceled = False
         self.flag = 0
 
