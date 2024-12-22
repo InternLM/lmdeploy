@@ -245,33 +245,38 @@ class AsyncEngine(LogitsMixin):
 
     async def stop_session(self, session_id: int):
         """Stop a session by a session_id."""
-        if str(session_id) in self.id2generator:
-            await self.id2generator[str(session_id)].async_cancel(session_id)
+        generator = self.id2generator.get(self.id2generator)
+        if generator:
+            await generator.async_cancel(session_id)
+        # else it's not running at all
 
     async def end_session(self, session_id: int):
-        """Clear a session by a session_id."""
-        if str(session_id) in self.id2generator:
-            await self.id2generator[str(session_id)].async_end(session_id)
-            self.id2step[str(session_id)] = 0
+        """For ending a session that is not running."""
+        # TODO: wait for generator to finish `await generator.async_done()`
+        assert session_id not in self.id2generator
+        generator = await self.free_gens.get()
+        try:
+            await generator.async_end(session_id)
+            self.id2step[session_id] = 0
+        except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
+            print(f'[end_session] exception caught: {e}')
+        finally:
+            self.free_gens.put_nowait(generator)
 
     @asynccontextmanager
-    async def safe_run(self, session_id: Optional[int] = None):
+    async def safe_run(self, session_id: int):
         """A context manager to make sure server's safe running."""
-        try:
-            yield
-        except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
-            print(f'exception caught: {e}')
-            # TODO: find out why await would block the coroutine here
-            await self.stop_session(session_id)
-        if str(session_id) in self.id2generator:
-            self.free_gens.put_nowait(self.id2generator[str(session_id)])
-
-    async def get_generator(self, stop: bool, session_id: int):
-        """Only return the model instance if it is available."""
-        assert not stop, 'not implemented'
         generator = await self.free_gens.get()
-        self.id2generator[str(session_id)] = generator
-        return generator
+        assert session_id not in self.id2generator
+        self.id2generator[session_id] = generator
+        try:
+            yield generator
+        except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
+            print(f'[safe_run] exception caught: {e}')
+            await generator.async_cancel(session_id)
+        finally:
+            self.id2generator.pop(session_id)
+            self.free_gens.put_nowait(generator)
 
     def batch_infer(self,
                     prompts: Union[List[str], str, List[Dict],
@@ -478,10 +483,10 @@ class AsyncEngine(LogitsMixin):
             do_preprocess (bool): whether pre-process the messages. Default to
                 True, which means chat_template will be applied.
         """
-        if str(session_id) not in self.id2step:
-            self.id2step[str(session_id)] = 0
+        if session_id not in self.id2step:
+            self.id2step[session_id] = 0
         if step != 0:
-            self.id2step[str(session_id)] = step
+            self.id2step[session_id] = step
         if gen_config is None:
             gen_config = GenerationConfig()
         else:
@@ -524,7 +529,7 @@ class AsyncEngine(LogitsMixin):
                                        gen_config=gen_config,
                                        adapter_name=adapter_name)
         logger.info(f'session_id={session_id}, '
-                    f'history_tokens={self.id2step[str(session_id)]}, '
+                    f'history_tokens={self.id2step[session_id]}, '
                     f'input_tokens={len(input_ids)}, '
                     f'max_new_tokens={gen_config.max_new_tokens}, '
                     f'seq_start={sequence_start}, seq_end={sequence_end}, '
@@ -533,19 +538,19 @@ class AsyncEngine(LogitsMixin):
         if gen_config.max_new_tokens is None:
             # for interactive endpoint, will try maximum possible token num
             gen_config.max_new_tokens = max(
-                128, self.session_len - self.id2step[str(session_id)] -
-                len(input_ids))
-        elif self.id2step[str(session_id)] + len(
+                128,
+                self.session_len - self.id2step[session_id] - len(input_ids))
+        elif self.id2step[session_id] + len(
                 input_ids) + gen_config.max_new_tokens > self.session_len:
             gen_config.max_new_tokens = max(
-                self.session_len - self.id2step[str(session_id)] -
-                len(input_ids), 128)
+                self.session_len - self.id2step[session_id] - len(input_ids),
+                128)
             logger.error(
                 f'Truncate max_new_tokens to {gen_config.max_new_tokens}')
-        if self.id2step[str(session_id)] + len(
+        if self.id2step[session_id] + len(
                 input_ids) + gen_config.max_new_tokens > self.session_len:
             logger.error(f'run out of tokens. session_id={session_id}.')
-            yield GenOut('', self.id2step[str(session_id)], len(input_ids), 0,
+            yield GenOut('', self.id2step[session_id], len(input_ids), 0,
                          'length')
             if sequence_end is True and sequence_start is False:
                 await self.end_session(session_id)
@@ -562,9 +567,10 @@ class AsyncEngine(LogitsMixin):
                 for inst in self.instances:
                     self.free_gens.put_nowait(inst)
 
-            generator = await self.get_generator(False, session_id)
-            async with self.safe_run(session_id):
+            async with self.safe_run(session_id) as generator:
                 state = DetokenizeState(len(input_ids))
+                res = input_ids.copy()
+                prev_len = 0
                 start_ids_offset = state.ids_offset
                 response = ''
                 async for outputs in generator.async_stream_infer(
@@ -575,12 +581,15 @@ class AsyncEngine(LogitsMixin):
                         stream_output=stream_response,
                         sequence_start=sequence_start,
                         sequence_end=sequence_end,
-                        step=self.id2step[str(session_id)]):
+                        step=self.id2step[session_id]):
                     # decode res
                     if is_error(outputs.status):
                         tokens = 0
                         break
-                    res, tokens = input_ids + outputs.token_ids, outputs.num_token  # noqa
+                    tokens = outputs.num_token
+                    res += outputs.token_ids[prev_len - tokens:]
+                    prev_len = tokens
+
                     if len(res) <= state.ids_offset:
                         continue
 
@@ -598,7 +607,7 @@ class AsyncEngine(LogitsMixin):
 
                     # response, history token len,
                     # input token len, gen token len
-                    yield GenOut(response, self.id2step[str(session_id)],
+                    yield GenOut(response, self.id2step[session_id],
                                  len(input_ids), tokens, finish_reason, res,
                                  logprobs)
                 if not is_error(outputs.status):
@@ -609,24 +618,22 @@ class AsyncEngine(LogitsMixin):
                     if not response.endswith('�'):
                         # avaid returning the last response twice
                         response = ''
-                    yield GenOut(response, self.id2step[str(session_id)],
+                    yield GenOut(response, self.id2step[session_id],
                                  len(input_ids), tokens, finish_reason)
                 else:
-                    yield GenOut(
-                        response='internal error happened',
-                        history_token_len=self.id2step[str(session_id)],
-                        input_token_len=len(input_ids),
-                        generate_token_len=0,
-                        finish_reason='error',
-                        token_ids=[])
+                    yield GenOut(response='internal error happened',
+                                 history_token_len=self.id2step[session_id],
+                                 input_token_len=len(input_ids),
+                                 generate_token_len=0,
+                                 finish_reason='error',
+                                 token_ids=[])
                 # update step
-                self.id2step[str(session_id)] += len(input_ids) + tokens
+                self.id2step[session_id] += len(input_ids) + tokens
                 if sequence_end:
-                    self.id2step[str(session_id)] = 0
+                    self.id2step[session_id] = 0
                 # manually end pytorch session
-                # TODO modify pytorch or turbomind api
                 if self.backend == 'pytorch' and sequence_end:
-                    await self.end_session(session_id)
+                    await generator.async_end(session_id)
 
     def parse_tool_response(self, text, tools, **kwargs):
         """Parse model response containing tool information.
