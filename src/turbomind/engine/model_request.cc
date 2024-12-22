@@ -69,11 +69,11 @@ void ModelRequest::Cancel(std::function<void(int)> cb)
     }
 }
 
-void ModelRequest::End(std::function<void(int)> cb)
+void ModelRequest::End(std::function<void(int)> cb, uint64_t session_id)
 {
     auto r = std::make_shared<Request>();
 
-    r->id = r->session.id = session_id_;
+    r->id = r->session.id = session_id;
     r->session.kill_flag  = true;
 
     r->end_cb = std::move(cb);

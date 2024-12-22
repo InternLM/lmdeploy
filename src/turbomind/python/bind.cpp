@@ -506,11 +506,12 @@ PYBIND11_MODULE(_turbomind, m)
             "cb"_a)
         .def(
             "end",
-            [](ModelRequest* model_request, std::function<void(int)> cb) {
-                model_request->End(std::move(cb));  //
+            [](ModelRequest* model_request, std::function<void(int)> cb, uint64_t session_id) {
+                model_request->End(std::move(cb), session_id);  //
             },
             py::call_guard<py::gil_scoped_release>(),
-            "cb"_a);
+            "cb"_a,
+            "session_id"_a);
 
     // transformer model
     using ft::AbstractTransformerModel;

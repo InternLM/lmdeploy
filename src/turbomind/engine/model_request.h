@@ -19,7 +19,7 @@ public:
     void Cancel(std::function<void(int)> cb);
 
     // Reset the channel to uninitailized state, calls `notify` when done
-    void End(std::function<void(int)> cb);
+    void End(std::function<void(int)> cb, uint64_t session_id);
 
     using TensorMap_ = std::unordered_map<std::string, ManagedTensor>;
 

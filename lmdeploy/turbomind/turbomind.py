@@ -399,7 +399,7 @@ class TurboMindInstance:
         await self.done_event.wait()
         self.end_event = asyncio.Event()
         self.event_loop = asyncio.get_running_loop()
-        self.model_inst.end(self.async_end_cb)
+        self.model_inst.end(self.async_end_cb, session_id)
         await self.end_event.wait()
 
     def end_cb(self, status: int):
