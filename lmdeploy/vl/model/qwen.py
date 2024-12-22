@@ -32,15 +32,19 @@ class QwenVisionModel(VisonModel):
         ])
 
     def build_model(self):
+        """build the vision part of a VLM model when backend is turbomind, or
+        load the whole VLM model when `self.with_llm==True`"""
         from accelerate import init_empty_weights
         with init_empty_weights():
             config = self.hf_config
             config.quantization_config = {}  # disable vision part quantization
             model = AutoModelForCausalLM.from_config(config,
                                                      trust_remote_code=True)
-            del model.lm_head
-            for key in ['wte', 'h', 'ln_f']:
-                setattr(model.transformer, key, None)
+            self.vl_model = model
+            if not self.with_llm:
+                del model.lm_head
+                for key in ['wte', 'h', 'ln_f']:
+                    setattr(model.transformer, key, None)
 
         from accelerate.utils import get_balanced_memory, infer_auto_device_map
         max_memory = get_balanced_memory(
@@ -66,7 +70,7 @@ class QwenVisionModel(VisonModel):
             load_checkpoint_and_dispatch(
                 model=model,
                 checkpoint=self.model_path,
-                device_map=device_map,
+                device_map=device_map if not self.with_llm else {'': 'cpu'},
                 no_split_module_classes=['VisualAttentionBlock'],
                 dtype=torch.half)
 
