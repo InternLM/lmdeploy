@@ -516,6 +516,17 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
                 inputs_embeds=inputs_embeds,
             )
 
+    def load_lora_weights(self, weights: Iterable[Tuple[str, torch.Tensor]],
+                          adapter_id: int):
+        """load lora weights."""
+
+        if hasattr(self.language_model, 'load_lora_weights'):
+            return self.language_model.load_lora_weights(weights, adapter_id)
+        else:
+            from lmdeploy.pytorch.adapter.adapter import load_lora_weights
+
+            return load_lora_weights(weights, adapter_id)
+
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
         """load weights."""
 

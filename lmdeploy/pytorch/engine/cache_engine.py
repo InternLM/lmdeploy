@@ -98,7 +98,7 @@ class CacheEngine:
         attn_backend = get_backend()
         dtype = model_config.dtype
         num_heads = model_config.num_key_value_heads
-        if local and not model_config.multi_query_attention:
+        if local:
             assert num_heads % world_size == 0, \
                 f'num_heads: {num_heads}, world_size: {world_size}'
             num_heads = num_heads // world_size
@@ -121,7 +121,7 @@ class CacheEngine:
         attn_backend = get_backend()
         dtype = model_config.dtype
         num_heads = model_config.num_key_value_heads
-        if local and not model_config.multi_query_attention:
+        if local:
             assert num_heads % world_size == 0, \
                 f'num_heads: {num_heads}, world_size: {world_size}'
             num_heads = num_heads // world_size
