@@ -65,7 +65,7 @@ def hf_command_line_test(config,
                                  need_tp=True,
                                  cuda_prefix=cuda_prefix)
 
-    if type == 'pytorch' or 'mono-internvL' in model_case.lower():
+    if type == 'pytorch':
         if not is_bf16_supported():
             cmd += ' --dtype float16'
     if type == 'turbomind':

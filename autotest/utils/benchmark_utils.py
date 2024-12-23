@@ -41,7 +41,7 @@ def generation_test(config,
     command = get_command_with_extra(command, cuda_prefix)
 
     run_config = ''
-    if backend == 'pytorch' or 'mono-internvL' in model.lower():
+    if backend == 'pytorch':
         command += ' --backend pytorch'
         if not is_bf16_supported():
             command += ' --dtype float16'
@@ -111,7 +111,7 @@ def throughput_test(config,
         run_config = '--num-prompts 3000'
     if backend == 'pytorch':
         command += ' --backend pytorch'
-        if not is_bf16_supported() or 'mono-internvL' in model.lower():
+        if not is_bf16_supported():
             command += ' --dtype float16'
     else:
         if '4bit' in model:
