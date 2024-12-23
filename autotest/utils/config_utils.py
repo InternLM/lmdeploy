@@ -251,7 +251,8 @@ def get_benchmark_model_list(tp_num,
             'backend': 'pytorch',
             'tp_num': tp_num
         } for item in model_list if '4bits' not in item and (
-            item in config.get('pytorch_chat_model') or tp_num == 4)]
+            item.replace('-inner-w8a8', '') in config.get('pytorch_chat_model')
+            or tp_num == 4)]
         for kvint in kvint_list:
             result += [{
                 'model': item,
