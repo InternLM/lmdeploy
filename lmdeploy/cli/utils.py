@@ -354,7 +354,7 @@ class ArgumentHelper:
 
     @staticmethod
     def calib_search_scale(parser):
-        """Add argument batch_size to parser."""
+        """Add argument search_scale to parser."""
 
         return parser.add_argument(
             '--search-scale',
@@ -362,6 +362,18 @@ class ArgumentHelper:
             default=False,
             help=\
             'Whether search scale ratio. Default to be disabled, which means only smooth quant with 0.5 ratio will be applied'  # noqa
+        )
+
+    @staticmethod
+    def clamp_zeros(parser):
+        """Add argument clamp_zeros to parser."""
+
+        return parser.add_argument(
+            '--clamp-zeros',
+            action='store_true',
+            default=False,
+            help=\
+            'Whether clamp zeros weights to a minimal decimal. This is useful when NaN happened during calibration.'  # noqa
         )
 
     @staticmethod

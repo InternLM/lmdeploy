@@ -33,6 +33,7 @@ class CalibrationContext():
                  layer_type: Union[str, type],
                  norm_type: Union[str, type],
                  batch_size: int = 1,
+                 clamp_zeros: bool = False,
                  device: str = 'cuda',
                  **kwargs) -> None:
         """Initiate calibration context.
@@ -42,6 +43,11 @@ class CalibrationContext():
             tokenizer (PreTrainedTokenizer): Tokenizer of the given model.
             layer_type (Union[str, type]): Type of the layers to be observed.
             norm_type (Union[str, type]): Norm type used in the model.
+            batch_size (int): The batch size for running the calib samples.
+                Low GPU mem requires small batch_size. Large batch_size
+                reduces the calibration time while costs more VRAM.
+            clamp_zeros (bool): Whether to clamp zeros to minimal decimals in
+                weights to avoid NaN error. May lead to accuracy drop.
             device (str, optional): Device where the model should run.
                 Defaults to 'cuda'.
         """
@@ -49,6 +55,7 @@ class CalibrationContext():
         self.layer_type = layer_type
         self.norm_type = norm_type
         self.batch_size = batch_size
+        self.clamp_zeros = clamp_zeros
 
         num_kv_heads, num_attn_heads = self._guess_num_heads(model)
         self.num_kv_heads = num_kv_heads
@@ -265,7 +272,7 @@ class CalibrationContext():
 
 @torch.no_grad()
 def auto_scale_block(module, module_kwargs, w_bit, w_group_size, input_feat,
-                     mod_name):
+                     mod_name, clamp_zeros):
     if 'use_cache' in module_kwargs:
         module_kwargs.pop('use_cache')
 
@@ -286,13 +293,21 @@ def auto_scale_block(module, module_kwargs, w_bit, w_group_size, input_feat,
 
         concat_w = torch.cat([_m.weight for _m in linears2scale], dim=0)
         from .awq import get_weight_scale, pseudo_quantize_tensor
-        w_mean = get_weight_scale(concat_w, w_group_size)
+        w_mean = get_weight_scale(concat_w,
+                                  w_group_size,
+                                  clamp_zeros=clamp_zeros)
 
         org_sd = {k: v.cpu() for k, v in block.state_dict().items()}
         for ratio in range(0, n_grid):
             ratio = ratio * 1 / n_grid
-            scales = (x_max.pow(ratio) /
-                      w_mean.pow(1 - ratio)).clamp(min=1e-4).view(-1)
+            if clamp_zeros:
+                scales = (x_max.pow(ratio) /
+                          w_mean.pow(1 - ratio).clamp(min=1e-4)).clamp(
+                              min=1e-4).view(-1)
+            else:
+                scales = (x_max.pow(ratio) /
+                          w_mean.pow(1 - ratio)).clamp(min=1e-4).view(-1)
+
             scales = scales / (scales.max() * scales.min()).sqrt()
             for fc in linears2scale:
                 fc.weight.mul_(scales.view(1, -1).to(fc.weight.device))
@@ -356,13 +371,14 @@ class CalibrationContextV2(CalibrationContext):
                  layer_type: Union[str, type],
                  norm_type: Union[str, type],
                  batch_size: int = 1,
+                 clamp_zeros: bool = False,
                  device: str = 'cuda',
                  search_scale: bool = True,
                  w_bits: int = 4,
                  w_group_size: int = 128,
                  **kwargs) -> None:
         super().__init__(model, tokenizer, layer_type, norm_type, batch_size,
-                         device)
+                         clamp_zeros, device)
         self.w_bits = w_bits
         self.w_group_size = w_group_size
         self.search_scale = search_scale
@@ -433,7 +449,8 @@ class CalibrationContextV2(CalibrationContext):
                 mod_name = self.mod2name[mod]
                 ActivationObserver.disable()
                 auto_scale_block(mod, batch_kwargs[i], self.w_bits,
-                                 self.w_group_size, obs_group, mod_name)
+                                 self.w_group_size, obs_group, mod_name,
+                                 self.clamp_zeros)
                 ActivationObserver.enable()
             for key, item in obs_group.items():
                 if key.startswith(f'{mod_name}.') and item.value is not None:

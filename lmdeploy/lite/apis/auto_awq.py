@@ -13,9 +13,7 @@ from lmdeploy.lite.quantization.awq import (FC_FCS_MAP, NORM_FCS_MAP,
 from lmdeploy.lite.utils import collect_target_modules
 from lmdeploy.pytorch.check_env import try_import_deeplink
 
-from .calibrate import LAYER_TYPE_MAP, NORM_TYPE_MAP, calibrate
-
-NORM_TYPE_MAP = NORM_TYPE_MAP  # legacy
+from .calibrate import LAYER_TYPE_MAP, calibrate
 
 
 def save_vl_model(vl_model, model_path, dst_path):
@@ -58,6 +56,7 @@ def auto_awq(model: str,
              device: str = 'cuda',
              revision: str = None,
              dtype: Literal['float16', 'bfloat16', 'auto'] = 'auto',
+             clamp_zeros: bool = False,
              download_dir: str = None):
     """Perform weight quantization using AWQ algorithm.
 
@@ -79,6 +78,8 @@ def auto_awq(model: str,
         revision (str): The specific model version to use. It can be a
             branch name, a tag name, or a commit id. If unspecified,
             will use the default version.
+        clamp_zeros (bool): Whether to clamp zeros to minimal decimals in
+            weights to avoid NaN error. May lead to accuracy drop.
         download_dir (str): Directory to download and load the weights,
             default to the default cache directory of huggingface.
     """
@@ -99,7 +100,8 @@ def auto_awq(model: str,
                                                      w_group_size=w_group_size,
                                                      search_scale=search_scale,
                                                      dtype=dtype,
-                                                     batch_size=batch_size)
+                                                     batch_size=batch_size,
+                                                     clamp_zeros=clamp_zeros)
 
     layer_type = LAYER_TYPE_MAP[type(model).__name__]
     fc2fcs = FC_FCS_MAP[layer_type]
@@ -114,12 +116,23 @@ def auto_awq(model: str,
     if search_scale:
         awq_ratios = input_stats['ratios']
         act_scales = input_stats['absmean']
-        awq_layers(layers, fc2fcs, norm2fcs, act_scales, awq_ratios,
-                   w_group_size, device)
+        awq_layers(layers,
+                   fc2fcs,
+                   norm2fcs,
+                   act_scales,
+                   awq_ratios,
+                   w_group_size,
+                   device,
+                   clamp_zeros=clamp_zeros)
     else:
         act_scales = input_stats['absmax']
-        smooth_layers(layers, fc2fcs, norm2fcs, act_scales, w_group_size,
-                      device)
+        smooth_layers(layers,
+                      fc2fcs,
+                      norm2fcs,
+                      act_scales,
+                      w_group_size,
+                      device,
+                      clamp_zeros=clamp_zeros)
     quant_weights(model, fcs, w_bits, w_sym, w_group_size, device)
     quantization_config = dict(quant_method='awq',
                                version='gemm',

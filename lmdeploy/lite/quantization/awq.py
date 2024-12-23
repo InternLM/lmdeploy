@@ -118,11 +118,15 @@ def skipped_module(name: str):
 
 
 @torch.no_grad()
-def get_weight_scale(weight, q_group_size=-1):
+def get_weight_scale(weight, q_group_size=-1, clamp_zeros: bool = False):
     org_shape = weight.shape
     if q_group_size > 0:
         weight = weight.view(-1, q_group_size)
-    scale = weight.abs() / weight.abs().amax(dim=1, keepdim=True)
+    if clamp_zeros:
+        scale = weight.abs() / weight.abs().amax(dim=1,
+                                                 keepdim=True).clamp(min=1e-4)
+    else:
+        scale = weight.abs() / weight.abs().amax(dim=1, keepdim=True)
     scale = scale.view(org_shape)
     scale = scale.mean(0)
     return scale
@@ -133,7 +137,8 @@ def smooth_ln_fcs(ln: torch.nn.Module,
                   fcs: List[torch.nn.Module],
                   act_scales: torch.Tensor,
                   group_size: int = -1,
-                  alpha: float = 0.5) -> torch.Tensor:
+                  alpha: float = 0.5,
+                  clamp_zeros: bool = False) -> torch.Tensor:
     """Smooth weights of a layer normalization and its fully connected layers.
 
     :param ln: Layer Normalization module
@@ -153,10 +158,15 @@ def smooth_ln_fcs(ln: torch.nn.Module,
     act_scales = act_scales.to(device=device, dtype=dtype)
 
     concat_w = torch.cat([fc.weight for fc in fcs], dim=0)
-    w_scales = get_weight_scale(concat_w, group_size)
+    w_scales = get_weight_scale(concat_w, group_size, clamp_zeros=clamp_zeros)
 
-    scales = (act_scales.pow(alpha) /
-              w_scales.pow(1 - alpha)).clamp(min=1e-4).to(device).to(dtype)
+    if clamp_zeros:
+        scales = (act_scales.pow(alpha) /
+                  w_scales.pow(1 - alpha).clamp(min=1e-4)).clamp(
+                      min=1e-4).to(device).to(dtype)
+    else:
+        scales = (act_scales.pow(alpha) /
+                  w_scales.pow(1 - alpha)).clamp(min=1e-4).to(device).to(dtype)
 
     scales = scales / (scales[nonzero_positions].max() *
                        scales[nonzero_positions].min()).sqrt()
@@ -183,7 +193,8 @@ def smooth_fc_fcs(pre_fc: torch.nn.Module,
                   fcs: List[torch.nn.Module],
                   act_scales: torch.Tensor,
                   group_size: int = -1,
-                  alpha: float = 0.5) -> torch.Tensor:
+                  alpha: float = 0.5,
+                  clamp_zeros: bool = False) -> torch.Tensor:
     """Smooth weights of a fully connected layer and its downstream layers.
 
     :param pre_fc: Previous Fully Connected layer
@@ -204,10 +215,15 @@ def smooth_fc_fcs(pre_fc: torch.nn.Module,
     act_scales = act_scales.to(device=device, dtype=dtype)
 
     concat_w = torch.cat([fc.weight for fc in fcs], dim=0)
-    w_scales = get_weight_scale(concat_w, group_size)
+    w_scales = get_weight_scale(concat_w, group_size, clamp_zeros=clamp_zeros)
 
-    scales = (act_scales.pow(alpha) /
-              w_scales.pow(1 - alpha)).clamp(min=1e-4).to(device).to(dtype)
+    if clamp_zeros:
+        scales = (act_scales.pow(alpha) /
+                  w_scales.pow(1 - alpha).clamp(min=1e-4)).clamp(
+                      min=1e-4).to(device).to(dtype)
+    else:
+        scales = (act_scales.pow(alpha) /
+                  w_scales.pow(1 - alpha)).clamp(min=1e-4).to(device).to(dtype)
     scales = scales / (scales.max() * scales.min()).sqrt()
 
     # (for qwen&baichuan) pre_fc is packed QKV, only V needs to scale
@@ -298,7 +314,8 @@ def smooth_layers(layers,
                   norm2fcs,
                   a_scales,
                   group_size=-1,
-                  device='cuda'):
+                  device='cuda',
+                  clamp_zeros=False):
     """Apply weight smoothing based on input scales."""
 
     for l_name, layer in layers.items():
@@ -308,7 +325,11 @@ def smooth_layers(layers,
 
             ln = layer.get_submodule(ln_name)
             fcs = [layer.get_submodule(n) for n in fc_names]
-            smooth_ln_fcs(ln, fcs, a_scales[a_name], group_size)
+            smooth_ln_fcs(ln,
+                          fcs,
+                          a_scales[a_name],
+                          group_size,
+                          clamp_zeros=clamp_zeros)
 
         for f_name, fc_names in fc2fcs.items():
             a_name = [f'{l_name}.{n}' for n in fc_names][0]
@@ -316,7 +337,11 @@ def smooth_layers(layers,
             fc = layer.get_submodule(f_name)
             fcs = [layer.get_submodule(n) for n in fc_names]
 
-            smooth_fc_fcs(fc, fcs, a_scales[a_name], group_size)
+            smooth_fc_fcs(fc,
+                          fcs,
+                          a_scales[a_name],
+                          group_size,
+                          clamp_zeros=clamp_zeros)
 
         layer.to('cpu')
         print(f'{l_name} smooth weight done.')
@@ -361,7 +386,8 @@ def awq_layers(layers,
                a_scales,
                a_ratios=None,
                group_size=-1,
-               device='cuda'):
+               device='cuda',
+               clamp_zeros=False):
     """Apply awq based on input scales."""
 
     for l_name, layer in layers.items():
@@ -373,7 +399,12 @@ def awq_layers(layers,
 
             ln = layer.get_submodule(ln_name)
             fcs = [layer.get_submodule(n) for n in fc_names]
-            smooth_ln_fcs(ln, fcs, a_scales[a_name], group_size, ratio)
+            smooth_ln_fcs(ln,
+                          fcs,
+                          a_scales[a_name],
+                          group_size,
+                          ratio,
+                          clamp_zeros=clamp_zeros)
 
         for f_name, fc_names in fc2fcs.items():
             a_name = [f'{l_name}.{n}' for n in fc_names][0]
@@ -384,7 +415,12 @@ def awq_layers(layers,
             fc = layer.get_submodule(f_name)
             fcs = [layer.get_submodule(n) for n in fc_names]
 
-            smooth_fc_fcs(fc, fcs, a_scales[a_name], group_size, ratio)
+            smooth_fc_fcs(fc,
+                          fcs,
+                          a_scales[a_name],
+                          group_size,
+                          ratio,
+                          clamp_zeros=clamp_zeros)
 
         layer.to('cpu')
         print(f'{l_name} smooth weight done.')

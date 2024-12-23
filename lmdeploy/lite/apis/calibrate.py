@@ -67,6 +67,8 @@ HEAD_NAME_MAP = {
     'MistralForCausalLM': 'lm_head',
 }
 
+CLAMP_ZERO_WEIGHTS = False
+
 
 def _prepare_for_calibrate(model: nn.Module,
                            layer_type: Union[str, type],
@@ -206,6 +208,7 @@ def calibrate(model: str,
               w_group_size: int = 128,
               search_scale: bool = False,
               dtype: str = 'auto',
+              clamp_zeros: bool = False,
               batch_size: int = 1) -> None:
     """The main function for loading the model and performing calibration on a
     given dataset.
@@ -227,6 +230,8 @@ def calibrate(model: str,
         search_scale (bool): Whether search scale ratio. Default to False,
             which means only smooth quant with 0.5 ratio will be applied.
         dtype (str): Data type for loading model weights and calib infer.
+        clamp_zeros (bool): Whether to clamp zeros to minimal decimals in
+            weights to avoid NaN error. May lead to accuracy drop.
         batch_size (int): The batch size for running the calib samples.
             Low GPU mem requires small batch_size. Large batch_size
             reduces the calibration time while costs more VRAM.
@@ -306,14 +311,16 @@ def calibrate(model: str,
                                          w_bits=w_bits,
                                          w_group_size=w_group_size,
                                          batch_size=batch_size,
-                                         search_scale=search_scale)
+                                         search_scale=search_scale,
+                                         clamp_zeros=clamp_zeros)
     else:
         calib_ctx = CalibrationContext(model,
                                        tokenizer,
                                        layer_type=layer_type,
                                        norm_type=norm_type,
                                        batch_size=batch_size,
-                                       device=device)
+                                       device=device,
+                                       clamp_zeros=clamp_zeros)
 
     with calib_ctx:
         all_data = torch.cat([
