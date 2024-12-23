@@ -245,15 +245,25 @@ class RequestManager:
             return False
         return not self.requests.empty()
 
-    def get_all_requests(self) -> Dict[RequestType, Request]:
+    async def get_all_requests(self) -> Dict[RequestType, Request]:
         """get all requests in current queue."""
         num_reqs = self.requests.qsize()
         reqs: ReqList = []
-        for _ in range(num_reqs):
-            elem = self.requests.get_nowait()
+
+        def __proc_reqs(elem):
+            """proc reqs."""
+            nonlocal reqs
             if isinstance(elem, Request):
                 elem = [elem]
             reqs += elem
+
+        if num_reqs == 0:
+            elem = await self.requests.get()
+            __proc_reqs(elem)
+        else:
+            for _ in range(num_reqs):
+                elem = self.requests.get_nowait()
+                __proc_reqs(elem)
 
         # gather requests
         reqs_by_type: Dict[RequestType, Request] = dict(
@@ -289,12 +299,12 @@ class RequestManager:
                                 ' not exists.')
                 self.response(resp)
 
-    def step(self, **kwargs):
+    async def step(self, **kwargs):
         """handle requests.
 
         Should only be called in loop task.
         """
-        reqs_by_type = self.get_all_requests()
+        reqs_by_type = await self.get_all_requests()
 
         # handle requests
         for req_type in self.request_priority:

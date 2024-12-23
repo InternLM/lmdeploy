@@ -829,8 +829,7 @@ class Engine:
         while True:
             if self.scheduler.has_unfinished():
                 await forward_event.wait()
-            self.req_manager.step()
-            await asyncio.sleep(0)
+            await self.req_manager.step()
 
     @torch.inference_mode()
     async def _async_loop_background(self, in_que: asyncio.Queue,
