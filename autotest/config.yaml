@@ -196,6 +196,8 @@ pytorch_base_model:
 
 turbomind_quatization:
     no_awq:
+        - meta-llama/Meta-Llama-3-1-70B-Instruct
+        - Qwen/Qwen2.5-72B-Instruct
         - Qwen/Qwen1.5-MoE-A2.7B-Chat
         - Qwen/Qwen2-VL-2B-Instruct
         - Qwen/Qwen2-VL-7B-Instruct
