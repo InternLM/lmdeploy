@@ -254,7 +254,7 @@ lmdeploy serve gradio api_server_url --server-name ${gradio_ui_ip} --server-port
 Following are two steps to launch multiple api servers through torchrun. Just create a python script with the following codes.
 
 1. Launch the proxy server through `lmdeploy serve proxy`. Get the correct proxy server url.
-2. Launch the script through `torchrun --nproc_per_node 2 script.py InternLM/internlm2-chat-1_8b http://{proxy_node_name}:{proxy_node_port}`.**Note**: Please do not use `0.0.0.0:8000` here, instead, we input the real ip name, `11.25.34.55:8000` for example.
+2. Launch the script through `torchrun --nproc_per_node 2 script.py InternLM/internlm2-chat-1_8b --proxy_url http://{proxy_node_name}:{proxy_node_port}`.**Note**: Please do not use `0.0.0.0:8000` here, instead, we input the real ip name, `11.25.34.55:8000` for example.
 
 ```python
 import os
