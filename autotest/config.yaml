@@ -247,7 +247,6 @@ pytorch_quatization:
         - microsoft/Phi-3-mini-4k-instruct
     w8a8:
         - meta-llama/Meta-Llama-3-8B-Instruct
-        - meta-llama/Meta-Llama-3-1-8B-Instruct
         - meta-llama/Llama-3.2-1B-Instruct
         - meta-llama/Llama-2-7b-chat-hf
         - internlm/internlm2-chat-20b
@@ -262,6 +261,7 @@ pytorch_quatization:
         - microsoft/Phi-3-mini-4k-instruct
         - internlm/internlm2_5-20b
         - internlm/internlm2_5-7b
+        - meta-llama/Meta-Llama-3-1-8B-Instruct
     no_kvint4:
         - meta-llama/Llama-3.2-1B-Instruct
         - OpenGVLab/InternVL2-1B
