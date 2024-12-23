@@ -112,13 +112,22 @@ class CAMBSingleGraphRunner:
         input_buffers['kv_seqlens'] = torch.ones(max_batches,
                                                  dtype=torch.int32,
                                                  device=device)
-
-        input_buffers['kv_start_indices'] = torch.ones(
+        # critical to set negative for kv_start_indices
+        # if we don't set it, two batches with same input tokens
+        # will result in different answer
+        input_buffers['kv_start_indices'] = -torch.ones(
             (max_batches * max_tokens), dtype=torch.int32, device=device)
 
         input_buffers['local_adapter_ids'] = torch.zeros(max_batches,
                                                          dtype=torch.int32,
                                                          device=device)
+        # create buffer for mrope for qwen2VL here
+        mrope_position_ids = kwargs.get('mrope_position_ids', None)
+        if mrope_position_ids is not None:
+            input_buffers['mrope_position_ids'] = torch.ones(3,
+                                                             max_tokens,
+                                                             dtype=torch.int32,
+                                                             device=device)
         return input_buffers
 
     def update_camb_buffer(self, graph_meta: CudaGraphMeta, input_ids: Tensor,
@@ -184,6 +193,14 @@ class CAMBSingleGraphRunner:
                 'inputs_embeds'][:, :new_batch_size]
 
         new_inputs.update(kwargs)
+
+        # mrope for qwen2VL
+        mrope_position_ids = kwargs.get('mrope_position_ids', None)
+        if mrope_position_ids is not None:
+            input_buffers[
+                'mrope_position_ids'][:, :num_tokens] = mrope_position_ids
+            new_inputs['mrope_position_ids'] = input_buffers[
+                'mrope_position_ids'][:, :new_batch_size]
         return new_inputs
 
     def update_camb_context(self, graph_meta, context):
@@ -200,7 +217,6 @@ class CAMBSingleGraphRunner:
         context.q_seqlens = input_buffers['q_seqlens']
         context.kv_seqlens = input_buffers['kv_seqlens']
         context.q_start_loc = input_buffers['q_start_loc']
-        context.kv_start_indices = input_buffers['kv_start_indices']
 
     def forward(self, **kwargs):
         """forward."""
