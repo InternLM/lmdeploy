@@ -180,7 +180,7 @@ class AsyncEngine(LogitsMixin):
         self.tokenizer = self.engine.tokenizer
         self.id2step = {}
         self.id2generator = {}
-        self.free_gens = None
+        self.free_gens: asyncio.Queue = None
         self.instances = [
             self.engine.create_instance() for _ in range(self.instance_num)
         ]
@@ -245,7 +245,7 @@ class AsyncEngine(LogitsMixin):
 
     async def stop_session(self, session_id: int):
         """Stop a session by a session_id."""
-        generator = self.id2generator.get(self.id2generator)
+        generator = self.id2generator.get(session_id)
         if generator:
             await generator.async_cancel(session_id)
         # else it's not running at all
@@ -263,7 +263,7 @@ class AsyncEngine(LogitsMixin):
             await generator.async_end(session_id)
             self.id2step[session_id] = 0
         except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
-            print(f'[end_session] exception caught: {e}')
+            logger.error(f'[end_session] exception caught: {e}')
         finally:
             self.free_gens.put_nowait(generator)
 
@@ -277,7 +277,7 @@ class AsyncEngine(LogitsMixin):
         try:
             yield generator
         except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
-            print(f'[safe_run] exception caught: {e}')
+            logger.error(f'[safe_run] exception caught: {e}')
             await generator.async_cancel(session_id)
         finally:
             self.id2generator.pop(session_id)
@@ -576,7 +576,7 @@ class AsyncEngine(LogitsMixin):
 
             async with self.safe_run(session_id) as generator:
                 state = DetokenizeState(len(input_ids))
-                res = input_ids.copy()
+                token_ids = input_ids.copy()
                 prev_len = 0
                 start_ids_offset = state.ids_offset
                 response = ''
@@ -594,19 +594,19 @@ class AsyncEngine(LogitsMixin):
                         tokens = 0
                         break
                     tokens = outputs.num_token
-                    res += outputs.token_ids[prev_len - tokens:]
+                    token_ids += outputs.token_ids[prev_len - tokens:]
                     prev_len = tokens
 
-                    if len(res) <= state.ids_offset:
+                    if len(token_ids) <= state.ids_offset:
                         continue
 
                     ids_offset = state.ids_offset
                     response, state = self.tokenizer.detokenize_incrementally(
-                        res,
+                        token_ids,
                         state,
                         skip_special_tokens=gen_config.skip_special_tokens)
+                    res = token_ids[ids_offset:]
 
-                    res = res[ids_offset:]
                     logprobs = None
                     if outputs.logprobs:
                         log_offset = ids_offset - start_ids_offset
@@ -617,6 +617,7 @@ class AsyncEngine(LogitsMixin):
                     yield GenOut(response, self.id2step[session_id],
                                  len(input_ids), tokens, finish_reason, res,
                                  logprobs)
+                    # end of generator loop
                 if not is_error(outputs.status):
                     finish_reason = 'length' \
                         if tokens >= gen_config.max_new_tokens else 'stop'
@@ -635,12 +636,12 @@ class AsyncEngine(LogitsMixin):
                                  finish_reason='error',
                                  token_ids=[])
                 # update step
-                self.id2step[session_id] += len(input_ids) + tokens
                 if sequence_end:
                     self.id2step[session_id] = 0
-                # manually end pytorch session
-                if self.backend == 'pytorch' and sequence_end:
-                    await generator.async_end(session_id)
+                    if self.backend == 'pytorch':  # manually end pytorch session
+                        await generator.async_end(session_id)
+                else:
+                    self.id2step[session_id] += len(input_ids) + tokens
 
     def parse_tool_response(self, text, tools, **kwargs):
         """Parse model response containing tool information.

@@ -485,7 +485,7 @@ class TurboMindInstance:
 
     def async_cancel_cb(self, fut: asyncio.Future, status: int):
         """executing on engine's signaling thread."""
-        print(f'session canceled, status = {status}')
+        logger.info(f'[async_cancel_cb] session canceled, status = {status}')
         fut.get_loop().call_soon_threadsafe(fut.set_result, status)
 
     async def async_cancel(self, session_id: int = None):
@@ -495,7 +495,7 @@ class TurboMindInstance:
 
     def async_end_cb(self, fut: asyncio.Future, status: int):
         """executing on engine's signaling thread."""
-        print(f'session ended, status = {status}')
+        logger.info(f'[async_end_cb] session ended, status = {status}')
         fut.get_loop().call_soon_threadsafe(fut.set_result, status)
 
     async def async_end(self, session_id):
@@ -543,10 +543,9 @@ class TurboMindInstance:
         if self.lock is None:
             self.lock = asyncio.Lock()
 
-        async with self.lock:  # reentrant proof
-
-            self.flag = 0
-
+        # may remove when proved not possible
+        async with self.lock:  
+            logger.info(f'[async_stream_infer] session {session_id} start')
             gen_cfg = self._get_generation_config(gen_config)
 
             inputs, input_len = self.prepare_inputs(
@@ -608,7 +607,7 @@ class TurboMindInstance:
                         break
 
             except Exception as e:
-                logger.error(e)
+                logger.error(f'[async_stream_infer] {e}')
                 yield self._get_error_output()
 
             finally:
@@ -617,6 +616,7 @@ class TurboMindInstance:
                 while not state or state.status == 0:
                     await signal.fut
                     state = shared_state.consume()
+            logger.info(f'[async_stream_infer] session {session_id} done')
 
     def _get_error_output(self):
         return EngineOutput(status=ResponseType.INTERNAL_ENGINE_ERROR,
