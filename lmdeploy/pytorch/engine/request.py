@@ -260,10 +260,11 @@ class RequestManager:
         if num_reqs == 0:
             elem = await self.requests.get()
             __proc_reqs(elem)
-        else:
-            for _ in range(num_reqs):
-                elem = self.requests.get_nowait()
-                __proc_reqs(elem)
+            num_reqs = self.requests.qsize()
+
+        for _ in range(num_reqs):
+            elem = self.requests.get_nowait()
+            __proc_reqs(elem)
 
         # gather requests
         reqs_by_type: Dict[RequestType, Request] = dict(

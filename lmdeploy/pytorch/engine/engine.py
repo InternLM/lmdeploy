@@ -822,14 +822,23 @@ class Engine:
                 swap_out_map = dict()
                 __update_inputs(next_token_ids)
 
+    def _set_has_runable_event(self, has_runable_event: asyncio.Event):
+        """set has runable event."""
+        if self.scheduler.has_unfinished():
+            has_runable_event.set()
+        else:
+            has_runable_event.clear()
+
     @torch.inference_mode()
     async def _async_loop_preprocess_message(self,
-                                             forward_event: asyncio.Event):
+                                             forward_event: asyncio.Event,
+                                             has_runable_event: asyncio.Event):
         """preprocess msg."""
         while True:
             if self.scheduler.has_unfinished():
                 await forward_event.wait()
             await self.req_manager.step()
+            self._set_has_runable_event(has_runable_event)
 
     @torch.inference_mode()
     async def _async_loop_background(self, in_que: asyncio.Queue,
@@ -995,8 +1004,10 @@ class Engine:
                                                  name='MainLoopBackground')
 
         # preprocess task
+        has_runable_event = asyncio.Event()
         loop_msg_proc = event_loop.create_task(
-            self._async_loop_preprocess_message(forward_event),
+            self._async_loop_preprocess_message(forward_event,
+                                                has_runable_event),
             name='MainLoopPreprocessMessage')
 
         # response task
@@ -1044,13 +1055,11 @@ class Engine:
             while not finish:
                 finish, out = await out_que.get()
                 step_outputs = await self._make_infer_outputs(*out)
+                self._set_has_runable_event(has_runable_event)
                 resp_que.put_nowait(step_outputs)
 
         while True:
-            if not self.scheduler.has_unfinished():
-                await asyncio.sleep(0.01)
-                continue
-
+            await has_runable_event.wait()
             await __step()
 
     async def async_loop(self):
