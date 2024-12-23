@@ -252,9 +252,13 @@ class AsyncEngine(LogitsMixin):
 
     async def end_session(self, session_id: int):
         """For ending a session that is not running."""
-        # TODO: wait for generator to finish `await generator.async_done()`
-        assert session_id not in self.id2generator
-        generator = await self.free_gens.get()
+        generator = self.id2generator.get(session_id)
+        if generator:
+            fut = generator._fut
+            await fut
+            assert session_id not in self.id2generator
+        else:
+            generator = await self.free_gens.get()
         try:
             await generator.async_end(session_id)
             self.id2step[session_id] = 0
@@ -266,8 +270,9 @@ class AsyncEngine(LogitsMixin):
     @asynccontextmanager
     async def safe_run(self, session_id: int):
         """A context manager to make sure server's safe running."""
-        generator = await self.free_gens.get()
         assert session_id not in self.id2generator
+        generator = await self.free_gens.get()
+        generator._fut = asyncio.get_running_loop().create_future()
         self.id2generator[session_id] = generator
         try:
             yield generator
@@ -276,6 +281,8 @@ class AsyncEngine(LogitsMixin):
             await generator.async_cancel(session_id)
         finally:
             self.id2generator.pop(session_id)
+            generator._fut.set_result(None)
+            generator._fut = None
             self.free_gens.put_nowait(generator)
 
     def batch_infer(self,

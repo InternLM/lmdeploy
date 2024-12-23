@@ -8,6 +8,7 @@ import threading
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
+from functools import partial
 from itertools import repeat
 from queue import Queue
 from typing import Dict, Iterable, List
@@ -319,6 +320,13 @@ class TurboMind:
         return TurboMindInstance(self, self.config, cuda_stream_id)
 
 
+class StreamingSignal:
+
+    def __init__(self):
+        self.loop = asyncio.get_running_loop()
+        self.fut = self.loop.create_future()
+
+
 class TurboMindInstance:
     """Instance of TurboMind.
 
@@ -346,9 +354,7 @@ class TurboMindInstance:
         self.model_inst = self._create_model_instance(0)
 
         self.config = config
-
-        self.cond = None
-        self.done_event = None
+        self.lock = None
 
     def _create_model_instance(self, device_id):
         model_inst = self.tm_model.model_comm.create_model_instance(device_id)
@@ -386,52 +392,6 @@ class TurboMindInstance:
                     tok_res.pop(k)
             out_logprobs.append(tok_res)
         return out_logprobs
-
-    def async_end_cb(self, status: int):
-
-        async def _signal():
-            print(f'session ended, status = {status}')
-            self.end_event.set()
-
-        asyncio.run_coroutine_threadsafe(_signal(), self.event_loop)
-
-    async def async_end(self, session_id):
-        await self.done_event.wait()
-        self.end_event = asyncio.Event()
-        self.event_loop = asyncio.get_running_loop()
-        self.model_inst.end(self.async_end_cb, session_id)
-        await self.end_event.wait()
-
-    def end_cb(self, status: int):
-        print(f'session ended, status = {status}')
-        self.end_event.set()
-
-    def end(self):
-        self.done_event.wait()
-        self.end_event = threading.Event()
-        self.model_inst.end(self.end_cb)
-        self.end_event.wait()
-
-    def cancel(self, session_id: int, blocking: bool = True):
-        self.model_inst.cancel()
-        if blocking:
-            self.done_event.wait()
-
-    def async_cancel_cb(self, status: int):
-
-        async def _signal():
-            print(f'session canceled, status = {status}')
-            self.cancel_event.set()
-
-        asyncio.run_coroutine_threadsafe(_signal(), self.event_loop)
-
-    async def async_cancel(self, session_id: int = None):
-        """End the given session."""
-        if not self.is_canceled:
-            self.cancel_event = asyncio.Event()
-            self.model_inst.cancel(self.async_cancel_cb)
-            self.is_canceled = True
-        await self.cancel_event.wait()
 
     def prepare_embeddings(self,
                            input_embeddings=None,
@@ -493,7 +453,7 @@ class TurboMindInstance:
         assert isinstance(input_ids, Sequence)
 
         input_ids = torch.IntTensor(input_ids)
-        input_lengths = torch.IntTensor([len(input_ids)])
+        input_len = len(input_ids)
 
         inputs = dict(input_ids=input_ids, )
 
@@ -521,16 +481,36 @@ class TurboMindInstance:
         if bad_words is not None:
             inputs['bad_words_list'] = bad_words
 
-        return inputs, input_lengths
+        return inputs, input_len
 
-    async def async_signal(self):
-        async with self.cond:
-            self.flag = 1
-            self.cond.notify()
+    def async_cancel_cb(self, fut: asyncio.Future, status: int):
+        """executing on engine's signaling thread."""
+        print(f'session canceled, status = {status}')
+        fut.get_loop().call_soon_threadsafe(fut.set_result, status)
 
-    def async_signal_cb(self):
-        coro = self.async_signal()
-        asyncio.run_coroutine_threadsafe(coro, self.event_loop)
+    async def async_cancel(self, session_id: int = None):
+        fut = asyncio.get_running_loop().create_future()
+        self.model_inst.cancel(partial(self.async_cancel_cb, fut))
+        return await fut
+
+    def async_end_cb(self, fut: asyncio.Future, status: int):
+        """executing on engine's signaling thread."""
+        print(f'session ended, status = {status}')
+        fut.get_loop().call_soon_threadsafe(fut.set_result, status)
+
+    async def async_end(self, session_id):
+        fut = asyncio.get_running_loop().create_future()
+        self.model_inst.end(partial(self.async_end_cb, fut), session_id)
+        await fut
+
+    def async_signal_cb(self, s: StreamingSignal):
+        """executing on engine's signaling thread."""
+
+        def _signal():
+            fut, s.fut = s.fut, s.loop.create_future()  # exchange
+            fut.set_result(None)
+
+        s.loop.call_soon_threadsafe(_signal)
 
     async def async_stream_infer(self,
                                  session_id,
@@ -559,98 +539,84 @@ class TurboMindInstance:
             stream_output (bool): indicator for stream output
             kwargs (dict): kwargs for backward compatibility
         """
-        self.event_loop = asyncio.get_running_loop()
 
-        if self.done_event is not None:
-            await self.done_event.wait()
-            self.done_event.clear()
-        else:
-            self.cond = asyncio.Condition()
-            self.done_event = asyncio.Event()
+        if self.lock is None:
+            self.lock = asyncio.Lock()
 
-        self.is_canceled = False
-        self.flag = 0
+        async with self.lock:  # reentrant proof
 
-        gen_cfg = self._get_generation_config(gen_config)
+            self.flag = 0
 
-        inputs, input_length = self.prepare_inputs(
-            input_ids=input_ids,
-            input_embeddings=input_embeddings,
-            input_embedding_ranges=input_embedding_ranges,
-            gen_config=gen_config)
+            gen_cfg = self._get_generation_config(gen_config)
 
-        session = _tm.SessionParam(id=session_id,
-                                   step=step,
-                                   start=sequence_start,
-                                   end=sequence_end)
+            inputs, input_len = self.prepare_inputs(
+                input_ids=input_ids,
+                input_embeddings=input_embeddings,
+                input_embedding_ranges=input_embedding_ranges,
+                gen_config=gen_config)
 
-        inputs = _np_dict_to_tm_dict(inputs)
+            session = _tm.SessionParam(id=session_id,
+                                       step=step,
+                                       start=sequence_start,
+                                       end=sequence_end)
 
-        outputs, shared_state = self.model_inst.forward(
-            inputs, session, gen_cfg, stream_output, self.async_signal_cb)
+            inputs = _np_dict_to_tm_dict(inputs)
 
-        outputs = _tm_dict_to_torch_dict(outputs)
+            signal = StreamingSignal()
+            signal_cb = partial(self.async_signal_cb, signal)
 
-        output_ids_buf = outputs['output_ids']
+            outputs, shared_state = self.model_inst.forward(
+                inputs, session, gen_cfg, stream_output, signal_cb)
 
-        out_logprobs = None
-        finish = False
-        state = None
+            outputs = _tm_dict_to_torch_dict(outputs)
 
-        output_ids = []
-        output_len = 0
-        prev_len = step + input_length[0]
-        try:
-            # generator
-            while True:
+            output_ids_buf = outputs['output_ids']
 
-                async with self.cond:
-                    while not self.flag:
-                        await self.cond.wait()
-                    self.flag = 0
+            out_logprobs = None
+            finish = False
+            state = None
 
-                state = shared_state.consume()
-                status, seq_len = state.status, state.seq_len
+            output_ids = []
+            output_len = 0
+            prev_len = step + input_len
+            try:
+                while True:
+                    await signal.fut
 
-                if status == 7:
-                    finish = True
-                    status = 0
-                elif status:
-                    yield self._get_error_output()
-                    break
+                    state = shared_state.consume()
+                    status, seq_len = state.status, state.seq_len
 
-                if seq_len == prev_len and not finish:
-                    continue
+                    if status == 7:
+                        finish, status = True, 0
+                    elif status:
+                        yield self._get_error_output()
+                        break
 
-                output_ids += output_ids_buf[prev_len:seq_len].tolist()
-                output_len += seq_len - prev_len
+                    if seq_len == prev_len and not finish:
+                        continue
 
-                status = ResponseType.FINISH if finish else ResponseType.SUCCESS
-                output = EngineOutput(status, output_ids, output_len.item(),
-                                      out_logprobs)
+                    output_ids += output_ids_buf[prev_len:seq_len].tolist()
+                    output_len += seq_len - prev_len
+                    status = ResponseType.FINISH if finish else ResponseType.SUCCESS
+                    output = EngineOutput(status, output_ids, output_len,
+                                          out_logprobs)
+                    prev_len = seq_len
 
-                prev_len = seq_len
+                    yield output
 
-                yield output
+                    if finish:
+                        break
 
-                if finish:
-                    break
+            except Exception as e:
+                logger.error(e)
+                yield self._get_error_output()
 
-        except Exception as e:
-            logger.error(e)
-            yield self._get_error_output()
-
-        finally:
-            async with self.cond:
-                # Contract: `notfiy` won't be called again if status is non-zero
+            finally:
+                # Contract: `cb` won't be called again if status is non-zero
                 # wait for status to be set as `finish` or `error`
                 while not state or state.status == 0:
-                    while not self.flag:
-                        await self.cond.wait()
-                    self.flag = 0
+                    await signal.fut
                     state = shared_state.consume()
-            self.done_event.set()
-            self.event_loop = None
 
     def _get_error_output(self):
         return EngineOutput(status=ResponseType.INTERNAL_ENGINE_ERROR,
@@ -683,6 +649,21 @@ class TurboMindInstance:
         with self.cond:
             self.flag = 1
             self.cond.notify()
+
+    def end_cb(self, status: int):
+        print(f'session ended, status = {status}')
+        self.end_event.set()
+
+    def end(self):
+        self.done_event.wait()
+        self.end_event = threading.Event()
+        self.model_inst.end(self.end_cb)
+        self.end_event.wait()
+
+    def cancel(self, session_id: int, blocking: bool = True):
+        self.model_inst.cancel()
+        if blocking:
+            self.done_event.wait()
 
     def stream_infer(self,
                      session_id,

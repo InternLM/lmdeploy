@@ -172,6 +172,9 @@ def main(model_path: str,
                                   repetition_penalty=repetition_penalty,
                                   stop_token_ids=stop_words)
 
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
     nth_round = 1
     step = 0
     seed = random.getrandbits(64)
@@ -181,7 +184,7 @@ def main(model_path: str,
             exit(0)
         elif prompt == 'end':
             if use_async:
-                asyncio.run(generator.async_end(session_id))
+                loop.run_until_complete(generator.async_end(session_id))
             else:
                 generator.end(session_id)
             nth_round = 1
@@ -211,7 +214,7 @@ def main(model_path: str,
                 coro = async_infer(generator, session_id, input_ids,
                                    gen_config, sequence_start, step,
                                    stream_output, tokenizer, state)
-                tokens = asyncio.run(coro)
+                tokens = loop.run_until_complete(coro)
             else:
                 tokens = infer(generator, session_id, input_ids, gen_config,
                                sequence_start, step, stream_output, tokenizer,
