@@ -32,6 +32,7 @@ logger = get_logger('lmdeploy')
 
 def load_vl_model(model_path: str,
                   backend: str,
+                  with_llm: bool = False,
                   backend_config: Optional[Union[TurbomindEngineConfig,
                                                  PytorchEngineConfig]] = None):
     """load visual model.
@@ -39,6 +40,8 @@ def load_vl_model(model_path: str,
     Args:
         model_path(str): the path or repo_id from model hub of the model
         backend(str): the name of inference backend
+        with_llm(bool): load LLM model or not. Set it to False for VLM
+            inference scenarios and True for VLM quantization
         backend_config: the config of the inference engine
     """
     if not os.path.exists(model_path):
@@ -49,11 +52,13 @@ def load_vl_model(model_path: str,
                                download_dir=download_dir)
 
     max_memory = None
-    tp = getattr(backend_config, 'tp', 1)
-    max_memory = {i: torch.cuda.mem_get_info(i)[0] for i in range(tp)}
+    if not with_llm:
+        tp = getattr(backend_config, 'tp', 1)
+        max_memory = {i: torch.cuda.mem_get_info(i)[0] for i in range(tp)}
 
     _, hf_config = get_model_arch(model_path)
     kwargs = dict(model_path=model_path,
+                  with_llm=with_llm,
                   max_memory=max_memory,
                   hf_config=hf_config,
                   backend=backend)
@@ -63,7 +68,9 @@ def load_vl_model(model_path: str,
                 logger.info(f'matching vision model: {name}')
                 model = module(**kwargs)
                 model.build_preprocessor()
-                if backend == 'turbomind':
+                # build the vision part of a VLM model when backend is
+                # turbomind, or load the whole VLM model when `with_llm==True`
+                if backend == 'turbomind' or with_llm:
                     model.build_model()
                 return model
         except Exception:

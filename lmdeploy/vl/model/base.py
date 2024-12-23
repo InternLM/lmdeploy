@@ -17,11 +17,13 @@ class VisonModel(ABC):
 
     def __init__(self,
                  model_path: str,
+                 with_llm: bool = False,
                  max_memory: Dict[int, int] = None,
                  hf_config: AutoConfig = None,
                  backend: str = ''):
         """init."""
         self.model_path = model_path
+        self.with_llm = with_llm
         self.max_memory = max_memory
         self.backend = backend
         if hf_config is None:
@@ -38,11 +40,11 @@ class VisonModel(ABC):
         raise NotImplementedError()
 
     def build_model(self, ):
-        """build model.
+        """build the vision part of a VLM model when backend is turbomind.
 
-        ONLY implement it when the backend is turbomind engine
+        But when `with_llm=True`, load the whole VLM model
         """
-        if self.backend == 'turbomind':
+        if self.backend == 'turbomind' or self.with_llm:
             raise NotImplementedError()
 
     @abstractmethod

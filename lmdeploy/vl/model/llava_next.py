@@ -28,9 +28,13 @@ class LlavaNextVisionModel(LlavaHfVisionModel):
             from transformers import LlavaNextForConditionalGeneration
             self.model = LlavaNextForConditionalGeneration._from_config(
                 self.hf_config)
-            del self.model.language_model
+            self.vl_model = self.model
+            if not self.with_llm:
+                del self.model.language_model
 
     def build_model(self):
+        """build the vision part of a VLM model when backend is turbomind, or
+        load the whole VLM model when `self.with_llm==True`"""
         from accelerate import load_checkpoint_and_dispatch
         from accelerate.utils import get_balanced_memory, infer_auto_device_map
 
@@ -58,7 +62,7 @@ class LlavaNextVisionModel(LlavaHfVisionModel):
             load_checkpoint_and_dispatch(
                 model=self.model,
                 checkpoint=self.model_path,
-                device_map=device_map,
+                device_map=device_map if not self.with_llm else {'': 'cpu'},
                 no_split_module_classes=no_split_module_classes,
                 dtype=torch.half)
         self.model.eval()
