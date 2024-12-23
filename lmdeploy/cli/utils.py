@@ -119,9 +119,10 @@ class ArgumentHelper:
             '--quant-dtype',
             type=str,
             default=default,
-            choices=['int8', 'float8_e4m3fn', 'float8_e5m2'],
-            help='data type for the quantized model weights and activations')
-    
+            choices=['int8', 'float8_e4m3fn', 'float8_e5m2', 'fp8'],
+            help='data type for the quantized model weights and activations.'
+            'Note "fp8" is the short version of "float8_e4m3fn"')
+
     @staticmethod
     def model_format(parser, default: str = None):
         return parser.add_argument(

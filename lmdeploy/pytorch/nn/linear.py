@@ -664,9 +664,9 @@ class W8A8Linear(nn.Module):
                                   loaded_weight: torch.Tensor, rank: int,
                                   world_size: int):
         """weight loader for rowwise linear."""
-        if loaded_weight.dim() == 2 and param.dtype in (torch.float16,
-                                                        torch.float32,
-                                                        torch.bfloat16):
+        if loaded_weight.dim() == 2 and param.dtype in (torch.int8,
+                                                        torch.float8_e4m3fn,
+                                                        torch.float8_e5m2):
             weight = loaded_weight.chunk(world_size, 1)[rank]
             return default_weight_loader(param, weight)
         elif loaded_weight.dim() == 2 and loaded_weight.size(1) == 1:
@@ -821,7 +821,7 @@ class QKVW8A8Linear(MergedW8A8Linear, QKVMixin):
                  is_tp: bool = True,
                  num_replicate_kv_heads: int = 1,
                  quant_dtype: torch.dtype = torch.int8):
-        
+
         self.qkv_split_section = self._get_qkv_out_features(
             num_q_heads, num_kv_heads, head_size, head_size_v,
             num_replicate_kv_heads)

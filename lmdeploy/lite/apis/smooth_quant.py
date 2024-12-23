@@ -25,8 +25,11 @@ def smooth_quant(model: str,
                  w_bits: int = 8,
                  dtype: Literal['float16', 'bfloat16', 'auto'] = 'auto',
                  device: str = 'cuda',
-                 quant_dtype: Literal['int8', 'float8_e4m3fn', 'float8_e5m2'] = 'int8'):
-    
+                 quant_dtype: Literal['int8', 'fp8', 'float8_e4m3fn',
+                                      'float8_e5m2'] = 'int8'):
+    if quant_dtype == 'fp8':
+        quant_dtype = 'float8_e4m3fn'
+
     quant_dtype = getattr(torch, quant_dtype, torch.int8)
     if quant_dtype.is_floating_point:
         q_dtype_info = torch.finfo(quant_dtype)

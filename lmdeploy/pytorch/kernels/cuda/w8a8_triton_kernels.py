@@ -47,17 +47,19 @@ def per_channel_quant(x: torch.Tensor, n_bits: int, dtype: torch.dtype):
 @triton.autotune(
     configs=[
         triton.Config({
-            'BLOCK_N': 64,
+            'BLOCK_M': 128,
+            'BLOCK_N': 256,
             'BLOCK_K': 128,
         },
-                      num_stages=4,
-                      num_warps=4),
+                      num_stages=3,
+                      num_warps=8),
         triton.Config({
+            'BLOCK_M': 256,
             'BLOCK_N': 128,
             'BLOCK_K': 128,
         },
-                      num_stages=4,
-                      num_warps=4)
+                      num_stages=3,
+                      num_warps=8)
     ],
     key=['N', 'K'],
     warmup=5,
@@ -112,7 +114,7 @@ def _linear(
     for k in range(0, tl.cdiv(K, BLOCK_K)):
         a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_K, other=None)
         b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_K, other=None)
-        accumulator += tl.dot(a, b)
+        accumulator = tl.dot(a, b, accumulator, out_dtype=ACCUMULATOR_DTYPE)
         a_ptrs += BLOCK_K * stride_ak
         b_ptrs += BLOCK_K * stride_bk
     c = accumulator.to(tl.float32)
@@ -131,17 +133,19 @@ def _linear(
 @triton.autotune(
     configs=[
         triton.Config({
-            'BLOCK_N': 64,
+            'BLOCK_M': 128,
+            'BLOCK_N': 256,
             'BLOCK_K': 128,
         },
-                      num_stages=4,
-                      num_warps=4),
+                      num_stages=3,
+                      num_warps=8),
         triton.Config({
+            'BLOCK_M': 256,
             'BLOCK_N': 128,
             'BLOCK_K': 128,
         },
-                      num_stages=4,
-                      num_warps=4)
+                      num_stages=3,
+                      num_warps=8)
     ],
     key=['N', 'K'],
     warmup=5,
@@ -181,7 +185,7 @@ def _linear_add(A, B, C, residual_ptr, M, N, K, stride_am, stride_ak,
     for k in range(0, tl.cdiv(K, BLOCK_K)):
         a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_K, other=None)
         b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_K, other=None)
-        accumulator += tl.dot(a, b)
+        accumulator = tl.dot(a, b, accumulator, out_dtype=ACCUMULATOR_DTYPE)
         a_ptrs += BLOCK_K * stride_ak
         b_ptrs += BLOCK_K * stride_bk
     c = accumulator.to(tl.float32)
@@ -226,13 +230,10 @@ def matmul_kernel_dynamic_quant(a,
         assert residual.is_contiguous()
     c = a.new_empty(c_shape, dtype=output_dtype)
     accumulator_dtype = tl.float32 if a.is_floating_point() else tl.int32
-    BLOCK_M = 128
-    if M < BLOCK_M:
-        BLOCK_M = triton.next_power_of_2(M)
-        BLOCK_M = max(BLOCK_M, 16)
 
     def grid(META):
-        return (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, META['BLOCK_N']), )
+        return (triton.cdiv(M, META['BLOCK_M']) *
+                triton.cdiv(N, META['BLOCK_N']), )
 
     kernel_meta = get_kernel_meta(a)
     if residual is not None:
@@ -249,7 +250,6 @@ def matmul_kernel_dynamic_quant(a,
                           b.stride(0),
                           c.stride(-2),
                           c.stride(-1),
-                          BLOCK_M=BLOCK_M,
                           GROUP_SIZE_M=8,
                           rms_scale_ptr=rms_scale,
                           linear_scale_ptr=linear_scale,
@@ -268,7 +268,6 @@ def matmul_kernel_dynamic_quant(a,
                       b.stride(0),
                       c.stride(-2),
                       c.stride(-1),
-                      BLOCK_M=BLOCK_M,
                       GROUP_SIZE_M=8,
                       rms_scale_ptr=rms_scale,
                       linear_scale_ptr=linear_scale,
@@ -585,26 +584,11 @@ def test_per_token_quant(x, eps, quant_dtype=torch.int8):
             x_s_torch.flatten().to(torch.float32)))
 
 
-@triton.testing.perf_report(
-    triton.testing.Benchmark(
-        x_names=['M'],
-        x_vals=[1, 16, 32, 64, 128, 256] + [512 * i * 2 for i in range(1, 17)],
-        line_arg='provider',
-        line_vals=['int8_dynamic_triton_op', 'float_torch'],
-        line_names=['int8_dynamic_triton_op', 'float_torch'],
-        styles=[('blue', '-'), ('green', '-'), ('orange', '-'),
-                ('yellow', '-'), ('yellow', '-')],
-        ylabel='GB/s',
-        plot_name='forward',
-        args={
-            'dtype': torch.float16,
-        }))
-def bench_rms_and_linear(M,
-                         dtype,
-                         provider,
-                         eps=1e-5,
-                         device='cuda',
-                         quant_dtype=torch.int8):
+def bench_rms_and_linear(M: int,
+                         provider: str,
+                         dtype: torch.dtype = torch.float16,
+                         eps: float = 1e-5):
+    """benchmark rms and linear."""
 
     def rms_norm_torch(x, w, eps):
         variance = x.to(torch.float32).pow(2).mean(-1, keepdim=True)
@@ -616,6 +600,7 @@ def bench_rms_and_linear(M,
 
     N = 4096
     K = 4096
+
     x_shape = (M, K)
     rms_w_shape = (x_shape[-1], )
     rms_weight = torch.randn(rms_w_shape,
@@ -627,17 +612,29 @@ def bench_rms_and_linear(M,
                                 dtype=dtype,
                                 device='cuda',
                                 requires_grad=True)
-    linear_weight_quant, linear_scale = per_channel_quant(
-        linear_weight, 8, quant_dtype)
 
-    alpha = max(x.max().abs(), x.min().abs())
-    if quant_dtype.is_floating_point:
-        qdtype_info = torch.finfo(quant_dtype)
+    if provider == 'torch_fp16':
+        rms_out_torch = rms_norm_torch(x, rms_weight, eps).half()
+
+        def y_fwd():
+            linear_torch(rms_out_torch, linear_weight)
     else:
-        qdtype_info = torch.iinfo(quant_dtype)
-    rms_scale = alpha / qdtype_info.max
+        if provider == 'triton_int8':
+            quant_dtype = torch.int8
+        elif provider == 'triton_fp8_e4m3':
+            quant_dtype = torch.float8_e4m3fn
+        elif provider == 'triton_fp8_e5m2':
+            quant_dtype = torch.float8_e5m2
 
-    if provider == 'int8_dynamic_triton_op':
+        linear_weight_quant, linear_scale = per_channel_quant(
+            linear_weight, 8, quant_dtype)
+
+        alpha = max(x.max().abs(), x.min().abs())
+        if quant_dtype.is_floating_point:
+            qdtype_info = torch.finfo(quant_dtype)
+        else:
+            qdtype_info = torch.iinfo(quant_dtype)
+        rms_scale = alpha / qdtype_info.max
         rms_out, rms_scale = rms_norm_dynamic_quant(x,
                                                     rms_weight,
                                                     eps,
@@ -650,17 +647,16 @@ def bench_rms_and_linear(M,
                                         rms_scale,
                                         linear_scale,
                                         output_dtype=dtype)
-    elif provider == 'float_torch':
-        rms_out_torch = rms_norm_torch(x, rms_weight, eps).half()
-
-        def y_fwd():
-            linear_torch(rms_out_torch, linear_weight)
 
     quantiles = [0.5, 0.2, 0.8]
     ms, min_ms, max_ms = triton.testing.do_bench(y_fwd,
                                                  quantiles=quantiles,
                                                  rep=500)
-    return ms, max_ms, min_ms
+
+    def perf(ms):
+        return 2 * M * N * K * 1e-12 / (ms * 1e-3)
+
+    return perf(ms), perf(max_ms), perf(min_ms)
 
 
 if __name__ == '__main__':
@@ -720,4 +716,26 @@ if __name__ == '__main__':
         test_per_token_quant(x, eps, quant_dtype=torch.float8_e4m3fn)
         test_per_token_quant(x, eps, quant_dtype=torch.float8_e5m2)
 
-    bench_rms_and_linear.run(print_data=True)
+    # benchmark triton kernels
+    line_vals = ['triton_int8', 'torch_fp16']
+    line_names = ['triton_int8', 'torch_fp16']
+
+    if is_fp8_supported:
+        line_vals += ['triton_fp8_e4m3', 'triton_fp8_e5m2']
+        line_names += ['triton_fp8_e4m3', 'triton_fp8_e5m2']
+    config = triton.testing.Benchmark(x_names=['M'],
+                                      x_vals=[1, 16, 32, 64, 128, 256] +
+                                      [512 * i * 2 for i in range(1, 5)],
+                                      line_arg='provider',
+                                      line_vals=line_vals,
+                                      line_names=line_names,
+                                      styles=[('blue', '-'), ('green', '-'),
+                                              ('orange', '-'), ('black', '-'),
+                                              ('yellow', '-')],
+                                      ylabel='TFLOPS',
+                                      plot_name='bench-triton',
+                                      args={
+                                          'dtype': torch.float16,
+                                      })
+    bench_funch = (triton.testing.perf_report(config))(bench_rms_and_linear)
+    bench_funch.run(print_data=True)
