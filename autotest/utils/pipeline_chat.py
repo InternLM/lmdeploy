@@ -37,7 +37,7 @@ def run_pipeline_chat_test(config,
 
     if 'pytorch' in type:
         backend_config = PytorchEngineConfig(tp=tp)
-        if not is_bf16_supported():
+        if not is_bf16_supported() or 'mono-internvL' in model_case.lower():
             backend_config.dtype = 'float16'
     else:
         backend_config = TurbomindEngineConfig(tp=tp)
