@@ -365,18 +365,6 @@ class ArgumentHelper:
         )
 
     @staticmethod
-    def clamp_zeros(parser):
-        """Add argument clamp_zeros to parser."""
-
-        return parser.add_argument(
-            '--clamp-zeros',
-            action='store_true',
-            default=False,
-            help=\
-            'Whether clamp zeros weights to a minimal decimal. This is useful when NaN happened during calibration.'  # noqa
-        )
-
-    @staticmethod
     def device(parser,
                default: str = 'cuda',
                choices: List[str] = ['cuda', 'ascend', 'maca']):

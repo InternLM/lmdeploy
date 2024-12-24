@@ -21,8 +21,7 @@ def smooth_quant(model: str,
                  batch_size: int = 1,
                  w_bits: int = 8,
                  dtype: str = 'auto',
-                 device: str = 'cuda',
-                 clamp_zeros: bool = False):
+                 device: str = 'cuda'):
     model_path = model
     vl_model, model, tokenizer, work_dir = calibrate(model,
                                                      calib_dataset,
@@ -71,22 +70,10 @@ def smooth_quant(model: str,
     if search_scale:
         awq_ratios = inp_stats['ratios']
         act_scales = inp_stats['absmean']
-        awq_layers(layers,
-                   fc2fcs,
-                   norm2fcs,
-                   act_scales,
-                   awq_ratios,
-                   -1,
-                   device,
-                   clamp_zeros=clamp_zeros)
+        awq_layers(layers, fc2fcs, norm2fcs, act_scales, awq_ratios, -1,
+                   device)
     else:
-        smooth_layers(layers,
-                      fc2fcs,
-                      norm2fcs,
-                      act_scales,
-                      -1,
-                      device,
-                      clamp_zeros=clamp_zeros)
+        smooth_layers(layers, fc2fcs, norm2fcs, act_scales, -1, device)
 
     rmsnorms = collect_target_modules(model, norm_type)
 

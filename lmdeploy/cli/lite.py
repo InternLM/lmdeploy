@@ -36,7 +36,6 @@ class SubCliLite(object):
         ArgumentHelper.calib_batchsize(parser)
         ArgumentHelper.calib_search_scale(parser)
         ArgumentHelper.dtype(parser)
-        ArgumentHelper.clamp_zeros(parser)
         parser.add_argument(
             '--device',
             type=str,
@@ -126,7 +125,6 @@ class SubCliLite(object):
         ArgumentHelper.calib_batchsize(parser)
         ArgumentHelper.calib_search_scale(parser)
         ArgumentHelper.dtype(parser)
-        ArgumentHelper.clamp_zeros(parser)
 
     @staticmethod
     def auto_awq(args):
