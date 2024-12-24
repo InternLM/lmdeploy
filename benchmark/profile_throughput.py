@@ -93,8 +93,8 @@ class Engine:
                          skip_detokenize: bool):
         model_inst = self.tm_model.create_instance()
         counters = []
-        for prompt, input_seqlen, output_seqlen in iter(
-                req_queue.get_nowait, [None, None, None]):
+        for prompt, input_seqlen, output_seqlen, cancel_after in iter(
+                req_queue.get_nowait, None):
 
             ts = [time.perf_counter()]
             ns = [0]
@@ -109,26 +109,32 @@ class Engine:
             prev_len = 0
             token_ids = input_ids.copy()
 
-            async for outputs in model_inst.async_stream_infer(
-                    session_id,
-                    input_ids=input_ids,
-                    gen_config=GenerationConfig(max_new_tokens=output_seqlen,
-                                                temperature=temperature,
-                                                top_p=top_p,
-                                                top_k=top_k,
-                                                ignore_eos=True),
-                    sequence_start=True,
-                    sequence_end=True,
-                    stream_output=stream_output):
-                n_token = outputs.num_token
-                if n_token > prev_len:
-                    token_ids += outputs.token_ids[prev_len - n_token:]
-                    if not skip_detokenize:
-                        _, state = self.tokenizer.detokenize_incrementally(
-                            token_ids, state)
-                    ts.append(time.perf_counter())
-                    ns.append(n_token)
-                    prev_len = n_token
+            generator = model_inst.async_stream_infer(
+                session_id,
+                input_ids=input_ids,
+                gen_config=GenerationConfig(max_new_tokens=output_seqlen,
+                                            temperature=temperature,
+                                            top_p=top_p,
+                                            top_k=top_k,
+                                            ignore_eos=True),
+                sequence_start=True,
+                sequence_end=True,
+                stream_output=stream_output)
+            try:
+                async for outputs in generator:
+                    n_token = outputs.num_token
+                    if n_token > prev_len:
+                        token_ids += outputs.token_ids[prev_len - n_token:]
+                        if not skip_detokenize:
+                            _, state = self.tokenizer.detokenize_incrementally(
+                                token_ids, state)
+                        ts.append(time.perf_counter())
+                        ns.append(n_token)
+                        prev_len = n_token
+                        if n_token > cancel_after:
+                            break
+            finally:
+                await generator.aclose()
 
             # for pytorch engine to restart a session
             if isinstance(model_inst, EngineInstance):
@@ -140,20 +146,23 @@ class Engine:
         return counters
 
     def process_request(self, requests, concurrency, temperature, top_p, top_k,
-                        stream_output, skip_tokenize, skip_detokenize):
+                        stream_output, skip_tokenize, skip_detokenize,
+                        cancel_rate):
         req_queue = Queue()
 
         # feed request to q
-        for req in requests:
+        for prompt, input_len, output_len in requests:
+            cancel_after = output_len + 1
+            if cancel_rate > 0:
+                if random.random() < cancel_rate:
+                    cancel_after = random.randint(0, cancel_after)
             if skip_tokenize:
-                req_queue.put((self.tokenizer.encode(req[0]), *req[1:]))
+                req_queue.put((self.tokenizer.encode(prompt), input_len,
+                               output_len, cancel_after))
             else:
-                req_queue.put(req)
+                req_queue.put((prompt, input_len, output_len, cancel_after))
         for i in range(concurrency):
-            req_queue.put([None, None, None])
-
-        event_loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(event_loop)
+            req_queue.put(None)
 
         # start threads
         tasks = []
@@ -169,6 +178,9 @@ class Engine:
         self.pbar = tqdm(total=len(requests))
 
         start = time.time()
+
+        event_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(event_loop)
 
         counters = asyncio.run(_gather_tasks(tasks))
 
@@ -231,6 +243,7 @@ class Engine:
         tab_row('Benchmark duration', elapsed_time)
         tab_row('Total requests', len(requests))
         tab_row('Concurrency', concurrency)
+        tab_row('Cancel rate', cancel_rate)
         tab_row('Stream output', str(stream_output).lower())
         tab_row('Skip tokenize', str(skip_tokenize).lower())
         tab_row('Skip detokenize', str(skip_detokenize).lower())
@@ -281,6 +294,10 @@ def parse_args():
     parser.add_argument('--skip-detokenize',
                         action='store_true',
                         help='Skip detokenizing output tokens')
+    parser.add_argument('--cancel-rate',
+                        type=float,
+                        help='Possibility of a request being canceled',
+                        default=0)
     parser.add_argument('--csv',
                         type=str,
                         help='Where to save the result.',
@@ -367,7 +384,8 @@ def main():
                            concurrency=args.concurrency,
                            stream_output=not args.no_stream_output,
                            skip_tokenize=args.skip_tokenize,
-                           skip_detokenize=args.skip_detokenize)
+                           skip_detokenize=args.skip_detokenize,
+                           cancel_rate=args.cancel_rate)
 
 
 if __name__ == '__main__':

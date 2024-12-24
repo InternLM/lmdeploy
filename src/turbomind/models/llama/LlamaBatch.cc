@@ -1480,11 +1480,8 @@ auto LlamaBatch<T>::Interrupt(int index, bool force_stop, bool force_end) -> Sig
 
     const auto len = state_->requests[index]->sequence_length.getVal<int>();
     // move the request handle into the signal
-    return [this, len, r = std::move(state_->requests[index])] {  //
-        UpdateState(*r, Request::kFinish, len);
-        if (r->cancel_cb) {
-            r->cancel_cb(0);
-        }
+    return [this, len, force_stop, r = std::move(state_->requests[index])] {  //
+        UpdateState(*r, force_stop ? Request::kCancel : Request::kFinish, len);
     };
 }
 

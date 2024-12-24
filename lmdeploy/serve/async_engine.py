@@ -267,24 +267,6 @@ class AsyncEngine(LogitsMixin):
         finally:
             self.free_gens.put_nowait(generator)
 
-    @asynccontextmanager
-    async def safe_run(self, session_id: int):
-        """A context manager to make sure server's safe running."""
-        assert session_id not in self.id2generator
-        generator = await self.free_gens.get()
-        generator._fut = asyncio.get_running_loop().create_future()
-        self.id2generator[session_id] = generator
-        try:
-            yield generator
-        except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
-            logger.error(f'[safe_run] exception caught: {e}')
-            await generator.async_cancel(session_id)
-        finally:
-            self.id2generator.pop(session_id)
-            generator._fut.set_result(None)
-            generator._fut = None
-            self.free_gens.put_nowait(generator)
-
     def batch_infer(self,
                     prompts: Union[List[str], str, List[Dict],
                                    List[List[Dict]]],
@@ -463,6 +445,33 @@ class AsyncEngine(LogitsMixin):
         input_ids = self.tokenizer.encode(prompt, add_bos=sequence_start)
         return {'prompt': prompt, 'input_ids': input_ids}
 
+    @asynccontextmanager
+    async def model_inst(self, session_id: int):
+        """A context manager to make sure server's safe running."""
+        assert session_id not in self.id2generator
+        inst = await self.free_gens.get()
+        inst._fut = asyncio.get_running_loop().create_future()
+        self.id2generator[session_id] = inst
+        try:
+            yield inst
+        finally:
+            self.id2generator.pop(session_id)
+            inst._fut.set_result(None)
+            inst._fut = None
+            self.free_gens.put_nowait(inst)
+
+    @asynccontextmanager
+    async def safe_run(self, inst, session_id, **kwargs):
+        generator = inst.async_stream_infer(session_id, **kwargs)
+        try:
+            yield generator
+        except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
+            logger.error(f'[safe_run] exception caught: {e}')
+            # TODO: remove session_id from async cancel
+            await inst.async_cancel(session_id)
+        finally:
+            await generator.aclose()
+
     async def generate(
             self,
             messages,
@@ -561,34 +570,33 @@ class AsyncEngine(LogitsMixin):
                          'length')
             if sequence_end is True and sequence_start is False:
                 await self.end_session(session_id)
-        else:
+            return
 
-            def is_error(status):
-                return status not in [
-                    ResponseType.SUCCESS, ResponseType.FINISH
-                ]
+        def is_error(status):
+            return status not in [ResponseType.SUCCESS, ResponseType.FINISH]
 
-            if self.free_gens is None:
-                # `asyncio.Queue` must be created in an async context
-                self.free_gens = asyncio.Queue()
-                for inst in self.instances:
-                    self.free_gens.put_nowait(inst)
+        if self.free_gens is None:
+            # `asyncio.Queue` must be created in an async context
+            self.free_gens = asyncio.Queue()
+            for inst in self.instances:
+                self.free_gens.put_nowait(inst)
 
-            async with self.safe_run(session_id) as generator:
-                state = DetokenizeState(len(input_ids))
-                token_ids = input_ids.copy()
-                prev_len = 0
-                start_ids_offset = state.ids_offset
-                response = ''
-                async for outputs in generator.async_stream_infer(
-                        session_id=session_id,
-                        **prompt_input,
-                        gen_config=gen_config,
-                        adapter_name=adapter_name,
-                        stream_output=stream_response,
-                        sequence_start=sequence_start,
-                        sequence_end=sequence_end,
-                        step=self.id2step[session_id]):
+        async with self.model_inst(session_id) as inst:
+            state = DetokenizeState(len(input_ids))
+            token_ids = input_ids.copy()
+            prev_len = 0
+            start_ids_offset = state.ids_offset
+            response = ''
+            async with self.safe_run(inst,
+                                     session_id=session_id,
+                                     **prompt_input,
+                                     gen_config=gen_config,
+                                     adapter_name=adapter_name,
+                                     stream_output=stream_response,
+                                     sequence_start=sequence_start,
+                                     sequence_end=sequence_end,
+                                     step=self.id2step[session_id]) as gen:
+                async for outputs in gen:
                     # decode res
                     if is_error(outputs.status):
                         tokens = 0
@@ -635,13 +643,14 @@ class AsyncEngine(LogitsMixin):
                                  generate_token_len=0,
                                  finish_reason='error',
                                  token_ids=[])
-                # update step
-                if sequence_end:
-                    self.id2step[session_id] = 0
-                    if self.backend == 'pytorch':  # manually end pytorch session
-                        await generator.async_end(session_id)
-                else:
-                    self.id2step[session_id] += len(input_ids) + tokens
+            # update step
+            if sequence_end:
+                self.id2step[session_id] = 0
+                if self.backend == 'pytorch':
+                    # manually end pytorch session
+                    await inst.async_end(session_id)
+            else:
+                self.id2step[session_id] += len(input_ids) + tokens
 
     def parse_tool_response(self, text, tools, **kwargs):
         """Parse model response containing tool information.

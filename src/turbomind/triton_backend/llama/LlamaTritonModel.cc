@@ -25,11 +25,11 @@
 #include <yaml-cpp/yaml.h>
 
 #include "src/turbomind/engine/gateway.h"
+#include "src/turbomind/engine/model_request.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaV2.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
-#include "src/turbomind/engine/model_request.h"
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
@@ -176,6 +176,11 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t                                 ten
                                       std::string                            model_dir,
                                       std::string                            config,
                                       std::function<std::shared_ptr<void>()> ffi_ctx_factory):
+    model_param_{},
+    attn_param_{},
+    moe_param_{},
+    lora_param_{},
+    engine_param_{},
     tensor_para_size_(tensor_para_size),
     pipeline_para_size_(pipeline_para_size),
     weights_(getDeviceCount()),

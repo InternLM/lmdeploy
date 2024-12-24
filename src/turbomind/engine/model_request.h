@@ -16,7 +16,7 @@ public:
     ModelRequest(Gateway* gateway, int session_len, int vocab_size);
 
     // Cancel running request
-    void Cancel(std::function<void(int)> cb);
+    void Cancel();
 
     // Reset the channel to uninitailized state, calls `notify` when done
     void End(std::function<void(int)> cb, uint64_t session_id);
