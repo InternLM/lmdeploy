@@ -259,8 +259,10 @@ def get_benchmark_model_list(tp_num,
                 'backend': 'turbomind',
                 'quant_policy': kvint,
                 'tp_num': tp_num
-            } for item in model_list if item.replace('-inner-4bits', '') in
-                       config.get('turbomind_chat_model')]
+            } for item in model_list if item.replace(
+                '-inner-4bits', '') in config.get('turbomind_chat_model')
+                       and item.replace('-inner-4bits', '') not in
+                       quatization_case_config.get('no_kvint' + str(kvint))]
     return result
 
 
