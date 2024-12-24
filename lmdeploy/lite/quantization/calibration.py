@@ -42,6 +42,9 @@ class CalibrationContext():
             tokenizer (PreTrainedTokenizer): Tokenizer of the given model.
             layer_type (Union[str, type]): Type of the layers to be observed.
             norm_type (Union[str, type]): Norm type used in the model.
+            batch_size (int): The batch size for running the calib samples.
+                Low GPU mem requires small batch_size. Large batch_size
+                reduces the calibration time while costs more VRAM.
             device (str, optional): Device where the model should run.
                 Defaults to 'cuda'.
         """
@@ -290,9 +293,14 @@ def auto_scale_block(module, module_kwargs, w_bit, w_group_size, input_feat,
 
         org_sd = {k: v.cpu() for k, v in block.state_dict().items()}
         for ratio in range(0, n_grid):
-            ratio = ratio * 1 / n_grid
-            scales = (x_max.pow(ratio) /
-                      w_mean.pow(1 - ratio)).clamp(min=1e-4).view(-1)
+            ratio = ratio / n_grid
+            w_mean_pow = w_mean.pow(1 - ratio)
+            if w_mean_pow.min().item() == 0:
+                print('w_mean.pow(1 - ratio).min is zero, '
+                      'clamping w_mean.pow(1 - ratio) to 1e-4')
+                w_mean_pow = w_mean_pow.clamp(min=1e-4)
+            scales = (x_max.pow(ratio) / w_mean_pow).clamp(min=1e-4).view(-1)
+
             scales = scales / (scales.max() * scales.min()).sqrt()
             for fc in linears2scale:
                 fc.weight.mul_(scales.view(1, -1).to(fc.weight.device))

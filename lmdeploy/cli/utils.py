@@ -354,7 +354,7 @@ class ArgumentHelper:
 
     @staticmethod
     def calib_search_scale(parser):
-        """Add argument batch_size to parser."""
+        """Add argument search_scale to parser."""
 
         return parser.add_argument(
             '--search-scale',

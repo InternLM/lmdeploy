@@ -43,8 +43,10 @@ NORM_FCS_MAP = {
     'MixtralDecoderLayer': {
         'input_layernorm':
         ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
-        'post_attention_layernorm':
-        ['block_sparse_moe.experts.{i}.w1', 'block_sparse_moe.experts.{i}.w3']
+        'post_attention_layernorm': [
+            'block_sparse_moe.gate', 'block_sparse_moe.experts.{i}.w1',
+            'block_sparse_moe.experts.{i}.w3'
+        ]
     },
     'Qwen2VLDecoderLayer': {
         'input_layernorm':
@@ -120,7 +122,12 @@ def get_weight_scale(weight, q_group_size=-1):
     org_shape = weight.shape
     if q_group_size > 0:
         weight = weight.view(-1, q_group_size)
-    scale = weight.abs() / weight.abs().amax(dim=1, keepdim=True)
+    abs_weight = weight.abs()
+    abs_weight_amax = abs_weight.amax(dim=1, keepdim=True)
+    if abs_weight_amax.min().item() == 0:
+        print('weight.amax.min is zero, clamping weight.amax to 1e-4')
+        abs_weight_amax = abs_weight_amax.clamp(min=1e-4)
+    scale = abs_weight / abs_weight_amax
     scale = scale.view(org_shape)
     scale = scale.mean(0)
     return scale
@@ -153,8 +160,13 @@ def smooth_ln_fcs(ln: torch.nn.Module,
     concat_w = torch.cat([fc.weight for fc in fcs], dim=0)
     w_scales = get_weight_scale(concat_w, group_size)
 
+    w_scales_pow = w_scales.pow(1 - alpha)
+    if w_scales_pow.min().item() == 0:
+        print('w_scales.pow(1 - alpha).min is zero, '
+              'clamping w_scales.pow(1 - alpha) to 1e-4')
+        w_scales_pow = w_scales_pow.clamp(min=1e-4)
     scales = (act_scales.pow(alpha) /
-              w_scales.pow(1 - alpha)).clamp(min=1e-4).to(device).to(dtype)
+              w_scales_pow).clamp(min=1e-4).to(device).to(dtype)
 
     scales = scales / (scales[nonzero_positions].max() *
                        scales[nonzero_positions].min()).sqrt()
@@ -204,8 +216,13 @@ def smooth_fc_fcs(pre_fc: torch.nn.Module,
     concat_w = torch.cat([fc.weight for fc in fcs], dim=0)
     w_scales = get_weight_scale(concat_w, group_size)
 
+    w_scales_pow = w_scales.pow(1 - alpha)
+    if w_scales_pow.min().item() == 0:
+        print('w_scales.pow(1 - alpha).min is zero, '
+              'clamping w_scales.pow(1 - alpha) to 1e-4')
+        w_scales_pow = w_scales_pow.clamp(min=1e-4)
     scales = (act_scales.pow(alpha) /
-              w_scales.pow(1 - alpha)).clamp(min=1e-4).to(device).to(dtype)
+              w_scales_pow).clamp(min=1e-4).to(device).to(dtype)
     scales = scales / (scales.max() * scales.min()).sqrt()
 
     # (for qwen&baichuan) pre_fc is packed QKV, only V needs to scale
