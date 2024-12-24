@@ -16,8 +16,17 @@ logger = get_logger('lmdeploy')
 BuffType = Dict[str, Tensor]
 
 
-def round_up_to_multiple_of_8(n: int):
-    return (n + 7) // 8 * 8
+def next_power_of_2(n: int):
+    """Return the smallest power of 2 greater than or equal to n."""
+    n -= 1
+    n |= n >> 1
+    n |= n >> 2
+    n |= n >> 4
+    n |= n >> 8
+    n |= n >> 16
+    n |= n >> 32
+    n += 1
+    return n
 
 
 def _false(*args, **kwargs):
@@ -65,7 +74,6 @@ class MACASingleGraphRunner:
         context = self.ctx_mgr.current_context()
         self.update_context_cudagraph(self.meta, context)
         current_stream = torch.cuda.current_stream()
-
         output = self.model(**padded_kwargs)
 
         # warmup
@@ -103,37 +111,34 @@ class MACASingleGraphRunner:
         device = graph_meta.device
 
         input_buffers: BuffType = dict()
-        input_buffers['input_ids'] = torch.zeros(1,
+        input_buffers['input_ids'] = torch.empty(1,
                                                  max_tokens,
                                                  dtype=torch.int32,
                                                  device=device)
-        input_buffers['position_ids'] = torch.ones((1, max_tokens),
-                                                   dtype=torch.int32,
-                                                   device=device)
+
+        input_buffers['position_ids'] = torch.empty((1, max_tokens),
+                                                    dtype=torch.int32,
+                                                    device=device)
 
         input_buffers['block_offsets'] = torch.zeros((max_batches, num_blocks),
                                                      dtype=torch.int32,
                                                      device=device)
 
-        input_buffers['q_start_loc'] = torch.arange(max_batches + 1,
-                                                    dtype=torch.int32,
-                                                    device=device)
-
         input_buffers['q_seqlens'] = torch.ones(max_batches,
                                                 dtype=torch.int32,
                                                 device=device)
 
-        input_buffers['kv_seqlens'] = torch.ones(max_batches,
-                                                 dtype=torch.int32,
-                                                 device=device)
+        input_buffers['kv_seqlens'] = torch.empty(max_batches,
+                                                  dtype=torch.int32,
+                                                  device=device)
 
-        input_buffers['kv_start_indices'] = torch.ones((max_batches, 1),
-                                                       dtype=torch.int64,
-                                                       device=device)
+        input_buffers['q_start_loc'] = torch.arange(max_batches + 1,
+                                                    dtype=torch.int32,
+                                                    device=device)
 
-        input_buffers['local_adapter_ids'] = torch.zeros(max_batches,
-                                                         dtype=torch.int32,
-                                                         device=device)
+        input_buffers['kv_start_indices'] = torch.empty((max_batches, 1),
+                                                        dtype=torch.int64,
+                                                        device=device)
         return input_buffers
 
     def fill_buffers_cudagraph(self, graph_meta: CudaGraphMeta,
@@ -153,17 +158,15 @@ class MACASingleGraphRunner:
 
         batch_size, num_blocks = block_offsets.size()
         num_tokens = input_ids.size(-1)
-        q_start_loc_size = q_start_loc.size(0)
 
         # fill buffer
         input_buffers['input_ids'][:, :num_tokens] = input_ids
         input_buffers['position_ids'][:, :num_tokens] = position_ids
         input_buffers[
             'block_offsets'][:batch_size, :num_blocks] = block_offsets
+        input_buffers['q_start_loc'][:batch_size + 1] = q_start_loc
         input_buffers['q_seqlens'][:batch_size] = q_seqlens
         input_buffers['kv_seqlens'][:batch_size] = kv_seqlens
-
-        input_buffers['q_start_loc'][:q_start_loc_size] = q_start_loc
         input_buffers['kv_start_indices'][:batch_size] = kv_start_indices
 
         if inputs_embeds is not None:
@@ -173,15 +176,18 @@ class MACASingleGraphRunner:
                 input_buffers['inputs_embeds'] = inputs_embeds.new_zeros(
                     1, max_num_tokens, emb_size)
             input_buffers['inputs_embeds'][:, :num_tokens] = inputs_embeds
-
         # create inputs
-        new_batch_size = round_up_to_multiple_of_8(batch_size)
-        q_start_loc_size = round_up_to_multiple_of_8(q_start_loc_size)
+        new_batch_size = next_power_of_2(batch_size)
+
+        # init ended batch buffer
+        if batch_size != new_batch_size:
+            input_buffers['kv_seqlens'][batch_size:new_batch_size] = -1
+            input_buffers['kv_start_indices'][batch_size:new_batch_size] = -1
 
         attn_metadata.block_offsets = input_buffers[
             'block_offsets'][:new_batch_size]
         attn_metadata.q_start_loc = input_buffers[
-            'q_start_loc'][:q_start_loc_size]
+            'q_start_loc'][:new_batch_size + 1]
         attn_metadata.q_seqlens = input_buffers['q_seqlens'][:new_batch_size]
         attn_metadata.kv_seqlens = input_buffers['kv_seqlens'][:new_batch_size]
         attn_metadata.kv_start_indices = input_buffers[
@@ -214,6 +220,7 @@ class MACASingleGraphRunner:
     def update_context_cudagraph(self, graph_meta, context):
         """update step context with input buffers."""
         input_buffers = graph_meta.input_buffers
+        context.block_offsets = input_buffers['block_offsets']
         context.q_seqlens = input_buffers['q_seqlens']
         context.kv_seqlens = input_buffers['kv_seqlens']
         context.q_start_loc = input_buffers['q_start_loc']
@@ -256,7 +263,7 @@ class MACAGraphRunner(GraphRunner):
         context = self.ctx_mgr.current_context()
         is_decoding = context.is_decoding
         num_tokens = input_ids.numel()
-        new_num_tokens = round_up_to_multiple_of_8(num_tokens)
+        new_num_tokens = next_power_of_2(num_tokens)
         return (new_num_tokens, is_decoding)
 
     def __call__(self, **kwargs):
@@ -268,7 +275,6 @@ class MACAGraphRunner(GraphRunner):
 
         if (not enable_graph) or (not is_decoding):
             return self.model(**kwargs)
-
         if graph_key not in self._runner_map:
             max_batches = max_tokens if is_decoding else self.max_batches
             runner = MACASingleGraphRunner(self.model,
