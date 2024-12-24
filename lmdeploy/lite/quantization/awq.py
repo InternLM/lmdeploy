@@ -181,10 +181,10 @@ def smooth_ln_fcs(ln: torch.nn.Module,
         fc.weight.mul_(scales.view(1, -1))
 
     for p in ln.parameters():
-        assert torch.isnan(p).sum() == 0
+        assert torch.isnan(p).sum() == 0, 'may use `--clamp-zeros` option'
     for fc in fcs:
         for p in fc.parameters():
-            assert torch.isnan(p).sum() == 0
+            assert torch.isnan(p).sum() == 0, 'may use `--clamp-zeros` option'
     return scales
 
 
@@ -246,10 +246,10 @@ def smooth_fc_fcs(pre_fc: torch.nn.Module,
         fc.weight.mul_(scales.view(1, -1))
 
     for p in pre_fc.parameters():
-        assert torch.isnan(p).sum() == 0
+        assert torch.isnan(p).sum() == 0, 'may use `--clamp-zeros` option'
     for fc in fcs:
         for p in fc.parameters():
-            assert torch.isnan(p).sum() == 0
+            assert torch.isnan(p).sum() == 0, 'may use `--clamp-zeros` option'
 
     return scales
 
