@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import asyncio
 import copy
 import json
 import os
@@ -18,15 +19,15 @@ from fastapi import BackgroundTasks, Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
+from requests.exceptions import RequestException
 
 from lmdeploy.serve.openai.api_server import (check_api_key,
                                               create_error_response)
 from lmdeploy.serve.openai.protocol import (  # noqa: E501
     ChatCompletionRequest, CompletionRequest, ModelCard, ModelList,
     ModelPermission)
-from lmdeploy.serve.proxy.constants import (API_TIMEOUT_LEN,
-                                            LATENCY_DEEQUE_LEN, ErrorCodes,
-                                            Strategy, err_msg)
+from lmdeploy.serve.proxy.constants import (API_TIMEOUT_LEN, LATENCY_DEQUE_LEN,
+                                            ErrorCodes, Strategy, err_msg)
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -36,7 +37,7 @@ class Status(BaseModel):
     """Status protocol consists of models' information."""
     models: Optional[List[str]] = Field(default=[], examples=[[]])
     unfinished: int = 0
-    latency: Deque = Field(default=deque(maxlen=LATENCY_DEEQUE_LEN),
+    latency: Deque = Field(default=deque(maxlen=LATENCY_DEQUE_LEN),
                            examples=[[]])
     speed: Optional[int] = Field(default=None, examples=[None])
 
@@ -87,6 +88,9 @@ class NodeManager:
             with open(self.config_path, 'r') as config_file:
                 self.nodes = yaml.safe_load(config_file)['nodes']
                 for url, status in self.nodes.items():
+                    latency = deque(status.get('latency', []),
+                                    maxlen=LATENCY_DEQUE_LEN)
+                    status['latency'] = latency
                     status = Status(**status)
                     self.nodes[url] = status
         self.heart_beat_thread = threading.Thread(target=heart_beat_controller,
@@ -99,7 +103,7 @@ class NodeManager:
         nodes = copy.deepcopy(self.nodes)
         for url, status in nodes.items():
             nodes[url] = status.model_dump()
-            nodes[url]['latency'] = list(status.latency)
+            nodes[url]['latency'] = list(status.latency)[-LATENCY_DEQUE_LEN:]
         with open(self.config_path, 'w') as config_file:  # update cfg yml
             yaml.dump(dict(nodes=nodes), config_file)
 
@@ -149,7 +153,8 @@ class NodeManager:
                 to_be_deleted.append(node_url)
         for node_url in to_be_deleted:
             self.remove(node_url)
-            logger.info(f'Removed node_url: {node_url}')
+            logger.info(f'Removed node_url: {node_url} '
+                        'due to heart beat expiration')
 
     @property
     def model_list(self):
@@ -251,7 +256,7 @@ class NodeManager:
         Args:
             model_name (str): the model in the request.
         """
-        logger.info(f'no model name: {model_name}')
+        logger.warning(f'no model name: {model_name}')
         ret = {
             'error_code': ErrorCodes.MODEL_NOT_FOUND,
             'text': err_msg[ErrorCodes.MODEL_NOT_FOUND],
@@ -260,9 +265,9 @@ class NodeManager:
 
     def handle_api_timeout(self, node_url):
         """Handle the api time out."""
-        logger.info(f'api timeout: {node_url}')
+        logger.warning(f'api timeout: {node_url}')
         ret = {
-            'error_code': ErrorCodes.API_TIMEOUT,
+            'error_code': ErrorCodes.API_TIMEOUT.value,
             'text': err_msg[ErrorCodes.API_TIMEOUT],
         }
         return json.dumps(ret).encode() + b'\n'
@@ -286,7 +291,9 @@ class NodeManager:
                                              delimiter=b'\n'):
                 if chunk:
                     yield chunk + b'\n\n'
-        except requests.exceptions.RequestException as e:  # noqa
+        except (Exception, GeneratorExit, RequestException) as e:  # noqa
+            logger.error(f'catched an exception: {e}')
+            # exception happened, reduce unfinished num
             yield self.handle_api_timeout(node_url)
 
     async def generate(self, request: Dict, node_url: str, node_path: str):
@@ -304,7 +311,8 @@ class NodeManager:
                                              json=request,
                                              timeout=API_TIMEOUT_LEN)
                 return response.text
-        except requests.exceptions.RequestException as e:  # noqa
+        except (Exception, GeneratorExit, RequestException, asyncio.CancelledError) as e:  # noqa  # yapf: disable
+            logger.error(f'catched an exception: {e}')
             return self.handle_api_timeout(node_url)
 
     def pre_call(self, node_url):
@@ -381,7 +389,11 @@ def add_node(node: Node, raw_request: Request = None):
         RPM or other metric. All the values of nodes should be the same metric.
     """
     try:
-        node_manager.add(node.url, node.status)
+        res = node_manager.add(node.url, node.status)
+        if res is not None:
+            logger.error(f'add node {node.url} failed, {res}')
+            return res
+        logger.info(f'add node {node.url} successfully')
         return 'Added successfully'
     except:  # noqa
         return 'Failed to add, please check the input url.'
@@ -392,8 +404,10 @@ def remove_node(node_url: str):
     """Show available models."""
     try:
         node_manager.remove(node_url)
+        logger.info(f'delete node {node_url} successfully')
         return 'Deleted successfully'
     except:  # noqa
+        logger.error(f'delete node {node_url} failed.')
         return 'Failed to delete, please check the input url.'
 
 
@@ -439,6 +453,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     if not node_url:
         return node_manager.handle_unavailable_model(request.model)
 
+    logger.info(f'A request is dispatched to {node_url}')
     request_dict = request.model_dump()
     start = node_manager.pre_call(node_url)
     if request.stream is True:
@@ -497,6 +512,7 @@ async def completions_v1(request: CompletionRequest,
     if not node_url:
         return node_manager.handle_unavailable_model(request.model)
 
+    logger.info(f'A request is dispatched to {node_url}')
     request_dict = request.model_dump()
     start = node_manager.pre_call(node_url)
     if request.stream is True:
@@ -517,6 +533,7 @@ def proxy(server_name: str = '0.0.0.0',
                             'min_observed_latency'] = 'min_expected_latency',
           api_keys: Optional[Union[List[str], str]] = None,
           ssl: bool = False,
+          log_level: str = 'INFO',
           **kwargs):
     """To launch the proxy server.
 
@@ -540,6 +557,7 @@ def proxy(server_name: str = '0.0.0.0',
     if ssl:
         ssl_keyfile = os.environ['SSL_KEYFILE']
         ssl_certfile = os.environ['SSL_CERTFILE']
+    logger.setLevel(log_level)
     uvicorn.run(app=app,
                 host=server_name,
                 port=server_port,
