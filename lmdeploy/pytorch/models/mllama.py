@@ -1289,8 +1289,11 @@ class MllamaForConditionalGeneration(nn.Module, CudaGraphMixin,
         attn_metadata = context.attn_metadata
         cross_attn_metadata = context.cross_attn_metadata
 
-        if int(cross_attn_metadata.kv_seqlens.sum()) == 0:
+        # cross_attn_metadata is None when inputs without image
+        if cross_attn_metadata is not None and int(
+                cross_attn_metadata.kv_seqlens.sum()) == 0:
             cross_attn_metadata.kv_seqlens = None
+
         device = input_ids.device
 
         # process image input
