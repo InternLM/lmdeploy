@@ -205,7 +205,7 @@ def fused_moe_blocked_fp8_kernel_launcher(
     assert B_scale.dim() == 3
 
     assert K % A_scale.size(1) == 0
-    assert K % B_scale.size(0) == 0
+    assert K % B_scale.size(2) == 0
     assert N % B_scale.size(1) == 0
 
     group_ak = K // A_scale.size(1)

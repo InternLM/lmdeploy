@@ -27,10 +27,17 @@ def _make_A(M, K, group_size, out_dtype):
     return A, quant_A, scale
 
 
+def _aligned_size(a, b):
+    return (a + b - 1) // b * b
+
+
 def _make_B(K, N, group_size, out_dtype):
-    quant_B = torch.rand(K // group_size,
+    K_aligned = _aligned_size(K, group_size)
+    N_aligned = _aligned_size(N, group_size)
+
+    quant_B = torch.rand(K_aligned // group_size,
                          group_size,
-                         N // group_size,
+                         N_aligned // group_size,
                          group_size,
                          dtype=torch.float32,
                          device='cuda')
@@ -43,9 +50,9 @@ def _make_B(K, N, group_size, out_dtype):
     quant_B *= scaling
     quant_B = quant_B.to(out_dtype).to(torch.float32)
 
-    scale = torch.rand(K // group_size,
+    scale = torch.rand(K_aligned // group_size,
                        1,
-                       N // group_size,
+                       N_aligned // group_size,
                        1,
                        dtype=torch.float32,
                        device='cuda')
@@ -53,9 +60,9 @@ def _make_B(K, N, group_size, out_dtype):
 
     B = quant_B * scale
 
-    B = B.reshape(K, N)
-    quant_B = quant_B.reshape(K, N).to(out_dtype)
-    scale = scale.reshape(K // group_size, N // group_size)
+    B = B.reshape(K_aligned, N_aligned)[:K, :N]
+    quant_B = quant_B.reshape(K_aligned, N_aligned).to(out_dtype)[:K, :N]
+    scale = scale.reshape(K_aligned // group_size, N_aligned // group_size)
     return B, quant_B, scale
 
 
@@ -120,7 +127,8 @@ class TestGemmFP8:
 
     @pytest.fixture
     def N(self):
-        yield 1024
+        # test non-aligned
+        yield 1024 + 64
 
     @pytest.fixture
     def K(self):

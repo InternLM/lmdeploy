@@ -160,8 +160,8 @@ def _gemm_fp8_kernel(
                           other=1.0)
 
         # load ab
-        a = tl.load(a_ptrs)
-        b = tl.load(b_ptrs)
+        a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_K, other=0.0)
+        b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_K, other=0.0)
 
         # mma
         accumulator = tl.dot(a, b, acc=accumulator * acc_ratio[:, None])
@@ -201,13 +201,9 @@ def blocked_gemm_fp8(A: Tensor,
     M, K = A.shape
     _, N = B.shape
 
-    assert K % A_scale.size(1) == 0
-    assert K % B_scale.size(0) == 0
-    assert N % B_scale.size(1) == 0
-
-    group_ak = K // A_scale.size(1)
-    group_bk = K // B_scale.size(0)
-    group_bn = N // B_scale.size(1)
+    group_ak = triton.cdiv(K, A_scale.size(1))
+    group_bk = triton.cdiv(K, B_scale.size(0))
+    group_bn = triton.cdiv(N, B_scale.size(1))
 
     C = A.new_empty(M, N, dtype=out_dtype)
 

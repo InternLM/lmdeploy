@@ -82,7 +82,7 @@ class DeepseekV2Attention(nn.Module):
                  dtype: torch.dtype = None,
                  device: torch.device = None):
         super().__init__()
-        quantization_config = None
+        quantization_config = getattr(config, 'quantization_config', None)
         self.q_lora_rank = config.q_lora_rank
         self.hidden_size = config.hidden_size
         self.num_heads = config.num_attention_heads
@@ -100,6 +100,7 @@ class DeepseekV2Attention(nn.Module):
                 dtype=dtype,
                 device=device,
                 is_tp=True,
+                quant_config=quantization_config,
             )
         else:
             self.q_a_proj = build_colwise_linear(
@@ -109,6 +110,7 @@ class DeepseekV2Attention(nn.Module):
                 dtype=dtype,
                 device=device,
                 is_tp=False,
+                quant_config=quantization_config,
             )
             self.q_a_layernorm = RMSNorm(config.q_lora_rank,
                                          1e-6,
@@ -122,6 +124,7 @@ class DeepseekV2Attention(nn.Module):
                 dtype=dtype,
                 device=device,
                 is_tp=True,
+                quant_config=quantization_config,
             )
 
         self.kv_a_proj_with_mqa = build_colwise_linear(
@@ -131,6 +134,7 @@ class DeepseekV2Attention(nn.Module):
             dtype=dtype,
             device=device,
             is_tp=False,
+            quant_config=quantization_config,
         )
         self.kv_a_layernorm = RMSNorm(config.kv_lora_rank,
                                       1e-6,
@@ -175,6 +179,7 @@ class DeepseekV2Attention(nn.Module):
             dtype=dtype,
             device=device,
             is_tp=True,
+            quant_config=quantization_config,
         )
 
     def _q_proj(self, hidden_states, num_heads: int, nope_size: int,
@@ -377,6 +382,7 @@ class DeepseekV2MoE(nn.Module):
                  dtype: torch.dtype = None,
                  device: torch.device = None):
         super().__init__()
+        quantization_config = getattr(config, 'quantization_config', None)
         self.hidden_dim = config.hidden_size
         self.ffn_dim = config.moe_intermediate_size
         self.num_experts = config.n_routed_experts
@@ -399,6 +405,7 @@ class DeepseekV2MoE(nn.Module):
             dtype=dtype,
             device=device,
             all_reduce=False,
+            quant_config=quantization_config,
         )
 
         self.shared_experts = None
@@ -643,7 +650,6 @@ class DeepseekV2Model(nn.Module):
         cos, sin = cos[0], sin[0]
         rotary_pos_emb = (cos, sin)
         for idx, decoder_layer in enumerate(self.layers):
-
             past_key_value = past_key_values[idx]
             hidden_states, residual = decoder_layer(
                 hidden_states,
@@ -672,6 +678,12 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                  device: torch.device = None):
         super().__init__()
         self.config = config
+        # TODO: setup blocked fp8 here
+        # config.quantization_config = dict(
+        #     quant_method='blocked_fp8',
+        # )
+        self.quantization_config = getattr(config, 'quantization_config', None)
+        self.dtype = dtype
         self.ctx_mgr = ctx_mgr
         self.model = DeepseekV2Model(config, dtype=dtype, device=device)
         # build lm_head
@@ -680,6 +692,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                                             bias=False,
                                             dtype=dtype,
                                             device=device)
+        self._load_buffers = dict()
 
     def forward(
         self,
@@ -763,28 +776,78 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             weight = weight.flatten(0, 1)
             return weight
 
+        def __load_kcvc(name: str, weight: torch.Tensor):
+            """load kc and vc from weight."""
+            config = self.config
+            v_head_dim = config.v_head_dim
+            qk_nope_head_dim = config.qk_nope_head_dim
+            w_kc, w_vc = weight.unflatten(
+                0, (-1, qk_nope_head_dim + v_head_dim)).split(
+                    [qk_nope_head_dim, v_head_dim], dim=1)
+            w_vc = w_vc.transpose(1, 2).contiguous()
+            kc_param_name = name.replace('.kv_b_proj', '.kc')
+            param_kc = params_dict[kc_param_name]
+            load_weight(param_kc, w_kc)
+            vc_param_name = name.replace('.kv_b_proj', '.vc')
+            param_vc = params_dict[vc_param_name]
+            load_weight(param_vc, w_vc)
+
+        def __dequant_weight(weight: torch.Tensor, scale: torch.Tensor,
+                             dtype: torch.dtype):
+            """dequant weight."""
+            dim_w0, dim_w1 = weight.shape
+            dim_s0, dim_s1 = scale.shape
+            assert dim_w0 % dim_s0 == 0
+            assert dim_w1 % dim_s1 == 0
+            group0 = dim_w0 // dim_s0
+            group1 = dim_w1 // dim_s1
+            weight = weight.reshape(dim_s0, group0, dim_s1, group1)
+            scale = scale.reshape(dim_s0, 1, dim_s1, 1)
+            weight = weight.to(scale.dtype) * scale
+            weight = weight.to(dtype)
+            weight = weight.reshape(dim_w0, dim_w1)
+            return weight
+
+        def __load_kcvc_blocked_fp8(name: str, loaded_weight: torch.Tensor):
+            """dequant weight."""
+            if name.endswith('.weight'):
+                weight_name = name
+                scale_name = name.replace('.weight', '.scale')
+            elif name.endswith('.scale'):
+                weight_name = name.replace('.scale', '.weight')
+                scale_name = name
+            self._load_buffers[name] = loaded_weight
+            if (weight_name in self._load_buffers
+                    and scale_name in self._load_buffers):
+                weight = self._load_buffers.pop(weight_name)
+                scale = self._load_buffers.pop(scale_name)
+                kc_param_name = weight_name.replace('.kv_b_proj', '.kc')
+                dtype = params_dict[kc_param_name].dtype
+                weight = __dequant_weight(weight, scale, dtype)
+                __load_kcvc(weight_name, weight)
+
         for (mod_name, head_dim, pe_dim_offset) in update_pe_mapping:
             if mod_name not in name:
                 continue
-            weight = __update_pe(loaded_weight, head_dim, pe_dim_offset)
+            if name.endswith('.scale'):
+                weight = loaded_weight
+            else:
+                weight = __update_pe(loaded_weight, head_dim, pe_dim_offset)
             param = params_dict[name]
             load_weight(param, weight)
             break
         else:
             if '.kv_b_proj' in name:
-                config = self.config
-                v_head_dim = config.v_head_dim
-                qk_nope_head_dim = config.qk_nope_head_dim
-                w_kc, w_vc = loaded_weight.unflatten(
-                    0, (-1, qk_nope_head_dim + v_head_dim)).split(
-                        [qk_nope_head_dim, v_head_dim], dim=1)
-                w_vc = w_vc.transpose(1, 2).contiguous()
-                kc_param_name = name.replace('.kv_b_proj', '.kc')
-                param_kc = params_dict[kc_param_name]
-                load_weight(param_kc, w_kc)
-                vc_param_name = name.replace('.kv_b_proj', '.vc')
-                param_vc = params_dict[vc_param_name]
-                load_weight(param_vc, w_vc)
+                quantization_config = self.quantization_config
+                quant_method = None
+                if quantization_config is not None:
+                    quant_method = quantization_config.get('quant_method')
+
+                if quant_method == 'blocked_fp8':
+                    # update blocked fp8 weight
+                    __load_kcvc_blocked_fp8(name, loaded_weight)
+                else:
+                    __load_kcvc(name, loaded_weight)
             else:
                 param = params_dict[name]
                 load_weight(param, loaded_weight)
@@ -796,6 +859,8 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             ('.gate_up_proj', '.gate_proj', 0),
             ('.gate_up_proj', '.up_proj', 1),
         ]
+
+        scale_suffix = '.weight_scale_inv'
 
         config = self.config
         qk_rope_head_dim = config.qk_rope_head_dim
@@ -818,6 +883,9 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                           exp_id, 'down')
             expert_params_mapping += [gate_param, up_param, down_param]
 
+        num_hidden_layers = self.config.num_hidden_layers
+        nextn_key = f'.layers.{num_hidden_layers}'
+
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:
             if 'rotary_emb.inv_freq' in name:
@@ -825,8 +893,13 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             if ('rotary_emb.cos_cached' in name
                     or 'rotary_emb.sin_cached' in name):
                 continue
+            if nextn_key in name:
+                # skip nextn
+                continue
             if self.config.tie_word_embeddings and 'lm_head.weight' in name:
                 continue
+            if name.endswith(scale_suffix):
+                name = name[:-len(scale_suffix)] + '.scale'
             if '.experts' in name:
                 self._load_weight_experts(
                     name,
