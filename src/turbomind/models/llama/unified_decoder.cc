@@ -21,6 +21,7 @@ UnifiedDecoder<T>::UnifiedDecoder(const ModelParam&     model,
                                   const MoeParam&       moe,
                                   const LoraParam&      lora,
                                   const NcclParam&      tp,
+                                  const EngineParam&    engine,
                                   const Context<T>&     ctx):
     layer_num_(model.layer_num),
     hidden_units_(model.hidden_units),
@@ -41,6 +42,8 @@ UnifiedDecoder<T>::UnifiedDecoder(const ModelParam&     model,
     if (std::accumulate(model.inter_size.begin(), model.inter_size.end(), 0LL)) {
         ffn_layer_ = std::make_unique<LlamaFfnLayer<T>>(model, tp, ctx);
     }
+
+    rotary_emb_ = std::make_unique<RotaryEmbeddingV2<T>>(attn, engine.session_len, ctx.stream, ctx.allocator.get());
 
     check_cuda_error(cudaEventCreateWithFlags(&ev_h_cu_x_, cudaEventDisableTiming));
 }
@@ -86,6 +89,9 @@ void UnifiedDecoder<T>::forwardSelfAttn(T*                attn_io,
     inputs.insert("cu_k_len", {MEMORY_GPU, TYPE_INT32, {batch_size + 1}, cu_k_len_});
     inputs.insert("h_cu_q_len", {MEMORY_CPU, TYPE_INT32, {batch_size + 1}, h_cu_q_len_});
     inputs.insert("h_cu_k_len", {MEMORY_CPU, TYPE_INT32, {batch_size + 1}, h_cu_k_len_});
+    inputs.insert("cos_sin",
+                  {MEMORY_GPU, getTensorType<T>(), {token_num, (size_t)rotary_emb_->dim_}, rotary_emb_->cos_sin_});
+    inputs.insert("q2p", {MEMORY_GPU, TYPE_INT32, {token_num}, rotary_emb_->q2p_});
 
     TensorMap outputs(*_outputs);
     outputs.insert("hidden_features", {MEMORY_GPU, dtype_, {token_num, hidden_units_}, attn_io});
@@ -159,6 +165,19 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
     sync_check_cuda_error();
 
     count_and_fix(decoder_output, token_num * hidden_units_, Concat("norm0", 0), 2);
+
+    {
+        RotaryEmbeddingV2Param params;
+        params.rope_theta = inputs->getPtr<float>("rope_theta");
+        params.q_len      = cu_q_len_;
+        params.k_len      = cu_k_len_;
+        params.h_q_len    = h_cu_q_len_;
+        params.h_k_len    = h_cu_k_len_;
+        params.dc_size    = dc_batch_size;
+        params.batch_size = batch_size;
+        params.token_num  = token_num;
+        rotary_emb_->forward(params);
+    }
 
     for (size_t layer = 0; layer < layer_num_; ++layer) {
 
