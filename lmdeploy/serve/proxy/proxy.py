@@ -389,7 +389,9 @@ def add_node(node: Node, raw_request: Request = None):
     try:
         res = node_manager.add(node.url, node.status)
         if res is not None:
+            logger.error(f'add node {node.url} failed, {res}')
             return res
+        logger.info(f'add node {node.url} successfully')
         return 'Added successfully'
     except:  # noqa
         return 'Failed to add, please check the input url.'
@@ -400,8 +402,10 @@ def remove_node(node_url: str):
     """Show available models."""
     try:
         node_manager.remove(node_url)
+        logger.info(f'delete node {node_url} successfully')
         return 'Deleted successfully'
     except:  # noqa
+        logger.error(f'delete node {node_url} failed.')
         return 'Failed to delete, please check the input url.'
 
 
@@ -447,6 +451,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     if not node_url:
         return node_manager.handle_unavailable_model(request.model)
 
+    logger.info(f'{request} is dispatched to {node_url}')
     request_dict = request.model_dump()
     start = node_manager.pre_call(node_url)
     if request.stream is True:
@@ -505,6 +510,7 @@ async def completions_v1(request: CompletionRequest,
     if not node_url:
         return node_manager.handle_unavailable_model(request.model)
 
+    logger.info(f'{request} is dispatched to {node_url}')
     request_dict = request.model_dump()
     start = node_manager.pre_call(node_url)
     if request.stream is True:
