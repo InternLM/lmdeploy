@@ -125,7 +125,7 @@ def get_weight_scale(weight, q_group_size=-1):
     abs_weight = weight.abs()
     abs_weight_amax = abs_weight.amax(dim=1, keepdim=True)
     if abs_weight_amax.min().item() == 0:
-        print('clamp zero values to a minimal decimal')
+        print('weight.amax.min is zero, clamping weight.amax to 1e-4')
         abs_weight_amax = abs_weight_amax.clamp(min=1e-4)
     scale = abs_weight / abs_weight_amax
     scale = scale.view(org_shape)
@@ -162,7 +162,8 @@ def smooth_ln_fcs(ln: torch.nn.Module,
 
     w_scales_pow = w_scales.pow(1 - alpha)
     if w_scales_pow.min().item() == 0:
-        print('clamp zero values to a minimal decimal')
+        print('w_scales.pow(1 - alpha).min is zero, '
+              'clamping w_scales.pow(1 - alpha) to 1e-4')
         w_scales_pow = w_scales_pow.clamp(min=1e-4)
     scales = (act_scales.pow(alpha) /
               w_scales_pow).clamp(min=1e-4).to(device).to(dtype)
@@ -217,7 +218,8 @@ def smooth_fc_fcs(pre_fc: torch.nn.Module,
 
     w_scales_pow = w_scales.pow(1 - alpha)
     if w_scales_pow.min().item() == 0:
-        print('clamp zero values to a minimal decimal')
+        print('w_scales.pow(1 - alpha).min is zero, '
+              'clamping w_scales.pow(1 - alpha) to 1e-4')
         w_scales_pow = w_scales_pow.clamp(min=1e-4)
     scales = (act_scales.pow(alpha) /
               w_scales_pow).clamp(min=1e-4).to(device).to(dtype)
