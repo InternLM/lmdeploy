@@ -255,7 +255,7 @@ class NodeManager:
         Args:
             model_name (str): the model in the request.
         """
-        logger.warn(f'no model name: {model_name}')
+        logger.warning(f'no model name: {model_name}')
         ret = {
             'error_code': ErrorCodes.MODEL_NOT_FOUND,
             'text': err_msg[ErrorCodes.MODEL_NOT_FOUND],
@@ -264,7 +264,7 @@ class NodeManager:
 
     def handle_api_timeout(self, node_url):
         """Handle the api time out."""
-        logger.warn(f'api timeout: {node_url}')
+        logger.warning(f'api timeout: {node_url}')
         ret = {
             'error_code': ErrorCodes.API_TIMEOUT.value,
             'text': err_msg[ErrorCodes.API_TIMEOUT],
