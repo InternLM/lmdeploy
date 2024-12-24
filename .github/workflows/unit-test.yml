@@ -34,13 +34,12 @@ jobs:
   unit_test:
     runs-on: [self-hosted, linux-a100-s2]
     timeout-minutes: 4320 # 72hours
-    env:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
     container:
       image: nvcr.io/nvidia/tritonserver:22.12-py3
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e CUDA_VISIBLE_DEVICES=2,3 --pull never"
       volumes:
         - /nvme/share_data/github-actions/pip-cache:/root/.cache/pip
+        - /nvme/share_data/github-actions/hf_home:/root/.cache/huggingface
         - /nvme/share_data/github-actions/packages:/root/packages
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
@@ -82,6 +81,9 @@ jobs:
           python3 -m pip install /root/packages/flash_attn-2.6.3+cu118torch2.3cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
           python3 -m pip install -r requirements_cuda.txt -r requirements/test.txt
           python3 -m pip install .
+          huggingface-cli login --token ${{ secrets.HF_TOKEN }}
+          huggingface-cli whoami
+          pytest tests/test_lmdeploy/test_auto_backend.py
       - name: Check env
         run: |
           python3 -m pip list
