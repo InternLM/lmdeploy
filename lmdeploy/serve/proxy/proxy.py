@@ -26,9 +26,8 @@ from lmdeploy.serve.openai.api_server import (check_api_key,
 from lmdeploy.serve.openai.protocol import (  # noqa: E501
     ChatCompletionRequest, CompletionRequest, ModelCard, ModelList,
     ModelPermission)
-from lmdeploy.serve.proxy.constants import (API_TIMEOUT_LEN,
-                                            LATENCY_DEEQUE_LEN, ErrorCodes,
-                                            Strategy, err_msg)
+from lmdeploy.serve.proxy.constants import (API_TIMEOUT_LEN, LATENCY_DEQUE_LEN,
+                                            ErrorCodes, Strategy, err_msg)
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -38,7 +37,7 @@ class Status(BaseModel):
     """Status protocol consists of models' information."""
     models: Optional[List[str]] = Field(default=[], examples=[[]])
     unfinished: int = 0
-    latency: Deque = Field(default=deque(maxlen=LATENCY_DEEQUE_LEN),
+    latency: Deque = Field(default=deque(maxlen=LATENCY_DEQUE_LEN),
                            examples=[[]])
     speed: Optional[int] = Field(default=None, examples=[None])
 
@@ -90,7 +89,7 @@ class NodeManager:
                 self.nodes = yaml.safe_load(config_file)['nodes']
                 for url, status in self.nodes.items():
                     latency = deque(status.get('latency', []),
-                                    maxlen=LATENCY_DEEQUE_LEN)
+                                    maxlen=LATENCY_DEQUE_LEN)
                     status['latency'] = latency
                     status = Status(**status)
                     self.nodes[url] = status
@@ -104,7 +103,7 @@ class NodeManager:
         nodes = copy.deepcopy(self.nodes)
         for url, status in nodes.items():
             nodes[url] = status.model_dump()
-            nodes[url]['latency'] = list(status.latency)[-LATENCY_DEEQUE_LEN:]
+            nodes[url]['latency'] = list(status.latency)[-LATENCY_DEQUE_LEN:]
         with open(self.config_path, 'w') as config_file:  # update cfg yml
             yaml.dump(dict(nodes=nodes), config_file)
 
