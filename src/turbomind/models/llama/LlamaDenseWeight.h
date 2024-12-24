@@ -290,6 +290,8 @@ struct MoeFfnWeight {
             return;
         }
 
+        enable_ep = param.enable_ep;
+
         // printf("%d %d %d\n", (int)hidden_dim, (int)param.inter_size, (int)expert_num);
 
         gate.input_dims  = hidden_dim;
@@ -297,14 +299,15 @@ struct MoeFfnWeight {
         gate.type        = get_default_weight_type<T>();
         gate.group_size  = group_size;
 
-        experts.resize(expert_num);
+        experts.resize(enable_ep ? expert_num / tp : expert_num);
 
         method        = param.method;
         fuse_silu_act = fuse_silu_act && method == MoeParam::kFused;
 
         for (auto& e : experts) {
             // inter size is divided by tp in `FfnWeight`
-            e = LlamaFfnWeight<T>{hidden_dim, (size_t)param.inter_size, tp, weight_type, group_size, fuse_silu_act};
+            size_t divide = enable_ep ? 1 : tp;
+            e = LlamaFfnWeight<T>{hidden_dim, (size_t)param.inter_size, divide, weight_type, group_size, fuse_silu_act};
         }
 
         if (param.shared_gate) {
@@ -339,6 +342,7 @@ struct MoeFfnWeight {
         block.free(st);
     }
 
+    bool                           enable_ep;
     LlamaDenseWeight<T>            gate;
     std::vector<LlamaFfnWeight<T>> experts;
 
