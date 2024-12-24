@@ -291,6 +291,7 @@ class NodeManager:
                 if chunk:
                     yield chunk + b'\n\n'
         except (Exception, GeneratorExit, RequestException) as e:  # noqa
+            logger.error(f'catched an exception: {e}')
             # exception happened, reduce unfinished num
             yield self.handle_api_timeout(node_url)
 
@@ -310,6 +311,7 @@ class NodeManager:
                                              timeout=API_TIMEOUT_LEN)
                 return response.text
         except (Exception, GeneratorExit, RequestException, asyncio.CancelledError) as e:  # noqa  # yapf: disable
+            logger.error(f'catched an exception: {e}')
             return self.handle_api_timeout(node_url)
 
     def pre_call(self, node_url):
