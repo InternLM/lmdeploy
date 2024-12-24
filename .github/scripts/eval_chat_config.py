@@ -74,8 +74,6 @@ with read_base():
         models as hf_llama3_1_8b_instruct  # noqa: F401, E501
     from opencompass.configs.models.hf_llama.hf_llama3_8b_instruct import \
         models as hf_llama_3_8b_instruct  # noqa: F401, E501
-    from opencompass.configs.models.hf_llama.lmdeploy_llama2_7b_chat import \
-        models as lmdeploy_llama2_7b_chat  # noqa: F401, E501
     from opencompass.configs.models.hf_llama.lmdeploy_llama3_1_8b_instruct import \
         models as lmdeploy_llama3_1_8b_instruct  # noqa: F401, E501
     from opencompass.configs.models.hf_llama.lmdeploy_llama3_8b_instruct import \
@@ -184,12 +182,6 @@ turbomind_qwen_7b_chat_kvint4 = deepcopy(*lmdeploy_qwen_7b_chat)
 turbomind_qwen_7b_chat_kvint8 = deepcopy(*lmdeploy_qwen_7b_chat)
 pytorch_qwen_7b_chat = deepcopy(*lmdeploy_qwen_7b_chat)
 
-# ===== Configs for meta-llama/Llama-2-7b-chat-hf =====
-turbomind_llama2_7b_chat = deepcopy(*lmdeploy_llama2_7b_chat)
-turbomind_llama2_7b_chat_4bits = deepcopy(*lmdeploy_llama2_7b_chat)
-turbomind_llama2_7b_chat_kvint4 = deepcopy(*lmdeploy_llama2_7b_chat)
-turbomind_llama2_7b_chat_kvint8 = deepcopy(*lmdeploy_llama2_7b_chat)
-
 # ===== Configs for meta-llama/Meta-Llama-3-8B-Instruct =====
 turbomind_llama3_8b_instruct = deepcopy(*lmdeploy_llama3_8b_instruct)
 turbomind_llama3_8b_instruct_4bits = deepcopy(*lmdeploy_llama3_8b_instruct)
@@ -261,13 +253,13 @@ for model in [v for k, v in locals().items() if '_batch1' in k]:
 
 basic_pytorch_chat_tp1 = dict(type=TurboMindModelwithChatTemplate,
                               engine_config=dict(session_len=MAX_SESSION_LEN,
-                                                 max_batch_size=64,
+                                                 max_batch_size=128,
                                                  tp=1),
                               gen_config=dict(do_sample=False,
                                               max_new_tokens=MAX_NEW_TOKENS),
                               max_out_len=MAX_NEW_TOKENS,
                               max_seq_len=MAX_SESSION_LEN,
-                              batch_size=64,
+                              batch_size=500,
                               run_cfg=dict(num_gpus=1))
 
 # ===== Configs for Qwen/Qwen1.5-MoE-A2.7B-Chat =====
