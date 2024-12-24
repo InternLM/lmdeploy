@@ -5,7 +5,9 @@ import triton
 import triton.language as tl
 
 from .activation import silu_and_mul
+from .fused_moe import _get_sorted_idx, _make_intermediate, _renormalize
 from .triton_utils import get_kernel_meta
+from .w8a8_triton_kernels import per_token_quant_int8
 
 
 def get_cuda_autotune_config():
@@ -47,9 +49,11 @@ def get_cuda_autotune_config():
     rep=25,
 )
 @triton.jit
-def fused_moe_kernel(
+def fused_moe_w8a8_kernel(
     A,
+    A_scale,
     B,
+    B_scale,
     C,
     SortedIdx,
     ExpStart,
@@ -62,6 +66,7 @@ def fused_moe_kernel(
     stride_be: tl.constexpr,
     stride_bn: tl.constexpr,
     stride_bk: tl.constexpr,
+    stride_bse: tl.constexpr,
     stride_cm: tl.constexpr,
     stride_cn: tl.constexpr,
     BLOCK_SIZE_M: tl.constexpr,
@@ -114,16 +119,19 @@ def fused_moe_kernel(
     else:
         offs_am = offs_sid
     a_ptrs = A + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
+    as_ptrs = A_scale + offs_am
     offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
     offs_bn = tl.max_contiguous(tl.multiple_of(offs_bn, BLOCK_SIZE_N),
                                 BLOCK_SIZE_N)
 
     # deepseek has 160 experts, exp index would overflow int32
-    exp_off = stride_be * exp_id.to(tl.int64)
+    exp_id = exp_id.to(tl.int64)
+    exp_off = stride_be * exp_id
     b_ptrs = B + exp_off + (offs_k[:, None] * stride_bk +
                             offs_bn[None, :] * stride_bn)
+    bs_ptrs = B_scale + exp_id * stride_bse + offs_bn
 
-    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.int32)
 
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         a = tl.load(a_ptrs,
@@ -137,11 +145,16 @@ def fused_moe_kernel(
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
 
+    ascale = tl.load(as_ptrs, mask=mask_sid)
+    bscale = tl.load(bs_ptrs)
+    c = accumulator.to(ascale.dtype)
+    c = c * ascale[:, None] * bscale[None, :]
+
     if ENABLE_WEIGHTS:
         weight = tl.load(Weights + sid, mask=mask_sid)
-        accumulator = accumulator * weight[:, None].to(accumulator.dtype)
+        c = c * weight[:, None].to(c.dtype)
 
-    c = accumulator.to(A.dtype.element_ty)
+    c = c.to(C.dtype.element_ty)
 
     if reindex_c:
         offs_cm = sid
@@ -151,9 +164,11 @@ def fused_moe_kernel(
     tl.store(c_ptrs, c, mask=mask_sid[:, None])
 
 
-def fused_moe_kernel_launcher(
+def fused_moe_w8a8_kernel_launcher(
     A: torch.Tensor,
+    A_scale: torch.Tensor,
     B: torch.Tensor,
+    B_scale: torch.Tensor,
     C: torch.Tensor,
     sorted_idx: torch.Tensor,
     exp_start: torch.Tensor,
@@ -174,6 +189,9 @@ def fused_moe_kernel_launcher(
     M_NP2 = max(64, M_NP2)
     E, N, K = B.shape
 
+    assert A_scale.is_contiguous()
+    assert B_scale.is_contiguous()
+
     def _grid_fn(META):
         grid = (triton.cdiv(M_NP2, META['BLOCK_SIZE_M']) *
                 triton.cdiv(N, META['BLOCK_SIZE_N']), E)
@@ -184,9 +202,11 @@ def fused_moe_kernel_launcher(
 
     grid = _grid_fn
     kernel_meta = get_kernel_meta(A)
-    fused_moe_kernel[grid](
+    fused_moe_w8a8_kernel[grid](
         A,
+        A_scale,
         B,
+        B_scale,
         C,
         sorted_idx,
         exp_start,
@@ -199,6 +219,7 @@ def fused_moe_kernel_launcher(
         stride_be=B.stride(0),
         stride_bn=B.stride(1),
         stride_bk=B.stride(2),
+        stride_bse=B_scale.stride(0),
         stride_cm=C.stride(0),
         stride_cn=C.stride(1),
         ENABLE_WEIGHTS=enable_weights,
@@ -211,104 +232,22 @@ def fused_moe_kernel_launcher(
     )
 
 
-@triton.jit
-def _start_end_kernel(TopkIdx, SortedIdx, ExpStart, ExpEnd,
-                      len_sorted_idx: int, num_experts: tl.constexpr,
-                      BLOCK: tl.constexpr):
-    """start end kernel."""
-    exp_id = tl.program_id(0)
-    exp_start = -1
-    cnt = 0
-
-    s_off = tl.arange(0, BLOCK)
-
-    # find start
-    for sidx_start in range(0, len_sorted_idx, BLOCK):
-        sidx_off = sidx_start + s_off
-        sidx_mask = sidx_off < len_sorted_idx
-        sidx = tl.load(SortedIdx + sidx_off, mask=sidx_mask, other=0)
-        tidx = tl.load(TopkIdx + sidx, mask=sidx_mask, other=num_experts)
-        tidx_mask = tidx == exp_id
-        cnt += tl.sum(tidx_mask.to(tl.int32))
-        if cnt > 0 and exp_start < 0:
-            exp_start = sidx_start + tl.argmax(tidx_mask, axis=0)
-
-    if exp_start < 0:
-        exp_start *= 0
-    exp_end = exp_start + cnt
-    tl.store(ExpStart + exp_id, exp_start)
-    tl.store(ExpEnd + exp_id, exp_end)
-
-
-def get_start_end(topk_idx: torch.Tensor, sorted_idx: torch.Tensor,
-                  num_experts: int):
-    """get start and end.
-
-    same process as:
-    >>> exp_tok_cnt = F.one_hot(flatten_topk_ids, num_classes=E).sum(0)
-    >>> exp_end = exp_tok_cnt.cumsum(0)
-    >>> exp_start = exp_end - exp_tok_cnt
-    """
-    start_end = sorted_idx.new_empty(2, num_experts)
-    exp_start = start_end[0, :]
-    exp_end = start_end[1, :]
-
-    BLOCK = 128
-    kernel_meta = get_kernel_meta(topk_idx)
-    _start_end_kernel[(num_experts, )](
-        topk_idx,
-        sorted_idx,
-        exp_start,
-        exp_end,
-        len_sorted_idx=sorted_idx.numel(),
-        num_experts=num_experts,
-        BLOCK=BLOCK,
-        num_warps=4,
-        num_stages=1,
-        **kernel_meta,
-    )
-
-    return exp_start, exp_end
-
-
-def _get_sorted_idx(topk_ids: torch.Tensor, num_experts: int):
-    """get sorted idx."""
-    flatten_topk_ids = topk_ids.flatten()
-    sorted_idx = flatten_topk_ids.argsort()
-
-    exp_start, exp_end = get_start_end(flatten_topk_ids, sorted_idx,
-                                       num_experts)
-    return sorted_idx, exp_start, exp_end
-
-
-def _renormalize(topk_weights: torch.Tensor, renormalize: bool):
-    if renormalize:
-        topk_weights = topk_weights / topk_weights.sum(dim=-1, keepdim=True)
-    if not topk_weights.is_contiguous():
-        topk_weights = topk_weights.contiguous()
-    return topk_weights
-
-
-def _make_intermediate(shape: tuple, dtype: torch.dtype, device: torch.device,
-                       zeros: bool):
-    """make intermediate."""
-    if zeros:
-        return torch.zeros(shape, dtype=dtype, device=device)
-    else:
-        return torch.empty(shape, dtype=dtype, device=device)
-
-
-def fused_moe(hidden_states: torch.Tensor,
-              w1: torch.Tensor,
-              w2: torch.Tensor,
-              topk_weights: torch.Tensor,
-              topk_ids: torch.Tensor,
-              topk: int,
-              expert_offset: int = 0,
-              num_experts: int = None,
-              renormalize: bool = False) -> torch.Tensor:
+def fused_moe_w8a8(input: torch.Tensor,
+                   input_scale: torch.Tensor,
+                   w1: torch.Tensor,
+                   w1_scale: torch.Tensor,
+                   w2: torch.Tensor,
+                   w2_scale: torch.Tensor,
+                   topk_weights: torch.Tensor,
+                   topk_ids: torch.Tensor,
+                   topk: int,
+                   out_dtype: torch.dtype = torch.float16,
+                   expert_offset: int = 0,
+                   num_experts: int = None,
+                   renormalize: bool = False) -> torch.Tensor:
     """fused moe."""
-    M = hidden_states.size(0)
+    device = input.device
+    M = input.size(0)
     E, N, _ = w1.shape
     if num_experts is None:
         num_experts = E
@@ -318,13 +257,15 @@ def fused_moe(hidden_states: torch.Tensor,
     sorted_idx, exp_start, exp_end = _get_sorted_idx(topk_ids, num_experts)
 
     intermediate_cache1 = _make_intermediate((M, topk, N),
-                                             dtype=hidden_states.dtype,
-                                             device=hidden_states.device,
+                                             dtype=out_dtype,
+                                             device=device,
                                              zeros=not full_exp)
     # gate and up
-    fused_moe_kernel_launcher(
-        hidden_states,
+    fused_moe_w8a8_kernel_launcher(
+        input,
+        input_scale,
         w1,
+        w1_scale,
         intermediate_cache1,
         sorted_idx=sorted_idx,
         exp_start=exp_start,
@@ -342,16 +283,20 @@ def fused_moe(hidden_states: torch.Tensor,
     unflat_size = intermediate_cache1.shape[:-1]
     intermediate_cache1 = intermediate_cache1.flatten(0, -2)
     gate_cache = silu_and_mul(intermediate_cache1)
+    del intermediate_cache1
     gate_cache = gate_cache.unflatten(0, unflat_size)
+    gate_cache, gate_scale = per_token_quant_int8(gate_cache, 1e-7)
 
     intermediate_cache2 = _make_intermediate((M, topk, w2.shape[1]),
-                                             dtype=hidden_states.dtype,
-                                             device=hidden_states.device,
+                                             dtype=out_dtype,
+                                             device=device,
                                              zeros=not full_exp)
     # down
-    fused_moe_kernel_launcher(
+    fused_moe_w8a8_kernel_launcher(
         gate_cache,
+        gate_scale,
         w2,
+        w2_scale,
         intermediate_cache2,
         sorted_idx=sorted_idx,
         exp_start=exp_start,
