@@ -433,8 +433,6 @@ class SchedulerSequence:
     sampling_param: SamplingParam = field(default_factory=SamplingParam)
     logical_blocks: LogicalTokenBlocks = field(
         default_factory=LogicalTokenBlocks)
-    sender_id: int = -1
-    req_id: int = -1
     adapter_name: str = None
     arrive_time: float = 0.0
     meta: Any = None

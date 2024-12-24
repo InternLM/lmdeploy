@@ -286,15 +286,15 @@ class AsyncEngine(LogitsMixin):
         self.running_session_ids.add(session_id)
         return generator
 
-    def batch_infer(self,
-                    prompts: Union[List[str], str, List[Dict],
-                                   List[List[Dict]]],
-                    gen_config: Optional[Union[GenerationConfig,
-                                               List[GenerationConfig]]] = None,
-                    do_preprocess: bool = True,
-                    adapter_name: Optional[str] = None,
-                    use_tqdm: bool = False,
-                    **kwargs):
+    async def async_batch_infer(
+            self,
+            prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
+            gen_config: Optional[Union[GenerationConfig,
+                                       List[GenerationConfig]]] = None,
+            do_preprocess: bool = True,
+            adapter_name: Optional[str] = None,
+            use_tqdm: bool = False,
+            **kwargs):
         """Inference a batch of prompts.
 
         Args:
@@ -357,13 +357,44 @@ class AsyncEngine(LogitsMixin):
                 if use_tqdm and out.finish_reason is not None:
                     pbar.update(1)
 
-        async def gather():
-            await asyncio.gather(
-                *[_inner_call(i, generators[i]) for i in range(len(prompts))])
-
-        _get_event_loop().run_until_complete(gather())
+        await asyncio.gather(
+            *[_inner_call(i, generators[i]) for i in range(len(prompts))])
         outputs = outputs[0] if need_list_wrap else outputs
         return outputs
+
+    def batch_infer(self,
+                    prompts: Union[List[str], str, List[Dict],
+                                   List[List[Dict]]],
+                    gen_config: Optional[Union[GenerationConfig,
+                                               List[GenerationConfig]]] = None,
+                    do_preprocess: bool = True,
+                    adapter_name: Optional[str] = None,
+                    use_tqdm: bool = False,
+                    **kwargs):
+        """Inference a batch of prompts.
+
+        Args:
+            prompts (List[str] | str | List[Dict] | List[List[Dict]]]): a
+            batch of prompts. It accepts: string prompt, a list of string
+            prompts, a chat history in OpenAI format or a list of chat
+            history.
+            gen_config (GenerationConfig | None): a instance of or a list of
+                GenerationConfig. Default to None.
+            do_preprocess (bool): whether pre-process the messages. Default to
+                True, which means chat_template will be applied.
+            adapter_name (str): the adapter name of slora for pytorch backend.
+                Pick one from adapters. Default to None, using the base model.
+            use_tqdm (bool): Whether use the progress bar. Default to False
+        """
+        output = self.async_batch_infer(
+            prompts=prompts,
+            gen_config=gen_config,
+            do_preprocess=do_preprocess,
+            adapter_name=adapter_name,
+            use_tqdm=use_tqdm,
+            **kwargs,
+        )
+        return _get_event_loop().run_until_complete(output)
 
     def stream_infer(
             self,
