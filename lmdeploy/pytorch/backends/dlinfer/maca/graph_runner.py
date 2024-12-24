@@ -139,6 +139,14 @@ class MACASingleGraphRunner:
         input_buffers['kv_start_indices'] = torch.empty((max_batches, 1),
                                                         dtype=torch.int64,
                                                         device=device)
+
+        # create buffer for mrope for qwen2VL here
+        mrope_position_ids = kwargs.get('mrope_position_ids', None)
+        if mrope_position_ids is not None:
+            input_buffers['mrope_position_ids'] = torch.ones(3,
+                                                             max_tokens,
+                                                             dtype=torch.int32,
+                                                             device=device)
         return input_buffers
 
     def fill_buffers_cudagraph(self, graph_meta: CudaGraphMeta,
@@ -215,6 +223,15 @@ class MACASingleGraphRunner:
                 new_inputs['inputs_embeds'] = input_buffers['inputs_embeds']
 
         new_inputs.update(kwargs)
+
+        # mrope for qwen2VL
+        mrope_position_ids = kwargs.get('mrope_position_ids', None)
+        if mrope_position_ids is not None:
+            input_buffers[
+                'mrope_position_ids'][:, :num_tokens] = mrope_position_ids
+            new_inputs['mrope_position_ids'] = input_buffers[
+                'mrope_position_ids'][:, :new_batch_size]
+
         return new_inputs
 
     def update_context_cudagraph(self, graph_meta, context):
