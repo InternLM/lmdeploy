@@ -450,7 +450,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     if not node_url:
         return node_manager.handle_unavailable_model(request.model)
 
-    logger.info(f'{request} is dispatched to {node_url}')
+    logger.info(f'A request is dispatched to {node_url}')
     request_dict = request.model_dump()
     start = node_manager.pre_call(node_url)
     if request.stream is True:
@@ -509,7 +509,7 @@ async def completions_v1(request: CompletionRequest,
     if not node_url:
         return node_manager.handle_unavailable_model(request.model)
 
-    logger.info(f'{request} is dispatched to {node_url}')
+    logger.info(f'A request is dispatched to {node_url}')
     request_dict = request.model_dump()
     start = node_manager.pre_call(node_url)
     if request.stream is True:
