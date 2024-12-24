@@ -320,6 +320,7 @@ if [ "${MLP_ROLE_INDEX}" -eq 0 ]; then
     PROXY_PORT=8000
     lmdeploy serve proxy --server-name ${MASTER_IP} --server-port ${PROXY_PORT} &
 else
+    # 这里我们默认调度平台同时启动了所有机器，否则要sleep一会，等待 proxy 启动成功
     echo "Not starting lmdeploy serve proxy on worker node ${MLP_ROLE_INDEX}."
 fi
 # 启动 torchrun 并放入后台
