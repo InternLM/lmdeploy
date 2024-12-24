@@ -153,7 +153,8 @@ class NodeManager:
                 to_be_deleted.append(node_url)
         for node_url in to_be_deleted:
             self.remove(node_url)
-            logger.info(f'Removed node_url: {node_url}')
+            logger.info(f'Removed node_url: {node_url} '
+                        'due to heart beat expiration')
 
     @property
     def model_list(self):
