@@ -77,6 +77,7 @@ def auto_awq(model: str,
         revision (str): The specific model version to use. It can be a
             branch name, a tag name, or a commit id. If unspecified,
             will use the default version.
+        dtype (str): Data type for loading model weights and calib infer.
         download_dir (str): Directory to download and load the weights,
             default to the default cache directory of huggingface.
     """

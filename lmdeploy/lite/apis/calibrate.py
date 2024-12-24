@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 from pathlib import Path
-from typing import Union
+from typing import Literal, Union
 
 import torch
 from torch import nn
@@ -205,7 +205,7 @@ def calibrate(model: str,
               w_bits: int = 4,
               w_group_size: int = 128,
               search_scale: bool = False,
-              dtype: str = 'auto',
+              dtype: Literal['float16', 'bfloat16', 'auto'] = 'auto',
               batch_size: int = 1) -> None:
     """The main function for loading the model and performing calibration on a
     given dataset.

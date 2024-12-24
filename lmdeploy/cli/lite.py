@@ -72,6 +72,7 @@ class SubCliLite(object):
         ArgumentHelper.calib_samples(parser)
         ArgumentHelper.calib_seqlen(parser)
         ArgumentHelper.calib_batchsize(parser)
+        ArgumentHelper.dtype(parser)
         parser.add_argument('--w-bits',
                             type=int,
                             default=4,

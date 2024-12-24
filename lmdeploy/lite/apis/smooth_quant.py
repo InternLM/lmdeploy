@@ -1,4 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
+from typing import Literal
+
 import fire
 import torch
 from torch import nn
@@ -20,7 +23,7 @@ def smooth_quant(model: str,
                  search_scale: bool = False,
                  batch_size: int = 1,
                  w_bits: int = 8,
-                 dtype: str = 'auto',
+                 dtype: Literal['float16', 'bfloat16', 'auto'] = 'auto',
                  device: str = 'cuda'):
     model_path = model
     vl_model, model, tokenizer, work_dir = calibrate(model,
