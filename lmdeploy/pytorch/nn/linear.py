@@ -1419,8 +1419,14 @@ def build_linear(in_features: int,
             is_tp=is_tp,
             all_reduce=all_reduce,
         )
-    elif quant_method == 'blocked_fp8':
-        fp8_dtype = quant_config.get('fp8_dtype', torch.float8_e4m3fn)
+    elif quant_method == 'fp8':
+        fmt = quant_config.get('fmt', 'e4m3')
+        if fmt == 'e4m3':
+            fp8_dtype = torch.float8_e4m3fn
+        elif fmt == 'e5m2':
+            fp8_dtype = torch.float8_e5m2
+        else:
+            raise TypeError(f'Unsupported fp8 fmt: {fmt}')
         return BlockedF8Linear(
             in_features,
             out_features,
@@ -1528,8 +1534,14 @@ def build_merged_colwise_linear(
             is_tp=is_tp,
             out_names=out_names,
         )
-    elif quant_method == 'blocked_fp8':
-        fp8_dtype = quant_config.get('fp8_dtype', torch.float8_e4m3fn)
+    elif quant_method == 'fp8':
+        fmt = quant_config.get('fmt', 'e4m3')
+        if fmt == 'e4m3':
+            fp8_dtype = torch.float8_e4m3fn
+        elif fmt == 'e5m2':
+            fp8_dtype = torch.float8_e5m2
+        else:
+            raise TypeError(f'Unsupported fp8 fmt: {fmt}')
         return MergedBlockedF8Linear(
             in_features=in_features,
             all_out_features=all_out_features,

@@ -531,8 +531,14 @@ def build_fused_moe(
             all_reduce=all_reduce,
             enable_ep=enable_ep,
         )
-    elif quant_method == 'blocked_fp8':
-        fp8_dtype = quant_config.get('fp8_dtype', torch.float8_e4m3fn)
+    elif quant_method == 'fp8':
+        fmt = quant_config.get('fmt', 'e4m3')
+        if fmt == 'e4m3':
+            fp8_dtype = torch.float8_e4m3fn
+        elif fmt == 'e5m2':
+            fp8_dtype = torch.float8_e5m2
+        else:
+            raise TypeError(f'Unsupported fp8 fmt: {fmt}')
         return FusedMoEBlockedF8(
             hidden_dim=hidden_dim,
             ffn_dim=ffn_dim,

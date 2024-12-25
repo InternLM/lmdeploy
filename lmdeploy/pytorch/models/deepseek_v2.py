@@ -678,10 +678,6 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                  device: torch.device = None):
         super().__init__()
         self.config = config
-        # TODO: setup blocked fp8 here
-        # config.quantization_config = dict(
-        #     quant_method='blocked_fp8',
-        # )
         self.quantization_config = getattr(config, 'quantization_config', None)
         self.dtype = dtype
         self.ctx_mgr = ctx_mgr
@@ -843,7 +839,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                 if quantization_config is not None:
                     quant_method = quantization_config.get('quant_method')
 
-                if quant_method == 'blocked_fp8':
+                if quant_method == 'fp8':
                     # update blocked fp8 weight
                     __load_kcvc_blocked_fp8(name, loaded_weight)
                 else:
@@ -854,6 +850,13 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
         """load weights."""
+
+        def __skip_nextn(name, nextn_keys):
+            for nextn_key in nextn_keys:
+                if nextn_key in name:
+                    return True
+            return False
+
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)
             ('.gate_up_proj', '.gate_proj', 0),
@@ -884,7 +887,13 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             expert_params_mapping += [gate_param, up_param, down_param]
 
         num_hidden_layers = self.config.num_hidden_layers
-        nextn_key = f'.layers.{num_hidden_layers}'
+
+        num_nextn_predict_layers = getattr(self.config,
+                                           'num_nextn_predict_layers', 1)
+        nextn_keys = [
+            f'.layers.{num_hidden_layers+i}'
+            for i in range(num_nextn_predict_layers)
+        ]
 
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:
@@ -893,9 +902,10 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             if ('rotary_emb.cos_cached' in name
                     or 'rotary_emb.sin_cached' in name):
                 continue
-            if nextn_key in name:
+            if '.layers' in name:
                 # skip nextn
-                continue
+                if __skip_nextn(name, nextn_keys):
+                    continue
             if self.config.tie_word_embeddings and 'lm_head.weight' in name:
                 continue
             if name.endswith(scale_suffix):
