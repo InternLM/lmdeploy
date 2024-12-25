@@ -10,7 +10,7 @@ on:
       - "3rdparty/**"
       - "lmdeploy/**"
       - "requirements/**"
-      - "requirements.txt"
+      - "requirements_cuda.txt"
       - "CMakeLists.txt"
       - "setup.py"
   push:
@@ -24,7 +24,7 @@ on:
       - "3rdparty/**"
       - "lmdeploy/**"
       - "requirements/**"
-      - "requirements.txt"
+      - "requirements_cuda.txt"
       - "CMakeLists.txt"
       - "setup.py"
     tags:
@@ -39,6 +39,7 @@ jobs:
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e CUDA_VISIBLE_DEVICES=2,3 --pull never"
       volumes:
         - /nvme/share_data/github-actions/pip-cache:/root/.cache/pip
+        - /nvme/share_data/github-actions/hf_home:/root/.cache/huggingface
         - /nvme/share_data/github-actions/packages:/root/packages
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
@@ -78,7 +79,7 @@ jobs:
           python3 -m pip install pynvml packaging protobuf transformers_stream_generator
           # manually install flash attn
           python3 -m pip install /root/packages/flash_attn-2.6.3+cu118torch2.3cxx11abiFALSE-cp38-cp38-linux_x86_64.whl
-          python3 -m pip install -r requirements.txt -r requirements/test.txt
+          python3 -m pip install -r requirements_cuda.txt -r requirements/test.txt
           python3 -m pip install .
       - name: Check env
         run: |
@@ -90,6 +91,7 @@ jobs:
           echo "TODO"
       - name: Test lmdeploy python UT
         run: |
+          huggingface-cli login --token ${{ secrets.HF_TOKEN }}
           coverage run --branch --source lmdeploy -m pytest -rsE tests
           coverage xml
           coverage report -m

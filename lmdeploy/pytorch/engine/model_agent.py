@@ -135,21 +135,26 @@ def model_forward(
     stream = stream or torch.cuda.current_stream()
     with torch.cuda.stream(stream):
         # forward
-        inputs = inputs.to_device('cuda')
         ctx_mgr = model.ctx_mgr
         context = ctx_mgr.build_context(
             inputs=inputs,
+            model_config=cache_engine.model_config,
             world_size=world_size,
             kv_caches=cache_engine.gpu_cache,
             kv_quant_policy=cache_engine.cache_config.quant_policy,
         )
         with ctx_mgr.context(context):
+            model_metas = None
+            model_metas = model.update_model_metas(
+                past_key_values=cache_engine.gpu_cache,
+                context=context,
+            )
             input_dict = model.prepare_inputs_for_generation(
                 past_key_values=cache_engine.gpu_cache,
                 context=context,
             )
             output = model(**input_dict)
-    return dict(hidden_states=output)
+    return dict(hidden_states=output, model_metas=model_metas)
 
 
 SwapMap = Dict[int, int]
@@ -175,6 +180,10 @@ class AutoModelAgent:
 
     def get_logits(self, hidden_states: torch.Tensor):
         """get logits of model output."""
+        raise NotImplementedError('Not implemented.')
+
+    def get_input_processor(self):
+        """get input processor."""
         raise NotImplementedError('Not implemented.')
 
 
@@ -267,13 +276,15 @@ class BaseModelAgent(AutoModelAgent):
                                     swap_in_map=swap_in_map,
                                     swap_out_map=swap_out_map)
         await asyncio.sleep(0)
-        while not self.stream.query():
-            await asyncio.sleep(0)
         return output
 
     def get_logits(self, hidden_states: torch.Tensor):
         """get logits of model output."""
         return self.patched_model.get_logits(hidden_states)
+
+    def get_input_processor(self):
+        """get input processor.."""
+        return self.patched_model.get_input_processor()
 
 
 @torch.inference_mode()
@@ -360,14 +371,26 @@ def _tp_build_model(
     return patched_model, cache_engine, cache_config
 
 
-def _broadcast_inputs(rank: int, inputs: Any, stream: torch.cuda.Stream):
+def _broadcast_inputs(rank: int, inputs: Any, group: dist.group,
+                      stream: torch.cuda.Stream):
     """get input tensor parallel."""
     # broadcast meta info
     if rank != 0:
         inputs = [None, None, None]
+    else:
+        device_inputs = inputs[0]
+        meta_inputs = device_inputs.to_device('meta')
+        inputs[0] = meta_inputs
 
     with torch.cuda.stream(stream):
-        dist.broadcast_object_list(inputs)
+        dist.broadcast_object_list(inputs, group=group)
+        if rank == 0:
+            device_inputs.broadcast()
+        else:
+            device_inputs = inputs[0].broadcast()
+
+    inputs[0] = device_inputs
+
     return inputs
 
 
@@ -380,6 +403,7 @@ def _tp_model_loop(
     adapters: Dict[str, str],
     world_size: int,
     barrier: mp.Barrier,
+    cpu_group: dist.group,
 ):
     """Start model loops for tensor parallel model inference.
 
@@ -405,11 +429,12 @@ def _tp_model_loop(
     while True:
         barrier.wait()
         inputs, swap_in_map, swap_out_map = _broadcast_inputs(
-            rank, None, stream)
+            rank, None, cpu_group, stream)
 
         cache_swapping(cache_engine,
                        swap_in_map=swap_in_map,
                        swap_out_map=swap_out_map)
+        inputs = inputs.to_device('cuda')
 
         model_forward(
             patched_model,
@@ -441,10 +466,13 @@ def _start_tp_process(proc_id: int,
     try:
         from lmdeploy.pytorch.check_env import check_env_deeplink
         check_env_deeplink(device_context.device_type)
+        timeout = timedelta(days=35600)
         dist.init_process_group('nccl',
                                 rank=rank,
                                 world_size=world_size,
-                                timeout=timedelta(days=35600))
+                                timeout=timeout)
+        cpu_group = dist.new_group(timeout=timeout, backend='gloo')
+        kwargs['cpu_group'] = cpu_group
         dist_ctx = DistContext(rank=rank, world_size=world_size)
         torch.cuda.set_device(rank)
         with get_dist_manager().context(dist_ctx), get_device_manager(
@@ -614,12 +642,15 @@ class TPModelAgent(AutoModelAgent):
 
         rank = 0
         try:
+            timeout = timedelta(days=35600)
             dist.init_process_group('nccl',
                                     rank=rank,
                                     world_size=world_size,
-                                    timeout=timedelta(days=35600))
+                                    timeout=timeout)
+            cpu_group = dist.new_group(timeout=timeout, backend='gloo')
             dist_ctx = DistContext(rank=rank, world_size=world_size)
             self._dist_ctx = dist_ctx
+            self._cpu_group = cpu_group
         except Exception as e:
             from traceback import print_exc
             logger.error(f'Rank[{rank}] failed.')
@@ -661,7 +692,8 @@ class TPModelAgent(AutoModelAgent):
             self.mp_bar.wait()
             rank = 0
             _broadcast_inputs(rank, [inputs, swap_in_map, swap_out_map],
-                              self.stream)
+                              self._cpu_group, self.stream)
+
             cache_swapping(self.cache_engine,
                            swap_in_map=swap_in_map,
                            swap_out_map=swap_out_map)
@@ -687,13 +719,15 @@ class TPModelAgent(AutoModelAgent):
                                     swap_in_map=swap_in_map,
                                     swap_out_map=swap_out_map)
         await asyncio.sleep(0)
-        while not self.stream.query():
-            await asyncio.sleep(0)
         return output
 
     def get_logits(self, hidden_states: torch.Tensor):
         """get logits of model output."""
         return self.patched_model.get_logits(hidden_states)
+
+    def get_input_processor(self):
+        """get input processor.."""
+        return self.patched_model.get_input_processor()
 
 
 def _exit_handler(agent: TPModelAgent):
@@ -722,7 +756,7 @@ def build_model_agent(model_path: str,
         custom_module_map (str): customized nn module map
     """
     model_config = ModelConfig.from_pretrained(
-        model_path, trust_remote_code=trust_remote_code, dtype=dtype)
+        model_path, trust_remote_code=trust_remote_code, dtype=dtype, tp=tp)
     model_config.custom_module_map = custom_module_map
     if tp == 1:
         model_agent = BaseModelAgent(model_path,

@@ -11,6 +11,7 @@ from lmdeploy.archs import get_task
 from lmdeploy.lite.quantization import CalibrationContext, CalibrationContextV2
 from lmdeploy.lite.utils import (collect_target_modules, get_calib_loaders,
                                  load_hf_from_pretrained)
+from lmdeploy.vl.model.builder import load_vl_model
 
 LAYER_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMDecoderLayer',
@@ -239,20 +240,25 @@ def calibrate(model: str,
 
     model_type, _ = get_task(model)
     make_compatible_internvl_config(model)
-    if model_type == 'llm':
-        # Load tokenizer and configuration
-        tokenizer = AutoTokenizer.from_pretrained(model,
-                                                  trust_remote_code=True)
 
+    # Load tokenizer and configuration
+    tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=True)
+
+    if model_type == 'llm':
         model = load_hf_from_pretrained(model,
                                         torch_dtype=torch.float16,
                                         trust_remote_code=True)
         vl_model = None
     elif model_type == 'vlm':
-        from lmdeploy.vl.model.builder import vl_model_with_tokenizer
-        vl_model, model, tokenizer = vl_model_with_tokenizer(model_path=model)
+        vl_model = load_vl_model(model, backend=None, with_llm=True).vl_model
+        model = vl_model
+        if hasattr(vl_model, 'language_model'):  # deepseek vl
+            model = vl_model.language_model
+        if hasattr(vl_model, 'llm'):  # MiniCPMV
+            model = vl_model.llm
+        model.config.use_cache = False
+        model.half().eval()
 
-    model.config.use_cache = False
     model_type = type(model).__name__
     if model_type not in LAYER_TYPE_MAP or model_type not in NORM_TYPE_MAP:
         raise RuntimeError(
