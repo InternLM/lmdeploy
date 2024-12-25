@@ -403,7 +403,7 @@ def run_pipeline_vl_chat_test(config,
     if 'minicpm' in model_case.lower():
         MiniCPM_vl_testcase(pipe, file, resource_path)
     if 'qwen' in model_case.lower():
-        Qwen_vl_testcase(pipe, file)
+        Qwen_vl_testcase(pipe, file, resource_path)
 
     file.close()
 
@@ -423,9 +423,11 @@ def internvl_vl_testcase(pipe, file, resource_path, lang='en'):
                  dict(type='text',
                       text=f'{IMAGE_TOKEN}{IMAGE_TOKEN}\n{description}'),
                  dict(type='image_url',
-                      image_url=dict(max_dynamic_patch=12, url=f'{resource_path}/{PIC_REDPANDA}')),
+                      image_url=dict(max_dynamic_patch=12,
+                                     url=f'{resource_path}/{PIC_REDPANDA}')),
                  dict(type='image_url',
-                      image_url=dict(max_dynamic_patch=12, url=f'{resource_path}/{PIC_PANDA}'))
+                      image_url=dict(max_dynamic_patch=12,
+                                     url=f'{resource_path}/{PIC_PANDA}'))
              ])
     ]
     response = pipe(messages)
@@ -586,9 +588,11 @@ def MiniCPM_vl_testcase(pipe, file, resource_path):
              content=[
                  dict(type='text', text='Describe the two images in detail.'),
                  dict(type='image_url',
-                      image_url=dict(max_slice_nums=9, url=PIC_REDPANDA)),
+                      image_url=dict(max_slice_nums=9,
+                                     url=f'{resource_path}/{PIC_REDPANDA}')),
                  dict(type='image_url',
-                      image_url=dict(max_slice_nums=9, url=PIC_PANDA))
+                      image_url=dict(max_slice_nums=9,
+                                     url=f'{resource_path}/{PIC_PANDA}'))
              ])
     ]
     response = pipe(messages)
@@ -606,27 +610,27 @@ def MiniCPM_vl_testcase(pipe, file, resource_path):
                     response.text + '\n')
 
     # In-context few-shot learning
-    EXAMPLE1 = f'{resource_path}data1.jpeg'
-    EXAMPLE2 = f'{resource_path}data2.jpeg'
-    EXAMPLE3 = f'{resource_path}data3.jpeg'
     question = 'production date'
     messages = [
         dict(role='user',
              content=[
                  dict(type='text', text=question),
-                 dict(type='image_url', image_url=dict(url=EXAMPLE1)),
+                 dict(type='image_url',
+                      image_url=dict(url=f'{resource_path}/data1.jpeg')),
              ]),
         dict(role='assistant', content='2021.08.29'),
         dict(role='user',
              content=[
                  dict(type='text', text=question),
-                 dict(type='image_url', image_url=dict(url=EXAMPLE2)),
+                 dict(type='image_url',
+                      image_url=dict(url=f'{resource_path}/data2.jpeg')),
              ]),
         dict(role='assistant', content='1999.05.15'),
         dict(role='user',
              content=[
                  dict(type='text', text=question),
-                 dict(type='image_url', image_url=dict(url=EXAMPLE3)),
+                 dict(type='image_url',
+                      image_url=dict(url=f'{resource_path}/data3.jpeg')),
              ])
     ]
     response = pipe(messages)
@@ -678,14 +682,16 @@ def MiniCPM_vl_testcase(pipe, file, resource_path):
                     '\n')
 
 
-def Qwen_vl_testcase(pipe, file):
+def Qwen_vl_testcase(pipe, file, resource_path):
     # multi-image multi-round conversation, combined images
     messages = [
         dict(role='user',
              content=[
                  dict(type='text', text='Describe the two images in detail.'),
-                 dict(type='image_url', image_url=dict(url=PIC_BEIJING)),
-                 dict(type='image_url', image_url=dict(url=PIC_CHONGQING))
+                 dict(type='image_url',
+                      image_url=dict(url=f'{resource_path}/{PIC_BEIJING}')),
+                 dict(type='image_url',
+                      image_url=dict(url=f'{resource_path}/{PIC_CHONGQING}'))
              ])
     ]
     response = pipe(messages)
@@ -716,11 +722,11 @@ def Qwen_vl_testcase(pipe, file):
                  dict(type='image_url',
                       image_url=dict(min_pixels=min_pixels,
                                      max_pixels=max_pixels,
-                                     url=PIC_BEIJING)),
+                                     url=f'{resource_path}/{PIC_BEIJING}')),
                  dict(type='image_url',
                       image_url=dict(min_pixels=min_pixels,
                                      max_pixels=max_pixels,
-                                     url=PIC_CHONGQING))
+                                     url=f'{resource_path}/{PIC_CHONGQING}'))
              ])
     ]
     response = pipe(messages)
