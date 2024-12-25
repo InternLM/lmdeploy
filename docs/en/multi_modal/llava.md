@@ -5,7 +5,7 @@ LMDeploy supports the following llava series of models, which are detailed in th
 |                Model                 |    Size     | Supported Inference Engine |
 | :----------------------------------: | :---------: | :------------------------: |
 | llava-hf/Llava-interleave-qwen-7b-hf |     7B      |         TurboMind          |
-|       llava-hf/llava-1.5-7b-hf       |     7B      |         TurboMind          |
+|       llava-hf/llava-1.5-7b-hf       |     7B      |     TurboMind, PyTorch     |
 |   liuhaotian/llava-v1.6-vicuna-7b    |     7B      |         TurboMind          |
 |   liuhaotian/llava-v1.6-mistral-7b   |     7B      |         TurboMind          |
 | lmms-lab/llava-onevision-qwen2-7b-ov | 0.5B,7B,72B |         TurboMind          |
