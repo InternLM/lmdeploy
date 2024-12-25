@@ -75,7 +75,7 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |          QWen1.5-MoE           |    A2.7B    | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 |             QWen2              | 0.5B - 72B  | LLM  |    Yes    |   Yes   |   No    | Yes  |  Yes  |
 |            Qwen2.5             | 0.5B - 72B  | LLM  |    Yes    |   Yes   |   No    | Yes  |  Yes  |
-|            QWen2-VL            |   2B, 7B    | MLLM |    Yes    |   Yes   |   No    |  No  |  No   |
+|            QWen2-VL            |   2B, 7B    | MLLM |    Yes    |   Yes   |   No    |  No  |  Yes  |
 |          DeepSeek-MoE          |     16B     | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |          DeepSeek-V2           |  16B, 236B  | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |         DeepSeek-V2.5          |    236B     | LLM  |    Yes    |   No    |   No    |  No  |  No   |
@@ -96,7 +96,7 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |            ChemVLM             |   8B-26B    | MLLM |    Yes    |   Yes   |   No    |  -   |   -   |
 |             Gemma2             |   9B-27B    | LLM  |    Yes    |   Yes   |   Yes   |  -   |   -   |
 |              GLM4              |     9B      | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
-|             GLM-4V             |     9B      | MLLM |    Yes    |   Yes   |   Yes   |  No  |  No   |
+|             GLM-4V             |     9B      | MLLM |    Yes    |   Yes   |   Yes   |  No  |  Yes  |
 |           CodeGeeX4            |     9B      | LLM  |    Yes    |   Yes   |   Yes   |  -   |   -   |
 |          Phi-3.5-mini          |    3.8B     | LLM  |    Yes    |   Yes   |   No    |  -   |   -   |
 |          Phi-3.5-MoE           |   16x3.8B   | LLM  |    Yes    |   Yes   |   No    |  -   |   -   |
