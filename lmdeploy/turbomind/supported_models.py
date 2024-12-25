@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from lmdeploy.archs import get_model_arch, get_quantization_config
+from lmdeploy.archs import get_model_arch, search_nested_config
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -82,9 +82,8 @@ def is_supported(model_path: str):
     else:
 
         arch, cfg = get_model_arch(model_path)
-        quant_config = get_quantization_config(cfg.to_dict())
-        if (quant_config
-                and quant_config.get('quant_method') in ['smooth_quant']):
+        quant_method = search_nested_config(cfg.to_dict(), 'quant_method')
+        if quant_method and quant_method in ['smooth_quant']:
             # tm hasn't support quantized models by applying smoothquant
             return False
 

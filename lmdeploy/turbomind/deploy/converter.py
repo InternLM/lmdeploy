@@ -6,7 +6,7 @@ import shutil
 import fire
 import torch
 
-from lmdeploy.archs import get_model_arch, get_quantization_config
+from lmdeploy.archs import get_model_arch, search_nested_config
 from lmdeploy.messages import TurbomindEngineConfig
 from lmdeploy.model import MODELS, best_match_model
 from lmdeploy.utils import get_logger, get_model
@@ -196,7 +196,7 @@ def get_tm_model(model_path,
             If it is None, the turbomind model won't be saved
     """
     _, cfg = get_model_arch(model_path)
-    quant_config = get_quantization_config(cfg.to_dict())
+    quant_config = search_nested_config(cfg.to_dict(), 'quantization_config')
     if quant_config:
         quant_method = quant_config.get('quant_method')
         _group_size = int(quant_config.get('group_size', 0))
