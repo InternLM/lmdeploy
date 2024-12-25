@@ -329,6 +329,7 @@ class StreamingSemaphore:
 
     async def acquire(self):
         if self.val:
+            self.val = 0
             return
         self.fut = self.loop.create_future()
         await self.fut
@@ -578,11 +579,11 @@ class TurboMindInstance:
         try:
             while True:
                 await sem.acquire()
-
                 state = shared_state.consume()
+
                 status, seq_len = state.status, state.seq_len
 
-                if status == 7:
+                if status in [7, 8]:  # finish / canceled
                     finish, status = True, 0
                 elif status:
                     yield self._get_error_output()
