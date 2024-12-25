@@ -33,7 +33,7 @@ class CogVLMVisionModel(VisonModel):
             self.vl_model = AutoModelForCausalLM.from_pretrained(
                 self.model_path, device_map='cpu', trust_remote_code=True)
         else:
-            raise NotImplementedError('turbomind has not supported glm4v yet')
+            raise NotImplementedError('turbomind has not supported cogvlm yet')
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """refer to the spec of `super().preprocess`"""
