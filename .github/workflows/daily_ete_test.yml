@@ -638,6 +638,7 @@ jobs:
     runs-on: [self-hosted, linux-a100]
     env:
       BENCHMARK_REPORT_DIR: /nvme/qa_test_models/benchmark-reports/${{ github.run_id }}
+      LD_LIBRARY_PATH: ~/miniconda3/lib
     steps:
       - name: Clone repository
         uses: actions/checkout@v2

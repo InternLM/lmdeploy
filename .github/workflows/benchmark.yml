@@ -148,6 +148,8 @@ jobs:
     needs: [benchmark]
     timeout-minutes: 5
     runs-on: [self-hosted, linux-a100]
+    env:
+      LD_LIBRARY_PATH: ~/miniconda3/lib
     steps:
       - name: Clone repository
         uses: actions/checkout@v2
