@@ -193,3 +193,21 @@ def get_model_arch(model_path: str):
             raise RuntimeError(
                 f'Could not find model architecture from config: {_cfg}')
         return arch, cfg
+
+
+def get_quantization_config(config):
+    """get quantization config from a model's config."""
+    if isinstance(config, dict):
+        for k, v in config.items():
+            if k == 'quantization_config':
+                return v
+            if isinstance(v, (dict, list)):
+                result = get_quantization_config(v)
+                if result is not None:
+                    return result
+    elif isinstance(config, list):
+        for item in config:
+            result = get_quantization_config(item)
+            if result is not None:
+                return result
+    return None
