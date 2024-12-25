@@ -423,9 +423,9 @@ def internvl_vl_testcase(pipe, file, resource_path, lang='en'):
                  dict(type='text',
                       text=f'{IMAGE_TOKEN}{IMAGE_TOKEN}\n{description}'),
                  dict(type='image_url',
-                      image_url=dict(max_dynamic_patch=12, url=PIC_REDPANDA)),
+                      image_url=dict(max_dynamic_patch=12, url=f'{resource_path}/{PIC_REDPANDA}')),
                  dict(type='image_url',
-                      image_url=dict(max_dynamic_patch=12, url=PIC_PANDA))
+                      image_url=dict(max_dynamic_patch=12, url=f'{resource_path}/{PIC_PANDA}'))
              ])
     ]
     response = pipe(messages)
