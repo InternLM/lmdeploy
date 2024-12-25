@@ -84,7 +84,7 @@ def is_supported(model_path: str):
         arch, cfg = get_model_arch(model_path)
         quant_config = get_quantization_config(cfg.to_dict())
         if (quant_config
-                and quant_config.get('quant_method') in ['smoothquant']):
+                and quant_config.get('quant_method') in ['smooth_quant']):
             # tm hasn't support quantized models by applying smoothquant
             return False
 
