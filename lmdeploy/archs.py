@@ -128,7 +128,8 @@ def check_vl_llm(config: dict) -> bool:
         return True
     elif arch == 'MultiModalityCausalLM' and 'language_config' in config:
         return True
-    elif arch == 'ChatGLMModel' and 'vision_config' in config:
+    elif arch in ['ChatGLMModel', 'ChatGLMForConditionalGeneration'
+                  ] and 'vision_config' in config:
         return True
     elif arch in supported_archs:
         return True
