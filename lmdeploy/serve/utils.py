@@ -42,9 +42,10 @@ class LogitsMixin:
         input_ids = []
         input_embeddings = []
         input_embedding_ranges = []
-        for prompt in prompts:
+        for idx, prompt in enumerate(prompts):
             out = _get_event_loop().run_until_complete(
-                self._get_prompt_input(prompt,
+                self._get_prompt_input(idx,
+                                       prompt,
                                        do_preprocess=True,
                                        sequence_start=True,
                                        adapter_name=None))

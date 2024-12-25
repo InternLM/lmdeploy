@@ -121,7 +121,8 @@ def run_local(model_path: str,
         prompt = engine.vl_prompt_template.prompt_to_messages(prompt)
         t0 = time.perf_counter()
         inputs = _run_until_complete(
-            engine._get_prompt_input(prompt, True, sequence_start, ''))
+            engine._get_prompt_input(session._session_id, prompt, True,
+                                     sequence_start, ''))
         t1 = time.perf_counter()
         logger.info('preprocess cost %.3fs' % (t1 - t0))
 

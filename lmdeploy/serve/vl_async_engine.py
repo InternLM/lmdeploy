@@ -57,6 +57,7 @@ class VLAsyncEngine(AsyncEngine):
         return _prompts
 
     async def _get_prompt_input(self,
+                                session_id: int,
                                 messages: Union[str, List[Dict]],
                                 do_preprocess: bool,
                                 sequence_start: bool,
@@ -71,7 +72,8 @@ class VLAsyncEngine(AsyncEngine):
         specification.
         """
         if isinstance(messages, str):
-            return await super()._get_prompt_input(messages, do_preprocess,
+            return await super()._get_prompt_input(session_id, messages,
+                                                   do_preprocess,
                                                    sequence_start,
                                                    adapter_name, tools,
                                                    **kwargs)
@@ -81,7 +83,8 @@ class VLAsyncEngine(AsyncEngine):
                     item['type'] in ['image_url', 'image_data']
                     for item in message['content']) for message in messages)
             if not has_multimodal_input:
-                return await super()._get_prompt_input(messages, do_preprocess,
+                return await super()._get_prompt_input(session_id, messages,
+                                                       do_preprocess,
                                                        sequence_start,
                                                        adapter_name, tools,
                                                        **kwargs)
