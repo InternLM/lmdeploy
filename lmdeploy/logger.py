@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from https://github.com/vllm-project/vllm/blob/main/vllm/entrypoints/logger.py  # noqa
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from .messages import GenerationConfig
 from .utils import get_logger
@@ -21,6 +21,10 @@ class RequestLogger:
         self.max_log_len = max_log_len
 
     def log_prompt(self, session_id: int, prompt: str) -> None:
+        if isinstance(prompt, Dict):
+            # Prompt may be a GPT4V message with base64 images;
+            # logging might be impractical due to length
+            return
         if self.max_log_len is not None:
             if prompt is not None:
                 prompt = prompt[:self.max_log_len]
