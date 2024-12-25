@@ -35,8 +35,9 @@ class VisionExpertAttention(nn.Module):
         is_cogvlm2 = hasattr(config, 'num_multi_query_heads')
         quantization_config = getattr(config, 'quantization_config', None)
         num_heads = config.num_attention_heads
-        num_key_value_heads = getattr(config, 'num_multi_query_heads',
-                                      num_heads)
+        num_key_value_heads = getattr(config, 'num_key_value_heads', num_heads)
+        num_replicate_kv_heads = getattr(config,
+                                         'num_replicate_key_value_heads', 1)
         hidden_size = config.hidden_size
         head_dim = getattr(config, 'head_dim', hidden_size // num_heads)
         self.hidden_size = hidden_size
@@ -53,7 +54,7 @@ class VisionExpertAttention(nn.Module):
             quant_config=quantization_config,
             dtype=dtype,
             device=device,
-        )
+            num_replicate_kv_heads=num_replicate_kv_heads)
         self.language_expert_query_key_value = build_qkv_proj(
             hidden_size,
             num_q_heads=num_heads,
@@ -63,7 +64,7 @@ class VisionExpertAttention(nn.Module):
             quant_config=quantization_config,
             dtype=dtype,
             device=device,
-        )
+            num_replicate_kv_heads=num_replicate_kv_heads)
 
         # rotary embedding
         self.apply_rotary_pos_emb = ApplyRotaryEmb()
