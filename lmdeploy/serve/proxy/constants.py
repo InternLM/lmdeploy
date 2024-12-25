@@ -3,7 +3,7 @@
 import enum
 
 LATENCY_DEQUE_LEN = 15
-API_TIMEOUT_LEN = 100
+API_READ_TIMEOUT = 100
 
 
 class Strategy(enum.Enum):

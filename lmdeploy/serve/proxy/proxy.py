@@ -26,8 +26,9 @@ from lmdeploy.serve.openai.api_server import (check_api_key,
 from lmdeploy.serve.openai.protocol import (  # noqa: E501
     ChatCompletionRequest, CompletionRequest, ModelCard, ModelList,
     ModelPermission)
-from lmdeploy.serve.proxy.constants import (API_TIMEOUT_LEN, LATENCY_DEQUE_LEN,
-                                            ErrorCodes, Strategy, err_msg)
+from lmdeploy.serve.proxy.constants import (API_READ_TIMEOUT,
+                                            LATENCY_DEQUE_LEN, ErrorCodes,
+                                            Strategy, err_msg)
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -272,20 +273,20 @@ class NodeManager:
         }
         return json.dumps(ret).encode() + b'\n'
 
-    def stream_generate(self, request: Dict, node_url: str, node_path: str):
+    def stream_generate(self, request: Dict, node_url: str, endpoint: str):
         """Return a generator to handle the input request.
 
         Args:
             request (Dict): the input request.
             node_url (str): the node url.
-            node_path (str): the node path. Such as `/v1/chat/completions`.
+            endpoint (str): the endpoint. Such as `/v1/chat/completions`.
         """
         try:
             response = requests.post(
-                node_url + node_path,
+                node_url + endpoint,
                 json=request,
-                stream=request['stream'],
-                timeout=API_TIMEOUT_LEN,
+                stream=True,
+                timeout=(5, API_READ_TIMEOUT),
             )
             for chunk in response.iter_lines(decode_unicode=False,
                                              delimiter=b'\n'):
@@ -296,20 +297,20 @@ class NodeManager:
             # exception happened, reduce unfinished num
             yield self.handle_api_timeout(node_url)
 
-    async def generate(self, request: Dict, node_url: str, node_path: str):
+    async def generate(self, request: Dict, node_url: str, endpoint: str):
         """Return a the response of the input request.
 
         Args:
             request (Dict): the input request.
             node_url (str): the node url.
-            node_path (str): the node path. Such as `/v1/chat/completions`.
+            endpoint (str): the endpoint. Such as `/v1/chat/completions`.
         """
         try:
             import httpx
             async with httpx.AsyncClient() as client:
-                response = await client.post(node_url + node_path,
+                response = await client.post(node_url + endpoint,
                                              json=request,
-                                             timeout=API_TIMEOUT_LEN)
+                                             timeout=API_READ_TIMEOUT)
                 return response.text
         except (Exception, GeneratorExit, RequestException, asyncio.CancelledError) as e:  # noqa  # yapf: disable
             logger.error(f'catched an exception: {e}')
