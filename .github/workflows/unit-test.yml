@@ -91,7 +91,6 @@ jobs:
           echo "TODO"
       - name: Test lmdeploy python UT
         run: |
-          huggingface-cli login --token ${{ secrets.HF_TOKEN }}
           coverage run --branch --source lmdeploy -m pytest -rsE tests
           coverage xml
           coverage report -m
