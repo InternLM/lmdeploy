@@ -260,7 +260,10 @@ Following are two steps to launch multiple api servers through torchrun. Just cr
 import os
 import socket
 from typing import List, Literal
+
 import fire
+
+
 def get_host_ip():
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -269,11 +272,13 @@ def get_host_ip():
     finally:
         s.close()
     return ip
+
+
 def main(model_path: str,
-         tp: int=1,
+         tp: int = 1,
          proxy_url: str = 'http://0.0.0.0:8000',
          port: int = 23333,
-         backend: Literal['turbomind', 'pytorch']='turbomind'):
+         backend: Literal['turbomind', 'pytorch'] = 'turbomind'):
     local_rank = int(os.environ.get('LOCAL_RANK', -1))
     world_size = int(os.environ.get('WORLD_SIZE', -1))
     local_ip = get_host_ip()
@@ -282,13 +287,15 @@ def main(model_path: str,
         port = port[local_rank]
     else:
         port += local_rank * 10
-    if (world_size-local_rank)%tp==0:
-        rank_list = ','.join([str(local_rank+i) for i in range(tp)])
+    if (world_size - local_rank) % tp == 0:
+        rank_list = ','.join([str(local_rank + i) for i in range(tp)])
         command = f'CUDA_VISIBLE_DEVICES={rank_list} lmdeploy serve api_server {model_path} '\
                   f'--server-name {local_ip} --server-port {port} --tp {tp} '\
                   f'--proxy-url {proxy_url} --backend {backend}'
         print(f'running command: {command}')
         os.system(command)
+
+
 if __name__ == '__main__':
     fire.Fire(main)
 ```
