@@ -26,7 +26,7 @@ def wq_gemm_forward(
     if input_dtype != torch.float16:
         x = x.half()
 
-    FP16_MATMUL_HEURISTIC_CONDITION = x.size(0) * x.size(1) >= 64
+    FP16_MATMUL_HEURISTIC_CONDITION = x.size(0) * x.size(1) >= 32
 
     x = x.flatten(0, -2)
     if FP16_MATMUL_HEURISTIC_CONDITION:
