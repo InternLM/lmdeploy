@@ -6,7 +6,7 @@ import shutil
 import fire
 import torch
 
-from lmdeploy.archs import get_model_arch
+from lmdeploy.archs import get_model_arch, search_nested_config
 from lmdeploy.messages import TurbomindEngineConfig
 from lmdeploy.model import MODELS, best_match_model
 from lmdeploy.utils import get_logger, get_model
@@ -175,23 +175,6 @@ def pack_model_repository(workspace_path: str):
                dst=osp.join(model_repo_dir, 'postprocessing'))
 
 
-def find_quantization_config(nested, target_key):
-    if isinstance(nested, dict):
-        for key, value in nested.items():
-            if key == target_key:
-                return value
-            if isinstance(value, (dict, list)):
-                result = find_quantization_config(value, target_key)
-                if result is not None:
-                    return result
-    elif isinstance(nested, list):
-        for item in nested:
-            result = find_quantization_config(item, target_key)
-            if result is not None:
-                return result
-    return None
-
-
 def get_tm_model(model_path,
                  model_name,
                  chat_template_name,
@@ -214,8 +197,7 @@ def get_tm_model(model_path,
             If it is None, the turbomind model won't be saved
     """
     _, cfg = get_model_arch(model_path)
-    quant_config = find_quantization_config(cfg.to_dict(),
-                                            'quantization_config')
+    quant_config = search_nested_config(cfg.to_dict(), 'quantization_config')
     if quant_config:
         quant_method = quant_config.get('quant_method')
         _group_size = int(quant_config.get('group_size', 0))
