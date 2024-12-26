@@ -26,6 +26,10 @@ def _update_torch_dtype(config: 'ModelConfig', dtype: str):
         return config
 
     torch_dtype = getattr(config.hf_config, 'torch_dtype', None)
+    # deal with case when torch_dtype is not string but torch.dtype
+    if isinstance(torch_dtype, torch.dtype):
+        torch_dtype = str(torch_dtype).split('.')[1]
+
     if torch_dtype is None:
         _dtype = 'float16' if dtype == 'auto' else dtype
         logger.warning('Model config does not have `torch_dtype`,'
