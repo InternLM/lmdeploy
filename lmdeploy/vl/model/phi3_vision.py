@@ -21,6 +21,14 @@ class Phi3VisionModel(LlavaHfVisionModel):
             processor.tokenizer = None
         self.processor = processor
 
+    def build_model(self):
+        if self.with_llm:
+            from transformers import AutoModelForCausalLM
+            self.vl_model = AutoModelForCausalLM.from_pretrained(
+                self.model_path, device_map='cpu', trust_remote_code=True)
+        else:
+            raise NotImplementedError('turbomind has not supported phi3v yet')
+
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """refers to `super.preprocess() for spec."""
         images = self.collect_images(messages)
