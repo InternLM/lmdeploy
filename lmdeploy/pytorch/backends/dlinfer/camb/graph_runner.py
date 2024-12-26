@@ -16,8 +16,17 @@ logger = get_logger('lmdeploy')
 BuffType = Dict[str, Tensor]
 
 
-def round_up_to_multiple_of_8(n: int):
-    return (n + 7) // 8 * 8 + 8
+def next_power_of_2(n: int):
+    """Return the smallest power of 2 greater than or equal to n."""
+    n -= 1
+    n |= n >> 1
+    n |= n >> 2
+    n |= n >> 4
+    n |= n >> 8
+    n |= n >> 16
+    n |= n >> 32
+    n += 1
+    return n
 
 
 def _false(*args, **kwargs):
@@ -101,7 +110,7 @@ class CAMBSingleGraphRunner:
                                                      dtype=torch.int32,
                                                      device=device)
 
-        input_buffers['q_start_loc'] = torch.arange(max_batches,
+        input_buffers['q_start_loc'] = torch.arange(max_batches + 1,
                                                     dtype=torch.int32,
                                                     device=device)
 
@@ -165,13 +174,13 @@ class CAMBSingleGraphRunner:
             input_buffers['inputs_embeds'][:, :num_tokens] = inputs_embeds
 
         # create inputs
-        new_num_tokens = round_up_to_multiple_of_8(num_tokens)
+        new_num_tokens = next_power_of_2(num_tokens)
         new_batch_size = new_num_tokens
 
         attn_metadata.block_offsets = input_buffers[
             'block_offsets'][:new_batch_size]
         attn_metadata.q_start_loc = input_buffers[
-            'q_start_loc'][:new_batch_size]
+            'q_start_loc'][:new_batch_size + 1]
         attn_metadata.q_seqlens = input_buffers['q_seqlens'][:new_batch_size]
         attn_metadata.kv_seqlens = input_buffers['kv_seqlens'][:new_batch_size]
 
@@ -268,7 +277,7 @@ class CAMBGraphRunner(GraphRunner):
         context = self.ctx_mgr.current_context()
         is_decoding = context.is_decoding
         num_tokens = input_ids.numel()
-        new_num_tokens = round_up_to_multiple_of_8(num_tokens)
+        new_num_tokens = next_power_of_2(num_tokens)
         return (new_num_tokens, is_decoding)
 
     def __call__(self, **kwargs):
