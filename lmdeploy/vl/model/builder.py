@@ -73,8 +73,8 @@ def load_vl_model(model_path: str,
                 if backend == 'turbomind' or with_llm:
                     model.build_model()
                 return model
-        except Exception:
-            logger.error(f'matching vision model: {name} failed')
+        except Exception as e:
+            logger.error(f'build vision model {name} failed, {e}')
             raise
 
     raise ValueError(f'unsupported vl model with config {hf_config}')

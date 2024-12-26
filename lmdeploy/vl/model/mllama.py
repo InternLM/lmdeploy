@@ -5,6 +5,15 @@ from typing import Dict, List
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
 
 
+def check_transformers():
+    try:
+        from transformers import MllamaForConditionalGeneration  # noqa: F401
+    except ImportError:
+        raise ImportError(
+            'please install latest transformers by '
+            'pip install git+https://github.com/huggingface/transformers.git')
+
+
 @VISION_MODELS.register_module()
 class MllamaVLModel(VisonModel):
     """llama3.2 model."""
@@ -30,6 +39,16 @@ class MllamaVLModel(VisonModel):
             outputs.append(results)
         messages.append(dict(role='preprocess', content=outputs))
         return messages
+
+    def build_model(self):
+        check_transformers()
+        if self.with_llm:
+            from transformers import MllamaForConditionalGeneration
+            model = MllamaForConditionalGeneration.from_pretrained(
+                self.model_path, device_map='cpu')
+            self.vl_model = model
+        else:
+            raise NotImplementedError('turbomind has not supported mllama yet')
 
     @staticmethod
     def proc_messages(messages, chat_template, sequence_start):

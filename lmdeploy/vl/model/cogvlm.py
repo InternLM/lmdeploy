@@ -27,6 +27,14 @@ class CogVLMVisionModel(VisonModel):
         patch_size = self.hf_config.vision_config['patch_size']
         self.n_token_per_image = 2 + (image_size // patch_size // 2)**2
 
+    def build_model(self):
+        if self.with_llm:
+            from transformers import AutoModelForCausalLM
+            self.vl_model = AutoModelForCausalLM.from_pretrained(
+                self.model_path, device_map='cpu', trust_remote_code=True)
+        else:
+            raise NotImplementedError('turbomind has not supported cogvlm yet')
+
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """refer to the spec of `super().preprocess`"""
         images = self.collect_images(messages)
