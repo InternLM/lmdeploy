@@ -129,16 +129,17 @@ def get_output_model_registered_name_and_config(model_path: str,
         ] else 'float16'
     elif dtype in ['float16', 'bfloat16']:
         if weight_type == 'int4':
-            logger.warn(f'The model {model_path} is a quantized model, so the '
-                        f'specified data type {dtype} is ignored')
+            logger.warning(
+                f'The model {model_path} is a quantized model, so the '
+                f'specified data type {dtype} is ignored')
         else:
             weight_type = dtype
     else:
         assert 0, f'unsupported specified data type {dtype}'
 
     if weight_type == 'bfloat16' and not is_bf16_supported():
-        logger.warn('data type fallback to float16 since '
-                    'torch.cuda.is_bf16_supported is False')
+        logger.warning('data type fallback to float16 since '
+                       'torch.cuda.is_bf16_supported is False')
         weight_type = 'float16'
     config.model_config.model_arch = model_arch
     config.model_config.weight_type = weight_type
