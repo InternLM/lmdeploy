@@ -254,9 +254,9 @@ def calibrate(model: str,
     elif model_type == 'vlm':
         vl_model = load_vl_model(model, backend=None, with_llm=True).vl_model
         model = vl_model
-        if hasattr(vl_model, 'language_model'):  # deepseek vl
+        if hasattr(vl_model, 'language_model'):  # deepseek-vl, ...
             model = vl_model.language_model
-        if hasattr(vl_model, 'llm'):  # MiniCPMV
+        if hasattr(vl_model, 'llm'):  # MiniCPMV, ...
             model = vl_model.llm
         model.config.use_cache = False
         if dtype == 'float16':
