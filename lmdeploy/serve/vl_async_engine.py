@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import time
 from typing import Dict, List, Literal, Optional, Tuple, Union
 
 import PIL
@@ -90,9 +91,16 @@ class VLAsyncEngine(AsyncEngine):
                                                        **kwargs)
         else:
             raise RuntimeError(f'unsupported messages {messages}')
-
+        start = time.perf_counter()
         messages = await self.async_convert_to_pil_images(messages)
+        duration = time.perf_counter() - start
+        logger.info(f'session {session_id}, image preparing {duration:.3f}s')
+        start = time.perf_counter()
         results = await self.vl_encoder.preprocess(messages)
+        duration = time.perf_counter() - start
+        logger.info(
+            f'session {session_id}, image preprocessing {duration:.3f}s')
+        start = time.perf_counter()
         if self.backend == 'turbomind':
             # for tm engine, this module perform vision embedding after image
             # preprocessing. It utilizes the hf model's vision embeddings
@@ -100,6 +108,9 @@ class VLAsyncEngine(AsyncEngine):
             # embedding_ranges and so on. All the returned values are passed
             # to tm engine for token generation
             results = await self.vl_encoder.async_infer(results)
+            duration = time.perf_counter() - start
+            logger.info(
+                f'session {session_id}, vision forward {duration:.3f}s')
             results = await self.vl_encoder.wrap_for_turbomind(
                 results, self.chat_template, self.tokenizer, sequence_start)
         elif self.backend == 'pytorch':

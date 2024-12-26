@@ -208,6 +208,7 @@ class InternVLVisionModel(VisonModel):
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """refers to `super.preprocess() for spec."""
         images = self.collect_images(messages)
+        logger.info(f'preprocess {len(images)} images')
         outputs = []
         for image, params in images:
             image = image.convert('RGB')

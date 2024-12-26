@@ -5,6 +5,7 @@ import json
 import os
 import random
 import re
+import time
 from contextlib import asynccontextmanager
 from copy import deepcopy
 from itertools import count
@@ -246,16 +247,20 @@ class AsyncEngine(LogitsMixin):
 
     async def stop_session(self, session_id: int):
         """Stop a session by a session_id."""
+        logger.info(f'stop session {session_id}')
         if str(session_id) in self.id2generator:
             await self.id2generator[str(session_id)].async_cancel(session_id)
+            logger.info(f'recycle generator for session {session_id}')
             self.gens_set.add(self.id2generator[str(session_id)])
 
         self.running_session_ids.discard(session_id)
 
     async def end_session(self, session_id: int):
         """Clear a session by a session_id."""
+        logger.info(f'end session {session_id}')
         if str(session_id) in self.id2generator:
             await self.id2generator[str(session_id)].async_end(session_id)
+            logger.info(f'recycle generator for session {session_id}')
             self.id2step[str(session_id)] = 0
             self.gens_set.add(self.id2generator[str(session_id)])
 
@@ -268,10 +273,12 @@ class AsyncEngine(LogitsMixin):
             yield
         except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
             # TODO: find out why await would block the coroutine here
+            logger.error(f'got exception, type {type(e).__name__}, {e}')
             _get_event_loop().create_task(self.stop_session(session_id))
             raise e
         if str(session_id) in self.id2generator:
             self.gens_set.add(self.id2generator[str(session_id)])
+            logger.info(f'recycle generator for session {session_id}')
         self.running_session_ids.discard(session_id)
 
     async def get_generator(self, stop: bool, session_id: int):
@@ -540,7 +547,7 @@ class AsyncEngine(LogitsMixin):
                                        prompt_token_ids=input_ids,
                                        gen_config=gen_config,
                                        adapter_name=adapter_name)
-        logger.info(f'session_id={session_id}, '
+        logger.info(f'session={session_id}, '
                     f'history_tokens={self.id2step[str(session_id)]}, '
                     f'input_tokens={len(input_ids)}, '
                     f'max_new_tokens={gen_config.max_new_tokens}, '
@@ -561,7 +568,7 @@ class AsyncEngine(LogitsMixin):
                 f'Truncate max_new_tokens to {gen_config.max_new_tokens}')
         if self.id2step[str(session_id)] + len(
                 input_ids) + gen_config.max_new_tokens > self.session_len:
-            logger.error(f'run out of tokens. session_id={session_id}.')
+            logger.error(f'run out of tokens. session={session_id}.')
             yield GenOut('', self.id2step[str(session_id)], len(input_ids), 0,
                          'length')
             if sequence_end is True and sequence_start is False:
@@ -574,10 +581,13 @@ class AsyncEngine(LogitsMixin):
                 ]
 
             generator = await self.get_generator(False, session_id)
+            logger.info(f'assign a generator for session {session_id}')
             async with self.safe_run(session_id):
                 state = DetokenizeState(len(input_ids))
                 start_ids_offset = state.ids_offset
                 response = ''
+                start = time.perf_counter()
+                ttft = 0
                 async for outputs in generator.async_stream_infer(
                         session_id=session_id,
                         **prompt_input,
@@ -587,6 +597,9 @@ class AsyncEngine(LogitsMixin):
                         sequence_start=sequence_start,
                         sequence_end=sequence_end,
                         step=self.id2step[str(session_id)]):
+                    if ttft == 0:
+                        ttft = time.perf_counter() - start
+                        logger.info(f'session {session_id}, ttft {ttft:.3f}s')
                     # decode res
                     if is_error(outputs.status):
                         tokens = 0
@@ -612,6 +625,7 @@ class AsyncEngine(LogitsMixin):
                     yield GenOut(response, self.id2step[str(session_id)],
                                  len(input_ids), tokens, finish_reason, res,
                                  logprobs)
+                latency = time.perf_counter() - start
                 if not is_error(outputs.status):
                     finish_reason = 'length' \
                         if tokens >= gen_config.max_new_tokens else 'stop'
@@ -620,9 +634,16 @@ class AsyncEngine(LogitsMixin):
                     if not response.endswith('�'):
                         # avaid returning the last response twice
                         response = ''
+                    logger.info(f'session {session_id} finished, latency '
+                                f'{latency:.3f}s, reason "{finish_reason}", '
+                                f'input_tokens {len(input_ids)}, '
+                                f'outupt_tokens {tokens}')
                     yield GenOut(response, self.id2step[str(session_id)],
                                  len(input_ids), tokens, finish_reason)
                 else:
+                    logger.error(
+                        f'session {session_id} finish, reason "error", '
+                        f'input_tokens {len(input_ids)}')
                     yield GenOut(
                         response='internal error happened',
                         history_token_len=self.id2step[str(session_id)],
