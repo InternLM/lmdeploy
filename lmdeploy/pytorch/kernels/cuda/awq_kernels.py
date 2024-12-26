@@ -7,203 +7,91 @@ from .triton_utils import get_kernel_meta, wrap_jit_func
 
 def get_cuda_autotune_config():
     return [
-        # most used
-        triton.Config(
-            {
-                'BLOCK_SIZE_M': 128,
-                'BLOCK_SIZE_N': 64,
-                'BLOCK_SIZE_K': 32,
-                'GROUP_SIZE_M': 8
-            },
-            num_stages=4,
-            num_warps=4),
-        triton.Config(
-            {
-                'BLOCK_SIZE_M': 64,
-                'BLOCK_SIZE_N': 64,
-                'BLOCK_SIZE_K': 64,
-                'GROUP_SIZE_M': 8
-            },
-            num_stages=4,
-            num_warps=4),
-        # # other
-        # triton.Config(
-        #     {
-        #         'BLOCK_SIZE_M': 128,
-        #         'BLOCK_SIZE_N': 256,
-        #         'BLOCK_SIZE_K': 64,
-        #         'GROUP_SIZE_M': 8
-        #     },
-        #     num_stages=3,
-        #     num_warps=8),
-        # triton.Config(
-        #     {
-        #         'BLOCK_SIZE_M': 64,
-        #         'BLOCK_SIZE_N': 256,
-        #         'BLOCK_SIZE_K': 32,
-        #         'GROUP_SIZE_M': 8
-        #     },
-        #     num_stages=4,
-        #     num_warps=4),
-        # triton.Config(
-        #     {
-        #         'BLOCK_SIZE_M': 128,
-        #         'BLOCK_SIZE_N': 128,
-        #         'BLOCK_SIZE_K': 32,
-        #         'GROUP_SIZE_M': 8
-        #     },
-        #     num_stages=4,
-        #     num_warps=4),
-        # triton.Config(
-        #     {
-        #         'BLOCK_SIZE_M': 64,
-        #         'BLOCK_SIZE_N': 128,
-        #         'BLOCK_SIZE_K': 32,
-        #         'GROUP_SIZE_M': 8
-        #     },
-        #     num_stages=4,
-        #     num_warps=4),
-        # triton.Config(
-        #     {
-        #         'BLOCK_SIZE_M': 128,
-        #         'BLOCK_SIZE_N': 32,
-        #         'BLOCK_SIZE_K': 32,
-        #         'GROUP_SIZE_M': 8
-        #     },
-        #     num_stages=4,
-        #     num_warps=4),
-        # triton.Config(
-        #     {
-        #         'BLOCK_SIZE_M': 64,
-        #         'BLOCK_SIZE_N': 32,
-        #         'BLOCK_SIZE_K': 32,
-        #         'GROUP_SIZE_M': 8
-        #     },
-        #     num_stages=5,
-        #     num_warps=2),
-        # triton.Config(
-        #     {
-        #         'BLOCK_SIZE_M': 32,
-        #         'BLOCK_SIZE_N': 64,
-        #         'BLOCK_SIZE_K': 32,
-        #         'GROUP_SIZE_M': 8
-        #     },
-        #     num_stages=5,
-        #     num_warps=2),
-        # # Good config for fp8 inputs.
-        # triton.Config(
-        #     {
-        #         'BLOCK_SIZE_M': 128,
-        #         'BLOCK_SIZE_N': 256,
-        #         'BLOCK_SIZE_K': 128,
-        #         'GROUP_SIZE_M': 8
-        #     },
-        #     num_stages=3,
-        #     num_warps=8),
-        # triton.Config(
-        #     {
-        #         'BLOCK_SIZE_M': 256,
-        #         'BLOCK_SIZE_N': 128,
-        #         'BLOCK_SIZE_K': 128,
-        #         'GROUP_SIZE_M': 8
-        #     },
-        #     num_stages=3,
-        #     num_warps=8),
-        # triton.Config(
-        #     {
-        #         'BLOCK_SIZE_M': 256,
-        #         'BLOCK_SIZE_N': 64,
-        #         'BLOCK_SIZE_K': 128,
-        #         'GROUP_SIZE_M': 8
-        #     },
-        #     num_stages=4,
-        #     num_warps=4),
-        # triton.Config(
-        #     {
-        #         'BLOCK_SIZE_M': 64,
-        #         'BLOCK_SIZE_N': 256,
-        #         'BLOCK_SIZE_K': 128,
-        #         'GROUP_SIZE_M': 8
-        #     },
-        #     num_stages=4,
-        #     num_warps=4),
-        # triton.Config(
-        #     {
-        #         'BLOCK_SIZE_M': 128,
-        #         'BLOCK_SIZE_N': 128,
-        #         'BLOCK_SIZE_K': 128,
-        #         'GROUP_SIZE_M': 8
-        #     },
-        #     num_stages=4,
-        #     num_warps=4),
-        # triton.Config(
-        #     {
-        #         'BLOCK_SIZE_M': 128,
-        #         'BLOCK_SIZE_N': 64,
-        #         'BLOCK_SIZE_K': 64,
-        #         'GROUP_SIZE_M': 8
-        #     },
-        #     num_stages=4,
-        #     num_warps=4),
-        # triton.Config(
-        #     {
-        #         'BLOCK_SIZE_M': 128,
-        #         'BLOCK_SIZE_N': 32,
-        #         'BLOCK_SIZE_K': 64,
-        #         'GROUP_SIZE_M': 8
-        #     },
-        #     num_stages=4,
-        #     num_warps=4),
+        triton.Config({
+            'BLOCK_SIZE_N': 64,
+            'GROUP_SIZE_M': 8,
+        },
+                      num_stages=3,
+                      num_warps=4),
     ]
 
 
 @triton.jit
-def _get_unpacked_order(offs_n, elem_per_int: tl.constexpr):
-    """get unpacked order."""
-    origin_order = offs_n % elem_per_int
-    unpacked_order = (origin_order & 1) * 4 + origin_order // 2
-    return unpacked_order
+def _dequant_s4_to_f16x2(weight, shift: tl.constexpr, is_top: tl.constexpr):
+
+    immLut: tl.constexpr = (0xf0 & 0xcc) | 0xaa
+    BOTTOM_MASK: tl.constexpr = 0x000f000f
+    TOP_MASK: tl.constexpr = 0x00f000f0
+    I4s_TO_F16s_MAGIC_NUM: tl.constexpr = 0x64006400
+    FP16_TOP_MAGIC_NUM: tl.constexpr = 0x64006400
+    ONE_SIXTEENTH: tl.constexpr = 0x2c002c00
+    NEG_64: tl.constexpr = 0xd400d400
+
+    if shift:
+        weight = weight >> 8
+
+    if is_top:
+        return tl.inline_asm_elementwise("""{
+        .reg .b32 tmp;
+        lop3.b32 tmp, $2, $3, $4, $5;
+        fma.rn.f16x2 tmp, tmp, $6, $7;
+        mov.b32 {$0, $1}, tmp;
+    }""",
+                                         '=h,=h,r,n,n,n,r,r',
+                                         args=[
+                                             weight, TOP_MASK,
+                                             I4s_TO_F16s_MAGIC_NUM, immLut,
+                                             ONE_SIXTEENTH, NEG_64
+                                         ],
+                                         dtype=(tl.float16, tl.float16),
+                                         is_pure=True,
+                                         pack=1)
+    else:
+        return tl.inline_asm_elementwise("""{
+        .reg .b32 tmp;
+        lop3.b32 tmp, $2, $3, $4, $5;
+        sub.f16x2 tmp, tmp, $6;
+        mov.b32 {$0, $1}, tmp;
+    }""",
+                                         '=h,=h,r,n,n,n,r',
+                                         args=[
+                                             weight, BOTTOM_MASK,
+                                             I4s_TO_F16s_MAGIC_NUM, immLut,
+                                             FP16_TOP_MAGIC_NUM
+                                         ],
+                                         dtype=(tl.float16, tl.float16),
+                                         is_pure=True,
+                                         pack=1)
 
 
 @triton.jit
-def _broadcast_pack(weight, width: tl.constexpr):
-    """broadcast pack."""
-    broadcast_tmp = tl.arange(0, width)
+def _unpack_weight(weight):
+    """unpack weight."""
+    # broadcast and shift
+    width: tl.constexpr = 8
     BLOCK_SIZE_K: tl.constexpr = weight.shape[0]
     BLOCK_SIZE_QN: tl.constexpr = weight.shape[1]
     BLOCK_SIZE_N: tl.constexpr = BLOCK_SIZE_QN * width
-    weight = tl.broadcast(weight[:, :, None], broadcast_tmp[None, None, :])
-    weight = tl.reshape(weight, (BLOCK_SIZE_K, BLOCK_SIZE_N))
-    return weight
 
+    w0, w1 = _dequant_s4_to_f16x2(weight, False, False)
+    w2, w3 = _dequant_s4_to_f16x2(weight, False, True)
+    w4, w5 = _dequant_s4_to_f16x2(weight, True, False)
+    w6, w7 = _dequant_s4_to_f16x2(weight, True, True)
 
-@triton.jit
-def _unpack_weight(weight, order):
-    """unpack weight."""
-    weight = _broadcast_pack(weight, 8)
-    weight = weight >> (order * 4)
-    # cast to float16
-    immLut = (0xf0 & 0xcc) | 0xaa
-    BOTTOM_MASK = 0xf
-    I4s_TO_F16s_MAGIC_NUM = 0x6400
-    FP16_TOP_MAGIC_NUM = 0x6400
-    weight = tl.inline_asm_elementwise(
-        """lop3.b32 $1, $1, $2, $3, $4;
-    sub.f16x2 $1, $1, $5;
-    mov.b32 {$0, _}, $1;""",
-        '=h, r, n, n, n, r', [
-            weight, BOTTOM_MASK, I4s_TO_F16s_MAGIC_NUM, immLut,
-            FP16_TOP_MAGIC_NUM
-        ],
-        dtype=tl.float16,
-        is_pure=False,
-        pack=1)
-    return weight
+    w04 = tl.join(w0, w4)
+    w15 = tl.join(w1, w5)
+    w26 = tl.join(w2, w6)
+    w37 = tl.join(w3, w7)
+    w0246 = tl.join(w04, w26)
+    w1357 = tl.join(w15, w37)
+    weight = tl.join(w0246, w1357)
+
+    return weight.reshape(BLOCK_SIZE_K, BLOCK_SIZE_N)
 
 
 @triton.autotune(
     configs=get_cuda_autotune_config(),
-    key=['M_NEXT_P2', 'N', 'K'],
+    key=['N', 'K'],
 )
 @wrap_jit_func
 @triton.jit
@@ -225,12 +113,9 @@ def awq_linear_kernel(
         stride_zk: tl.constexpr,
         stride_zn: tl.constexpr,  #
         stride_cm,
-        stride_ck: tl.constexpr,
         stride_cn: tl.constexpr,
         # Meta-parameters
-        M_NEXT_P2: tl.constexpr,
-        Q_GROUP_SIZE: tl.constexpr,
-        SPLIT_K_ITERS: tl.constexpr,
+        SPLIT_K: tl.constexpr,
         BLOCK_SIZE_M: tl.constexpr,
         BLOCK_SIZE_N: tl.constexpr,
         BLOCK_SIZE_K: tl.constexpr,  #
@@ -239,19 +124,13 @@ def awq_linear_kernel(
     """Kernel for computing the matmul C = A x B.
     A has shape (M, K), B has shape (K, N) and C has shape (M, N)
     """
-    ELEM_PER_INT = 8
-    if Q_GROUP_SIZE > BLOCK_SIZE_K:
-        GROUP_SIZE_K: tl.constexpr = BLOCK_SIZE_K
-    else:
-        GROUP_SIZE_K: tl.constexpr = Q_GROUP_SIZE
-    K_PER_GROUP: tl.constexpr = Q_GROUP_SIZE // GROUP_SIZE_K
 
     # -----------------------------------------------------------
     # Map program ids `pid` to the block of C it should compute.
     # This is done in a grouped ordering to promote L2 data reuse.
     # See above `L2 Cache Optimizations` section for details.
-    pid = tl.program_id(axis=0)
-    split_kid = tl.program_id(axis=1)
+    kid = tl.program_id(axis=0)
+    pid = tl.program_id(axis=1)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
@@ -267,8 +146,7 @@ def awq_linear_kernel(
     offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
     BLOCK_SIZE_QN: tl.constexpr = BLOCK_SIZE_N // 8
     offs_wn = pid_n * BLOCK_SIZE_QN + tl.arange(0, BLOCK_SIZE_QN)
-    offs_k = tl.arange(0, GROUP_SIZE_K)
-    unpacked_order = _get_unpacked_order(offs_bn, ELEM_PER_INT)
+    offs_k = tl.arange(0, BLOCK_SIZE_K)
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am +
                       offs_k[None, :] * stride_ak)
     qw_ptrs = qw_ptr + (offs_k[:, None] * stride_wk +
@@ -276,49 +154,59 @@ def awq_linear_kernel(
     s_ptrs = s_ptr + offs_bn * stride_sn
     qz_ptrs = qz_ptr + offs_wn * stride_zn
 
-    # split k
-    NUM_K_BLOCKS = K // GROUP_SIZE_K
-    K_PER_SPLIT = tl.cdiv(NUM_K_BLOCKS, SPLIT_K_ITERS)
-    k_start = split_kid * K_PER_SPLIT
-    k_last = min(k_start + K_PER_SPLIT, NUM_K_BLOCKS)
-    a_ptrs += k_start * GROUP_SIZE_K * stride_ak
-    qw_ptrs += k_start * GROUP_SIZE_K * stride_wk
-    qg_id = k_start // K_PER_GROUP
-
     # -----------------------------------------------------------
     # Iterate to compute a block of the C matrix.
     # We accumulate into a `[BLOCK_SIZE_M, BLOCK_SIZE_N]` block
     # of fp32 values for higher accuracy.
     # `accumulator` will be converted back to fp16 after the loop.
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
-    s = tl.zeros((1, BLOCK_SIZE_N), dtype=s_ptrs.dtype.element_ty)
-    zs = tl.zeros((1, BLOCK_SIZE_N), dtype=s_ptrs.dtype.element_ty)
+
+    k_start = 0
+    k_last = K // BLOCK_SIZE_K
+    if SPLIT_K > 1:
+        K_PER_CTA = tl.cdiv(k_last, SPLIT_K)
+        k_start = K_PER_CTA * kid
+        k_last = min(k_start + K_PER_CTA, k_last)
+
+    if k_start >= k_last:
+        return
 
     # prefetch
-    next_qw = tl.load(qw_ptrs)
-    qw_ptrs += GROUP_SIZE_K * stride_wk
+    a_ptrs += k_start * BLOCK_SIZE_K * stride_ak
+    qw_ptrs += k_start * BLOCK_SIZE_K * stride_wk
+    s_ptrs += k_start * stride_sk
+    qz_ptrs += k_start * stride_zk
+    qz = tl.load(qz_ptrs)[None, :]
+    qw = tl.load(qw_ptrs)
+    s = tl.load(s_ptrs)[None, :]
+    qw_ptrs += BLOCK_SIZE_K * stride_wk
+    s_ptrs += stride_sk
+    qz_ptrs += stride_zk
 
-    for k in range(k_start, k_last):
-        a = tl.load(a_ptrs)
-        qw = next_qw
-        if k + 1 < k_last:
-            next_qw = tl.load(qw_ptrs)
-        w = _unpack_weight(qw, unpacked_order)
+    for k in tl.range(k_start, k_last, num_stages=3):
 
-        if k == k_start or k % K_PER_GROUP == 0:
-            s = tl.load(s_ptrs + qg_id * stride_sk)[None, :]
-            qz = tl.load(qz_ptrs + qg_id * stride_zk)[None, :]
-            qg_id += 1
-            z = _unpack_weight(qz, unpacked_order)
-            zs = -z * s
+        # unpack b
+        z = _unpack_weight(qz)
+        zs = -z * s
+        w = _unpack_weight(qw)
         b = w * s + zs
 
+        # load a
+        a = tl.load(a_ptrs)
+
+        # load next q
+        qz = tl.load(qz_ptrs, mask=k + 1 < k_last)[None, :]
+        qw = tl.load(qw_ptrs, mask=k + 1 < k_last)
+        s = tl.load(s_ptrs, mask=k + 1 < k_last)[None, :]
+
         # We accumulate along the K dimension.
-        accumulator += tl.dot(a, b)
+        accumulator = tl.dot(a, b, acc=accumulator)
 
         # Advance the ptrs to the next K block.
-        a_ptrs += GROUP_SIZE_K * stride_ak
-        qw_ptrs += GROUP_SIZE_K * stride_wk
+        a_ptrs += BLOCK_SIZE_K * stride_ak
+        qw_ptrs += BLOCK_SIZE_K * stride_wk
+        s_ptrs += stride_sk
+        qz_ptrs += stride_zk
 
     c = accumulator.to(tl.float16)
 
@@ -329,11 +217,11 @@ def awq_linear_kernel(
     c_ptrs = c_ptr + stride_cm * offs_cm[:,
                                          None] + stride_cn * offs_cn[None, :]
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-    if stride_ck > 0:
-        c_ptrs += split_kid * stride_ck
-        tl.store(c_ptrs, c, mask=c_mask)
-    else:
+
+    if SPLIT_K > 1:
         tl.atomic_add(c_ptrs, c, mask=c_mask)
+    else:
+        tl.store(c_ptrs, c, mask=c_mask)
 
 
 def awq_linear(x, qweight, scales, qzeros):
@@ -341,17 +229,24 @@ def awq_linear(x, qweight, scales, qzeros):
     M = x.size(0)
     K = qweight.size(0)
     N = scales.size(1)
-    SPLIT_K_ITERS = 4
     group_size = K // scales.size(0)
+    SPLIT_K = max(1, K // 4096)
 
     def grid(META):
         """grid."""
-        return (triton.cdiv(M, META['BLOCK_SIZE_M']) *
-                triton.cdiv(N, META['BLOCK_SIZE_N']), SPLIT_K_ITERS)
+        return (
+            SPLIT_K,
+            triton.cdiv(M, META['BLOCK_SIZE_M']) *
+            triton.cdiv(N, META['BLOCK_SIZE_N']),
+        )
 
-    out = scales.new_empty(M, SPLIT_K_ITERS, N)
-    M_NEXT_P2 = triton.next_power_of_2(M)
+    if SPLIT_K > 1:
+        out = scales.new_zeros(M, N)
+    else:
+        out = scales.new_empty(M, N)
 
+    BLOCK_SIZE_M = triton.next_power_of_2(M)
+    BLOCK_SIZE_M = max(16, min(128, BLOCK_SIZE_M))
     kernel_meta = get_kernel_meta(x)
     awq_linear_kernel[grid](
         # Pointers to matrices
@@ -373,12 +268,11 @@ def awq_linear(x, qweight, scales, qzeros):
         stride_zk=qzeros.stride(0),
         stride_zn=qzeros.stride(1),  #
         stride_cm=out.stride(0),
-        stride_ck=out.stride(1),
-        stride_cn=out.stride(2),
+        stride_cn=out.stride(1),
         # Meta-parameters
-        M_NEXT_P2=M_NEXT_P2,
-        Q_GROUP_SIZE=group_size,
-        SPLIT_K_ITERS=SPLIT_K_ITERS,
+        BLOCK_SIZE_M=BLOCK_SIZE_M,
+        BLOCK_SIZE_K=group_size,
+        SPLIT_K=SPLIT_K,
         **kernel_meta)
 
-    return out.sum(1)
+    return out
