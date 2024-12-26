@@ -1004,7 +1004,7 @@ def serve(model_path: str,
           proxy_url: Optional[str] = None,
           max_log_len: int = None,
           disable_fastapi_docs: bool = False,
-          max_concurrent_requests: int = None,
+          concurrency_pressure: float = 1.5,
           **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -1049,6 +1049,12 @@ def serve(model_path: str,
         proxy_url (str): The proxy url to register the api_server.
         max_log_len (int): Max number of prompt characters or prompt tokens
             being printed in log. Default: Unlimited
+        concurrency_pressure: This refers to the ratio between the maximum
+            number of concurrent requests and the maximum batch size that
+            the engine can handle. The server is designed to process the
+            engine’s tasks once the maximum number of concurrent requests is
+            reached, regardless of any additional requests sent by clients
+            concurrently during that time. Default to 1.5
     """
     if os.getenv('TM_LOG_LEVEL') is None:
         os.environ['TM_LOG_LEVEL'] = log_level
@@ -1074,8 +1080,8 @@ def serve(model_path: str,
             allow_headers=allow_headers,
         )
     # Set the maximum number of concurrent requests
-    if max_concurrent_requests is None:
-        max_concurrent_requests = backend_config.max_batch_size
+    max_concurrent_requests = int(backend_config.max_batch_size *
+                                  concurrency_pressure)
     app.add_middleware(ConcurrencyLimitMiddleware,
                        max_concurrent_requests=max_concurrent_requests)
 

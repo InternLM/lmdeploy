@@ -139,6 +139,16 @@ class SubCliServe:
                             type=str,
                             default=None,
                             help='The proxy url for api server.')
+        parser.add_argument(
+            '--concurrency-pressure',
+            type=float,
+            default=1.5,
+            help='This refers to the ratio between the maximum'
+            'number of concurrent requests and the maximum batch size that '
+            'the engine can handle. The server is designed to process the '
+            'engine’s tasks once the maximum number of concurrent requests is '
+            'reached, regardless of any additional requests sent by clients '
+            'concurrently during that time. Default to 1.5')
         # common args
         ArgumentHelper.backend(parser)
         ArgumentHelper.log_level(parser)
@@ -352,7 +362,8 @@ class SubCliServe:
                        ssl=args.ssl,
                        proxy_url=args.proxy_url,
                        max_log_len=args.max_log_len,
-                       disable_fastapi_docs=args.disable_fastapi_docs)
+                       disable_fastapi_docs=args.disable_fastapi_docs,
+                       concurrency_pressure=args.concurrency_pressure)
 
     @staticmethod
     def api_client(args):
