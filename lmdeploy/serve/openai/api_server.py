@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.security.http import HTTPAuthorizationCredentials, HTTPBearer
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from lmdeploy.archs import get_task
 from lmdeploy.messages import (GenerationConfig, LogitsProcessor,
@@ -973,6 +974,18 @@ async def startup_event():
         print(f'Service registration failed: {e}')
 
 
+class ConcurrencyLimitMiddleware(BaseHTTPMiddleware):
+
+    def __init__(self, app: FastAPI, max_concurrent_requests: int):
+        super().__init__(app)
+        self.semaphore = asyncio.Semaphore(max_concurrent_requests)
+
+    async def dispatch(self, request: Request, call_next):
+        async with self.semaphore:
+            response = await call_next(request)
+            return response
+
+
 def serve(model_path: str,
           model_name: Optional[str] = None,
           backend: Literal['turbomind', 'pytorch'] = 'turbomind',
@@ -991,6 +1004,7 @@ def serve(model_path: str,
           proxy_url: Optional[str] = None,
           max_log_len: int = None,
           disable_fastapi_docs: bool = False,
+          max_concurrent_requests: int = None,
           **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -1059,6 +1073,12 @@ def serve(model_path: str,
             allow_methods=allow_methods,
             allow_headers=allow_headers,
         )
+    # Set the maximum number of concurrent requests
+    if max_concurrent_requests is None:
+        max_concurrent_requests = backend_config.max_batch_size
+    app.add_middleware(ConcurrencyLimitMiddleware,
+                       max_concurrent_requests=max_concurrent_requests)
+
     if api_keys is not None:
         if isinstance(api_keys, str):
             api_keys = api_keys.split(',')
