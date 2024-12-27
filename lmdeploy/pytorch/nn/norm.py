@@ -39,7 +39,12 @@ class RMSNorm(nn.Module):
             builder = backend.get_layer_impl_builder(OpType.RMSNorm)
         self.register_parameter('weight',
                                 self.create_weight(hidden_size, dtype, device))
-        self.impl = builder.build(hidden_size, eps, quant_dtype=quant_dtype)
+        if w8a8_flag:
+            self.impl = builder.build(hidden_size,
+                                      eps,
+                                      quant_dtype=quant_dtype)
+        else:
+            self.impl = builder.build(hidden_size, eps)
 
     @staticmethod
     def create_weight(hidden_size: int,

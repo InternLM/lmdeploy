@@ -130,7 +130,7 @@ class QLinear(nn.Module):
                     quant_dtype=quant_dtype)
 
         if initialization:
-            weight_quant, scale = per_channel_quant(mod.weight.detach(), 8,
+            weight_quant, scale = per_channel_quant(mod.weight.detach(),
                                                     quant_dtype)
             q_mod.weight.data = weight_quant
             q_mod.scale = scale

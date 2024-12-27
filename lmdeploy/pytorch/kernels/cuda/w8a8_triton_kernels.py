@@ -14,14 +14,13 @@ else:
     tl_round = tl.math.round
 
 
-def per_channel_quant(x: torch.Tensor, n_bits: int, dtype: torch.dtype):
+def per_channel_quant(x: torch.Tensor, dtype: torch.dtype):
     """Quantize the input tensor 'x' channel-wise using the given number of
     bits.
 
     Args:
         x (torch.Tensor): The input tensor to be quantized. Must be a
             2-dimensional tensor.
-        n_bits (int): The number of bits to use for quantization.
         dtype (torch.dtype): The data type to which the quantized tensor should
             be converted.
 
@@ -527,7 +526,7 @@ def test_rms_and_linear(x,
         return F.linear(x, b)
 
     linear_weight_quant, linear_scale = per_channel_quant(
-        linear_weight, 8, quant_dtype)
+        linear_weight, quant_dtype)
 
     rms_out, rms_scale = rms_norm_dynamic_quant(x,
                                                 rms_weight,
@@ -627,7 +626,7 @@ def bench_rms_and_linear(M: int,
             quant_dtype = torch.float8_e5m2
 
         linear_weight_quant, linear_scale = per_channel_quant(
-            linear_weight, 8, quant_dtype)
+            linear_weight, quant_dtype)
 
         alpha = max(x.max().abs(), x.min().abs())
         if quant_dtype.is_floating_point:
