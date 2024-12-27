@@ -126,8 +126,8 @@ def awq_linear_kernel(
     # Map program ids `pid` to the block of C it should compute.
     # This is done in a grouped ordering to promote L2 data reuse.
     # See above `L2 Cache Optimizations` section for details.
-    kid = tl.program_id(axis=0)
-    pid = tl.program_id(axis=1)
+    kid = tl.program_id(axis=1)
+    pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
@@ -175,14 +175,13 @@ def awq_linear_kernel(
 
     for k in tl.range(k_start, k_last, SPLIT_K, num_stages=3):
 
-        # unpack b
-        z = _unpack_weight(qz)
-        zs = -z * s
-        w = _unpack_weight(qw)
-        b = w * s + zs
-
         # load a
         a = tl.load(a_ptrs)
+
+        # unpack b
+        z = _unpack_weight(qz)
+        w = _unpack_weight(qw)
+        b = (w - z) * s
 
         # load next q
         mask = k + SPLIT_K < k_last
@@ -226,9 +225,9 @@ def awq_linear(x, qweight, scales, qzeros):
     def grid(META):
         """grid."""
         return (
-            SPLIT_K,
             triton.cdiv(M, META['BLOCK_SIZE_M']) *
             triton.cdiv(N, META['BLOCK_SIZE_N']),
+            SPLIT_K,
         )
 
     if SPLIT_K > 1:
