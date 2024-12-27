@@ -2,6 +2,8 @@
 import os
 from typing import Optional, Union
 
+import torch
+
 from lmdeploy.archs import get_model_arch
 from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig
 from lmdeploy.utils import get_logger, get_model
@@ -29,6 +31,7 @@ logger = get_logger('lmdeploy')
 
 
 def load_vl_model(model_path: str,
+                  backend: str,
                   with_llm: bool = False,
                   backend_config: Optional[Union[TurbomindEngineConfig,
                                                  PytorchEngineConfig]] = None):
@@ -36,8 +39,9 @@ def load_vl_model(model_path: str,
 
     Args:
         model_path(str): the path or repo_id from model hub of the model
-        with_llm(bool): whether to remove the LLM part from the model.
-            When it is False, it means removing LLM part
+        backend(str): the name of inference backend
+        with_llm(bool): load LLM model or not. Set it to False for VLM
+            inference scenarios and True for VLM quantization
         backend_config: the config of the inference engine
     """
     if not os.path.exists(model_path):
@@ -49,7 +53,6 @@ def load_vl_model(model_path: str,
 
     max_memory = None
     if not with_llm:
-        import torch
         tp = getattr(backend_config, 'tp', 1)
         max_memory = {i: torch.cuda.mem_get_info(i)[0] for i in range(tp)}
 
@@ -57,30 +60,21 @@ def load_vl_model(model_path: str,
     kwargs = dict(model_path=model_path,
                   with_llm=with_llm,
                   max_memory=max_memory,
-                  hf_config=hf_config)
+                  hf_config=hf_config,
+                  backend=backend)
     for name, module in VISION_MODELS.module_dict.items():
         try:
             if module.match(hf_config):
                 logger.info(f'matching vision model: {name}')
-                return module(**kwargs)
-        except Exception:
-            logger.error(f'matching vision model: {name} failed')
+                model = module(**kwargs)
+                model.build_preprocessor()
+                # build the vision part of a VLM model when backend is
+                # turbomind, or load the whole VLM model when `with_llm==True`
+                if backend == 'turbomind' or with_llm:
+                    model.build_model()
+                return model
+        except Exception as e:
+            logger.error(f'build vision model {name} failed, {e}')
             raise
 
     raise ValueError(f'unsupported vl model with config {hf_config}')
-
-
-def vl_model_with_tokenizer(model_path: str, with_llm: bool = True):
-    """load visual model."""
-    vl_model = load_vl_model(model_path, with_llm).vl_model
-    llm = vl_model
-    if hasattr(vl_model, 'language_model'):  # deepseek vl
-        llm = vl_model.language_model
-    if hasattr(vl_model, 'llm'):  # MiniCPMV
-        llm = vl_model.llm
-    llm.config.use_cache = False
-    llm.half().eval()
-    from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained(model_path,
-                                              trust_remote_code=True)
-    return vl_model, llm, tokenizer

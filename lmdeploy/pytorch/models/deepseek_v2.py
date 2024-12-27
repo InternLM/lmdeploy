@@ -90,6 +90,9 @@ class DeepseekV2Attention(nn.Module):
         self.v_head_dim = config.v_head_dim
         self.qk_nope_head_dim = config.qk_nope_head_dim
         self.q_head_dim = config.qk_nope_head_dim + config.qk_rope_head_dim
+        num_replicate_kv_heads = getattr(config,
+                                         'num_replicate_key_value_heads', 1)
+        num_key_value_heads = getattr(config, 'num_key_value_heads', 1)
 
         if self.q_lora_rank is None:
             self.q_proj = build_colwise_linear(
@@ -157,10 +160,9 @@ class DeepseekV2Attention(nn.Module):
             self.num_heads,
             config.kv_lora_rank + self.qk_rope_head_dim,
             scale=self.softmax_scale,
-            num_kv_heads=1,
+            num_kv_heads=num_key_value_heads,
             v_head_size=config.kv_lora_rank,
-            replicate_kv=True,
-        )
+            num_replicate_kv_heads=num_replicate_kv_heads)
 
         self.vc = DeepseekV2BMM(self.num_heads,
                                 config.kv_lora_rank,

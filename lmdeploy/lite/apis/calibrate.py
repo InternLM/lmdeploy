@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 from pathlib import Path
-from typing import Union
+from typing import Literal, Union
 
 import torch
 from torch import nn
@@ -11,6 +11,7 @@ from lmdeploy.archs import get_task
 from lmdeploy.lite.quantization import CalibrationContext, CalibrationContextV2
 from lmdeploy.lite.utils import (collect_target_modules, get_calib_loaders,
                                  load_hf_from_pretrained)
+from lmdeploy.vl.model.builder import load_vl_model
 
 LAYER_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMDecoderLayer',
@@ -204,6 +205,7 @@ def calibrate(model: str,
               w_bits: int = 4,
               w_group_size: int = 128,
               search_scale: bool = False,
+              dtype: Literal['float16', 'bfloat16', 'auto'] = 'auto',
               batch_size: int = 1) -> None:
     """The main function for loading the model and performing calibration on a
     given dataset.
@@ -224,6 +226,7 @@ def calibrate(model: str,
         w_group_size (int): Group size for weight quantization statistics.
         search_scale (bool): Whether search scale ratio. Default to False,
             which means only smooth quant with 0.5 ratio will be applied.
+        dtype (str): Data type for loading model weights and calib infer.
         batch_size (int): The batch size for running the calib samples.
             Low GPU mem requires small batch_size. Large batch_size
             reduces the calibration time while costs more VRAM.
@@ -239,20 +242,35 @@ def calibrate(model: str,
 
     model_type, _ = get_task(model)
     make_compatible_internvl_config(model)
-    if model_type == 'llm':
-        # Load tokenizer and configuration
-        tokenizer = AutoTokenizer.from_pretrained(model,
-                                                  trust_remote_code=True)
 
+    # Load tokenizer and configuration
+    tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=True)
+
+    if model_type == 'llm':
         model = load_hf_from_pretrained(model,
-                                        torch_dtype=torch.float16,
+                                        dtype=dtype,
                                         trust_remote_code=True)
         vl_model = None
     elif model_type == 'vlm':
-        from lmdeploy.vl.model.builder import vl_model_with_tokenizer
-        vl_model, model, tokenizer = vl_model_with_tokenizer(model_path=model)
+        vl_model = load_vl_model(model, backend=None, with_llm=True).vl_model
+        model = vl_model
+        if hasattr(vl_model, 'language_model'):  # deepseek-vl, ...
+            model = vl_model.language_model
+        if hasattr(vl_model, 'llm'):  # MiniCPMV, ...
+            model = vl_model.llm
+        model.config.use_cache = False
+        if dtype == 'float16':
+            model.half()
+        elif dtype == 'bfloat16':
+            assert torch.cuda.is_bf16_supported(
+            ), 'your device does not support bfloat16 please set --dtype float16'  # noqa
+            model.to(torch.bfloat16)
+        elif dtype == 'auto' and model.config.torch_dtype == torch.bfloat16:
+            print('Warning: we cast model to float16 to prevent OOM. You'
+                  ' may enforce it bfloat16 by `--dtype bfloat16`')
+            model.half()
+        model.eval()
 
-    model.config.use_cache = False
     model_type = type(model).__name__
     if model_type not in LAYER_TYPE_MAP or model_type not in NORM_TYPE_MAP:
         raise RuntimeError(

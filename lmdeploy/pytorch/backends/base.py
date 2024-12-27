@@ -12,7 +12,8 @@ from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 
 class OpType(Enum):
     """Layer type enumerate."""
-    Attention = auto()
+    PagedAttention = auto()
+    FlashAttention = auto()
     Linear = auto()
     RotaryEmbedding = auto()
     ApplyRotaryEmb = auto()

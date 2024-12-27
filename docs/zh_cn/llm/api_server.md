@@ -258,6 +258,89 @@ curl http://{server_ip}:{server_port}/v1/chat/interactive \
   }'
 ```
 
+## 同时启动多个 api_server
+
+两步直接启动多机多卡服务。先用下面的代码创建一个启动脚本。然后：
+
+1. 启动代理服务 `lmdeploy serve proxy`。
+2. torchrun 启动脚本 `torchrun --nproc_per_node 2 script.py InternLM/internlm2-chat-1_8b --proxy_url http://{proxy_node_name}:{proxy_node_port}`. **注意**： 多机多卡不要用默认 url `0.0.0.0:8000`，我们需要输入真实ip对应的地址，如：`11.25.34.55:8000`。多机情况下，因为不需要子节点间的通信，所以并不需要用户指定 torchrun 的 `--nnodes` 等参数，只要能保证每个节点执行一次单节点的 torchrun 就行。
+
+```python
+import os
+import socket
+from typing import List, Literal
+
+import fire
+
+
+def get_host_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('8.8.8.8', 80))
+        ip = s.getsockname()[0]
+    finally:
+        s.close()
+    return ip
+
+
+def main(model_path: str,
+         tp: int = 1,
+         proxy_url: str = 'http://0.0.0.0:8000',
+         port: int = 23333,
+         backend: Literal['turbomind', 'pytorch'] = 'turbomind'):
+    local_rank = int(os.environ.get('LOCAL_RANK', -1))
+    world_size = int(os.environ.get('WORLD_SIZE', -1))
+    local_ip = get_host_ip()
+    if isinstance(port, List):
+        assert len(port) == world_size
+        port = port[local_rank]
+    else:
+        port += local_rank * 10
+    if (world_size - local_rank) % tp == 0:
+        rank_list = ','.join([str(local_rank + i) for i in range(tp)])
+        command = f'CUDA_VISIBLE_DEVICES={rank_list} lmdeploy serve api_server {model_path} '\
+                  f'--server-name {local_ip} --server-port {port} --tp {tp} '\
+                  f'--proxy-url {proxy_url} --backend {backend}'
+        print(f'running command: {command}')
+        os.system(command)
+
+
+if __name__ == '__main__':
+    fire.Fire(main)
+```
+
+### 示例
+
+为了进一步展示如何在集群环境中使用多机多卡服务。下面提供一个在火山云的用例：
+
+```shell
+#!/bin/bash
+# 激活 conda 环境
+source /path/to/your/home/miniconda3/bin/activate /path/to/your/home/miniconda3/envs/your_env
+export HOME=/path/to/your/home
+# 获取主节点IP地址（假设 MLP_WORKER_0_HOST 是主节点的IP）
+MASTER_IP=${MLP_WORKER_0_HOST}
+# 检查是否为主节点
+if [ "${MLP_ROLE_INDEX}" -eq 0 ]; then
+    # 启动 lmdeploy serve proxy 并放入后台
+    echo "Starting lmdeploy serve proxy on master node..."
+    PROXY_PORT=8000
+    lmdeploy serve proxy --server-name ${MASTER_IP} --server-port ${PROXY_PORT} &
+else
+    # 这里我们默认调度平台同时启动了所有机器，否则要sleep一会，等待 proxy 启动成功
+    echo "Not starting lmdeploy serve proxy on worker node ${MLP_ROLE_INDEX}."
+fi
+# 启动 torchrun 并放入后台
+# 再次强调多机环境下并不需要传--nnodes 或者 --master-addr 等参数，相当于每个机器上执行一次单节点的 torchrun 即可。
+torchrun \
+--nproc_per_node=${MLP_WORKER_GPU} \
+/path/to/script.py \
+InternLM/internlm2-chat-1_8b 8 http://${MASTER_IP}:${PROXY_PORT}
+# 打印主机的IP地址
+echo "Host IP addresses:"
+hostname -I
+```
+
 ## 接入 WebUI
 
 LMDeploy 提供 gradio 和 [OpenAOE](https://github.com/InternLM/OpenAOE) 两种方式，为 api_server 接入 WebUI。

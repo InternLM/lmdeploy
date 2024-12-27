@@ -377,15 +377,17 @@ def main():
     requests = sample_requests(args.dataset, args.num_prompts,
                                engine.tokenizer)
 
-    engine.process_request(requests,
-                           temperature=args.temperature,
-                           top_p=args.top_p,
-                           top_k=args.top_k,
-                           concurrency=args.concurrency,
-                           stream_output=not args.no_stream_output,
-                           skip_tokenize=args.skip_tokenize,
-                           skip_detokenize=args.skip_detokenize,
-                           cancel_rate=args.cancel_rate)
+    engine.process_request(
+        requests,
+        temperature=args.temperature,
+        top_p=args.top_p,
+        top_k=args.top_k,
+        concurrency=args.concurrency
+        if args.concurrency < args.num_prompts else args.num_prompts,
+        stream_output=not args.no_stream_output,
+        skip_tokenize=args.skip_tokenize,
+        skip_detokenize=args.skip_detokenize,
+        cancel_rate=args.cancel_rate)
 
 
 if __name__ == '__main__':

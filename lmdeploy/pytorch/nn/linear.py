@@ -12,7 +12,7 @@ from lmdeploy.utils import get_logger
 
 from ..backends import OpType, get_backend
 from ..backends.lora import AdapterInfo
-from .utils import div_up, get_distribute_size
+from .utils import get_distribute_size
 
 logger = get_logger('lmdeploy')
 
@@ -32,9 +32,11 @@ def _chunk_align(weight: torch.Tensor, chunks: int, dim: int, align: int):
     size = weight.size(dim)
     assert size % align == 0
     aligned_size = size // align
-    align_per_chunk = div_up(aligned_size, chunks)
-    sections = [align_per_chunk] * (chunks - 1)
-    sections += [aligned_size - align_per_chunk * (chunks - 1)]
+
+    # try best to evenly split chunks
+    align_per_chunk = aligned_size // chunks
+    remain = aligned_size % chunks
+    sections = [align_per_chunk + int(c < remain) for c in range(chunks)]
     sections = [sec * align for sec in sections]
     return weight.split(sections, dim=dim)
 
@@ -42,20 +44,24 @@ def _chunk_align(weight: torch.Tensor, chunks: int, dim: int, align: int):
 class QKVMixin:
     """qkv mixin."""
 
-    def _get_qkv_out_features(self, num_q_heads: int, num_kv_heads: int,
-                              head_size: int, head_size_v: int):
+    def _get_qkv_out_features(self,
+                              num_q_heads: int,
+                              num_kv_heads: int,
+                              head_size: int,
+                              head_size_v: int,
+                              num_replicate_kv_heads: int = 1):
         """get io features."""
-        all_out_features = (num_q_heads * head_size, num_kv_heads * head_size,
-                            num_kv_heads * head_size_v)
+        num_kv_heads_real = num_kv_heads // num_replicate_kv_heads
+        all_out_features = (num_q_heads * head_size,
+                            num_kv_heads_real * head_size,
+                            num_kv_heads_real * head_size_v)
         return all_out_features
 
-    def _update_num_heads(self, num_q_heads: int, num_kv_heads: int,
-                          replicate_kv: bool):
+    def _update_num_heads(self, num_q_heads: int, num_kv_heads: int):
         """update num heads."""
         world_size, rank = get_world_rank()
         num_q_heads = get_distribute_size(num_q_heads, world_size, rank)
-        if not replicate_kv:
-            num_kv_heads = get_distribute_size(num_kv_heads, world_size, rank)
+        num_kv_heads = get_distribute_size(num_kv_heads, world_size, rank)
 
         return num_q_heads, num_kv_heads
 
@@ -212,7 +218,7 @@ class AwqLinear(nn.Module):
         self.out_features = out_features
         self.w_bit = w_bit
         self.group_size = group_size
-        self.elem_per_int = 32 // self.w_bit
+        self.elem_per_int = 32 // w_bit
         self.lora_adapters = nn.ModuleDict()
         self.is_tp = is_tp
         self.colwise = colwise
@@ -363,12 +369,9 @@ class MergedAwqLinear(AwqLinear):
                  w_bit: int,
                  group_size: int,
                  bias: bool,
-                 replicate: Optional[List[bool]] = None,
                  device: Optional[torch.device] = None,
                  is_tp: bool = True,
                  out_names: Optional[List[int]] = None):
-        if replicate is None:
-            replicate = tuple(False for _ in all_out_features)
 
         self.split_section_s = all_out_features
         elem_per_int = 32 // w_bit
@@ -377,9 +380,8 @@ class MergedAwqLinear(AwqLinear):
         ]
 
         all_out_features = self._update_all_out_features(
-            all_out_features, w_bit, group_size, replicate)
+            all_out_features, w_bit, group_size)
         self.all_out_features = all_out_features
-        self.replicate = replicate
         if out_names is None:
             out_names = torch.arange(len(self.all_out_features)).tolist()
         assert len(out_names) == len(self.all_out_features)
@@ -414,15 +416,12 @@ class MergedAwqLinear(AwqLinear):
         return in_features, out_features
 
     def _update_all_out_features(self, all_out_features: List[int], w_bit: int,
-                                 group_size: int,
-                                 replicate: Optional[List[bool]]):
+                                 group_size: int):
         """update all out features."""
         world_size, rank = get_world_rank()
         new_all_out_features = []
         align = max(32 // w_bit, group_size)
-        for out_feat, rep in zip(all_out_features, replicate):
-            if rep:
-                new_all_out_features.append(out_feat)
+        for out_feat in all_out_features:
             new_out_feat = get_distribute_size(out_feat, world_size, rank,
                                                align)
             new_all_out_features.append(new_out_feat)
@@ -433,14 +432,11 @@ class MergedAwqLinear(AwqLinear):
         """weight loader."""
         world_size, rank = get_world_rank()
         shard_idx = self.out_names_map[shard_id]
-
         if loaded_weight.dim() == 1:
             # bias
             align = max(self.elem_per_int, self.group_size)
             param_w = param.data.split(self.all_out_features, 0)[shard_idx]
-            if not self.replicate[shard_idx]:
-                weight = _chunk_align(loaded_weight, world_size, 0,
-                                      align)[rank]
+            weight = _chunk_align(loaded_weight, world_size, 0, align)[rank]
             param_w.copy_(weight)
 
         if param._weight_type in ['scales', 'bias']:
@@ -456,8 +452,7 @@ class MergedAwqLinear(AwqLinear):
             ]
             param_w = param.data.split(quanted_out_feats, 1)[shard_idx]
 
-        if not self.replicate[shard_idx]:
-            weight = _chunk_align(loaded_weight, world_size, -1, align)[rank]
+        weight = _chunk_align(loaded_weight, world_size, -1, align)[rank]
         param_w.copy_(weight)
 
     def weight_spliter_wz(self, loaded_weight: torch.Tensor):
@@ -480,44 +475,81 @@ class QKVAwqLinear(MergedAwqLinear, QKVMixin):
                  head_size_v: int,
                  w_bit: int,
                  group_size: int,
-                 replicate_kv: bool = False,
                  bias: bool = False,
                  device: Optional[torch.device] = None,
-                 is_tp: bool = True):
+                 is_tp: bool = True,
+                 num_replicate_kv_heads: int = 1):
 
         self.qkv_split_section_s = self._get_qkv_out_features(
-            num_q_heads, num_kv_heads, head_size, head_size_v)
+            num_q_heads, num_kv_heads, head_size, head_size_v,
+            num_replicate_kv_heads)
         elem_per_int = 32 // w_bit
         self.qkv_split_section_wz = [
             size // elem_per_int for size in self.qkv_split_section_s
         ]
 
         num_q_heads, num_kv_heads = self._update_num_heads(
-            num_q_heads, num_kv_heads, replicate_kv)
+            num_q_heads, num_kv_heads)
         all_out_features = self._get_qkv_out_features(num_q_heads,
                                                       num_kv_heads, head_size,
                                                       head_size_v)
-        replicate = (False, replicate_kv, replicate_kv)
         out_names = ('q', 'k', 'v')
         self.num_q_heads = num_q_heads
         self.num_kv_heads = num_kv_heads
         self.head_size = head_size
         self.head_size_v = head_size_v
+        self.num_replicate_kv_heads = num_replicate_kv_heads
+
         super().__init__(in_features,
                          all_out_features,
                          w_bit=w_bit,
                          group_size=group_size,
                          bias=bias,
-                         replicate=replicate,
                          device=device,
                          is_tp=is_tp,
                          out_names=out_names)
 
     def _update_all_out_features(self, all_out_features: List[int], w_bit: int,
-                                 group_size: int,
-                                 replicate: Optional[List[bool]]):
+                                 group_size: int):
         """update all out features."""
         return all_out_features
+
+    def weight_loader(self, param: torch.nn.Parameter,
+                      loaded_weight: torch.Tensor, shard_id: Any):
+        """weight loader."""
+        world_size, rank = get_world_rank()
+        chunk_size, chunk_idx = world_size, rank
+        shard_idx = self.out_names_map[shard_id]
+
+        if self.num_replicate_kv_heads > 1 and shard_id in ['k', 'v']:
+            # update to duplicate k/v for tp_size > num_kv_heads
+            chunk_size = world_size // self.num_replicate_kv_heads
+            chunk_idx = rank // self.num_replicate_kv_heads
+
+        if loaded_weight.dim() == 1:
+            # bias
+            align = max(self.elem_per_int, self.group_size)
+            param_w = param.data.split(self.all_out_features, 0)[shard_idx]
+            weight = _chunk_align(loaded_weight, chunk_size, 0,
+                                  align)[chunk_idx]
+            param_w.copy_(weight)
+            return
+
+        if param._weight_type in ['scales', 'bias']:
+            # scales
+            align = max(self.elem_per_int, self.group_size)
+            param_w = param.data.split(self.all_out_features, -1)[shard_idx]
+        else:
+            # qweight or qzeros
+            align = max(self.elem_per_int,
+                        self.group_size) // self.elem_per_int
+            quanted_out_feats = [
+                feat // self.elem_per_int for feat in self.all_out_features
+            ]
+            param_w = param.data.split(quanted_out_feats, 1)[shard_idx]
+
+        weight = _chunk_align(loaded_weight, chunk_size, -1, align)[chunk_idx]
+        param_w.copy_(weight)
 
     def weight_spliter_wz(self,
                           loaded_weight: torch.Tensor,
@@ -710,18 +742,13 @@ class MergedW8A8Linear(W8A8Linear):
                  in_features: int,
                  all_out_features: List[int],
                  bias: bool,
-                 replicate: Optional[List[bool]] = None,
                  dtype: Optional[torch.dtype] = None,
                  device: Optional[torch.device] = None,
                  is_tp: bool = True,
                  out_names: Optional[List[int]] = None):
-        if replicate is None:
-            replicate = tuple(False for _ in all_out_features)
         self.split_section = all_out_features
-        all_out_features = self._update_all_out_features(
-            all_out_features, replicate)
+        all_out_features = self._update_all_out_features(all_out_features)
         self.all_out_features = all_out_features
-        self.replicate = replicate
         if out_names is None:
             out_names = torch.arange(len(self.all_out_features)).tolist()
         assert len(out_names) == len(self.all_out_features)
@@ -748,14 +775,11 @@ class MergedW8A8Linear(W8A8Linear):
         """get io features."""
         return in_features, out_features
 
-    def _update_all_out_features(self, all_out_features: List[int],
-                                 replicate: Optional[List[bool]]):
+    def _update_all_out_features(self, all_out_features: List[int]):
         """update all out features."""
         world_size, rank = get_world_rank()
         new_all_out_features = []
-        for out_feat, rep in zip(all_out_features, replicate):
-            if rep:
-                new_all_out_features.append(out_feat)
+        for out_feat in all_out_features:
             new_out_feat = get_distribute_size(out_feat, world_size, rank)
             new_all_out_features.append(new_out_feat)
         return new_all_out_features
@@ -766,8 +790,7 @@ class MergedW8A8Linear(W8A8Linear):
         world_size, rank = get_world_rank()
         shard_idx = self.out_names_map[shard_id]
         param_w = param.data.split(self.all_out_features, 0)[shard_idx]
-        if not self.replicate[shard_idx]:
-            loaded_weight = loaded_weight.chunk(world_size, 0)[rank]
+        loaded_weight = loaded_weight.chunk(world_size, 0)[rank]
         param_w.copy_(loaded_weight)
 
     def weight_spliter(self, loaded_weight: torch.Tensor):
@@ -787,37 +810,56 @@ class QKVW8A8Linear(MergedW8A8Linear, QKVMixin):
                  num_kv_heads: int,
                  head_size: int,
                  head_size_v: int,
-                 replicate_kv: bool = False,
                  bias: bool = False,
                  dtype: Optional[torch.dtype] = None,
                  device: Optional[torch.device] = None,
-                 is_tp: bool = True):
+                 is_tp: bool = True,
+                 num_replicate_kv_heads: int = 1):
         self.qkv_split_section = self._get_qkv_out_features(
-            num_q_heads, num_kv_heads, head_size, head_size_v)
+            num_q_heads, num_kv_heads, head_size, head_size_v,
+            num_replicate_kv_heads)
         num_q_heads, num_kv_heads = self._update_num_heads(
-            num_q_heads, num_kv_heads, replicate_kv)
+            num_q_heads, num_kv_heads)
         all_out_features = self._get_qkv_out_features(num_q_heads,
                                                       num_kv_heads, head_size,
                                                       head_size_v)
-        replicate = (False, replicate_kv, replicate_kv)
         out_names = ('q', 'k', 'v')
         self.num_q_heads = num_q_heads
         self.num_kv_heads = num_kv_heads
         self.head_size = head_size
         self.head_size_v = head_size_v
+        self.num_replicate_kv_heads = num_replicate_kv_heads
         super().__init__(in_features,
                          all_out_features,
                          bias=bias,
-                         replicate=replicate,
                          dtype=dtype,
                          device=device,
                          is_tp=is_tp,
                          out_names=out_names)
 
-    def _update_all_out_features(self, all_out_features: List[int],
-                                 replicate: Optional[List[bool]]):
+    def _update_all_out_features(self, all_out_features: List[int]):
         """update all out features."""
         return all_out_features
+
+    def weight_loader(self, param: torch.nn.Parameter,
+                      loaded_weight: torch.Tensor, shard_id: Any):
+        """weight loader."""
+        _, rank = get_world_rank()
+        shard_idx = self.out_names_map[shard_id]
+        param_w = param.data.split(self.all_out_features, 0)[shard_idx]
+        num_head = self.num_q_heads if shard_id == 'q' \
+            else self.num_kv_heads
+        head_dim = self.head_size if shard_id in ['q', 'k'] \
+            else self.head_size_v
+        # update to duplicate k/v for tp_size > num_kv_heads
+        rank_idx = rank if shard_id == 'q' \
+            else rank // self.num_replicate_kv_heads
+        sec_start = rank_idx * num_head * head_dim
+        sec_len = num_head * head_dim
+        loaded_weight = loaded_weight.narrow(dim=0,
+                                             start=sec_start,
+                                             length=sec_len)
+        param_w.copy_(loaded_weight)
 
     def weight_spliter(self,
                        loaded_weight: torch.Tensor,
@@ -986,18 +1028,13 @@ class MergedBaseLinear(BaseLinear):
                  in_features: int,
                  all_out_features: List[int],
                  bias: bool,
-                 replicate: Optional[List[bool]] = None,
                  dtype: Optional[torch.dtype] = None,
                  device: Optional[torch.device] = None,
                  is_tp: bool = True,
                  out_names: Optional[List[int]] = None):
-        if replicate is None:
-            replicate = tuple(False for _ in all_out_features)
         self.split_section = all_out_features
-        all_out_features = self._update_all_out_features(
-            all_out_features, replicate)
+        all_out_features = self._update_all_out_features(all_out_features)
         self.all_out_features = all_out_features
-        self.replicate = replicate
         if out_names is None:
             out_names = torch.arange(len(self.all_out_features)).tolist()
         assert len(out_names) == len(self.all_out_features)
@@ -1022,14 +1059,11 @@ class MergedBaseLinear(BaseLinear):
         """get io features."""
         return in_features, out_features
 
-    def _update_all_out_features(self, all_out_features: List[int],
-                                 replicate: Optional[List[bool]]):
+    def _update_all_out_features(self, all_out_features: List[int]):
         """update all out features."""
         world_size, rank = get_world_rank()
         new_all_out_features = []
-        for out_feat, rep in zip(all_out_features, replicate):
-            if rep:
-                new_all_out_features.append(out_feat)
+        for out_feat in all_out_features:
             new_out_feat = get_distribute_size(out_feat, world_size, rank)
             new_all_out_features.append(new_out_feat)
         return new_all_out_features
@@ -1040,8 +1074,7 @@ class MergedBaseLinear(BaseLinear):
         world_size, rank = get_world_rank()
         shard_idx = self.out_names_map[shard_id]
         param_w = param.data.split(self.all_out_features, 0)[shard_idx]
-        if not self.replicate[shard_idx]:
-            loaded_weight = loaded_weight.chunk(world_size, 0)[rank]
+        loaded_weight = loaded_weight.chunk(world_size, 0)[rank]
         param_w.copy_(loaded_weight)
 
     def weight_spliter(self, loaded_weight: torch.Tensor):
@@ -1061,35 +1094,36 @@ class QKVBaseLinear(MergedBaseLinear, QKVMixin):
                  num_kv_heads: int,
                  head_size: int,
                  head_size_v: int,
-                 replicate_kv: bool = False,
                  bias: bool = False,
                  dtype: Optional[torch.dtype] = None,
                  device: Optional[torch.device] = None,
-                 is_tp: bool = True):
+                 is_tp: bool = True,
+                 num_replicate_kv_heads: int = 1):
+
         self.qkv_split_section = self._get_qkv_out_features(
-            num_q_heads, num_kv_heads, head_size, head_size_v)
+            num_q_heads, num_kv_heads, head_size, head_size_v,
+            num_replicate_kv_heads)
         num_q_heads, num_kv_heads = self._update_num_heads(
-            num_q_heads, num_kv_heads, replicate_kv)
+            num_q_heads, num_kv_heads)
         all_out_features = self._get_qkv_out_features(num_q_heads,
                                                       num_kv_heads, head_size,
                                                       head_size_v)
-        replicate = (False, replicate_kv, replicate_kv)
         out_names = ('q', 'k', 'v')
         self.num_q_heads = num_q_heads
         self.num_kv_heads = num_kv_heads
         self.head_size = head_size
         self.head_size_v = head_size_v
+        self.num_replicate_kv_heads = num_replicate_kv_heads
+
         super().__init__(in_features,
                          all_out_features,
                          bias=bias,
-                         replicate=replicate,
                          dtype=dtype,
                          device=device,
                          is_tp=is_tp,
                          out_names=out_names)
 
-    def _update_all_out_features(self, all_out_features: List[int],
-                                 replicate: Optional[List[bool]]):
+    def _update_all_out_features(self, all_out_features: List[int]):
         """update all out features."""
         return all_out_features
 
@@ -1097,15 +1131,20 @@ class QKVBaseLinear(MergedBaseLinear, QKVMixin):
                       loaded_weight: torch.Tensor, shard_id: Any):
         """weight loader."""
         world_size, rank = get_world_rank()
+        chunk_size, chunk_idx = world_size, rank
         shard_idx = self.out_names_map[shard_id]
         param_w = param.data.split(self.all_out_features, 0)[shard_idx]
-        if not self.replicate[shard_idx]:
-            if shard_idx in [0, 1]:
-                loaded_weight = _chunk_align(loaded_weight, world_size, 0,
-                                             self.head_size)[rank]
-            if shard_idx == 2:
-                loaded_weight = _chunk_align(loaded_weight, world_size, 0,
-                                             self.head_size_v)[rank]
+
+        if self.num_replicate_kv_heads > 1 and shard_id in ['k', 'v']:
+            # update to duplicate k/v for tp_size > num_kv_heads
+            chunk_size = world_size // self.num_replicate_kv_heads
+            chunk_idx = rank // self.num_replicate_kv_heads
+        if shard_idx in [0, 1]:
+            loaded_weight = _chunk_align(loaded_weight, chunk_size, 0,
+                                         self.head_size)[chunk_idx]
+        elif shard_idx == 2:
+            loaded_weight = _chunk_align(loaded_weight, chunk_size, 0,
+                                         self.head_size_v)[chunk_idx]
         param_w.copy_(loaded_weight)
 
     def weight_spliter(self,
@@ -1291,12 +1330,12 @@ def build_qkv_proj(in_features: int,
                    num_kv_heads: int,
                    head_size: int,
                    head_size_v: int = None,
-                   replicate_kv: bool = False,
                    bias: bool = False,
                    quant_config: Any = None,
                    dtype: Optional[torch.dtype] = None,
                    device: Optional[torch.device] = None,
-                   is_tp: bool = True):
+                   is_tp: bool = True,
+                   num_replicate_kv_heads: int = 1):
     """build qkv proj."""
     if is_tp:
         world_size, _ = get_world_rank()
@@ -1306,48 +1345,42 @@ def build_qkv_proj(in_features: int,
         head_size_v = head_size
 
     if quant_config is None:
-        return QKVBaseLinear(
-            in_features=in_features,
-            num_q_heads=num_q_heads,
-            num_kv_heads=num_kv_heads,
-            head_size=head_size,
-            head_size_v=head_size_v,
-            replicate_kv=replicate_kv,
-            bias=bias,
-            dtype=dtype,
-            device=device,
-            is_tp=is_tp,
-        )
+        return QKVBaseLinear(in_features=in_features,
+                             num_q_heads=num_q_heads,
+                             num_kv_heads=num_kv_heads,
+                             head_size=head_size,
+                             head_size_v=head_size_v,
+                             bias=bias,
+                             dtype=dtype,
+                             device=device,
+                             is_tp=is_tp,
+                             num_replicate_kv_heads=num_replicate_kv_heads)
 
     quant_method = quant_config['quant_method']
     if quant_method == 'awq':
         w_bit = quant_config.get('bits', 4)
         group_size = quant_config.get('group_size', 128)
-        return QKVAwqLinear(
-            in_features=in_features,
-            num_q_heads=num_q_heads,
-            num_kv_heads=num_kv_heads,
-            head_size=head_size,
-            head_size_v=head_size_v,
-            replicate_kv=replicate_kv,
-            w_bit=w_bit,
-            group_size=group_size,
-            bias=bias,
-            device=device,
-            is_tp=is_tp,
-        )
+        return QKVAwqLinear(in_features=in_features,
+                            num_q_heads=num_q_heads,
+                            num_kv_heads=num_kv_heads,
+                            head_size=head_size,
+                            head_size_v=head_size_v,
+                            w_bit=w_bit,
+                            group_size=group_size,
+                            bias=bias,
+                            device=device,
+                            is_tp=is_tp,
+                            num_replicate_kv_heads=num_replicate_kv_heads)
     if quant_method == 'smooth_quant':
-        return QKVW8A8Linear(
-            in_features=in_features,
-            num_q_heads=num_q_heads,
-            num_kv_heads=num_kv_heads,
-            head_size=head_size,
-            head_size_v=head_size_v,
-            replicate_kv=replicate_kv,
-            bias=bias,
-            dtype=dtype,
-            device=device,
-            is_tp=is_tp,
-        )
+        return QKVW8A8Linear(in_features=in_features,
+                             num_q_heads=num_q_heads,
+                             num_kv_heads=num_kv_heads,
+                             head_size=head_size,
+                             head_size_v=head_size_v,
+                             bias=bias,
+                             dtype=dtype,
+                             device=device,
+                             is_tp=is_tp,
+                             num_replicate_kv_heads=num_replicate_kv_heads)
     else:
         raise RuntimeError(f'Unsupported quant method: {quant_method}')

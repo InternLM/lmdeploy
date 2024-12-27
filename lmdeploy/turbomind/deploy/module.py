@@ -191,7 +191,7 @@ class Attn(Module):
         self.attn_bias = model.model_config.attn_bias
 
     def _reorder_and_merge(self, qkvo):
-        q, k, v, o = map(transpose, qkvo)
+        q, k, v, o = qkvo
         # reorder output dim for tm's rotary embedding layout
         if self.model.permute_qk:
             q = permute_v2(q, self.head_dim)
@@ -202,6 +202,27 @@ class Attn(Module):
             o = torch.zeros_like(q)
         return qkv, o
 
+    def _repeat_kv(self, qkvo, kind: str):
+        """replicate kv."""
+        q, k, v, o = qkvo
+        head_dim = self.model.model_config.size_per_head
+        hidden_dim = self.model.model_config.hidden_units
+
+        def _repeat(x):
+            dim = hidden_dim if kind != 'bias' else 1
+            x = x.reshape(dim, -1, head_dim)
+            x = x.repeat(1, 1, self.model.repeat_kv)
+            x = x.reshape(dim, -1)
+            return x
+
+        k, v = map(_repeat, (k, v))
+        if kind == 'bias':
+            if o is None:
+                o = torch.zeros(hidden_dim, dtype=q.dtype, device=q.device)
+            q, k, v, o = map(torch.squeeze, (q, k, v, o))
+
+        return (q, k, v, o)
+
     def _export(self, idx: int, qkvo, kind: str, pack_fn, **kwargs):
         if all(x is None for x in qkvo):
             return
@@ -209,6 +230,9 @@ class Attn(Module):
         if is_lora_a:
             qkv, o = map(transpose, qkvo)
         else:
+            qkvo = tuple(map(transpose, qkvo))
+            if self.model.repeat_kv:
+                qkvo = self._repeat_kv(qkvo, kind)
             qkv, o = self._reorder_and_merge(qkvo)
         self.model.save_split(pack_fn(qkv),
                               self._attn.format(idx, 'w_qkv', kind),
