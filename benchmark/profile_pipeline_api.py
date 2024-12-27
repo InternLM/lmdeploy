@@ -69,14 +69,14 @@ class Engine:
     def process_request(self, requests, concurrency, temperature, top_p, top_k,
                         stream_output):
 
-        stats = OrderedDict(
-            (session_id, None) for session_id in range(len(requests)))
+        stats = OrderedDict((index, None) for index in range(len(requests)))
         prompts = [prompt for prompt, _, _ in requests]
         gen_configs = [
             GenerationConfig(temperature=temperature,
                              top_p=top_p,
                              top_k=top_k,
                              ignore_eos=True,
+                             do_sample=True,
                              max_new_tokens=output_len)
             for _, _, output_len in requests
         ]
@@ -87,10 +87,10 @@ class Engine:
             for output in self.pipe.stream_infer(prompts,
                                                  gen_configs,
                                                  do_preprocess=False):
-                session_id = output.session_id
+                index = output.index
                 n_token = output.generate_token_len
                 finish_reason = output.finish_reason
-                stats[session_id] = (n_token, finish_reason)
+                stats[index] = (n_token, finish_reason)
                 if finish_reason is not None:
                     pbar.update(1)
         else:
@@ -98,20 +98,20 @@ class Engine:
                                     gen_configs,
                                     do_preprocess=False,
                                     use_tqdm=True):
-                session_id = output.session_id
+                index = output.index
                 n_token = output.generate_token_len
                 finish_reason = output.finish_reason
-                stats[session_id] = (n_token, finish_reason)
+                stats[index] = (n_token, finish_reason)
 
         elapsed_time = time.perf_counter() - start
 
         completion_tokens = 0
-        for session_id, (n_token, finish_reason) in stats.items():
+        for index, (n_token, finish_reason) in stats.items():
             assert finish_reason == 'length', \
-                f'unexpected finish_reason of session_id={session_id}, ' \
-                f'prompt={requests[session_id][0]}'
-            assert n_token - 1 <= requests[session_id][-1] <= n_token, \
-                f'request to generate {requests[session_id][-1]} tokens, ' \
+                f'unexpected finish_reason of index={index}, ' \
+                f'prompt={requests[index][0]}'
+            assert n_token - 1 <= requests[index][-1] <= n_token, \
+                f'request to generate {requests[index][-1]} tokens, ' \
                 f'but got {n_token} tokens'
             completion_tokens += n_token
 

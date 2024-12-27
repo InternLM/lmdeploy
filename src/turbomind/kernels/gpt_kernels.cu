@@ -315,7 +315,7 @@ void invokeTranspose2D_(T* dst, const T* src, int rows, int cols, cudaStream_t s
     dim3 grid((cols + TILE_DIM - 1) / TILE_DIM,  //
               (rows + TILE_DIM - 1) / TILE_DIM);
     bool swap_xy = false;
-    
+
     if (grid.y > 65535) {  // max dim for grid.y
         std::swap(grid.x, grid.y);
         swap_xy = true;
