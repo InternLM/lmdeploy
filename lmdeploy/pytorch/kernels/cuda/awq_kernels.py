@@ -2,8 +2,6 @@
 import triton
 from triton import language as tl
 
-from .triton_utils import get_kernel_meta, wrap_jit_func
-
 
 def get_cuda_autotune_config():
     return [
@@ -93,7 +91,6 @@ def _unpack_weight(weight):
     configs=get_cuda_autotune_config(),
     key=['N', 'K'],
 )
-@wrap_jit_func
 @triton.jit
 def awq_linear_kernel(
         a_ptr,
@@ -161,29 +158,22 @@ def awq_linear_kernel(
     # `accumulator` will be converted back to fp16 after the loop.
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
-    k_start = 0
+    k_start = kid
     k_last = K // BLOCK_SIZE_K
-    if SPLIT_K > 1:
-        K_PER_CTA = tl.cdiv(k_last, SPLIT_K)
-        k_start = K_PER_CTA * kid
-        k_last = min(k_start + K_PER_CTA, k_last)
-
-    if k_start >= k_last:
-        return
 
     # prefetch
     a_ptrs += k_start * BLOCK_SIZE_K * stride_ak
     qw_ptrs += k_start * BLOCK_SIZE_K * stride_wk
     s_ptrs += k_start * stride_sk
     qz_ptrs += k_start * stride_zk
-    qz = tl.load(qz_ptrs)[None, :]
     qw = tl.load(qw_ptrs)
+    qz = tl.load(qz_ptrs)[None, :]
     s = tl.load(s_ptrs)[None, :]
-    qw_ptrs += BLOCK_SIZE_K * stride_wk
-    s_ptrs += stride_sk
-    qz_ptrs += stride_zk
+    qw_ptrs += SPLIT_K * BLOCK_SIZE_K * stride_wk
+    s_ptrs += SPLIT_K * stride_sk
+    qz_ptrs += SPLIT_K * stride_zk
 
-    for k in tl.range(k_start, k_last, num_stages=3):
+    for k in tl.range(k_start, k_last, SPLIT_K, num_stages=3):
 
         # unpack b
         z = _unpack_weight(qz)
@@ -195,18 +185,19 @@ def awq_linear_kernel(
         a = tl.load(a_ptrs)
 
         # load next q
-        qz = tl.load(qz_ptrs, mask=k + 1 < k_last)[None, :]
-        qw = tl.load(qw_ptrs, mask=k + 1 < k_last)
-        s = tl.load(s_ptrs, mask=k + 1 < k_last)[None, :]
+        mask = k + SPLIT_K < k_last
+        qz = tl.load(qz_ptrs, mask=mask)[None, :]
+        s = tl.load(s_ptrs, mask=mask)[None, :]
+        qw = tl.load(qw_ptrs, mask=mask)
 
         # We accumulate along the K dimension.
         accumulator = tl.dot(a, b, acc=accumulator)
 
         # Advance the ptrs to the next K block.
-        a_ptrs += BLOCK_SIZE_K * stride_ak
-        qw_ptrs += BLOCK_SIZE_K * stride_wk
-        s_ptrs += stride_sk
-        qz_ptrs += stride_zk
+        a_ptrs += SPLIT_K * BLOCK_SIZE_K * stride_ak
+        qw_ptrs += SPLIT_K * BLOCK_SIZE_K * stride_wk
+        s_ptrs += SPLIT_K * stride_sk
+        qz_ptrs += SPLIT_K * stride_zk
 
     c = accumulator.to(tl.float16)
 
@@ -219,7 +210,7 @@ def awq_linear_kernel(
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
 
     if SPLIT_K > 1:
-        tl.atomic_add(c_ptrs, c, mask=c_mask)
+        tl.atomic_add(c_ptrs, c, mask=c_mask, sem='relaxed', scope='gpu')
     else:
         tl.store(c_ptrs, c, mask=c_mask)
 
@@ -247,7 +238,6 @@ def awq_linear(x, qweight, scales, qzeros):
 
     BLOCK_SIZE_M = triton.next_power_of_2(M)
     BLOCK_SIZE_M = max(16, min(128, BLOCK_SIZE_M))
-    kernel_meta = get_kernel_meta(x)
     awq_linear_kernel[grid](
         # Pointers to matrices
         x,
@@ -273,6 +263,6 @@ def awq_linear(x, qweight, scales, qzeros):
         BLOCK_SIZE_M=BLOCK_SIZE_M,
         BLOCK_SIZE_K=group_size,
         SPLIT_K=SPLIT_K,
-        **kernel_meta)
+    )
 
     return out
