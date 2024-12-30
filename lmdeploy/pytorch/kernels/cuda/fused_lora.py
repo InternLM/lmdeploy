@@ -9,8 +9,8 @@ def get_autotune_config():
     return [
         triton.Config(
             {
-                'BLOCK_SIZE_M': 64,
-                'BLOCK_SIZE_N': 256,
+                'BLOCK_SIZE_M': 32,
+                'BLOCK_SIZE_N': 128,
                 'BLOCK_SIZE_K': 128
             },
             num_stages=4,
@@ -43,6 +43,8 @@ def _atomic_store(ptrs, val, mask):
 @triton.autotune(
     configs=get_autotune_config(),
     key=['N', 'K'],
+    warmup=5,
+    rep=20,
 )
 @triton.jit
 def _fused_lora_kernel(
@@ -58,13 +60,13 @@ def _fused_lora_kernel(
     adapter_ids_ptr,
     N: tl.constexpr,
     K: tl.constexpr,
-    stride_am: tl.constexpr,
+    stride_am,
     stride_ak: tl.constexpr,
     stride_lar: tl.constexpr,
     stride_lak: tl.constexpr,
     stride_lbr: tl.constexpr,
     stride_lbn: tl.constexpr,
-    stride_cm: tl.constexpr,
+    stride_cm,
     stride_cn: tl.constexpr,
     BLOCK_SIZE_R: tl.constexpr,
     BLOCK_SIZE_M: tl.constexpr,
@@ -126,7 +128,7 @@ def _fused_lora_kernel(
                          mask=offs_k[:, None] < K - k * BLOCK_SIZE_K,
                          other=0.0)
             # We accumulate along the K dimension.
-            accumulator += tl.dot(a, la)
+            accumulator = tl.dot(a, la, acc=accumulator)
             # Advance the ptrs to the next K block.
             a_ptrs += BLOCK_SIZE_K * stride_ak
             la_ptrs += BLOCK_SIZE_K * stride_lak
