@@ -84,7 +84,7 @@ FastCompare(const T* src, const T* ref, int dims, int bsz, cudaStream_t stream, 
         thrust::cuda::par.on(stream),
         zip_iter,
         zip_iter + count,
-        [=] __device__(auto tup) {
+        [=] __host__ __device__(thrust::tuple<float, float> tup) -> Tuple {
             float   s        = thrust::get<0>(tup);
             float   r        = thrust::get<1>(tup);
             float   abs_diff = fabsf(s - r);
