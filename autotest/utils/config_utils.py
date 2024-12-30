@@ -113,7 +113,7 @@ def get_all_model_list(tp_num: int = None,
                                          model_type=model_type):
             if case not in case_list:
                 case_list.append(case)
-    return [x for x in case_list if 'w8a8' not in x]
+    return case_list
 
 
 def get_quantization_model_list(type):

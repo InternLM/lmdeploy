@@ -247,13 +247,13 @@ for model in [v for k, v in locals().items() if k.startswith('pytorch_')]:
 
 basic_pytorch_chat_tp1 = dict(type=TurboMindModelwithChatTemplate,
                               engine_config=dict(session_len=MAX_SESSION_LEN,
-                                                 max_batch_size=128,
+                                                 max_batch_size=64,
                                                  tp=1),
                               gen_config=dict(do_sample=False,
                                               max_new_tokens=MAX_NEW_TOKENS),
                               max_out_len=MAX_NEW_TOKENS,
                               max_seq_len=MAX_SESSION_LEN,
-                              batch_size=500,
+                              batch_size=128,
                               run_cfg=dict(num_gpus=1))
 
 # ===== Configs for Qwen/Qwen1.5-MoE-A2.7B-Chat =====

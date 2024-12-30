@@ -254,15 +254,21 @@ def calibrate(model: str,
     elif model_type == 'vlm':
         vl_model = load_vl_model(model, backend=None, with_llm=True).vl_model
         model = vl_model
-        if hasattr(vl_model, 'language_model'):  # deepseek vl
+        if hasattr(vl_model, 'language_model'):  # deepseek-vl, ...
             model = vl_model.language_model
-        if hasattr(vl_model, 'llm'):  # MiniCPMV
+        if hasattr(vl_model, 'llm'):  # MiniCPMV, ...
             model = vl_model.llm
         model.config.use_cache = False
         if dtype == 'float16':
             model.half()
         elif dtype == 'bfloat16':
+            assert torch.cuda.is_bf16_supported(
+            ), 'your device does not support bfloat16 please set --dtype float16'  # noqa
             model.to(torch.bfloat16)
+        elif dtype == 'auto' and model.config.torch_dtype == torch.bfloat16:
+            print('Warning: we cast model to float16 to prevent OOM. You'
+                  ' may enforce it bfloat16 by `--dtype bfloat16`')
+            model.half()
         model.eval()
 
     model_type = type(model).__name__

@@ -64,6 +64,16 @@ class Qwen2VLModel(VisonModel):
         messages.append(dict(role='preprocess', content=outputs))
         return messages
 
+    def build_model(self):
+        check_qwen_vl_deps_install()
+        from transformers import Qwen2VLForConditionalGeneration
+        if self.with_llm:
+            self.vl_model = Qwen2VLForConditionalGeneration.from_pretrained(
+                self.model_path, device_map='cpu')
+        else:
+            raise NotImplementedError(
+                'turbomind has not supported qwen2-vl yet')
+
     @torch.no_grad()
     def forward(self,
                 messages: List[Dict],
