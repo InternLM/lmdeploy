@@ -146,9 +146,6 @@ turbomind_internlm2_5_7b_chat = deepcopy(*lmdeploy_internlm2_5_7b_chat)
 turbomind_internlm2_5_7b_chat_4bits = deepcopy(*lmdeploy_internlm2_5_7b_chat)
 turbomind_internlm2_5_7b_chat_kvint4 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
 turbomind_internlm2_5_7b_chat_kvint8 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
-turbomind_internlm2_5_7b_chat_batch1 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
-turbomind_internlm2_5_7b_chat_batch1_4bits = deepcopy(
-    *lmdeploy_internlm2_5_7b_chat)
 pytorch_internlm2_5_7b_chat = deepcopy(*lmdeploy_internlm2_5_7b_chat)
 pytorch_internlm2_5_7b_chat_w8a8 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
 
@@ -218,9 +215,10 @@ pytorch_qwen2_5_7b_instruct = deepcopy(*lmdeploy_qwen2_5_7b_instruct)
 pytorch_qwen2_5_7b_instruct_w8a8 = deepcopy(*lmdeploy_qwen2_5_7b_instruct)
 
 for model in [v for k, v in locals().items() if k.startswith('turbomind_')]:
-    model['engine_config']['max_batch_size'] = 256
+    model['engine_config']['max_batch_size'] = 1
+    model['engine_config']['enable_prefix_caching'] = True
     model['gen_config']['do_sample'] = False
-    model['batch_size'] = 500
+    model['batch_size'] = 100
 
 for model in [v for k, v in locals().items() if k.endswith('_4bits')]:
     model['engine_config']['model_format'] = 'awq'
@@ -242,14 +240,10 @@ for model in [v for k, v in locals().items() if k.endswith('_kvint8')]:
 for model in [v for k, v in locals().items() if k.startswith('pytorch_')]:
     model['abbr'] = model['abbr'].replace('turbomind', 'pytorch')
     model['backend'] = 'pytorch'
-    model['engine_config']['max_batch_size'] = 128
-    model['gen_config']['do_sample'] = False
-    model['batch_size'] = 500
-
-for model in [v for k, v in locals().items() if '_batch1' in k]:
-    model['abbr'] = model['abbr'] + '_batch1'
     model['engine_config']['max_batch_size'] = 1
-    model['batch_size'] = 1
+    model['engine_config']['enable_prefix_caching'] = True
+    model['gen_config']['do_sample'] = False
+    model['batch_size'] = 100
 
 basic_pytorch_chat_tp1 = dict(type=TurboMindModelwithChatTemplate,
                               engine_config=dict(session_len=MAX_SESSION_LEN,
