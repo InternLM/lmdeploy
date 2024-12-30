@@ -16,8 +16,17 @@ logger = get_logger('lmdeploy')
 BuffType = Dict[str, Tensor]
 
 
-def round_up_to_multiple_of_8(n: int):
-    return (n + 7) // 8 * 8
+def next_power_of_2(n: int):
+    """Return the smallest power of 2 greater than or equal to n."""
+    n -= 1
+    n |= n >> 1
+    n |= n >> 2
+    n |= n >> 4
+    n |= n >> 8
+    n |= n >> 16
+    n |= n >> 32
+    n += 1
+    return n
 
 
 def _false(*args, **kwargs):
@@ -59,16 +68,16 @@ class MACASingleGraphRunner:
 
     def capture(self, **kwargs):
         """capture graph."""
-        self.meta.input_buffers = self.make_buffers_cudagraph(
+        self.meta.input_buffers = self.model.make_buffers_cudagraph(
             self.meta, **kwargs)
-        padded_kwargs = self.fill_buffers_cudagraph(self.meta, **kwargs)
+        padded_kwargs = self.model.fill_buffers_cudagraph(self.meta, **kwargs)
         context = self.ctx_mgr.current_context()
-        self.update_context_cudagraph(self.meta, context)
+        self.model.update_context_cudagraph(self.meta, context)
         current_stream = torch.cuda.current_stream()
 
-        output = self.model(**padded_kwargs)
-
         # warmup
+        self.model(**padded_kwargs)
+
         self._graph = torch.cuda.CUDAGraph()
         # unsafe kernel call in other thread might invalid the capture
         # so we set thread_safe capture mode here.
@@ -86,138 +95,13 @@ class MACASingleGraphRunner:
         """forward."""
         num_tokens = kwargs['input_ids'].size(-1)
         assert self._graph is not None
-        self.fill_buffers_cudagraph(self.meta, **kwargs)
+        self.model.fill_buffers_cudagraph(self.meta, **kwargs)
         context = self.ctx_mgr.current_context()
-        self.update_context_cudagraph(self.meta, context)
+        self.model.update_context_cudagraph(self.meta, context)
 
         self._graph.replay()
         output = self.meta.output_buffers['logits'][:, :num_tokens]
         return output
-
-    def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, *args,
-                               **kwargs) -> BuffType:
-        """make cudagraph buffers from forward inputs."""
-        max_batches = graph_meta.max_batchs
-        max_tokens = graph_meta.max_tokens
-        num_blocks = graph_meta.num_blocks
-        device = graph_meta.device
-
-        input_buffers: BuffType = dict()
-        input_buffers['input_ids'] = torch.zeros(1,
-                                                 max_tokens,
-                                                 dtype=torch.int32,
-                                                 device=device)
-        input_buffers['position_ids'] = torch.ones((1, max_tokens),
-                                                   dtype=torch.int32,
-                                                   device=device)
-
-        input_buffers['block_offsets'] = torch.zeros((max_batches, num_blocks),
-                                                     dtype=torch.int32,
-                                                     device=device)
-
-        input_buffers['q_start_loc'] = torch.arange(max_batches + 1,
-                                                    dtype=torch.int32,
-                                                    device=device)
-
-        input_buffers['q_seqlens'] = torch.ones(max_batches,
-                                                dtype=torch.int32,
-                                                device=device)
-
-        input_buffers['kv_seqlens'] = torch.ones(max_batches,
-                                                 dtype=torch.int32,
-                                                 device=device)
-
-        input_buffers['kv_start_indices'] = torch.ones((max_batches, 1),
-                                                       dtype=torch.int64,
-                                                       device=device)
-
-        input_buffers['local_adapter_ids'] = torch.zeros(max_batches,
-                                                         dtype=torch.int32,
-                                                         device=device)
-        return input_buffers
-
-    def fill_buffers_cudagraph(self, graph_meta: CudaGraphMeta,
-                               input_ids: Tensor, position_ids: Tensor,
-                               past_key_values: List, attn_metadata: Any,
-                               inputs_embeds: Tensor,
-                               **kwargs) -> Dict[str, Tensor]:
-        """fill cudagraph buffers from forward inputs."""
-        is_decoding = graph_meta.is_decoding
-        block_offsets: Tensor = attn_metadata.block_offsets
-        q_start_loc: Tensor = attn_metadata.q_start_loc
-        q_seqlens: Tensor = attn_metadata.q_seqlens
-        kv_seqlens: Tensor = attn_metadata.kv_seqlens
-        kv_start_indices: Tensor = attn_metadata.kv_start_indices
-
-        input_buffers: BuffType = graph_meta.input_buffers
-
-        batch_size, num_blocks = block_offsets.size()
-        num_tokens = input_ids.size(-1)
-        q_start_loc_size = q_start_loc.size(0)
-
-        # fill buffer
-        input_buffers['input_ids'][:, :num_tokens] = input_ids
-        input_buffers['position_ids'][:, :num_tokens] = position_ids
-        input_buffers[
-            'block_offsets'][:batch_size, :num_blocks] = block_offsets
-        input_buffers['q_seqlens'][:batch_size] = q_seqlens
-        input_buffers['kv_seqlens'][:batch_size] = kv_seqlens
-
-        input_buffers['q_start_loc'][:q_start_loc_size] = q_start_loc
-        input_buffers['kv_start_indices'][:batch_size] = kv_start_indices
-
-        if inputs_embeds is not None:
-            emb_size = inputs_embeds.size(-1)
-            if 'inputs_embeds' not in input_buffers:
-                max_num_tokens = input_buffers['input_ids'].size(-1)
-                input_buffers['inputs_embeds'] = inputs_embeds.new_zeros(
-                    1, max_num_tokens, emb_size)
-            input_buffers['inputs_embeds'][:, :num_tokens] = inputs_embeds
-
-        # create inputs
-        new_batch_size = round_up_to_multiple_of_8(batch_size)
-        q_start_loc_size = round_up_to_multiple_of_8(q_start_loc_size)
-
-        attn_metadata.block_offsets = input_buffers[
-            'block_offsets'][:new_batch_size]
-        attn_metadata.q_start_loc = input_buffers[
-            'q_start_loc'][:q_start_loc_size]
-        attn_metadata.q_seqlens = input_buffers['q_seqlens'][:new_batch_size]
-        attn_metadata.kv_seqlens = input_buffers['kv_seqlens'][:new_batch_size]
-        attn_metadata.kv_start_indices = input_buffers[
-            'kv_start_indices'][:new_batch_size]
-
-        new_inputs = dict(
-            past_key_values=past_key_values,
-            attn_metadata=attn_metadata,
-        )
-
-        if is_decoding:
-            new_inputs['input_ids'] = input_buffers[
-                'input_ids'][:, :new_batch_size]
-            new_inputs['position_ids'] = input_buffers[
-                'position_ids'][:, :new_batch_size]
-        else:
-            new_inputs['input_ids'] = input_buffers['input_ids']
-            new_inputs['position_ids'] = input_buffers['position_ids']
-
-        if inputs_embeds is not None:
-            if is_decoding:
-                new_inputs['inputs_embeds'] = input_buffers[
-                    'inputs_embeds'][:, :new_batch_size]
-            else:
-                new_inputs['inputs_embeds'] = input_buffers['inputs_embeds']
-
-        new_inputs.update(kwargs)
-        return new_inputs
-
-    def update_context_cudagraph(self, graph_meta, context):
-        """update step context with input buffers."""
-        input_buffers = graph_meta.input_buffers
-        context.q_seqlens = input_buffers['q_seqlens']
-        context.kv_seqlens = input_buffers['kv_seqlens']
-        context.q_start_loc = input_buffers['q_start_loc']
-        context.kv_start_indices = input_buffers['kv_start_indices']
 
     def __del__(self):
         """del."""
@@ -256,7 +140,7 @@ class MACAGraphRunner(GraphRunner):
         context = self.ctx_mgr.current_context()
         is_decoding = context.is_decoding
         num_tokens = input_ids.numel()
-        new_num_tokens = round_up_to_multiple_of_8(num_tokens)
+        new_num_tokens = next_power_of_2(num_tokens)
         return (new_num_tokens, is_decoding)
 
     def __call__(self, **kwargs):
@@ -268,7 +152,6 @@ class MACAGraphRunner(GraphRunner):
 
         if (not enable_graph) or (not is_decoding):
             return self.model(**kwargs)
-
         if graph_key not in self._runner_map:
             max_batches = max_tokens if is_decoding else self.max_batches
             runner = MACASingleGraphRunner(self.model,
