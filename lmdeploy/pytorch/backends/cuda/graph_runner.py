@@ -139,7 +139,8 @@ class CUDAGraphRunner(GraphRunner):
         is_decoding = context.is_decoding
         num_tokens = input_ids.numel()
         new_num_tokens = next_power_of_2(num_tokens)
-        return (new_num_tokens, is_decoding)
+        mask_input = attn_metadata.medusa_attn_mask is not None
+        return (new_num_tokens, is_decoding, mask_input)
 
     def __call__(self, **kwargs):
         """call."""

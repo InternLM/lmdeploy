@@ -8,6 +8,8 @@ from torch import Tensor
 from lmdeploy.pytorch.model_inputs import StepContext
 
 BuffType = Dict[str, Tensor]
+CUDA_GRAPH_PREFILL_SEQLEN = 256
+CUDA_GRAPH_PREFILL_KVLEN = 4096
 
 
 def next_power_of_2(n: int):
@@ -48,7 +50,11 @@ class CudaGraphMixin:
         **kwargs,
     ):
         """return True is model support cudagraph."""
-        return attn_metadata.is_decoding
+        # return attn_metadata.is_decoding
+        seq_lens = input_ids.size(1)
+        if attn_metadata.kv_flatten_size is None:
+            return seq_lens <= CUDA_GRAPH_PREFILL_SEQLEN
+        return seq_lens <= CUDA_GRAPH_PREFILL_SEQLEN and attn_metadata.kv_flatten_size <= CUDA_GRAPH_PREFILL_KVLEN  # noqa
 
     def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, *args,
                                **kwargs) -> BuffType:
@@ -78,6 +84,9 @@ class CudaGraphMixin:
         input_buffers['q_start_loc'] = input_buffers['qkv_lens'][0]
         input_buffers['q_seqlens'] = input_buffers['qkv_lens'][1]
         input_buffers['kv_seqlens'] = input_buffers['qkv_lens'][2]
+        input_buffers['kv_start_loc'] = torch.zeros(max_batches,
+                                                    dtype=torch.int64,
+                                                    device=device)
         input_buffers['local_adapter_ids'] = torch.zeros(max_batches,
                                                          dtype=torch.int64,
                                                          device=device)
@@ -100,6 +109,7 @@ class CudaGraphMixin:
         q_start_loc: Tensor = attn_metadata.q_start_loc
         q_seqlens: Tensor = attn_metadata.q_seqlens
         kv_seqlens: Tensor = attn_metadata.kv_seqlens
+        kv_start_loc: Tensor = attn_metadata.kv_start_loc
         input_buffers: BuffType = graph_meta.input_buffers
 
         batch_size, num_blocks = block_offsets.size()
@@ -121,9 +131,26 @@ class CudaGraphMixin:
                 input_buffers['inputs_embeds'] = inputs_embeds.new_zeros(
                     1, max_num_tokens, emb_size)
             input_buffers['inputs_embeds'][:, :num_tokens] = inputs_embeds
+        new_batch_size = next_power_of_2(batch_size)
+        if attn_metadata.medusa_attn_mask is not None:
+            medusa_attn_mask = attn_metadata.medusa_attn_mask
+            if 'medusa_attn_mask' not in input_buffers:
+                input_buffers['medusa_attn_mask'] = medusa_attn_mask.new_zeros(
+                    graph_meta.max_batchs, 64, CUDA_GRAPH_PREFILL_KVLEN)
+            input_buffers[
+                'medusa_attn_mask'][:batch_size, :, :medusa_attn_mask.
+                                    shape[-1]] = medusa_attn_mask[:batch_size]
+            attn_metadata.medusa_attn_mask = input_buffers[
+                'medusa_attn_mask'][:new_batch_size]
+        if kv_start_loc is not None:
+            input_buffers['kv_start_loc'][:batch_size] = kv_start_loc
+            attn_metadata.kv_start_loc = input_buffers[
+                'kv_start_loc'][:new_batch_size]
 
         # create inputs
-        new_batch_size = next_power_of_2(batch_size)
+        if attn_metadata.kv_flatten_size is not None:
+            attn_metadata.kv_flatten_size = max(attn_metadata.kv_flatten_size,
+                                                CUDA_GRAPH_PREFILL_KVLEN)
         attn_metadata.block_offsets = input_buffers[
             'block_offsets'][:new_batch_size]
         attn_metadata.q_start_loc = input_buffers[

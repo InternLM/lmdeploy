@@ -124,8 +124,10 @@ class CudaOpsBackend(DefaultOpsBackend):
             attention_mask = torch.zeros((bs, max_q_seqlen, max_kv_seqlen),
                                          dtype=dtype,
                                          device=device)
-            attention_mask[:, -medusa_len:, -medusa_len:] = (
-                1 - step_context.medusa_attn_mask) * (-1e30)
+            masked_value = (1 - step_context.medusa_attn_mask) * (-1e30)
+            for i in range(bs):
+                attention_mask[i, :, kv_seqlens[i] -
+                               medusa_len:kv_seqlens[i]] = masked_value  # noqa
             step_context.medusa_attn_mask = attention_mask
 
         attn_metadata = attn_meta_cls(
