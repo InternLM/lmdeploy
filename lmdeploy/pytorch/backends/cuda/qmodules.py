@@ -65,9 +65,11 @@ class TritonLinearW8A8Impl(LinearW8A8Impl):
     def __init__(self,
                  in_features: int,
                  out_features: int,
+                 out_dtype: torch.dtype = torch.float16,
                  quant_dtype: torch.dtype = torch.int8):
         self.in_features = in_features
         self.out_features = out_features
+        self.out_dtype = out_dtype
         self.quant_dtype = quant_dtype
 
     def forward(self,
@@ -88,7 +90,7 @@ class TritonLinearW8A8Impl(LinearW8A8Impl):
                                           weight,
                                           input_scale,
                                           scale,
-                                          output_dtype=torch.float16,
+                                          output_dtype=self.out_dtype,
                                           bias=bias)
 
         if all_reduce:
@@ -108,4 +110,5 @@ class TritonLinearW8A8Builder(LinearW8A8Builder):
         """build."""
         return TritonLinearW8A8Impl(in_features,
                                     out_features,
+                                    dtype,
                                     quant_dtype=quant_dtype)

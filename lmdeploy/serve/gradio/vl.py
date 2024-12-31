@@ -115,10 +115,13 @@ def run_local(model_path: str,
         else:
             prompt = history[-1][0][0]
             images = history[-1][0][1:]
-            prompt = (prompt, images)
-
-        logger.info('prompt: ' + str(prompt))
-        prompt = engine.vl_prompt_template.prompt_to_messages(prompt)
+            # convert prompt into GPT4V format
+            prompt = [
+                dict(role='user', content=[dict(type='text', text=prompt)])
+            ]
+            for image in images:
+                prompt[0]['content'].append(
+                    dict(type='image_data', image_data=dict(data=image)))
         t0 = time.perf_counter()
         inputs = _run_until_complete(
             engine._get_prompt_input(prompt, True, sequence_start, ''))

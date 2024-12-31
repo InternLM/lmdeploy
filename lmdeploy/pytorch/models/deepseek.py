@@ -12,7 +12,7 @@ from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, RopeType,
                                  SiluAndMul, build_rotary_embedding)
 from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
                                         build_qkv_proj, build_rowwise_linear)
-from lmdeploy.pytorch.nn.moe import FusedMoE, SoftmaxTopK
+from lmdeploy.pytorch.nn.moe import SoftmaxTopK, build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
@@ -135,7 +135,7 @@ class DeepseekMoE(nn.Module):
 
         self.softmax_topk = SoftmaxTopK(self.top_k)
 
-        self.experts = FusedMoE(
+        self.experts = build_fused_moe(
             self.hidden_dim,
             self.ffn_dim,
             self.num_experts,
@@ -265,12 +265,10 @@ class DeepseekDecoderLayer(nn.Module):
                                        device=device)
 
         # build attention layer norm
-        self.post_attention_layernorm = RMSNorm(
-            config.hidden_size,
-            config.rms_norm_eps,
-            quant_config=quantization_config,
-            dtype=dtype,
-            device=device)
+        self.post_attention_layernorm = RMSNorm(config.hidden_size,
+                                                config.rms_norm_eps,
+                                                dtype=dtype,
+                                                device=device)
 
     def forward(
         self,
@@ -528,14 +526,12 @@ class DeepseekForCausalLM(nn.Module, CudaGraphMixin):
         num_experts = self.config.n_routed_experts
         expert_params_mapping = []
         for exp_id in range(num_experts):
-            gate_param = ('.experts.gate_up_weights',
-                          f'.experts.{exp_id}.gate_proj.weight', exp_id,
-                          'gate')
-            up_param = ('.experts.gate_up_weights',
-                        f'.experts.{exp_id}.up_proj.weight', exp_id, 'up')
-            down_param = ('.experts.down_weights',
-                          f'.experts.{exp_id}.down_proj.weight', exp_id,
-                          'down')
+            gate_param = ('.experts.gate_up', f'.experts.{exp_id}.gate_proj',
+                          exp_id, 'gate')
+            up_param = ('.experts.gate_up', f'.experts.{exp_id}.up_proj',
+                        exp_id, 'up')
+            down_param = ('.experts.down', f'.experts.{exp_id}.down_proj',
+                          exp_id, 'down')
             expert_params_mapping += [gate_param, up_param, down_param]
 
         params_dict = dict(self.named_parameters())
