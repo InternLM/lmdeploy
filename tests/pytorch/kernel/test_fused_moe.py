@@ -266,7 +266,7 @@ class TestFusedMoeW8A8(TestFusedMoe):
             per_channel_quant
         num_experts, num_outs, _ = w.shape
         w = w.flatten(0, -2)
-        w_i8, w_scale = per_channel_quant(w, 8, torch.int8)
+        w_i8, w_scale = per_channel_quant(w, torch.int8)
         w_i8 = w_i8.view(num_experts, num_outs, -1)
         w_scale = w_scale.view(num_experts, num_outs, -1)
         return w_i8, w_scale
