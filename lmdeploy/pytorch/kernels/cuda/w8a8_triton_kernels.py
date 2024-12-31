@@ -456,7 +456,7 @@ def rms_norm_dynamic_quant(x, w, eps, residual=None, quant_dtype=torch.int8):
 
     The function reshapes the input tensor `x`, creates an empty tensor `y`
     with the same shape as `x`, and calculates RMS normalization on the
-    reshaped `x` using a Triton kernel `_rms_norm_fwd_fused_dynamic_symmetric`.
+    reshaped `x` using a Triton kernel `rms_norm_quant_kernel`.
     """
     qdtype_info = torch.finfo(
         quant_dtype) if quant_dtype.is_floating_point else torch.iinfo(
