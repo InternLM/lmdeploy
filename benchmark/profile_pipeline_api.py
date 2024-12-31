@@ -60,7 +60,9 @@ def sample_requests(dataset_path: str, num_requests: int,
 class Engine:
 
     def __init__(self, model_path: str, engine_config, csv: str):
-        self.pipe = pipeline(model_path, backend_config=engine_config)
+        self.pipe = pipeline(model_path,
+                             backend_config=engine_config,
+                             log_level='ERROR')
         self.tokenizer = AutoTokenizer.from_pretrained(model_path,
                                                        trust_remote_code=True)
 
