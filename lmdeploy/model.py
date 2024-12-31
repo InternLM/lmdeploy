@@ -1005,8 +1005,8 @@ class Qwen2d5Chat(Qwen7BChat):
             stop_words=['<|im_end|>'],
             **kwargs):
 
-        self.tool = tools
-        self.eotool = eotools
+        self.tools = tools
+        self.eotools = eotools
         super().__init__(system=system,
                          meta_instruction=meta_instruction,
                          eosys=eosys,
@@ -1043,9 +1043,9 @@ class Qwen2d5Chat(Qwen7BChat):
                 tool_prompt += self.separator
                 tool_prompt += f'{{"type": "function", "function": {json.dumps(tool, ensure_ascii=False)}}}'
             if len(messages) and messages[0]['role'] == 'system':
-                ret += f"{self.system}{messages[0]['content']}{self.tool}{tool_prompt}{self.eotool}{self.eosys}"
+                ret += f"{self.system}{messages[0]['content']}{self.tools}{tool_prompt}{self.eotools}{self.eosys}"
             else:
-                ret += f'{self.system}{self.meta_instruction}{self.tool}{tool_prompt}{self.eotool}{self.eosys}'
+                ret += f'{self.system}{self.meta_instruction}{self.tools}{tool_prompt}{self.eotools}{self.eosys}'
         else:
             if self.meta_instruction is not None and sequence_start:
                 if len(messages) and messages[0]['role'] == 'system':
