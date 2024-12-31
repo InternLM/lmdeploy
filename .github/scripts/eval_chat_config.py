@@ -74,6 +74,8 @@ with read_base():
         models as hf_llama3_1_8b_instruct  # noqa: F401, E501
     from opencompass.configs.models.hf_llama.hf_llama3_8b_instruct import \
         models as hf_llama_3_8b_instruct  # noqa: F401, E501
+    from opencompass.configs.models.hf_llama.lmdeploy_llama2_7b_chat import \
+        models as lmdeploy_llama2_7b_chat  # noqa: F401, E501
     from opencompass.configs.models.hf_llama.lmdeploy_llama3_1_8b_instruct import \
         models as lmdeploy_llama3_1_8b_instruct  # noqa: F401, E501
     from opencompass.configs.models.hf_llama.lmdeploy_llama3_8b_instruct import \
@@ -214,9 +216,14 @@ turbomind_qwen2_5_7b_instruct_kvint8 = deepcopy(*lmdeploy_qwen2_5_7b_instruct)
 pytorch_qwen2_5_7b_instruct = deepcopy(*lmdeploy_qwen2_5_7b_instruct)
 pytorch_qwen2_5_7b_instruct_w8a8 = deepcopy(*lmdeploy_qwen2_5_7b_instruct)
 
+# ===== Configs for meta-llama/Llama-2-7b-chat-hf =====
+turbomind_llama2_7b_chat = deepcopy(*lmdeploy_llama2_7b_chat)
+turbomind_llama2_7b_chat_4bits = deepcopy(*lmdeploy_llama2_7b_chat)
+turbomind_llama2_7b_chat_kvint4 = deepcopy(*lmdeploy_llama2_7b_chat)
+turbomind_llama2_7b_chat_kvint8 = deepcopy(*lmdeploy_llama2_7b_chat)
+
 for model in [v for k, v in locals().items() if k.startswith('turbomind_')]:
     model['engine_config']['max_batch_size'] = 1
-    model['engine_config']['enable_prefix_caching'] = True
     model['gen_config']['do_sample'] = False
     model['batch_size'] = 100
 
@@ -241,7 +248,6 @@ for model in [v for k, v in locals().items() if k.startswith('pytorch_')]:
     model['abbr'] = model['abbr'].replace('turbomind', 'pytorch')
     model['backend'] = 'pytorch'
     model['engine_config']['max_batch_size'] = 1
-    model['engine_config']['enable_prefix_caching'] = True
     model['gen_config']['do_sample'] = False
     model['batch_size'] = 100
 
