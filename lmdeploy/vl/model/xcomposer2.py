@@ -96,10 +96,11 @@ class Xcomposer2VisionModel(VisonModel):
 
     def __init__(self,
                  model_path: str,
+                 with_llm: bool = False,
                  max_memory: Dict[int, int] = None,
                  hf_config: AutoConfig = None,
                  backend: str = ''):
-        super().__init__(model_path, max_memory, hf_config, backend)
+        super().__init__(model_path, with_llm, max_memory, hf_config, backend)
         check_xcomposer_install()
         self.model_type, self.module = get_xcomposer_type(self.model_path)
         logger.info(f'matching type of {self.model_type}')
@@ -144,6 +145,8 @@ class Xcomposer2VisionModel(VisonModel):
             self.preprocess_func = self._preprocess_7b
 
     def build_model(self):
+        """build the vision part of a VLM model when backend is turbomind, or
+        load the whole VLM model when `self.with_llm==True`"""
         from accelerate import init_empty_weights
         with init_empty_weights(), warnings.catch_warnings(), \
                 init_empty_vit(self.model_path):
@@ -155,8 +158,10 @@ class Xcomposer2VisionModel(VisonModel):
             model.vit.resize_pos()
             model.vit.vision_tower.vision_model.post_layernorm.to_empty(
                 device='cpu').half()
-            del model.model
-            del model.output
+            self.vl_model = model
+            if not self.with_llm:
+                del model.model
+                del model.output
 
         from accelerate.utils import get_balanced_memory, infer_auto_device_map
         max_memory = get_balanced_memory(
@@ -178,7 +183,7 @@ class Xcomposer2VisionModel(VisonModel):
             load_checkpoint_and_dispatch(
                 model=model,
                 checkpoint=self.model_path,
-                device_map=device_map,
+                device_map=device_map if not self.with_llm else {'': 'cpu'},
                 no_split_module_classes=['CLIPEncoderLayer'],
                 dtype=torch.half)
 

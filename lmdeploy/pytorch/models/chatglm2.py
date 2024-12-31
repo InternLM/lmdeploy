@@ -40,11 +40,10 @@ class SelfAttention(torch.nn.Module):
 
         self.projection_size = config.kv_channels * config.num_attention_heads
         self.num_attention_heads = config.num_attention_heads
-        self.num_kv_heads = self.num_attention_heads
+        self.num_kv_heads = config.num_key_value_heads
         self.head_size = (self.projection_size // config.num_attention_heads)
-        self.multi_query_attention = config.multi_query_attention
-        if self.multi_query_attention:
-            self.num_kv_heads = config.multi_query_group_num
+        num_replicate_kv_heads = getattr(config,
+                                         'num_replicate_key_value_heads', 1)
         self.query_key_value = build_qkv_proj(
             config.hidden_size,
             num_q_heads=self.num_attention_heads,
@@ -54,7 +53,7 @@ class SelfAttention(torch.nn.Module):
             quant_config=quantization_config,
             dtype=dtype,
             device=device,
-        )
+            num_replicate_kv_heads=num_replicate_kv_heads)
 
         # apply rotary
         self.apply_rotary_pos_emb = ApplyRotaryEmb()

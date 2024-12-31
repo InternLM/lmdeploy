@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Union
 
 import torch
@@ -40,12 +41,13 @@ class ImageEncoder:
             vision_config = VisionConfig()
         self.vision_config = vision_config
         self.max_batch_size = vision_config.max_batch_size
+        self.executor = ThreadPoolExecutor(max_workers=1)
         torch.cuda.empty_cache()
 
     async def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """preprocess multimodal data in the messages."""
         future = asyncio.get_event_loop().run_in_executor(
-            None, self.model.preprocess, messages)
+            self.executor, self.model.preprocess, messages)
         future.add_done_callback(_raise_exception_on_finish)
         outputs = await future
         return outputs
@@ -58,7 +60,7 @@ class ImageEncoder:
             of `preprocess()`
         """
         future = asyncio.get_event_loop().run_in_executor(
-            None, self.model.forward, messages, self.max_batch_size)
+            self.executor, self.model.forward, messages, self.max_batch_size)
         future.add_done_callback(_raise_exception_on_finish)
         outputs = await future
         return outputs

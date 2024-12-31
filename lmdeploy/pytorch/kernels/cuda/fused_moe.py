@@ -91,8 +91,6 @@ def fused_moe_kernel(
     if GROUP_SIZE_M == 1:
         pid_m = pid % num_pid_m
         pid_n = pid // num_pid_m
-        # pid_m = pid // num_pid_n
-        # pid_n = pid % num_pid_n
     else:
         num_pid_in_group = GROUP_SIZE_M * num_pid_n
         group_id = pid // num_pid_in_group
@@ -133,7 +131,7 @@ def fused_moe_kernel(
         b = tl.load(b_ptrs,
                     mask=offs_k[:, None] < K - k * BLOCK_SIZE_K,
                     other=0.0)
-        accumulator += tl.dot(a, b)
+        accumulator = tl.dot(a, b, acc=accumulator)
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
 
