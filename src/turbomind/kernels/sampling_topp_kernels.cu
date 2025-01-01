@@ -217,9 +217,9 @@ void invokeTopPSort(TopPSortParams& params, cudaStream_t stream)
     size_t topp_id_val_buf_size  = sizeof(int) * params.batch_size * params.vocab_size_padded;
     size_t begin_offset_buf_size = sizeof(int) * params.batch_size;
     size_t end_offset_buf_size   = sizeof(int) * params.batch_size;
-    topp_id_val_buf_size         = div_up<size_t>(topp_id_val_buf_size, 256) * 256;
-    begin_offset_buf_size        = div_up<size_t>(begin_offset_buf_size, 256) * 256;
-    end_offset_buf_size          = div_up<size_t>(end_offset_buf_size, 256) * 256;
+    topp_id_val_buf_size         = cdiv<size_t>(topp_id_val_buf_size, 256) * 256;
+    begin_offset_buf_size        = cdiv<size_t>(begin_offset_buf_size, 256) * 256;
+    end_offset_buf_size          = cdiv<size_t>(end_offset_buf_size, 256) * 256;
 
     if (params.workspace == nullptr) {
         size_t cub_temp_storage_size;
