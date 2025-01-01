@@ -4,6 +4,8 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
+#include <memory>
 #include <ostream>
 
 #include "src/turbomind/utils/Tensor.h"
@@ -107,7 +109,8 @@ struct Request {
 
     int ec;  // set when disabling conflicting requests
 
-    enum {
+    enum
+    {
         kOk       = 0,
         kInvalid  = 1,  // Sequence not exist or both `start` & `stop` (instead of `end`) is set
         kConflict = 2,  // Concurrent requests to the same sequence
