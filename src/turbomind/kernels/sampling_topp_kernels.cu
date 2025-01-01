@@ -237,7 +237,7 @@ void invokeTopPSort(TopPSortParams& params, cudaStream_t stream)
                                                                0,              // begin_bit
                                                                sizeof(T) * 8,  // end_bit = sizeof(KeyT) * 8
                                                                stream));       // cudaStream_t
-        cub_temp_storage_size = div_up(cub_temp_storage_size, 256UL) * 256;
+        cub_temp_storage_size = cdiv<size_t>(cub_temp_storage_size, 256) * 256;
         params.workspace_size =
             topp_id_val_buf_size + begin_offset_buf_size + end_offset_buf_size + cub_temp_storage_size;
         return;
