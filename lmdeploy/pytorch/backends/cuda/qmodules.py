@@ -48,9 +48,13 @@ class TritonRMSNormBuilder(RMSNormW8A8Builder):
 class TritonLinearW8A8Impl(LinearW8A8Impl):
     """triton linear w8a8 implementation."""
 
-    def __init__(self, in_features: int, out_features: int):
+    def __init__(self,
+                 in_features: int,
+                 out_features: int,
+                 out_dtype: torch.dtype = torch.float16):
         self.in_features = in_features
         self.out_features = out_features
+        self.out_dtype = out_dtype
 
     def forward(self,
                 x,
@@ -70,7 +74,7 @@ class TritonLinearW8A8Impl(LinearW8A8Impl):
                                           weight,
                                           input_scale,
                                           scale,
-                                          output_dtype=torch.float16,
+                                          output_dtype=self.out_dtype,
                                           bias=bias)
 
         if all_reduce:
@@ -87,4 +91,4 @@ class TritonLinearW8A8Builder(LinearW8A8Builder):
               bias: bool = True,
               dtype: torch.dtype = None):
         """build."""
-        return TritonLinearW8A8Impl(in_features, out_features)
+        return TritonLinearW8A8Impl(in_features, out_features, dtype)

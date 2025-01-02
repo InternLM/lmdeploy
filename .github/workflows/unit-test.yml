@@ -39,6 +39,7 @@ jobs:
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e CUDA_VISIBLE_DEVICES=2,3 --pull never"
       volumes:
         - /nvme/share_data/github-actions/pip-cache:/root/.cache/pip
+        - /nvme/share_data/github-actions/hf_home:/root/.cache/huggingface
         - /nvme/share_data/github-actions/packages:/root/packages
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
