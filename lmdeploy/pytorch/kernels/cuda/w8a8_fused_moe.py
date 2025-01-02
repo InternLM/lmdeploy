@@ -79,6 +79,7 @@ def fused_moe_w8a8_kernel(
     expert_offset: tl.constexpr,
     reindex_a: tl.constexpr,
     reindex_c: tl.constexpr,
+    ACCUMULATOR_DTYPE: tl.constexpr,
 ):
     """fused moe kernel."""
     exp_id = tl.program_id(1)
@@ -129,7 +130,8 @@ def fused_moe_w8a8_kernel(
                             offs_bn[None, :] * stride_bn)
     bs_ptrs = B_scale + exp_id * stride_bse + offs_bn
 
-    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.int32)
+    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N),
+                           dtype=ACCUMULATOR_DTYPE)
 
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         a = tl.load(a_ptrs,
@@ -139,7 +141,10 @@ def fused_moe_w8a8_kernel(
         b = tl.load(b_ptrs,
                     mask=offs_k[:, None] < K - k * BLOCK_SIZE_K,
                     other=0.0)
-        accumulator = tl.dot(a, b, acc=accumulator)
+        accumulator = tl.dot(a,
+                             b,
+                             acc=accumulator,
+                             out_dtype=ACCUMULATOR_DTYPE)
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
 
@@ -189,6 +194,7 @@ def fused_moe_w8a8_kernel_launcher(
 
     assert A_scale.is_contiguous()
     assert B_scale.is_contiguous()
+    accumulator_dtype = tl.float32 if A.is_floating_point() else tl.int32
 
     def _grid_fn(META):
         grid = (triton.cdiv(M_NP2, META['BLOCK_SIZE_M']) *
@@ -226,6 +232,7 @@ def fused_moe_w8a8_kernel_launcher(
         reindex_a=reindex_a,
         reindex_c=reindex_c,
         M_NP2=M_NP2,
+        ACCUMULATOR_DTYPE=accumulator_dtype,
         **kernel_meta,
     )
 
@@ -240,6 +247,7 @@ def fused_moe_w8a8(input: torch.Tensor,
                    topk_ids: torch.Tensor,
                    topk: int,
                    out_dtype: torch.dtype = torch.float16,
+                   quant_dtype: torch.dtype = torch.int8,
                    expert_offset: int = 0,
                    num_experts: int = None,
                    renormalize: bool = False) -> torch.Tensor:
@@ -283,7 +291,9 @@ def fused_moe_w8a8(input: torch.Tensor,
     gate_cache = silu_and_mul(intermediate_cache1)
     del intermediate_cache1
     gate_cache = gate_cache.unflatten(0, unflat_size)
-    gate_cache, gate_scale = per_token_quant_int8(gate_cache, 1e-7)
+    gate_cache, gate_scale = per_token_quant_int8(gate_cache,
+                                                  1e-7,
+                                                  quant_dtype=quant_dtype)
 
     intermediate_cache2 = _make_intermediate((M, topk, w2.shape[1]),
                                              dtype=out_dtype,

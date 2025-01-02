@@ -102,7 +102,8 @@ class FusedMoEW8A8Builder(ABC):
     def build(top_k: int,
               num_experts: int,
               renormalize: bool = False,
-              out_dtype: torch.dtype = torch.float16):
+              out_dtype: torch.dtype = torch.float16,
+              quant_dtype: torch.dtype = torch.int8):
         """build from mlp."""
         raise NotImplementedError
 
