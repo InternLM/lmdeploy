@@ -43,6 +43,7 @@ def _atomic_store(ptrs, val, mask):
 @triton.autotune(
     configs=get_autotune_config(),
     key=['N', 'K'],
+    restore_value=['c_ptr'],
     warmup=5,
     rep=20,
 )
