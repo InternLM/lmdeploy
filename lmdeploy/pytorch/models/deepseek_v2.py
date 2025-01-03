@@ -4,6 +4,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import torch
 import torch.distributed as dist
+import torch.nn.functional as F
 from torch import nn
 
 from lmdeploy.pytorch.distributed import get_world_rank
@@ -81,7 +82,7 @@ class DeepseekV2Attention(nn.Module):
                  dtype: torch.dtype = None,
                  device: torch.device = None):
         super().__init__()
-        quantization_config = None
+        quantization_config = getattr(config, 'quantization_config', None)
         self.q_lora_rank = config.q_lora_rank
         self.hidden_size = config.hidden_size
         self.num_heads = config.num_attention_heads
@@ -102,6 +103,7 @@ class DeepseekV2Attention(nn.Module):
                 dtype=dtype,
                 device=device,
                 is_tp=True,
+                quant_config=quantization_config,
             )
         else:
             self.q_a_proj = build_colwise_linear(
@@ -111,6 +113,7 @@ class DeepseekV2Attention(nn.Module):
                 dtype=dtype,
                 device=device,
                 is_tp=False,
+                quant_config=quantization_config,
             )
             self.q_a_layernorm = RMSNorm(config.q_lora_rank,
                                          1e-6,
@@ -124,6 +127,7 @@ class DeepseekV2Attention(nn.Module):
                 dtype=dtype,
                 device=device,
                 is_tp=True,
+                quant_config=quantization_config,
             )
 
         self.kv_a_proj_with_mqa = build_colwise_linear(
@@ -133,6 +137,7 @@ class DeepseekV2Attention(nn.Module):
             dtype=dtype,
             device=device,
             is_tp=False,
+            quant_config=quantization_config,
         )
         self.kv_a_layernorm = RMSNorm(config.kv_lora_rank,
                                       1e-6,
@@ -176,6 +181,7 @@ class DeepseekV2Attention(nn.Module):
             dtype=dtype,
             device=device,
             is_tp=True,
+            quant_config=quantization_config,
         )
 
     def _q_proj(self, hidden_states, num_heads: int, nope_size: int,
@@ -272,6 +278,104 @@ class DeepseekV2Attention(nn.Module):
         return attn_output
 
 
+class MoEGate(nn.Module):
+    """Deepseek Gate."""
+
+    def __init__(self,
+                 config: Any,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None):
+        super().__init__()
+        self.config = config
+        self.top_k = config.num_experts_per_tok
+        self.n_routed_experts = config.n_routed_experts
+        self.routed_scaling_factor = config.routed_scaling_factor
+        self.scoring_func = config.scoring_func
+        self.alpha = config.aux_loss_alpha
+        self.seq_aux = config.seq_aux
+        self.topk_method = config.topk_method
+        self.n_group = config.n_group
+        self.topk_group = config.topk_group
+        self.norm_topk_prob = config.norm_topk_prob
+        self.renormalize = self.top_k > 1 and self.norm_topk_prob
+
+        # topk selection algorithm
+        self.norm_topk_prob = config.norm_topk_prob
+        self.gating_dim = config.hidden_size
+        self.weight = nn.Parameter(
+            torch.empty((self.n_routed_experts, self.gating_dim),
+                        dtype=dtype,
+                        device=device))
+        if self.topk_method == 'noaux_tc':
+            self.e_score_correction_bias = nn.Parameter(
+                torch.empty((self.n_routed_experts, ),
+                            dtype=dtype,
+                            device=device))
+        self.softmax_topk = SoftmaxTopK(self.top_k)
+
+    def _compute_scores(self, logits: torch.Tensor):
+        """compute scores."""
+        if self.scoring_func == 'softmax':
+            scores = logits.softmax(dim=-1, dtype=torch.float32)
+        elif self.scoring_func == 'sigmoid':
+            scores = logits.sigmoid()
+        else:
+            raise NotImplementedError('insupportable scoring function '
+                                      f'for MoE gating: {self.scoring_func}')
+        return scores
+
+    def forward(self, hidden_states: torch.Tensor):
+        """forward."""
+        sequence_length, hidden_dim = hidden_states.shape
+        router_logits = F.linear(hidden_states, self.weight)
+
+        if self.topk_method == 'greedy':
+            topk_weight, topk_idx = self.softmax_topk(router_logits)
+        elif self.topk_method == 'group_limited_greedy':
+            scores = self._compute_scores(router_logits)
+            grouped_logits = scores.unflatten(-1, (self.n_group, -1))
+            group_scores = (grouped_logits.max(-1).values)
+            group_idx = torch.topk(group_scores,
+                                   k=self.topk_group,
+                                   dim=-1,
+                                   sorted=False)[1]  # [n, top_k_group]
+            group_mask = torch.zeros_like(group_scores)  # [n, n_group]
+            group_mask.scatter_(1, group_idx, 1)  # [n, n_group]
+            group_mask = ~group_mask.bool()[..., None]
+            grouped_logits = grouped_logits.masked_fill(group_mask, 0.0)
+            scores = grouped_logits.flatten(1, 2)
+            topk_weight, topk_idx = self.softmax_topk(scores)
+        elif self.topk_method == 'noaux_tc':
+            scores = self._compute_scores(router_logits)
+            scores_for_choice = scores.view(
+                sequence_length, -1) + self.e_score_correction_bias[None]
+            group_scores = (scores_for_choice.view(
+                sequence_length, self.n_group,
+                -1).topk(2, dim=-1)[0].sum(dim=-1))  # [n, n_group]
+            group_idx = torch.topk(group_scores,
+                                   k=self.topk_group,
+                                   dim=-1,
+                                   sorted=False)[1]  # [n, top_k_group]
+            group_mask = torch.zeros_like(group_scores)  # [n, n_group]
+            group_mask.scatter_(1, group_idx, 1)  # [n, n_group]
+            score_mask = (group_mask.unsqueeze(-1).expand(
+                sequence_length, self.n_group,
+                self.n_routed_experts // self.n_group).reshape(
+                    sequence_length, -1))  # [n, e]
+            tmp_scores = scores_for_choice.masked_fill(~score_mask.bool(),
+                                                       0.0)  # [n, e]
+            _, topk_idx = torch.topk(tmp_scores,
+                                     k=self.top_k,
+                                     dim=-1,
+                                     sorted=False)
+            topk_weight = scores.gather(1, topk_idx)
+        else:
+            raise RuntimeError(f'Unsupported topk_method: {self.topk_method}')
+        if not self.renormalize:
+            topk_weight = topk_weight * self.routed_scaling_factor
+        return topk_weight, topk_idx
+
+
 class DeepseekV2MoE(nn.Module):
     """Deepseek v2 MoE."""
 
@@ -280,6 +384,7 @@ class DeepseekV2MoE(nn.Module):
                  dtype: torch.dtype = None,
                  device: torch.device = None):
         super().__init__()
+        quantization_config = getattr(config, 'quantization_config', None)
         self.hidden_dim = config.hidden_size
         self.ffn_dim = config.moe_intermediate_size
         self.num_experts = config.n_routed_experts
@@ -291,16 +396,7 @@ class DeepseekV2MoE(nn.Module):
         self.n_group = config.n_group
         self.topk_group = config.topk_group
 
-        self.gate = build_rowwise_linear(
-            self.hidden_dim,
-            self.num_experts,
-            bias=False,
-            dtype=dtype,
-            device=device,
-            is_tp=False,
-        )
-
-        self.softmax_topk = SoftmaxTopK(self.top_k)
+        self.gate = MoEGate(config, dtype=dtype, device=device)
 
         self.experts = build_fused_moe(
             self.hidden_dim,
@@ -311,6 +407,7 @@ class DeepseekV2MoE(nn.Module):
             dtype=dtype,
             device=device,
             all_reduce=False,
+            quant_config=quantization_config,
         )
 
         self.shared_experts = None
@@ -335,27 +432,8 @@ class DeepseekV2MoE(nn.Module):
         """forward."""
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
-        router_logits = self.gate(hidden_states)
+        topk_weights, topk_ids = self.gate(hidden_states)
 
-        if self.topk_method == 'greedy':
-            topk_weights, topk_ids = self.softmax_topk(router_logits)
-        elif self.topk_method == 'group_limited_greedy':
-            grouped_logits = router_logits.unflatten(-1, (self.n_group, -1))
-            group_scores = (grouped_logits.max(-1).values)
-            group_idx = torch.topk(group_scores,
-                                   k=self.topk_group,
-                                   dim=-1,
-                                   sorted=False)[1]  # [n, top_k_group]
-            group_mask = torch.zeros_like(group_scores)  # [n, n_group]
-            group_mask.scatter_(1, group_idx, 1)  # [n, n_group]
-            group_mask = ~group_mask.bool()[..., None]
-            grouped_logits = grouped_logits.masked_fill(group_mask, 0.0)
-            router_logits = grouped_logits.flatten(1, 2)
-            topk_weights, topk_ids = self.softmax_topk(router_logits)
-        else:
-            raise RuntimeError(f'Unsupported topk_method: {self.topk_method}')
-        if not self.renormalize:
-            topk_weights = topk_weights * self.routed_scaling_factor
         out_states = self.experts(
             hidden_states,
             topk_weights,
@@ -572,7 +650,6 @@ class DeepseekV2Model(nn.Module):
         cos, sin = cos[0], sin[0]
         rotary_pos_emb = (cos, sin)
         for idx, decoder_layer in enumerate(self.layers):
-
             past_key_value = past_key_values[idx]
             hidden_states, residual = decoder_layer(
                 hidden_states,
@@ -601,6 +678,8 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                  device: torch.device = None):
         super().__init__()
         self.config = config
+        self.quantization_config = getattr(config, 'quantization_config', None)
+        self.dtype = dtype
         self.ctx_mgr = ctx_mgr
         self.model = DeepseekV2Model(config, dtype=dtype, device=device)
         # build lm_head
@@ -609,6 +688,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                                             bias=False,
                                             dtype=dtype,
                                             device=device)
+        self._load_buffers = dict()
 
     def forward(
         self,
@@ -692,39 +772,98 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             weight = weight.flatten(0, 1)
             return weight
 
+        def __load_kcvc(name: str, weight: torch.Tensor):
+            """load kc and vc from weight."""
+            config = self.config
+            v_head_dim = config.v_head_dim
+            qk_nope_head_dim = config.qk_nope_head_dim
+            w_kc, w_vc = weight.unflatten(
+                0, (-1, qk_nope_head_dim + v_head_dim)).split(
+                    [qk_nope_head_dim, v_head_dim], dim=1)
+            w_vc = w_vc.transpose(1, 2).contiguous()
+            kc_param_name = name.replace('.kv_b_proj', '.kc')
+            param_kc = params_dict[kc_param_name]
+            load_weight(param_kc, w_kc)
+            vc_param_name = name.replace('.kv_b_proj', '.vc')
+            param_vc = params_dict[vc_param_name]
+            load_weight(param_vc, w_vc)
+
+        def __dequant_weight(weight: torch.Tensor, scale: torch.Tensor,
+                             dtype: torch.dtype):
+            """dequant weight."""
+            dim_w0, dim_w1 = weight.shape
+            dim_s0, dim_s1 = scale.shape
+            assert dim_w0 % dim_s0 == 0
+            assert dim_w1 % dim_s1 == 0
+            group0 = dim_w0 // dim_s0
+            group1 = dim_w1 // dim_s1
+            weight = weight.reshape(dim_s0, group0, dim_s1, group1)
+            scale = scale.reshape(dim_s0, 1, dim_s1, 1)
+            weight = weight.to(scale.dtype) * scale
+            weight = weight.to(dtype)
+            weight = weight.reshape(dim_w0, dim_w1)
+            return weight
+
+        def __load_kcvc_blocked_fp8(name: str, loaded_weight: torch.Tensor):
+            """dequant weight."""
+            if name.endswith('.weight'):
+                weight_name = name
+                scale_name = name.replace('.weight', '.scale')
+            elif name.endswith('.scale'):
+                weight_name = name.replace('.scale', '.weight')
+                scale_name = name
+            self._load_buffers[name] = loaded_weight
+            if (weight_name in self._load_buffers
+                    and scale_name in self._load_buffers):
+                weight = self._load_buffers.pop(weight_name)
+                scale = self._load_buffers.pop(scale_name)
+                kc_param_name = weight_name.replace('.kv_b_proj', '.kc')
+                dtype = params_dict[kc_param_name].dtype
+                weight = __dequant_weight(weight, scale, dtype)
+                __load_kcvc(weight_name, weight)
+
         for (mod_name, head_dim, pe_dim_offset) in update_pe_mapping:
             if mod_name not in name:
                 continue
-            weight = __update_pe(loaded_weight, head_dim, pe_dim_offset)
+            if name.endswith('.scale'):
+                weight = loaded_weight
+            else:
+                weight = __update_pe(loaded_weight, head_dim, pe_dim_offset)
             param = params_dict[name]
             load_weight(param, weight)
             break
         else:
             if '.kv_b_proj' in name:
-                config = self.config
-                v_head_dim = config.v_head_dim
-                qk_nope_head_dim = config.qk_nope_head_dim
-                w_kc, w_vc = loaded_weight.unflatten(
-                    0, (-1, qk_nope_head_dim + v_head_dim)).split(
-                        [qk_nope_head_dim, v_head_dim], dim=1)
-                w_vc = w_vc.transpose(1, 2).contiguous()
-                kc_param_name = name.replace('.kv_b_proj', '.kc')
-                param_kc = params_dict[kc_param_name]
-                load_weight(param_kc, w_kc)
-                vc_param_name = name.replace('.kv_b_proj', '.vc')
-                param_vc = params_dict[vc_param_name]
-                load_weight(param_vc, w_vc)
+                quantization_config = self.quantization_config
+                quant_method = None
+                if quantization_config is not None:
+                    quant_method = quantization_config.get('quant_method')
+
+                if quant_method == 'fp8':
+                    # update blocked fp8 weight
+                    __load_kcvc_blocked_fp8(name, loaded_weight)
+                else:
+                    __load_kcvc(name, loaded_weight)
             else:
                 param = params_dict[name]
                 load_weight(param, loaded_weight)
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
         """load weights."""
+
+        def __skip_nextn(name, nextn_keys):
+            for nextn_key in nextn_keys:
+                if nextn_key in name:
+                    return True
+            return False
+
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)
             ('.gate_up_proj', '.gate_proj', 0),
             ('.gate_up_proj', '.up_proj', 1),
         ]
+
+        scale_suffix = '.weight_scale_inv'
 
         config = self.config
         qk_rope_head_dim = config.qk_rope_head_dim
@@ -747,6 +886,15 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                           exp_id, 'down')
             expert_params_mapping += [gate_param, up_param, down_param]
 
+        num_hidden_layers = self.config.num_hidden_layers
+
+        num_nextn_predict_layers = getattr(self.config,
+                                           'num_nextn_predict_layers', 1)
+        nextn_keys = [
+            f'.layers.{num_hidden_layers+i}'
+            for i in range(num_nextn_predict_layers)
+        ]
+
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:
             if 'rotary_emb.inv_freq' in name:
@@ -754,8 +902,14 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             if ('rotary_emb.cos_cached' in name
                     or 'rotary_emb.sin_cached' in name):
                 continue
+            if '.layers' in name:
+                # skip nextn
+                if __skip_nextn(name, nextn_keys):
+                    continue
             if self.config.tie_word_embeddings and 'lm_head.weight' in name:
                 continue
+            if name.endswith(scale_suffix):
+                name = name[:-len(scale_suffix)] + '.scale'
             if '.experts' in name:
                 self._load_weight_experts(
                     name,
