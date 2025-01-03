@@ -15,15 +15,12 @@ def apply_rotary_pos_emb(
 ) -> Tuple[Tensor, Tensor]:
     query_states = query_states.contiguous()
     key_states = key_states.contiguous()
-    bs = query_states.shape[0]
     query_states_reshaped = query_states.unsqueeze(0)
     key_states_reshaped = key_states.unsqueeze(0)
-    cos_reshaped = cos.reshape(1, bs, 1, -1)
-    sin_reshaped = sin.reshape(1, bs, 1, -1)
     query_states_reshaped, key_states_reshaped = \
         ext_ops.apply_rotary_pos_emb(query_states_reshaped,
                                      key_states_reshaped,
-                                     cos_reshaped, sin_reshaped,
+                                     cos, sin,
                                      None, None)
     if q_embed is None:
         q_embed = query_states_reshaped.view(query_states.shape)
