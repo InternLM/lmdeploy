@@ -31,10 +31,11 @@ class TestRequestHander:
 
         async def __dummy_loop():
             while True:
-                manager.step()
-                await asyncio.sleep(0.1)
+                try:
+                    await manager.step()
+                except Exception:
+                    return
 
-        asyncio.set_event_loop(event_loop)
         sender = manager.build_sender()
         manager.start_loop(__dummy_loop)
 
