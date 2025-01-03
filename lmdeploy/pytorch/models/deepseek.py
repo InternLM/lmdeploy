@@ -313,7 +313,6 @@ class DeepseekModel(nn.Module):
         super().__init__()
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
-        quantization_config = getattr(config, 'quantization_config', None)
 
         self.embed_tokens = nn.Embedding(config.vocab_size,
                                          config.hidden_size,
@@ -330,7 +329,6 @@ class DeepseekModel(nn.Module):
         # build norm
         self.norm = RMSNorm(config.hidden_size,
                             config.rms_norm_eps,
-                            quant_config=quantization_config,
                             dtype=dtype,
                             device=device)
 

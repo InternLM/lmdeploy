@@ -37,7 +37,9 @@ class RMSNormW8A8Builder(ABC):
 
     @staticmethod
     @abstractmethod
-    def build(hidden_size: int, eps: float = 1e-6):
+    def build(hidden_size: int,
+              eps: float = 1e-6,
+              quant_dtype: torch.dtype = torch.int8):
         """build."""
         raise NotImplementedError
 
@@ -71,6 +73,7 @@ class LinearW8A8Builder(ABC):
     def build(in_features: int,
               out_features: int,
               bias: bool = True,
-              dtype: torch.dtype = None):
+              dtype: torch.dtype = None,
+              quant_dtype: torch.dtype = torch.int8):
         """build."""
         raise NotImplementedError
