@@ -50,6 +50,15 @@ class TritonLoRAImpl(LoRAImpl):
         """forward."""
         lora_input = self._make_packed_lora_input(x, ctx_mgr)
 
+        base_slice = adapter_info.base_slice
+        sliced_base = base_output[..., base_slice]
+
+        if base_output.is_contiguous():
+            kernel_output = sliced_base.flatten(0, -2)
+            cum = True
+        else:
+            kernel_output = None
+            cum = False
         lora_out = fused_lora(
             lora_input.x,
             lora_A,
@@ -62,14 +71,14 @@ class TritonLoRAImpl(LoRAImpl):
             adapter_ids=lora_input.adapter_ids,
             max_rank=adapter_info.max_rank,
             max_seqlen=lora_input.max_seq_len,
+            output=kernel_output,
+            cum=cum,
         )
 
-        base_slice = adapter_info.base_slice
-        sliced_base = base_output[..., base_slice]
-        lora_out = lora_out.reshape(sliced_base.shape)
-        sliced_base.add_(lora_out)
-        output = base_output
-        return output
+        if not base_output.is_contiguous():
+            lora_out = lora_out.reshape(sliced_base.shape)
+            sliced_base.add_(lora_out)
+        return base_output
 
 
 class TritonLoRABuilder(LoRABuilder):
