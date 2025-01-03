@@ -124,7 +124,7 @@ class GenerationConfig:
         """Check input validation."""
         assert type(
             self.n) == int and self.n > 0, 'n is not a positive integer'
-        assert self.top_p > 0 and self.top_p <= 1  # (0, 1]
+        assert self.top_p >= 0 and self.top_p <= 1  # [0, 1]
         assert self.top_k >= 0, 'top_k can not be a negative integer'
         assert self.temperature >= 0 and self.temperature <= 2  # [0,2]
         assert 0 <= self.min_p <= 1, \
@@ -338,7 +338,6 @@ class Response:
     text: str
     generate_token_len: int
     input_token_len: int
-    session_id: int
     finish_reason: Optional[Literal['stop', 'length']] = None
     token_ids: List[int] = field(default_factory=list)
     logprobs: List[Dict[int, float]] = None

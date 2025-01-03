@@ -25,6 +25,7 @@ add_library(Llama STATIC
 set_property(TARGET Llama PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET Llama PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(Llama PUBLIC CUDA::cudart
+        engine
         gemm2
         rms_norm
         cublasMMWrapper

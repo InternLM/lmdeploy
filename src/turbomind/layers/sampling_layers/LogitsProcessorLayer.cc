@@ -178,7 +178,7 @@ void LogitsProcessorLayer<T>::forward(TensorMap* output_tensors, TensorMap* inpu
     // temperature
     {
         if (!ALL_OF(temperature_.begin(), batch_size, float, 1.f)) {
-            invokeBatchApplyTemperaturePenalty(
+            invokeBatchApplyTemperaturePenalty_v2(
                 logits, (T*)nullptr, temperature_buf_, batch_size, args_.vocab_size, args_.vocab_size_padded, stream_);
             sync_check_cuda_error();
         }
