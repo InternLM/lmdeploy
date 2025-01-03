@@ -7,7 +7,8 @@ import torch
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.llava_hf import VISION_MODELS, LlavaHfVisionModel
-from lmdeploy.vl.model.utils import disable_logging
+from lmdeploy.vl.model.utils import (disable_logging,
+                                     get_vision_encoder_device_map)
 
 logger = get_logger('lmdeploy')
 
@@ -36,27 +37,12 @@ class LlavaNextVisionModel(LlavaHfVisionModel):
         """build the vision part of a VLM model when backend is turbomind, or
         load the whole VLM model when `self.with_llm==True`"""
         from accelerate import load_checkpoint_and_dispatch
-        from accelerate.utils import get_balanced_memory, infer_auto_device_map
 
         no_split_module_classes = ['CLIPEncoderLayer']
-        max_memory = get_balanced_memory(
-            self.model,
-            max_memory=self.max_memory,
-            dtype=torch.half,
-            no_split_module_classes=no_split_module_classes)
-        device_map = infer_auto_device_map(
-            self.model,
-            no_split_module_classes=no_split_module_classes,
-            max_memory=max_memory,
-            dtype=torch.half)
-
         same_device_keys = [('multi_modal_projector', 'image_newline')]
-        for keys in same_device_keys:
-            keys = [k for k in keys if k in device_map]
-            if len(keys) <= 1:
-                continue
-            for k in keys[1:]:
-                device_map[k] = device_map[keys[0]]
+        device_map = get_vision_encoder_device_map(self.model, self.max_memory,
+                                                   no_split_module_classes,
+                                                   same_device_keys)
 
         with disable_logging():
             load_checkpoint_and_dispatch(
