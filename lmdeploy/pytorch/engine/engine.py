@@ -1040,7 +1040,6 @@ class Engine:
 
         async def __step():
             """step decoding."""
-            # prefill = self.scheduler.has_waiting()
             prefill = __do_prefill()
             schedule_output = self.scheduler.schedule(
                 is_prefill=prefill, prealloc_size=prefill_interval)

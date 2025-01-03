@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
-from typing import Literal, Optional, Union
+from typing import Dict, List, Literal, Optional, Union
 
 from transformers import AutoConfig
 
@@ -128,7 +128,8 @@ def check_vl_llm(config: dict) -> bool:
         return True
     elif arch == 'MultiModalityCausalLM' and 'language_config' in config:
         return True
-    elif arch == 'ChatGLMModel' and 'vision_config' in config:
+    elif arch in ['ChatGLMModel', 'ChatGLMForConditionalGeneration'
+                  ] and 'vision_config' in config:
         return True
     elif arch in supported_archs:
         return True
@@ -193,3 +194,22 @@ def get_model_arch(model_path: str):
             raise RuntimeError(
                 f'Could not find model architecture from config: {_cfg}')
         return arch, cfg
+
+
+def search_nested_config(config, key):
+    """Recursively searches for the value associated with the given key in a
+    nested configuration of a model."""
+    if isinstance(config, Dict):
+        for k, v in config.items():
+            if k == key:
+                return v
+            if isinstance(v, (Dict, List)):
+                result = search_nested_config(v, key)
+                if result is not None:
+                    return result
+    elif isinstance(config, List):
+        for item in config:
+            result = search_nested_config(item, key)
+            if result is not None:
+                return result
+    return None

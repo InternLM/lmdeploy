@@ -32,26 +32,30 @@ class LlavaHfVisionModel(VisonModel):
             self.n_token_per_image += 1
 
     def build_model(self):
+        """build the vision part of a VLM model when backend is turbomind, or
+        load the whole VLM model when `self.with_llm==True`"""
         from accelerate import init_empty_weights, load_checkpoint_and_dispatch
 
         with init_empty_weights(), warnings.catch_warnings():
             warnings.simplefilter('ignore')
             from transformers import LlavaForConditionalGeneration
             model = LlavaForConditionalGeneration._from_config(self.hf_config)
-            del model.language_model
+            self.vl_model = model
+            if not self.with_llm:
+                del model.language_model
 
         # fix for llava-hf/llava-interleave-qwen-7b-hf
         setattr(model.config, 'tie_word_embeddings', False)
         with disable_logging():
-            load_checkpoint_and_dispatch(model=model,
-                                         max_memory=self.max_memory,
-                                         checkpoint=self.model_path,
-                                         device_map='auto',
-                                         no_split_module_classes=[
-                                             'CLIPEncoderLayer',
-                                             'SiglipEncoderLayer'
-                                         ],
-                                         dtype=torch.half)
+            load_checkpoint_and_dispatch(
+                model=model,
+                max_memory=self.max_memory,
+                checkpoint=self.model_path,
+                device_map='auto' if not self.with_llm else {'': 'cpu'},
+                no_split_module_classes=[
+                    'CLIPEncoderLayer', 'SiglipEncoderLayer'
+                ],
+                dtype=torch.half)
         model.eval()
         self.model = model
 
