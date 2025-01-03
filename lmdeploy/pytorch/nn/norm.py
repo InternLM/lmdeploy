@@ -4,7 +4,10 @@ from typing import Any
 import torch
 from torch import nn
 
+from lmdeploy.pytorch.distributed import get_world_rank
+
 from ..backends import OpType, get_backend
+from .utils import chunk_aligned, get_distribute_size
 
 
 def _is_w8a8(quant_config: Any):
@@ -28,7 +31,9 @@ class RMSNorm(nn.Module):
                  eps: float = 1e-6,
                  dtype: torch.dtype = None,
                  device: torch.device = None,
-                 quant_config: Any = None):
+                 quant_config: Any = None,
+                 tp: bool = False,
+                 align: int = 1):
         super().__init__()
         backend = get_backend()
 
@@ -37,6 +42,14 @@ class RMSNorm(nn.Module):
             builder = backend.get_layer_impl_builder(OpType.RMSNormW8A8)
         else:
             builder = backend.get_layer_impl_builder(OpType.RMSNorm)
+
+        if tp:
+            world_size, rank = get_world_rank()
+            hidden_size = get_distribute_size(hidden_size,
+                                              world_size,
+                                              rank,
+                                              align=align)
+
         self.register_parameter('weight',
                                 self.create_weight(hidden_size, dtype, device))
         if w8a8_flag:
@@ -45,6 +58,17 @@ class RMSNorm(nn.Module):
                                       quant_dtype=quant_dtype)
         else:
             self.impl = builder.build(hidden_size, eps)
+
+        if tp:
+            self.weight.weight_loader = self.weight_loader
+        self.align = align
+
+    def weight_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor):
+        """weight loader."""
+        world_size, rank = get_world_rank()
+        loaded_weight = chunk_aligned(loaded_weight, world_size, 0,
+                                      self.align)[rank]
+        param.copy_(loaded_weight)
 
     @staticmethod
     def create_weight(hidden_size: int,
