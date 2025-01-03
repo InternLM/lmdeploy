@@ -123,6 +123,7 @@ class CLI(object):
         ArgumentHelper.adapters(pt_group)
         ArgumentHelper.device(pt_group)
         ArgumentHelper.eager_mode(pt_group)
+        ArgumentHelper.cache_block_seq_len(pt_group)
         # common engine args
         dtype_act = ArgumentHelper.dtype(pt_group)
         tp_act = ArgumentHelper.tp(pt_group)
@@ -267,7 +268,8 @@ class CLI(object):
                 enable_prefix_caching=args.enable_prefix_caching,
                 device_type=args.device,
                 eager_mode=args.eager_mode,
-                quant_policy=args.quant_policy)
+                quant_policy=args.quant_policy,
+                block_size=args.cache_block_seq_len)
             run_chat(args.model_path,
                      engine_config,
                      chat_template_config=chat_template_config)
