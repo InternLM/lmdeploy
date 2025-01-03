@@ -124,12 +124,16 @@ class InternAttention(nn.Module):
                 eps=config.layer_norm_eps,
                 dtype=dtype,
                 device=device,
+                tp=True,
+                align=self.head_dim,
             )
             self.k_norm = RMSNorm(
                 self.embed_dim,
                 eps=config.layer_norm_eps,
                 dtype=dtype,
                 device=device,
+                tp=True,
+                align=self.head_dim,
             )
 
         self.scale = self.head_dim**-0.5

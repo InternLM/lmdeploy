@@ -12,7 +12,7 @@ from lmdeploy.utils import get_logger
 
 from ..backends import OpType, get_backend
 from ..backends.lora import AdapterInfo
-from .utils import get_distribute_size
+from .utils import chunk_aligned, get_distribute_size
 
 logger = get_logger('lmdeploy')
 
@@ -25,20 +25,7 @@ def _check_qkv_split_layout(layout: str):
                            f'but get: {layout}')
 
 
-def _chunk_align(weight: torch.Tensor, chunks: int, dim: int, align: int):
-    """chunk aligned."""
-    if align == 1:
-        return weight.chunk(chunks, dim=dim)
-    size = weight.size(dim)
-    assert size % align == 0
-    aligned_size = size // align
-
-    # try best to evenly split chunks
-    align_per_chunk = aligned_size // chunks
-    remain = aligned_size % chunks
-    sections = [align_per_chunk + int(c < remain) for c in range(chunks)]
-    sections = [sec * align for sec in sections]
-    return weight.split(sections, dim=dim)
+_chunk_align = chunk_aligned
 
 
 class QKVMixin:
