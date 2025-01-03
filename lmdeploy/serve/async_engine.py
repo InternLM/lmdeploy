@@ -361,7 +361,19 @@ class AsyncEngine(LogitsMixin):
             await asyncio.gather(
                 *[_inner_call(i, generators[i]) for i in range(len(prompts))])
 
-        _get_event_loop().run_until_complete(gather())
+        loop = _get_event_loop()
+        if loop.is_running():
+            # when there is another event loop running in the same thread
+            # it will raise error. Putting it in another thread might case
+            # slightly performance drop, about 10%
+            logger.warn(
+                'Another event loop running detected. Run this event loop '
+                'in a separate thread. This might cause performance drop.')
+            thread = Thread(target=lambda: loop.run_until_complete(gather()))
+            thread.start()
+            thread.join()
+        else:
+            loop.run_until_complete(gather())
         outputs = outputs[0] if need_list_wrap else outputs
         return outputs
 
@@ -520,7 +532,7 @@ class AsyncEngine(LogitsMixin):
         elif gen_config.random_seed is None and sequence_start:
             gen_config.random_seed = random.getrandbits(64)
         if gen_config.n > 1:
-            logger.ERROR(f"n({gen_config.n}) > 1 hasn't been supported yet. "
+            logger.error(f"n({gen_config.n}) > 1 hasn't been supported yet. "
                          f'Fallback to 1')
             gen_config.n = 1
         prompt = messages
