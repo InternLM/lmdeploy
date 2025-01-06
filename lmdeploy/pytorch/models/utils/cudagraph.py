@@ -54,7 +54,8 @@ class CudaGraphMixin:
         seq_lens = input_ids.size(1)
         if attn_metadata.kv_flatten_size is None:
             return seq_lens <= CUDA_GRAPH_PREFILL_SEQLEN
-        return seq_lens <= CUDA_GRAPH_PREFILL_SEQLEN and attn_metadata.kv_flatten_size <= CUDA_GRAPH_PREFILL_KVLEN  # noqa
+        enabled = seq_lens <= CUDA_GRAPH_PREFILL_SEQLEN and attn_metadata.kv_flatten_size <= CUDA_GRAPH_PREFILL_KVLEN  # noqa
+        return enabled
 
     def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, *args,
                                **kwargs) -> BuffType:
