@@ -78,7 +78,9 @@ def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs,
 
         k = _load_kv(k_ptrs, causal_mask, boundary_check=(1, ))
         if apply_mask:
-            attn_mask = tl.load(attn_mask_ptr)
+            attn_mask = tl.load(attn_mask_ptr,
+                                boundary_check=(0, 1),
+                                padding_option='zero')
         qk = tl.dot(q, k)
 
         if BLOCK_DK1 != 0:
