@@ -13,13 +13,13 @@ logger = get_logger('lmdeploy')
 class GLM4VisionModel(VisonModel):
     """glm-4v-9b vision model."""
 
-    _arch = 'ChatGLMModel'
+    _arch = ['ChatGLMModel', 'ChatGLMForConditionalGeneration']
 
     @classmethod
     def match(cls, config: AutoConfig):
         """check whether the config match the model."""
         arch = config.architectures[0]
-        if arch == cls._arch and hasattr(config, 'vision_config'):
+        if arch in cls._arch and hasattr(config, 'vision_config'):
             return True
         return False
 
@@ -36,6 +36,14 @@ class GLM4VisionModel(VisonModel):
         image_size = self.hf_config.vision_config['image_size']
         patch_size = self.hf_config.vision_config['patch_size']
         self.n_token_per_image = 2 + (image_size // patch_size // 2)**2
+
+    def build_model(self):
+        if self.with_llm:
+            from transformers import AutoModelForCausalLM
+            self.vl_model = AutoModelForCausalLM.from_pretrained(
+                self.model_path, device_map='cpu', trust_remote_code=True)
+        else:
+            raise NotImplementedError('turbomind has not supported glm4v yet')
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """refers to the spec of `super.preprocess()"""

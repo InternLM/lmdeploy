@@ -51,21 +51,14 @@ class CudaOpsBackend(DefaultOpsBackend):
             from .activation import TritonSiluAndMulBuilder
             return TritonSiluAndMulBuilder
         elif layer_type == OpType.LinearW4A16:
-            try:
-                from awq.modules.linear.gemm import awq_ext  # noqa: F401
-                AWQ_INSTALLED = True
-            except Exception:
-                AWQ_INSTALLED = False
-            if AWQ_INSTALLED:
-                from .awq_modules import AwqLinearW4A16Builder
-                return AwqLinearW4A16Builder
-            else:
-                logger.debug(
-                    f'Op {layer_type} fallback to default implementation.')
-                return super().get_layer_impl_builder(layer_type)
+            from .awq_modules import AwqLinearW4A16Builder
+            return AwqLinearW4A16Builder
         elif layer_type == OpType.FusedMoE:
             from .moe import TritonFusedMoEBuilder
             return TritonFusedMoEBuilder
+        elif layer_type == OpType.FusedMoEW8A8:
+            from .moe import TritonFusedMoEW8A8Builder
+            return TritonFusedMoEW8A8Builder
         else:
             logger.debug(
                 f'Op {layer_type} fallback to default implementation.')

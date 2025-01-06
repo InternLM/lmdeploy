@@ -158,8 +158,7 @@ jobs:
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
-          python3 -m pip install /root/packages/xformers-0.0.28.post1-cp310-cp310-manylinux_2_28_x86_64.whl --no-deps
+          python3 -m pip install /root/packages/xformers-*.whl --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
@@ -167,7 +166,6 @@ jobs:
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
-          pip install triton==3.0.0
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
@@ -245,8 +243,7 @@ jobs:
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
-          python3 -m pip install /root/packages/xformers-0.0.28.post1-cp310-cp310-manylinux_2_28_x86_64.whl --no-deps
+          python3 -m pip install /root/packages/xformers-*.whl --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
@@ -254,7 +251,6 @@ jobs:
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
-          pip install triton==3.0.0
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
@@ -345,8 +341,7 @@ jobs:
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
-          python3 -m pip install /root/packages/xformers-0.0.28.post1-cp310-cp310-manylinux_2_28_x86_64.whl --no-deps
+          python3 -m pip install /root/packages/xformers-*.whl --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
@@ -354,7 +349,6 @@ jobs:
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
-          pip install triton==3.0.0
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
@@ -437,8 +431,7 @@ jobs:
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
-          python3 -m pip install /root/packages/xformers-0.0.28.post1-cp310-cp310-manylinux_2_28_x86_64.whl --no-deps
+          python3 -m pip install /root/packages/xformers-*.whl --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
@@ -446,7 +439,6 @@ jobs:
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
-          pip install triton==3.0.0
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
@@ -498,8 +490,7 @@ jobs:
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
-          python3 -m pip install /root/packages/xformers-0.0.28.post1-cp310-cp310-manylinux_2_28_x86_64.whl --no-deps
+          python3 -m pip install /root/packages/xformers-*.whl --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
@@ -507,7 +498,6 @@ jobs:
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
-          pip install triton==3.0.0
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
@@ -560,8 +550,7 @@ jobs:
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
-          python3 -m pip install /root/packages/xformers-0.0.28.post1-cp310-cp310-manylinux_2_28_x86_64.whl --no-deps
+          python3 -m pip install /root/packages/xformers-*.whl --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
@@ -575,7 +564,6 @@ jobs:
           echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
       - name: Check env
         run: |
-          pip install triton==3.0.0
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
@@ -593,13 +581,13 @@ jobs:
         run: |
           export LMDEPLOY_DIR=$(pwd)
 
-          python3 .github/scripts/action_tools.py evaluate "[turbomind_internlm2_chat_7b, pytorch_internlm2_chat_7b, turbomind_internlm2_5_7b_chat, pytorch_internlm2_5_7b_chat, turbomind_internlm2_5_7b_chat_batch1, turbomind_internlm2_5_7b_chat_batch1_4bits, turbomind_internlm2_5_20b_chat, pytorch_internlm2_5_20b_chat, turbomind_qwen1_5_7b_chat, pytorch_qwen1_5_7b_chat, turbomind_llama2_7b_chat, turbomind_llama3_8b_instruct, pytorch_llama3_8b_instruct, turbomind_llama3_1_8b_instruct, pytorch_llama3_1_8b_instruct, turbomind_qwen2_7b_instruct, pytorch_qwen2_7b_instruct, pytorch_qwen1_5_moe_2_7b_chat, pytorch_gemma_2_9b_it]" "[*race_datasets, *gsm8k_datasets, *ifeval_datasets]" /root/evaluation-reports/${{ github.run_id }} chat true
+          python3 .github/scripts/action_tools.py evaluate "[turbomind_internlm2_chat_7b, pytorch_internlm2_chat_7b, turbomind_internlm2_5_7b_chat, pytorch_internlm2_5_7b_chat, turbomind_internlm2_5_20b_chat, pytorch_internlm2_5_20b_chat, turbomind_qwen1_5_7b_chat, pytorch_qwen1_5_7b_chat, turbomind_llama2_7b_chat, turbomind_llama3_8b_instruct, pytorch_llama3_8b_instruct, turbomind_llama3_1_8b_instruct, pytorch_llama3_1_8b_instruct, turbomind_qwen2_7b_instruct, pytorch_qwen2_7b_instruct, pytorch_qwen1_5_moe_2_7b_chat, pytorch_gemma_2_9b_it]" "[*race_datasets, *gsm8k_datasets, *ifeval_datasets]" /root/evaluation-reports/${{ github.run_id }} chat true
       - name: Evaluate base models
         if: matrix.evaluate_type == 'base'
         run: |
           export LMDEPLOY_DIR=$(pwd)
 
-          python3 .github/scripts/action_tools.py evaluate "[turbomind_internlm2_5_7b, turbomind_qwen2_5_14b, turbomind_internlm2_5_7b_batch1]" "[*race_datasets, *gsm8k_datasets, *gpqa_datasets, *winogrande_datasets]" /root/evaluation-reports/${{ github.run_id }} base true
+          python3 .github/scripts/action_tools.py evaluate "[turbomind_internlm2_5_7b, turbomind_qwen2_5_14b]" "[*race_datasets, *gsm8k_datasets, *gpqa_datasets, *winogrande_datasets]" /root/evaluation-reports/${{ github.run_id }} base true
       - name: Clear workspace
         if: always()
         run: |

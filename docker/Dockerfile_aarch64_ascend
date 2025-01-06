@@ -121,5 +121,4 @@ COPY --from=copy_temp /tmp /opt/lmdeploy
 WORKDIR /opt/lmdeploy
 
 RUN --mount=type=cache,target=/root/.cache/pip \
-    sed -i '/triton/d' requirements/runtime.txt && \
     LMDEPLOY_TARGET_DEVICE=ascend pip3 install -v --no-build-isolation -e .
