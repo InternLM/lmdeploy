@@ -30,24 +30,13 @@ SeqList = List[SchedulerSequence]
 _EMPTY_TOKEN = np.empty((0, ), dtype=np.int64)
 
 
-def _raise_exception_on_finish(task: asyncio.Task) -> None:
-    """raise exception on finish."""
-    try:
-        task.result()
-    except asyncio.CancelledError:
-        return
-    except Exception as e:
-        raise e
-
-
 @dataclass
 class InferOutput:
     """The output of the model inference."""
 
     session_id: int
+    resp: Response
     token_ids: List[int]
-    sender_id: int
-    req_id: int
     meta: Any = None
     finish: bool = False
     logits: torch.Tensor = None
@@ -250,7 +239,7 @@ class Engine:
 
     def _bind_request_manager(self):
         """bind request manager."""
-        req_manager = RequestManager(self.engine_config.thread_safe)
+        req_manager = RequestManager()
         req_manager.bind_func(RequestType.ADD_SESSION, self._on_add_session)
         req_manager.bind_func(RequestType.STOP_SESSION, self._on_stop_session)
         req_manager.bind_func(RequestType.END_SESSION, self._on_end_session)
@@ -262,18 +251,15 @@ class Engine:
         return self.req_manager.start_loop(self.async_loop)
 
     def _response(self,
+                  resp: Response,
                   resp_type: ResponseType,
-                  sender_id: int,
-                  req_id: int,
                   data: Any = None,
                   err_msg: str = ''):
         """response."""
-        self.req_manager.response(
-            Response(type=resp_type,
-                     sender_id=sender_id,
-                     req_id=req_id,
-                     data=data,
-                     err_msg=err_msg))
+        resp.type = resp_type
+        resp.data = data
+        resp.err_msg = err_msg
+        self.req_manager.response(resp)
 
     def _get_max_session_len(self):
         """get max session len."""
@@ -299,7 +285,7 @@ class Engine:
                 self.scheduler.add_session(session_id)
                 resp_type = ResponseType.SUCCESS
             if resp:
-                self._response(resp_type, req.sender_id, req.req_id)
+                self._response(req.resp, resp_type)
 
     def _on_stop_session(self, reqs: Request, **kwargs):
         """on stop session callback."""
@@ -311,7 +297,7 @@ class Engine:
                 self.scheduler.stop_session(session_id)
                 resp_type = ResponseType.SUCCESS
             if resp:
-                self._response(resp_type, req.sender_id, req.req_id)
+                self._response(req.resp, resp_type)
 
     def _on_end_session(self, reqs: Request, **kwargs):
         """on end session callback."""
@@ -323,14 +309,35 @@ class Engine:
                 self.scheduler.end_session(session_id)
                 resp_type = ResponseType.SUCCESS
             if resp:
-                self._response(resp_type, req.sender_id, req.req_id)
+                self._response(req.resp, resp_type)
 
     def _on_add_message(self, reqs: Request, **kwargs):
         """on add message callback."""
+        for req in reqs:
+            req_data = req.data
+            if req_data.get('input_multimodals', None) is None:
+                continue
+            elif self.input_processor is None:
+                logger.warning('Do not support Multimodal inputs.')
+                continue
+            input_ids = req_data['token_ids']
+            input_multimodals = req_data['input_multimodals']
+            if len(input_multimodals) == 0:
+                req_data['input_multimodals'] = None
+                continue
+            result = self.input_processor.preprocess_input(
+                input_ids, input_multimodals)
 
-        self._msg_preprocess_inque.put_nowait(reqs)
+            input_ids = result.input_ids
+            input_multimodals = result.input_multimodals
 
-    def _add_message(self, que):
+            req_data['token_ids'] = input_ids
+            req_data['input_multimodals'] = input_multimodals
+
+        if len(reqs) > 0:
+            self._add_message(reqs)
+
+    def _add_message(self, reqs):
 
         def __update_bad_words(msg):
             """update bad words."""
@@ -353,16 +360,10 @@ class Engine:
                 sampling_param.max_new_tokens,
                 max_session_len - msg.num_all_tokens())
 
-        if que.qsize() == 0:
-            return
-
-        reqs = que.get_nowait()
-
         for req in reqs:
             session_id = req.data['session_id']
             if session_id not in self.scheduler.sessions:
-                self._response(ResponseType.SESSION_NOT_EXIST, req.sender_id,
-                               req.req_id)
+                self._response(req.resp, ResponseType.SESSION_NOT_EXIST)
                 continue
             session_id = req.data['session_id']
             sess = self.scheduler.sessions[session_id]
@@ -396,8 +397,7 @@ class Engine:
                 __update_bad_words(msg)
                 __update_max_new_tokens(msg)
 
-            msg.sender_id = req.sender_id
-            msg.req_id = req.req_id
+            msg.resp = req.resp
 
     @property
     def model_config(self):
@@ -553,11 +553,12 @@ class Engine:
         return stopped, num_appendable_ids
 
     @logging_timer('SamplingLogits', logger)
-    def async_sampling_logits(self, logits: torch.Tensor,
-                              all_ids: torch.Tensor,
-                              guided_input_ids: torch.Tensor,
-                              sampling_inputs: SamplingInputs,
-                              inputs: ModelInputs, ignore_eos: torch.Tensor):
+    async def async_sampling_logits(self, logits: torch.Tensor,
+                                    all_ids: torch.Tensor,
+                                    guided_input_ids: torch.Tensor,
+                                    sampling_inputs: SamplingInputs,
+                                    inputs: ModelInputs,
+                                    ignore_eos: torch.Tensor):
         """sampling logits."""
 
         def __get_last_logits():
@@ -572,7 +573,8 @@ class Engine:
         split_logits = __get_last_logits()
         logits_processor = FusedLogitsProcessor(sampling_inputs, ignore_eos,
                                                 self.tokenizer.model.model)
-        logits = logits_processor(all_ids, guided_input_ids, split_logits)
+        logits = await logits_processor(all_ids, guided_input_ids,
+                                        split_logits)
         next_token_ids = logits_processor.sampling(logits)
 
         return next_token_ids
@@ -585,13 +587,11 @@ class Engine:
         if model_metas is None:
             model_metas = [None] * len(running)
         next_token_ids = next_token_ids.numpy()
-        eos_token_id = self.model_config.eos_token_id
         for token, msg, stop, model_meta in zip(next_token_ids, running,
                                                 stopped, model_metas):
             if msg.status != MessageStatus.RUNNING:
                 continue
             update_token = token
-            stop = stop or token in eos_token_id
             if stop:
                 update_token = _EMPTY_TOKEN
             else:
@@ -697,15 +697,6 @@ class Engine:
                                   event: torch.cuda.Event):
         """make infer output."""
 
-        def __get_out_token_ids(token: torch.Tensor, msg: SchedulerSequence,
-                                stopped: bool):
-            """check if output is necessary."""
-            if stopped:
-                return []
-            if token in msg.sampling_param.stop_words:
-                return []
-            return [token]
-
         def __get_q_start_loc():
             inputs = self._inputs
             seq_length = inputs.seq_length
@@ -733,16 +724,15 @@ class Engine:
         for idx, msg in enumerate(running):
             if not is_run[idx]:
                 continue
-            token_ids = __get_out_token_ids(next_token_ids[idx], msg,
-                                            stopped[idx])
+            token_ids = msg.all_ids[-msg.num_new_tokens:]
             finish = msg.status == MessageStatus.STOPPED
             if not finish and len(token_ids) == 0:
                 continue
             session_id = msg.session_id
+            resp = msg.resp
             out = InferOutput(
                 session_id=session_id,
-                sender_id=msg.sender_id,
-                req_id=msg.req_id,
+                resp=resp,
                 finish=finish,
                 token_ids=token_ids,
             )
@@ -803,7 +793,7 @@ class Engine:
             logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
 
             # sampling
-            next_token_ids = self.async_sampling_logits(
+            next_token_ids = await self.async_sampling_logits(
                 logits, all_ids, guided_input_ids, sampling_inputs, inputs,
                 num_ignore_eos > 0)
             num_ignore_eos = num_ignore_eos - 1
@@ -832,39 +822,28 @@ class Engine:
                 swap_out_map = dict()
                 __update_inputs(next_token_ids)
 
+    def _set_has_runable_event(self, has_runable_event: asyncio.Event):
+        """set has runable event."""
+        if self.scheduler.has_unfinished():
+            has_runable_event.set()
+        else:
+            has_runable_event.clear()
+
     @torch.inference_mode()
-    async def _async_loop_preprocess_message(self, inque, outque):
+    async def _async_loop_preprocess_message(self,
+                                             forward_event: asyncio.Event,
+                                             has_runable_event: asyncio.Event):
         """preprocess msg."""
         while True:
-            reqs = await inque.get()
-
-            for req in reqs:
-                req_data = req.data
-                if req_data.get('input_multimodals', None) is None:
-                    continue
-                elif self.input_processor is None:
-                    logger.warning('Do not support Multimodal inputs.')
-                    continue
-                input_ids = req_data['token_ids']
-                input_multimodals = req_data['input_multimodals']
-                if len(input_multimodals) == 0:
-                    req_data['input_multimodals'] = None
-                    continue
-                result = self.input_processor.preprocess_input(
-                    input_ids, input_multimodals)
-
-                input_ids = result.input_ids
-                input_multimodals = result.input_multimodals
-
-                req_data['token_ids'] = input_ids
-                req_data['input_multimodals'] = input_multimodals
-
-            if len(reqs) > 0:
-                outque.put_nowait(reqs)
+            if self.scheduler.has_unfinished():
+                await forward_event.wait()
+            await self.req_manager.step()
+            self._set_has_runable_event(has_runable_event)
 
     @torch.inference_mode()
     async def _async_loop_background(self, in_que: asyncio.Queue,
-                                     out_que: asyncio.Queue):
+                                     out_que: asyncio.Queue,
+                                     forward_event: asyncio.Event):
         """async loop background."""
 
         def __gather_all_ids(seqs: SeqList, sampling_inputs: SamplingInputs):
@@ -925,76 +904,52 @@ class Engine:
 
         while True:
             is_prefill, scheduler_output = await in_que.get()
-            try:
-                running = scheduler_output.running
-                swap_in_map = scheduler_output.swap_in_map
-                swap_out_map = scheduler_output.swap_out_map
-                prefill_interval = self.scheduler_config.prefill_interval
-                loop_count = 1 if is_prefill else (prefill_interval - 1)
-                assert len(running) > 0
+            running = scheduler_output.running
+            swap_in_map = scheduler_output.swap_in_map
+            swap_out_map = scheduler_output.swap_out_map
+            prefill_interval = self.scheduler_config.prefill_interval
+            loop_count = 1 if is_prefill else (prefill_interval - 1)
+            assert len(running) > 0
 
-                # create inputs
-                inputs = self.create_model_inputs(running, is_prefill)
-                sampling_inputs = SamplingInputs.from_sampling_params(running)
-                all_ids = __gather_all_ids(running, sampling_inputs)
-                guided_input_ids = __gather_guided_input_ids(
-                    running, sampling_inputs)
-                num_appendable_ids = __get_num_appendable_ids(running)
-                num_ignore_eos = __get_num_ignore_eos(running)
-                return_logits = __need_logits(running)
+            # create inputs
+            inputs = self.create_model_inputs(running, is_prefill)
+            sampling_inputs = SamplingInputs.from_sampling_params(running)
+            all_ids = __gather_all_ids(running, sampling_inputs)
+            guided_input_ids = __gather_guided_input_ids(
+                running, sampling_inputs)
+            num_appendable_ids = __get_num_appendable_ids(running)
+            num_ignore_eos = __get_num_ignore_eos(running)
+            return_logits = __need_logits(running)
 
-                self._running = running
-                self._inputs = inputs
+            self._running = running
+            self._inputs = inputs
 
-                await self._async_step_background(
-                    inputs=inputs,
-                    swap_in_map=swap_in_map,
-                    swap_out_map=swap_out_map,
-                    all_ids=all_ids,
-                    guided_input_ids=guided_input_ids,
-                    sampling_inputs=sampling_inputs,
-                    num_appendable_ids=num_appendable_ids,
-                    num_ignore_eos=num_ignore_eos,
-                    loop_count=loop_count,
-                    return_logits=return_logits,
-                    output_que=out_que,
-                )
-            except Exception as e:
-                out_que.put_nowait((True, e))
-            finally:
-                in_que.task_done()
+            forward_event.clear()
+            await self._async_step_background(
+                inputs=inputs,
+                swap_in_map=swap_in_map,
+                swap_out_map=swap_out_map,
+                all_ids=all_ids,
+                guided_input_ids=guided_input_ids,
+                sampling_inputs=sampling_inputs,
+                num_appendable_ids=num_appendable_ids,
+                num_ignore_eos=num_ignore_eos,
+                loop_count=loop_count,
+                return_logits=return_logits,
+                output_que=out_que,
+            )
+            forward_event.set()
 
-    @torch.inference_mode()
-    async def _async_loop(self):
-        """Main loop of the engine.
-
-        Each engine instance would communicate with the engine by queue.
-        """
-
-        self._msg_preprocess_inque = asyncio.Queue()
-        self._msg_preprocess_outque = asyncio.Queue()
-
-        prefill_interval = self.scheduler_config.prefill_interval
-        in_que = asyncio.Queue()
-        out_que = asyncio.Queue()
-        loop_background = asyncio.get_event_loop().create_task(
-            self._async_loop_background(in_que, out_que),
-            name='MainLoopBackground')
-        loop_background.add_done_callback(_raise_exception_on_finish)
-
-        loop_msg_proc = asyncio.get_event_loop().create_task(
-            self._async_loop_preprocess_message(self._msg_preprocess_inque,
-                                                self._msg_preprocess_outque),
-            name='MainLoopPreprocessMessage')
-        loop_msg_proc.add_done_callback(_raise_exception_on_finish)
+    async def _async_send_responses(self, que: asyncio.Queue,
+                                    forward_event: asyncio.Event):
+        """send responses."""
 
         def __send_resp(out: InferOutput):
             """send response."""
             resp_type = (ResponseType.FINISH
                          if out.finish else ResponseType.SUCCESS)
-            self._response(resp_type,
-                           sender_id=out.sender_id,
-                           req_id=out.req_id,
+            self._response(out.resp,
+                           resp_type,
                            data=dict(token_ids=out.token_ids,
                                      logits=out.logits))
 
@@ -1003,23 +958,83 @@ class Engine:
             for out in step_outputs.values():
                 __send_resp(out)
 
+        while True:
+            resps = await que.get()
+            if self.scheduler.has_unfinished():
+                await forward_event.wait()
+            __send_resps(resps)
+
+    @staticmethod
+    def _add_loop_tasks_done_callback(tasks: List[asyncio.Task]):
+        """add loop tasks done callback."""
+
+        def __task_callback(task: asyncio.Task) -> None:
+            """raise exception on finish."""
+            task_name = task.get_name()
+            try:
+                task.result()
+            except asyncio.CancelledError:
+                logger.debug(f'Task <{task_name}> cancelled.')
+                return
+            except Exception:
+                logger.exception(f'Task <{task_name}> failed')
+                for task in tasks:
+                    if not task.cancelled():
+                        task.cancel()
+
+        for task in tasks:
+            task.add_done_callback(__task_callback)
+
+    @torch.inference_mode()
+    async def _async_loop(self):
+        """Main loop of the engine.
+
+        Each engine instance would communicate with the engine by queue.
+        """
+        event_loop = asyncio.get_event_loop()
+        prefill_interval = self.scheduler_config.prefill_interval
+
+        # forward task
+        in_que = asyncio.Queue()
+        out_que = asyncio.Queue()
+        forward_event = asyncio.Event()
+        forward_event.set()
+        loop_background = event_loop.create_task(self._async_loop_background(
+            in_que, out_que, forward_event),
+                                                 name='MainLoopBackground')
+
+        # preprocess task
+        has_runable_event = asyncio.Event()
+        loop_msg_proc = event_loop.create_task(
+            self._async_loop_preprocess_message(forward_event,
+                                                has_runable_event),
+            name='MainLoopPreprocessMessage')
+
+        # response task
+        resp_que = asyncio.Queue()
+        loop_send_resp = event_loop.create_task(self._async_send_responses(
+            resp_que, forward_event),
+                                                name='MainLoopResponse')
+
+        loop_main = asyncio.current_task()
+        loop_tasks: List[asyncio.Task] = [
+            loop_main, loop_background, loop_msg_proc, loop_send_resp
+        ]
+        self._add_loop_tasks_done_callback(loop_tasks)
+
         def __do_prefill():
             # decoding if no waiting
             if not self.scheduler.has_waiting():
                 return False
-
-            num_running = len(self.scheduler.running)
-            num_waiting = len(self.scheduler.waiting)
+            num_running = self.scheduler.num_running()
+            num_waiting = self.scheduler.num_waiting()
             max_batches = self.scheduler_config.max_batches
-
             # prefill if too much waiting
             if num_waiting >= 4:
                 return True
-
             # prefill if no enough running
             if num_running < max_batches * 0.5:
                 return True
-
             # decoding
             return False
 
@@ -1037,31 +1052,13 @@ class Engine:
             in_que.put_nowait((prefill, schedule_output))
             finish = False
             while not finish:
-                if self.req_manager.has_requests():
-                    self.req_manager.step()
-                self._add_message(self._msg_preprocess_outque)
                 finish, out = await out_que.get()
-                try:
-                    if isinstance(out, Exception):
-                        raise out
-                    (next_token_ids, logits, stopped, model_metas, event) = out
-                    step_outputs = await self._make_infer_outputs(
-                        next_token_ids, logits, stopped, model_metas, event)
-                    __send_resps(step_outputs)
-                except Exception as e:
-                    raise e
-                finally:
-                    out_que.task_done()
+                step_outputs = await self._make_infer_outputs(*out)
+                self._set_has_runable_event(has_runable_event)
+                resp_que.put_nowait(step_outputs)
 
         while True:
-            if self.req_manager.has_requests():
-                self.req_manager.step()
-            self._add_message(self._msg_preprocess_outque)
-
-            if not self.scheduler.has_unfinished():
-                await asyncio.sleep(0.01)
-                continue
-
+            await has_runable_event.wait()
             await __step()
 
     async def async_loop(self):
