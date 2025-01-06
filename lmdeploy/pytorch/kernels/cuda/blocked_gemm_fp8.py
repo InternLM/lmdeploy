@@ -36,7 +36,6 @@ def _quant_fp8_kernel(
     scale = tl.max(tl.abs(a)) * rfp8_max
     out = a / scale
 
-    scale = scale
     out = tl.clamp(out, fp8_min, fp8_max)
     out = out.to(out_ptr.dtype.element_ty)
 
