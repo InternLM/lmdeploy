@@ -153,7 +153,7 @@ class CAMBSingleGraphRunner:
             'block_offsets'][:batch_size, :num_blocks] = block_offsets
         input_buffers['q_seqlens'][:batch_size] = q_seqlens
         input_buffers['kv_seqlens'][:batch_size] = kv_seqlens
-        input_buffers['q_start_loc'][:batch_size + 1] = q_start_loc[:batch_size + 1]
+        input_buffers['q_start_loc'][:batch_size + 1] = q_start_loc
         input_buffers[
             'kv_start_indices'][:num_tokens] = kv_start_indices[:num_tokens]
 
