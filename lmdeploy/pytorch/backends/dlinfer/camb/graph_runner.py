@@ -100,7 +100,7 @@ class CAMBSingleGraphRunner:
         input_buffers['block_offsets'] = torch.zeros((max_batches, num_blocks),
                                                      dtype=torch.int32,
                                                      device=device)
-        
+
         # in attn_metadata, we mock q_start_loc as cu_seqlens so need to add 1
         input_buffers['q_start_loc'] = torch.arange(max_batches + 1,
                                                     dtype=torch.int32,
@@ -186,7 +186,7 @@ class CAMBSingleGraphRunner:
 
         # is_decoding:
         new_inputs['input_ids'] = input_buffers[
-            'input_ids'][:, :new_batch_size+1]
+            'input_ids'][:, :new_batch_size + 1]
         new_inputs['position_ids'] = input_buffers[
             'position_ids'][:, :new_batch_size]
 
