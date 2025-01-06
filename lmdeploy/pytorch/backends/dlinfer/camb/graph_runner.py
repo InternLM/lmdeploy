@@ -16,17 +16,8 @@ logger = get_logger('lmdeploy')
 BuffType = Dict[str, Tensor]
 
 
-def next_power_of_2(n: int):
-    """Return the smallest power of 2 greater than or equal to n."""
-    n -= 1
-    n |= n >> 1
-    n |= n >> 2
-    n |= n >> 4
-    n |= n >> 8
-    n |= n >> 16
-    n |= n >> 32
-    n += 1
-    return n
+def round_up_to_multiple_of_8(n: int):
+    return (n + 7) // 8 * 8 + 8
 
 
 def _false(*args, **kwargs):
@@ -109,7 +100,7 @@ class CAMBSingleGraphRunner:
         input_buffers['block_offsets'] = torch.zeros((max_batches, num_blocks),
                                                      dtype=torch.int32,
                                                      device=device)
-
+        
         # in attn_metadata, we mock q_start_loc as cu_seqlens so need to add 1
         input_buffers['q_start_loc'] = torch.arange(max_batches + 1,
                                                     dtype=torch.int32,
@@ -162,7 +153,7 @@ class CAMBSingleGraphRunner:
             'block_offsets'][:batch_size, :num_blocks] = block_offsets
         input_buffers['q_seqlens'][:batch_size] = q_seqlens
         input_buffers['kv_seqlens'][:batch_size] = kv_seqlens
-        input_buffers['q_start_loc'][:batch_size + 1] = q_start_loc
+        input_buffers['q_start_loc'][:batch_size + 1] = q_start_loc[:batch_size + 1]
         input_buffers[
             'kv_start_indices'][:num_tokens] = kv_start_indices[:num_tokens]
 
@@ -174,8 +165,9 @@ class CAMBSingleGraphRunner:
                     1, max_num_tokens, emb_size)
             input_buffers['inputs_embeds'][:, :num_tokens] = inputs_embeds
 
+        # below only used for capture graph
         # create inputs
-        new_num_tokens = next_power_of_2(num_tokens)
+        new_num_tokens = round_up_to_multiple_of_8(num_tokens)
         new_batch_size = new_num_tokens
 
         attn_metadata.block_offsets = input_buffers[
@@ -194,7 +186,7 @@ class CAMBSingleGraphRunner:
 
         # is_decoding:
         new_inputs['input_ids'] = input_buffers[
-            'input_ids'][:, :new_batch_size]
+            'input_ids'][:, :new_batch_size+1]
         new_inputs['position_ids'] = input_buffers[
             'position_ids'][:, :new_batch_size]
 
@@ -278,7 +270,7 @@ class CAMBGraphRunner(GraphRunner):
         context = self.ctx_mgr.current_context()
         is_decoding = context.is_decoding
         num_tokens = input_ids.numel()
-        new_num_tokens = next_power_of_2(num_tokens)
+        new_num_tokens = round_up_to_multiple_of_8(num_tokens)
         return (new_num_tokens, is_decoding)
 
     def __call__(self, **kwargs):
