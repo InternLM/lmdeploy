@@ -319,6 +319,69 @@ class TurboMind:
         return TurboMindInstance(self, self.config, cuda_stream_id)
 
 
+def _get_logits(outputs):
+    logits = outputs['logits']
+
+    def _func(out: EngineOutput, step: int):
+        out.logits = logits[:step - 1, :]
+
+    return _func
+
+
+def _get_last_hidden_state(outputs):
+    last_hidden_state = outputs['last_hidden_state']
+
+    def _func(out: EngineOutput, step: int):
+        out.last_hidden_state = last_hidden_state[:step - 1, :]
+
+    return _func
+
+
+def _get_logprobs_impl(logprob_vals: torch.Tensor,
+                       logprob_idxs: torch.Tensor,
+                       logprob_nums: torch.Tensor,
+                       output_ids: List[int],
+                       logprobs: int,
+                       out_logprobs: List[Dict[int, float]] = None):
+    length = len(output_ids)
+    offset = len(out_logprobs)
+    if length == offset:
+        return out_logprobs
+    for (pos, idx, val, n) in zip(range(offset,
+                                        length), logprob_idxs[offset:length],
+                                  logprob_vals[offset:length],
+                                  logprob_nums[offset:length]):
+        topn = min(n.item(), logprobs)
+        tok_res = {idx[i].item(): val[i].item() for i in range(topn)}
+        token_id = output_ids[pos]
+        if token_id not in tok_res:
+            print(token_id, tok_res)
+            valid_n = n.item()
+            tok_res[token_id] = \
+                val[:valid_n][idx[:valid_n] == token_id].item()
+        ids = list(tok_res.keys())
+        for k in ids:
+            if tok_res[k] == float('-inf'):
+                tok_res.pop(k)
+        out_logprobs.append(tok_res)
+    return out_logprobs
+
+
+def _get_logprobs(outputs, output_logprobs: int):
+    logprob_vals = outputs['logprob_vals']
+    logprob_idxs = outputs['logprob_indexes']
+    logprob_nums = outputs['logprob_nums']
+
+    logprobs = []
+
+    def _func(out: EngineOutput, step: int):
+        _get_logprobs_impl(logprob_vals, logprob_idxs, logprob_nums,
+                           out.token_ids, output_logprobs, logprobs)
+        out.logprobs = logprobs
+
+    return _func
+
+
 class StreamingSemaphore:
 
     def __init__(self):
@@ -375,38 +438,16 @@ class TurboMindInstance:
         model_inst = self.tm_model.model_comm.create_model_instance(device_id)
         return model_inst
 
-    def _get_logprobs(self,
-                      logprob_vals: torch.Tensor,
-                      logprob_indexes: torch.Tensor,
-                      logprob_nums: torch.Tensor,
-                      output_ids: torch.Tensor,
-                      logprobs: int = None,
-                      length: int = None,
-                      out_logprobs: List[Dict[int, float]] = None,
-                      session_id: int = None):
-        if logprobs is None:
-            return None
-        if out_logprobs is None:
-            out_logprobs = []
-        if len(output_ids) <= len(out_logprobs):
-            return out_logprobs
-        offset = len(out_logprobs)
-        for (token_id, idx, val, n) in zip(output_ids[offset:length],
-                                           logprob_indexes[offset:length],
-                                           logprob_vals[offset:length],
-                                           logprob_nums[offset:length]):
-            topn = min(n.item(), logprobs)
-            tok_res = {idx[i].item(): val[i].item() for i in range(topn)}
-            if token_id.item() not in tok_res:
-                valid_n = n.item()
-                tok_res[token_id.item()] = \
-                    val[:valid_n][idx[:valid_n] == token_id].item()
-            ids = list(tok_res.keys())
-            for k in ids:
-                if tok_res[k] == float('-inf'):
-                    tok_res.pop(k)
-            out_logprobs.append(tok_res)
-        return out_logprobs
+    def _get_extra_output_processors(self, outputs: Dict[str, torch.Tensor],
+                                     gen_config: GenerationConfig):
+        fs = []
+        if gen_config.output_logits:
+            fs.append(_get_logits(outputs))
+        if gen_config.output_last_hidden_state:
+            fs.append(_get_last_hidden_state(outputs))
+        if gen_config.logprobs:
+            fs.append(_get_logprobs(outputs, gen_config.logprobs))
+        return fs
 
     def prepare_embeddings(self,
                            input_embeddings=None,
@@ -566,9 +607,10 @@ class TurboMindInstance:
 
         outputs = _tm_dict_to_torch_dict(outputs)
 
+        extra_fs = self._get_extra_output_processors(outputs, gen_config)
+
         output_ids_buf = outputs['output_ids']
 
-        out_logprobs = None
         finish = False
         state = None
 
@@ -594,8 +636,11 @@ class TurboMindInstance:
                 output_ids += output_ids_buf[prev_len:seq_len].tolist()
                 output_len += seq_len - prev_len
                 status = ResponseType.FINISH if finish else ResponseType.SUCCESS  # noqa
-                output = EngineOutput(status, output_ids, output_len,
-                                      out_logprobs)
+                output = EngineOutput(status, output_ids, output_len)
+
+                for f in extra_fs:
+                    f(output, seq_len)
+
                 prev_len = seq_len
 
                 yield output
@@ -632,6 +677,10 @@ class TurboMindInstance:
         c.repetition_penalty = cfg.repetition_penalty
         if cfg.min_new_tokens:
             c.min_new_tokens = cfg.min_new_tokens
+        if cfg.output_last_hidden_state:
+            c.output_last_hidden_state = cfg.output_last_hidden_state
+        if cfg.output_logits:
+            c.output_logits = cfg.output_logits
         if cfg.logprobs:
             if cfg.logprobs > MAX_LOGPROBS:
                 cfg.logprobs = MAX_LOGPROBS

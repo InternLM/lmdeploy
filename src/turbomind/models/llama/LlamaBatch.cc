@@ -1163,7 +1163,7 @@ void LlamaBatch<T>::InitializeSampling(const GenerationState& g)
 
     TensorMap outputs;
     for (int i = 0; i < batch_size; i++) {
-        if (state_->requests[i]->inputs.isExist("logprobs")) {
+        if (state_->requests[i]->gen_cfg.output_logprobs) {
             outputs.insert(
                 {"sampled_logprobs", {MEMORY_GPU, TYPE_FP32, {(size_t)batch_size, 1, kMaxLogProb}, sampled_logprobs_}});
             outputs.insert(
@@ -1178,7 +1178,7 @@ void LlamaBatch<T>::InitializeSampling(const GenerationState& g)
 }
 
 template<typename T>
-void LlamaBatch<T>::OutputContextLogits(T*                                  context_decoder_output,
+void LlamaBatch<T>::OutputLogits(T*                                  context_decoder_output,
                                         const std::vector<int>&             indices,
                                         const std::vector<int>&             lengths,
                                         const std::vector<const Sequence*>& sequences)
@@ -1251,6 +1251,23 @@ void LlamaBatch<T>::OutputContextLogits(T*                                  cont
             }
         }
         logits += model_->vocab_size_padded_ * lengths[k];
+    }
+}
+
+template<typename T>
+void LlamaBatch<T>::OutputLastHiddenState(T*                                  context_decoder_output,
+                                          const std::vector<int>&             idxs,
+                                          const std::vector<int>&             input_lens,
+                                          const std::vector<const Sequence*>& sequences)
+{
+    for (int i = 0; i < idxs.size(); ++i) {
+        auto& r = state_->requests[idxs[i]];
+        if (r->gen_cfg.output_last_hidden_state) {
+            auto dst = r->outputs.getPtr<T>("last_hidden_state");
+            dst += sequences[i]->cache_len * model_->hidden_units_;
+            Copy(context_decoder_output, (int64_t)input_lens[i] * model_->hidden_units_, dst);
+        }
+        context_decoder_output += (int64_t)input_lens[i] * model_->hidden_units_;
     }
 }
 
@@ -1703,7 +1720,8 @@ bool LlamaBatch<T>::Forward(GenerationState& g)
                                sequences.data());
 
         // compute logits of inputs if requested
-        OutputContextLogits(context_decoder_output_buf_, decode_indices, decode_lengths, sequences);
+        OutputLogits(context_decoder_output_buf_, decode_indices, decode_lengths, sequences);
+        OutputLastHiddenState(context_decoder_output_buf_, decode_indices, decode_lengths, sequences);
     }
 
     std::fill(h_input_length_buf_, h_input_length_buf_ + active_size, 0);

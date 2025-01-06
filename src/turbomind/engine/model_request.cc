@@ -54,8 +54,12 @@ static T get(const std::unordered_map<std::string, ManagedTensor>& m, const std:
     return fallback;
 }
 
-ModelRequest::ModelRequest(Gateway* gateway, int session_len, int vocab_size):
-    gateway_{gateway}, session_len_{session_len}, vocab_size_{vocab_size}
+ModelRequest::ModelRequest(Gateway* gateway, DataType data_type, int session_len, int vocab_size, int hidden_dim):
+    gateway_{gateway},
+    data_type_{data_type},
+    session_len_{session_len},
+    vocab_size_{vocab_size},
+    hidden_dim_{hidden_dim}
 {
 }
 
@@ -107,23 +111,30 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
     const int input_len  = inputs.at("input_ids")->shape[0];
     const int output_len = input_len + param.gen_cfg.max_new_tokens;
 
+    const int max_seq_len = std::min(input_len + output_len, session_len_) + 1;
+    const int max_out_len = std::min(output_len, session_len_) + 1;
+
     for (auto& [k, v] : *param.tensors) {
         inputs_->emplace(k, v);
     }
 
-    add(outputs_, "output_ids", TYPE_INT32, MEMORY_CPU, session_len_);
+    add(outputs_, "output_ids", TYPE_INT32, MEMORY_CPU, max_seq_len);
     add(outputs_, "sequence_length", TYPE_INT32, MEMORY_CPU, 1);
-
-    if (param.gen_cfg.output_logprobs) {
-        const int max_logprob_len = std::min(output_len, session_len_) + 1;
-        add(outputs_, "logprob_vals", TYPE_FP32, MEMORY_CPU, max_logprob_len, kMaxLogProb);
-        add(outputs_, "logprob_indexes", TYPE_INT32, MEMORY_CPU, max_logprob_len, kMaxLogProb);
-        add(outputs_, "logprob_nums", TYPE_INT32, MEMORY_CPU, max_logprob_len);
-    }
 
     if (param.gen_cfg.output_logits) {
         /// TODO: allow output logits on GPU
-        add(outputs_, "logits", TYPE_FP32, MEMORY_CPU, output_len, vocab_size_);
+        add(outputs_, "logits", TYPE_FP32, MEMORY_CPU, max_seq_len, vocab_size_);
+    }
+
+    if (param.gen_cfg.output_last_hidden_state) {
+        /// TODO: allow hidden states on GPU
+        add(outputs_, "last_hidden_state", data_type_, MEMORY_CPU, max_seq_len, hidden_dim_);
+    }
+
+    if (param.gen_cfg.output_logprobs) {
+        add(outputs_, "logprob_vals", TYPE_FP32, MEMORY_CPU, max_out_len, kMaxLogProb);
+        add(outputs_, "logprob_indexes", TYPE_INT32, MEMORY_CPU, max_out_len, kMaxLogProb);
+        add(outputs_, "logprob_nums", TYPE_INT32, MEMORY_CPU, max_out_len);
     }
 
     auto r = std::make_shared<Request>();

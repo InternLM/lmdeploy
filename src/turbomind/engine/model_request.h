@@ -13,7 +13,7 @@ class ModelRequest {
 public:
     virtual ~ModelRequest() = default;
 
-    ModelRequest(Gateway* gateway, int session_len, int vocab_size);
+    ModelRequest(Gateway* gateway, DataType data_type, int session_len, int vocab_size, int hidden_dim);
 
     // Cancel running request
     void Cancel();
@@ -40,12 +40,15 @@ public:
     OutputParam Forward(InputParam param, std::function<void()> cb);
 
 protected:
-    Gateway* gateway_;
+    Gateway* const gateway_;
+
+    const DataType data_type_;
+
+    const int session_len_;
+    const int hidden_dim_;
+    const int vocab_size_;
 
     uint64_t session_id_;
-
-    int session_len_;
-    int vocab_size_;
 
     std::weak_ptr<Request> request_;
 

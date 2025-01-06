@@ -379,7 +379,11 @@ std::unique_ptr<ModelRequest> LlamaTritonModel<T>::createModelInstance(int devic
 
     FT_CHECK(engines_[device_id] != nullptr);
 
-    return std::make_unique<ModelRequest>(gateway_.get(), engine_param_.session_len, model_param_.vocab_size);
+    return std::make_unique<ModelRequest>(gateway_.get(),
+                                          getTensorType<T>(),
+                                          engine_param_.session_len,
+                                          model_param_.vocab_size,
+                                          model_param_.hidden_units);
 }
 
 template<typename T>

@@ -342,7 +342,7 @@ PYBIND11_MODULE(_turbomind, m)
         .def_readwrite("repetition_penalty", &ft::GenerationConfig::repetition_penalty)
         .def_readwrite("random_seed", &ft::GenerationConfig::random_seed)
         .def_readwrite("output_logprobs", &ft::GenerationConfig::output_logprobs)
-        .def_readwrite("output_hidden_states", &ft::GenerationConfig::output_hidden_states)
+        .def_readwrite("output_last_hidden_state", &ft::GenerationConfig::output_last_hidden_state)
         .def_readwrite("output_logits", &ft::GenerationConfig::output_logits)
         .def("__repr__", [](const ft::GenerationConfig& c) {
             std::ostringstream oss;

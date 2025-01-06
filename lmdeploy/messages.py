@@ -97,6 +97,8 @@ class GenerationConfig:
     logprobs: int = None
     response_format: Optional[Dict] = None
     logits_processors: Optional[List[LogitsProcessor]] = None
+    output_logits: bool = None
+    output_last_hidden_state: bool = None
 
     def convert_stop_bad_words_to_ids(self, tokenizer: Tokenizer):
         """convert stop_words/bad_sords to ids and append the ids to
@@ -341,6 +343,8 @@ class Response:
     finish_reason: Optional[Literal['stop', 'length']] = None
     token_ids: List[int] = field(default_factory=list)
     logprobs: List[Dict[int, float]] = None
+    logits: torch.Tensor = None
+    last_hidden_state: torch.Tensor = None
     index: int = 0
 
 
@@ -360,6 +364,8 @@ class EngineOutput:
     token_ids: List[int]
     num_token: int
     logprobs: List[Dict[int, float]] = None
+    logits: torch.Tensor = None
+    last_hidden_state: torch.Tensor = None
 
 
 @dataclass

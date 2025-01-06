@@ -100,10 +100,15 @@ public:
 
     [[nodiscard]] Signal Interrupt(int index, bool force_stop = false, bool force_end = false);
 
-    void OutputContextLogits(T*                                  context_decoder_output,
-                             const std::vector<int>&             indices,
-                             const std::vector<int>&             lengths,
-                             const std::vector<const Sequence*>& sequences);
+    void OutputLogits(T*                                  context_decoder_output,
+                      const std::vector<int>&             indices,
+                      const std::vector<int>&             lengths,
+                      const std::vector<const Sequence*>& sequences);
+
+    void OutputLastHiddenState(T*                                  context_decoder_output,
+                               const std::vector<int>&             indices,
+                               const std::vector<int>&             lengths,
+                               const std::vector<const Sequence*>& sequences);
 
     explicit LlamaBatch(const EngineParam&           param,
                         std::unique_ptr<LlamaV2<T>>  model,

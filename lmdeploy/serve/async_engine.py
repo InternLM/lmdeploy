@@ -55,6 +55,8 @@ class GenOut:
     finish_reason: Optional[Literal['stop', 'length', 'error']] = None
     token_ids: List[int] = None
     logprobs: List[Dict[int, float]] = None
+    logits: Any = None
+    last_hidden_state: Any = None
 
 
 def _gen_out_to_response(out: GenOut, index) -> Response:
@@ -64,6 +66,8 @@ def _gen_out_to_response(out: GenOut, index) -> Response:
                     finish_reason=out.finish_reason,
                     token_ids=out.token_ids,
                     logprobs=out.logprobs,
+                    last_hidden_state=out.last_hidden_state,
+                    logits=out.logits,
                     index=index)
 
 
@@ -580,7 +584,8 @@ class AsyncEngine(LogitsMixin):
         try:
             yield generator
         except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
-            logger.error(f'[safe_run] exception caught: {e}')
+            logger.error(
+                f'[safe_run] exception caught: {type(e).__name__} {e}')
             # TODO: remove session_id from async cancel
             await inst.async_cancel(session_id)
         finally:
@@ -723,16 +728,18 @@ class AsyncEngine(LogitsMixin):
                         skip_special_tokens=gen_config.skip_special_tokens)
                     res = token_ids[ids_offset:]
 
-                    logprobs = None
-                    if outputs.logprobs:
+                    out = GenOut(response, self.id2step[session_id],
+                                 len(input_ids), tokens, finish_reason, res)
+                    if outputs.logprobs is not None:
                         log_offset = ids_offset - start_ids_offset
-                        logprobs = outputs.logprobs[log_offset:]
+                        out.logprobs = outputs.logprobs[log_offset:]
+                    if outputs.last_hidden_state is not None:
+                        out.last_hidden_state = outputs.last_hidden_state
+                    if outputs.logits is not None:
+                        out.logits = outputs.logits
 
-                    # response, history token len,
-                    # input token len, gen token len
-                    yield GenOut(response, self.id2step[session_id],
-                                 len(input_ids), tokens, finish_reason, res,
-                                 logprobs)
+                    yield out
+
                     # end of generator loop
                 if not is_error(outputs.status):
                     finish_reason = 'length' \

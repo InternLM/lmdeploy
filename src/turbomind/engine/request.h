@@ -25,11 +25,9 @@ struct GenerationConfig {
 
     uint64_t random_seed = 0;
 
-    int output_logprobs = 0;
-
-    // placeholders that are not implemented yet
-    bool output_hidden_states = false;
-    bool output_logits        = false;
+    int  output_logprobs          = 0;
+    bool output_last_hidden_state = false;
+    bool output_logits            = false;
 };
 
 inline std::ostream& operator<<(std::ostream& os, const GenerationConfig& c)
@@ -44,7 +42,7 @@ inline std::ostream& operator<<(std::ostream& os, const GenerationConfig& c)
     os << ", repetition_penalty=" << c.repetition_penalty;
     os << ", random_seed=" << c.random_seed;
     os << ", output_logprobs=" << c.output_logprobs;
-    os << ", output_hidden_states=" << c.output_hidden_states;
+    os << ", output_hidden_states=" << c.output_last_hidden_state;
     os << ", output_logits=" << c.output_logits;
     os << " }";
     return os;
@@ -109,8 +107,7 @@ struct Request {
 
     int ec;  // set when disabling conflicting requests
 
-    enum
-    {
+    enum {
         kOk       = 0,
         kInvalid  = 1,  // Sequence not exist or both `start` & `stop` (instead of `end`) is set
         kConflict = 2,  // Concurrent requests to the same sequence
