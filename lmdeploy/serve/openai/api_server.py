@@ -509,7 +509,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
                 for call_info in call_info_list
             ]
         except Exception as e:
-            logger.error(f'Exception: {e}')
+            logger.error(f'Failed to parse {text}. Exception: {e}.')
             return create_error_response(
                 HTTPStatus.BAD_REQUEST,
                 'Failed to parse fc related info to json format!')

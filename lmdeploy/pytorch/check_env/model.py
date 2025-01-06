@@ -72,33 +72,6 @@ class ModelChecker(BaseChecker):
                        'Please send issue to LMDeploy with error logs.')
             self.log_and_exit(e, 'Model', message=message)
 
-    def check_awq(self, config):
-        """check awq."""
-        logger = self.get_logger()
-        device_type = self.device_type
-        if device_type != 'cuda':
-            return
-
-        quantization_config = getattr(config, 'quantization_config', dict())
-        quant_method = quantization_config.get('quant_method', None)
-        if quant_method != 'awq':
-            return
-        try:
-            import awq  # noqa
-        except Exception as e:
-            self.log_and_exit(e, 'autoawq', logger)
-
-        try:
-            import awq_ext  # noqa
-        except Exception as e:
-            logger.debug('Exception:', exc_info=1)
-            self.log_and_exit(
-                e,
-                'awq_ext',
-                message='Failed to import `awq_ext`. '
-                'Try reinstall it from source: '
-                'https://github.com/casper-hansen/AutoAWQ_kernels')
-
     def check(self):
         """check."""
         import transformers
@@ -112,6 +85,3 @@ class ModelChecker(BaseChecker):
 
         # dtype check
         self.check_dtype(config)
-
-        # awq
-        self.check_awq(config)
