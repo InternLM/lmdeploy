@@ -7,8 +7,7 @@ import torch
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.llava_hf import VISION_MODELS, LlavaHfVisionModel
-from lmdeploy.vl.model.utils import (disable_logging,
-                                     get_vision_encoder_device_map)
+from lmdeploy.vl.model.utils import disable_logging
 
 logger = get_logger('lmdeploy')
 
@@ -40,9 +39,9 @@ class LlavaNextVisionModel(LlavaHfVisionModel):
 
         no_split_module_classes = ['CLIPEncoderLayer']
         same_device_keys = [('multi_modal_projector', 'image_newline')]
-        device_map = get_vision_encoder_device_map(self.model, self.max_memory,
-                                                   no_split_module_classes,
-                                                   same_device_keys)
+        device_map = self.get_vision_encoder_device_map(
+            self.model, self.max_memory, no_split_module_classes,
+            same_device_keys)
 
         with disable_logging():
             load_checkpoint_and_dispatch(

@@ -238,6 +238,7 @@ class SubCliServe:
             help='the strategy to dispatch requests to nodes')
         ArgumentHelper.api_keys(parser)
         ArgumentHelper.ssl(parser)
+        ArgumentHelper.log_level(parser)
 
     @staticmethod
     def gradio(args):

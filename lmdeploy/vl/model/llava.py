@@ -14,9 +14,7 @@ from transformers import AutoConfig, AutoModelForCausalLM
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.llava_hf import VISION_MODELS, LlavaHfVisionModel
-from lmdeploy.vl.model.utils import (disable_logging,
-                                     get_vision_encoder_device_map,
-                                     rewrite_ctx)
+from lmdeploy.vl.model.utils import disable_logging, rewrite_ctx
 
 logger = get_logger('lmdeploy')
 
@@ -311,9 +309,8 @@ class LlavaVisionModel(LlavaHfVisionModel):
         no_split_module_classes = ['CLIPEncoderLayer', 'SiglipEncoderLayer']
         same_device_keys = [('mm_projector', 'vision_resampler',
                              'image_newline', 'rotary_emb')]
-        device_map = get_vision_encoder_device_map(model, self.max_memory,
-                                                   no_split_module_classes,
-                                                   same_device_keys)
+        device_map = self.get_vision_encoder_device_map(
+            model, self.max_memory, no_split_module_classes, same_device_keys)
         with disable_logging():
             load_checkpoint_and_dispatch(
                 model=model,

@@ -9,17 +9,33 @@ from lmdeploy.utils import is_bf16_supported
 
 def get_turbomind_model_list(tp_num: int = None,
                              model_type: str = 'chat_model',
-                             quant_policy: int = None):
+                             quant_policy: int = None,
+                             is_converted: bool = False):
     config = get_config()
 
     if quant_policy is None:
-        case_list = copy.deepcopy(config.get('turbomind_' + model_type))
+        if is_converted:
+            case_list = [
+                x for x in copy.deepcopy(config.get('turbomind_' + model_type))
+                if x not in config.get('turbomind_quatization').get(
+                    'no_converted')
+            ]
+        else:
+            case_list = copy.deepcopy(config.get('turbomind_' + model_type))
     else:
-        case_list = [
-            x for x in config.get('turbomind_' + model_type)
-            if x not in config.get('turbomind_quatization').get(
-                'no_kvint' + str(quant_policy))
-        ]
+        if is_converted:
+            case_list = [
+                x for x in config.get('turbomind_' + model_type)
+                if x not in config.get('turbomind_quatization').get(
+                    'no_kvint' + str(quant_policy) and x not in config.get(
+                        'turbomind_quatization').get('no_converted'))
+            ]
+        else:
+            case_list = [
+                x for x in config.get('turbomind_' + model_type)
+                if x not in config.get('turbomind_quatization').get(
+                    'no_kvint' + str(quant_policy))
+            ]
 
     quatization_case_config = config.get('turbomind_quatization')
     for key in config.get('turbomind_' + model_type):
@@ -97,7 +113,7 @@ def get_all_model_list(tp_num: int = None,
                                          model_type=model_type):
             if case not in case_list:
                 case_list.append(case)
-    return [x for x in case_list if 'w8a8' not in x]
+    return case_list
 
 
 def get_quantization_model_list(type):
@@ -202,6 +218,7 @@ def get_benchmark_model_list(tp_num,
     else:
         case_list_base = config.get('benchmark_model')
     quatization_case_config = config.get('turbomind_quatization')
+    pytorch_quatization_case_config = config.get('pytorch_quatization')
 
     case_list = copy.deepcopy(case_list_base)
     for key in case_list_base:
@@ -209,6 +226,12 @@ def get_benchmark_model_list(tp_num,
                              ) and key not in quatization_case_config.get(
                                  'no_awq') and not is_quantization_model(key):
             case_list.append(key + '-inner-4bits')
+
+    for key in case_list_base:
+        if key in config.get('pytorch_chat_model'
+                             ) and key in pytorch_quatization_case_config.get(
+                                 'w8a8') and not is_quantization_model(key):
+            case_list.append(key + '-inner-w8a8')
 
     model_list = [
         item for item in case_list if get_tp_num(config, item) == tp_num
@@ -228,15 +251,18 @@ def get_benchmark_model_list(tp_num,
             'backend': 'pytorch',
             'tp_num': tp_num
         } for item in model_list if '4bits' not in item and (
-            item in config.get('pytorch_chat_model') or tp_num == 4)]
+            item.replace('-inner-w8a8', '') in config.get('pytorch_chat_model')
+            or tp_num == 4)]
         for kvint in kvint_list:
             result += [{
                 'model': item,
                 'backend': 'turbomind',
                 'quant_policy': kvint,
                 'tp_num': tp_num
-            } for item in model_list if item.replace('-inner-4bits', '') in
-                       config.get('turbomind_chat_model')]
+            } for item in model_list if item.replace(
+                '-inner-4bits', '') in config.get('turbomind_chat_model')
+                       and item.replace('-inner-4bits', '') not in
+                       quatization_case_config.get('no_kvint' + str(kvint))]
     return result
 
 

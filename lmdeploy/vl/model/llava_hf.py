@@ -7,8 +7,7 @@ from transformers import AutoProcessor
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
-from lmdeploy.vl.model.utils import (disable_logging,
-                                     get_vision_encoder_device_map)
+from lmdeploy.vl.model.utils import disable_logging
 
 logger = get_logger('lmdeploy')
 
@@ -48,8 +47,8 @@ class LlavaHfVisionModel(VisonModel):
         # fix for llava-hf/llava-interleave-qwen-7b-hf
         setattr(model.config, 'tie_word_embeddings', False)
         no_split_module_classes = ['CLIPEncoderLayer', 'SiglipEncoderLayer']
-        device_map = get_vision_encoder_device_map(model, self.max_memory,
-                                                   no_split_module_classes)
+        device_map = self.get_vision_encoder_device_map(
+            model, self.max_memory, no_split_module_classes)
         with disable_logging():
             load_checkpoint_and_dispatch(
                 model=model,
@@ -154,3 +153,33 @@ class LlavaHfVisionModel(VisonModel):
                                                  sequence_start)
         return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
                                      sequence_start)
+
+    @staticmethod
+    def get_vision_encoder_device_map(
+            model,
+            max_memory,
+            no_split_module_classes=['CLIPEncoderLayer', 'SiglipEncoderLayer'],
+            same_device_keys=None):
+        """map vision_encoder to same device."""
+        from accelerate.utils import get_balanced_memory, infer_auto_device_map
+        max_memory = get_balanced_memory(
+            model,
+            max_memory=max_memory,
+            dtype=torch.half,
+            no_split_module_classes=no_split_module_classes)
+        device_map = infer_auto_device_map(
+            model,
+            no_split_module_classes=no_split_module_classes,
+            max_memory=max_memory,
+            dtype=torch.half)
+
+        if not same_device_keys:
+            return device_map
+
+        for keys in same_device_keys:
+            fuzzy_keys = [kk for kk in device_map for k in keys if kk.find(k)]
+            if len(fuzzy_keys) <= 1:
+                continue
+            for k in fuzzy_keys[1:]:
+                device_map[k] = device_map[fuzzy_keys[0]]
+        return device_map
