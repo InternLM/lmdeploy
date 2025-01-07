@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import atexit
 import concurrent.futures
 import dataclasses
 import json
@@ -166,15 +167,18 @@ class _EventLoopThread:
 
     def __init__(self):
         fut = concurrent.futures.Future()
-        self.thread = Thread(
-            target=partial(_EventLoopThread._thread_entry, fut))
+        self.thread = Thread(target=partial(_EventLoopThread._thread_entry,
+                                            fut),
+                             daemon=True)
         self.thread.start()
         self.loop: asyncio.AbstractEventLoop = fut.result()
         self.closed = False
+        atexit.register(self.close)
 
     @staticmethod
     def _thread_entry(fut):
         loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         fut.set_result(loop)
         try:
             loop.run_forever()
@@ -189,9 +193,6 @@ class _EventLoopThread:
         self.closed = True
         self.loop.call_soon_threadsafe(self.loop.stop)
         self.thread.join()
-
-    def __del__(self):
-        self.close()
 
 
 class AsyncEngine(LogitsMixin):
