@@ -2,6 +2,8 @@ import os
 import subprocess
 from subprocess import PIPE
 
+from get_run_config import is_4090_device
+
 from lmdeploy.utils import is_bf16_supported
 
 
@@ -42,10 +44,13 @@ def quantization(config,
     if 'llama-3' in origin_model_name.lower():
         quantization_cmd += ' --search-scale'
 
-    if not is_bf16_supported():
+    if not is_bf16_supported() or is_4090_device:
         quantization_cmd += ' --batch-size 8'
     else:
         quantization_cmd += ' --batch-size 32'
+
+    if is_4090_device:
+        quantization_cmd += '--quant-dtype fp8'
 
     with open(quantization_log, 'w') as f:
         # remove existing folder
