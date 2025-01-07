@@ -6,7 +6,8 @@ from torch import Tensor
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.pytorch.model_inputs import StepContext
-from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMeta
+from lmdeploy.pytorch.models.utils.cudagraph import (CudaGraphMeta,
+                                                     next_power_of_2)
 from lmdeploy.utils import get_logger
 
 from ...graph_runner import GraphRunner
@@ -14,10 +15,6 @@ from ...graph_runner import GraphRunner
 logger = get_logger('lmdeploy')
 
 BuffType = Dict[str, Tensor]
-
-
-def round_up_to_multiple_of_8(n: int):
-    return (n + 7) // 8 * 8 + 8
 
 
 def _false(*args, **kwargs):
@@ -167,7 +164,7 @@ class CAMBSingleGraphRunner:
 
         # below only used for capture graph
         # create inputs
-        new_num_tokens = round_up_to_multiple_of_8(num_tokens)
+        new_num_tokens = next_power_of_2(num_tokens)
         new_batch_size = new_num_tokens
 
         attn_metadata.block_offsets = input_buffers[
@@ -270,7 +267,7 @@ class CAMBGraphRunner(GraphRunner):
         context = self.ctx_mgr.current_context()
         is_decoding = context.is_decoding
         num_tokens = input_ids.numel()
-        new_num_tokens = round_up_to_multiple_of_8(num_tokens)
+        new_num_tokens = next_power_of_2(num_tokens)
         return (new_num_tokens, is_decoding)
 
     def __call__(self, **kwargs):
