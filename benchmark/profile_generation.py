@@ -1,11 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import argparse
+import asyncio
 import csv
 import os
 import time
 from dataclasses import dataclass
-from queue import Queue
-from threading import Thread
 from typing import List, Union
 
 import numpy as np
@@ -24,8 +23,9 @@ get_logger('lmdeploy').setLevel('ERROR')
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
 
-def infer(model, session_id: int, input_ids: List,
-          gen_config: GenerationConfig, test_round: int, que: Queue):
+async def infer(model, session_id: int, input_ids: List,
+                gen_config: GenerationConfig, test_round: int,
+                que: asyncio.Queue):
     if session_id == 1:
         pbar = tqdm(total=test_round)
     chatbot = model.create_instance()
@@ -47,12 +47,12 @@ def infer(model, session_id: int, input_ids: List,
         The time elapsing in this iteration `now-prev` is set to the latency of first token of
         the 5 tokens, i.e. `token_latency_stats[0]`, and `token_latency_stats[1:4]` is set 0`
         """   # noqa: E501
-        for outputs in chatbot.stream_infer(session_id,
-                                            input_ids,
-                                            gen_config=gen_config,
-                                            sequence_start=True,
-                                            sequence_end=True,
-                                            stream_output=True):
+        async for outputs in chatbot.async_stream_infer(session_id,
+                                                        input_ids,
+                                                        gen_config=gen_config,
+                                                        sequence_start=True,
+                                                        sequence_end=True,
+                                                        stream_output=True):
             n_token = outputs.num_token
             now = time.perf_counter()
             if n_prev_token != n_token:
@@ -61,7 +61,7 @@ def infer(model, session_id: int, input_ids: List,
             prev = now
         # for pytorch engine to restart a session
         if hasattr(chatbot, 'end'):
-            chatbot.end(session_id)
+            await chatbot.async_end(session_id)
         if session_id == 1:
             pbar.update(1)
 
@@ -69,39 +69,42 @@ def infer(model, session_id: int, input_ids: List,
             f'Error. session_id({session_id}) request {output_seqlen} ' \
             f'tokens, but generate {n_token} tokens'
         stats.append(token_latency_stats[:output_seqlen])
-    que.put((session_id, stats))
+    await que.put((session_id, stats))
 
 
 def warmup(model, concurrency: int, input_ids: List[int], warmup_round: int,
-           gen_config: GenerationConfig):
+           gen_config: GenerationConfig, event_loop: asyncio.BaseEventLoop):
     if not warmup_round:
         return
 
     print('start to warmup ...')
 
-    def _infer(model, session_id):
+    async def _infer(model, session_id):
         chatbot = model.create_instance()
         for _ in range(warmup_round):
-            for _ in chatbot.stream_infer(session_id,
-                                          input_ids=input_ids,
-                                          sequence_start=True,
-                                          sequence_end=True,
-                                          ignore_eos=True,
-                                          gen_config=gen_config):
+            async for _ in chatbot.async_stream_infer(session_id,
+                                                      input_ids=input_ids,
+                                                      sequence_start=True,
+                                                      sequence_end=True,
+                                                      ignore_eos=True,
+                                                      gen_config=gen_config):
                 continue
             # for pytorch engine to restart a session
             if hasattr(chatbot, 'end'):
-                chatbot.end(session_id)
+                await chatbot.async_end(session_id)
 
     _start = time.perf_counter()
-    procs = []
-    for i in range(concurrency):
-        proc = Thread(target=_infer, args=(model, i + 1), daemon=True)
-        procs.append(proc)
-        proc.start()
 
-    for proc in procs:
-        proc.join()
+    # start threads
+    tasks = []
+    for i in range(concurrency):
+        task = _infer(model, i + 1)
+        tasks.append(task)
+
+    async def _gather_tasks(tasks):
+        return await asyncio.gather(*tasks)
+
+    event_loop.run_until_complete(_gather_tasks(tasks))
 
     _end = time.perf_counter()
     print(f'end warmup, elapsed time: {round(_end - _start, 2)}s')
@@ -125,31 +128,34 @@ def profile_throughput(model_path: str, concurrency: int, input_seqlen: int,
         from lmdeploy.pytorch.engine import Engine
         tm_model = Engine(model_path, engine_config)
 
+    event_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(event_loop)
+
     # make up a dummy `input_ids` with the length of `input_seqlen` exactly
     assert input_seqlen > 0, 'input_seqlen should > 0'
     input_ids = np.random.randint(low=0, high=101, size=input_seqlen).tolist()
-    warmup(tm_model, concurrency, input_ids, warmup_round, gen_config)
+    warmup(tm_model, concurrency, input_ids, warmup_round, gen_config,
+           event_loop)
 
-    que = Queue()
-    procs = []
+    que = asyncio.Queue()
     _start = time.perf_counter()
 
+    tasks = []
     for i in range(concurrency):
-        proc = Thread(target=infer,
-                      args=(tm_model, i + 1, input_ids, gen_config, test_round,
-                            que))
-        procs.append(proc)
-        proc.start()
+        task = infer(tm_model, i + 1, input_ids, gen_config, test_round, que)
+        tasks.append(task)
 
-    for proc in procs:
-        proc.join()
+    async def _gather_tasks(tasks):
+        return await asyncio.gather(*tasks)
+
+    event_loop.run_until_complete(_gather_tasks(tasks))
 
     _end = time.perf_counter()
     elapsed_time = _end - _start
 
     token_latency_stats = []
     while not que.empty():
-        _, _stats = que.get()
+        _, _stats = que.get_nowait()
         token_latency_stats += _stats
 
     # The shape is [concurrency*test_round, output_seqlen]
@@ -426,7 +432,6 @@ def main():
                     block_size=args.cache_block_seq_len,
                     session_len=session_len,
                     tp=args.tp,
-                    thread_safe=True,
                     eager_mode=args.eager_mode,
                     enable_prefix_caching=args.enable_prefix_caching,
                     dtype=args.dtype,

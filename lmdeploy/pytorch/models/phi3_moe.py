@@ -7,7 +7,7 @@ from torch import nn
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, LayerNorm, RopeType
 from lmdeploy.pytorch.nn.linear import build_qkv_proj, build_rowwise_linear
-from lmdeploy.pytorch.nn.moe import FusedMoE
+from lmdeploy.pytorch.nn.moe import build_fused_moe
 from lmdeploy.pytorch.nn.rotary_embedding import (LongRoPEScalingParameters,
                                                   build_rotary_embedding)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
@@ -180,7 +180,7 @@ class PhiMoESparseMoeBlock(nn.Module):
             is_tp=False,
         )
 
-        self.experts = FusedMoE(
+        self.experts = build_fused_moe(
             self.hidden_dim,
             self.ffn_dim,
             self.num_experts,
@@ -448,12 +448,12 @@ class PhiMoEForCausalLM(nn.Module, CudaGraphMixin):
         num_experts = self.config.num_local_experts
         expert_params_mapping = []
         for exp_id in range(num_experts):
-            gate_param = ('.experts.gate_up_weights',
-                          f'.experts.{exp_id}.w1.weight', exp_id, 'gate')
-            up_param = ('.experts.gate_up_weights',
-                        f'.experts.{exp_id}.w3.weight', exp_id, 'up')
-            down_param = ('.experts.down_weights',
-                          f'.experts.{exp_id}.w2.weight', exp_id, 'down')
+            gate_param = ('.experts.gate_up', f'.experts.{exp_id}.w1', exp_id,
+                          'gate')
+            up_param = ('.experts.gate_up', f'.experts.{exp_id}.w3', exp_id,
+                        'up')
+            down_param = ('.experts.down', f'.experts.{exp_id}.w2', exp_id,
+                          'down')
             expert_params_mapping += [gate_param, up_param, down_param]
 
         params_dict = dict(self.named_parameters())
