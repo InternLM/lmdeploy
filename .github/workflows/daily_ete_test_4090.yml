@@ -91,7 +91,7 @@ jobs:
   download_pkgs:
     needs: linux-build
     if: ${{!cancelled()}}
-    runs-on: [self-hosted, linux-a100]
+    runs-on: linux-4090
     timeout-minutes: 50
     steps:
       - name: Clone repository
@@ -124,7 +124,7 @@ jobs:
   test_quantization:
     needs: download_pkgs
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'quant') )}}
-    runs-on: [self-hosted, linux-a100]
+    runs-on: linux-4090
     timeout-minutes: 150
     env:
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
@@ -177,7 +177,7 @@ jobs:
 
   test_tools:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'tools'))}}
-    runs-on: [self-hosted, linux-a100]
+    runs-on: linux-4090
     needs: test_quantization
     timeout-minutes: 150
     strategy:
@@ -275,7 +275,7 @@ jobs:
 
   test_restful:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'restful'))}}
-    runs-on: [self-hosted, linux-a100]
+    runs-on: linux-4090
     needs: test_quantization
     strategy:
       fail-fast: false
@@ -353,7 +353,7 @@ jobs:
 
   test_pipeline:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'pipeline'))}}
-    runs-on: [self-hosted, linux-a100]
+    runs-on: linux-4090
     needs: test_quantization
     timeout-minutes: 120
     steps:
@@ -393,7 +393,7 @@ jobs:
 
   test_benchmark:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'benchmark'))}}
-    runs-on: [self-hosted, linux-a100]
+    runs-on: linux-4090
     needs: test_quantization
     timeout-minutes: 120
     steps:
@@ -430,7 +430,7 @@ jobs:
 
   test_evaluation:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'evaluation'))}}
-    runs-on: [self-hosted, linux-a100]
+    runs-on: linux-4090
     needs: test_quantization
     timeout-minutes: 120 # 2hours
     strategy:
@@ -490,7 +490,7 @@ jobs:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'benchmark'))}}
     needs: [test_benchmark]
     timeout-minutes: 5
-    runs-on: [self-hosted, linux-a100]
+    runs-on: linux-4090
     env:
       BENCHMARK_REPORT_DIR: /nvme/qa_test_models/benchmark-reports/${{ github.run_id }}
     steps:
@@ -506,7 +506,7 @@ jobs:
 
   get_coverage_report:
     if: ${{!cancelled()}}
-    runs-on: [self-hosted, linux-a100]
+    runs-on: linux-4090
     needs: [test_tools, test_restful, test_pipeline, test_benchmark]
     timeout-minutes: 5
     steps:
@@ -536,7 +536,7 @@ jobs:
     if: always() && !cancelled() && (github.ref_name == 'develop' || github.ref_name == 'main')
     needs: [get_benchmark_result, get_coverage_report, test_evaluation]
     timeout-minutes: 5
-    runs-on: [self-hosted, linux-a100]
+    runs-on: linux-4090
     steps:
       - name: notify
         if: contains(needs.*.result, 'failure')
