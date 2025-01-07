@@ -114,11 +114,8 @@ class CAMBSingleGraphRunner:
         # if we don't set it, two batches with same input tokens
         # will result in different answer
         input_buffers['kv_start_indices'] = -torch.ones(
-            (max_batches * max_tokens), dtype=torch.int32, device=device)
+            max_batches, dtype=torch.int32, device=device)
 
-        input_buffers['local_adapter_ids'] = torch.zeros(max_batches,
-                                                         dtype=torch.int32,
-                                                         device=device)
         # create buffer for mrope for qwen2VL here
         mrope_position_ids = kwargs.get('mrope_position_ids', None)
         if mrope_position_ids is not None:
@@ -205,14 +202,6 @@ class CAMBSingleGraphRunner:
     def update_camb_context(self, graph_meta, context):
         """update step context with input buffers."""
         input_buffers = graph_meta.input_buffers
-        local_adapter_ids = context.local_adapter_ids
-        if local_adapter_ids is not None:
-            if input_buffers['local_adapter_ids'].data_ptr(
-            ) != local_adapter_ids.data_ptr():
-                input_buffers['local_adapter_ids'].fill_(0)
-            batch_size = local_adapter_ids.size(0)
-            input_buffers['local_adapter_ids'][:batch_size] = local_adapter_ids
-            context.local_adapter_ids = input_buffers['local_adapter_ids']
         context.q_seqlens = input_buffers['q_seqlens']
         context.kv_seqlens = input_buffers['kv_seqlens']
         context.q_start_loc = input_buffers['q_start_loc']
