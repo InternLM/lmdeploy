@@ -293,10 +293,14 @@ class FusedLogitsProcessor(LogitsWarper):
     def __init__(self,
                  sampling_inputs: SamplingInputs,
                  ignore_eos: torch.Tensor,
-                 tokenizer: Optional[Tokenizer] = None):
+                 tokenizer: Optional[Tokenizer] = None,
+                 logit_bias: Optional[Dict[int, float]] = None):
         self.sampling_inputs: SamplingInputs = sampling_inputs
         self.ignore_eos = ignore_eos
         self.tokenizer = tokenizer
+        self.logit_bias = {
+            128001: 2
+        }
 
     def __call__(self, all_ids: torch.LongTensor,
                  guided_input_ids: torch.LongTensor,
@@ -352,6 +356,10 @@ class FusedLogitsProcessor(LogitsWarper):
         """sampling."""
         sampling_inputs = self.sampling_inputs
 
+        if self.logit_bias is not None:
+            for token_id, bias_value in self.logit_bias.items():
+                logits[:, token_id] += bias_value
+
         def __random_sampling(scores: torch.Tensor, indices: torch.LongTensor):
             """random sampling."""
             max_topk = sampling_inputs.max_top_k
@@ -360,7 +368,7 @@ class FusedLogitsProcessor(LogitsWarper):
                 max_topk = scores.size(1)
                 if top_k is not None:
                     top_k = torch.where(top_k <= 0, top_k.new_tensor(max_topk),
-                                        top_k)
+                                      top_k)
 
             if top_k is not None:
                 scores = _filter_topk_sorted_(scores, top_k)
@@ -378,7 +386,7 @@ class FusedLogitsProcessor(LogitsWarper):
             seeds = sampling_inputs.random_seeds
             offsets = sampling_inputs.random_offsets
             return _multinomial_sampling(softmax_scores, seeds, offsets,
-                                         indices)
+                                       indices)
 
         if sampling_inputs.max_top_k == 1:
             return logits.argmax(-1)
