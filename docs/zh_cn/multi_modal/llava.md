@@ -4,8 +4,10 @@ LMDeploy 支持以下 LLaVA 系列模型，具体如下表所示：
 
 |                 模型                 |    大小     |   支持的推理引擎   |
 | :----------------------------------: | :---------: | :----------------: |
-| llava-hf/Llava-interleave-qwen-7b-hf |     7B      |     TurboMind      |
-|       llava-hf/llava-1.5-7b-hf       |     7B      | TurboMind, Pytorch |
+| llava-hf/Llava-interleave-qwen-7b-hf |     7B      | TurboMind, PyTorch |
+|       llava-hf/llava-1.5-7b-hf       |     7B      | TurboMind, PyTorch |
+|  llava-hf/llava-v1.6-mistral-7b-hf   |     7B      |      PyTorch       |
+|   llava-hf/llava-v1.6-vicuna-7b-hf   |     7B      |      PyTorch       |
 |   liuhaotian/llava-v1.6-vicuna-7b    |     7B      |     TurboMind      |
 |   liuhaotian/llava-v1.6-mistral-7b   |     7B      |     TurboMind      |
 | lmms-lab/llava-onevision-qwen2-7b-ov | 0.5B,7B,72B |     TurboMind      |
