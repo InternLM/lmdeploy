@@ -70,8 +70,6 @@ def run_local(model_path: str,
               **kwargs):
 
     from lmdeploy.serve.vl_async_engine import VLAsyncEngine
-    if isinstance(backend_config, PytorchEngineConfig):
-        backend_config.thread_safe = True
     vision_config = VisionConfig(thread_safe=True)
     engine = VLAsyncEngine(model_path=model_path,
                            model_name=model_name,
