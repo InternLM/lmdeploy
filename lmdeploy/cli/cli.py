@@ -2,9 +2,12 @@
 import argparse
 import os
 
+from ..utils import get_logger
 from ..version import __version__
 from .utils import (ArgumentHelper, DefaultsAndTypesHelpFormatter,
                     convert_args, get_chat_template, get_lora_adapters)
+
+logger = get_logger('lmdeploy')
 
 
 class CLI(object):
@@ -123,7 +126,6 @@ class CLI(object):
         ArgumentHelper.adapters(pt_group)
         ArgumentHelper.device(pt_group)
         ArgumentHelper.eager_mode(pt_group)
-        ArgumentHelper.cache_block_seq_len(pt_group)
         # common engine args
         dtype_act = ArgumentHelper.dtype(pt_group)
         tp_act = ArgumentHelper.tp(pt_group)
@@ -257,6 +259,12 @@ class CLI(object):
         if backend == 'pytorch':
             from lmdeploy.messages import PytorchEngineConfig
             from lmdeploy.pytorch.chat import run_chat
+            block_size = 64  # default block size
+            if args.device == 'camb':
+                logger.warning(
+                    'camb device requires block size to be 16, setting block size to 16'
+                )
+                block_size = 16
 
             adapters = get_lora_adapters(args.adapters)
             engine_config = PytorchEngineConfig(
@@ -269,7 +277,7 @@ class CLI(object):
                 device_type=args.device,
                 eager_mode=args.eager_mode,
                 quant_policy=args.quant_policy,
-                block_size=args.cache_block_seq_len)
+                block_size=block_size)
             run_chat(args.model_path,
                      engine_config,
                      chat_template_config=chat_template_config)
