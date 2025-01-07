@@ -603,6 +603,8 @@ class AsyncEngine(LogitsMixin):
             step: int = 0,
             do_preprocess: bool = True,
             adapter_name: Optional[str] = None,
+            skip_stop_tokens: bool = True,
+            rewind_stop_tokens: bool = False,
             **kwargs):
         """Generate responses.
 
@@ -695,9 +697,13 @@ class AsyncEngine(LogitsMixin):
             return status not in [ResponseType.SUCCESS, ResponseType.FINISH]
 
         async with self.model_inst(session_id) as inst:
-            state = DetokenizeState(len(input_ids))
+            stop_token_ids = gen_config.stop_token_ids \
+                if skip_stop_tokens else []
             token_ids = input_ids.copy()
-            prev_len = 0
+            history_len = self.id2step[session_id]
+            input_len = len(input_ids)
+            output_len, gen_len = 0, 0
+            state = DetokenizeState(len(input_ids))
             start_ids_offset = state.ids_offset
             response = ''
             async with self.safe_run(inst,
@@ -708,17 +714,32 @@ class AsyncEngine(LogitsMixin):
                                      stream_output=stream_response,
                                      sequence_start=sequence_start,
                                      sequence_end=sequence_end,
-                                     step=self.id2step[session_id]) as gen:
+                                     step=history_len) as gen:
+                prev_len = 0
+                hit_stop_token = 0
                 async for outputs in gen:
                     # decode res
                     if is_error(outputs.status):
-                        tokens = 0
                         break
-                    tokens = outputs.num_token
-                    token_ids += outputs.token_ids[prev_len - tokens:]
-                    prev_len = tokens
 
-                    if len(token_ids) <= state.ids_offset:
+                    output_len = outputs.num_token
+
+                    if hit_stop_token:
+                        continue
+
+                    # This assumes the engine will stop when stop token is hit
+                    if output_len and outputs.token_ids[-1] in stop_token_ids:
+                        hit_stop_token = 1
+
+                    mask = slice(prev_len - output_len,
+                                 output_len - hit_stop_token)
+
+                    token_ids += outputs.token_ids[mask]
+                    gen_len = len(token_ids)
+
+                    prev_len = output_len
+
+                    if gen_len <= state.ids_offset:
                         continue
 
                     ids_offset = state.ids_offset
@@ -728,8 +749,9 @@ class AsyncEngine(LogitsMixin):
                         skip_special_tokens=gen_config.skip_special_tokens)
                     res = token_ids[ids_offset:]
 
-                    out = GenOut(response, self.id2step[session_id],
-                                 len(input_ids), tokens, finish_reason, res)
+                    out = GenOut(response, history_len, input_len, gen_len,
+                                 finish_reason, res)
+
                     if outputs.logprobs is not None:
                         log_offset = ids_offset - start_ids_offset
                         out.logprobs = outputs.logprobs[log_offset:]
@@ -739,18 +761,18 @@ class AsyncEngine(LogitsMixin):
                         out.logits = outputs.logits
 
                     yield out
+                # end of generator loop
 
-                    # end of generator loop
                 if not is_error(outputs.status):
                     finish_reason = 'length' \
-                        if tokens >= gen_config.max_new_tokens else 'stop'
+                        if gen_len >= gen_config.max_new_tokens else 'stop'
                     # utf-8 char at the end means it's a potential unfinished
                     # byte sequence
                     if not response.endswith('�'):
-                        # avaid returning the last response twice
+                        # avoid returning the last response twice
                         response = ''
                     yield GenOut(response, self.id2step[session_id],
-                                 len(input_ids), tokens, finish_reason)
+                                 len(input_ids), gen_len, finish_reason)
                 else:
                     yield GenOut(response='internal error happened',
                                  history_token_len=self.id2step[session_id],
@@ -765,7 +787,10 @@ class AsyncEngine(LogitsMixin):
                     # manually end pytorch session
                     await inst.async_end(session_id)
             else:
-                self.id2step[session_id] += len(input_ids) + tokens
+                if rewind_stop_tokens:
+                    # rewind the step to the token before the stop token
+                    output_len = gen_len
+                self.id2step[session_id] += input_len + output_len
 
     def parse_tool_response(self, text, tools, **kwargs):
         """Parse model response containing tool information.
