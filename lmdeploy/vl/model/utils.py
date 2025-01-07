@@ -196,33 +196,3 @@ def add_device_hook(module: torch.nn.Module,
     add_hook_to_module(module=module,
                        hook=ToDevice(device=device),
                        append=True)
-
-
-def get_vision_encoder_device_map(
-        model,
-        max_memory,
-        no_split_module_classes=['CLIPEncoderLayer', 'SiglipEncoderLayer'],
-        same_device_keys=None):
-    """map vision_encoder to same device."""
-    from accelerate.utils import get_balanced_memory, infer_auto_device_map
-    max_memory = get_balanced_memory(
-        model,
-        max_memory=max_memory,
-        dtype=torch.half,
-        no_split_module_classes=no_split_module_classes)
-    device_map = infer_auto_device_map(
-        model,
-        no_split_module_classes=no_split_module_classes,
-        max_memory=max_memory,
-        dtype=torch.half)
-
-    if not same_device_keys:
-        return device_map
-
-    for keys in same_device_keys:
-        fuzzy_keys = [kk for kk in device_map for k in keys if kk.find(k)]
-        if len(fuzzy_keys) <= 1:
-            continue
-        for k in fuzzy_keys[1:]:
-            device_map[k] = device_map[fuzzy_keys[0]]
-    return device_map
