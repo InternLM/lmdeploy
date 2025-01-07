@@ -149,9 +149,11 @@ LMDeploy TurboMindエンジンは卓越した推論能力を持ち、さまざ�
 <td>
 <ul>
   <li>LLaVA(1.5,1.6) (7B-34B)</li>
+  <li>LLaVA-OneVision (0.5B, 7B, 72B)</li>
   <li>InternLM-XComposer2 (7B, 4khd-7B)</li>
   <li>InternLM-XComposer2.5 (7B)</li>
   <li>Qwen-VL (7B)</li>
+  <li>Qwen2-VL (2B, 7B, 72B)</li>
   <li>DeepSeek-VL (7B)</li>
   <li>InternVL-Chat (v1.1-v1.5)</li>
   <li>InternVL2 (1B-76B)</li>
