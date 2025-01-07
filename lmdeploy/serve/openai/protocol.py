@@ -135,6 +135,7 @@ class ChatCompletionRequest(BaseModel):
     session_id: Optional[int] = -1
     ignore_eos: Optional[bool] = False
     skip_special_tokens: Optional[bool] = True
+    spaces_between_special_tokens: Optional[bool] = True
     top_k: Optional[int] = 40
     seed: Optional[int] = None
     min_new_tokens: Optional[int] = Field(default=None, examples=[None])
@@ -251,6 +252,7 @@ class CompletionRequest(BaseModel):
     session_id: Optional[int] = -1
     ignore_eos: Optional[bool] = False
     skip_special_tokens: Optional[bool] = True
+    spaces_between_special_tokens: Optional[bool] = True
     top_k: Optional[int] = 40  # for opencompass
     seed: Optional[int] = None
 

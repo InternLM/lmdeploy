@@ -149,7 +149,8 @@ def _create_completion_logprobs(tokenizer: Tokenizer,
                                 skip_special_tokens: bool = True,
                                 offset: int = 0,
                                 all_token_ids: List[int] = None,
-                                state: DetokenizeState = None):
+                                state: DetokenizeState = None,
+                                spaces_between_special_tokens: bool = True):
     """create openai LogProbs for completion.
 
     Args:
@@ -162,6 +163,9 @@ def _create_completion_logprobs(tokenizer: Tokenizer,
         offset (int): text offset.
         all_token_ids (int): the history output token ids.
         state (DetokenizeState): tokenizer decode state.
+        spaces_between_special_tokens (bool): Whether or not to add spaces
+            around special tokens. The behavior of Fast tokenizers is to have
+            this to False. This is setup to True in slow tokenizers.
     """
     if logprobs is None or len(logprobs) == 0:
         return None, None, None, None
@@ -183,7 +187,8 @@ def _create_completion_logprobs(tokenizer: Tokenizer,
             response, _state = tokenizer.detokenize_incrementally(
                 all_token_ids + [top_id],
                 copy.deepcopy(state),
-                skip_special_tokens=skip_special_tokens)
+                skip_special_tokens=skip_special_tokens,
+                spaces_between_special_tokens=spaces_between_special_tokens)
             res[response] = prob
             if top_id == token_id:
                 out_state = _state
@@ -323,6 +328,9 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     - ignore_eos (bool): indicator for ignoring eos
     - skip_special_tokens (bool): Whether or not to remove special tokens
         in the decoding. Default to be True.
+    - spaces_between_special_tokens (bool): Whether or not to add spaces
+        around special tokens. The behavior of Fast tokenizers is to have
+        this to False. This is setup to True in slow tokenizers.
     - min_new_tokens (int): To generate at least numbers of tokens.
     - min_p (float): Minimum token probability, which will be scaled by the
         probability of the most likely token. It must be a value between
@@ -394,7 +402,8 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         logits_processors=logits_processors,
         min_new_tokens=request.min_new_tokens,
         min_p=request.min_p,
-        random_seed=random_seed)
+        random_seed=random_seed,
+        spaces_between_special_tokens=request.spaces_between_special_tokens)
 
     tools = None
     if request.tools and request.tool_choice != 'none':
@@ -582,6 +591,9 @@ async def completions_v1(request: CompletionRequest,
     - ignore_eos (bool): indicator for ignoring eos
     - skip_special_tokens (bool): Whether or not to remove special tokens
         in the decoding. Default to be True.
+    - spaces_between_special_tokens (bool): Whether or not to add spaces
+        around special tokens. The behavior of Fast tokenizers is to have
+        this to False. This is setup to True in slow tokenizers.
     - top_k (int): The number of the highest probability vocabulary
         tokens to keep for top-k-filtering
 
@@ -625,7 +637,8 @@ async def completions_v1(request: CompletionRequest,
         ignore_eos=request.ignore_eos,
         stop_words=request.stop,
         skip_special_tokens=request.skip_special_tokens,
-        random_seed=random_seed)
+        random_seed=random_seed,
+        spaces_between_special_tokens=request.spaces_between_special_tokens)
     generators = []
     for i in range(len(request.prompt)):
         result_generator = VariableInterface.async_engine.generate(
@@ -674,7 +687,7 @@ async def completions_v1(request: CompletionRequest,
                         VariableInterface.async_engine.tokenizer,
                         res.token_ids, res.logprobs,
                         gen_config.skip_special_tokens, offset, all_token_ids,
-                        state)
+                        state, gen_config.spaces_between_special_tokens)
                 if request.stream_options and request.stream_options.include_usage:  # noqa E501
                     final_res = res
                     total_tokens = sum([
@@ -726,8 +739,12 @@ async def completions_v1(request: CompletionRequest,
         logprobs = None
         if request.logprobs and len(final_logprobs):
             logprobs, _, _, _ = _create_completion_logprobs(
-                VariableInterface.async_engine.tokenizer, final_token_ids,
-                final_logprobs, gen_config.skip_special_tokens)
+                VariableInterface.async_engine.tokenizer,
+                final_token_ids,
+                final_logprobs,
+                gen_config.skip_special_tokens,
+                spaces_between_special_tokens=gen_config.
+                spaces_between_special_tokens)
 
         assert final_res is not None
         choice_data = CompletionResponseChoice(
