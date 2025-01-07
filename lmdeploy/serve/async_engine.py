@@ -165,18 +165,17 @@ class Session:
 
 class _EventLoopThread:
 
-    def __init__(self):
+    def __init__(self, daemon=False):
         fut = concurrent.futures.Future()
-        self.thread = Thread(target=partial(_EventLoopThread._thread_entry,
-                                            fut),
-                             daemon=True)
+        self.thread = Thread(target=partial(self._thread_entry, fut),
+                             daemon=daemon)
         self.thread.start()
         self.loop: asyncio.AbstractEventLoop = fut.result()
         self.closed = False
-        atexit.register(self.close)
+        if daemon:
+            atexit.register(self.close)
 
-    @staticmethod
-    def _thread_entry(fut):
+    def _thread_entry(self, fut):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         fut.set_result(loop)
@@ -185,7 +184,37 @@ class _EventLoopThread:
         except BaseException as e:
             logger.error(f'[internal_thread] {type(e).__name__} {e}')
         finally:
-            loop.close()
+            try:
+                self._cancel_all_tasks()
+                loop.run_until_complete(loop.shutdown_asyncgens())
+            finally:
+                asyncio.set_event_loop(None)
+                loop.close()
+
+    def _cancel_all_tasks(self):
+        """Modified from asyncio/runners.py."""
+        to_cancel = asyncio.all_tasks(self.loop)
+        if not to_cancel:
+            return
+
+        for task in to_cancel:
+            task.cancel()
+
+        async def _gather():
+            await asyncio.gather(*to_cancel, return_exceptions=True)
+
+        self.loop.run_until_complete(_gather())
+
+        for task in to_cancel:
+            if task.cancelled():
+                continue
+            if task.exception() is not None:
+                self.loop.call_exception_handler({
+                    'message':
+                    'unhandled exception during worker thread shutdown',
+                    'exception': task.exception(),
+                    'task': task,
+                })
 
     def close(self):
         if self.closed:
@@ -280,7 +309,7 @@ class AsyncEngine(LogitsMixin):
         ]
         self._session_id = count(0)
         self.request_logger = RequestLogger(max_log_len)
-        self.internal_thread = _EventLoopThread()
+        self.internal_thread = _EventLoopThread(daemon=True)
         self.limiter: asyncio.Semaphore = None
 
     def close(self):
