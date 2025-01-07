@@ -1,21 +1,18 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import argparse
 import asyncio
-import csv
-import itertools
 import json
 import os
 import random
-import time
 from queue import Queue
 from typing import List, Tuple, Union
 
-import numpy as np
 from tqdm import tqdm
 
 from lmdeploy.cli.utils import ArgumentHelper, DefaultsAndTypesHelpFormatter
 from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
                                TurbomindEngineConfig)
+from lmdeploy.profiler import Profiler, Session
 from lmdeploy.pytorch.engine import EngineInstance
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import get_logger
@@ -72,7 +69,7 @@ class Engine:
 
     def __init__(self, model_path: str,
                  engine_config: Union[PytorchEngineConfig,
-                                      TurbomindEngineConfig], csv: str):
+                                      TurbomindEngineConfig]):
         if isinstance(engine_config, TurbomindEngineConfig):
             from lmdeploy.turbomind import TurboMind
             tm_model = TurboMind.from_pretrained(model_path,
@@ -84,7 +81,6 @@ class Engine:
         self.tm_model = tm_model
         self.tokenizer = tm_model.tokenizer
 
-        self.csv = csv
         self.pbar = None
 
     async def _inference(self, req_queue: Queue, session_id: int,
@@ -92,12 +88,11 @@ class Engine:
                          stream_output: bool, skip_tokenize: bool,
                          skip_detokenize: bool):
         model_inst = self.tm_model.create_instance()
-        counters = []
-        for prompt, input_seqlen, output_seqlen, cancel_after in iter(
+        sess: Session = None
+        for prompt, _, output_seqlen, cancel_after, sess in iter(
                 req_queue.get_nowait, None):
 
-            ts = [time.perf_counter()]
-            ns = [0]
+            sess.tick(0)
 
             if skip_tokenize:
                 input_ids = prompt
@@ -128,11 +123,11 @@ class Engine:
                         if not skip_detokenize:
                             _, state = self.tokenizer.detokenize_incrementally(
                                 token_ids, state)
-                        ts.append(time.perf_counter())
-                        ns.append(n_token)
+                        sess.tick(n_token)
                         prev_len = n_token
                         if n_token > cancel_after:
                             break
+                sess.finish(Session.SUCCESS)
             finally:
                 await generator.aclose()
 
@@ -140,14 +135,11 @@ class Engine:
             if isinstance(model_inst, EngineInstance):
                 await model_inst.async_end(session_id)
 
-            counters.append((ts, ns, input_seqlen))
             self.pbar.update(1)
 
-        return counters
-
-    def process_request(self, requests, concurrency, temperature, top_p, top_k,
-                        stream_output, skip_tokenize, skip_detokenize,
-                        cancel_rate):
+    def process_request(self, requests, profiler: Profiler, concurrency,
+                        temperature, top_p, top_k, stream_output,
+                        skip_tokenize, skip_detokenize, cancel_rate):
         req_queue = Queue()
 
         # feed request to q
@@ -156,11 +148,11 @@ class Engine:
             if cancel_rate > 0:
                 if random.random() < cancel_rate:
                     cancel_after = random.randint(0, cancel_after)
+            sess = profiler.new_session(input_len, output_len)
+            req = [prompt, input_len, output_len, cancel_after, sess]
             if skip_tokenize:
-                req_queue.put((self.tokenizer.encode(prompt), input_len,
-                               output_len, cancel_after))
-            else:
-                req_queue.put((prompt, input_len, output_len, cancel_after))
+                req[0] = self.tokenizer.encode(prompt)
+            req_queue.put(req)
         for i in range(concurrency):
             req_queue.put(None)
 
@@ -177,91 +169,16 @@ class Engine:
 
         self.pbar = tqdm(total=len(requests))
 
-        start = time.time()
-
         event_loop = asyncio.new_event_loop()
         asyncio.set_event_loop(event_loop)
 
-        counters = asyncio.run(_gather_tasks(tasks))
+        profiler.start()
 
-        elapsed_time = time.time() - start
+        asyncio.run(_gather_tasks(tasks))
+
+        profiler.finish()
 
         self.pbar.close()
-
-        ttfts: List[float] = []
-        tpots: List[float] = []
-        e2es: List[float] = []
-        itls: List[float] = []
-        tpts: List[int] = []
-
-        total_output = 0
-        total_input = 0
-
-        for ts, ns, input_len in itertools.chain.from_iterable(counters):
-            total_output += ns[-1]
-            total_input += input_len
-            e2es.append(ts[-1] - ts[0])
-            ttfts.append(ts[1] - ts[0])
-            if ns[-1] > ns[1]:
-                tpots.append((ts[-1] - ts[1]) / (ns[-1] - ns[1]))
-            else:  # no-stream-output
-                tpots.append((ts[-1] - ts[0]) / (ns[-1] - ns[0]))
-            t_dif = np.subtract(ts[1:], ts[:-1])
-            n_dif = np.subtract(ns[1:], ns[:-1])
-            itls.extend(t_dif[1:])
-            tpts.extend(n_dif)
-
-        output_throughput = total_output / elapsed_time
-        input_throughput = total_input / elapsed_time
-
-        qs = (50, 75, 90, 99)
-
-        tpot_ms_mean = np.mean(tpots)
-        tpot_ms_stat = tuple(np.percentile(tpots, qs))
-        e2e_mean = np.mean(e2es)
-        e2e_stat = tuple(np.percentile(e2es, qs))
-
-        if stream_output:
-            ttft_ms_mean = np.mean(ttfts)
-            ttft_ms_stat = tuple(np.percentile(ttfts, qs))
-            itls_ms_mean = np.mean(itls)
-            itls_ms_stat = tuple(np.percentile(itls, qs))
-            tpts_ms_mean = np.mean(tpts)
-            tpts_ms_stat = tuple(np.percentile(tpts, qs).astype(int))
-
-        rps = len(requests) / elapsed_time
-
-        def tab_row(name, *items):
-
-            def fmt(x):
-                return '{:>10.3f}'.format(x) if isinstance(
-                    x, float) else '{:>10}'.format(x)
-
-            print('{:<35}{}'.format(name, ''.join([fmt(x) for x in items])))
-
-        print('\n{s:{c}^{n}}'.format(s=' Profile Throughtput ', n=85, c='='))
-        tab_row('Benchmark duration', elapsed_time)
-        tab_row('Total requests', len(requests))
-        tab_row('Concurrency', concurrency)
-        tab_row('Cancel rate', cancel_rate)
-        tab_row('Stream output', str(stream_output).lower())
-        tab_row('Skip tokenize', str(skip_tokenize).lower())
-        tab_row('Skip detokenize', str(skip_detokenize).lower())
-        tab_row('Total input tokens', total_input)
-        tab_row('Total generated tokens', total_output)
-        tab_row('Input token throughput (tok/s)', input_throughput)
-        tab_row('Output token throughput (tok/s)', output_throughput)
-        tab_row('Request throughput (req/s)', rps)
-        print('-' * 85)
-        tab_row('', 'mean', *(f'P{q}' for q in qs))
-        tab_row('End-to-end Latency', e2e_mean, *e2e_stat)
-        if stream_output:
-            tab_row('Time to First Token (TTFT)', ttft_ms_mean, *ttft_ms_stat)
-        tab_row('Time per Output Token (TPOT)', tpot_ms_mean, *tpot_ms_stat)
-        if stream_output:
-            tab_row('Inter-token Latency (ITL)', itls_ms_mean, *itls_ms_stat)
-            tab_row('Tokens per Tick', tpts_ms_mean, *tpts_ms_stat)
-        print('=' * 85)
 
 
 def parse_args():
@@ -298,6 +215,7 @@ def parse_args():
                         type=float,
                         help='Possibility of a request being canceled',
                         default=0)
+    parser.add_argument('--use-uvloop', action='store_true')
     parser.add_argument('--csv',
                         type=str,
                         help='Where to save the result.',
@@ -372,13 +290,22 @@ def main():
             dtype=args.dtype,
         )
 
-    engine = Engine(args.model_path, engine_config, csv=args.csv)
+    if args.use_uvloop:
+        import uvloop
+        asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+
+    engine = Engine(args.model_path, engine_config)
 
     requests = sample_requests(args.dataset, args.num_prompts,
                                engine.tokenizer)
 
+    stream_output = not args.no_stream_output
+
+    profiler = Profiler(stream_output, [50, 75, 95, 99])
+
     engine.process_request(
         requests,
+        profiler,
         temperature=args.temperature,
         top_p=args.top_p,
         top_k=args.top_k,
@@ -388,6 +315,16 @@ def main():
         skip_tokenize=args.skip_tokenize,
         skip_detokenize=args.skip_detokenize,
         cancel_rate=args.cancel_rate)
+
+    hyperparams = [('Concurrency', args.concurrency),
+                   ('Cancel rate', args.cancel_rate),
+                   ('Stream output', str(stream_output).lower()),
+                   ('Skip tokenize', str(args.skip_tokenize).lower()),
+                   ('Skip detokenize', str(args.skip_detokenize).lower())]
+    profiler.compute_metrics()
+    profiler.summarize(title='Profile Throughput', hyperparams=hyperparams)
+    if args.csv:
+        profiler.save_csv(args.csv)
 
 
 if __name__ == '__main__':
