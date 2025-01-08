@@ -50,7 +50,7 @@ def quantization(config,
         quantization_cmd += ' --batch-size 32'
 
     if is_4090_device:
-        quantization_cmd += '--quant-dtype fp8'
+        quantization_cmd += ' --quant-dtype fp8'
 
     with open(quantization_log, 'w') as f:
         # remove existing folder
