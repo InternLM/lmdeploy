@@ -648,11 +648,12 @@ class TurboMindInstance:
                 if finish:
                     break
 
-        except GeneratorExit:
-            logger.info(f'[async_stream_infer] GeneratorExit {session_id}')
-            await self.async_cancel(session_id)
-        except BaseException as e:
+        except (GeneratorExit, asyncio.CancelledError) as e:
+            logger.info(f'[async_stream_infer] {type(e).__name__}')
+            self.model_inst.cancel()
+        except Exception as e:
             logger.error(f'[async_stream_infer] {type(e).__name__} {e}')
+            self.model_inst.cancel()
             yield self._get_error_output()
         finally:
             # Contract: `cb` won't be called again if status is non-zero

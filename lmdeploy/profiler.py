@@ -81,6 +81,12 @@ class Profiler:
 
         qs = self.percentages
 
+        self.e2es = self.e2es or [float('inf')]
+        self.tpots = self.tpots or [float('inf')]
+        self.ttfts = self.ttfts or [float('inf')]
+        self.itls = self.itls or [float('inf')]
+        self.tpts = self.tpts or [0]
+
         self.tpot_mean = np.mean(self.tpots)
         self.tpot_stat = tuple(np.percentile(self.tpots, qs))
         self.e2e_mean = np.mean(self.e2es)
