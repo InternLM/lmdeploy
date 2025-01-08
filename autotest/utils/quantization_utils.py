@@ -47,7 +47,7 @@ def quantization(config,
     if not is_bf16_supported():
         quantization_cmd += ' --batch-size 8'
     elif is_4090_device():
-        quantization_cmd += ' --batch-size 4'
+        quantization_cmd += ' --batch-size 1'
     else:
         quantization_cmd += ' --batch-size 32'
 
