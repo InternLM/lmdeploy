@@ -728,7 +728,7 @@ class AsyncEngine(LogitsMixin):
 
         async with self.model_inst(session_id) as inst:
             stop_token_ids = gen_config.stop_token_ids \
-                if skip_stop_tokens else []
+                if skip_stop_tokens and not gen_config.ignore_eos else []
             token_ids = input_ids.copy()
             history_len = self.id2step[session_id]
             input_len = len(input_ids)
