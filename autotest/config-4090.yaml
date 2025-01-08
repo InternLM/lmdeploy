@@ -13,6 +13,7 @@ tp_config:
     Qwen-VL-Chat: 2
     InternVL2_5-26B: 2
     InternVL2_5-38B: 2
+    InternVL2_5-38B-AWQ: 2
     Qwen2.5-14B-Instruct: 2
     Qwen2.5-32B-Instruct: 2
     llava-v1.5-13b: 2
@@ -33,6 +34,7 @@ turbomind_chat_model:
     - OpenGVLab/InternVL2_5-2B
     - OpenGVLab/InternVL2_5-8B
     - OpenGVLab/InternVL2_5-26B
+    - OpenGVLab/InternVL2_5-38B-AWQ
     - Qwen/Qwen2.5-0.5B-Instruct
     - Qwen/Qwen2.5-1.5B-Instruct
     - Qwen/Qwen2.5-3B-Instruct
@@ -50,6 +52,7 @@ pytorch_chat_model:
     - OpenGVLab/InternVL2_5-4B
     - OpenGVLab/InternVL2_5-8B
     - OpenGVLab/InternVL2_5-26B
+    - OpenGVLab/InternVL2_5-38B-AWQ
     - Qwen/Qwen2.5-0.5B-Instruct
     - Qwen/Qwen2.5-1.5B-Instruct
     - Qwen/Qwen2.5-3B-Instruct
@@ -79,6 +82,9 @@ pytorch_vl_model:
 turbomind_quatization:
     no_awq:
         - meta-llama/Meta-Llama-3-1-70B-Instruct
+        - internlm/internlm2_5-20b-chat
+        - internlm/internlm2-chat-20b
+        - internlm/internlm2_5-20b
         - Qwen/Qwen2.5-72B-Instruct
         - Qwen/Qwen1.5-MoE-A2.7B-Chat
         - Qwen/Qwen2-VL-2B-Instruct
@@ -89,6 +95,7 @@ turbomind_quatization:
         - deepseek-ai/DeepSeek-V2-Lite-Chat
         - codellama/CodeLlama-7b-Instruct-hf
         - allenai/Molmo-7B-D-0924
+        - OpenGVLab/InternVL2_5-26B
     gptq:
         - internlm/internlm2_5-7b-chat
     no_kvint4:
@@ -114,8 +121,6 @@ turbomind_quatization:
 pytorch_quatization:
     awq:
         - internlm/internlm2_5-7b-chat
-        - internlm/internlm2_5-20b-chat
-        - internlm/internlm2-chat-20b
         - Qwen/Qwen2.5-7B-Instruct
     w8a8:
         - internlm/internlm2_5-7b-chat
