@@ -110,7 +110,7 @@ jobs:
         run: |
           mv ${{env.TEST_CODE_PATH}}/autotest/config-4090.yaml ${{env.TEST_CODE_PATH}}/autotest/config.yaml
       - name: Download Artifacts
-        if: ${{github.event_name == 'schedule' || inputs.offline_mode}}
+        if: ${{github.event_name != 'schedule' || !inputs.offline_mode}}
         uses: actions/download-artifact@v4.1.4
         with:
           name: my-artifact-${{ github.run_id }}-py310
