@@ -103,7 +103,7 @@ jobs:
       - name: Copy repository - offline
         if: ${{github.event_name == 'schedule' || inputs.offline_mode}}
         run: |
-          rm -. * && cp -r ${{env.OFFLINE_CODE_PATH}}/. .
+          rm -rf * && cp -r ${{env.OFFLINE_CODE_PATH}}/. .
       - name: Change testconfig on v100
         run: |
           mv autotest/config-4090.yaml autotest/config.yaml
