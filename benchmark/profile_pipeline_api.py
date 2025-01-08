@@ -108,7 +108,8 @@ class Engine:
         completion_tokens = 0
         for index, (n_token, finish_reason) in stats.items():
             assert finish_reason == 'length', \
-                f'unexpected finish_reason of index={index}, ' \
+                f'unexpected finish_reason {finish_reason}, ' \
+                f'index={index}, ' \
                 f'prompt={requests[index][0]}'
             assert n_token - 1 <= requests[index][-1] <= n_token, \
                 f'request to generate {requests[index][-1]} tokens, ' \
