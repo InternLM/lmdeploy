@@ -765,11 +765,11 @@ class AsyncEngine(LogitsMixin):
                                  output_len - hit_stop_token)
 
                     token_ids += outputs.token_ids[mask]
-                    gen_len = len(token_ids)
+                    gen_len = len(token_ids) - input_len
 
                     prev_len = output_len
 
-                    if gen_len <= state.ids_offset:
+                    if len(token_ids) <= state.ids_offset:
                         continue
 
                     ids_offset = state.ids_offset
