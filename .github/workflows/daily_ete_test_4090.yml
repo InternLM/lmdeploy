@@ -100,25 +100,30 @@ jobs:
         with:
           repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
           ref: ${{github.event.inputs.repo_ref || 'main'}}
+      - name: Copy repository
+        if: ${{github.event_name != 'schedule' && !inputs.offline_mode}}
+        run: rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && cp -r . ${{env.TEST_CODE_PATH}}
       - name: Copy repository - offline
         if: ${{github.event_name == 'schedule' || inputs.offline_mode}}
-        run: |
-          rm -rf * && cp -r ${{env.OFFLINE_CODE_PATH}}/. .
+        run: rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && cp -r ${{env.OFFLINE_CODE_PATH}}/. ${{env.TEST_CODE_PATH}}
       - name: Change testconfig on v100
         run: |
-          mv autotest/config-4090.yaml autotest/config.yaml
+          mv ${{env.TEST_CODE_PATH}}/autotest/config-4090.yaml ${{env.TEST_CODE_PATH}}/autotest/config.yaml
       - name: Download Artifacts
         if: ${{github.event_name != 'schedule' && !inputs.offline_mode}}
         uses: actions/download-artifact@v4
         with:
           name: my-artifact-${{ github.run_id }}-py310
+      - name: Copy Artifacts
+        if: ${{github.event_name != 'schedule' && !inputs.offline_mode}}
+        run: rm ${{env.TEST_CODE_PATH}}/lmdeploy-*.whl -f && cp lmdeploy-*.whl ${{env.TEST_CODE_PATH}}
       - name: Copy Artifacts - offline
         if: ${{github.event_name == 'schedule' || inputs.offline_mode}}
-        run: cp ${{env.OFFLINE_CODE_PATH}}/lmdeploy-*.whl .
+        run: rm ${{env.TEST_CODE_PATH}}/lmdeploy-*.whl -f && cp ${{env.OFFLINE_CODE_PATH}}/lmdeploy-*.whl ${{env.TEST_CODE_PATH}}
       - name: Install lmdeploy
         run: |
           python3 -m pip uninstall lmdeploy -y
-          python3 -m pip install lmdeploy-*.whl --no-deps
+          python3 -m pip install ${{env.TEST_CODE_PATH}}/lmdeploy-*.whl --no-deps
 
   test_quantization:
     needs: download_pkgs
@@ -130,6 +135,9 @@ jobs:
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
     steps:
+      - name: Copy repository and Artifacts
+        run: |
+          cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Check env
         run: |
           python3 -m pip list
@@ -194,6 +202,9 @@ jobs:
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
     steps:
+      - name: Copy repository and Artifacts
+        run: |
+          cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Check env
         run: |
           python3 -m pip list
@@ -268,6 +279,9 @@ jobs:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
     timeout-minutes: 60
     steps:
+      - name: Copy repository and Artifacts
+        run: |
+          cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Check env
         run: |
           python3 -m pip list
@@ -335,6 +349,9 @@ jobs:
     needs: test_quantization
     timeout-minutes: 120
     steps:
+      - name: Copy repository and Artifacts
+        run: |
+          cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Check env
         run: |
           python3 -m pip list
@@ -368,6 +385,9 @@ jobs:
     needs: test_quantization
     timeout-minutes: 120
     steps:
+      - name: Copy repository and Artifacts
+        run: |
+          cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Check env
         run: |
           python3 -m pip list
@@ -402,6 +422,9 @@ jobs:
       matrix:
         evaluate_type: ['chat', 'base']
     steps:
+      - name: Copy repository and Artifacts
+        run: |
+          cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Install opencompass
         run: |
           git clone --depth=1 https://github.com/open-compass/opencompass.git
@@ -467,6 +490,8 @@ jobs:
     needs: [test_tools, test_restful, test_pipeline, test_benchmark]
     timeout-minutes: 5
     steps:
+      - name: Copy repository and Artifacts
+        run: cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Get coverage report
         run: |
           coverage combine ${{env.REPORT_DIR}}

@@ -2,7 +2,7 @@ import os
 import subprocess
 from subprocess import PIPE
 
-from get_run_config import is_4090_device
+from utils.get_run_config import is_4090_device
 
 from lmdeploy.utils import is_bf16_supported
 
