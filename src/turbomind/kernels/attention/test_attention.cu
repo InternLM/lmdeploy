@@ -7,6 +7,7 @@
 #include "src/turbomind/kernels/attention/attention_params.h"
 #include "src/turbomind/kernels/attention/reference.h"
 #include "src/turbomind/models/llama/llama_utils.h"
+#include "src/turbomind/models/llama/rotary_emb.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "test_utils.h"
 #include <algorithm>
@@ -146,17 +147,9 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
                            cu_seq_lens.data().get(),
                            cu_seq_lens.data().get(),
                            cu_block_cnts.data().get(),
-                           nullptr,
+                           (T*)nullptr,
+                           (int*)nullptr,
                            rope_dim,
-                           1.,
-                           0.,
-                           0.,
-                           1.0,
-                           1.0,
-                           0.0,
-                           0.0,
-                           0.0,
-                           1.0,
                            2 * head_num * seq_len,
                            0,
                            seq_len,
@@ -180,17 +173,6 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
                            k_ptrs.data().get(),
                            cu_seq_lens.data().get(),
                            cu_block_cnts.data().get(),
-                           nullptr,
-                           rope_dim,
-                           1.,
-                           0.,
-                           0.,
-                           1.0,
-                           1.0,
-                           0.0,
-                           0.0,
-                           0.0,
-                           1.0,
                            2 * head_num * seq_len,
                            0,
                            seq_len,
@@ -396,6 +378,29 @@ int test_attention()
         rope_base[i]        = kRoPEBase;
     }
 
+    // precompute cos/sin
+    const int device_id = 0;
+    auto      allocator = std::make_unique<Allocator<AllocatorType::CUDA>>(device_id, false);
+    allocator->setStream(nullptr);
+    AttentionParam attn_param;
+    attn_param.rope.type   = RopeType::kDefault;
+    attn_param.rope.base   = kRoPEBase;
+    attn_param.rope.dim    = kRoPEDim;
+    attn_param.rope.factor = 1.0f;
+    auto rotary_emb        = std::make_unique<RotaryEmbeddingV2<T>>(attn_param, 0, nullptr, allocator.get());
+
+    RotaryEmbeddingV2Param rotary_param;
+    rotary_param.rope_theta = rope_base.data().get();
+    rotary_param.q_len      = cu_seqlens.data().get();
+    rotary_param.k_len      = cu_kv_lens.data().get();
+    rotary_param.h_q_len    = cu_seqlens.data().get();
+    rotary_param.h_k_len    = cu_kv_lens.data().get();
+    rotary_param.batch_size = kBatchSize;
+    rotary_param.token_num  = kTokenNum;
+    rotary_emb->forward(rotary_param);
+    params.cos_sin = rotary_emb->cos_sin_;
+    params.q2p     = rotary_emb->q2p_;
+
     // getchar();
 
     params.out = output_ref.data().get();
@@ -435,9 +440,7 @@ int test_attention()
     params.size_per_head = kHeadDim;
     params.inv_sqrt_dh   = (float)std::log2(expf(1.)) / std::sqrt((float)params.size_per_head);
 
-    params.rotary_embedding_dim  = kRoPEDim;
-    params.rotary_embedding_base = kRoPEBase;
-    params.rope_ti_scale         = 1.;
+    params.rotary_embedding_dim = kRoPEDim;
 
     params.split_cnt = split_cnt.data().get();
     params.partial_L = partial_L.data().get();
@@ -450,10 +453,6 @@ int test_attention()
 
     params.qk = qk_buf.data().get();
     params.pr = pr_buf.data().get();
-
-    params.attention_scaling          = 1.f;
-    params.llama3_inv_scaling_factor  = 0;
-    params.yarn_ramp_inv_factor_div_2 = 0;
 
     Reference<T> reference(kDump ? Reference<T>::kUNFUSED : Reference<T>::kFLASH_ATTENTION, {});
     // Reference<T> reference(Reference<T>::kUNFUSED, {});
@@ -548,17 +547,6 @@ int test_attention()
                        k_ptrs.data().get(),
                        cu_kv_lens.data().get(),
                        cu_block_cnts.data().get(),
-                       nullptr,  // DECODING ? nullptr : params.rope_theta,
-                       kRoPEDim,
-                       1.,
-                       0.,
-                       0.,
-                       1.0,
-                       1.0,
-                       0.0,
-                       0.0,
-                       0.0,
-                       1.0,
                        KvHeadNum * kContextLen,
                        0,
                        kContextLen,
