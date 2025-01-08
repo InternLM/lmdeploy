@@ -28,7 +28,8 @@ class InternLM2Attention(nn.Module):
         num_key_value_heads = config.num_key_value_heads
         hidden_size = config.hidden_size
         head_dim = hidden_size // num_heads
-
+        num_replicate_kv_heads = getattr(config,
+                                         'num_replicate_key_value_heads', 1)
         # packed qkv
         self.wqkv = build_qkv_proj(
             hidden_size,
@@ -39,6 +40,7 @@ class InternLM2Attention(nn.Module):
             quant_config=quantization_config,
             dtype=dtype,
             device=device,
+            num_replicate_kv_heads=num_replicate_kv_heads,
         )
 
         # rotary embedding
@@ -219,7 +221,6 @@ class InternLM2Model(nn.Module):
         super().__init__()
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
-        quantization_config = getattr(config, 'quantization_config', None)
 
         self.tok_embeddings = nn.Embedding(config.vocab_size,
                                            config.hidden_size,
@@ -239,7 +240,6 @@ class InternLM2Model(nn.Module):
         # build norm
         self.norm = RMSNorm(config.hidden_size,
                             config.rms_norm_eps,
-                            quant_config=quantization_config,
                             dtype=dtype,
                             device=device)
 
@@ -394,6 +394,32 @@ class InternLM2ForCausalLM(nn.Module, CudaGraphMixin):
             attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
         )
+
+    def load_lora_weights(self, weights: Iterable[Tuple[str, torch.Tensor]],
+                          adapter_id: int):
+        """load lora weights."""
+
+        from lmdeploy.pytorch.adapter.adapter import load_lora_weights
+
+        num_heads = self.config.num_attention_heads
+        num_key_value_heads = self.config.num_key_value_heads
+        hidden_size = self.config.hidden_size
+        head_dim = hidden_size // num_heads
+        group_size = num_heads // num_key_value_heads
+
+        def _rearange_wqkv(weights):
+            for name, loaded_weight in weights:
+                if 'wqkv.lora_B' in name:
+                    loaded_weight = loaded_weight.unflatten(
+                        0, (-1, 2 + group_size, head_dim))
+                    q = loaded_weight[:, :-2].flatten(0, 2)
+                    k = loaded_weight[:, -2].flatten(0, 1)
+                    v = loaded_weight[:, -1].flatten(0, 1)
+                    loaded_weight = torch.cat([q, k, v], dim=0)
+                yield name, loaded_weight
+
+        weights_iter = _rearange_wqkv(weights)
+        load_lora_weights(self, weights_iter, adapter_id)
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
         """load weights."""

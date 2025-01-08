@@ -82,17 +82,19 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v2.DeepseekV2ForCausalLM'
 })
 
+# deepseek-v3
+MODULE_MAP.update({
+    'DeepseekV3ForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v2.DeepseekV2ForCausalLM'
+})
+
 # llava
 MODULE_MAP.update(
     {
-        'LlavaLlamaForCausalLM':
-        f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlavaLlamaForCausalLM',
-        'LlavaMistralForCausalLM':
-        f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mistral.LlavaMistralForCausalLM',
         'LlavaForConditionalGeneration':
         f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llava.LlavaForConditionalGeneration',  # noqa: E501
         'LlavaNextForConditionalGeneration':  # noqa: E501
-        f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llava.LlavaForConditionalGeneration'
+        f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llava.LlavaNextForConditionalGeneration'  # noqa: E501
     })
 
 # qwen
@@ -158,7 +160,7 @@ MODULE_MAP.update({
 # phi3 vision
 MODULE_MAP.update({
     'Phi3VForCausalLM':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3.Phi3VForCausalLM',
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3_v.Phi3VForCausalLM',
 })
 
 # phi-3.5-moe

@@ -274,11 +274,19 @@ class Scheduler:
         return self.has_running() or self.has_waiting()
 
     def has_running(self):
-        return self.seq_manager.num_sequences(MessageStatus.RUNNING) > 0
+        return self.num_running() > 0
 
     def has_waiting(self):
-        return self.seq_manager.num_sequences(MessageStatus.WAITING) > 0
+        return self.num_waiting() > 0
 
     def get_block_tables(self, seqs: SeqList):
         """get block table of the sequences."""
         return [self.block_manager.get_block_table(seq) for seq in seqs]
+
+    def num_running(self):
+        """num running."""
+        return self.seq_manager.num_sequences(MessageStatus.RUNNING)
+
+    def num_waiting(self):
+        """num waiting."""
+        return self.seq_manager.num_sequences(MessageStatus.WAITING)

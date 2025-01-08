@@ -44,7 +44,13 @@ class CacheEngine:
         self.num_layers = model_config.num_layers
         self.kv_cache_dtype = model_config.dtype
         if cache_config.quant_policy > 0:
-            self.kv_cache_dtype = torch.uint8
+            if self.cache_config.device_type in ['cuda']:
+                self.kv_cache_dtype = torch.uint8
+            elif self.cache_config.device_type in ['ascend', 'npu']:
+                self.kv_cache_dtype = torch.int8
+            else:
+                raise ValueError(
+                    f'unsupported device_type {self.cache_config.device_type}')
 
         # Initialize the cache.
         self.local_gpu_cache = self.allocate_gpu_cache()
@@ -92,7 +98,7 @@ class CacheEngine:
         attn_backend = get_backend()
         dtype = model_config.dtype
         num_heads = model_config.num_key_value_heads
-        if local and not model_config.multi_query_attention:
+        if local:
             assert num_heads % world_size == 0, \
                 f'num_heads: {num_heads}, world_size: {world_size}'
             num_heads = num_heads // world_size
@@ -115,7 +121,7 @@ class CacheEngine:
         attn_backend = get_backend()
         dtype = model_config.dtype
         num_heads = model_config.num_key_value_heads
-        if local and not model_config.multi_query_attention:
+        if local:
             assert num_heads % world_size == 0, \
                 f'num_heads: {num_heads}, world_size: {world_size}'
             num_heads = num_heads // world_size
@@ -202,7 +208,7 @@ class CacheEngine:
 
     def allocate_cpu_cache(self):
         """allocate caches on Host."""
-        caches = self._allocate_cache(self.num_gpu_blocks, 'cpu')
+        caches = self._allocate_cache(self.num_cpu_blocks, 'cpu')
 
         self.full_cpu_cache = caches
         self.local_cpu_cache = list(zip(*caches))

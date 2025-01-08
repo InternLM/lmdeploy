@@ -18,7 +18,7 @@ cd lmdeploy
 
 ### Environment Preparation
 
-The Docker version is supposed to be no less than `18.03`. And `Ascend Docker Runtime` should be installed by following [the official guide](https://www.hiascend.com/document/detail/zh/mindx-dl/60rc2/clusterscheduling/clusterschedulingig/.clusterschedulingig/dlug_installation_012.html).
+The Docker version is supposed to be no less than `18.09`. And `Ascend Docker Runtime` should be installed by following [the official guide](https://www.hiascend.com/document/detail/zh/mindx-dl/60rc2/clusterscheduling/clusterschedulingig/.clusterschedulingig/dlug_installation_012.html).
 
 > \[!CAUTION\]
 > If error message `libascend_hal.so: cannot open shared object file` shows, that means **Ascend Docker Runtime** is not installed correctly!
@@ -136,3 +136,9 @@ lmdeploy lite auto_awq $HF_MODEL --work-dir $WORK_DIR --device npu
 ```
 
 Please check [supported_models](../../supported_models/supported_models.md) before use this feature.
+
+### int8 KV-cache Quantization
+
+Ascend backend has supported offline int8 KV-cache Quantization on eager mode.
+
+Please refer this [doc](https://github.com/DeepLink-org/dlinfer/blob/main/docs/quant/ascend_kv_quant.md) for details.

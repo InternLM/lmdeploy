@@ -12,7 +12,7 @@ class MedusaModelConfigBuilder(AutoModelConfigBuilder):
         return hf_config.architectures[0] == 'MedusaModel'
 
     @classmethod
-    def build(cls, hf_config, model_path: str = None):
+    def build(cls, hf_config, model_path: str = None, **kwargs):
         """build."""
         from transformers import AutoConfig
         base_config = AutoConfig.from_pretrained(

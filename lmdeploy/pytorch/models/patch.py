@@ -8,6 +8,7 @@ from typing import Any, Dict
 
 import torch
 from transformers.configuration_utils import PretrainedConfig
+from transformers.modeling_utils import load_state_dict
 
 from lmdeploy.utils import get_logger
 
@@ -250,6 +251,10 @@ def add_adapters(model: torch.nn.Module,
         ranks, scalings = get_ranks_and_scalings(target_name,
                                                  adapter_cfgs,
                                                  device=device)
+        # split in case target_name has '.' like 'attention.wo'
+        # which cannot be used as name of a module
+        # and it's not aligned with key in model.packed_modules_mapping
+        target_name = target_name.split('.')[-1]
         found_mods, pack_idx = find_all_target(model, target_name)
         sum_rank = ranks.sum().item()
 
@@ -295,7 +300,9 @@ def add_adapters(model: torch.nn.Module,
     for name, path in adapters.items():
         adapter_id = adapter_id_map[name]
         checkpoint_path = f'{path}/adapter_model.bin'
-        state_dict = torch.load(checkpoint_path, map_location=device)
+        if not osp.exists(checkpoint_path):
+            checkpoint_path = f'{path}/adapter_model.safetensors'
+        state_dict = load_state_dict(checkpoint_path, map_location=device)
 
         if hasattr(model, 'load_lora_weights'):
             model.load_lora_weights(state_dict.items(), adapter_id=adapter_id)

@@ -9,8 +9,8 @@ def get_autotune_config():
     return [
         triton.Config(
             {
-                'BLOCK_SIZE_M': 64,
-                'BLOCK_SIZE_N': 256,
+                'BLOCK_SIZE_M': 32,
+                'BLOCK_SIZE_N': 128,
                 'BLOCK_SIZE_K': 128
             },
             num_stages=4,
@@ -26,9 +26,26 @@ def get_autotune_config():
     ]
 
 
+@triton.jit
+def _atomic_store(ptrs, val, mask):
+    """atomic store values."""
+    dtype = ptrs.dtype.element_ty
+    if (dtype == torch.float16) | (dtype == torch.float32):
+        tl.atomic_add(ptrs, val, mask=mask, sem='relaxed')
+    else:
+        # bfloat16 does not support atomic add
+        origin = tl.load(ptrs, mask=mask)
+        val = val.to(origin.dtype)
+        val += origin
+        tl.store(ptrs, val, mask=mask)
+
+
 @triton.autotune(
     configs=get_autotune_config(),
     key=['N', 'K'],
+    restore_value=['c_ptr'],
+    warmup=5,
+    rep=20,
 )
 @triton.jit
 def _fused_lora_kernel(
@@ -44,18 +61,19 @@ def _fused_lora_kernel(
     adapter_ids_ptr,
     N: tl.constexpr,
     K: tl.constexpr,
-    stride_am: tl.constexpr,
+    stride_am,
     stride_ak: tl.constexpr,
     stride_lar: tl.constexpr,
     stride_lak: tl.constexpr,
     stride_lbr: tl.constexpr,
     stride_lbn: tl.constexpr,
-    stride_cm: tl.constexpr,
+    stride_cm,
     stride_cn: tl.constexpr,
     BLOCK_SIZE_R: tl.constexpr,
     BLOCK_SIZE_M: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
     BLOCK_SIZE_K: tl.constexpr,
+    CUM: tl.constexpr,
 ):
     """fused lora kernel."""
     pid = tl.program_id(axis=0)
@@ -70,87 +88,91 @@ def _fused_lora_kernel(
     rank_start = tl.load(rank_start_ptr + adapter_id)
     rank = tl.load(ranks_ptr + adapter_id)
 
-    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
-    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
-    GROUP_SIZE_M: tl.constexpr = 1
-    num_pid_in_group = GROUP_SIZE_M * num_pid_n
-    group_id = pid // num_pid_in_group
-    first_pid_m = group_id * GROUP_SIZE_M
-    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
-    pid_n = (pid % num_pid_in_group) // group_size_m
+    pid_m = pid
 
     if pid_m * BLOCK_SIZE_M >= M:
         return
 
     offs_m = (seq_start + pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M))
-    offs_n = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N))
+    offs_n = tl.arange(0, BLOCK_SIZE_N)
 
     mask_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M) < M
-    if rank == 0:
-        offs_cm = offs_m
-        offs_cn = offs_n
-        c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[
-            None, :]
-        c_mask = mask_cm[:, None] & (offs_cn[None, :] < N)
-        tl.store(c_ptrs, 0, mask=c_mask)
-        return
-
-    offs_am = (seq_start +
-               (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M)
-    offs_r = rank_start + tl.arange(0, BLOCK_SIZE_R) % rank
-    offs_k = tl.arange(0, BLOCK_SIZE_K)
-    a_ptrs = a_ptr + (offs_am[:, None] * stride_am +
-                      offs_k[None, :] * stride_ak)
-    la_ptrs = lora_a_ptr + (offs_k[:, None] * stride_lak +
-                            offs_r[None, :] * stride_lar)
-
-    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_R), dtype=tl.float32)
-    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
-        # Load the next block of A and B
-        # If it is out of bounds, set it to 0.
-        a = tl.load(a_ptrs,
-                    mask=offs_k[None, :] < K - k * BLOCK_SIZE_K,
-                    other=0.0)
-        la = tl.load(la_ptrs,
-                     mask=offs_k[:, None] < K - k * BLOCK_SIZE_K,
-                     other=0.0)
-        # We accumulate along the K dimension.
-        accumulator += tl.dot(a, la)
-        # Advance the ptrs to the next K block.
-        a_ptrs += BLOCK_SIZE_K * stride_ak
-        la_ptrs += BLOCK_SIZE_K * stride_lak
-    ar = accumulator.to(lora_b_ptr.dtype.element_ty)
-
-    offs_lbn = offs_n % N
-    lb_ptrs = lora_b_ptr + (offs_r[:, None] * stride_lbr +
-                            offs_lbn * stride_lbn)
-    lb = tl.load(lb_ptrs, mask=tl.arange(0, BLOCK_SIZE_R)[:, None] < rank)
-
-    c = tl.dot(ar, lb)
-
-    scaling = tl.load(scaling_ptr + adapter_id)
-    c *= scaling
-
-    c = c.to(c_ptr.dtype.element_ty)
     offs_cm = offs_m
-    offs_cn = offs_n
-    c_ptrs = c_ptr + stride_cm * offs_cm[:,
-                                         None] + stride_cn * offs_cn[None, :]
-    c_mask = mask_cm[:, None] & (offs_cn[None, :] < N)
-    tl.store(c_ptrs, c, mask=c_mask)
+    c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_n[None, :]
+
+    if rank == 0:
+        if not CUM:
+            for n in range(0, tl.cdiv(N, BLOCK_SIZE_N)):
+                mask_cn = (offs_n < N - n * BLOCK_SIZE_N)
+                c_mask = mask_cm[:, None] * mask_cn[None, :]
+                tl.store(c_ptrs, 0.0, mask=c_mask)
+                c_ptrs += stride_cn * BLOCK_SIZE_N
+    else:
+
+        offs_am = (seq_start +
+                   (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M)
+        offs_r = rank_start + tl.arange(0, BLOCK_SIZE_R) % rank
+        offs_k = tl.arange(0, BLOCK_SIZE_K)
+        a_ptrs = a_ptr + (offs_am[:, None] * stride_am +
+                          offs_k[None, :] * stride_ak)
+        la_ptrs = lora_a_ptr + (offs_k[:, None] * stride_lak +
+                                offs_r[None, :] * stride_lar)
+
+        accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_R), dtype=tl.float32)
+        for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
+            # Load the next block of A and B
+            # If it is out of bounds, set it to 0.
+            a = tl.load(a_ptrs,
+                        mask=offs_k[None, :] < K - k * BLOCK_SIZE_K,
+                        other=0.0)
+            la = tl.load(la_ptrs,
+                         mask=offs_k[:, None] < K - k * BLOCK_SIZE_K,
+                         other=0.0)
+            # We accumulate along the K dimension.
+            accumulator = tl.dot(a, la, acc=accumulator)
+            # Advance the ptrs to the next K block.
+            a_ptrs += BLOCK_SIZE_K * stride_ak
+            la_ptrs += BLOCK_SIZE_K * stride_lak
+        ar = accumulator.to(lora_b_ptr.dtype.element_ty)
+
+        scaling = tl.load(scaling_ptr + adapter_id).to(ar.dtype)
+        ar *= scaling
+        ar = tl.where(
+            tl.arange(0, BLOCK_SIZE_R)[None, :] < rank, ar, tl.zeros_like(ar))
+        lb_ptrs = lora_b_ptr + (offs_r[:, None] * stride_lbr +
+                                offs_n[None, :] * stride_lbn)
+
+        for n in range(0, tl.cdiv(N, BLOCK_SIZE_N)):
+            lb = tl.load(lb_ptrs, mask=offs_n[None, :] < N - n * BLOCK_SIZE_N)
+            c = tl.dot(ar, lb)
+
+            mask_cn = (offs_n < N - n * BLOCK_SIZE_N)
+            c_mask = mask_cm[:, None] * mask_cn[None, :]
+            if CUM:
+                _atomic_store(c_ptrs, c, mask=c_mask)
+            else:
+                tl.store(c_ptrs, c, mask=c_mask)
+            c_ptrs += stride_cn * BLOCK_SIZE_N
+            lb_ptrs += stride_lbn * BLOCK_SIZE_N
 
 
-def fused_lora(input: torch.Tensor, lora_a: torch.Tensor, lora_b: torch.Tensor,
-               scaling: torch.LongTensor, rank_start: torch.LongTensor,
-               ranks: torch.LongTensor, seq_start: torch.LongTensor,
-               seq_lens: torch.LongTensor, adapter_ids: torch.LongTensor,
-               max_rank: int, max_seqlen: int):
+def fused_lora(input: torch.Tensor,
+               lora_a: torch.Tensor,
+               lora_b: torch.Tensor,
+               scaling: torch.LongTensor,
+               rank_start: torch.LongTensor,
+               ranks: torch.LongTensor,
+               seq_start: torch.LongTensor,
+               seq_lens: torch.LongTensor,
+               adapter_ids: torch.LongTensor,
+               max_rank: int,
+               max_seqlen: int,
+               output: torch.Tensor = None,
+               cum: bool = False):
     """fused lora."""
 
     def grid(META):
-        ret = ((triton.cdiv(max_seqlen, META['BLOCK_SIZE_M']) *
-                triton.cdiv(N, META['BLOCK_SIZE_N'])), batch_size)
+        ret = ((triton.cdiv(max_seqlen, META['BLOCK_SIZE_M'])), batch_size)
         return ret
 
     assert input.dim() == 2
@@ -158,7 +180,12 @@ def fused_lora(input: torch.Tensor, lora_a: torch.Tensor, lora_b: torch.Tensor,
     M, K = input.shape
     N = lora_b.size(1)
 
-    output = input.new_empty((M, N))
+    if output is None:
+        output = input.new_empty((M, N))
+        cum = False
+    else:
+        assert output.size(0) == M
+        assert output.size(1) == N
 
     BLOCK_SIZE_R = max(16, max_rank)
     _fused_lora_kernel[grid](
@@ -183,6 +210,7 @@ def fused_lora(input: torch.Tensor, lora_a: torch.Tensor, lora_b: torch.Tensor,
         stride_cm=output.stride(0),
         stride_cn=output.stride(1),
         BLOCK_SIZE_R=BLOCK_SIZE_R,
+        CUM=cum,
     )
 
     return output

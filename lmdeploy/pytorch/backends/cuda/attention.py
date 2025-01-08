@@ -42,6 +42,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         alibi: bool = False,
         sliding_window: int = None,
         logit_softcapping: float = None,
+        causal: bool = True,
         **kwargs,
     ):
         super().__init__(
@@ -53,8 +54,10 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             alibi=alibi,
             sliding_window=sliding_window,
             logit_softcapping=logit_softcapping,
+            causal=causal,
             **kwargs,
         )
+        assert not (alibi and not causal)
 
         from lmdeploy.pytorch.kernels.cuda import (alibi_paged_attention_fwd,
                                                    fill_kv_cache,
@@ -177,6 +180,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
                     window_size=self.sliding_window,
                     sm_scale=self.scale,
                     logit_softcapping=self.logit_softcapping,
+                    causal=self.causal,
                 )
         else:
             self.alibi_paged_attention_fwd(
@@ -212,6 +216,7 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
         alibi: bool = False,
         sliding_window: int = None,
         logical_softcapping: float = None,
+        causal: bool = True,
         **kwargs,
     ) -> TritonAttentionImpl:
         """build."""
@@ -223,4 +228,5 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
                                    alibi=alibi,
                                    sliding_window=sliding_window,
                                    logical_softcapping=logical_softcapping,
+                                   causal=causal,
                                    **kwargs)

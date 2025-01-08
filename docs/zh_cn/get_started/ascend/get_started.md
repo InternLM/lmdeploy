@@ -17,7 +17,7 @@ cd lmdeploy
 
 ### 环境准备
 
-Docker 版本应不低于 18.03。并且需按照[官方指南](https://www.hiascend.com/document/detail/zh/mindx-dl/60rc2/clusterscheduling/clusterschedulingig/clusterschedulingig/dlug_installation_012.html)安装 Ascend Docker Runtime。
+Docker 版本应不低于 18.09。并且需按照[官方指南](https://www.hiascend.com/document/detail/zh/mindx-dl/60rc2/clusterscheduling/clusterschedulingig/clusterschedulingig/dlug_installation_012.html)安装 Ascend Docker Runtime。
 
 > \[!CAUTION\]
 > 如果在后续容器内出现`libascend_hal.so: cannot open shared object file`错误，说明Ascend Docker Runtime没有被正确安装。
@@ -133,3 +133,9 @@ lmdeploy lite auto_awq $HF_MODEL --work-dir $WORK_DIR --device npu
 ```
 
 支持的模型列表请参考[支持的模型](../../supported_models/supported_models.md)。
+
+### int8 KV-cache 量化
+
+昇腾后端现在支持了在eager模式下的离线int8 KV-cache量化。
+
+详细使用方式请请参考这篇[文章](https://github.com/DeepLink-org/dlinfer/blob/main/docs/quant/ascend_kv_quant.md)。

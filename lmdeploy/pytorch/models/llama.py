@@ -29,7 +29,8 @@ class LlamaAttention(nn.Module):
         num_key_value_heads = config.num_key_value_heads
         hidden_size = config.hidden_size
         head_dim = getattr(config, 'head_dim', hidden_size // num_heads)
-
+        num_replicate_kv_heads = getattr(config,
+                                         'num_replicate_key_value_heads', 1)
         # packed qkv
         self.qkv_proj = build_qkv_proj(
             hidden_size,
@@ -40,6 +41,7 @@ class LlamaAttention(nn.Module):
             quant_config=quantization_config,
             dtype=dtype,
             device=device,
+            num_replicate_kv_heads=num_replicate_kv_heads,
         )
 
         # rotary embedding
@@ -450,22 +452,3 @@ class LlamaForCausalLM(nn.Module, CudaGraphMixin):
             else:
                 param = params_dict[name]
                 load_weight(param, loaded_weight)
-
-
-class LlavaLlamaForCausalLM(LlamaForCausalLM):
-    """llava llama for causallm."""
-
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
-        """load weights."""
-
-        new_weights = dict()
-        for key, val in weights:
-            if key.startswith('model.vision_tower'):
-                continue
-            if key.startswith('model.mm_projector'):
-                continue
-            if key.startswith('model.image_newline'):
-                continue
-            new_weights[key] = val
-
-        super().load_weights(new_weights.items())

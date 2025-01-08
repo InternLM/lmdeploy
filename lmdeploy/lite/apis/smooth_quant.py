@@ -1,4 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
+from typing import Literal
+
 import fire
 import torch
 from torch import nn
@@ -6,7 +9,8 @@ from torch import nn
 from lmdeploy.lite.apis.calibrate import (LAYER_TYPE_MAP, NORM_TYPE_MAP,
                                           calibrate)
 from lmdeploy.lite.quantization.awq import (FC_FCS_MAP, NORM_FCS_MAP,
-                                            awq_layers, smooth_layers)
+                                            awq_layers, skipped_module,
+                                            smooth_layers)
 from lmdeploy.lite.utils import collect_target_modules
 from lmdeploy.pytorch.models import QLinear, QRMSNorm
 
@@ -19,8 +23,20 @@ def smooth_quant(model: str,
                  search_scale: bool = False,
                  batch_size: int = 1,
                  w_bits: int = 8,
-                 device: str = 'cuda'):
+                 dtype: Literal['float16', 'bfloat16', 'auto'] = 'auto',
+                 device: str = 'cuda',
+                 quant_dtype: Literal['int8', 'fp8', 'float8_e4m3fn',
+                                      'float8_e5m2'] = 'int8'):
+    if quant_dtype == 'fp8':
+        quant_dtype = 'float8_e4m3fn'
 
+    quant_dtype = getattr(torch, quant_dtype, torch.int8)
+    if quant_dtype.is_floating_point:
+        q_dtype_info = torch.finfo(quant_dtype)
+    else:
+        q_dtype_info = torch.iinfo(quant_dtype)
+
+    assert q_dtype_info.bits == w_bits
     model_path = model
     vl_model, model, tokenizer, work_dir = calibrate(model,
                                                      calib_dataset,
@@ -31,6 +47,7 @@ def smooth_quant(model: str,
                                                      w_bits=w_bits,
                                                      w_group_size=-1,
                                                      search_scale=search_scale,
+                                                     dtype=dtype,
                                                      batch_size=batch_size)
 
     # calibrate function exports the calibration statistics
@@ -76,16 +93,20 @@ def smooth_quant(model: str,
     rmsnorms = collect_target_modules(model, norm_type)
 
     for name, linear in fcs.items():
+        if skipped_module(name):
+            continue
         linear.to(device)
-        q_linear = QLinear.from_float(linear)
+        q_linear = QLinear.from_float(linear, quant_dtype=quant_dtype)
         parent_name, _, child_name = name.rpartition('.')
         parent = model.get_submodule(parent_name)
         setattr(parent, child_name, q_linear)
         linear.to('cpu')
 
     for name, norm in rmsnorms.items():
+        if skipped_module(name):
+            continue
         norm.to(device)
-        q_norm = QRMSNorm.from_float(norm)
+        q_norm = QRMSNorm.from_float(norm, quant_dtype=quant_dtype)
         parent_name, _, child_name = name.rpartition('.')
         parent = model.get_submodule(parent_name)
         setattr(parent, child_name, q_norm)
@@ -95,8 +116,10 @@ def smooth_quant(model: str,
         from .auto_awq import save_vl_model
         save_vl_model(vl_model, model_path, work_dir)
     else:
+        quant_dtype_s = str(quant_dtype).split('.')[1]
         model.config.update(
-            dict(quantization_config=dict(quant_method='smooth_quant')))
+            dict(quantization_config=dict(quant_method='smooth_quant',
+                                          quant_dtype=f'{quant_dtype_s}')))
         model.save_pretrained(work_dir,
                               max_shard_size='2GB',
                               safe_serialization=False)

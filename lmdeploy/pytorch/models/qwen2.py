@@ -29,7 +29,8 @@ class Qwen2Attention(nn.Module):
         num_key_value_heads = config.num_key_value_heads
         hidden_size = config.hidden_size
         head_dim = getattr(config, 'head_dim', hidden_size // num_heads)
-
+        num_replicate_kv_heads = getattr(config,
+                                         'num_replicate_key_value_heads', 1)
         # packed qkv
         self.qkv_proj = build_qkv_proj(
             hidden_size,
@@ -40,7 +41,7 @@ class Qwen2Attention(nn.Module):
             quant_config=quantization_config,
             dtype=dtype,
             device=device,
-        )
+            num_replicate_kv_heads=num_replicate_kv_heads)
 
         # rotary embedding
         self.apply_rotary_pos_emb = ApplyRotaryEmb()
@@ -224,7 +225,6 @@ class Qwen2Model(nn.Module):
         super().__init__()
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
-        quantization_config = getattr(config, 'quantization_config', None)
 
         self.embed_tokens = nn.Embedding(config.vocab_size,
                                          config.hidden_size,
@@ -241,7 +241,6 @@ class Qwen2Model(nn.Module):
         # build norm
         self.norm = RMSNorm(config.hidden_size,
                             config.rms_norm_eps,
-                            quant_config=quantization_config,
                             dtype=dtype,
                             device=device)
 

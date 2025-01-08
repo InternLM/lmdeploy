@@ -10,6 +10,7 @@ from lmdeploy.pytorch.nn.linear import build_rowwise_linear
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
+from .utils.model import DeployModelMixin
 
 vicuna_7b_stage2 = [(0, ), (0, 0), (1, ), (0, 1), (0, 0, 0), (1, 0), (2, ),
                     (0, 2), (0, 0, 1), (0, 3), (3, ), (0, 1, 0), (2, 0), (4, ),
@@ -138,7 +139,7 @@ class ResBlock(nn.Module):
         return x + self.act(self.linear(x))
 
 
-class MedusaModel(nn.Module, CudaGraphMixin):
+class MedusaModel(nn.Module, CudaGraphMixin, DeployModelMixin):
     """The medusa model architecture."""
 
     packed_modules_mapping = {
