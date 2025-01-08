@@ -20,16 +20,15 @@
 // Modified from
 // https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/models/multi_gpu_gpt/ParallelGpt.cc
 
-
 #include <algorithm>
 #include <memory>
 
 #include "src/turbomind/macro.h"
 
-#include "src/turbomind/models/llama/LlamaV2.h"
 #include "src/turbomind/models/llama/LlamaBatch.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
+#include "src/turbomind/models/llama/LlamaV2.h"
 #include "src/turbomind/models/llama/LlamaWeight.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/models/llama/llama_params.h"

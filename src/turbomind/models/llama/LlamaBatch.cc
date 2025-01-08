@@ -1179,9 +1179,9 @@ void LlamaBatch<T>::InitializeSampling(const GenerationState& g)
 
 template<typename T>
 void LlamaBatch<T>::OutputLogits(T*                                  context_decoder_output,
-                                        const std::vector<int>&             indices,
-                                        const std::vector<int>&             lengths,
-                                        const std::vector<const Sequence*>& sequences)
+                                 const std::vector<int>&             indices,
+                                 const std::vector<int>&             lengths,
+                                 const std::vector<const Sequence*>& sequences)
 {
     std::vector<float*> output_logits;
     int                 num_token = 0;

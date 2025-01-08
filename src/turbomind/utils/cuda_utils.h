@@ -306,7 +306,7 @@ inline std::string getDeviceName()
     return std::string(props.name);
 }
 
-template <class T>
+template<class T>
 inline T div_up(T a, T n)
 {
     return (a + n - 1) / n;
