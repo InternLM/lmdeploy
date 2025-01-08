@@ -153,6 +153,9 @@ class Xcomposer2VisionModel(VisonModel):
                                                      trust_remote_code=True)
             model.vit.load_model()
             model.vit.resize_pos()
+            if hasattr(self.hf_config, 'img_size'):
+                model.vit.vision_tower.vision_model.embeddings.image_size = \
+                    self.hf_config.img_size
             model.vit.vision_tower.vision_model.post_layernorm.to_empty(
                 device='cpu').half()
             del model.model
