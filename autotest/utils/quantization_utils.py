@@ -44,12 +44,14 @@ def quantization(config,
     if 'llama-3' in origin_model_name.lower():
         quantization_cmd += ' --search-scale'
 
-    if not is_bf16_supported() or is_4090_device():
+    if not is_bf16_supported():
         quantization_cmd += ' --batch-size 8'
+    elif is_4090_device():
+        quantization_cmd += ' --batch-size 4'
     else:
         quantization_cmd += ' --batch-size 32'
 
-    if is_4090_device():
+    if quantization_type == 'w8a8' and is_4090_device():
         quantization_cmd += ' --quant-dtype fp8'
 
     with open(quantization_log, 'w') as f:
