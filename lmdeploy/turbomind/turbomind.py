@@ -547,10 +547,10 @@ class TurboMindInstance:
         logger.info(f'[async_end_cb] session ended, status = {status}')
         fut.get_loop().call_soon_threadsafe(fut.set_result, status)
 
-    def async_end(self, session_id):
+    async def async_end(self, session_id):
         fut = asyncio.get_running_loop().create_future()
         self.model_inst.end(partial(self.async_end_cb, fut), session_id)
-        return fut
+        await fut
 
     def async_signal_cb(self, s: StreamingSemaphore):
         """executing on engine's signaling thread."""
