@@ -103,16 +103,17 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
 
     auto& inputs = *param.tensors;
 
-    const int batch_size = 1;
-    const int beam_width = 1;
-
     FT_CHECK(inputs.at("input_ids")->shape.size() == 1);
 
     const int input_len  = inputs.at("input_ids")->shape[0];
     const int output_len = input_len + param.gen_cfg.max_new_tokens;
 
-    const int max_seq_len = std::min(input_len + output_len, session_len_) + 1;
+    // Max possible length of a sequence, this depends on `history_len` which isn't available here, so `session_len`
+    // is used instead
+    const int max_seq_len = session_len_ + 1;
     const int max_out_len = std::min(output_len, session_len_) + 1;
+    // This does not include histroy length in interactive mode
+    const int max_in_out_len = std::min(input_len + output_len, session_len_) + 1;
 
     for (auto& [k, v] : *param.tensors) {
         inputs_->emplace(k, v);
@@ -122,13 +123,11 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
     add(outputs_, "sequence_length", TYPE_INT32, MEMORY_CPU, 1);
 
     if (param.gen_cfg.output_logits) {
-        /// TODO: allow output logits on GPU
-        add(outputs_, "logits", TYPE_FP32, MEMORY_CPU, max_seq_len, vocab_size_);
+        add(outputs_, "logits", TYPE_FP32, MEMORY_CPU, max_in_out_len, vocab_size_);
     }
 
     if (param.gen_cfg.output_last_hidden_state) {
-        /// TODO: allow hidden states on GPU
-        add(outputs_, "last_hidden_state", data_type_, MEMORY_CPU, max_seq_len, hidden_dim_);
+        add(outputs_, "last_hidden_state", data_type_, MEMORY_CPU, max_in_out_len, hidden_dim_);
     }
 
     if (param.gen_cfg.output_logprobs) {

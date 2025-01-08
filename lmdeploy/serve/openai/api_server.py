@@ -868,6 +868,17 @@ async def chat_interactive_v1(request: GenerateRequest,
     if isinstance(request.stop, str):
         request.stop = [request.stop]
 
+    end_session = sequence_end and not sequence_start \
+        and request.prompt == '' and request.request_output_len == 0
+    if end_session:
+        await async_engine.end_session(request.session_id)
+        return JSONResponse(
+            dict(text='',
+                 tokens=0,
+                 input_tokens=0,
+                 history_tokens=0,
+                 finish_reason=None))
+
     random_seed = request.seed if request.seed else None
 
     gen_config = GenerationConfig(
