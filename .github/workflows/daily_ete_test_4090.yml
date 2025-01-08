@@ -96,12 +96,12 @@ jobs:
     steps:
       - name: Clone repository
         uses: actions/checkout@v2
-        if: ${{github.event_name != 'schedule' && !inputs.offline_mode}}
+        if: ${{github.event_name != 'schedule' || !inputs.offline_mode}}
         with:
           repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
           ref: ${{github.event.inputs.repo_ref || 'main'}}
       - name: Copy repository
-        if: ${{github.event_name != 'schedule' && !inputs.offline_mode}}
+        if: ${{github.event_name != 'schedule' || !inputs.offline_mode}}
         run: rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && cp -r . ${{env.TEST_CODE_PATH}}
       - name: Copy repository - offline
         if: ${{github.event_name == 'schedule' || inputs.offline_mode}}

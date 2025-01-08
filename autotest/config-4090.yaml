@@ -41,7 +41,6 @@ turbomind_chat_model:
     - Qwen/Qwen2.5-32B-Instruct
     - Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4
 
-
 pytorch_chat_model:
     - internlm/internlm2_5-7b-chat
     - internlm/internlm2_5-20b-chat
@@ -91,6 +90,7 @@ turbomind_quatization:
         - codellama/CodeLlama-7b-Instruct-hf
         - allenai/Molmo-7B-D-0924
     gptq:
+        - internlm/internlm2_5-7b-chat
     no_kvint4:
         - meta-llama/Llama-3.2-1B-Instruct
         - OpenGVLab/InternVL2-1B
