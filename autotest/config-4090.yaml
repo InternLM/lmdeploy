@@ -90,7 +90,6 @@ turbomind_quatization:
         - codellama/CodeLlama-7b-Instruct-hf
         - allenai/Molmo-7B-D-0924
     gptq:
-        - internlm/internlm2_5-7b-chat
     no_kvint4:
         - meta-llama/Llama-3.2-1B-Instruct
         - OpenGVLab/InternVL2-1B

@@ -18,6 +18,7 @@ def test_quantization_awq(config, model, worker_id):
 
 @pytest.mark.order(3)
 @pytest.mark.timeout(900)
+@pytest.mark.gptq
 @pytest.mark.parametrize('model', get_quantization_model_list('gptq'))
 def test_quantization_gptq(config, model, worker_id):
     quantization_type = 'gptq'
