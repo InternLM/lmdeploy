@@ -32,7 +32,7 @@ on:
         required: true
         description: 'Whether start a offline mode, if true, you should prepare code and whl package by yourself'
         type: boolean
-        default: false
+        default: true
       regression_func:
         required: true
         description: 'regression functions'
@@ -96,30 +96,34 @@ jobs:
     steps:
       - name: Clone repository
         uses: actions/checkout@v2
-        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
+        if: ${{github.event_name != 'schedule' || !inputs.offline_mode}}
         with:
           repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
           ref: ${{github.event.inputs.repo_ref || 'main'}}
       - name: Copy repository
-        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
+        if: ${{github.event_name != 'schedule' || !inputs.offline_mode}}
         run: rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && cp -r . ${{env.TEST_CODE_PATH}}
       - name: Copy repository - offline
-        if: ${{inputs.offline_mode}}
+        if: ${{github.event_name == 'schedule' || inputs.offline_mode}}
         run: rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && cp -r ${{env.OFFLINE_CODE_PATH}}/. ${{env.TEST_CODE_PATH}}
       - name: Change testconfig on v100
         run: |
           mv ${{env.TEST_CODE_PATH}}/autotest/config-4090.yaml ${{env.TEST_CODE_PATH}}/autotest/config.yaml
       - name: Download Artifacts
-        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
+        if: ${{github.event_name == 'schedule' || inputs.offline_mode}}
         uses: actions/download-artifact@v4.1.4
         with:
           name: my-artifact-${{ github.run_id }}-py310
       - name: Copy Artifacts
-        if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
+        if: ${{github.event_name == 'schedule' || inputs.offline_mode}}
         run: rm ${{env.TEST_CODE_PATH}}/lmdeploy-*.whl -f && cp lmdeploy-*.whl ${{env.TEST_CODE_PATH}}
       - name: Copy Artifacts - offline
         if: ${{inputs.offline_mode}}
         run: rm ${{env.TEST_CODE_PATH}}/lmdeploy-*.whl -f && cp ${{env.OFFLINE_CODE_PATH}}/lmdeploy-*.whl ${{env.TEST_CODE_PATH}}
+      - name: Install lmdeploy
+        run: |
+          python3 -m pip uninstall lmdeploy -y
+          python3 -m pip install ${{env.TEST_CODE_PATH}}/lmdeploy-*.whl --no-deps
 
   test_quantization:
     needs: download_pkgs
@@ -134,10 +138,6 @@ jobs:
       - name: Copy repository and Artifacts
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
-      - name: Install lmdeploy
-        run: |
-          python3 -m pip uninstall lmdeploy
-          python3 -m pip install lmdeploy-*.whl --no-deps
       - name: Check env
         run: |
           python3 -m pip list
@@ -205,10 +205,6 @@ jobs:
       - name: Copy repository and Artifacts
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
-      - name: Install lmdeploy
-        run: |
-          python3 -m pip uninstall lmdeploy
-          python3 -m pip install lmdeploy-*.whl --no-deps
       - name: Check env
         run: |
           python3 -m pip list
@@ -286,10 +282,6 @@ jobs:
       - name: Copy repository and Artifacts
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
-      - name: Install lmdeploy
-        run: |
-          python3 -m pip uninstall lmdeploy
-          python3 -m pip install lmdeploy-*.whl --no-deps
       - name: Check env
         run: |
           python3 -m pip list
@@ -360,10 +352,6 @@ jobs:
       - name: Copy repository and Artifacts
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
-      - name: Install lmdeploy
-        run: |
-          python3 -m pip uninstall lmdeploy
-          python3 -m pip install lmdeploy-*.whl --no-deps
       - name: Check env
         run: |
           python3 -m pip list
@@ -400,10 +388,6 @@ jobs:
       - name: Copy repository and Artifacts
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
-      - name: Install lmdeploy
-        run: |
-          python3 -m pip uninstall lmdeploy
-          python3 -m pip install lmdeploy-*.whl --no-deps
       - name: Check env
         run: |
           python3 -m pip list
@@ -441,10 +425,6 @@ jobs:
       - name: Copy repository and Artifacts
         run: |
           cp -r ${{env.TEST_CODE_PATH}}/. .
-      - name: Install lmdeploy
-        run: |
-          python3 -m pip uninstall lmdeploy
-          python3 -m pip install lmdeploy-*.whl --no-deps
       - name: Install opencompass
         run: |
           git clone --depth=1 https://github.com/open-compass/opencompass.git
@@ -512,10 +492,6 @@ jobs:
     steps:
       - name: Copy repository and Artifacts
         run: cp -r ${{env.TEST_CODE_PATH}}/. .
-      - name: Install lmdeploy
-        run: |
-          python3 -m pip uninstall lmdeploy
-          python3 -m pip install lmdeploy-*.whl --no-deps
       - name: Get coverage report
         run: |
           coverage combine ${{env.REPORT_DIR}}
