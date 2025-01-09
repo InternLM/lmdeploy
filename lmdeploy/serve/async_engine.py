@@ -759,7 +759,7 @@ class AsyncEngine(LogitsMixin):
 
                     output_len = outputs.num_token
 
-                    if hit_stop_token:
+                    if hit_stop_token or prev_len == output_len:
                         continue
 
                     # This assumes the engine will stop when stop token is hit
@@ -773,9 +773,6 @@ class AsyncEngine(LogitsMixin):
                     gen_len = len(token_ids) - input_len
 
                     prev_len = output_len
-
-                    if len(token_ids) <= state.ids_offset:
-                        continue
 
                     ids_offset = state.ids_offset
                     response, state = self.tokenizer.detokenize_incrementally(
