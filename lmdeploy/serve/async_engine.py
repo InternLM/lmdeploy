@@ -726,9 +726,14 @@ class AsyncEngine(LogitsMixin):
         def is_error(status):
             return status not in [ResponseType.SUCCESS, ResponseType.FINISH]
 
+        # used to skip / rewind stop words in interactive mode
+        stop_ids = []
+        if skip_stop_tokens and not gen_config.ignore_eos:
+            stop_ids = gen_config.stop_token_ids or []
+            if self.tokenizer.eos_token_id not in stop_ids:
+                stop_ids.append(self.tokenizer.eos_token_id)
+
         async with self.model_inst(session_id) as inst:
-            stop_token_ids = gen_config.stop_token_ids \
-                if skip_stop_tokens and not gen_config.ignore_eos else []
             token_ids = input_ids.copy()
             history_len = self.id2step[session_id]
             input_len = len(input_ids)
@@ -758,7 +763,7 @@ class AsyncEngine(LogitsMixin):
                         continue
 
                     # This assumes the engine will stop when stop token is hit
-                    if output_len and outputs.token_ids[-1] in stop_token_ids:
+                    if output_len and outputs.token_ids[-1] in stop_ids:
                         hit_stop_token = 1
 
                     mask = slice(prev_len - output_len,
