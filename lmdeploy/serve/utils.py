@@ -17,46 +17,17 @@ PromptType = Union[str, List[Dict]]
 
 
 class LogitsMixin:
-    """Helper class to calculate logits and ppl."""
+    """Helper class to calculate ppl."""
 
-    def prepare_inputs(self, prompts: Union[PromptType, List[PromptType]]):
-        if hasattr(self, '_convert_prompts'):
-            prompts = self._convert_prompts(prompts)
-        need_list_wrap = isinstance(prompts, str) or isinstance(
-            prompts[0], Dict)
-        prompts = [prompts] if need_list_wrap else prompts
-
-        decorated = []
-        input_ids = []
-        input_embeddings = []
-        input_embedding_ranges = []
-        for prompt in prompts:
-            out = self._run(
-                coro=self._get_prompt_input(messages=prompt,
-                                            do_preprocess=True,
-                                            sequence_start=True,
-                                            adapter_name=None)).result()
-            decorated.append(out['prompt'])
-            input_ids.append(out['input_ids'])
-            input_embeddings.append(out.get('input_embeddings', None))
-
-        outputs = dict(prompts=decorated, input_ids=input_ids)
-        if not any(input_embeddings):
-            input_embeddings = None
-            input_embedding_ranges = None
-        outputs['input_embeddings'] = input_embeddings
-        outputs['input_embedding_ranges'] = input_embedding_ranges
-
-        return outputs
-
-    async def async_get_logits(self,
-                               input_ids,
-                               input_embeddings=None,
-                               input_embedding_ranges=None,
-                               steps: List[int] = None,
-                               sequence_start: bool = True,
-                               sequence_end: bool = True,
-                               adapter_name: str = None):
+    async def _async_get_logits(
+            self,
+            input_ids,
+            input_embeddings=None,
+            input_embedding_ranges=None,
+            steps: List[int] = None,
+            sequence_start: bool = True,
+            sequence_end: bool = True,
+            adapter_name: str = None) -> List[torch.Tensor]:
         assert input_ids and all(isinstance(_, List) for _ in input_ids)
         assert (input_embeddings is None or isinstance(input_embeddings, List)
                 and len(input_ids) == len(input_embeddings))
@@ -94,121 +65,6 @@ class LogitsMixin:
                     logits.append(outputs.logits)
         return logits
 
-    def get_logits(
-        self,
-        input_ids: Union[InputIdsType, List[InputIdsType]],
-        input_embeddings: Union[InputEmbsType, List[InputEmbsType]] = None,
-        input_embedding_ranges: Union[InputEmbRngsType,
-                                      List[InputEmbRngsType]] = None):
-        """Get logits given a list of input tokens.
-
-        Args:
-            input_ids (Union[List[int], List[List[int]]]): the batch of
-                input token ids
-        """
-        assert len(input_ids) > 0
-        if isinstance(input_ids[0], int):
-            input_ids = [input_ids]
-        for input_id in input_ids:
-            assert len(input_id) > 0
-
-        bs = len(input_ids)
-        # TODO: a better way to determine `max_input_len`, at most allocate
-        # 2G mem for logits with shape [bs, max_input_len, vocab_size]
-        vocab_size = self.hf_tm_cfg.vocab_size
-        max_input_len = 2 * 1024**3 // (bs * vocab_size * 4)
-
-        n_max_iter = np.ceil(
-            max([len(input_id)
-                 for input_id in input_ids]) / max_input_len).astype(int)
-
-        index_range_starts = []
-        index_range_ends = []
-        for input_id in input_ids:
-            index_range_start = np.array(
-                [i * max_input_len for i in range(n_max_iter)])
-            index_range_end = index_range_start + max_input_len
-            index_range_start[index_range_start >= len(input_id)] = len(
-                input_id)
-            index_range_end[index_range_end >= len(input_id)] = len(input_id)
-            index_range_starts.append(index_range_start)
-            index_range_ends.append(index_range_end)
-
-        def _split_embeddings(input_ids, niter, iter_len, embeddings,
-                              embedding_ranges):
-            embs = [None] * niter
-            ranges = [None] * niter
-
-            if embeddings is None:
-                return embs, ranges
-
-            for i in range(niter):
-                iembs = []
-                iranges = []
-                for emb, (begin, end) in zip(embeddings, embedding_ranges):
-                    assert end <= len(input_ids)
-                    if begin >= (i + 1) * iter_len or end <= i * iter_len:
-                        continue
-                    if isinstance(emb, np.ndarray):
-                        emb = torch.from_numpy(emb)
-                    emb = emb.squeeze()
-                    offx = max(iter_len * i - begin, 0)
-                    offy = max(end - iter_len * (i + 1), 0)
-                    emb = emb[offx:emb.shape[0] - offy]
-                    off = max(begin - iter_len * i, 0)
-                    rng = [off, off + emb.shape[0]]
-                    iembs.append(emb)
-                    iranges.append(rng)
-
-                iembs = iembs or None
-                iranges = iranges or None
-                embs[i] = iembs
-                ranges[i] = iranges
-
-            return embs, ranges
-
-        if input_embeddings is not None:
-            if not isinstance(input_embeddings[0], list):
-                input_embeddings = [input_embeddings]
-                input_embedding_ranges = [input_embedding_ranges]
-            _input_embeddings = []
-            _input_embedding_ranges = []
-            for i in range(len(input_ids)):
-                embeddings, ranges = _split_embeddings(
-                    input_ids[i], n_max_iter, max_input_len,
-                    input_embeddings[i], input_embedding_ranges[i])
-                _input_embeddings.append(embeddings)
-                _input_embedding_ranges.append(ranges)
-            input_embeddings = _input_embeddings
-            input_embedding_ranges = _input_embedding_ranges
-
-        logits = []
-        for i in range(n_max_iter):
-            steps = [start[i] for start in index_range_starts]
-            _input_ids = [
-                input_id[start[i]:end[i]] for input_id, start, end in zip(
-                    input_ids, index_range_starts, index_range_ends)
-            ]
-            embeddings = None
-            ranges = None
-            if input_embeddings is not None:
-                embeddings = [x[i] for x in input_embeddings]
-                ranges = [x[i] for x in input_embedding_ranges]
-
-            _logits = self._run(
-                coro=self.async_get_logits(_input_ids,
-                                           steps=steps,
-                                           input_embeddings=embeddings,
-                                           input_embedding_ranges=ranges,
-                                           sequence_start=(i == 0),
-                                           sequence_end=(i == n_max_iter -
-                                                         1))).result()
-            logits.extend(_logits)
-
-        # concat logits. Shape is [bsz, seq_len, vocab_size]
-        logits = torch.cat(logits, dim=1)
-        return logits
-
     def get_ppl(self, input_ids: Union[List[int],
                                        List[List[int]]]) -> List[float]:
         """Get perplexity scores given a list of input tokens that have to be
@@ -230,8 +86,7 @@ class LogitsMixin:
         vocab_size = self.hf_tm_cfg.vocab_size
         max_input_len = 2 * 1024**3 // (vocab_size * 4)
         sizes = [len(_) for _ in input_ids]
-        losses = []
-        target_counts = []
+        result = []
         sorted_index_values = sorted(list(enumerate(sizes)),
                                      key=lambda x: x[1],
                                      reverse=True)
@@ -243,26 +98,20 @@ class LogitsMixin:
             logger.info(f'start: {start}, end: {end}')
             if start == end:
                 _input_ids = input_ids[indices[start]]
-                loss, target_count = self._get_long_text_ppl(
-                    input_ids=_input_ids, max_input_len=max_input_len)
-                losses.append(loss)
-                target_counts.append(target_count)
+                res = self._get_long_text_ppl(input_ids=_input_ids,
+                                              max_input_len=max_input_len)
+                result.append(res)
             else:
                 _input_ids = [input_ids[indices[i]] for i in range(start, end)]
-                loss, target_count = self._get_ppl(
+                res = self._get_ppl(
                     input_ids=_input_ids,
                     max_input_len=max_input_len,
                 )
-                losses.append(loss)
-                target_counts.append(target_count)
-        loss = torch.concatenate(losses)
-        target_count = torch.concatenate(target_counts)
-        loss_avg = loss / target_count
-        loss_avg = loss_avg.numpy().tolist()
-        result = list(range(len(loss_avg)))
+                result.extend(res)
+        output = list(range(len(result)))
         for index, sorted_index in enumerate(indices):
-            result[sorted_index] = loss_avg[index]
-        return result
+            output[sorted_index] = result[index]
+        return output
 
     def _batch_iterator(self, sizes, max_value):
         """Return an iterator that calculates intervals (start, end) of a
@@ -308,11 +157,11 @@ class LogitsMixin:
                 steps=step,
                 sequence_start=(i == 0),
                 sequence_end=(i + max_input_len >= seq_len))
-            losses.append(loss)
-            target_counts.append(target_count)
-        loss_sum = torch.concatenate(losses).sum().unsqueeze(0)
-        target_count = torch.concatenate(target_counts).sum().unsqueeze(0)
-        return loss_sum, target_count
+            losses.extend(loss)
+            target_counts.extend(target_count)
+        loss_sum = sum(losses)
+        target_count = sum(target_counts)
+        return loss_sum / target_count
 
     def _get_ppl(self,
                  input_ids,
@@ -334,41 +183,42 @@ class LogitsMixin:
                     f'total_len: {total_len}')
         torch.cuda.empty_cache()
         logits = self._run(
-            self.async_get_logits(input_ids=input_ids,
-                                  steps=steps,
-                                  sequence_start=sequence_start,
-                                  sequence_end=sequence_end)).result()
-        bsz, seq_len, vocab_size = logits.shape
-        logits = logits.float()
-        padding_token_id = -100
-        if target_ids is None:
-            # shift token_ids by 1 to the left
-            target_ids = [x[1:] + [padding_token_id] for x in input_ids]
-        else:
+            coro=self._async_get_logits(input_ids=input_ids,
+                                        steps=steps,
+                                        sequence_start=sequence_start,
+                                        sequence_end=sequence_end)).result()
+        result = []
+        for _logits in logits:
+            _logits = _logits.float()
+            seq_len, vocab_size = _logits.shape
+            padding_token_id = -100
+            if target_ids is None:
+                # shift token_ids by 1 to the left
+                target_ids = [x[1:] + [padding_token_id] for x in input_ids]
+            else:
+                target_ids = [
+                    target_ids[i] + [padding_token_id] if
+                    len(target_ids[i]) < len(input_ids[i]) else target_ids[i]
+                    for i in range(len(input_ids))
+                ]
             target_ids = [
-                target_ids[i] + [padding_token_id]
-                if len(target_ids[i]) < len(input_ids[i]) else target_ids[i]
-                for i in range(bsz)
+                torch.Tensor(torch.LongTensor(_target_ids))
+                for _target_ids in target_ids
             ]
-        target_ids = [
-            torch.Tensor(torch.LongTensor(_target_ids))
-            for _target_ids in target_ids
-        ]
-        target_ids = pad_sequence(target_ids,
-                                  batch_first=True,
-                                  padding_value=padding_token_id)
-        target_ids = target_ids.to(logits.device)
-        target_mask = target_ids != padding_token_id
-
-        # compute cross entropy loss
-        flat_logits = logits.contiguous().view(-1, vocab_size)
-        flat_target_ids = target_ids.contiguous().view(-1)
-        flat_loss_matrix = torch.nn.functional.cross_entropy(
-            flat_logits,
-            flat_target_ids,
-            reduction='none',
-            ignore_index=padding_token_id)
-        flat_loss_matrix = flat_loss_matrix.view(bsz, seq_len)
-        loss = flat_loss_matrix.sum(dim=-1).cpu()
-        target_count = target_mask.sum(dim=-1).cpu()
-        return loss, target_count
+            target_ids = pad_sequence(target_ids,
+                                      batch_first=True,
+                                      padding_value=padding_token_id)
+            target_ids = target_ids.to(_logits.device)
+            target_mask = target_ids != padding_token_id
+            # compute cross entropy loss
+            flat_logits = _logits.contiguous().view(-1, vocab_size)
+            flat_target_ids = target_ids.contiguous().view(-1)
+            flat_loss_matrix = torch.nn.functional.cross_entropy(
+                flat_logits,
+                flat_target_ids,
+                reduction='none',
+                ignore_index=padding_token_id)
+            loss = flat_loss_matrix.sum()
+            target_count = target_mask.sum()
+            result.append(loss.item() / target_count.item())
+        return result
