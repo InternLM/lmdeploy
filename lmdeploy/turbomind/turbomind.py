@@ -10,7 +10,7 @@ from dataclasses import asdict
 from functools import partial
 from itertools import repeat
 from queue import Queue
-from typing import Dict, Iterable, List
+from typing import Dict, List
 
 import numpy as np
 import torch
@@ -693,82 +693,3 @@ class TurboMindInstance:
             c.random_seed = cfg.random_seed
         # print (c)
         return c
-
-    def decode(self,
-               input_ids,
-               steps: List[int] = None,
-               input_embeddings=None,
-               input_embedding_ranges=None,
-               sequence_start: bool = True,
-               sequence_end: bool = True):
-        """Perform context decode on input tokens.
-
-        Args:
-            input_ids (numpy.ndarray): the batch of input token ids
-            steps (List[int]): the offset of the k/v cache
-            input_embeddings (List[List[Union[torch.Tensor, np.ndarray]]]):
-                embeddings features
-            input_embedding_ranges: (List[List[Tuple[int, int]]]):
-                the begin/end offsets of input_embeddings to input_ids
-            sequence_start (bool): indicator for starting a sequence
-            sequence_end (bool): indicator for ending a sequence
-        """
-
-        if len(input_ids) == 0:
-            input_ids = [[]]
-        if isinstance(input_ids[0], int):
-            input_ids = [input_ids]
-        if steps is None:
-            steps = [0] * len(input_ids)
-        assert isinstance(steps, List) and len(steps) == len(input_ids)
-
-        # append an extra token since input_len-1 tokens will be
-        # decoded by context decoder
-        input_ids = [x[:] for x in input_ids]
-        for inputs in input_ids:
-            inputs.append(0)
-
-        batch_size = len(input_ids)
-
-        def _broadcast_np(data, dtype, shape=(batch_size, )):
-            if isinstance(data, Iterable):
-                assert len(data) == batch_size
-                return data
-
-            return np.full(shape, data, dtype=dtype)
-
-        input_ids = [torch.IntTensor(ids) for ids in input_ids]
-        input_lengths = torch.IntTensor([len(ids) for ids in input_ids])
-        input_ids = pad_sequence(input_ids,
-                                 batch_first=True,
-                                 padding_value=self.eos_id)
-        steps = torch.IntTensor([step for step in steps])
-
-        inputs = dict(input_ids=input_ids,
-                      input_lengths=input_lengths,
-                      request_output_len=_broadcast_np(0, dtype=np.uint32),
-                      is_return_logits=_broadcast_np(1, np.uint32),
-                      START=_broadcast_np((1 if sequence_start else 0),
-                                          np.int32),
-                      END=_broadcast_np((1 if sequence_end else 0), np.int32),
-                      step=steps)
-
-        input_embeddings, input_embedding_ranges = self.prepare_embeddings(
-            input_embeddings, input_embedding_ranges)
-        if input_embeddings is not None:
-            inputs['input_embeddings'] = input_embeddings
-            inputs['input_embedding_ranges'] = input_embedding_ranges
-
-        tm_inputs = _np_dict_to_tm_dict(inputs)
-
-        # start forward thread
-        self._forward_thread(tm_inputs)
-
-        res, tm_outputs = self.que.get()
-        if res < 0:
-            return None
-
-        outputs = _tm_dict_to_torch_dict(tm_outputs)
-        logits = outputs['logits']
-
-        return logits[:, :-1, :]
