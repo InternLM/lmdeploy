@@ -127,6 +127,6 @@ class CambOpsBackend(DlinferOpsBackend):
                            backend_config: BackendConfig,
                            device: torch.device):
         """build graph runner."""
-        from .graph_runner import CAMBGraphRunner
-        return CAMBGraphRunner(model, model_config, cache_config,
+        from lmdeploy.pytorch.backends.cuda.graph_runner import CUDAGraphRunner
+        return CUDAGraphRunner(model, model_config, cache_config,
                                backend_config, device)
