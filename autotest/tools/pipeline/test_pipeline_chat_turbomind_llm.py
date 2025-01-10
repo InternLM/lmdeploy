@@ -222,7 +222,8 @@ def test_pipeline_chat_kvint8_tp4(config, common_case_config, model,
 @pytest.mark.pr_test
 @pytest.mark.parametrize('model', [
     'internlm/internlm2_5-20b-chat',
-    'internlm/internlm2_5-20b-chat-inner-4bits'
+    'internlm/internlm2_5-20b-chat-inner-4bits',
+    'mistralai/Mixtral-8x7B-Instruct-v0.1'
 ])
 def test_pipeline_chat_pr(config, common_case_config, model):
     spawn_context = get_context('spawn')
@@ -239,7 +240,7 @@ def test_pipeline_chat_pr(config, common_case_config, model):
 @pytest.mark.pipeline_chat
 @pytest.mark.gpu_num_1
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('model', ['Qwen/Qwen-7B-Chat'])
+@pytest.mark.parametrize('model', ['Qwen/Qwen2.5-7B-Instruct'])
 def test_modelscope_pipeline_chat_tp1(config, common_case_config, model,
                                       worker_id):
     if 'gw' in worker_id:

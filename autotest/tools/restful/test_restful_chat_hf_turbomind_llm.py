@@ -194,15 +194,23 @@ def test_restful_chat_kvint8_tp4(config, common_case_config, worker_id):
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_2
 @pytest.mark.pr_test
-@pytest.mark.parametrize('prepare_environment', [{
-    'model': 'internlm/internlm2_5-20b-chat',
-    'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6',
-    'tp_num': 2
-}, {
-    'model': 'internlm/internlm2_5-20b-chat-inner-4bits',
-    'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6',
-    'tp_num': 2
-}],
+@pytest.mark.parametrize('prepare_environment', [
+    {
+        'model': 'internlm/internlm2_5-20b-chat',
+        'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6',
+        'tp_num': 2
+    },
+    {
+        'model': 'internlm/internlm2_5-20b-chat-inner-4bits',
+        'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6',
+        'tp_num': 2
+    },
+    {
+        'model': 'mistralai/Mixtral-8x7B-Instruct-v0.1',
+        'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6',
+        'tp_num': 2
+    },
+],
                          indirect=True)
 def test_restful_chat_pr(config, common_case_config):
     run_all_step(
