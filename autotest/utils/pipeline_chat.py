@@ -235,7 +235,7 @@ def assert_pipeline_single_stream_return(output, logprobs_num: int = 0):
 
 def assert_pipeline_batch_stream_return(output, size: int = 1):
     for i in range(size):
-        output_list = [item for item in output if item.session_id == i]
+        output_list = [item for item in output if item.index == i]
         result, msg = assert_pipeline_single_stream_return(output_list)
         if not result:
             return result, msg
@@ -249,7 +249,7 @@ def assert_pipeline_single_element(output,
     result = True
     result &= output.generate_token_len > 0
     result &= output.input_token_len > 0
-    result &= output.session_id >= 0
+    result &= output.index >= 0
     if is_last:
         result &= len(output.text) >= 0
         result &= output.finish_reason in ['stop', 'length']

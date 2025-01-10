@@ -1,22 +1,28 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import atexit
+import concurrent.futures
 import dataclasses
 import json
 import os
 import random
 import re
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
 from copy import deepcopy
+from functools import partial
 from itertools import count
-from queue import Empty, Queue
+from queue import Queue
 from threading import Thread
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import (Any, AsyncIterator, Dict, Iterator, List, Literal,
+                    Optional, Tuple, Union)
+
+import tqdm
 
 from lmdeploy.logger import RequestLogger
 from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig, Response,
                                ResponseType, TurbomindEngineConfig)
 from lmdeploy.model import MODELS, ChatTemplateConfig, best_match_model
-from lmdeploy.serve.utils import LogitsMixin, _get_event_loop
+from lmdeploy.serve.utils import LogitsMixin
 from lmdeploy.tokenizer import DetokenizeState
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_logger
 
@@ -50,6 +56,37 @@ class GenOut:
     finish_reason: Optional[Literal['stop', 'length', 'error']] = None
     token_ids: List[int] = None
     logprobs: List[Dict[int, float]] = None
+    logits: Any = None
+    last_hidden_state: Any = None
+
+
+def _gen_out_to_response(out: GenOut, index) -> Response:
+    return Response(text=out.response,
+                    generate_token_len=out.generate_token_len,
+                    input_token_len=out.input_token_len,
+                    finish_reason=out.finish_reason,
+                    token_ids=out.token_ids,
+                    logprobs=out.logprobs,
+                    last_hidden_state=out.last_hidden_state,
+                    logits=out.logits,
+                    index=index)
+
+
+def _append_response(dst: Response, src: Response):
+    """dst += src."""
+    if not dst:
+        return src
+    dst.text += src.text
+    dst.generate_token_len = src.generate_token_len
+    dst.input_token_len = src.input_token_len
+    dst.finish_reason = src.finish_reason
+    dst.index = src.index
+    if src.token_ids:
+        dst.token_ids += src.token_ids
+    if src.logprobs:
+        dst.logprobs = dst.logprobs or []
+        dst.logprobs += src.logprobs
+    return dst
 
 
 class Session:
@@ -63,14 +100,17 @@ class Session:
         _engine (Any): engine for internal use.
         history (List[Any, str]): chat history.
     """
-    _ids = count(0)
 
-    def __init__(self):
-        self._id: int = next(self._ids)
+    def __init__(self,
+                 session_id: int,
+                 engine: Any,
+                 gen_config: GenerationConfig = None):
+        self._id: int = session_id
+        self._engine = engine
         self._step: int = 0
         self._prompt: Any = None
         self._response: Response = None
-        self._engine: Any = None
+        self._gen_config = gen_config
         self.history: List[Tuple[Any, str]] = []
 
     def _merge_response(self, resp: Response, step: Union[Response, GenOut]):
@@ -89,8 +129,8 @@ class Session:
     def close(self):
         """release engine storage for this session."""
         if self._engine:
-            inst = self._engine.create_instance()
-            inst.end(self._id)
+            self._engine._run(coro=self._engine.end_session(self._id)).result()
+            self._engine = None
 
     def __repr__(self) -> str:
         res = ''
@@ -99,6 +139,89 @@ class Session:
                 user = str(user)
             res += f'USER:\n{user}\nASSISTANT:\n{assistant}\n'
         return res
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
+
+    def __call__(
+            self,
+            prompt: str,
+            gen_config: Optional[GenerationConfig] = None,
+            stream_response: bool = True,
+            do_preprocess: bool = True) -> Union[Response, Iterator[Response]]:
+        self._engine.chat(prompt=prompt,
+                          gen_config=gen_config or self._gen_config,
+                          stream_response=stream_response,
+                          do_preprocess=do_preprocess,
+                          session=self)
+        if stream_response:
+            return self.generator
+        else:
+            return self.response
+
+
+class _EventLoopThread:
+
+    def __init__(self, daemon=False):
+        fut = concurrent.futures.Future()
+        self.thread = Thread(target=partial(self._thread_entry, fut),
+                             daemon=daemon)
+        self.thread.start()
+        self.loop: asyncio.AbstractEventLoop = fut.result()
+        self.closed = False
+        if daemon:
+            atexit.register(self.close)
+
+    def _thread_entry(self, fut):
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        fut.set_result(loop)
+        try:
+            loop.run_forever()
+        except BaseException as e:
+            logger.error(f'[internal_thread] {type(e).__name__} {e}')
+        finally:
+            try:
+                self._cancel_all_tasks()
+                loop.run_until_complete(loop.shutdown_asyncgens())
+            finally:
+                asyncio.set_event_loop(None)
+                loop.close()
+
+    def _cancel_all_tasks(self):
+        """Modified from asyncio/runners.py."""
+        to_cancel = asyncio.all_tasks(self.loop)
+        if not to_cancel:
+            return
+
+        for task in to_cancel:
+            task.cancel()
+
+        async def _gather():
+            await asyncio.gather(*to_cancel, return_exceptions=True)
+
+        self.loop.run_until_complete(_gather())
+
+        for task in to_cancel:
+            if task.cancelled():
+                continue
+            if task.exception() is not None:
+                self.loop.call_exception_handler({
+                    'message':
+                    'unhandled exception during worker thread shutdown',
+                    'exception': task.exception(),
+                    'task': task,
+                })
+
+    def close(self):
+        if self.closed:
+            return
+        self.closed = True
+        self.loop.call_soon_threadsafe(self.loop.stop)
+        self.thread.join()
 
 
 class AsyncEngine(LogitsMixin):
@@ -179,13 +302,26 @@ class AsyncEngine(LogitsMixin):
         self.instance_num = self.backend_config.max_batch_size
         self.tokenizer = self.engine.tokenizer
         self.id2step = {}
-        self.id2generator = {}
-        self.running_session_ids = set()
-        self.gens_set = set()
-        for i in range(self.instance_num):
-            self.gens_set.add(self.engine.create_instance())
+        self.id2inst = {}
+        self.free_insts: asyncio.Queue = None
+        self.instances = [
+            self.engine.create_instance() for _ in range(self.instance_num)
+        ]
         self._session_id = count(0)
         self.request_logger = RequestLogger(max_log_len)
+        self.internal_thread = _EventLoopThread(daemon=True)
+        self.limiter: asyncio.Semaphore = None
+
+    def close(self):
+        self.internal_thread.close()
+
+    def _get_free_insts(self):
+        if self.free_insts is None:
+            # `asyncio.Queue` must be created in an async context
+            self.free_insts = asyncio.Queue()
+            for inst in self.instances:
+                self.free_insts.put_nowait(inst)
+        return self.free_insts
 
     def _build_turbomind(
             self,
@@ -246,45 +382,117 @@ class AsyncEngine(LogitsMixin):
 
     async def stop_session(self, session_id: int):
         """Stop a session by a session_id."""
-        if str(session_id) in self.id2generator:
-            await self.id2generator[str(session_id)].async_cancel(session_id)
-            self.gens_set.add(self.id2generator[str(session_id)])
-
-        self.running_session_ids.discard(session_id)
+        generator = self.id2inst.get(session_id)
+        if generator:
+            await generator.async_cancel(session_id)
+        # else it's not running at all
 
     async def end_session(self, session_id: int):
-        """Clear a session by a session_id."""
-        if str(session_id) in self.id2generator:
-            await self.id2generator[str(session_id)].async_end(session_id)
-            self.id2step[str(session_id)] = 0
-            self.gens_set.add(self.id2generator[str(session_id)])
-
-        self.running_session_ids.discard(session_id)
-
-    @asynccontextmanager
-    async def safe_run(self, session_id: Optional[int] = None):
-        """A context manager to make sure server's safe running."""
+        """For ending a session that is not running."""
+        inst = self.id2inst.get(session_id)
+        if inst:
+            await inst._active.wait()
+            assert session_id not in self.id2inst
+        inst = await self._get_free_insts().get()
         try:
-            yield
+            await inst.async_end(session_id)
+            self.id2step[session_id] = 0
         except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
-            # TODO: find out why await would block the coroutine here
-            _get_event_loop().create_task(self.stop_session(session_id))
-            raise e
-        if str(session_id) in self.id2generator:
-            self.gens_set.add(self.id2generator[str(session_id)])
-        self.running_session_ids.discard(session_id)
+            logger.error(f'[end_session] exception caught: {e}')
+        finally:
+            self._get_free_insts().put_nowait(inst)
 
-    async def get_generator(self, stop: bool, session_id: int):
-        """Only return the model instance if it is available."""
-        if stop:
-            return self.engine.create_instance()
-        # waiting no generator is available or the same session_id is running
-        while self.gens_set == set() or session_id in self.running_session_ids:
-            await asyncio.sleep(0.1)
-        generator = self.gens_set.pop()
-        self.id2generator[str(session_id)] = generator
-        self.running_session_ids.add(session_id)
-        return generator
+    def _get_limiter(self):
+        if not self.limiter:
+            self.limiter = asyncio.Semaphore(self.instance_num)
+        return self.limiter
+
+    async def _async_infer(self, requests: AsyncIterator[Dict],
+                           **kwargs) -> AsyncIterator[AsyncIterator[Response]]:
+        async for req in requests:
+            gen = self.generate(**req, **kwargs)
+            yield gen
+
+    def _infer(self,
+               requests: Iterator[Dict],
+               multiplex: bool,
+               pbar=None,
+               loop=None) -> Iterator[Iterator[Response]]:
+
+        async def _sync_resp(g, que: Queue, idx: int, sem: asyncio.Semaphore):
+            async for out in g:
+                que.put(_gen_out_to_response(out, idx))
+            sem.release()
+            if not multiplex:
+                que.put(None)  # sentinel of inner generator
+            if pbar:
+                pbar.update(1)
+
+        que = Queue()
+
+        async def _infer():
+            sem = self._get_limiter()
+            tasks = []
+            for idx, req in enumerate(requests):
+                await sem.acquire()
+                gen = self.generate(**req)
+                dst = que if multiplex else Queue()
+                if not multiplex:
+                    que.put(iter(dst.get, None))
+                # create a task to send the responses
+                task = asyncio.create_task(_sync_resp(gen, dst, idx, sem))
+                tasks.append(task)
+            if not multiplex:  # sentinel of outer generator
+                que.put(None)
+            await asyncio.gather(*tasks)
+            if multiplex:
+                que.put(None)  # sentinel of inner generator
+
+        loop = loop or self.internal_thread.loop
+        # submit the coroutine to async world
+        asyncio.run_coroutine_threadsafe(
+            _infer(), loop).add_done_callback(lambda x: x.result())
+
+        return iter(que.get, None)
+
+    @staticmethod
+    def _is_single(prompts):
+        return isinstance(prompts, str) or isinstance(prompts[0], Dict)
+
+    def infer(self,
+              prompts: Union[List[str], str, List[Dict], List[List[Dict]]],
+              gen_config: Optional[Union[GenerationConfig,
+                                         List[GenerationConfig]]] = None,
+              do_preprocess: bool = True,
+              adapter_name: Optional[str] = None,
+              stream_response: bool = False,
+              multiplex: bool = False,
+              pbar: Optional[tqdm.tqdm] = None,
+              **kwargs):
+
+        prompts = [prompts] if AsyncEngine._is_single(prompts) else prompts
+        assert isinstance(prompts, List), 'prompts should be a list'
+        gen_config = gen_config or GenerationConfig()
+        if not isinstance(gen_config, List):
+            gen_config = [gen_config] * len(prompts)
+        assert len(prompts) == len(gen_config), \
+                'input gen_confg length differs from the length of prompts'  # noqa
+
+        def requests():
+            for prompt, gen_cfg in zip(prompts, gen_config):
+                r = dict(messages=prompt,
+                         gen_config=gen_cfg,
+                         do_preprocess=do_preprocess,
+                         adapter_name=adapter_name,
+                         stream_response=stream_response,
+                         **kwargs)
+                r.setdefault('sequence_start', True)
+                r.setdefault('sequence_end', True)
+                if 'session_id' not in r:
+                    r['session_id'] = next(self._session_id)
+                yield r
+
+        return self._infer(requests(), multiplex, pbar)
 
     def batch_infer(self,
                     prompts: Union[List[str], str, List[Dict],
@@ -310,59 +518,26 @@ class AsyncEngine(LogitsMixin):
                 Pick one from adapters. Default to None, using the base model.
             use_tqdm (bool): Whether use the progress bar. Default to False
         """
-        need_list_wrap = isinstance(prompts, str) or isinstance(
-            prompts[0], Dict)
-        prompts = [prompts] if need_list_wrap else prompts
-        assert isinstance(prompts, List), 'prompts should be a list'
-        if gen_config is None:
-            gen_config = GenerationConfig()
-        if not isinstance(gen_config, List):
-            gen_config = [gen_config] * len(prompts)
-        assert len(prompts) == len(gen_config), \
-                'input gen_confg length differs from the length of prompts'  # noqa
-        prompt_num = len(prompts)
-        session_ids = [next(self._session_id) for _ in range(prompt_num)]
-        outputs = [
-            Response('', 0, 0, session_ids[i], index=i)
-            for i in range(prompt_num)
-        ]
-        generators = []
-        if use_tqdm:
-            import tqdm
-            pbar = tqdm.tqdm(total=len(prompts))
-        for i, prompt in enumerate(prompts):
-            generators.append(
-                self.generate(prompt,
-                              session_ids[i],
-                              gen_config=gen_config[i],
-                              stream_response=True,
-                              sequence_start=True,
-                              sequence_end=True,
-                              do_preprocess=do_preprocess,
-                              adapter_name=adapter_name,
-                              **kwargs))
-
-        async def _inner_call(i, generator):
-            async for out in generator:
-                outputs[i].text += out.response
-                outputs[i].generate_token_len = out.generate_token_len
-                outputs[i].input_token_len = out.input_token_len
-                outputs[i].finish_reason = out.finish_reason
-                if out.token_ids:
-                    outputs[i].token_ids.extend(out.token_ids)
-                if out.logprobs:
-                    if outputs[i].logprobs is None:
-                        outputs[i].logprobs = []
-                    outputs[i].logprobs.extend(out.logprobs)
-                if use_tqdm and out.finish_reason is not None:
-                    pbar.update(1)
-
-        async def gather():
-            await asyncio.gather(
-                *[_inner_call(i, generators[i]) for i in range(len(prompts))])
-
-        _get_event_loop().run_until_complete(gather())
-        outputs = outputs[0] if need_list_wrap else outputs
+        is_single = AsyncEngine._is_single(prompts)
+        outputs = []
+        pbar = tqdm.tqdm(
+            total=1 if is_single else len(prompts)) if use_tqdm else None
+        try:
+            for g in self.infer(prompts,
+                                gen_config,
+                                do_preprocess,
+                                adapter_name,
+                                stream_response=False,
+                                pbar=pbar,
+                                **kwargs):
+                res = None
+                for out in g:
+                    res = _append_response(res, out)
+                outputs.append(res)
+        finally:
+            if pbar: pbar.close()  # noqa
+        if is_single:
+            return outputs[0]
         return outputs
 
     def stream_infer(
@@ -372,6 +547,7 @@ class AsyncEngine(LogitsMixin):
                                        List[GenerationConfig]]] = None,
             do_preprocess: bool = True,
             adapter_name: Optional[str] = None,
+            stream_response: bool = True,
             **kwargs):
         """Inference a batch of prompts with stream mode.
 
@@ -387,62 +563,13 @@ class AsyncEngine(LogitsMixin):
             adapter_name (str): the adapter name of slora for pytorch backend.
                 Pick one from adapters. Default to None, using the base model.
         """
-        need_list_wrap = isinstance(prompts, str) or isinstance(
-            prompts[0], Dict)
-        prompts = [prompts] if need_list_wrap else prompts
-        assert isinstance(prompts, List), 'prompts should be a list'
-        if gen_config is None:
-            gen_config = GenerationConfig()
-        if not isinstance(gen_config, List):
-            gen_config = [gen_config] * len(prompts)
-        assert len(prompts) == len(gen_config), \
-                'input gen_confg length differs from the length of prompts'  # noqa
-        session_ids = [next(self._session_id) for _ in range(len(prompts))]
-        outputs = Queue()
-        generators = []
-        for i, prompt in enumerate(prompts):
-            generators.append(
-                self.generate(prompt,
-                              session_ids[i],
-                              gen_config=gen_config[i],
-                              stream_response=True,
-                              sequence_start=True,
-                              sequence_end=True,
-                              do_preprocess=do_preprocess,
-                              adapter_name=adapter_name,
-                              **kwargs))
-
-        async def _inner_call(i, generator):
-            async for out in generator:
-                outputs.put(
-                    Response(out.response,
-                             out.generate_token_len,
-                             out.input_token_len,
-                             session_ids[i],
-                             out.finish_reason,
-                             out.token_ids,
-                             out.logprobs,
-                             index=i))
-
-        async def gather():
-            await asyncio.gather(
-                *[_inner_call(i, generators[i]) for i in range(len(prompts))])
-            outputs.put(None)
-
-        loop = _get_event_loop()
-        proc = Thread(target=lambda: loop.run_until_complete(gather()))
-        proc.start()
-
-        while True:
-            try:
-                out = outputs.get(timeout=0.001)
-                if out is None:
-                    break
-                yield out
-            except Empty:
-                pass
-
-        proc.join()
+        return self.infer(prompts,
+                          gen_config,
+                          do_preprocess,
+                          adapter_name,
+                          stream_response,
+                          multiplex=True,
+                          **kwargs)
 
     async def _get_prompt_input(self,
                                 prompt: str,
@@ -466,6 +593,34 @@ class AsyncEngine(LogitsMixin):
         input_ids = self.tokenizer.encode(prompt, add_bos=sequence_start)
         return {'prompt': prompt, 'input_ids': input_ids}
 
+    @asynccontextmanager
+    async def model_inst(self, session_id: int):
+        """A context manager to make sure server's safe running."""
+        assert session_id not in self.id2inst
+        free_insts = self._get_free_insts()
+        inst = await free_insts.get()
+        inst._active = asyncio.Event()
+        self.id2inst[session_id] = inst
+        try:
+            yield inst
+        finally:
+            self.id2inst.pop(session_id)
+            inst._active.set()
+            free_insts.put_nowait(inst)
+
+    @asynccontextmanager
+    async def safe_run(self, inst, session_id, **kwargs):
+        generator = inst.async_stream_infer(session_id, **kwargs)
+        try:
+            yield generator
+        except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
+            logger.error(
+                f'[safe_run] exception caught: {type(e).__name__} {e}')
+            # TODO: remove session_id from async cancel
+            await inst.async_cancel(session_id)
+        finally:
+            await generator.aclose()
+
     async def generate(
             self,
             messages,
@@ -478,6 +633,8 @@ class AsyncEngine(LogitsMixin):
             step: int = 0,
             do_preprocess: bool = True,
             adapter_name: Optional[str] = None,
+            skip_stop_tokens: bool = True,
+            rewind_stop_tokens: bool = False,
             **kwargs):
         """Generate responses.
 
@@ -493,10 +650,10 @@ class AsyncEngine(LogitsMixin):
             do_preprocess (bool): whether pre-process the messages. Default to
                 True, which means chat_template will be applied.
         """
-        if str(session_id) not in self.id2step:
-            self.id2step[str(session_id)] = 0
+        if session_id not in self.id2step:
+            self.id2step[session_id] = 0
         if step != 0:
-            self.id2step[str(session_id)] = step
+            self.id2step[session_id] = step
         if gen_config is None:
             gen_config = GenerationConfig()
         else:
@@ -539,7 +696,7 @@ class AsyncEngine(LogitsMixin):
                                        gen_config=gen_config,
                                        adapter_name=adapter_name)
         logger.info(f'session_id={session_id}, '
-                    f'history_tokens={self.id2step[str(session_id)]}, '
+                    f'history_tokens={self.id2step[session_id]}, '
                     f'input_tokens={len(input_ids)}, '
                     f'max_new_tokens={gen_config.max_new_tokens}, '
                     f'seq_start={sequence_start}, seq_end={sequence_end}, '
@@ -548,94 +705,132 @@ class AsyncEngine(LogitsMixin):
         if gen_config.max_new_tokens is None:
             # for interactive endpoint, will try maximum possible token num
             gen_config.max_new_tokens = max(
-                128, self.session_len - self.id2step[str(session_id)] -
-                len(input_ids))
-        elif self.id2step[str(session_id)] + len(
+                128,
+                self.session_len - self.id2step[session_id] - len(input_ids))
+        elif self.id2step[session_id] + len(
                 input_ids) + gen_config.max_new_tokens > self.session_len:
             gen_config.max_new_tokens = max(
-                self.session_len - self.id2step[str(session_id)] -
-                len(input_ids), 128)
+                self.session_len - self.id2step[session_id] - len(input_ids),
+                128)
             logger.error(
                 f'Truncate max_new_tokens to {gen_config.max_new_tokens}')
-        if self.id2step[str(session_id)] + len(
+        if self.id2step[session_id] + len(
                 input_ids) + gen_config.max_new_tokens > self.session_len:
             logger.error(f'run out of tokens. session_id={session_id}.')
-            yield GenOut('', self.id2step[str(session_id)], len(input_ids), 0,
+            yield GenOut('', self.id2step[session_id], len(input_ids), 0,
                          'length')
             if sequence_end is True and sequence_start is False:
                 await self.end_session(session_id)
-        else:
+            return
 
-            def is_error(status):
-                return status not in [
-                    ResponseType.SUCCESS, ResponseType.FINISH
-                ]
+        def is_error(status):
+            return status not in [ResponseType.SUCCESS, ResponseType.FINISH]
 
-            generator = await self.get_generator(False, session_id)
-            async with self.safe_run(session_id):
-                state = DetokenizeState(len(input_ids))
-                start_ids_offset = state.ids_offset
-                response = ''
-                async for outputs in generator.async_stream_infer(
-                        session_id=session_id,
-                        **prompt_input,
-                        gen_config=gen_config,
-                        adapter_name=adapter_name,
-                        stream_output=stream_response,
-                        sequence_start=sequence_start,
-                        sequence_end=sequence_end,
-                        step=self.id2step[str(session_id)]):
+        # used to skip / rewind stop words in interactive mode
+        stop_ids = []
+        if skip_stop_tokens and not gen_config.ignore_eos:
+            stop_ids = gen_config.stop_token_ids or []
+            if self.tokenizer.eos_token_id not in stop_ids:
+                stop_ids.append(self.tokenizer.eos_token_id)
+
+        async with self.model_inst(session_id) as inst:
+            token_ids = input_ids.copy()
+            history_len = self.id2step[session_id]
+            input_len = len(input_ids)
+            output_len, gen_len = 0, 0
+            state = DetokenizeState(len(input_ids))
+            start_ids_offset = state.ids_offset
+            response = ''
+            async with self.safe_run(inst,
+                                     session_id=session_id,
+                                     **prompt_input,
+                                     gen_config=gen_config,
+                                     adapter_name=adapter_name,
+                                     stream_output=stream_response,
+                                     sequence_start=sequence_start,
+                                     sequence_end=sequence_end,
+                                     step=history_len) as gen:
+                prev_len = 0
+                hit_stop_token = 0
+                async for outputs in gen:
                     # decode res
                     if is_error(outputs.status):
-                        tokens = 0
                         break
-                    res, tokens = input_ids + outputs.token_ids, outputs.num_token  # noqa
-                    if len(res) <= state.ids_offset:
+
+                    output_len = outputs.num_token
+
+                    if hit_stop_token or prev_len == output_len:
                         continue
+
+                    # This assumes the engine will stop when stop token is hit
+                    if output_len and outputs.token_ids[-1] in stop_ids:
+                        hit_stop_token = 1
+                        # one token and it's been skipped
+                        if output_len == prev_len + 1:
+                            continue
+
+                    mask = slice(prev_len - output_len,
+                                 output_len - hit_stop_token)
+
+                    token_ids += outputs.token_ids[mask]
+                    gen_len = len(token_ids) - input_len
+
+                    prev_len = output_len
 
                     ids_offset = state.ids_offset
                     response, state = self.tokenizer.detokenize_incrementally(
-                        res,
+                        token_ids,
                         state,
                         skip_special_tokens=gen_config.skip_special_tokens)
+                    res = token_ids[ids_offset:]
 
-                    res = res[ids_offset:]
-                    logprobs = None
-                    if outputs.logprobs:
+                    out = GenOut(response, history_len, input_len, gen_len,
+                                 finish_reason, res)
+
+                    if outputs.logprobs is not None:
                         log_offset = ids_offset - start_ids_offset
-                        logprobs = outputs.logprobs[log_offset:]
+                        out.logprobs = outputs.logprobs[log_offset:]
+                    if outputs.last_hidden_state is not None:
+                        out.last_hidden_state = outputs.last_hidden_state
+                        if hit_stop_token:
+                            out.last_hidden_state = \
+                                out.last_hidden_state[:-hit_stop_token]
+                    if outputs.logits is not None:
+                        out.logits = outputs.logits
+                        if hit_stop_token:
+                            out.logits = out.logits[:-hit_stop_token]
 
-                    # response, history token len,
-                    # input token len, gen token len
-                    yield GenOut(response, self.id2step[str(session_id)],
-                                 len(input_ids), tokens, finish_reason, res,
-                                 logprobs)
+                    yield out
+                # end of generator loop
+
                 if not is_error(outputs.status):
                     finish_reason = 'length' \
-                        if tokens >= gen_config.max_new_tokens else 'stop'
+                        if gen_len >= gen_config.max_new_tokens else 'stop'
                     # utf-8 char at the end means it's a potential unfinished
                     # byte sequence
                     if not response.endswith('�'):
-                        # avaid returning the last response twice
+                        # avoid returning the last response twice
                         response = ''
-                    yield GenOut(response, self.id2step[str(session_id)],
-                                 len(input_ids), tokens, finish_reason)
+                    yield GenOut(response, self.id2step[session_id],
+                                 len(input_ids), gen_len, finish_reason)
                 else:
-                    yield GenOut(
-                        response='internal error happened',
-                        history_token_len=self.id2step[str(session_id)],
-                        input_token_len=len(input_ids),
-                        generate_token_len=0,
-                        finish_reason='error',
-                        token_ids=[])
-                # update step
-                self.id2step[str(session_id)] += len(input_ids) + tokens
-                if sequence_end:
-                    self.id2step[str(session_id)] = 0
-                # manually end pytorch session
-                # TODO modify pytorch or turbomind api
-                if self.backend == 'pytorch' and sequence_end:
-                    await self.end_session(session_id)
+                    yield GenOut(response='internal error happened',
+                                 history_token_len=self.id2step[session_id],
+                                 input_token_len=len(input_ids),
+                                 generate_token_len=0,
+                                 finish_reason='error',
+                                 token_ids=[])
+            # update step
+            if sequence_end:
+                self.id2step[session_id] = 0
+                if self.backend == 'pytorch':
+                    # manually end pytorch session
+                    await inst.async_end(session_id)
+            else:
+                if rewind_stop_tokens:
+                    # rewind the step to the token before the stop token
+                    output_len = gen_len
+                self.id2step[session_id] += input_len + output_len
 
     def parse_tool_response(self, text, tools, **kwargs):
         """Parse model response containing tool information.
@@ -684,12 +879,28 @@ class AsyncEngine(LogitsMixin):
                           for call_info in call_info_list]
         return text, call_info_list
 
+    def _run(self, fn=None, coro=None, loop=None):
+        assert (fn or coro) and not (fn and coro)
+        loop = loop or self.internal_thread.loop
+        if fn:
+
+            async def _coro():
+                return fn()
+
+            coro = _coro()
+        return asyncio.run_coroutine_threadsafe(coro, loop)
+
+    def session(self, gen_config: GenerationConfig = None):
+        return Session(self._run(fn=lambda: next(self._session_id)).result(),
+                       engine=self,
+                       gen_config=gen_config)
+
     def chat(self,
              prompt: str,
              session=None,
              gen_config: Optional[GenerationConfig] = None,
-             do_preprocess: bool = True,
-             **kwargs) -> Session:
+             stream_response=False,
+             **kwargs) -> Union[Session, Iterator]:
         """Chat.
 
         Args:
@@ -702,8 +913,7 @@ class AsyncEngine(LogitsMixin):
             **kwargs (dict): ad hoc parametrization of `gen_config
         """
         if session is None:
-            session = Session()
-            session._engine = self.engine
+            session = self.session()
 
         # sync & init
         session._prompt = prompt
@@ -711,25 +921,35 @@ class AsyncEngine(LogitsMixin):
 
         sequence_start = session._step == 0
 
-        async def _work():
-            resp = Response('', -1, -1, session._id)
-            async for output in self.generate(prompt,
-                                              session_id=session._id,
-                                              gen_config=gen_config,
-                                              stream_response=False,
-                                              sequence_start=sequence_start,
-                                              sequence_end=False,
-                                              step=session._step,
-                                              do_preprocess=do_preprocess,
-                                              **kwargs):
-                resp = session._merge_response(resp, output)
-            return resp
+        generator = self.infer(prompt,
+                               gen_config,
+                               sequence_start=sequence_start,
+                               sequence_end=False,
+                               session_id=session._id,
+                               stream_response=stream_response,
+                               multiplex=True)
 
-        from lmdeploy.pytorch.engine.request import _run_until_complete
-        resp = _run_until_complete(_work())
+        def _gen():
+            resp = None
+            try:
+                for out in generator:
+                    resp = _append_response(resp, out)
+                    yield out
+            except:  # noqa
+                self._run(coro=self.stop_session(session._id)).result()
+                raise
+            else:
+                session._response = resp
+                session._step += resp.generate_token_len + resp.input_token_len
+                session.history.append((session._prompt, resp.text))
 
-        session._response = resp
-        session._step += resp.generate_token_len + resp.input_token_len
-        session.history.append((session._prompt, resp.text))
+        if stream_response:
+            session.generator = _gen()
+        else:
+            # run the generator until finish
+            with closing(_gen()) as gen:
+                for _ in gen:
+                    pass
+            session.generator = None
 
         return session
