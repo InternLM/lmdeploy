@@ -324,7 +324,8 @@ def main():
     profiler.compute_metrics()
     profiler.summarize(title='Profile Throughput', hyperparams=hyperparams)
     if args.csv:
-        profiler.save_csv(args.csv)
+        profiler.save_csv(args.csv, (('batch', args.concurrency),
+                                     ('num_prompts', args.num_prompts)))
 
 
 if __name__ == '__main__':

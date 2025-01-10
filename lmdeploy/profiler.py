@@ -146,17 +146,25 @@ class Profiler:
             tab_row('Tokens per Tick', self.tpts_mean, *self.tpts_stat)
         print('=' * width)
 
-    def save_csv(self, csv_file: str):
+    def save_csv(self, csv_file: str, hyperparams):
         """Export legacy metrics to CSV."""
         with open(csv_file, 'w') as csvfile:
             writer = csv.writer(csvfile)
+            keys, vals = zip(*hyperparams)
             writer.writerow([
-                'RPS', 'RPM', 'FTL(ave)(s)', 'throughput(out tok/s)',
-                'throughput(total tok/s)'
+                *keys,
+                'RPS',
+                'RPM',
+                'FTL(ave)(s)',
+                'throughput(out tok/s)',
+                'throughput(total tok/s)',
             ])
             ttft_mean = f'{self.ttft_mean:.3f}' if self.stream_output else '-'
             writer.writerow([
-                f'{self.rps:.3f}', f'{(self.rps * 60):.3f}', ttft_mean,
+                *vals,
+                f'{self.rps:.3f}',
+                f'{(self.rps * 60):.3f}',
+                ttft_mean,
                 f'{self.output_throughput:.3f}',
-                f'{(self.input_throughput + self.output_throughput):.3f}'
+                f'{(self.input_throughput + self.output_throughput):.3f}',
             ])
