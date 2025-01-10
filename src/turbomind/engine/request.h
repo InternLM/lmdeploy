@@ -25,9 +25,15 @@ struct GenerationConfig {
 
     uint64_t random_seed = 0;
 
-    int  output_logprobs          = 0;
-    bool output_last_hidden_state = false;
-    bool output_logits            = false;
+    int output_logprobs = 0;
+
+    enum OutType {
+        kNone       = 0,
+        kAll        = 1,
+        kGeneration = 2
+    };
+    int output_last_hidden_state = 0;
+    int output_logits            = 0;
 };
 
 inline std::ostream& operator<<(std::ostream& os, const GenerationConfig& c)
@@ -107,8 +113,7 @@ struct Request {
 
     int ec;  // set when disabling conflicting requests
 
-    enum
-    {
+    enum {
         kOk       = 0,
         kInvalid  = 1,  // Sequence not exist or both `start` & `stop` (instead of `end`) is set
         kConflict = 2,  // Concurrent requests to the same sequence

@@ -319,20 +319,21 @@ class TurboMind:
         return TurboMindInstance(self, self.config, cuda_stream_id)
 
 
-def _get_logits(outputs):
+def _get_logits(outputs, offset: int):
     logits = outputs['logits']
 
     def _func(out: EngineOutput, step: int):
-        out.logits = logits[:step - 1, :]
+        out.logits = logits[:step - offset - 1, :]
 
     return _func
 
 
-def _get_last_hidden_state(outputs):
+def _get_last_hidden_state(outputs, offset: int):
     last_hidden_state = outputs['last_hidden_state']
+    print(f'last_hidden_state.shape = {last_hidden_state.shape}')
 
     def _func(out: EngineOutput, step: int):
-        out.last_hidden_state = last_hidden_state[:step - 1, :]
+        out.last_hidden_state = last_hidden_state[:step - offset - 1, :]
 
     return _func
 
@@ -439,12 +440,19 @@ class TurboMindInstance:
         return model_inst
 
     def _get_extra_output_processors(self, outputs: Dict[str, torch.Tensor],
-                                     gen_config: GenerationConfig):
+                                     gen_config: GenerationConfig,
+                                     input_len: int):
+
+        def _get_offset(type):
+            return input_len - 1 if type == 'generation' else 0
+
         fs = []
         if gen_config.output_logits:
-            fs.append(_get_logits(outputs))
+            offset = _get_offset(gen_config.output_logits)
+            fs.append(_get_logits(outputs, offset))
         if gen_config.output_last_hidden_state:
-            fs.append(_get_last_hidden_state(outputs))
+            offset = _get_offset(gen_config.output_last_hidden_state)
+            fs.append(_get_last_hidden_state(outputs, offset))
         if gen_config.logprobs:
             fs.append(_get_logprobs(outputs, gen_config.logprobs))
         return fs
@@ -607,7 +615,8 @@ class TurboMindInstance:
 
         outputs = _tm_dict_to_torch_dict(outputs)
 
-        extra_fs = self._get_extra_output_processors(outputs, gen_config)
+        extra_fs = self._get_extra_output_processors(outputs, gen_config,
+                                                     input_len)
 
         output_ids_buf = outputs['output_ids']
 
@@ -678,10 +687,12 @@ class TurboMindInstance:
         c.repetition_penalty = cfg.repetition_penalty
         if cfg.min_new_tokens:
             c.min_new_tokens = cfg.min_new_tokens
+        output_type = dict(all=1, generation=2)
         if cfg.output_last_hidden_state:
-            c.output_last_hidden_state = cfg.output_last_hidden_state
+            c.output_last_hidden_state = output_type[
+                cfg.output_last_hidden_state]
         if cfg.output_logits:
-            c.output_logits = cfg.output_logits
+            c.output_logits = output_type[cfg.output_logits]
         if cfg.logprobs:
             if cfg.logprobs > MAX_LOGPROBS:
                 cfg.logprobs = MAX_LOGPROBS

@@ -789,8 +789,13 @@ class AsyncEngine(LogitsMixin):
                         out.logprobs = outputs.logprobs[log_offset:]
                     if outputs.last_hidden_state is not None:
                         out.last_hidden_state = outputs.last_hidden_state
+                        if hit_stop_token:
+                            out.last_hidden_state = \
+                                out.last_hidden_state[:-hit_stop_token]
                     if outputs.logits is not None:
                         out.logits = outputs.logits
+                        if hit_stop_token:
+                            out.logits = out.logits[:-hit_stop_token]
 
                     yield out
                 # end of generator loop
