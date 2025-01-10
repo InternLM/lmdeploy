@@ -108,7 +108,6 @@ def fused_moe_blocked_f8_kernel(
     else:
         offs_am = offs_sid
     a_ptrs = A + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
-    as_ptrs = A_scale + offs_am
     offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
     offs_bn = tl.max_contiguous(tl.multiple_of(offs_bn, BLOCK_SIZE_N),
                                 BLOCK_SIZE_N)
@@ -120,7 +119,7 @@ def fused_moe_blocked_f8_kernel(
                             offs_bn[None, :] * stride_bn)
 
     offs_bsn = pid_n * BLOCK_SIZE_N // group_bn
-    as_ptrs = A_scale + offs_am * stride_asm
+    as_ptrs = A_scale + (offs_am % M) * stride_asm
     bs_ptrs = B_scale + stride_bse * exp_id + offs_bsn * stride_bsn
 
     acc_scale = tl.load(as_ptrs) * tl.load(bs_ptrs)
