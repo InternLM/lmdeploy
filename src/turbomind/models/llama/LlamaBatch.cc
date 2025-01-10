@@ -1282,9 +1282,7 @@ void LlamaBatch<T>::OutputLogits(const float* logits, int first, int last, Gener
 }
 
 template<class T>
-void LlamaBatch<T>::OutputLastHiddenState(const T*                  hidden_states,
-                                          int                       first,
-                                          int                       last)
+void LlamaBatch<T>::OutputLastHiddenState(const T* hidden_states, int first, int last)
 {
     for (int i = first; i < last; ++i) {
 

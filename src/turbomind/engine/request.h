@@ -27,7 +27,8 @@ struct GenerationConfig {
 
     int output_logprobs = 0;
 
-    enum OutType {
+    enum OutType
+    {
         kNone       = 0,
         kAll        = 1,
         kGeneration = 2
@@ -113,7 +114,8 @@ struct Request {
 
     int ec;  // set when disabling conflicting requests
 
-    enum {
+    enum
+    {
         kOk       = 0,
         kInvalid  = 1,  // Sequence not exist or both `start` & `stop` (instead of `end`) is set
         kConflict = 2,  // Concurrent requests to the same sequence

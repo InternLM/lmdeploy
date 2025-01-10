@@ -24,7 +24,7 @@ public:
         cv_.notify_one();
     }
 
-    void clsoe()
+    void close()
     {
         {
             std::lock_guard lock{mutex_};
