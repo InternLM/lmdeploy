@@ -765,6 +765,9 @@ class AsyncEngine(LogitsMixin):
                     # This assumes the engine will stop when stop token is hit
                     if output_len and outputs.token_ids[-1] in stop_ids:
                         hit_stop_token = 1
+                        # one token and it's been skipped
+                        if output_len == prev_len + 1:
+                            continue
 
                     mask = slice(prev_len - output_len,
                                  output_len - hit_stop_token)
