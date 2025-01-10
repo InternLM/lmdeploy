@@ -104,11 +104,7 @@ class TritonFusedMoEW8A8Impl(FusedMoEW8A8Impl):
     def update_weights(self, gate_up_weights: torch.Tensor,
                        down_weights: torch.Tensor, gate_up_scale: torch.Tensor,
                        down_scale: torch.Tensor):
-        gate_up_weights = gate_up_weights.transpose(1,
-                                                    2).contiguous().transpose(
-                                                        1, 2)
-        down_weights = down_weights.transpose(1,
-                                              2).contiguous().transpose(1, 2)
+        # do not transpose weight for int8/fp8
         return gate_up_weights, down_weights, gate_up_scale, down_scale
 
     def support_ep(self):
@@ -201,11 +197,7 @@ class TritonFusedMoEBlockedF8Impl(FusedMoEBlockedF8Impl):
     def update_weights(self, gate_up_weights: torch.Tensor,
                        down_weights: torch.Tensor, gate_up_scale: torch.Tensor,
                        down_scale: torch.Tensor):
-        gate_up_weights = gate_up_weights.transpose(1,
-                                                    2).contiguous().transpose(
-                                                        1, 2)
-        down_weights = down_weights.transpose(1,
-                                              2).contiguous().transpose(1, 2)
+        # do not transpose weight for int8/fp8
         return gate_up_weights, down_weights, gate_up_scale, down_scale
 
     def support_ep(self):
