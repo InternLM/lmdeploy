@@ -15,7 +15,7 @@ Gateway::Gateway(std::function<std::shared_ptr<void>()> ctx_factory): request_qu
 void Gateway::shutdown()
 {
     request_queue_.close();
-    signal_buffer_.clsoe();
+    signal_buffer_.close();
 
     signal_thread_.join();
 }

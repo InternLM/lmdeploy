@@ -726,9 +726,14 @@ class AsyncEngine(LogitsMixin):
         def is_error(status):
             return status not in [ResponseType.SUCCESS, ResponseType.FINISH]
 
+        # used to skip / rewind stop words in interactive mode
+        stop_ids = []
+        if skip_stop_tokens and not gen_config.ignore_eos:
+            stop_ids = gen_config.stop_token_ids or []
+            if self.tokenizer.eos_token_id not in stop_ids:
+                stop_ids.append(self.tokenizer.eos_token_id)
+
         async with self.model_inst(session_id) as inst:
-            stop_token_ids = gen_config.stop_token_ids \
-                if skip_stop_tokens and not gen_config.ignore_eos else []
             token_ids = input_ids.copy()
             history_len = self.id2step[session_id]
             input_len = len(input_ids)
@@ -754,12 +759,15 @@ class AsyncEngine(LogitsMixin):
 
                     output_len = outputs.num_token
 
-                    if hit_stop_token:
+                    if hit_stop_token or prev_len == output_len:
                         continue
 
                     # This assumes the engine will stop when stop token is hit
-                    if output_len and outputs.token_ids[-1] in stop_token_ids:
+                    if output_len and outputs.token_ids[-1] in stop_ids:
                         hit_stop_token = 1
+                        # one token and it's been skipped
+                        if output_len == prev_len + 1:
+                            continue
 
                     mask = slice(prev_len - output_len,
                                  output_len - hit_stop_token)
@@ -768,9 +776,6 @@ class AsyncEngine(LogitsMixin):
                     gen_len = len(token_ids) - input_len
 
                     prev_len = output_len
-
-                    if len(token_ids) <= state.ids_offset:
-                        continue
 
                     ids_offset = state.ids_offset
                     response, state = self.tokenizer.detokenize_incrementally(
@@ -787,8 +792,13 @@ class AsyncEngine(LogitsMixin):
                         out.logprobs = outputs.logprobs[log_offset:]
                     if outputs.last_hidden_state is not None:
                         out.last_hidden_state = outputs.last_hidden_state
+                        if hit_stop_token:
+                            out.last_hidden_state = \
+                                out.last_hidden_state[:-hit_stop_token]
                     if outputs.logits is not None:
                         out.logits = outputs.logits
+                        if hit_stop_token:
+                            out.logits = out.logits[:-hit_stop_token]
 
                     yield out
                 # end of generator loop

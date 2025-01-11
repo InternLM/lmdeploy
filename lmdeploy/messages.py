@@ -97,8 +97,8 @@ class GenerationConfig:
     logprobs: int = None
     response_format: Optional[Dict] = None
     logits_processors: Optional[List[LogitsProcessor]] = None
-    output_logits: bool = None
-    output_last_hidden_state: bool = None
+    output_logits: Literal['all', 'generation'] = None
+    output_last_hidden_state: Literal['all', 'generation'] = None
 
     def convert_stop_bad_words_to_ids(self, tokenizer: Tokenizer):
         """convert stop_words/bad_sords to ids and append the ids to

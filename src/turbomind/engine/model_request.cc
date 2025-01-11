@@ -106,7 +106,7 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
     FT_CHECK(inputs.at("input_ids")->shape.size() == 1);
 
     const int input_len  = inputs.at("input_ids")->shape[0];
-    const int output_len = input_len + param.gen_cfg.max_new_tokens;
+    const int output_len = param.gen_cfg.max_new_tokens;
 
     // Max possible length of a sequence, this depends on `history_len` which isn't available here, so `session_len`
     // is used instead
@@ -123,11 +123,13 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
     add(outputs_, "sequence_length", TYPE_INT32, MEMORY_CPU, 1);
 
     if (param.gen_cfg.output_logits) {
-        add(outputs_, "logits", TYPE_FP32, MEMORY_CPU, max_in_out_len, vocab_size_);
+        const int len = param.gen_cfg.output_logits == GenerationConfig::kAll ? max_in_out_len : max_out_len;
+        add(outputs_, "logits", TYPE_FP32, MEMORY_CPU, len, vocab_size_);
     }
 
     if (param.gen_cfg.output_last_hidden_state) {
-        add(outputs_, "last_hidden_state", data_type_, MEMORY_CPU, max_in_out_len, hidden_dim_);
+        const int len = param.gen_cfg.output_last_hidden_state == GenerationConfig::kAll ? max_in_out_len : max_out_len;
+        add(outputs_, "last_hidden_state", data_type_, MEMORY_CPU, len, hidden_dim_);
     }
 
     if (param.gen_cfg.output_logprobs) {

@@ -17,7 +17,7 @@ cd lmdeploy
 
 ### 环境准备
 
-Docker 版本应不低于 18.03。并且需按照[官方指南](https://www.hiascend.com/document/detail/zh/mindx-dl/60rc2/clusterscheduling/clusterschedulingig/clusterschedulingig/dlug_installation_012.html)安装 Ascend Docker Runtime。
+Docker 版本应不低于 18.09。并且需按照[官方指南](https://www.hiascend.com/document/detail/zh/mindx-dl/60rc2/clusterscheduling/clusterschedulingig/clusterschedulingig/dlug_installation_012.html)安装 Ascend Docker Runtime。
 
 > \[!CAUTION\]
 > 如果在后续容器内出现`libascend_hal.so: cannot open shared object file`错误，说明Ascend Docker Runtime没有被正确安装。
