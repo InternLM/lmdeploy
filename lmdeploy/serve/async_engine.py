@@ -685,8 +685,7 @@ class AsyncEngine(LogitsMixin):
             gen_config.n = 1
         prompt = messages
         self.request_logger.log_prompt(session_id=session_id, prompt=prompt)
-        prompt_input = await self._get_prompt_input(session_id,
-                                                    prompt,
+        prompt_input = await self._get_prompt_input(prompt,
                                                     do_preprocess,
                                                     sequence_start,
                                                     adapter_name,

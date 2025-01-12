@@ -193,7 +193,7 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& reqs, std::vector<Signa
     for (const auto& r : reqs) {
 
         if (rank_ == 0) {
-            TM_LOG_INFO("[ProcessInferRequests] Request %ld received.", (long)r->id);
+            TM_LOG_INFO("[ProcessInferRequests] Request for %ld received.", (long)r->id);
         }
 
         if (r->ec) {
