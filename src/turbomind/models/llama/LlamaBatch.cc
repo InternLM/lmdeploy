@@ -1503,8 +1503,11 @@ template<typename T>
 auto LlamaBatch<T>::Interrupt(int index, bool force_stop, bool force_end) -> Signal
 {
     if (rank_ == 0) {
-        TM_LOG_INFO("[Interrupt] slot %d, request %lu, stop %d, end %d", \
-            index, (long)state_->requests[index]->id, force_stop, force_end);
+        TM_LOG_INFO("[Interrupt] slot %d, request %lu, stop %d, end %d",
+                    index,
+                    (long)state_->requests[index]->id,
+                    force_stop,
+                    force_end);
     }
 
     if (debug_ && rank_ == 0) {
