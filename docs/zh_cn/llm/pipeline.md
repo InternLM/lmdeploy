@@ -121,22 +121,27 @@ for item in pipe.stream_infer(prompts, gen_config=gen_config):
 ```python
 from transformers import AutoTokenizer
 from lmdeploy import pipeline
-model_repoid_or_path='internlm/internlm2_5-7b-chat'
+
+
+model_repoid_or_path = 'internlm/internlm2_5-7b-chat'
 pipe = pipeline(model_repoid_or_path)
 tokenizer = AutoTokenizer.from_pretrained(model_repoid_or_path, trust_remote_code=True)
-
-# logits
 messages = [
    {"role": "user", "content": "Hello, how are you?"},
 ]
 input_ids = tokenizer.apply_chat_template(messages)
-logits = pipe.get_logits(input_ids)
 
-# ppl
+# logits is a list of tensor
+logits = pipe.get_logits(input_ids)
+print(logits)
+
+# ppl is a list of float numbers
 ppl = pipe.get_ppl(input_ids)
+print(ppl)
 ```
 
 ```{note}
+当 input_ids 过长时，可能会出现 OOM 错误，请小心应用
 get_ppl 返回的是 cross entropy loss，没有在之后加 exp 操作
 ```
 

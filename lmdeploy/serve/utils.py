@@ -19,11 +19,78 @@ PromptType = Union[str, List[Dict]]
 class LogitsMixin:
     """Helper class to calculate ppl."""
 
-    async def _async_get_logits(self,
-                                input_ids,
-                                steps: List[int] = None,
-                                sequence_start: bool = True,
-                                sequence_end: bool = True) -> torch.Tensor:
+    def prepare_inputs(self, prompts: Union[PromptType, List[PromptType]]):
+        if hasattr(self, '_convert_prompts'):
+            prompts = self._convert_prompts(prompts)
+        need_list_wrap = isinstance(prompts, str) or isinstance(
+            prompts[0], Dict)
+        prompts = [prompts] if need_list_wrap else prompts
+
+        decorated = []
+        input_ids = []
+        input_embeddings = []
+        input_embedding_ranges = []
+        for prompt in prompts:
+            out = self._run(
+                coro=self._get_prompt_input(prompt,
+                                            do_preprocess=True,
+                                            sequence_start=True,
+                                            adapter_name=None)).result()
+            decorated.append(out['prompt'])
+            input_ids.append(out['input_ids'])
+            input_embeddings.append(out.get('input_embeddings', None))
+            input_embedding_ranges.append(
+                out.get('input_embedding_ranges', None))
+
+        outputs = dict(prompts=decorated, input_ids=input_ids)
+        if not any(input_embeddings):
+            input_embeddings = None
+            input_embedding_ranges = None
+        outputs['input_embeddings'] = input_embeddings
+        outputs['input_embedding_ranges'] = input_embedding_ranges
+
+        return outputs
+
+    def get_logits(
+        self,
+        input_ids: Union[InputIdsType, List[InputIdsType]],
+        input_embeddings: Union[InputEmbsType, List[InputEmbsType]] = None,
+        input_embedding_ranges: Union[InputEmbRngsType,
+                                      List[InputEmbRngsType]] = None):
+        """Get logits given a list of input tokens.
+
+        Args:
+            input_ids (Union[List[int], List[List[int]]]): the batch of
+                input token ids
+            input_embeddings: vision embeddings
+            input_embeddings_ranges, ranges where vision embeddings will be
+                inserted
+        Note:
+            A long input_ids might cause OOM. Please use it cautiously
+        """
+        assert isinstance(input_ids, List)
+        if isinstance(input_ids[0], int):
+            input_ids = [input_ids]
+        assert all(len(_) > 0 for _ in input_ids)
+        assert (input_embeddings is None
+                or len(input_embeddings) == len(input_ids))
+        assert (input_embedding_ranges is None
+                or len(input_embedding_ranges) == len(input_ids))
+
+        logits = self._run(coro=self._async_get_logits(
+            input_ids=input_ids,
+            input_embeddings=input_embeddings,
+            input_embedding_ranges=input_embedding_ranges)).result()
+        return logits
+
+    async def _async_get_logits(
+            self,
+            input_ids,
+            input_embeddings: List = None,
+            input_embedding_ranges: List = None,
+            steps: List[int] = None,
+            sequence_start: bool = True,
+            sequence_end: bool = True) -> List[torch.Tensor]:
         assert input_ids and all(isinstance(_, List) for _ in input_ids)
         assert steps is None or (len(steps) == len(input_ids))
 
@@ -33,6 +100,11 @@ class LogitsMixin:
             async for out in self.generate(
                     messages=None,
                     input_ids=input_ids[i],
+                    input_embeddings=(None if input_embeddings is None else
+                                      input_embeddings[i]),
+                    input_embedding_ranges=(None
+                                            if input_embedding_ranges is None
+                                            else input_embedding_ranges[i]),
                     step=0 if steps is None else steps[i],
                     session_id=next(self._session_id),
                     # `max_new_tokens=0` means we don't need engine to

@@ -116,28 +116,33 @@ for item in pipe.stream_infer(prompts, gen_config=gen_config):
     print(item)
 ```
 
-- **An example to cauculate logits & ppl:**
+- **An example to calculate logits & ppl:**
 
 ```python
 from transformers import AutoTokenizer
 from lmdeploy import pipeline
-model_repoid_or_path='internlm/internlm2_5-7b-chat'
+
+
+model_repoid_or_path = 'internlm/internlm2_5-7b-chat'
 pipe = pipeline(model_repoid_or_path)
 tokenizer = AutoTokenizer.from_pretrained(model_repoid_or_path, trust_remote_code=True)
-
-# logits
 messages = [
    {"role": "user", "content": "Hello, how are you?"},
 ]
 input_ids = tokenizer.apply_chat_template(messages)
-logits = pipe.get_logits(input_ids)
 
-# ppl
+# logits is a list of tensor
+logits = pipe.get_logits(input_ids)
+print(logits)
+
+# ppl is a list of float numbers
 ppl = pipe.get_ppl(input_ids)
+print(ppl)
 ```
 
 ```{note}
-get_ppl returns the cross entropy loss without applying the exponential operation afterwards
+- When input_ids is too long, an OOM (Out Of Memory) error may occur. Please apply it with caution
+- get_ppl returns the cross entropy loss without applying the exponential operation afterwards
 ```
 
 - **Below is an example for pytorch backend. Please install triton first.**
