@@ -1,9 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import asyncio
 from typing import Dict, List, Tuple, Union
 
 import numpy as np
 import torch
-from torch.nn.utils.rnn import pad_sequence
 
 from lmdeploy.messages import GenerationConfig
 from lmdeploy.utils import get_logger
@@ -19,50 +19,40 @@ PromptType = Union[str, List[Dict]]
 class LogitsMixin:
     """Helper class to calculate ppl."""
 
-    async def _async_get_logits(
-            self,
-            input_ids,
-            input_embeddings=None,
-            input_embedding_ranges=None,
-            steps: List[int] = None,
-            sequence_start: bool = True,
-            sequence_end: bool = True,
-            adapter_name: str = None) -> List[torch.Tensor]:
+    async def _async_get_logits(self,
+                                input_ids,
+                                steps: List[int] = None,
+                                sequence_start: bool = True,
+                                sequence_end: bool = True) -> torch.Tensor:
         assert input_ids and all(isinstance(_, List) for _ in input_ids)
-        assert (input_embeddings is None or isinstance(input_embeddings, List)
-                and len(input_ids) == len(input_embeddings))
-        assert (input_embedding_ranges is None
-                or isinstance(input_embedding_ranges, List)
-                and len(input_ids) == len(input_embedding_ranges))
-        logits = []
-        for i in range(len(input_ids)):
-            session_id = next(self._session_id)
-            history_len = (0 if session_id not in self.id2step else
-                           self.id2step[session_id])
-            token_ids = input_ids[i].copy()
-            embeddings = input_embeddings[i] if input_embeddings else None
-            ranges = (input_embedding_ranges[i]
-                      if input_embedding_ranges else None)
-            # `max_new_tokens=0` means we don't need engine to generate tokens
-            # `output_logits=True` requests engine to output logits
-            gen_config = GenerationConfig(max_new_tokens=0, output_logits=True)
-            async with self.model_inst(session_id) as inst:
-                async with self.safe_run(inst,
-                                         session_id=session_id,
-                                         input_ids=token_ids,
-                                         input_embeddings=embeddings,
-                                         input_embedding_ranges=ranges,
-                                         gen_config=gen_config,
-                                         adapter_name=adapter_name,
-                                         stream_output=False,
-                                         sequence_start=sequence_start,
-                                         sequence_end=sequence_end,
-                                         step=history_len) as gen:
-                    async for outputs in gen:
-                        # We only need to process the final `outputs` since
-                        # stream_output is False
-                        pass
-                    logits.append(outputs.logits)
+        assert steps is None or (len(steps) == len(input_ids))
+
+        logits = [None] * len(input_ids)
+
+        async def _proc(i):
+            async for out in self.generate(
+                    messages=None,
+                    input_ids=input_ids[i],
+                    step=0 if steps is None else steps[i],
+                    session_id=next(self._session_id),
+                    # `max_new_tokens=0` means we don't need engine to
+                    # generate tokens and `output_logits=all` requests engine
+                    # to output logits of all input tokens
+                    gen_config=GenerationConfig(max_new_tokens=0,
+                                                output_logits='all'),
+                    stream_response=False,
+                    sequence_start=sequence_start,
+                    sequence_end=sequence_end):
+                # In the last iteration, the yielded `out` is an empty response
+                # indicating the finish_reason, which should be ignored here
+                if out.finish_reason is None:
+                    # Try not to return in async for loop. Otherwise, there
+                    # will be `GeneratorExit` exception
+                    logits[i] = out.logits
+
+        tasks = [_proc(i) for i in range(len(input_ids))]
+        await asyncio.gather(*tasks)
+
         return logits
 
     def get_ppl(self, input_ids: Union[List[int],
@@ -75,7 +65,7 @@ class LogitsMixin:
                 input token ids
 
         Returns:
-            Union[float, List[float]]: A list of perplexity scores.
+            List[float]: A list of perplexity scores.
         """
         assert isinstance(input_ids, List)
         if isinstance(input_ids[0], int):
@@ -170,10 +160,10 @@ class LogitsMixin:
                  steps=None,
                  sequence_start: bool = True,
                  sequence_end: bool = True):
-        assert isinstance(input_ids, List)
-        assert all(isinstance(_, List) for _ in input_ids)
-        if target_ids:
-            assert all(isinstance(_, List) for _ in target_ids)
+        assert (isinstance(input_ids, List)
+                and all(isinstance(_, List) for _ in input_ids))
+        assert steps is None or len(steps) == len(input_ids)
+        assert target_ids is None or len(target_ids) == len(input_ids)
 
         lens = [len(_) for _ in input_ids]
         total_len = sum(lens)
@@ -182,37 +172,35 @@ class LogitsMixin:
         logger.info(f'get_ppl: bs: {len(input_ids)}, lens: {lens}, '
                     f'total_len: {total_len}')
         torch.cuda.empty_cache()
+
         logits = self._run(
             coro=self._async_get_logits(input_ids=input_ids,
                                         steps=steps,
                                         sequence_start=sequence_start,
                                         sequence_end=sequence_end)).result()
-        result = []
-        for _logits in logits:
-            _logits = _logits.float()
-            seq_len, vocab_size = _logits.shape
-            padding_token_id = -100
-            if target_ids is None:
-                # shift token_ids by 1 to the left
-                target_ids = [x[1:] + [padding_token_id] for x in input_ids]
-            else:
-                target_ids = [
-                    target_ids[i] + [padding_token_id] if
-                    len(target_ids[i]) < len(input_ids[i]) else target_ids[i]
-                    for i in range(len(input_ids))
-                ]
+        padding_token_id = -100
+        if target_ids is None:
+            target_ids = [x[1:] + [padding_token_id] for x in input_ids]
+        else:
             target_ids = [
-                torch.Tensor(torch.LongTensor(_target_ids))
-                for _target_ids in target_ids
+                target_ids[i] + [padding_token_id]
+                if len(target_ids[i]) < len(input_ids[i]) else target_ids[i]
+                for i in range(len(input_ids))
             ]
-            target_ids = pad_sequence(target_ids,
-                                      batch_first=True,
-                                      padding_value=padding_token_id)
-            target_ids = target_ids.to(_logits.device)
-            target_mask = target_ids != padding_token_id
+        target_ids = [
+            torch.Tensor(torch.LongTensor(_target_ids))
+            for _target_ids in target_ids
+        ]
+
+        result = []
+        for _logits, _target_ids in zip(logits, target_ids):
+            _logits = _logits.float()
+            vocab_size = _logits.shape[-1]
+            _target_ids = _target_ids.to(_logits.device)
+            target_mask = _target_ids != padding_token_id
             # compute cross entropy loss
             flat_logits = _logits.contiguous().view(-1, vocab_size)
-            flat_target_ids = target_ids.contiguous().view(-1)
+            flat_target_ids = _target_ids.contiguous().view(-1)
             flat_loss_matrix = torch.nn.functional.cross_entropy(
                 flat_logits,
                 flat_target_ids,
