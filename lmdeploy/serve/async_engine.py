@@ -781,7 +781,9 @@ class AsyncEngine(LogitsMixin):
                     response, state = self.tokenizer.detokenize_incrementally(
                         token_ids,
                         state,
-                        skip_special_tokens=gen_config.skip_special_tokens)
+                        skip_special_tokens=gen_config.skip_special_tokens,
+                        spaces_between_special_tokens=gen_config.
+                        spaces_between_special_tokens)
                     res = token_ids[ids_offset:]
 
                     out = GenOut(response, history_len, input_len, gen_len,

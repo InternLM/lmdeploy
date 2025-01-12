@@ -52,6 +52,9 @@ class GenerationConfig:
             ignoring the number of tokens in the prompt.
         skip_special_tokens (bool): Whether or not to remove special tokens
             in the decoding. Default to be True.
+        spaces_between_special_tokens (bool): Whether or not to add spaces
+            around special tokens. The behavior of Fast tokenizers is to have
+            this to False. This is setup to True in slow tokenizers.
         logprobs (int): Number of log probabilities to return per output token.
         response_format (Dict): Only pytorch backend support formatting
         response. Examples:
@@ -94,6 +97,7 @@ class GenerationConfig:
     bad_token_ids: List[int] = None
     min_new_tokens: int = None
     skip_special_tokens: bool = True
+    spaces_between_special_tokens: bool = True
     logprobs: int = None
     response_format: Optional[Dict] = None
     logits_processors: Optional[List[LogitsProcessor]] = None
