@@ -6,7 +6,7 @@ pipeline API 详细的接口说明，请阅读[此处](https://lmdeploy.readthed
 
 ## 使用方法
 
-- **使用默认参数的例子:**
+### "Hello, world" 示例
 
 ```python
 from lmdeploy import pipeline
@@ -40,7 +40,7 @@ LMDeploy 在研发过程中，k/v cache 比例的设定策略有变更，以下�
 
    分配策略改为从**空闲显存**中按比例为 k/v cache 开辟空间。默认比例值调整为 0.8。如果遇到 OOM，类似上面的方法，请酌情减少比例值，降低 k/v cache 的内存占用量
 
-- **如何设置 tp:**
+### 设置多卡并行
 
 ```python
 from lmdeploy import pipeline, TurbomindEngineConfig
@@ -52,7 +52,7 @@ response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
 print(response)
 ```
 
-- **如何设置 sampling 参数:**
+### 设置随机采样参数
 
 ```python
 from lmdeploy import pipeline, GenerationConfig, TurbomindEngineConfig
@@ -69,7 +69,7 @@ response = pipe(['Hi, pls intro yourself', 'Shanghai is'],
 print(response)
 ```
 
-- **如何设置 OpenAI 格式输入:**
+### 使用 OpenAI 格式的 prompt
 
 ```python
 from lmdeploy import pipeline, GenerationConfig, TurbomindEngineConfig
@@ -93,7 +93,7 @@ response = pipe(prompts,
 print(response)
 ```
 
-- **流式返回处理结果：**
+### 流式输出
 
 ```python
 from lmdeploy import pipeline, GenerationConfig, TurbomindEngineConfig
@@ -116,7 +116,20 @@ for item in pipe.stream_infer(prompts, gen_config=gen_config):
     print(item)
 ```
 
-- **计算 logits & ppl:**
+### 获取生成 token 的 logits
+
+```python
+from lmdeploy import pipeline, GenerationConfig
+
+pipe = pipeline('internlm/internlm2_5-7b-chat')
+
+gen_config=GenerationConfig(output_logits='generation')
+response = pipe(['Hi, pls intro yourself', 'Shanghai is'],
+                gen_config=gen_config)
+logits = response.logits
+```
+
+### 计算 ppl
 
 ```python
 from transformers import AutoTokenizer
@@ -145,7 +158,7 @@ print(ppl)
 get_ppl 返回的是 cross entropy loss，没有在之后加 exp 操作
 ```
 
-- **使用 pytorch 后端**
+### 使用 PyTorchEngine
 
 需要先安装 triton
 
@@ -174,7 +187,7 @@ response = pipe(prompts, gen_config=gen_config)
 print(response)
 ```
 
-- **一个 lora 的例子**
+### LoRA 模型推理
 
 ```python
 from lmdeploy import pipeline, GenerationConfig, PytorchEngineConfig
@@ -195,7 +208,7 @@ response = pipe(prompts, gen_config=gen_config, adapter_name='lora_name_1')
 print(response)
 ```
 
-## FAQs
+## 常见问题
 
 - **RuntimeError: An attempt has been made to start a new process before the current process has finished its bootstrapping phase**.
 

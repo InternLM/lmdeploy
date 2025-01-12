@@ -6,7 +6,7 @@ You can overview the detailed pipeline API in [this](https://lmdeploy.readthedoc
 
 ## Usage
 
-- **An example using default parameters:**
+### A 'Hello, world' example
 
 ```python
 from lmdeploy import pipeline
@@ -40,7 +40,7 @@ There have been alterations to the strategy for setting the k/v cache ratio thro
 
    The allocation strategy for k/v cache is changed to reserve space from the **GPU free memory** proportionally. The ratio `TurbomindEngineConfig.cache_max_entry_count` has been adjusted to 0.8 by default. If OOM error happens, similar to the method mentioned above, please consider reducing the ratio value to decrease the memory usage of the k/v cache.
 
-- **An example showing how to set tensor parallel num**:
+### Set tensor parallelism
 
 ```python
 from lmdeploy import pipeline, TurbomindEngineConfig
@@ -52,7 +52,7 @@ response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
 print(response)
 ```
 
-- **An example for setting sampling parameters:**
+### Set sampling parameters
 
 ```python
 from lmdeploy import pipeline, GenerationConfig, TurbomindEngineConfig
@@ -69,7 +69,7 @@ response = pipe(['Hi, pls intro yourself', 'Shanghai is'],
 print(response)
 ```
 
-- **An example for OpenAI format prompt input:**
+### Apply OpenAI format prompt
 
 ```python
 from lmdeploy import pipeline, GenerationConfig, TurbomindEngineConfig
@@ -93,7 +93,7 @@ response = pipe(prompts,
 print(response)
 ```
 
-- **An example for streaming mode:**
+### Apply streaming output
 
 ```python
 from lmdeploy import pipeline, GenerationConfig, TurbomindEngineConfig
@@ -116,7 +116,20 @@ for item in pipe.stream_infer(prompts, gen_config=gen_config):
     print(item)
 ```
 
-- **An example to calculate logits & ppl:**
+### Get logits for generated tokens
+
+```python
+from lmdeploy import pipeline, GenerationConfig
+
+pipe = pipeline('internlm/internlm2_5-7b-chat')
+
+gen_config=GenerationConfig(output_logits='generation')
+response = pipe(['Hi, pls intro yourself', 'Shanghai is'],
+                gen_config=gen_config)
+logits = response.logits
+```
+
+### Calculate ppl
 
 ```python
 from transformers import AutoTokenizer
@@ -131,10 +144,6 @@ messages = [
 ]
 input_ids = tokenizer.apply_chat_template(messages)
 
-# logits is a list of tensor
-logits = pipe.get_logits(input_ids)
-print(logits)
-
 # ppl is a list of float numbers
 ppl = pipe.get_ppl(input_ids)
 print(ppl)
@@ -145,7 +154,7 @@ print(ppl)
 - get_ppl returns the cross entropy loss without applying the exponential operation afterwards
 ```
 
-- **Below is an example for pytorch backend. Please install triton first.**
+### Use PyTorchEngine
 
 ```shell
 pip install triton>=2.1.0
@@ -172,7 +181,7 @@ response = pipe(prompts, gen_config=gen_config)
 print(response)
 ```
 
-- **An example for lora.**
+### Inference with LoRA
 
 ```python
 from lmdeploy import pipeline, GenerationConfig, PytorchEngineConfig
