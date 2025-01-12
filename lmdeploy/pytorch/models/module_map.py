@@ -82,6 +82,12 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v2.DeepseekV2ForCausalLM'
 })
 
+# deepseek-v3
+MODULE_MAP.update({
+    'DeepseekV3ForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v2.DeepseekV2ForCausalLM'
+})
+
 # llava
 MODULE_MAP.update(
     {

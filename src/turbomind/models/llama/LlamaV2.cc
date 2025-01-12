@@ -20,35 +20,30 @@
 // Modified from
 // https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/models/multi_gpu_gpt/ParallelGpt.cc
 
-#include "src/turbomind/models/llama/LlamaV2.h"
-#include "src/turbomind/kernels/attention/attention_params.h"
-#include "src/turbomind/kernels/decoding_kernels.h"
-#include "src/turbomind/kernels/gemm/tuner/params.h"
-#include "src/turbomind/kernels/gpt_kernels.h"
+#include <algorithm>
+#include <memory>
+
 #include "src/turbomind/macro.h"
+
 #include "src/turbomind/models/llama/LlamaBatch.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
+#include "src/turbomind/models/llama/LlamaV2.h"
 #include "src/turbomind/models/llama/LlamaWeight.h"
-#include "src/turbomind/models/llama/Request.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/llama/unified_decoder.h"
+
+#include "src/turbomind/kernels/decoding_kernels.h"
+#include "src/turbomind/kernels/gpt_kernels.h"
+
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/logger.h"
 #include "src/turbomind/utils/memory_utils.h"
-#include "src/turbomind/utils/monotonic.h"
-#include <algorithm>
-#include <chrono>
-#include <exception>
-#include <functional>
-#include <memory>
-#include <ratio>
-#include <sstream>
 
 namespace turbomind {
 

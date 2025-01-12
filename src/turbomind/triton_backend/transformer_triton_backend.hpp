@@ -22,15 +22,17 @@
 
 #include <functional>
 #include <memory>
-#include <sstream>
+#include <vector>
+
 #ifdef __linux__
 #include <sys/time.h>
 #endif
-#include <vector>
 
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/custom_ar_comm.h"
 #include "src/turbomind/utils/nccl_utils.h"
+
+#include "src/turbomind/engine/model_request.h"
 
 namespace turbomind {
 
@@ -62,7 +64,6 @@ struct AbstractTransformerModelInstance {
 };
 
 struct AbstractTransformerModel {
-    static std::shared_ptr<AbstractTransformerModel> createLlamaModel(std::string model_dir);
 
     virtual ~AbstractTransformerModel() = default;
 
@@ -72,12 +73,7 @@ struct AbstractTransformerModel {
     virtual void createCustomComms(std::vector<std::shared_ptr<AbstractCustomComm>>* custom_all_reduce_comms,
                                    int                                               world_size) = 0;
 
-    virtual std::unique_ptr<AbstractTransformerModelInstance>
-    createModelInstance(int                                                       deviceId,
-                        int                                                       rank,
-                        cudaStream_t                                              stream,
-                        std::pair<std::vector<NcclParam>, std::vector<NcclParam>> nccl_params,
-                        std::shared_ptr<AbstractCustomComm>                       custom_all_reduce_comm = nullptr) = 0;
+    virtual std::unique_ptr<ModelRequest> createModelInstance(int deviceId) = 0;
 
     virtual void createSharedWeights(int deviceId, int rank) = 0;
 

@@ -101,6 +101,8 @@ class GenerationConfig:
     logprobs: int = None
     response_format: Optional[Dict] = None
     logits_processors: Optional[List[LogitsProcessor]] = None
+    output_logits: Literal['all', 'generation'] = None
+    output_last_hidden_state: Literal['all', 'generation'] = None
 
     def convert_stop_bad_words_to_ids(self, tokenizer: Tokenizer):
         """convert stop_words/bad_sords to ids and append the ids to
@@ -128,7 +130,7 @@ class GenerationConfig:
         """Check input validation."""
         assert type(
             self.n) == int and self.n > 0, 'n is not a positive integer'
-        assert self.top_p > 0 and self.top_p <= 1  # (0, 1]
+        assert self.top_p >= 0 and self.top_p <= 1  # [0, 1]
         assert self.top_k >= 0, 'top_k can not be a negative integer'
         assert self.temperature >= 0 and self.temperature <= 2  # [0,2]
         assert 0 <= self.min_p <= 1, \
@@ -342,10 +344,11 @@ class Response:
     text: str
     generate_token_len: int
     input_token_len: int
-    session_id: int
     finish_reason: Optional[Literal['stop', 'length']] = None
     token_ids: List[int] = field(default_factory=list)
     logprobs: List[Dict[int, float]] = None
+    logits: torch.Tensor = None
+    last_hidden_state: torch.Tensor = None
     index: int = 0
 
 
@@ -365,6 +368,8 @@ class EngineOutput:
     token_ids: List[int]
     num_token: int
     logprobs: List[Dict[int, float]] = None
+    logits: torch.Tensor = None
+    last_hidden_state: torch.Tensor = None
 
 
 @dataclass
