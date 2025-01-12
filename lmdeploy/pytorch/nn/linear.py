@@ -12,7 +12,7 @@ from lmdeploy.utils import get_logger
 
 from ..backends import OpType, get_backend
 from ..backends.lora import AdapterInfo
-from .utils import get_distribute_size
+from .utils import chunk_aligned, div_up, get_distribute_size
 
 logger = get_logger('lmdeploy')
 
@@ -25,20 +25,7 @@ def _check_qkv_split_layout(layout: str):
                            f'but get: {layout}')
 
 
-def _chunk_align(weight: torch.Tensor, chunks: int, dim: int, align: int):
-    """chunk aligned."""
-    if align == 1:
-        return weight.chunk(chunks, dim=dim)
-    size = weight.size(dim)
-    assert size % align == 0
-    aligned_size = size // align
-
-    # try best to evenly split chunks
-    align_per_chunk = aligned_size // chunks
-    remain = aligned_size % chunks
-    sections = [align_per_chunk + int(c < remain) for c in range(chunks)]
-    sections = [sec * align for sec in sections]
-    return weight.split(sections, dim=dim)
+_chunk_align = chunk_aligned
 
 
 class QKVMixin:
@@ -163,6 +150,239 @@ class LoRA(nn.Module):
                 loaded_weight = loaded_weight.chunk(world_size, dim=0)[rank]
 
         param_r.copy_(loaded_weight.t())
+
+
+class BlockedF8Linear(nn.Module):
+    """blocked f8 linear."""
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        bias: bool,
+        dtype: Optional[torch.dtype] = None,
+        device: Optional[torch.device] = None,
+        fp8_dtype: torch.dtype = torch.float8_e4m3fn,
+        colwise: bool = True,
+        is_tp: bool = False,
+        all_reduce: bool = True,
+    ):
+        super().__init__()
+        if device is None:
+            device = torch.device('cpu')
+        if dtype is None:
+            dtype = torch.float16
+        if is_tp:
+            in_features, out_features = self._get_io_features(
+                in_features, out_features, colwise)
+        impl_builder = get_backend().get_layer_impl_builder(
+            OpType.LinearBlockedF8)
+        self.impl = impl_builder.build(in_features,
+                                       out_features,
+                                       block_size=128,
+                                       bias=bias is not None,
+                                       dtype=dtype)
+        self.block_size = 128
+        self.fp8_dtype = fp8_dtype
+        weight, scale, bias = self.create_weights(in_features, out_features,
+                                                  bias, dtype, device)
+        weight = torch.nn.Parameter(weight, requires_grad=False)
+        weight.weight_loader = self.weight_loader
+        scale = torch.nn.Parameter(scale, requires_grad=False)
+        scale.weight_loader = self.weight_loader
+        if bias is not None:
+            bias = torch.nn.Parameter(bias, requires_grad=False)
+            bias.weight_loader = self.weight_loader
+        self.register_parameter('weight', weight)
+        self.register_parameter('scale', scale)
+        self.register_parameter('bias', bias)
+
+        self.in_features = in_features
+        self.out_features = out_features
+        self.lora_adapters = nn.ModuleDict()
+        self.is_tp = is_tp
+        self.colwise = colwise
+        self.all_reduce = all_reduce
+
+    def _get_io_features(self, in_features: int, out_features: int,
+                         colwise: bool):
+        """get io features."""
+        world_size, rank = get_world_rank()
+        if colwise:
+            out_features = get_distribute_size(out_features, world_size, rank)
+        else:
+            in_features = get_distribute_size(in_features, world_size, rank)
+        return in_features, out_features
+
+    def _weight_loader_tp_colwise(self, param: torch.nn.Parameter,
+                                  loaded_weight: torch.Tensor, rank: int,
+                                  world_size: int):
+        """weight loader for colwise linear."""
+        weight = loaded_weight.chunk(world_size, 0)[rank]
+        return default_weight_loader(param, weight)
+
+    def _weight_loader_tp_rowwise(self, param: torch.nn.Parameter,
+                                  loaded_weight: torch.Tensor, rank: int,
+                                  world_size: int):
+        """weight loader for rowwise linear."""
+        if loaded_weight.dim() == 2:
+            weight = loaded_weight.chunk(world_size, 1)[rank]
+            return default_weight_loader(param, weight)
+        else:
+            # bias
+            if rank != 0:
+                loaded_weight = torch.zeros_like(loaded_weight)
+            return default_weight_loader(param, loaded_weight)
+
+    def weight_loader(self, param: torch.nn.Parameter,
+                      loaded_weight: torch.Tensor):
+        """weight loader."""
+        if not self.is_tp:
+            return default_weight_loader(param, loaded_weight)
+
+        world_size, rank = get_world_rank()
+        if self.colwise:
+            return self._weight_loader_tp_colwise(param, loaded_weight, rank,
+                                                  world_size)
+        else:
+            return self._weight_loader_tp_rowwise(param, loaded_weight, rank,
+                                                  world_size)
+
+    def create_weights(self, in_features: int, out_features: int, bias: bool,
+                       dtype: torch.dtype, device: torch.device):
+        """create weights."""
+        weight = torch.empty((out_features, in_features),
+                             dtype=self.fp8_dtype,
+                             device=device)
+        scale = torch.empty(
+            (div_up(out_features,
+                    self.block_size), div_up(in_features, self.block_size)),
+            dtype=torch.float32,
+            device=device)
+        if bias:
+            bias = torch.empty((out_features, ), dtype=dtype, device=device)
+        else:
+            bias = None
+        return weight, scale, bias
+
+    def update_weights(self):
+        """update weights."""
+        weight, scale, bias = self.impl.update_weights(self.weight, self.scale,
+                                                       self.bias)
+        weight = torch.nn.Parameter(weight, requires_grad=False)
+        self.weight.weight_loader = self.weight_loader
+        scale = torch.nn.Parameter(scale, requires_grad=False)
+        self.scale.weight_loader = self.weight_loader
+        if bias is not None:
+            bias = torch.nn.Parameter(bias, requires_grad=False)
+            self.bias.weight_loader = self.weight_loader
+        self.register_parameter('weight', weight)
+        self.register_parameter('scale', scale)
+        self.register_parameter('bias', bias)
+
+    def forward(self, x):
+        """forward of blocked fp8 linear."""
+        all_reduce = False if self.colwise else self.is_tp
+        all_reduce = all_reduce and self.all_reduce
+        if len(self.lora_adapters) == 0:
+            return self.impl.forward(x, self.weight, self.scale, self.bias,
+                                     all_reduce)
+
+        out = self.impl.forward(x, self.weight, self.scale, self.bias, False)
+        for lora_adapter in self.lora_adapters.values():
+            out = lora_adapter(x, out)
+        if all_reduce:
+            dist.all_reduce(out)
+        return out
+
+
+class MergedBlockedF8Linear(BlockedF8Linear):
+    """merged blocked fp8 linear."""
+
+    def __init__(self,
+                 in_features: int,
+                 all_out_features: List[int],
+                 bias: bool,
+                 fp8_dtype: torch.dtype = torch.float8_e4m3fn,
+                 replicate: Optional[List[bool]] = None,
+                 dtype: Optional[torch.dtype] = None,
+                 device: Optional[torch.device] = None,
+                 is_tp: bool = True,
+                 out_names: Optional[List[int]] = None):
+        if replicate is None:
+            replicate = tuple(False for _ in all_out_features)
+        self.block_size = 128
+        self.split_section = all_out_features
+        self.scale_split_section = [
+            section // self.block_size for section in self.split_section
+        ]
+        all_out_features = self._update_all_out_features(
+            all_out_features, replicate)
+        self.all_out_features = all_out_features
+        self.replicate = replicate
+        if out_names is None:
+            out_names = torch.arange(len(self.all_out_features)).tolist()
+        assert len(out_names) == len(self.all_out_features)
+        self.out_names_map = dict(
+            (name, idx) for idx, name in enumerate(out_names))
+        out_features = sum(all_out_features)
+        super().__init__(in_features,
+                         out_features,
+                         bias,
+                         dtype,
+                         device,
+                         fp8_dtype=fp8_dtype,
+                         colwise=True,
+                         is_tp=is_tp)
+        self.weight.weight_loader = self.weight_loader
+        self.scale.weight_loader = self.weight_loader
+        self.weight.weight_spliter = self.weight_spliter
+        self.scale.weight_spliter = self.weight_spliter
+        if self.bias is not None:
+            self.bias.weight_loader = self.weight_loader
+            self.bias.weight_spliter = self.weight_spliter
+
+    def _get_io_features(self, in_features: int, out_features: int,
+                         colwise: bool):
+        """get io features."""
+        return in_features, out_features
+
+    def _update_all_out_features(self, all_out_features: List[int],
+                                 replicate: Optional[List[bool]]):
+        """update all out features."""
+        world_size, rank = get_world_rank()
+        new_all_out_features = []
+        for out_feat, rep in zip(all_out_features, replicate):
+            if rep:
+                new_all_out_features.append(out_feat)
+            new_out_feat = get_distribute_size(out_feat, world_size, rank)
+            new_all_out_features.append(new_out_feat)
+        return new_all_out_features
+
+    def weight_loader(self, param: torch.nn.Parameter,
+                      loaded_weight: torch.Tensor, shard_id: Any):
+        """weight loader."""
+        world_size, rank = get_world_rank()
+        shard_idx = self.out_names_map[shard_id]
+        if loaded_weight.dim() == 2 and loaded_weight.dtype == torch.float32:
+            all_out_features = [
+                feats // self.block_size for feats in self.all_out_features
+            ]
+            param_w = param.data.split(all_out_features, 0)[shard_idx]
+        else:
+            param_w = param.data.split(self.all_out_features, 0)[shard_idx]
+        if not self.replicate[shard_idx]:
+            loaded_weight = loaded_weight.chunk(world_size, 0)[rank]
+        param_w.copy_(loaded_weight)
+
+    def weight_spliter(self, loaded_weight: torch.Tensor):
+        """weight spliter."""
+        if loaded_weight.dim() == 2 and loaded_weight.dtype == torch.float32:
+            return loaded_weight.split(self.scale_split_section, dim=0)
+        return loaded_weight.split(self.split_section, dim=0)
+
+    def weight_spliter_lora_b(self, loaded_weight: torch.Tensor):
+        return loaded_weight.split(self.split_section, dim=0)
 
 
 class AwqLinear(nn.Module):
@@ -598,17 +818,16 @@ class QKVAwqLinear(MergedAwqLinear, QKVMixin):
 class W8A8Linear(nn.Module):
     """w8a8 linear."""
 
-    def __init__(
-        self,
-        in_features: int,
-        out_features: int,
-        bias: bool,
-        dtype: Optional[torch.dtype] = None,
-        device: Optional[torch.device] = None,
-        colwise: bool = True,
-        is_tp: bool = False,
-        all_reduce: bool = True,
-    ):
+    def __init__(self,
+                 in_features: int,
+                 out_features: int,
+                 bias: bool,
+                 dtype: Optional[torch.dtype] = None,
+                 device: Optional[torch.device] = None,
+                 colwise: bool = True,
+                 is_tp: bool = False,
+                 all_reduce: bool = True,
+                 quant_dtype: Optional[torch.dtype] = torch.int8):
         super().__init__()
         if device is None:
             device = torch.device('cpu')
@@ -618,10 +837,12 @@ class W8A8Linear(nn.Module):
             in_features, out_features = self._get_io_features(
                 in_features, out_features, colwise)
         impl_builder = get_backend().get_layer_impl_builder(OpType.LinearW8A8)
+        self.quant_dtype = quant_dtype
         self.impl = impl_builder.build(in_features,
                                        out_features,
                                        bias is not None,
-                                       dtype=dtype)
+                                       dtype=dtype,
+                                       quant_dtype=quant_dtype)
         weight, scale, bias = self.create_weights(in_features, out_features,
                                                   bias, dtype, device)
         weight = torch.nn.Parameter(weight, requires_grad=False)
@@ -663,7 +884,9 @@ class W8A8Linear(nn.Module):
                                   loaded_weight: torch.Tensor, rank: int,
                                   world_size: int):
         """weight loader for rowwise linear."""
-        if loaded_weight.dim() == 2 and param.dtype == torch.int8:
+        if loaded_weight.dim() == 2 and param.dtype in (torch.int8,
+                                                        torch.float8_e4m3fn,
+                                                        torch.float8_e5m2):
             weight = loaded_weight.chunk(world_size, 1)[rank]
             return default_weight_loader(param, weight)
         elif loaded_weight.dim() == 2 and loaded_weight.size(1) == 1:
@@ -693,7 +916,7 @@ class W8A8Linear(nn.Module):
                        dtype: torch.dtype, device: torch.device):
         """create weights."""
         weight = torch.empty((out_features, in_features),
-                             dtype=torch.int8,
+                             dtype=self.quant_dtype,
                              device=device)
         scale = torch.empty((out_features, 1),
                             dtype=torch.float32,
@@ -745,7 +968,8 @@ class MergedW8A8Linear(W8A8Linear):
                  dtype: Optional[torch.dtype] = None,
                  device: Optional[torch.device] = None,
                  is_tp: bool = True,
-                 out_names: Optional[List[int]] = None):
+                 out_names: Optional[List[int]] = None,
+                 quant_dtype: torch.dtype = torch.int8):
         self.split_section = all_out_features
         all_out_features = self._update_all_out_features(all_out_features)
         self.all_out_features = all_out_features
@@ -761,7 +985,8 @@ class MergedW8A8Linear(W8A8Linear):
                          dtype,
                          device,
                          colwise=True,
-                         is_tp=is_tp)
+                         is_tp=is_tp,
+                         quant_dtype=quant_dtype)
         self.weight.weight_loader = self.weight_loader
         self.scale.weight_loader = self.weight_loader
         self.weight.weight_spliter = self.weight_spliter
@@ -814,7 +1039,9 @@ class QKVW8A8Linear(MergedW8A8Linear, QKVMixin):
                  dtype: Optional[torch.dtype] = None,
                  device: Optional[torch.device] = None,
                  is_tp: bool = True,
-                 num_replicate_kv_heads: int = 1):
+                 num_replicate_kv_heads: int = 1,
+                 quant_dtype: torch.dtype = torch.int8):
+
         self.qkv_split_section = self._get_qkv_out_features(
             num_q_heads, num_kv_heads, head_size, head_size_v,
             num_replicate_kv_heads)
@@ -835,7 +1062,8 @@ class QKVW8A8Linear(MergedW8A8Linear, QKVMixin):
                          dtype=dtype,
                          device=device,
                          is_tp=is_tp,
-                         out_names=out_names)
+                         out_names=out_names,
+                         quant_dtype=quant_dtype)
 
     def _update_all_out_features(self, all_out_features: List[int]):
         """update all out features."""
@@ -1200,6 +1428,10 @@ def build_linear(in_features: int,
         )
 
     quant_method = quant_config['quant_method']
+    quant_dtype = torch.int8
+    if 'quant_dtype' in quant_config:
+        quant_dtype = eval('torch.' + quant_config['quant_dtype'])
+
     if quant_method == 'awq':
         w_bit = quant_config.get('bits', 4)
         group_size = quant_config.get('group_size', 128)
@@ -1215,10 +1447,28 @@ def build_linear(in_features: int,
             all_reduce=all_reduce,
         )
     if quant_method == 'smooth_quant':
-        return W8A8Linear(
+        return W8A8Linear(in_features,
+                          out_features,
+                          bias=bias,
+                          dtype=dtype,
+                          device=device,
+                          colwise=colwise,
+                          is_tp=is_tp,
+                          all_reduce=all_reduce,
+                          quant_dtype=quant_dtype)
+    elif quant_method == 'fp8':
+        fmt = quant_config.get('fmt', 'e4m3')
+        if fmt == 'e4m3':
+            fp8_dtype = torch.float8_e4m3fn
+        elif fmt == 'e5m2':
+            fp8_dtype = torch.float8_e5m2
+        else:
+            raise TypeError(f'Unsupported fp8 fmt: {fmt}')
+        return BlockedF8Linear(
             in_features,
             out_features,
             bias=bias,
+            fp8_dtype=fp8_dtype,
             dtype=dtype,
             device=device,
             colwise=colwise,
@@ -1299,6 +1549,10 @@ def build_merged_colwise_linear(
         )
 
     quant_method = quant_config['quant_method']
+    quant_dtype = torch.int8
+    if 'quant_dtype' in quant_config:
+        quant_dtype = eval('torch.' + quant_config['quant_dtype'])
+
     if quant_method == 'awq':
         w_bit = quant_config.get('bits', 4)
         group_size = quant_config.get('group_size', 128)
@@ -1312,10 +1566,27 @@ def build_merged_colwise_linear(
             is_tp=is_tp,
         )
     if quant_method == 'smooth_quant':
-        return MergedW8A8Linear(
+        return MergedW8A8Linear(in_features=in_features,
+                                all_out_features=all_out_features,
+                                bias=bias,
+                                dtype=dtype,
+                                device=device,
+                                is_tp=is_tp,
+                                out_names=out_names,
+                                quant_dtype=quant_dtype)
+    elif quant_method == 'fp8':
+        fmt = quant_config.get('fmt', 'e4m3')
+        if fmt == 'e4m3':
+            fp8_dtype = torch.float8_e4m3fn
+        elif fmt == 'e5m2':
+            fp8_dtype = torch.float8_e5m2
+        else:
+            raise TypeError(f'Unsupported fp8 fmt: {fmt}')
+        return MergedBlockedF8Linear(
             in_features=in_features,
             all_out_features=all_out_features,
             bias=bias,
+            fp8_dtype=fp8_dtype,
             dtype=dtype,
             device=device,
             is_tp=is_tp,
@@ -1357,6 +1628,10 @@ def build_qkv_proj(in_features: int,
                              num_replicate_kv_heads=num_replicate_kv_heads)
 
     quant_method = quant_config['quant_method']
+    quant_dtype = torch.int8
+    if 'quant_dtype' in quant_config:
+        quant_dtype = eval('torch.' + quant_config['quant_dtype'])
+
     if quant_method == 'awq':
         w_bit = quant_config.get('bits', 4)
         group_size = quant_config.get('group_size', 128)
@@ -1381,6 +1656,7 @@ def build_qkv_proj(in_features: int,
                              dtype=dtype,
                              device=device,
                              is_tp=is_tp,
-                             num_replicate_kv_heads=num_replicate_kv_heads)
+                             num_replicate_kv_heads=num_replicate_kv_heads,
+                             quant_dtype=quant_dtype)
     else:
         raise RuntimeError(f'Unsupported quant method: {quant_method}')
