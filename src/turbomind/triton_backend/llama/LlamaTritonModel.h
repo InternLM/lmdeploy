@@ -20,35 +20,29 @@
 
 #pragma once
 
+#include "src/turbomind/engine/gateway.h"
 #include "src/turbomind/models/llama/LlamaBatch.h"
-#include "src/turbomind/models/llama/LlamaV2.h"
+#include "src/turbomind/models/llama/LlamaWeight.h"
 #include "src/turbomind/models/llama/llama_params.h"
-#include "src/turbomind/triton_backend/llama/LlamaTritonModelInstance.h"
 #include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
-#include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/custom_ar_comm.h"
 #include "src/turbomind/utils/nccl_utils.h"
 #include <cuda_fp16.h>
-#include <mutex>
 
 namespace turbomind {
 
 template<typename T>
 struct LlamaTritonModel: public AbstractTransformerModel {
-    LlamaTritonModel(size_t      tensor_para_size,
-                     size_t      pipeline_para_size,
-                     int         enable_custom_all_reduce,
-                     std::string model_dir,
-                     std::string config = "");
+    LlamaTritonModel(size_t                                 tensor_para_size,
+                     size_t                                 pipeline_para_size,
+                     int                                    enable_custom_all_reduce,
+                     std::string                            model_dir,
+                     std::string                            config,
+                     std::function<std::shared_ptr<void>()> ffi_ctx_factory);
 
     ~LlamaTritonModel() override;
 
-    std::unique_ptr<AbstractTransformerModelInstance>
-    createModelInstance(int                                                       deviceId,
-                        int                                                       rank,
-                        cudaStream_t                                              stream,
-                        std::pair<std::vector<NcclParam>, std::vector<NcclParam>> nccl_params,
-                        std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm = nullptr) override;
+    std::unique_ptr<ModelRequest> createModelInstance(int deviceId) override;
 
     void createSharedWeights(int deviceId, int rank) override;
 
@@ -65,11 +59,6 @@ struct LlamaTritonModel: public AbstractTransformerModel {
                            int                                               world_size) override;
 
     void handleMissingParams();
-
-    void set_ffi_lock(ffi_api_lock_ctrl_t func)
-    {
-        ffi_lock_ = func;
-    }
 
     std::string toString() override;
     int         getTensorParaSize() override;
@@ -91,6 +80,8 @@ private:
     size_t         pipeline_para_size_;
 
     std::shared_ptr<SharedState> shared_state_;
+    std::shared_ptr<Gateway>     gateway_;
+
     // Weights & engine instances for the ranks
     std::vector<std::shared_ptr<LlamaWeight<T>>> weights_;
     std::vector<std::shared_ptr<Engine<T>>>      engines_;
@@ -100,8 +91,6 @@ private:
 
     std::string model_name_;
     std::string model_dir_;
-
-    ffi_api_lock_ctrl_t ffi_lock_ = nullptr;
 };
 
 }  // namespace turbomind

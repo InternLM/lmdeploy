@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import asyncio
 import os
 import random
 
@@ -26,6 +27,28 @@ def input_prompt(model_name):
         print('\ndouble enter to end input >>> ', end='')
         sentinel = ''  # ends when this string is seen
     return '\n'.join(iter(input, sentinel))
+
+
+async def async_infer(generator, session_id, input_ids, gen_config,
+                      sequence_start, step, stream_output, tokenizer, state):
+    token_ids = input_ids.copy()
+    prev_len = 0
+    async for output in generator.async_stream_infer(
+            session_id=session_id,
+            input_ids=input_ids,
+            gen_config=gen_config,
+            sequence_start=sequence_start,
+            sequence_end=False,
+            step=step,
+            stream_output=stream_output):
+        tokens = output.num_token
+        if tokens > prev_len:
+            token_ids += output.token_ids[prev_len - tokens:]
+            response, state = tokenizer.detokenize_incrementally(token_ids,
+                                                                 state=state)
+            prev_len = tokens
+            print(response, end='', flush=True)
+    return tokens
 
 
 def main(model_path: str,
@@ -130,6 +153,9 @@ def main(model_path: str,
                                   repetition_penalty=repetition_penalty,
                                   stop_token_ids=stop_words)
 
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
     nth_round = 1
     step = 0
     seed = random.getrandbits(64)
@@ -138,7 +164,7 @@ def main(model_path: str,
         if prompt == 'exit':
             exit(0)
         elif prompt == 'end':
-            generator.end(session_id)
+            loop.run_until_complete(generator.async_end(session_id))
             nth_round = 1
             step = 0
             seed = random.getrandbits(64)
@@ -149,10 +175,8 @@ def main(model_path: str,
 
             if model.capability == 'chat':
                 sequence_start = (nth_round == 1)
-                sequence_end = False
             else:
                 sequence_start = True
-                sequence_end = True
                 step = 0
 
             if step + len(
@@ -163,20 +187,11 @@ def main(model_path: str,
 
             print(f'{prompt}', end='', flush=True)
             state = DetokenizeState(len(input_ids))
-            for outputs in generator.stream_infer(
-                    session_id=session_id,
-                    input_ids=[input_ids],
-                    gen_config=gen_config,
-                    sequence_start=sequence_start,
-                    sequence_end=sequence_end,
-                    step=step,
-                    stream_output=stream_output):
 
-                res, tokens = input_ids + outputs.token_ids, outputs.num_token
-                # decode res
-                response, state = tokenizer.detokenize_incrementally(
-                    res, state=state)
-                print(response, end='', flush=True)
+            coro = async_infer(generator, session_id, input_ids, gen_config,
+                               sequence_start, step, stream_output, tokenizer,
+                               state)
+            tokens = loop.run_until_complete(coro)
 
             # update step
             step += len(input_ids) + tokens

@@ -408,7 +408,7 @@ def test_gen_config_min_new_tokens(config, model, backend, worker_id):
         result = True
         for i in range(2):
             result &= response[i].finish_reason == 'length'
-            result &= response[i].session_id == i
+            result &= response[i].index == i
         save_pipeline_common_log(config, file_name, result, response)
         del pipe
         torch.cuda.empty_cache()
