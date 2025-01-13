@@ -635,6 +635,7 @@ class AsyncEngine(LogitsMixin):
             adapter_name: Optional[str] = None,
             skip_stop_tokens: bool = True,
             rewind_stop_tokens: bool = False,
+            input_ids: Optional[List] = None,
             **kwargs):
         """Generate responses.
 
@@ -650,6 +651,9 @@ class AsyncEngine(LogitsMixin):
             do_preprocess (bool): whether pre-process the messages. Default to
                 True, which means chat_template will be applied.
         """
+        if (messages is not None) ^ (input_ids is None):
+            raise ValueError(
+                'You must specify exactly one of messages or input_ids')
         if session_id not in self.id2step:
             self.id2step[session_id] = 0
         if step != 0:
@@ -680,28 +684,32 @@ class AsyncEngine(LogitsMixin):
             logger.ERROR(f"n({gen_config.n}) > 1 hasn't been supported yet. "
                          f'Fallback to 1')
             gen_config.n = 1
-        prompt = messages
-        self.request_logger.log_prompt(session_id=session_id, prompt=prompt)
-        prompt_input = await self._get_prompt_input(prompt,
-                                                    do_preprocess,
-                                                    sequence_start,
-                                                    adapter_name,
-                                                    tools=tools)
-        prompt = prompt_input['prompt']
-        input_ids = prompt_input['input_ids']
-        finish_reason = None
-        self.request_logger.log_inputs(session_id=session_id,
-                                       prompt=prompt,
-                                       prompt_token_ids=input_ids,
-                                       gen_config=gen_config,
-                                       adapter_name=adapter_name)
-        logger.info(f'session_id={session_id}, '
-                    f'history_tokens={self.id2step[session_id]}, '
-                    f'input_tokens={len(input_ids)}, '
-                    f'max_new_tokens={gen_config.max_new_tokens}, '
-                    f'seq_start={sequence_start}, seq_end={sequence_end}, '
-                    f'step={step}, prep={do_preprocess}')
-
+        if messages:
+            prompt = messages
+            self.request_logger.log_prompt(session_id=session_id,
+                                           prompt=prompt)
+            prompt_input = await self._get_prompt_input(prompt,
+                                                        do_preprocess,
+                                                        sequence_start,
+                                                        adapter_name,
+                                                        tools=tools)
+            prompt = prompt_input['prompt']
+            input_ids = prompt_input['input_ids']
+            self.request_logger.log_inputs(session_id=session_id,
+                                           prompt=prompt,
+                                           prompt_token_ids=input_ids,
+                                           gen_config=gen_config,
+                                           adapter_name=adapter_name)
+            logger.info(f'session_id={session_id}, '
+                        f'history_tokens={self.id2step[session_id]}, '
+                        f'input_tokens={len(input_ids)}, '
+                        f'max_new_tokens={gen_config.max_new_tokens}, '
+                        f'seq_start={sequence_start}, seq_end={sequence_end}, '
+                        f'step={step}, prep={do_preprocess}')
+        else:
+            # TODO(lvhan) VLM doesn't support input_ids as an argument.
+            # Figure out a graceful way to handle the invalid input
+            prompt_input = dict(input_ids=input_ids)
         if gen_config.max_new_tokens is None:
             # for interactive endpoint, will try maximum possible token num
             gen_config.max_new_tokens = max(
@@ -741,6 +749,7 @@ class AsyncEngine(LogitsMixin):
             state = DetokenizeState(len(input_ids))
             start_ids_offset = state.ids_offset
             response = ''
+            finish_reason = None
             async with self.safe_run(inst,
                                      session_id=session_id,
                                      **prompt_input,
