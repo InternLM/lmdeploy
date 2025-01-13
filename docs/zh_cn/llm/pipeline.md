@@ -123,10 +123,25 @@ from lmdeploy import pipeline, GenerationConfig
 
 pipe = pipeline('internlm/internlm2_5-7b-chat')
 
-gen_config=GenerationConfig(output_logits='generation')
+gen_config=GenerationConfig(output_logits='generation'
+                            max_new_tokens=10)
 response = pipe(['Hi, pls intro yourself', 'Shanghai is'],
                 gen_config=gen_config)
-logits = response.logits
+logits = [x.logits for x in response]
+```
+
+### 获取生成 token 最后一层的 hidden_states
+
+```python
+from lmdeploy import pipeline, GenerationConfig
+
+pipe = pipeline('internlm/internlm2_5-7b-chat')
+
+gen_config=GenerationConfig(output_last_hidden_state='generation',
+                            max_new_tokens=10)
+response = pipe(['Hi, pls intro yourself', 'Shanghai is'],
+                gen_config=gen_config)
+hidden_states = [x.last_hidden_state for x in response]
 ```
 
 ### 计算 ppl

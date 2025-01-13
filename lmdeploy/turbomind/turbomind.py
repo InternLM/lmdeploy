@@ -330,7 +330,6 @@ def _get_logits(outputs, offset: int):
 
 def _get_last_hidden_state(outputs, offset: int):
     last_hidden_state = outputs['last_hidden_state']
-    print(f'last_hidden_state.shape = {last_hidden_state.shape}')
 
     def _func(out: EngineOutput, step: int):
         out.last_hidden_state = last_hidden_state[:step - offset - 1, :]

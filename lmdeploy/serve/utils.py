@@ -22,8 +22,6 @@ class LogitsMixin:
     async def _async_get_logits(
             self,
             input_ids,
-            input_embeddings: List = None,
-            input_embedding_ranges: List = None,
             steps: List[int] = None,
             sequence_start: bool = True,
             sequence_end: bool = True) -> List[torch.Tensor]:
@@ -36,11 +34,6 @@ class LogitsMixin:
             async for out in self.generate(
                     messages=None,
                     input_ids=input_ids[i],
-                    input_embeddings=(None if input_embeddings is None else
-                                      input_embeddings[i]),
-                    input_embedding_ranges=(None
-                                            if input_embedding_ranges is None
-                                            else input_embedding_ranges[i]),
                     step=0 if steps is None else steps[i],
                     session_id=i,
                     # `max_new_tokens=0` means we don't need engine to
