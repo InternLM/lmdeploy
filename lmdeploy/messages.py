@@ -304,8 +304,8 @@ class PytorchEngineConfig:
         if self.device_type == 'camb' and self.block_size != 16:
             self.block_size = 16
             logger.warning(
-                'Currently, camb device requires block size to be 16, setting block size to 16'
-            )
+                'Currently, camb device requires block size to be 16, \
+                    setting block size to 16')
 
 
 class ResponseType(enum.Enum):
