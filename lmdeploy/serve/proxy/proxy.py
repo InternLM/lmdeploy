@@ -11,6 +11,7 @@ from collections import deque
 from http import HTTPStatus
 from typing import Deque, Dict, List, Literal, Optional, Union
 
+import aiohttp
 import numpy as np
 import requests
 import uvicorn
@@ -19,7 +20,6 @@ from fastapi import BackgroundTasks, Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
-from requests.exceptions import RequestException
 
 from lmdeploy.serve.openai.api_server import (check_api_key,
                                               create_error_response)
@@ -98,6 +98,8 @@ class NodeManager:
                                                   args=(self, ),
                                                   daemon=True)
         self.heart_beat_thread.start()
+        self.aiotimeout = aiohttp.ClientTimeout(total=API_READ_TIMEOUT,
+                                                connect=5)
 
     def update_config_file(self):
         """Update the config file."""
@@ -273,7 +275,8 @@ class NodeManager:
         }
         return json.dumps(ret).encode() + b'\n'
 
-    def stream_generate(self, request: Dict, node_url: str, endpoint: str):
+    async def stream_generate(self, request: Dict, node_url: str,
+                              endpoint: str):
         """Return a generator to handle the input request.
 
         Args:
@@ -282,17 +285,14 @@ class NodeManager:
             endpoint (str): the endpoint. Such as `/v1/chat/completions`.
         """
         try:
-            response = requests.post(
-                node_url + endpoint,
-                json=request,
-                stream=True,
-                timeout=(5, API_READ_TIMEOUT),
-            )
-            for chunk in response.iter_lines(decode_unicode=False,
-                                             delimiter=b'\n'):
-                if chunk:
-                    yield chunk + b'\n\n'
-        except (Exception, GeneratorExit, RequestException) as e:  # noqa
+            async with aiohttp.ClientSession() as session:
+                async with session.post(node_url + endpoint,
+                                        json=request,
+                                        timeout=self.aiotimeout) as response:
+                    async for line in response.content:
+                        if line.strip():
+                            yield line + b'\n\n'
+        except (Exception, GeneratorExit, aiohttp.ClientError) as e:  # noqa
             logger.error(f'catched an exception: {e}')
             # exception happened, reduce unfinished num
             yield self.handle_api_timeout(node_url)
@@ -306,13 +306,12 @@ class NodeManager:
             endpoint (str): the endpoint. Such as `/v1/chat/completions`.
         """
         try:
-            import httpx
-            async with httpx.AsyncClient() as client:
-                response = await client.post(node_url + endpoint,
-                                             json=request,
-                                             timeout=API_READ_TIMEOUT)
-                return response.text
-        except (Exception, GeneratorExit, RequestException, asyncio.CancelledError) as e:  # noqa  # yapf: disable
+            async with aiohttp.ClientSession() as session:
+                async with session.post(node_url + endpoint,
+                                        json=request,
+                                        timeout=self.aiotimeout) as response:
+                    return await response.text()
+        except (Exception, GeneratorExit, aiohttp.ClientError, asyncio.CancelledError) as e:  # noqa  # yapf: disable
             logger.error(f'catched an exception: {e}')
             return self.handle_api_timeout(node_url)
 
