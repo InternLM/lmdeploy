@@ -7,6 +7,9 @@ import torch
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 
 from .tokenizer import Tokenizer
+from .utils import get_logger
+
+logger = get_logger('lmdeploy')
 
 LogitsProcessor = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 """LogitsProcessor is a function that takes a tensor of input_ids, the logits
@@ -298,6 +301,11 @@ class PytorchEngineConfig:
         ]:
             assert False, \
                    'kv cache quantization only works for CUDA and ASCEND.'
+        if self.device_type == 'camb' and self.block_size != 16:
+            self.block_size = 16
+            logger.warning(
+                'Currently, camb device requires block size to be 16, setting block size to 16'
+            )
 
 
 class ResponseType(enum.Enum):
