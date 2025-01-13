@@ -377,7 +377,7 @@ class ArgumentHelper:
     @staticmethod
     def device(parser,
                default: str = 'cuda',
-               choices: List[str] = ['cuda', 'ascend', 'maca']):
+               choices: List[str] = ['cuda', 'ascend', 'maca', 'camb']):
         """Add argument device to parser."""
 
         return parser.add_argument('--device',
