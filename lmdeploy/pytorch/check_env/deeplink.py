@@ -5,6 +5,7 @@ deeplink_device_type_list = [
     'ascend',
     'npu',
     'maca',
+    'camb',
 ]
 
 

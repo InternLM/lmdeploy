@@ -7,6 +7,9 @@ import torch
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 
 from .tokenizer import Tokenizer
+from .utils import get_logger
+
+logger = get_logger('lmdeploy')
 
 LogitsProcessor = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 """LogitsProcessor is a function that takes a tensor of input_ids, the logits
@@ -52,6 +55,9 @@ class GenerationConfig:
             ignoring the number of tokens in the prompt.
         skip_special_tokens (bool): Whether or not to remove special tokens
             in the decoding. Default to be True.
+        spaces_between_special_tokens (bool): Whether or not to add spaces
+            around special tokens. The behavior of Fast tokenizers is to have
+            this to False. This is setup to True in slow tokenizers.
         logprobs (int): Number of log probabilities to return per output token.
         response_format (Dict): Only pytorch backend support formatting
         response. Examples:
@@ -94,6 +100,7 @@ class GenerationConfig:
     bad_token_ids: List[int] = None
     min_new_tokens: int = None
     skip_special_tokens: bool = True
+    spaces_between_special_tokens: bool = True
     logprobs: int = None
     response_format: Optional[Dict] = None
     logits_processors: Optional[List[LogitsProcessor]] = None
@@ -293,13 +300,18 @@ class PytorchEngineConfig:
         assert self.num_gpu_blocks >= 0, 'invalid num_gpu_blocks'
         assert self.quant_policy in (0, 4, 8), 'invalid quant_policy'
         assert self.device_type in [
-            'cuda', 'ascend', 'maca'
+            'cuda', 'ascend', 'maca', 'camb'
         ], (f'invalid device_type: {self.device_type}')
         if self.quant_policy > 0 and self.device_type not in [
                 'cuda', 'ascend'
         ]:
             assert False, \
                    'kv cache quantization only works for CUDA and ASCEND.'
+        if self.device_type == 'camb' and self.block_size != 16:
+            self.block_size = 16
+            logger.warning(
+                'Currently, camb device requires block size to be 16, \
+                    setting block size to 16')
 
 
 class ResponseType(enum.Enum):

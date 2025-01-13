@@ -78,7 +78,7 @@ class Engine:
                              top_p=top_p,
                              top_k=top_k,
                              ignore_eos=True,
-                             do_sample=True,
+                             do_sample=False,
                              max_new_tokens=output_len)
             for _, _, output_len in requests
         ]
