@@ -77,15 +77,17 @@ class NodeManager:
 
     def __init__(self,
                  config_path: Optional[str] = None,
-                 strategy: str = 'min_expected_latency') -> None:
+                 strategy: str = 'min_expected_latency',
+                 cache_status: Optional[bool] = True) -> None:
         self.nodes = dict()
         self.strategy = Strategy.from_str(strategy)
+        self.cache_status = cache_status
         self.latencies = dict()
         self.config_path = osp.join(osp.dirname(osp.realpath(__file__)),
                                     'proxy_config.yml')
         if config_path is not None:
             self.config_path = config_path
-        if osp.exists(self.config_path):
+        if osp.exists(self.config_path) and self.cache_status:
             with open(self.config_path, 'r') as config_file:
                 self.nodes = yaml.safe_load(config_file)['nodes']
                 for url, status in self.nodes.items():
@@ -107,8 +109,9 @@ class NodeManager:
         for url, status in nodes.items():
             nodes[url] = status.model_dump()
             nodes[url]['latency'] = list(status.latency)[-LATENCY_DEQUE_LEN:]
-        with open(self.config_path, 'w') as config_file:  # update cfg yml
-            yaml.dump(dict(nodes=nodes), config_file)
+        if self.cache_status:
+            with open(self.config_path, 'w') as config_file:  # update cfg yml
+                yaml.dump(dict(nodes=nodes), config_file)
 
     def add(self, node_url: str, status: Optional[Status] = None):
         """Add a node to the manager.
@@ -557,6 +560,7 @@ def proxy(server_name: str = '0.0.0.0',
           api_keys: Optional[Union[List[str], str]] = None,
           ssl: bool = False,
           log_level: str = 'INFO',
+          disable_cache_status: bool = False,
           **kwargs):
     """To launch the proxy server.
 
@@ -569,8 +573,12 @@ def proxy(server_name: str = '0.0.0.0',
         api_keys (List[str] | str | None): Optional list of API keys. Accepts string type as
             a single api_key. Default to None, which means no api key applied.
         ssl (bool): Enable SSL. Requires OS Environment variables 'SSL_KEYFILE' and 'SSL_CERTFILE'.
+        log_level (str): Set the log level. Default to INFO.
+        disable_cache_status (str): Whether to cache the proxy status to
+             proxy_config.yml.
     """  # noqa
     node_manager.strategy = Strategy.from_str(strategy)
+    node_manager.cache_status = not disable_cache_status
     if api_keys is not None:
         if isinstance(api_keys, str):
             api_keys = api_keys.split(',')

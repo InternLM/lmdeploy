@@ -236,6 +236,11 @@ class SubCliServe:
             choices=['random', 'min_expected_latency', 'min_observed_latency'],
             default='min_expected_latency',
             help='the strategy to dispatch requests to nodes')
+        parser.add_argument('--disable-cache-status',
+                            action='store_true',
+                            help='Whether to disable cache status of the '
+                            'proxy. If set, the proxy will forget the status '
+                            'of the previous time')
         ArgumentHelper.api_keys(parser)
         ArgumentHelper.ssl(parser)
         ArgumentHelper.log_level(parser)
