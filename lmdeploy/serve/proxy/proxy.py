@@ -100,8 +100,7 @@ class NodeManager:
                                                   args=(self, ),
                                                   daemon=True)
         self.heart_beat_thread.start()
-        self.aiotimeout = aiohttp.ClientTimeout(total=API_READ_TIMEOUT,
-                                                connect=5)
+        self.aiotimeout = aiohttp.ClientTimeout(total=API_READ_TIMEOUT)
 
     def update_config_file(self):
         """Update the config file."""
