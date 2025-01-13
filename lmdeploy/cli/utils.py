@@ -101,6 +101,15 @@ class ArgumentHelper:
             '`model_path` will be adopted')
 
     @staticmethod
+    def speculative_model(parser):
+        """Add argument speculative_model to parser."""
+
+        return parser.add_argument('--speculative-model',
+                                   type=str,
+                                   default=None,
+                                   help='The path of the spculative model.')
+
+    @staticmethod
     def dtype(parser, default: str = 'auto'):
         return parser.add_argument(
             '--dtype',

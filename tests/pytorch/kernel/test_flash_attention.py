@@ -32,7 +32,7 @@ def _make_bias(q_seqlens, history_lens, neg_val, causal):
         return (~mask).float() * neg_val
 
 
-def _naive_attention(batched_q, batched_kv, bias):
+def _naive_attention(batched_q, batched_kv, bias, rand_mask):
     batched_k, batched_v = batched_kv
 
     num_heads_q = batched_q.shape[2]
@@ -50,6 +50,8 @@ def _naive_attention(batched_q, batched_kv, bias):
 
     qk = torch.matmul(q, k) / math.sqrt(head_dim)
     attn_weight = qk + bias[:, None]
+    if rand_mask is not None:
+        attn_weight += rand_mask[:, None]
     attn_weight = torch.softmax(attn_weight, dim=-1, dtype=torch.float32)
     attn_weight = attn_weight.to(q.dtype)
     attn_output = torch.matmul(attn_weight, v)
@@ -108,6 +110,10 @@ class TestFlashAttention:
 
     @pytest.fixture
     def causal(self, request):
+        yield request.param
+
+    @pytest.fixture
+    def with_attention_mask(self, request):
         yield request.param
 
     @pytest.fixture
@@ -182,8 +188,16 @@ class TestFlashAttention:
         yield _make_bias(q_seqlens, history_lens, neg_val, causal)
 
     @pytest.fixture
-    def gt(self, batched_q, batched_kv, mask):
-        yield _naive_attention(batched_q, batched_kv, mask)
+    def rand_mask(self, mask, with_attention_mask):
+        neg_val = -1e30
+        if with_attention_mask:
+            yield torch.rand_like(mask).round() * neg_val
+        else:
+            yield None
+
+    @pytest.fixture
+    def gt(self, batched_q, batched_kv, mask, rand_mask):
+        yield _naive_attention(batched_q, batched_kv, mask, rand_mask)
 
     @pytest.fixture
     def conti_gt(self, gt, q_seqlens):
@@ -197,9 +211,11 @@ class TestFlashAttention:
     @pytest.mark.parametrize(['q_seqlens', 'history_lens'],
                              [([30, 50, 70, 90], [50, 40, 30, 20])],
                              indirect=True)
+    @pytest.mark.parametrize('with_attention_mask', [True, False],
+                             indirect=True)
     def test_flash_attention(self, conti_q, conti_kv, q_start_loc, q_seqlens,
                              kv_start_loc, kv_seqlens, head_dim_v, causal,
-                             conti_gt):
+                             conti_gt, rand_mask):
         from lmdeploy.pytorch.kernels.cuda.flashattention import \
             flash_attention_fwd
         max_seq_len = q_seqlens.max().item()
@@ -210,6 +226,7 @@ class TestFlashAttention:
                             conti_k,
                             conti_v,
                             out,
+                            attention_mask=rand_mask,
                             q_start_loc=q_start_loc,
                             q_seqlens=q_seqlens,
                             kv_start_loc=kv_start_loc,

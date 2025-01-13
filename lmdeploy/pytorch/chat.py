@@ -52,6 +52,7 @@ def _stop_words(stop_words: List[str], tokenizer: Tokenizer):
 
 def run_chat(model_path: str,
              engine_config: PytorchEngineConfig,
+             speculative_model: Optional[str] = None,
              gen_config: GenerationConfig = None,
              session_id: int = 1,
              trust_remote_code: bool = True,
@@ -62,12 +63,14 @@ def run_chat(model_path: str,
     Args:
         model_path (str): the huggingface model path.
         engine_config (PytorchEngineConfig): Config of engine.
+        speculative_model (str): the path of the speculative model.
         gen_config (GenerationConfig): Config of generation.
         session_id (int): the identical id of a session.
         trust_remote_code (bool): trust remote code.
     """
     from lmdeploy.pytorch.engine import Engine
     tm_model = Engine.from_pretrained(model_path,
+                                      speculative_model=speculative_model,
                                       engine_config=engine_config,
                                       trust_remote_code=trust_remote_code)
     tokenizer = tm_model.tokenizer

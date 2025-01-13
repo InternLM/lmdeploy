@@ -204,6 +204,8 @@ class BaseModelAgent(AutoModelAgent):
                  model_config: ModelConfig,
                  cache_config: CacheConfig,
                  backend_config: BackendConfig,
+                 speculative_model: str = None,
+                 speculative_model_config: ModelConfig = None,
                  adapters: Dict[str, str] = None,
                  trust_remote_code: bool = True):
         super().__init__(model_config=model_config, cache_config=cache_config)
@@ -212,6 +214,7 @@ class BaseModelAgent(AutoModelAgent):
         self._adapters = adapters
 
         self.patched_model = self._build_model(model_path,
+                                               self.model_config,
                                                adapters,
                                                device=device)
 
@@ -224,6 +227,13 @@ class BaseModelAgent(AutoModelAgent):
             cache_config=cache_config,
             backend_config=backend_config,
             device=device)
+        self.speculative_model = None
+        if speculative_model is not None:
+            self.speculative_model_config = speculative_model_config
+            self.speculative_model = self._build_model(
+                speculative_model,
+                self.speculative_model_config,
+                device=device)
 
         self.cache_engine = CacheEngine(cache_config, model_config)
 
@@ -231,21 +241,22 @@ class BaseModelAgent(AutoModelAgent):
 
     def _build_model(self,
                      model_path: str,
+                     model_config: ModelConfig,
                      adapters: Dict[str, str] = None,
                      device: torch.device = 'cuda'):
         """build patched model."""
-        custom_module_map = self.model_config.custom_module_map
+        custom_module_map = model_config.custom_module_map
         if custom_module_map is not None:
             update_custom_module_map(custom_module_map)
         logger.info('build model.')
-        patched_model = build_patched_model(self.model_config, device=device)
+        patched_model = build_patched_model(model_config, device=device)
         logger.info('loading weights.')
         load_model_weights(patched_model, model_path, device=device)
         logger.info('loading adapters.')
         if adapters is not None:
             add_adapters(patched_model,
                          adapters,
-                         dtype=self.model_config.dtype,
+                         dtype=model_config.dtype,
                          device=device)
         return patched_model
 
@@ -261,6 +272,16 @@ class BaseModelAgent(AutoModelAgent):
             world_size=1,
             stream=self.stream,
         )
+        if self.speculative_model is not None:
+            inputs.last_hidden_states = output['hidden_states']
+            spec_outputs = model_forward(
+                self.speculative_model,
+                inputs,
+                self.cache_engine,
+                world_size=1,
+                stream=self.stream,
+            )
+            output['spec_hidden_states'] = spec_outputs['hidden_states']
         return output
 
     async def async_forward(self, inputs: ModelInputs, swap_in_map: SwapMap,
@@ -278,9 +299,71 @@ class BaseModelAgent(AutoModelAgent):
         await asyncio.sleep(0)
         return output
 
+    async def score_proposal(self, inputs: ModelInputs, swap_in_map: SwapMap,
+                             swap_out_map: SwapMap, num_speculative_tokens):
+        """score the proposal.
+
+        Args:
+            inputs (Dict): The input data comes from _make_inputs.
+            swap_in_map (SwapMap): Cache maps to swap in.
+            swap_out_map (SwapMap): Cache maps to swap out.
+            num_speculative_tokens (int): The number of the proposal tokens.
+        """
+        cache_swapping(self.cache_engine,
+                       swap_in_map=swap_in_map,
+                       swap_out_map=swap_out_map)
+        spec_outputs = model_forward(
+            self.patched_model,
+            inputs,
+            self.cache_engine,
+            world_size=1,
+            stream=self.stream,
+        )
+        await asyncio.get_event_loop().run_in_executor(None,
+                                                       self.stream.synchronize)
+        hidden_states = spec_outputs['hidden_states']
+        hidden_states = hidden_states.reshape(
+            [-1, num_speculative_tokens + 1, hidden_states.shape[-1]])
+        logits = self.get_logits(hidden_states)
+        return logits
+
+    async def tree_decoding(self, inputs: ModelInputs, swap_in_map: SwapMap,
+                            swap_out_map: SwapMap,
+                            retrieve_indices: torch.Tensor):
+        cache_swapping(self.cache_engine,
+                       swap_in_map=swap_in_map,
+                       swap_out_map=swap_out_map)
+        bs = inputs.history_lengths.shape[0]
+        inputs.medusa_position_ids = inputs.medusa_position_ids.repeat(
+            inputs.history_lengths.shape[0], 1)
+        inputs.medusa_position_ids = inputs.medusa_position_ids.to(
+            inputs.history_lengths.device) + inputs.history_lengths[:, None]
+        spec_outputs = model_forward(
+            self.patched_model,
+            inputs,
+            self.cache_engine,
+            world_size=1,
+            stream=self.stream,
+        )
+        await asyncio.get_event_loop().run_in_executor(None,
+                                                       self.stream.synchronize)
+        hidden_states = spec_outputs['hidden_states']
+        hidden_states = hidden_states.reshape(bs, -1, hidden_states.shape[-1])
+        logits = self.get_logits(hidden_states)[:, retrieve_indices]
+        return logits
+
+    def generate_candidates(self, draft_logits: torch.Tensor,
+                            base_token_id: torch.Tensor):
+        return self.speculative_model.generate_candidates(
+            draft_logits, base_token_id)
+
     def get_logits(self, hidden_states: torch.Tensor):
         """get logits of model output."""
         return self.patched_model.get_logits(hidden_states)
+
+    def get_spec_logits(self, hidden_states_list: List[torch.Tensor]):
+        """get logits of model output."""
+        return self.speculative_model.get_logits(hidden_states_list)
 
     def get_input_processor(self):
         """get input processor.."""
@@ -543,6 +626,8 @@ class TPModelAgent(AutoModelAgent):
                  backend_config: BackendConfig,
                  world_size: int,
                  adapters: Dict[str, str] = None,
+                 speculative_model: str = None,
+                 speculative_model_config: ModelConfig = None,
                  trust_remote_code: bool = True) -> None:
         import signal
 
@@ -575,6 +660,13 @@ class TPModelAgent(AutoModelAgent):
                                 world_size=world_size,
                                 barrier=self.mp_bar)
 
+        self.speculative_model = None
+        if speculative_model is not None:
+            self.speculative_model_config = speculative_model_config
+            self.speculative_model = self._build_speculative_model(
+                speculative_model,
+                self.speculative_model_config,
+                world_size=world_size)
         model, cache_engine, cache_config = self._build_model(
             model_path=model_path,
             model_config=model_config,
@@ -685,6 +777,35 @@ class TPModelAgent(AutoModelAgent):
 
         return model, cache_engine, cache_config
 
+    @torch.inference_mode()
+    def _build_speculative_model(
+        self,
+        model_path: str,
+        model_config: ModelConfig,
+        world_size: int,
+        cache_config: CacheConfig = None,
+        backend_config: BackendConfig = None,
+    ):
+        """build model.
+
+        Currently, cache engine and backend config not used.
+        """
+        with get_dist_manager().context(self._dist_ctx):
+            rank = 0
+            device_map = torch.device('cuda')
+
+            custom_module_map = model_config.custom_module_map
+            if custom_module_map is not None:
+                update_custom_module_map(custom_module_map)
+            if rank == 0:
+                logger.info('build model.')
+            patched_model = build_patched_model(model_config,
+                                                device=device_map)
+            if rank == 0:
+                logger.info('loading weights.')
+            load_model_weights(patched_model, model_path, device=device_map)
+        return patched_model
+
     def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap,
                       swap_out_map: SwapMap):
         """forward impl."""
@@ -704,7 +825,49 @@ class TPModelAgent(AutoModelAgent):
                 world_size=1,
                 stream=self.stream,
             )
+            if self.speculative_model is not None:
+                inputs.last_hidden_states = output['hidden_states']
+                spec_outputs = model_forward(
+                    self.speculative_model,
+                    inputs,
+                    self.cache_engine,
+                    world_size=1,
+                    stream=self.stream,
+                )
+                output['spec_hidden_states'] = spec_outputs['hidden_states']
         return output
+
+    async def score_proposal(self, inputs: ModelInputs, swap_in_map: SwapMap,
+                             swap_out_map: SwapMap, num_speculative_tokens):
+        """model forward.
+
+        Args:
+            inputs (Dict): The input data comes from _make_inputs.
+            swap_in_map (SwapMap): Cache maps to swap in.
+            swap_out_map (SwapMap): Cache maps to swap out.
+            num_speculative_tokens (int): The number of the proposal tokens.
+        """
+        with get_dist_manager().context(self._dist_ctx):
+            self.mp_bar.wait()
+            rank = 0
+            _broadcast_inputs(rank, [inputs, swap_in_map, swap_out_map],
+                              self.stream)
+            cache_swapping(self.cache_engine,
+                           swap_in_map=swap_in_map,
+                           swap_out_map=swap_out_map)
+            spec_outputs = model_forward(
+                self.patched_model,
+                inputs,
+                self.cache_engine,
+                world_size=1,
+                stream=self.stream,
+            )
+            hidden_states = spec_outputs['hidden_states']
+            hidden_states = hidden_states.reshape(
+                [-1, num_speculative_tokens + 1, hidden_states.shape[-1]])
+            logits = self.get_logits(hidden_states)
+        self.stream.synchronize()
+        return logits
 
     async def async_forward(self, inputs: ModelInputs, swap_in_map: SwapMap,
                             swap_out_map: SwapMap):
@@ -721,9 +884,48 @@ class TPModelAgent(AutoModelAgent):
         await asyncio.sleep(0)
         return output
 
+    async def tree_decoding(self, inputs: ModelInputs, swap_in_map: SwapMap,
+                            swap_out_map: SwapMap,
+                            retrieve_indices: torch.Tensor):
+        bs = inputs.history_lengths.shape[0]
+        inputs.medusa_position_ids = inputs.medusa_position_ids.repeat(
+            inputs.history_lengths.shape[0], 1)
+        inputs.medusa_position_ids = inputs.medusa_position_ids.to(
+            inputs.history_lengths.device) + inputs.history_lengths[:, None]
+        with get_dist_manager().context(self._dist_ctx):
+            self.mp_bar.wait()
+            rank = 0
+            _broadcast_inputs(rank, [inputs, swap_in_map, swap_out_map],
+                              self.stream)
+            cache_swapping(self.cache_engine,
+                           swap_in_map=swap_in_map,
+                           swap_out_map=swap_out_map)
+            spec_outputs = model_forward(
+                self.patched_model,
+                inputs,
+                self.cache_engine,
+                world_size=1,
+                stream=self.stream,
+            )
+            hidden_states = spec_outputs['hidden_states']
+            hidden_states = hidden_states.reshape(bs, -1,
+                                                  hidden_states.shape[-1])
+            logits = self.get_logits(hidden_states)[:, retrieve_indices]
+        self.stream.synchronize()
+        return logits
+
+    def generate_candidates(self, draft_logits: torch.Tensor,
+                            base_token_id: torch.Tensor):
+        return self.speculative_model.generate_candidates(
+            draft_logits, base_token_id)
+
     def get_logits(self, hidden_states: torch.Tensor):
         """get logits of model output."""
         return self.patched_model.get_logits(hidden_states)
+
+    def get_spec_logits(self, hidden_states_list: List[torch.Tensor]):
+        """get logits of model output."""
+        return self.speculative_model.get_logits(hidden_states_list)
 
     def get_input_processor(self):
         """get input processor.."""
@@ -739,6 +941,7 @@ def build_model_agent(model_path: str,
                       cache_config: CacheConfig,
                       backend_config: BackendConfig,
                       trust_remote_code: bool,
+                      speculative_model: str = None,
                       adapters: Dict[str, str] = None,
                       tp: int = 1,
                       dtype: str = 'auto',
@@ -750,6 +953,7 @@ def build_model_agent(model_path: str,
         cache_config (CacheConfig): config of kv cache
         backend_config (BackendConfig): config of backend devices
         trust_remote_code (bool): To use the remote modeling code or not
+        speculative_model (str): The path of the speculative model
         adapters (Dict): lora adapters
         tp (int): the number of devices to be used in tensor parallelism
         dtype (str): the data type of model weights and activations
@@ -758,19 +962,31 @@ def build_model_agent(model_path: str,
     model_config = ModelConfig.from_pretrained(
         model_path, trust_remote_code=trust_remote_code, dtype=dtype, tp=tp)
     model_config.custom_module_map = custom_module_map
+    speculative_model_config = None
+    if speculative_model is not None:
+        speculative_model_config = ModelConfig.from_pretrained(
+            speculative_model,
+            trust_remote_code=trust_remote_code,
+            dtype=dtype)
     if tp == 1:
-        model_agent = BaseModelAgent(model_path,
-                                     model_config=model_config,
-                                     cache_config=cache_config,
-                                     backend_config=backend_config,
-                                     adapters=adapters,
-                                     trust_remote_code=trust_remote_code)
+        model_agent = BaseModelAgent(
+            model_path,
+            model_config=model_config,
+            cache_config=cache_config,
+            backend_config=backend_config,
+            speculative_model=speculative_model,
+            speculative_model_config=speculative_model_config,
+            adapters=adapters,
+            trust_remote_code=trust_remote_code)
     else:
-        model_agent = TPModelAgent(model_path,
-                                   model_config=model_config,
-                                   cache_config=cache_config,
-                                   backend_config=backend_config,
-                                   world_size=tp,
-                                   adapters=adapters,
-                                   trust_remote_code=trust_remote_code)
+        model_agent = TPModelAgent(
+            model_path,
+            model_config=model_config,
+            cache_config=cache_config,
+            backend_config=backend_config,
+            speculative_model=speculative_model,
+            speculative_model_config=speculative_model_config,
+            world_size=tp,
+            adapters=adapters,
+            trust_remote_code=trust_remote_code)
     return model_agent

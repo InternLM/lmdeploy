@@ -136,6 +136,9 @@ class ModelInputs:
     vision_inputs: VisionModelInputs = None
     cross_length: torch.LongTensor = None
     history_cross_length: torch.LongTensor = None
+    last_hidden_states: torch.Tensor = None
+    medusa_attn_mask: torch.Tensor = None
+    medusa_position_ids: torch.Tensor = None
     model_metas: List[Dict[str, Any]] = None
 
     def update(self, input_ids: torch.LongTensor):
@@ -293,6 +296,8 @@ class StepContext:
     cross_kv_seqlens: torch.LongTensor = None
     cross_attn_metadata: Any = None
     kv_quant_policy: Literal[0, 4, 8] = 0
+    last_hidden_states: torch.Tensor = None
+    medusa_attn_mask: torch.Tensor = None
     model_metas: List[Dict[str, Any]] = None
 
     _outputs: Dict = field(default_factory=dict)
@@ -328,12 +333,14 @@ class StepContext:
             input_embeddings, input_embedding_indexing = \
                 inputs.vision_inputs.get_inputs(history_seqlens, q_seqlens)
 
+        # for speculative decoding
+        last_hidden_states = inputs.last_hidden_states
         # kv_seqlens
         if inputs.is_decoding:
             attention_mask = torch.ones_like(q_seqlens)[:, None]
             position_ids = history_seqlens.unsqueeze(-1).clone()
         else:
-            max_q_seqlen = q_seqlens.max().item()
+            max_q_seqlen = q_seqlens.contiguous().max().item()
             mask_range = torch.arange(max_q_seqlen, device=device)[None, :]
             attention_mask = (mask_range < q_seqlens[:, None]).long()
             position_ids = attention_mask.long().cumsum(-1) - 1
@@ -352,6 +359,9 @@ class StepContext:
         # seq_len + history_length
         kv_seqlens = q_seqlens + history_seqlens
         kv_seqlens -= inputs.num_ignored_history
+        # medusa
+        if inputs.medusa_position_ids is not None:
+            position_ids = inputs.medusa_position_ids.reshape(1, -1)
 
         ret = StepContext(
             input_ids=inputs.input_ids,
@@ -370,6 +380,8 @@ class StepContext:
             world_size=world_size,
             local_adapter_ids=inputs.local_adapter_ids,
             vision_inputs=inputs.vision_inputs,
+            last_hidden_states=last_hidden_states,
+            medusa_attn_mask=inputs.medusa_attn_mask,
             kv_quant_policy=kv_quant_policy,
             model_metas=inputs.model_metas,
             cross_seqlens=cross_seqlens,

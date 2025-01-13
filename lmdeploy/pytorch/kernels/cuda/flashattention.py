@@ -61,11 +61,13 @@ def _load_kv(ptrs, causal_mask: tl.constexpr, boundary_check: tl.constexpr):
 @triton.jit
 def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs,
                        loop_start, loop_end, sm_scale, history_mask,
-                       kv_min_loc, causal_mask: tl.constexpr,
-                       window_size: tl.constexpr,
+                       kv_min_loc, attn_mask_ptr, apply_mask: tl.constexpr,
+                       causal_mask: tl.constexpr, window_size: tl.constexpr,
                        logit_softcapping: tl.constexpr, BLOCK_N: tl.constexpr,
                        BLOCK_DK1: tl.constexpr):
     k_ptrs = tl.advance(k_ptrs, (0, loop_start))
+    if apply_mask:
+        attn_mask_ptr = tl.advance(attn_mask_ptr, (0, loop_start))
     v_ptrs = tl.advance(v_ptrs, (loop_start, 0))
     if BLOCK_DK1:
         k1_ptrs = tl.advance(k1_ptrs, (0, loop_start))
@@ -75,6 +77,10 @@ def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs,
         start_n = tl.multiple_of(start_n, BLOCK_N)
 
         k = _load_kv(k_ptrs, causal_mask, boundary_check=(1, ))
+        if apply_mask:
+            attn_mask = tl.load(attn_mask_ptr,
+                                boundary_check=(0, 1),
+                                padding_option='zero')
         qk = tl.dot(q, k)
 
         if BLOCK_DK1 != 0:
@@ -83,6 +89,8 @@ def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs,
 
         if causal_mask:
             qk *= sm_scale
+            if apply_mask:
+                qk = qk + attn_mask
             qk = softcapping(qk, logit_softcapping)
             qk = qk * tl_log2(math.e)
             qk_mask = (history_mask[:, None]) >= (start_n + offs_n[None, :])
@@ -98,6 +106,8 @@ def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs,
             qk -= m_i_new[:, None]
         elif window_size > 0:
             qk *= sm_scale
+            if apply_mask:
+                qk = qk + attn_mask
             qk = softcapping(qk, logit_softcapping)
             qk = qk * tl_log2(math.e)
             qk_mask = ((start_n + offs_n[None, :]) >= kv_min_loc[:, None])
@@ -110,14 +120,19 @@ def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs,
             qk -= m_i_new[:, None]
         elif logit_softcapping > 0:
             qk *= sm_scale
+            if apply_mask:
+                qk = qk + attn_mask
             qk = softcapping(qk, logit_softcapping)
             qk = qk * tl_log2(math.e)
             m_i_new = tl.maximum(m_i, tl.max(qk, 1))
             qk -= m_i_new[:, None]
         else:
-            qk_scale = sm_scale * tl_log2(math.e)
-            m_i_new = tl.maximum(m_i, tl.max(qk, 1) * qk_scale)
-            qk = qk * qk_scale - m_i_new[:, None]
+            qk *= sm_scale
+            if apply_mask:
+                qk = qk + attn_mask
+            qk *= tl_log2(math.e)
+            m_i_new = tl.maximum(m_i, tl.max(qk, 1))
+            qk = qk - m_i_new[:, None]
 
         # -- compute p, m_i and l_i
         p = tl_exp2(qk)
@@ -136,6 +151,8 @@ def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs,
 
         k_ptrs = tl.advance(k_ptrs, (0, BLOCK_N))
         v_ptrs = tl.advance(v_ptrs, (BLOCK_N, 0))
+        if apply_mask:
+            attn_mask_ptr = tl.advance(attn_mask_ptr, (0, BLOCK_N))
         if BLOCK_DK1:
             k1_ptrs = tl.advance(k1_ptrs, (0, BLOCK_N))
 
@@ -168,6 +185,8 @@ def _flash_prefill_fwd_kernel(
     kv_start_loc_ptr,
     kv_seqlens_ptr,
     sm_scale,
+    attention_mask,
+    apply_mask: tl.constexpr,
     stride_qs: tl.constexpr,
     stride_qh: tl.constexpr,
     stride_qd: tl.constexpr,
@@ -180,6 +199,9 @@ def _flash_prefill_fwd_kernel(
     stride_os: tl.constexpr,
     stride_oh: tl.constexpr,
     stride_od: tl.constexpr,
+    stride_amb,
+    stride_amqs,
+    stride_amkvs,
     kv_group_num,
     head_dim_k,
     head_dim_v,
@@ -245,6 +267,18 @@ def _flash_prefill_fwd_kernel(
         block_shape=(BLOCK_N, BLOCK_DV),
         order=(1, 0),
     )
+    if apply_mask:
+        attn_mask_ptrs = tl.make_block_ptr(
+            base=attention_mask + batch_id * stride_amb +
+            start_m * BLOCK_M * stride_amqs,
+            shape=(q_seqlen, kv_seqlen),
+            strides=(stride_amqs, stride_amkvs),
+            offsets=(0, 0),
+            block_shape=(BLOCK_M, BLOCK_N),
+            order=(0, 1),
+        )
+    else:
+        attn_mask_ptrs = tl.full([BLOCK_M, BLOCK_N], 0, dtype=tl.int32)
 
     if BLOCK_DK1 != 0:
         offs_dk1 = BLOCK_DK + tl.arange(0, BLOCK_DK1)
@@ -292,6 +326,8 @@ def _flash_prefill_fwd_kernel(
                                        sm_scale,
                                        history_mask,
                                        kv_min_loc,
+                                       attn_mask_ptrs,
+                                       apply_mask=apply_mask,
                                        causal_mask=False,
                                        window_size=window_size,
                                        logit_softcapping=logit_softcapping,
@@ -316,6 +352,8 @@ def _flash_prefill_fwd_kernel(
                                        sm_scale,
                                        history_mask,
                                        kv_min_loc,
+                                       attn_mask_ptrs,
+                                       apply_mask=apply_mask,
                                        causal_mask=True,
                                        window_size=window_size,
                                        logit_softcapping=logit_softcapping,
@@ -348,6 +386,7 @@ def flash_attention_fwd(
     q_seqlens: Tensor,
     kv_start_loc: Tensor,
     kv_seqlens: Tensor,
+    attention_mask: Tensor = None,
     max_seqlen: int = None,
     window_size: int = None,
     sm_scale: float = None,
@@ -412,6 +451,10 @@ def flash_attention_fwd(
         num_stages = 3
     else:
         num_stages = 4
+    apply_mask = True
+    if attention_mask is None:
+        apply_mask = False
+        attention_mask = q_states.new_empty((1, 1, 1))
     _flash_prefill_fwd_kernel[grid](
         q_states,
         k_states,
@@ -422,6 +465,8 @@ def flash_attention_fwd(
         kv_start_loc,
         kv_seqlens,
         sm_scale=sm_scale,
+        attention_mask=attention_mask,
+        apply_mask=apply_mask,
         stride_qs=q_states.stride(0),
         stride_qh=q_states.stride(1),
         stride_qd=q_states.stride(2),
@@ -434,6 +479,9 @@ def flash_attention_fwd(
         stride_os=o_states.stride(0),
         stride_oh=o_states.stride(1),
         stride_od=o_states.stride(2),
+        stride_amb=attention_mask.stride(0),
+        stride_amqs=attention_mask.stride(1),
+        stride_amkvs=attention_mask.stride(2),
         kv_group_num=kv_group_num,
         head_dim_k=head_dim_k,
         head_dim_v=head_dim_v,
@@ -448,5 +496,4 @@ def flash_attention_fwd(
         num_warps=num_warps,
         num_stages=num_stages,
     )
-
     return o_states

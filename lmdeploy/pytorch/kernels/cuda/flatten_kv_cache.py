@@ -48,7 +48,8 @@ def _flatten_kv_cache(
     seqlen = tl.load(seqlens_ptr + batch_id)
     start_loc = tl.load(start_loc_ptr + batch_id)
     # fill last block to prevent attention nan
-    if batch_id == num_batches - 1:
+    # seqlen>0 to filter cuda graph padding
+    if batch_id == num_batches - 1 and seqlen > 0:
         seqlen = OUT_SIZE - start_loc
     if page_id * BLOCK_BS >= seqlen:
         return
@@ -140,7 +141,7 @@ def _flatten_kv_cache_quant(
 
     seqlen = tl.load(seqlens_ptr + batch_id)
     start_loc = tl.load(start_loc_ptr + batch_id)
-    if batch_id == num_batches - 1:
+    if batch_id == num_batches - 1 and seqlen > 0:
         seqlen = OUT_SIZE - start_loc
     if page_id * BLOCK_BS >= seqlen:
         return
