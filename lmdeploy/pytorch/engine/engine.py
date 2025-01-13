@@ -613,12 +613,12 @@ class Engine:
                 continue
             eos_token_id = self.model_config.eos_token_id
             update_token, eos_stop = self.extract_tokens(token, eos_token_id)
-            stop = stop or eos_stop
             if stop:
                 update_token = _EMPTY_TOKEN
             else:
                 msg.num_new_tokens += len(update_token)
             msg.update_token_ids(update_token, model_meta=model_meta)
+            stop = stop or eos_stop
             if stop:
                 msg.status = MessageStatus.STOPPED
 
