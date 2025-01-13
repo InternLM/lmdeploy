@@ -50,6 +50,8 @@ class SamplingParam:
     min_new_tokens: int = 0
     response_format: Optional[str] = None
     logits_processors: Optional[List[LogitsProcessor]] = None
+    out_logits: bool = False
+    out_last_hidden_states: bool = False
 
     @classmethod
     def from_gen_config(self, gen_config: GenerationConfig):
@@ -70,6 +72,16 @@ class SamplingParam:
         max_new_tokens = gen_config.max_new_tokens
         response_format = gen_config.response_format
 
+        output_logits = gen_config.output_logits
+        if output_logits:
+            if (output_logits != 'all' or gen_config.max_new_tokens > 0):
+                output_logits = None
+                logger.warning(
+                    'Pytorch Engine only support output_logits="all"'
+                    ' with max_new_tokens=0')
+        if gen_config.output_last_hidden_state is not None:
+            logger.warning(
+                'Pytorch Engine does not support output last hidden states.')
         if top_p < 0 or top_p > 1.0:
             logger.warning('`top_p` has to be a float > 0 and < 1'
                            f' but is {top_p}')
@@ -110,7 +122,8 @@ class SamplingParam:
                              response_format=response_format,
                              max_new_tokens=max_new_tokens,
                              min_new_tokens=min_new_tokens,
-                             logits_processors=gen_config.logits_processors)
+                             logits_processors=gen_config.logits_processors,
+                             out_logits=(output_logits is not None))
 
 
 class MessageStatus(enum.Enum):
