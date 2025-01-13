@@ -332,7 +332,7 @@ def get_max_batch_size(device_type: str):
     Args:
         device_type (str): the type of device
     """
-    assert device_type in ['cuda', 'ascend', 'maca']
+    assert device_type in ['cuda', 'ascend', 'maca', 'camb']
     if device_type == 'cuda':
         max_batch_size_map = {
             'a100': 256,
@@ -351,6 +351,8 @@ def get_max_batch_size(device_type: str):
     elif device_type == 'ascend':
         return 16
     elif device_type == 'maca':
+        return 128
+    elif device_type == 'camb':
         return 128
 
 
@@ -386,6 +388,8 @@ def is_bf16_supported(device_type: str = 'cuda'):
         # else:
         #     return False
     elif device_type == 'maca':
+        return True
+    elif device_type == 'camb':
         return True
     else:
         return False
