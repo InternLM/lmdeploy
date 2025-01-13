@@ -194,12 +194,6 @@ class TritonFusedMoEBlockedF8Impl(FusedMoEBlockedF8Impl):
         self.block_size = block_size
         self.out_dtype = out_dtype
 
-    def update_weights(self, gate_up_weights: torch.Tensor,
-                       down_weights: torch.Tensor, gate_up_scale: torch.Tensor,
-                       down_scale: torch.Tensor):
-        # do not transpose weight for int8/fp8
-        return gate_up_weights, down_weights, gate_up_scale, down_scale
-
     def support_ep(self):
         """support expert parallelism."""
         return True
