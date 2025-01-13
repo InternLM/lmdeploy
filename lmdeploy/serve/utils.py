@@ -71,7 +71,7 @@ class LogitsMixin:
         assert isinstance(input_ids, List)
         if isinstance(input_ids[0], int):
             input_ids = [input_ids]
-        assert all(len(_) > 0 for _ in input_ids)
+        assert all(len(_) > 1 for _ in input_ids)
 
         # TODO: a better way to determine `max_input_len`, at most allocate
         # 2G mem for logits with shape [bs, max_input_len, vocab_size]
