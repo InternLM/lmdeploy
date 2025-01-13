@@ -707,6 +707,8 @@ class AsyncEngine(LogitsMixin):
                         f'seq_start={sequence_start}, seq_end={sequence_end}, '
                         f'step={step}, prep={do_preprocess}')
         else:
+            # TODO(lvhan) VLM doesn't support input_ids as an argument.
+            # Figure out a graceful way to handle the invalid input
             prompt_input = dict(input_ids=input_ids)
         if gen_config.max_new_tokens is None:
             # for interactive endpoint, will try maximum possible token num
