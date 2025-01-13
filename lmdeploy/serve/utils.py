@@ -42,7 +42,7 @@ class LogitsMixin:
                                             if input_embedding_ranges is None
                                             else input_embedding_ranges[i]),
                     step=0 if steps is None else steps[i],
-                    session_id=next(self._session_id),
+                    session_id=i,
                     # `max_new_tokens=0` means we don't need engine to
                     # generate tokens and `output_logits=all` requests engine
                     # to output logits of all input tokens
@@ -78,6 +78,7 @@ class LogitsMixin:
         assert isinstance(input_ids, List)
         if isinstance(input_ids[0], int):
             input_ids = [input_ids]
+        assert all(len(_) > 0 for _ in input_ids)
 
         # TODO: a better way to determine `max_input_len`, at most allocate
         # 2G mem for logits with shape [bs, max_input_len, vocab_size]
