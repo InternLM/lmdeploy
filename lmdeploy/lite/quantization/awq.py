@@ -359,7 +359,6 @@ def smooth_layers(layers,
         max_memory = torch.cuda.max_memory_allocated() / 1024 / 1024 / 1024
         print(f'{l_name} smooth weight done.'
               f' max gpu memory: {max_memory:.2f} GB')
-        print(f'{l_name} smooth weight done.')
 
 
 def pseudo_quantize_tensor(w,
@@ -431,4 +430,3 @@ def awq_layers(layers,
         max_memory = torch.cuda.max_memory_allocated() / 1024 / 1024 / 1024
         print(f'{l_name} smooth weight done.'
               f' max gpu memory: {max_memory:.2f} GB')
-        print(f'{l_name} smooth weight done.')
