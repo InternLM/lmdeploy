@@ -191,7 +191,7 @@ class LlamaModel(BaseInputModel):
 
         return dict(
             size_per_head=head_dim,
-            rotary_embedding=hidden_units // attn_head_num,
+            rotary_embedding=head_dim,
             num_layer=num_layer,
             norm_eps=norm_eps,
             head_num=attn_head_num,
