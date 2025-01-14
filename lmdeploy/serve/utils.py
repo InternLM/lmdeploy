@@ -32,15 +32,14 @@ class LogitsMixin:
 
         async def _proc(i):
             async with self.model_inst(session_id=i) as inst:
-                token_ids = input_ids[i].copy()
-                input_len = len(token_ids)
+                input_len = len(input_ids[i])
                 # TODO(lvhan): Fix the ugly code later on
                 max_new_tokens = 1 if self.backend == 'turbomind' else 0
                 gen_config = GenerationConfig(max_new_tokens=max_new_tokens,
                                               output_logits='all')
                 async with self.safe_run(inst,
                                          session_id=i,
-                                         input_ids=token_ids,
+                                         input_ids=input_ids[i],
                                          gen_config=gen_config,
                                          stream_output=False,
                                          sequence_start=sequence_start,
@@ -49,6 +48,8 @@ class LogitsMixin:
                     async for outputs in gen:
                         pass
                     logits[i] = outputs.logits[:input_len, :]
+                if sequence_end and self.backend == 'pytorch':
+                    await inst.async_end(session_id=i)
 
         tasks = [_proc(i) for i in range(len(input_ids))]
         await asyncio.gather(*tasks)
@@ -210,4 +211,5 @@ class LogitsMixin:
             loss = flat_loss_matrix.sum()
             target_count = target_mask.sum()
             result.append(loss.item() / target_count.item())
+        logger.info(f'ppl result: {result}')
         return result
