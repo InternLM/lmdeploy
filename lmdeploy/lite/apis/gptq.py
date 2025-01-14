@@ -51,8 +51,11 @@ def auto_gptq(model: str,
     from auto_gptq.modeling._const import SUPPORTED_MODELS
 
     from ..modeling.internlm2_gptq import InternLM2GPTQForCausalLM
+    from ..modeling.internlm3_gptq import InternLM3GPTQForCausalLM
     SUPPORTED_MODELS.append('internlm2')
     GPTQ_CAUSAL_LM_MODEL_MAP.update(dict(internlm2=InternLM2GPTQForCausalLM))
+    SUPPORTED_MODELS.append('internlm3')
+    GPTQ_CAUSAL_LM_MODEL_MAP.update(dict(internlm3=InternLM3GPTQForCausalLM))
 
     pretrained_model_dir = model
     quantized_model_dir = work_dir
