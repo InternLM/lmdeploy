@@ -31,25 +31,24 @@ class LogitsMixin:
         logits = [None] * len(input_ids)
 
         async def _proc(i):
-            async for out in self.generate(
-                    messages=None,
-                    input_ids=input_ids[i],
-                    step=0 if steps is None else steps[i],
-                    session_id=i,
-                    # `max_new_tokens=0` means we don't need engine to
-                    # generate tokens and `output_logits=all` requests engine
-                    # to output logits of all input tokens
-                    gen_config=GenerationConfig(max_new_tokens=0,
-                                                output_logits='all'),
-                    stream_response=False,
-                    sequence_start=sequence_start,
-                    sequence_end=sequence_end):
-                # In the last iteration, the yielded `out` is an empty response
-                # indicating the finish_reason, which should be ignored here
-                if out.finish_reason is None:
-                    # Try not to return in async for loop. Otherwise, there
-                    # will be `GeneratorExit` exception
-                    logits[i] = out.logits
+            async with self.model_inst(session_id=i) as inst:
+                token_ids = input_ids[i].copy()
+                input_len = len(token_ids)
+                # TODO(lvhan): Fix the ugly code later on
+                max_new_tokens = 1 if self.backend == 'turbomind' else 0
+                gen_config = GenerationConfig(max_new_tokens=max_new_tokens,
+                                              output_logits='all')
+                async with self.safe_run(inst,
+                                         session_id=i,
+                                         input_ids=token_ids,
+                                         gen_config=gen_config,
+                                         stream_output=False,
+                                         sequence_start=sequence_start,
+                                         sequence_end=sequence_end,
+                                         step=steps[i] if steps else 0) as gen:
+                    async for outputs in gen:
+                        pass
+                    logits[i] = outputs.logits[:input_len, :]
 
         tasks = [_proc(i) for i in range(len(input_ids))]
         await asyncio.gather(*tasks)
