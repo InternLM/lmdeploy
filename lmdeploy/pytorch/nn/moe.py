@@ -208,13 +208,14 @@ class LinearWeightsW8A8(LinearWeights):
                  weight_type: str,
                  device: torch.device,
                  expert_list: List[int] = None,
-                 ep: bool = False):
+                 ep: bool = False,
+                 quant_dtype: torch.dtype = torch.int8):
         super().__init__(
             num_experts=num_experts,
             in_features=in_features,
             out_features=out_features,
             weight_type=weight_type,
-            dtype=torch.int8,
+            dtype=quant_dtype,
             device=device,
             expert_list=expert_list,
             ep=ep,
@@ -267,17 +268,23 @@ class FusedMoEW8A8(nn.Module):
                  top_k: int,
                  renormalize: bool = False,
                  dtype: Optional[torch.dtype] = None,
+                 quant_dtype: Optional[torch.dtype] = torch.int8,
                  device: Optional[torch.device] = None,
                  all_reduce: bool = True,
                  enable_ep: bool = False):
         super().__init__()
+
         if device is None:
             device = torch.device('cpu')
         dtype = torch.float16 if dtype is None else dtype
 
         impl_builder = get_backend().get_layer_impl_builder(
             OpType.FusedMoEW8A8)
-        self.impl = impl_builder.build(top_k, num_experts, renormalize, dtype)
+        self.impl = impl_builder.build(top_k,
+                                       num_experts,
+                                       renormalize,
+                                       dtype,
+                                       quant_dtype=quant_dtype)
 
         enable_ep = enable_ep and self.impl.support_ep()
         if enable_ep:
@@ -295,16 +302,16 @@ class FusedMoEW8A8(nn.Module):
                                          weight_type='gate_up',
                                          device=device,
                                          expert_list=expert_list,
-                                         ep=enable_ep)
-        self.down = LinearWeightsW8A8(
-            num_experts,
-            ffn_dim,
-            hidden_dim,
-            weight_type='down',
-            device=device,
-            expert_list=expert_list,
-            ep=enable_ep,
-        )
+                                         ep=enable_ep,
+                                         quant_dtype=quant_dtype)
+        self.down = LinearWeightsW8A8(num_experts,
+                                      ffn_dim,
+                                      hidden_dim,
+                                      weight_type='down',
+                                      device=device,
+                                      expert_list=expert_list,
+                                      ep=enable_ep,
+                                      quant_dtype=quant_dtype)
 
         self.hidden_dim = hidden_dim
         self.ffn_dim = ffn_dim
@@ -520,6 +527,7 @@ def build_fused_moe(
 
     quant_method = quant_config['quant_method']
     if quant_method == 'smooth_quant':
+        quant_dtype = eval('torch.' + quant_config.get('quant_dtype', 'int8'))
         return FusedMoEW8A8(
             hidden_dim=hidden_dim,
             ffn_dim=ffn_dim,
@@ -527,6 +535,7 @@ def build_fused_moe(
             top_k=top_k,
             renormalize=renormalize,
             dtype=dtype,
+            quant_dtype=quant_dtype,
             device=device,
             all_reduce=all_reduce,
             enable_ep=enable_ep,
