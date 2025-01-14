@@ -65,7 +65,7 @@ cd lmdeploy
 **步骤 3** - 以交互模式启动 docker 容器
 
 ```shell
-docker run --gpus all --net host --shm-size 16g -v $(pwd):/opt/lmdeploy --name lmdeploy -it openmmlab/lmdeploy:latest bin/bash
+docker run --gpus all --net host --shm-size 16g -v $(pwd):/opt/lmdeploy --name lmdeploy -it openmmlab/lmdeploy:latest /bin/bash
 ```
 
 **步骤 4** - 编译与安装

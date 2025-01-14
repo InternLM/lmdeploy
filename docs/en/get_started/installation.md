@@ -65,7 +65,7 @@ cd lmdeploy
 **Step 3** - launch docker container in interactive mode
 
 ```shell
-docker run --gpus all --net host --shm-size 16g -v $(pwd):/opt/lmdeploy --name lmdeploy -it openmmlab/lmdeploy:latest bin/bash
+docker run --gpus all --net host --shm-size 16g -v $(pwd):/opt/lmdeploy --name lmdeploy -it openmmlab/lmdeploy:latest /bin/bash
 ```
 
 **Step 4** - build and installation
