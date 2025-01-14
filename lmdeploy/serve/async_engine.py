@@ -382,6 +382,7 @@ class AsyncEngine(LogitsMixin):
 
     async def stop_session(self, session_id: int):
         """Stop a session by a session_id."""
+        logger.info(f'stop session {session_id}')
         generator = self.id2inst.get(session_id)
         if generator:
             await generator.async_cancel(session_id)
@@ -389,6 +390,7 @@ class AsyncEngine(LogitsMixin):
 
     async def end_session(self, session_id: int):
         """For ending a session that is not running."""
+        logger.info(f'end session {session_id}')
         inst = self.id2inst.get(session_id)
         if inst:
             await inst._active.wait()
@@ -700,7 +702,7 @@ class AsyncEngine(LogitsMixin):
                                            prompt_token_ids=input_ids,
                                            gen_config=gen_config,
                                            adapter_name=adapter_name)
-            logger.info(f'session_id={session_id}, '
+            logger.info(f'session={session_id}, '
                         f'history_tokens={self.id2step[session_id]}, '
                         f'input_tokens={len(input_ids)}, '
                         f'max_new_tokens={gen_config.max_new_tokens}, '
@@ -724,7 +726,7 @@ class AsyncEngine(LogitsMixin):
                 f'Truncate max_new_tokens to {gen_config.max_new_tokens}')
         if self.id2step[session_id] + len(
                 input_ids) + gen_config.max_new_tokens > self.session_len:
-            logger.error(f'run out of tokens. session_id={session_id}.')
+            logger.error(f'run out of tokens. session={session_id}.')
             yield GenOut('', self.id2step[session_id], len(input_ids), 0,
                          'length')
             if sequence_end is True and sequence_start is False:
@@ -822,9 +824,14 @@ class AsyncEngine(LogitsMixin):
                     if not response.endswith('�'):
                         # avoid returning the last response twice
                         response = ''
+                    logger.info(f'session {session_id} finished, reason '
+                                f'"{finish_reason}", input_tokens '
+                                f'{len(input_ids)}, outupt_tokens {gen_len}')
                     yield GenOut(response, self.id2step[session_id],
                                  len(input_ids), gen_len, finish_reason)
                 else:
+                    logger.error(f'session {session_id} finished, '
+                                 'reason "error"')
                     yield GenOut(response='internal error happened',
                                  history_token_len=self.id2step[session_id],
                                  input_token_len=len(input_ids),
