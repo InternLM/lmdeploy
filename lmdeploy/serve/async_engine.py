@@ -574,7 +574,6 @@ class AsyncEngine(LogitsMixin):
                           **kwargs)
 
     async def _get_prompt_input(self,
-                                session_id: int,
                                 prompt: str,
                                 do_preprocess: bool,
                                 sequence_start: bool,

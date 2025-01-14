@@ -491,7 +491,8 @@ class InternLM2Chat7B(InternLMChat7B):
         path = model_path.lower()
         if 'internlm2' in path and ('chat' in path or 'math' in path):
             return 'internlm2'
-        if 'internlm3' in path and ('instruct' in path or 'math' in path):
+
+        if 'internlm3' in path and ('instruct' in path):
             return 'internlm3'
 
     def messages2prompt(self,
