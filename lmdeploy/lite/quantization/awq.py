@@ -19,6 +19,11 @@ NORM_FCS_MAP = {
         'attention_norm': ['attention.wqkv'],
         'ffn_norm': ['feed_forward.w1', 'feed_forward.w3']
     },
+    'InternLM3DecoderLayer': {
+        'input_layernorm':
+        ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
+        'post_attention_layernorm': ['mlp.gate_proj', 'mlp.up_proj']
+    },
     'QWenBlock': {
         'ln_1': ['attn.c_attn'],
         'ln_2': ['mlp.w1', 'mlp.w2']
@@ -71,6 +76,10 @@ FC_FCS_MAP = {
     },
     'InternLM2DecoderLayer': {
         'feed_forward.w3': ['feed_forward.w2']
+    },
+    'InternLM3DecoderLayer': {
+        'self_attn.v_proj': ['self_attn.o_proj'],
+        'mlp.up_proj': ['mlp.down_proj']
     },
     'QWenBlock': {
         'attn.c_attn': ['attn.c_proj'],
@@ -304,6 +313,7 @@ def quant_weights(model, fcs, bits, symmetry, group_size=-1, device='cuda'):
                                                          scales, zeros))
         setattr(parent, child_name, q_linear)
         fc.to('cpu')
+        torch.cuda.empty_cache()
 
         print(f'{name} weight {pack_or_skip}.')
 
@@ -318,22 +328,37 @@ def smooth_layers(layers,
 
     for l_name, layer in layers.items():
         layer.to(device)
+        submodule_names = [name for name, _ in layer.named_modules()]
         for ln_name, fc_names in norm2fcs.items():
-            a_name = [f'{l_name}.{n}' for n in fc_names][0]
+            a_name = [
+                f'{l_name}.{n}' for n in fc_names if n in submodule_names
+            ][0]
 
             ln = layer.get_submodule(ln_name)
-            fcs = [layer.get_submodule(n) for n in fc_names]
+            fcs = [
+                layer.get_submodule(n) for n in fc_names
+                if n in submodule_names
+            ]
             smooth_ln_fcs(ln, fcs, a_scales[a_name], group_size)
 
         for f_name, fc_names in fc2fcs.items():
-            a_name = [f'{l_name}.{n}' for n in fc_names][0]
+            a_name = [
+                f'{l_name}.{n}' for n in fc_names if n in submodule_names
+            ][0]
 
             fc = layer.get_submodule(f_name)
-            fcs = [layer.get_submodule(n) for n in fc_names]
+            fcs = [
+                layer.get_submodule(n) for n in fc_names
+                if n in submodule_names
+            ]
 
             smooth_fc_fcs(fc, fcs, a_scales[a_name], group_size)
 
         layer.to('cpu')
+        torch.cuda.empty_cache()
+        max_memory = torch.cuda.max_memory_allocated() / 1024 / 1024 / 1024
+        print(f'{l_name} smooth weight done.'
+              f' max gpu memory: {max_memory:.2f} GB')
         print(f'{l_name} smooth weight done.')
 
 
@@ -402,4 +427,8 @@ def awq_layers(layers,
             smooth_fc_fcs(fc, fcs, a_scales[a_name], group_size, ratio)
 
         layer.to('cpu')
+        torch.cuda.empty_cache()
+        max_memory = torch.cuda.max_memory_allocated() / 1024 / 1024 / 1024
+        print(f'{l_name} smooth weight done.'
+              f' max gpu memory: {max_memory:.2f} GB')
         print(f'{l_name} smooth weight done.')

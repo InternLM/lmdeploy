@@ -101,6 +101,8 @@ def smooth_quant(model: str,
         parent = model.get_submodule(parent_name)
         setattr(parent, child_name, q_linear)
         linear.to('cpu')
+        q_linear.to('cpu')
+        torch.cuda.empty_cache()
 
     for name, norm in rmsnorms.items():
         if skipped_module(name):
@@ -111,6 +113,8 @@ def smooth_quant(model: str,
         parent = model.get_submodule(parent_name)
         setattr(parent, child_name, q_norm)
         norm.to('cpu')
+        q_linear.to('cpu')
+        torch.cuda.empty_cache()
 
     if vl_model:
         from .auto_awq import save_vl_model

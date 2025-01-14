@@ -16,6 +16,7 @@ from lmdeploy.vl.model.builder import load_vl_model
 LAYER_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMDecoderLayer',
     'InternLM2ForCausalLM': 'InternLM2DecoderLayer',
+    'InternLM3ForCausalLM': 'InternLM3DecoderLayer',
     'QWenLMHeadModel': 'QWenBlock',
     'Qwen2ForCausalLM': 'Qwen2DecoderLayer',
     'BaiChuanForCausalLM': 'DecoderLayer',  # Baichuan 7B
@@ -34,6 +35,7 @@ LAYER_TYPE_MAP = {
 NORM_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMRMSNorm',
     'InternLM2ForCausalLM': 'InternLM2RMSNorm',
+    'InternLM3ForCausalLM': 'InternLM3RMSNorm',
     'QWenLMHeadModel': 'RMSNorm',
     'Qwen2ForCausalLM': 'Qwen2RMSNorm',
     'BaiChuanForCausalLM': 'RMSNorm',  # Baichuan 7B
@@ -52,6 +54,7 @@ NORM_TYPE_MAP = {
 HEAD_NAME_MAP = {
     'InternLMForCausalLM': 'lm_head',
     'InternLM2ForCausalLM': 'output',
+    'InternLM3ForCausalLM': 'output',
     'QWenLMHeadModel': 'lm_head',
     'Qwen2ForCausalLM': 'lm_head',
     'BaiChuanForCausalLM': 'lm_head',  # Baichuan 7B
