@@ -4,8 +4,9 @@ from dataclasses import dataclass, field, fields
 from typing import Any, Dict, List, Literal
 
 import torch
-from torch import distributed as dist
 
+# from torch import distributed as dist
+import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.config import ModelConfig
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
@@ -15,7 +16,7 @@ def _broadcast_tensor(value: torch.Tensor, src: int = 0, device: str = 'cuda'):
     """broadcast tensor."""
     if value.device.type == 'meta':
         value = torch.empty_like(value, device=device)
-    dist.broadcast(value, src)
+    dist.broadcast(value, src, group=dist.get_tp_group('gpu'))
     return value
 
 

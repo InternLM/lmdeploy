@@ -2,8 +2,8 @@
 from typing import Optional
 
 import torch
-import torch.distributed as dist
 
+import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.kernels.cuda.w8a8_triton_kernels import (
     matmul_kernel_dynamic_quant, per_token_quant_int8, rms_norm_dynamic_quant)
 from lmdeploy.pytorch.models.q_modules import QTensor

@@ -3,7 +3,8 @@ from typing import Optional
 
 import torch
 import torch.nn.functional as F
-from torch import distributed as dist
+
+import lmdeploy.pytorch.distributed as dist
 
 from ..linear import LinearBuilder, LinearImpl
 

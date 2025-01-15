@@ -15,7 +15,8 @@ from lmdeploy.utils import get_logger
 from ..backends import get_backend
 from ..config import BackendConfig, CacheConfig, ModelConfig
 from ..devices import DeviceContext, get_device_manager
-from ..distributed import DistContext, get_dist_manager, get_world_rank
+from ..distributed import (DistContext, get_dist_manager, get_process_group,
+                           get_tp_group, get_world_rank)
 from ..model_inputs import ModelInputs
 from ..models.patch import (add_adapters, build_patched_model,
                             update_custom_module_map)
@@ -304,9 +305,12 @@ def _tp_build_model(
 
     def _broadcast_config(cache_config):
         """broadcast cache config, use minimum cache."""
+        world_group = get_process_group('cpu')
         if rank == 0:
             gathered_configs = [None] * world_size
-            dist.gather_object(cache_config, gathered_configs)
+            dist.gather_object(cache_config,
+                               gathered_configs,
+                               group=world_group)
             num_gpu_blocks_list = [
                 config.num_gpu_blocks for config in gathered_configs
             ]
@@ -320,9 +324,11 @@ def _tp_build_model(
             config_list = [cache_config]
         else:
             gathered_configs = None
-            dist.gather_object(cache_config, gathered_configs)
+            dist.gather_object(cache_config,
+                               gathered_configs,
+                               group=world_group)
             config_list = [None]
-        dist.broadcast_object_list(config_list)
+        dist.broadcast_object_list(config_list, group=world_group)
         return config_list[0]
 
     try:
@@ -402,8 +408,6 @@ def _tp_model_loop(
     backend_config: BackendConfig,
     adapters: Dict[str, str],
     world_size: int,
-    barrier: mp.Barrier,
-    cpu_group: dist.group,
 ):
     """Start model loops for tensor parallel model inference.
 
@@ -426,8 +430,9 @@ def _tp_model_loop(
                                                      adapters=adapters,
                                                      world_size=world_size)
 
+    cpu_group = get_tp_group('cpu')
     while True:
-        barrier.wait()
+        dist.barrier(cpu_group)
         inputs, swap_in_map, swap_out_map = _broadcast_inputs(
             rank, None, cpu_group, stream)
 
@@ -471,9 +476,7 @@ def _start_tp_process(proc_id: int,
                                 rank=rank,
                                 world_size=world_size,
                                 timeout=timeout)
-        cpu_group = dist.new_group(timeout=timeout, backend='gloo')
-        kwargs['cpu_group'] = cpu_group
-        dist_ctx = DistContext(rank=rank, world_size=world_size)
+        dist_ctx = DistContext().build(rank, tp=world_size)
         torch.cuda.set_device(rank)
         with get_dist_manager().context(dist_ctx), get_device_manager(
         ).context(device_context), torch.inference_mode():
@@ -566,14 +569,12 @@ class TPModelAgent(AutoModelAgent):
         self.backend_config = backend_config
 
         self._dist_ctx = None
-        self.mp_bar = self.mp_ctx.Barrier(world_size)
         self._start_sub_process(model_path,
                                 model_config=model_config,
                                 cache_config=cache_config,
                                 backend_config=backend_config,
                                 adapters=adapters,
-                                world_size=world_size,
-                                barrier=self.mp_bar)
+                                world_size=world_size)
 
         model, cache_engine, cache_config = self._build_model(
             model_path=model_path,
@@ -601,9 +602,8 @@ class TPModelAgent(AutoModelAgent):
 
     def _start_sub_process(self, model_path: str, model_config: ModelConfig,
                            cache_config: CacheConfig,
-                           backend_config: BackendConfig, adapters: Dict[str,
-                                                                         str],
-                           world_size: int, barrier: mp.Barrier):
+                           backend_config: BackendConfig,
+                           adapters: Dict[str, str], world_size: int):
         """Start tensor parallel sub process."""
         port = _find_available_port()
         os.environ.setdefault('MASTER_ADDR', '127.0.0.1')
@@ -627,7 +627,6 @@ class TPModelAgent(AutoModelAgent):
                     backend_config=backend_config,
                     adapters=adapters,
                     world_size=world_size,
-                    barrier=barrier,
                 ),
             ),
             nprocs=world_size - 1,
@@ -647,10 +646,8 @@ class TPModelAgent(AutoModelAgent):
                                     rank=rank,
                                     world_size=world_size,
                                     timeout=timeout)
-            cpu_group = dist.new_group(timeout=timeout, backend='gloo')
-            dist_ctx = DistContext(rank=rank, world_size=world_size)
+            dist_ctx = DistContext.build(rank=rank, tp=world_size)
             self._dist_ctx = dist_ctx
-            self._cpu_group = cpu_group
         except Exception as e:
             from traceback import print_exc
             logger.error(f'Rank[{rank}] failed.')
@@ -689,10 +686,11 @@ class TPModelAgent(AutoModelAgent):
                       swap_out_map: SwapMap):
         """forward impl."""
         with get_dist_manager().context(self._dist_ctx):
-            self.mp_bar.wait()
+            cpu_group = get_tp_group('cpu')
+            dist.barrier(cpu_group)
             rank = 0
             _broadcast_inputs(rank, [inputs, swap_in_map, swap_out_map],
-                              self._cpu_group, self.stream)
+                              cpu_group, self.stream)
 
             cache_swapping(self.cache_engine,
                            swap_in_map=swap_in_map,

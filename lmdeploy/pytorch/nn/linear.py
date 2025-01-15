@@ -2,9 +2,9 @@
 from typing import Any, List, Optional
 
 import torch
-import torch.distributed as dist
 from torch import nn
 
+import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.distributed import get_world_rank
 from lmdeploy.pytorch.weight_loader.model_weight_loader import \
     default_weight_loader
