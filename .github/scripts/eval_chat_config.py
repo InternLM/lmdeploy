@@ -260,7 +260,7 @@ for model in [v for k, v in locals().items() if k.startswith('pytorch_')]:
 for model in [v for k, v in locals().items() if '_batch1' in k]:
     model['abbr'] = model['abbr'] + '_batch1'
     model['engine_config']['max_batch_size'] = 1
-    model['batch_size'] = 1
+    model['batch_size'] = 100
 
 basic_pytorch_chat_tp1 = dict(type=TurboMindModelwithChatTemplate,
                               engine_config=dict(session_len=MAX_SESSION_LEN,
