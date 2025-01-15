@@ -320,7 +320,7 @@ class Vicuna(BaseChatTemplate):
             eosys=' ',
             user='USER: ',
             eoh=' ',
-            assistant='Assistant:',
+            assistant='ASSISTANT: ',
             eoa='</s>',
             stop_words=['</s>'],
             **kwargs):
@@ -358,10 +358,10 @@ class Llavav1(Vicuna):
         super().__init__(meta_instruction=meta_instruction, **kwargs)
 
     def get_prompt(self, prompt, sequence_start=True):
-        return super().get_prompt(prompt, sequence_start)
+        return super().get_prompt(prompt, sequence_start)[:-1]
 
     def messages2prompt(self, messages, sequence_start=True, **kwargs):
-        return super().messages2prompt(messages, sequence_start, **kwargs)
+        return super().messages2prompt(messages, sequence_start, **kwargs)[:-1]
 
     @classmethod
     def match(cls, model_path: str) -> Optional[str]:
@@ -386,10 +386,10 @@ class MiniGemini(Vicuna):
         super().__init__(**kwargs)
 
     def get_prompt(self, prompt, sequence_start=True):
-        return super().get_prompt(prompt, sequence_start)
+        return super().get_prompt(prompt, sequence_start)[:-1]
 
     def messages2prompt(self, messages, sequence_start=True, **kwargs):
-        return super().messages2prompt(messages, sequence_start, **kwargs)
+        return super().messages2prompt(messages, sequence_start, **kwargs)[:-1]
 
     @classmethod
     def match(cls, model_path: str) -> Optional[str]:
@@ -1267,7 +1267,7 @@ class UltraChat(BaseChatTemplate):
             eosys='</s>\n',
             user='User: ',
             eoh='</s>\n',
-            assistant='Assistant:',
+            assistant='Assistant: ',
             eoa='</s>',
             separator='\n',
             stop_words=['</s>'],
@@ -1396,22 +1396,26 @@ class Gemma(BaseChatTemplate):
 class Deepseek(BaseChatTemplate):
 
     def __init__(self,
+                 meta_instruction=None,
+                 eosys='\n\n',
                  user='User: ',
                  eoh='\n\n',
-                 assistant='Assistant:',
+                 assistant='Assistant: ',
                  eoa='<｜end▁of▁sentence｜>',
                  **kwargs):
         super().__init__(user=user,
                          eoh=eoh,
+                         meta_instruction=meta_instruction,
+                         eosys=eosys,
                          assistant=assistant,
                          eoa=eoa,
                          **kwargs)
 
     def get_prompt(self, prompt, sequence_start=True):
-        return super().get_prompt(prompt, sequence_start)
+        return super().get_prompt(prompt, sequence_start)[:-1]
 
     def messages2prompt(self, messages, sequence_start=True, **kwargs):
-        return super().messages2prompt(messages, sequence_start, **kwargs)
+        return super().messages2prompt(messages, sequence_start, **kwargs)[:-1]
 
     @classmethod
     def match(cls, model_path: str) -> Optional[str]:
@@ -1431,7 +1435,7 @@ class InternVLZH(BaseChatTemplate):
     def __init__(self,
                  user='<human>: ',
                  eoh=' ',
-                 assistant='<bot>:',
+                 assistant='<bot>: ',
                  eoa='</s>',
                  **kwargs):
         super().__init__(user=user,
@@ -1441,10 +1445,10 @@ class InternVLZH(BaseChatTemplate):
                          **kwargs)
 
     def get_prompt(self, prompt, sequence_start=True):
-        return super().get_prompt(prompt, sequence_start)
+        return super().get_prompt(prompt, sequence_start)[:-1]
 
     def messages2prompt(self, messages, sequence_start=True, **kwargs):
-        return super().messages2prompt(messages, sequence_start, **kwargs)
+        return super().messages2prompt(messages, sequence_start, **kwargs)[:-1]
 
     @classmethod
     def match(cls, model_path: str) -> Optional[str]:
@@ -1467,7 +1471,7 @@ class DeepseekVL(BaseChatTemplate):
             eosys='\n\n',
             user='User: ',
             eoh='\n\n',
-            assistant='Assistant:',
+            assistant='Assistant: ',
             eoa='<｜end▁of▁sentence｜>',
             **kwargs):
         super().__init__(meta_instruction=meta_instruction,
@@ -1479,10 +1483,10 @@ class DeepseekVL(BaseChatTemplate):
                          **kwargs)
 
     def get_prompt(self, prompt, sequence_start=True):
-        return super().get_prompt(prompt, sequence_start)
+        return super().get_prompt(prompt, sequence_start)[:-1]
 
     def messages2prompt(self, messages, sequence_start=True, **kwargs):
-        return super().messages2prompt(messages, sequence_start, **kwargs)
+        return super().messages2prompt(messages, sequence_start, **kwargs)[:-1]
 
     @classmethod
     def match(cls, model_path: str) -> Optional[str]:
