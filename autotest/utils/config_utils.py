@@ -42,9 +42,10 @@ def get_turbomind_model_list(tp_num: int = None,
         if key in case_list and key not in quatization_case_config.get(
                 'no_awq') and not is_quantization_model(key):
             case_list.append(key + '-inner-4bits')
-    for key in quatization_case_config.get('gptq'):
-        if key in case_list:
-            case_list.append(key + '-inner-gptq')
+    if quatization_case_config.get('gptq') is not None:
+        for key in quatization_case_config.get('gptq'):
+            if key in case_list:
+                case_list.append(key + '-inner-gptq')
 
     if tp_num is not None:
         return [

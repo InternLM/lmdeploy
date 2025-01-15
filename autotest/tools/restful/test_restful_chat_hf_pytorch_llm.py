@@ -214,6 +214,7 @@ def test_modelscope_restful_chat_tp1(config, common_case_config, worker_id):
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.restful_api_pytorch
 @pytest.mark.gpu_num_1
+@pytest.mark.lora
 @pytest.mark.parametrize(
     'prepare_environment',
     [{
@@ -237,6 +238,7 @@ def test_restful_chat_with_lora_tp1(config, common_case_config, worker_id):
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.restful_api_pytorch
 @pytest.mark.gpu_num_2
+@pytest.mark.lora
 @pytest.mark.parametrize(
     'prepare_environment',
     [{

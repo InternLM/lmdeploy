@@ -132,3 +132,12 @@ def _simple_model_name(model):
     model_name = model_name.replace('-inner-w8a8', '')
     model_name = model_name.replace('-4bits', '')
     return model_name
+
+
+def get_devive_name():
+    device_name = torch.cuda.get_device_name(0).lower()
+    return device_name
+
+
+def is_4090_device():
+    return '4090' in get_devive_name()

@@ -146,7 +146,7 @@ def test_hf_pytorch_chat_pr(config, model, cli_case_config):
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_pytorch_chat
 @pytest.mark.gpu_num_1
-@pytest.mark.parametrize('model', ['Qwen/Qwen-7B-Chat'])
+@pytest.mark.parametrize('model', ['Qwen/Qwen2.5-7B-Instruct'])
 def test_modelscope_pytorch_chat_tp1(config, model, cli_case_config,
                                      worker_id):
     os.environ['LMDEPLOY_USE_MODELSCOPE'] = 'True'
@@ -172,6 +172,7 @@ def test_modelscope_pytorch_chat_tp1(config, model, cli_case_config,
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_pytorch_chat
 @pytest.mark.gpu_num_1
+@pytest.mark.lora
 @pytest.mark.parametrize('model', ['meta-llama/Llama-2-7b-chat-hf'])
 def test_pytorch_chat_with_lora_tp1(config, model, cli_case_config, worker_id):
     usercase = 'chat_testcase'
@@ -195,6 +196,7 @@ def test_pytorch_chat_with_lora_tp1(config, model, cli_case_config, worker_id):
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_pytorch_chat
 @pytest.mark.gpu_num_2
+@pytest.mark.lora
 @pytest.mark.parametrize('model', ['baichuan-inc/Baichuan2-13B-Chat'])
 def test_pytorch_chat_with_lora_tp2(config, model, cli_case_config, worker_id):
     usercase = 'chat_testcase'

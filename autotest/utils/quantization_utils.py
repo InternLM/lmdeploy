@@ -2,6 +2,8 @@ import os
 import subprocess
 from subprocess import PIPE
 
+from utils.get_run_config import is_4090_device
+
 from lmdeploy.utils import is_bf16_supported
 
 
@@ -44,8 +46,13 @@ def quantization(config,
 
     if not is_bf16_supported():
         quantization_cmd += ' --batch-size 8'
+    elif is_4090_device():
+        quantization_cmd += ' --batch-size 1'
     else:
         quantization_cmd += ' --batch-size 32'
+
+    if quantization_type == 'w8a8' and is_4090_device():
+        quantization_cmd += ' --quant-dtype fp8'
 
     with open(quantization_log, 'w') as f:
         # remove existing folder
