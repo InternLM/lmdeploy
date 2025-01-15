@@ -55,6 +55,7 @@ class ModelConfig:
     session_len: int = None
     tp: int = 1
     model_format: str = 'hf'
+    enable_ep: bool = False
     expert_num: List[int] = ()
     expert_inter_size: int = 0
     experts_per_token: int = 0

@@ -230,6 +230,7 @@ bool test_moe_gate(int                     tokens,  //
                          softmax,
                          false,
                          1.f,
+                         {0, expert_num},  // expert_offset
                          nullptr);
     }
 
