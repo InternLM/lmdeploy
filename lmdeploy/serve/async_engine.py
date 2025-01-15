@@ -65,7 +65,7 @@ def _gen_out_to_response(out: GenOut, index) -> Response:
                     generate_token_len=out.generate_token_len,
                     input_token_len=out.input_token_len,
                     finish_reason=out.finish_reason,
-                    token_ids=out.token_ids,
+                    token_ids=out.token_ids or [],
                     logprobs=out.logprobs,
                     last_hidden_state=out.last_hidden_state,
                     logits=out.logits,
