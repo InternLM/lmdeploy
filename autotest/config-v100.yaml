@@ -28,6 +28,7 @@ turbomind_chat_model:
     - meta-llama/Meta-Llama-3-1-8B-Instruct-AWQ
     - meta-llama/Meta-Llama-3-8B-Instruct
     - meta-llama/Meta-Llama-3-8B-Instruct-inner-4bits
+    - internlm/internlm3-8b-instruct
     - internlm/internlm2_5-7b-chat
     - internlm/internlm2_5-20b-chat
     - internlm/internlm-xcomposer2d5-7b
@@ -48,6 +49,7 @@ turbomind_chat_model:
 pytorch_chat_model:
     - meta-llama/Meta-Llama-3-8B-Instruct
     - meta-llama/Meta-Llama-3-1-8B-Instruct
+    - internlm/internlm3-8b-instruct
     - internlm/internlm2_5-7b-chat
     - internlm/internlm2_5-20b-chat
     - OpenGVLab/InternVL2-1B
@@ -122,6 +124,7 @@ turbomind_quatization:
 
 pytorch_quatization:
     awq:
+        - internlm/internlm3-8b-instruct
         - internlm/internlm2_5-7b-chat
         - internlm/internlm2_5-20b-chat
         - Qwen/Qwen2-1.5B-Instruct
