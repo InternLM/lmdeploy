@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.security.http import HTTPAuthorizationCredentials, HTTPBearer
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from lmdeploy.archs import get_task
 from lmdeploy.messages import (GenerationConfig, LogitsProcessor,
@@ -1013,6 +1014,18 @@ async def startup_event():
         print(f'Service registration failed: {e}')
 
 
+class ConcurrencyLimitMiddleware(BaseHTTPMiddleware):
+
+    def __init__(self, app: FastAPI, max_concurrent_requests: int):
+        super().__init__(app)
+        self.semaphore = asyncio.Semaphore(max_concurrent_requests)
+
+    async def dispatch(self, request: Request, call_next):
+        async with self.semaphore:
+            response = await call_next(request)
+            return response
+
+
 def serve(model_path: str,
           model_name: Optional[str] = None,
           backend: Literal['turbomind', 'pytorch'] = 'turbomind',
@@ -1031,6 +1044,7 @@ def serve(model_path: str,
           proxy_url: Optional[str] = None,
           max_log_len: int = None,
           disable_fastapi_docs: bool = False,
+          concurrency_pressure: float = 1.5,
           **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -1075,6 +1089,12 @@ def serve(model_path: str,
         proxy_url (str): The proxy url to register the api_server.
         max_log_len (int): Max number of prompt characters or prompt tokens
             being printed in log. Default: Unlimited
+        concurrency_pressure: This refers to the ratio between the maximum
+            number of concurrent requests and the maximum batch size that
+            the engine can handle. The server is designed to process the
+            engine’s tasks once the maximum number of concurrent requests is
+            reached, regardless of any additional requests sent by clients
+            concurrently during that time. Default to 1.5
     """
     if os.getenv('TM_LOG_LEVEL') is None:
         os.environ['TM_LOG_LEVEL'] = log_level
@@ -1099,6 +1119,12 @@ def serve(model_path: str,
             allow_methods=allow_methods,
             allow_headers=allow_headers,
         )
+    # Set the maximum number of concurrent requests
+    max_concurrent_requests = int(backend_config.max_batch_size *
+                                  concurrency_pressure)
+    app.add_middleware(ConcurrencyLimitMiddleware,
+                       max_concurrent_requests=max_concurrent_requests)
+
     if api_keys is not None:
         if isinstance(api_keys, str):
             api_keys = api_keys.split(',')
