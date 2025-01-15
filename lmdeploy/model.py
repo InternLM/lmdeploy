@@ -1400,6 +1400,8 @@ class Gemma(BaseChatTemplate):
 class Deepseek(BaseChatTemplate):
 
     def __init__(self,
+                 meta_instruction=None,
+                 eosys='\n\n',
                  user='User: ',
                  eoh='\n\n',
                  assistant='Assistant: ',
@@ -1407,6 +1409,8 @@ class Deepseek(BaseChatTemplate):
                  **kwargs):
         super().__init__(user=user,
                          eoh=eoh,
+                         meta_instruction=meta_instruction,
+                         eosys=eosys,
                          assistant=assistant,
                          eoa=eoa,
                          **kwargs)
