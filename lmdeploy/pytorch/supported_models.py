@@ -72,6 +72,8 @@ _SUPPORTED_ARCHS = dict(
     MllamaForConditionalGeneration=True,
     # MiniCPM-V-2_6
     MiniCPMVForCausalLM=True,
+    # internlm3
+    InternLM3ForCausalLM=True,
 )
 
 

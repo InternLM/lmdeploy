@@ -151,7 +151,9 @@ def run_local(model_path: str,
                 response, state = engine.tokenizer.detokenize_incrementally(
                     res,
                     state,
-                    skip_special_tokens=gen_config.skip_special_tokens)
+                    skip_special_tokens=gen_config.skip_special_tokens,
+                    spaces_between_special_tokens=gen_config.
+                    spaces_between_special_tokens)  # noqa
                 if chatbot[-1][1] is None:
                     chatbot[-1][1] = ''
                     history[-1][1] = ''

@@ -172,7 +172,6 @@ class Engine:
 
         # create main thread
         self._start_loop()
-        self._create_buffers()
         self._output_stream = torch.cuda.Stream()
 
     @classmethod
@@ -227,12 +226,6 @@ class Engine:
             new_adapters[name] = new_path
 
         return new_adapters
-
-    def _create_buffers(self):
-        max_batches = self.scheduler_config.max_batches
-
-        # buffers to create inputs
-        self._seq_length_buf = torch.ones(max_batches, dtype=torch.long)
 
     def _build_adapter_manager(self, adapters):
         return AdapterManager(adapters)
@@ -368,14 +361,16 @@ class Engine:
             session_id = req.data['session_id']
             sess = self.scheduler.sessions[session_id]
             # TODO: support 1 session n sequence
+            sampling_param = req.data['sampling_param']
+            return_logits = sampling_param.out_logits
             if len(sess.sequences) == 0:
                 assert len(
                     req.data['token_ids']) > 0, ('Empty input is not allowed.')
                 sess.add_sequence(
                     req.data['token_ids'],
-                    sampling_param=req.data['sampling_param'],
+                    sampling_param=sampling_param,
                     adapter_name=req.data['adapter_name'],
-                    return_logits=req.data.get('return_logits', False),
+                    return_logits=return_logits,
                     multimodals=req.data.get('input_multimodals'),
                     input_embeddings=req.data.get('input_embeddings'),
                 )
@@ -391,8 +386,8 @@ class Engine:
                     embeddings=req.data.get('input_embeddings'),
                 )
                 msg.num_new_tokens = 0
-                msg.sampling_param = req.data['sampling_param']
-                msg.return_logits = req.data.get('return_logits', False)
+                msg.sampling_param = sampling_param
+                msg.return_logits = return_logits
                 msg.status = MessageStatus.WAITING
                 __update_bad_words(msg)
                 __update_max_new_tokens(msg)
@@ -431,7 +426,7 @@ class Engine:
             seq_length = [len(tokens) for tokens in token_ids]
             seq_length = torch.tensor(seq_length, dtype=torch.long)
         else:
-            seq_length = self._seq_length_buf[:batch_size]
+            seq_length = torch.ones(batch_size, dtype=torch.long)
         max_q_seq_length = seq_length.max().item()
 
         block_offsets = self.scheduler.get_block_tables(messages)
@@ -685,6 +680,8 @@ class Engine:
             if not return_logits and not inputs.is_decoding:
                 last_token_loc = [-1]
                 ret['hidden_states'] = ret['hidden_states'][:, last_token_loc]
+            else:
+                ret['hidden_states'] = ret['hidden_states'].to('cuda')
 
         hidden_states = ret.pop('hidden_states')
         logits = self.model_agent.get_logits(hidden_states)
@@ -808,7 +805,11 @@ class Engine:
             finish = finish or _check_finish(self.scheduler, idx)
             event = torch.cuda.Event()
             event.record()
-            output = (next_token_ids, logits, stopped, model_metas, event)
+            output = dict(next_token_ids=next_token_ids,
+                          logits=logits,
+                          stopped=stopped,
+                          model_metas=model_metas,
+                          event=event)
             output_que.put_nowait((finish, output))
 
             inputs.model_metas = model_metas
@@ -1053,7 +1054,7 @@ class Engine:
             finish = False
             while not finish:
                 finish, out = await out_que.get()
-                step_outputs = await self._make_infer_outputs(*out)
+                step_outputs = await self._make_infer_outputs(**out)
                 self._set_has_runable_event(has_runable_event)
                 resp_que.put_nowait(step_outputs)
 
