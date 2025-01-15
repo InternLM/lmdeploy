@@ -125,9 +125,9 @@ def test_hf_pytorch_base_tp2(config, model, cli_case_config, worker_id):
 @pytest.mark.hf_pytorch_chat
 @pytest.mark.gpu_num_2
 @pytest.mark.pr_test
-@pytest.mark.parametrize('model', [
-    'internlm/internlm2_5-20b-chat', '- mistralai/Mixtral-8x7B-Instruct-v0.1'
-])
+@pytest.mark.parametrize(
+    'model',
+    ['internlm/internlm2_5-20b-chat', 'mistralai/Mixtral-8x7B-Instruct-v0.1'])
 def test_hf_pytorch_chat_pr(config, model, cli_case_config):
     usercase = 'chat_testcase'
     result, chat_log, msg = hf_command_line_test(
