@@ -302,11 +302,12 @@ def run_pipeline_vl_chat_test(config,
     resource_path = config.get('resource_path')
 
     if 'pytorch' in backend:
-        backend_config = PytorchEngineConfig(tp=tp, session_len=8192)
+        backend_config = PytorchEngineConfig(tp=tp)
         if not is_bf16_supported():
             backend_config.dtype = 'float16'
     else:
-        backend_config = TurbomindEngineConfig(tp=tp, session_len=8192)
+        backend_config = TurbomindEngineConfig(tp=tp,
+                                               cache_max_entry_count=0.6)
 
     if 'llava' in model_case:
         backend_config.model_name = 'vicuna'
@@ -341,7 +342,7 @@ def run_pipeline_vl_chat_test(config,
     ])
     file.writelines(log_string)
     print(log_string)
-    response = pipe((prompt, image), gen_config)
+    response = pipe((prompt, image))
     result = 'tiger' in response.text.lower() or '虎' in response.text.lower()
     file.writelines('result:' + str(result) +
                     ', reason: simple example tiger not in ' + response.text +
@@ -368,7 +369,7 @@ def run_pipeline_vl_chat_test(config,
 
     image_urls = [f'{resource_path}/{PIC2}', f'{resource_path}/{PIC1}']
     images = [load_image(img_url) for img_url in image_urls]
-    response = pipe((prompt, images), gen_config)
+    response = pipe((prompt, images))
     result = 'tiger' in response.text.lower() or 'ski' in response.text.lower(
     ) or '虎' in response.text.lower() or '滑雪' in response.text.lower()
     file.writelines('result:' + str(result) +
