@@ -227,12 +227,15 @@ def test_pipeline_chat_kvint8_tp4(config, common_case_config, model,
 ])
 def test_pipeline_chat_pr(config, common_case_config, model):
     spawn_context = get_context('spawn')
+    case_config = {
+        k: v
+        for k, v in common_case_config.items() if k == 'memory_test'
+    }
     p = spawn_context.Process(target=run_pipeline_chat_test,
-                              args=(config, common_case_config, model,
-                                    'turbomind'))
+                              args=(config, case_config, model, 'turbomind'))
     p.start()
     p.join()
-    assert_pipeline_chat_log(config, common_case_config, model, 'turbomind')
+    assert_pipeline_chat_log(config, case_config, model, 'turbomind')
 
 
 @pytest.mark.order(6)

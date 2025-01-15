@@ -213,12 +213,14 @@ def test_restful_chat_kvint8_tp4(config, common_case_config, worker_id):
 ],
                          indirect=True)
 def test_restful_chat_pr(config, common_case_config):
-    run_all_step(
-        config, {
-            key: value
-            for key, value in common_case_config.items()
-            if key == 'memory_test'
-        })
+    case_config = {
+        k: v
+        for k, v in common_case_config.items() if k == 'memory_test'
+    }
+    run_all_step(config, {
+        key: value
+        for key, value in case_config.items() if key == 'memory_test'
+    })
 
 
 @pytest.mark.order(7)

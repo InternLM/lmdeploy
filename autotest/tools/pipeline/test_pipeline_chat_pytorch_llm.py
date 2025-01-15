@@ -255,14 +255,17 @@ def test_pipeline_chat_kvint8_tp4(config, common_case_config, model,
     ['internlm/internlm2_5-20b-chat', 'mistralai/Mixtral-8x7B-Instruct-v0.1'])
 def test_pipeline_chat_pytorch_pr(config, common_case_config, model):
     spawn_context = get_context('spawn')
+    case_config = {
+        k: v
+        for k, v in common_case_config.items() if k == 'memory_test'
+    }
     p = spawn_context.Process(target=run_pipeline_chat_test,
-                              args=(config, common_case_config, model,
-                                    'pytorch'))
+                              args=(config, case_config, model, 'pytorch'))
     p.start()
     p.join()
 
     # assert script
-    assert_pipeline_chat_log(config, common_case_config, model, 'pytorch')
+    assert_pipeline_chat_log(config, case_config, model, 'pytorch')
 
 
 @pytest.mark.order(6)

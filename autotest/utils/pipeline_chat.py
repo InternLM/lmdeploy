@@ -306,8 +306,7 @@ def run_pipeline_vl_chat_test(config,
         if not is_bf16_supported():
             backend_config.dtype = 'float16'
     else:
-        backend_config = TurbomindEngineConfig(tp=tp,
-                                               cache_max_entry_count=0.6)
+        backend_config = TurbomindEngineConfig(tp=tp)
 
     if 'llava' in model_case:
         backend_config.model_name = 'vicuna'
