@@ -54,10 +54,6 @@ with read_base():
         models as hf_internlm2_chat_7b  # noqa: F401, E501
     from opencompass.configs.models.hf_internlm.hf_internlm2_chat_20b import \
         models as hf_internlm2_chat_20b  # noqa: F401, E501
-    from opencompass.configs.models.hf_internlm.hf_internlm_chat_7b import \
-        models as hf_internlm_chat_7b  # noqa: F401, E501
-    from opencompass.configs.models.hf_internlm.hf_internlm_chat_20b import \
-        models as hf_internlm_chat_20b  # noqa: F401, E501
     from opencompass.configs.models.hf_internlm.lmdeploy_internlm2_5_7b_chat import \
         models as lmdeploy_internlm2_5_7b_chat  # noqa: F401, E501
     from opencompass.configs.models.hf_internlm.lmdeploy_internlm2_5_20b_chat import \
@@ -130,11 +126,6 @@ llama2_meta_template = dict(round=[
 
 MAX_SESSION_LEN = 2048
 MAX_NEW_TOKENS = 1024
-
-# ===== Configs for internlm/internlm-chat-7b =====
-turbomind_internlm_chat_7b = deepcopy(*lmdeploy_internlm_chat_7b)
-turbomind_internlm_chat_7b_4bits = deepcopy(*lmdeploy_internlm_chat_7b)
-pytorch_internlm_chat_7b = deepcopy(*lmdeploy_internlm_chat_7b)
 
 # ===== Configs for internlm/internlm2-chat-7b =====
 turbomind_internlm2_chat_7b = deepcopy(*lmdeploy_internlm2_chat_7b)

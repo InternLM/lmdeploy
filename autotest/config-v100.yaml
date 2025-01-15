@@ -6,7 +6,6 @@ benchmark_path: /nvme/qa_test_models/benchmark-reports
 dataset_path: /nvme/qa_test_models/datasets/ShareGPT_V3_unfiltered_cleaned_split.json
 
 tp_config:
-    internlm-chat-20b: 2
     internlm2-chat-20b: 2
     Baichuan2-13B-Chat: 2
     Mixtral-8x7B-Instruct-v0.1: 2
