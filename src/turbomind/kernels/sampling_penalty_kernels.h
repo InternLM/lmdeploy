@@ -81,8 +81,8 @@ template<typename T>
 void invokeMinLengthPenalty(T*           logits,
                             const int*   min_lengths,
                             const int*   end_ids,
+                            const int    end_ids_len,
                             const int*   sequnece_lengths,
-                            const int    max_input_length,
                             const int    batch_size,
                             const int    vocab_size_padded,
                             cudaStream_t stream);

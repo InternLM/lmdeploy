@@ -111,7 +111,16 @@ class BaseOutputModel(ABC):
         """Update `self.model_config` according to the input_model's
         `tokenizer_info` and `model_info`"""
         _, bos_id, eos_id = self.input_model_tokenizer_info
-
+        try:
+            from transformers import GenerationConfig
+            cfg = GenerationConfig.from_pretrained(self.input_model.model_path)
+            if isinstance(cfg.eos_token_id, int):
+                eos_id = [cfg.eos_token_id]
+            elif isinstance(cfg.eos_token_id, list):
+                eos_id = cfg.eos_token_id
+        except:
+            assert isinstance(eos_id, int)
+            eos_id = [eos_id]
         final_cfg = config_to_dict(self.model_config)
         final_cfg.update(dict(start_id=bos_id, end_id=eos_id))
         final_cfg.update(self.input_model_info)

@@ -19,29 +19,28 @@ struct MLAParam {
 };
 
 struct ModelParam {
-    size_t     head_num;
-    size_t     head_dim;
-    size_t     kv_head_num;
-    size_t     hidden_units;
-    size_t     layer_num;
-    size_t     vocab_size;
-    size_t     embedding_size;
-    float      norm_eps;
-    int        quant_policy;
-    bool       attn_bias;
-    WeightType weight_type;
-    int        group_size;
-    int        start_id;
-    int        end_id;
-    MLAParam   mla;
-    int        tune_layer_num;
+    size_t           head_num;
+    size_t           head_dim;
+    size_t           kv_head_num;
+    size_t           hidden_units;
+    size_t           layer_num;
+    size_t           vocab_size;
+    size_t           embedding_size;
+    float            norm_eps;
+    int              quant_policy;
+    bool             attn_bias;
+    WeightType       weight_type;
+    int              group_size;
+    int              start_id;
+    std::vector<int> end_id;
+    MLAParam         mla;
+    int              tune_layer_num;
 
     std::vector<int> inter_size;
 };
 
 struct MoeParam {
-    enum Method
-    {
+    enum Method {
         kNaive,
         kFused
     } method;
@@ -95,8 +94,7 @@ struct EngineParam {
     int max_prefill_iters;
 };
 
-enum class LoraPolicy : int
-{
+enum class LoraPolicy : int {
     kNull,
     kPlora,
 };

@@ -130,7 +130,7 @@ class TurboMind:
                 pass
 
         self.session_len = self.config.session_len
-        self.eos_id = self.tokenizer.eos_token_id
+        self.eos_id = self.config.model_config.end_id
 
     def _create_weight(self, model_comm):
         """Allocate weight buffer, load params if from_workspace."""
@@ -531,11 +531,12 @@ class TurboMindInstance:
             bad_words.extend(gen_config.bad_token_ids)
         if gen_config.ignore_eos:
             stop_words = None
-            bad_words.append(self.eos_id)
+            bad_words.extend(self.eos_id)
         else:
             stop_words = gen_config.stop_token_ids or []
-            if self.eos_id not in stop_words:
-                stop_words.append(self.eos_id)
+            for eos_id in self.eos_id:
+                if eos_id not in stop_words:
+                    stop_words.append(self.eos_id)
         stop_words = _construct_stop_or_bad_words(stop_words)
         bad_words = _construct_stop_or_bad_words(bad_words)
 
