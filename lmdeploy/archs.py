@@ -56,11 +56,10 @@ def autoget_backend(model_path: str) -> Literal['turbomind', 'pytorch']:
             else:
                 logger.warning(try_run_msg)
     else:
-        logger.warning(
-            'Fallback to pytorch engine because turbomind engine is not '
-            'installed correctly. If you insist to use turbomind engine, '
-            'you may need to reinstall lmdeploy from pypi or build from '
-            'source and try again.')
+        logger.warning('Fallback to pytorch engine because turbomind engine is not '
+                       'installed correctly. If you insist to use turbomind engine, '
+                       'you may need to reinstall lmdeploy from pypi or build from '
+                       'source and try again.')
         if not pytorch_has:
             logger.warning(try_run_msg)
 
@@ -70,8 +69,7 @@ def autoget_backend(model_path: str) -> Literal['turbomind', 'pytorch']:
 
 def autoget_backend_config(
     model_path: str,
-    backend_config: Optional[Union[PytorchEngineConfig,
-                                   TurbomindEngineConfig]] = None
+    backend_config: Optional[Union[PytorchEngineConfig, TurbomindEngineConfig]] = None
 ) -> Union[PytorchEngineConfig, TurbomindEngineConfig]:
     """Get backend config automatically.
 
@@ -116,20 +114,16 @@ def check_vl_llm(config: dict) -> bool:
 
     arch = config['architectures'][0]
     supported_archs = set([
-        'LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM',
-        'CogVLMForCausalLM', 'InternLMXComposer2ForCausalLM',
-        'InternVLChatModel', 'MiniGeminiLlamaForCausalLM',
-        'MGMLlamaForCausalLM', 'MiniCPMV', 'LlavaForConditionalGeneration',
-        'LlavaNextForConditionalGeneration', 'Phi3VForCausalLM',
-        'Qwen2VLForConditionalGeneration', 'MllamaForConditionalGeneration',
-        'MolmoForCausalLM'
+        'LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM', 'CogVLMForCausalLM', 'InternLMXComposer2ForCausalLM',
+        'InternVLChatModel', 'MiniGeminiLlamaForCausalLM', 'MGMLlamaForCausalLM', 'MiniCPMV',
+        'LlavaForConditionalGeneration', 'LlavaNextForConditionalGeneration', 'Phi3VForCausalLM',
+        'Qwen2VLForConditionalGeneration', 'MllamaForConditionalGeneration', 'MolmoForCausalLM'
     ])
     if arch == 'QWenLMHeadModel' and 'visual' in config:
         return True
     elif arch == 'MultiModalityCausalLM' and 'language_config' in config:
         return True
-    elif arch in ['ChatGLMModel', 'ChatGLMForConditionalGeneration'
-                  ] and 'vision_config' in config:
+    elif arch in ['ChatGLMModel', 'ChatGLMForConditionalGeneration'] and 'vision_config' in config:
         return True
     elif arch in supported_archs:
         return True
@@ -161,8 +155,7 @@ def get_model_arch(model_path: str):
     if os.path.exists(os.path.join(model_path, 'triton_models', 'weights')):
         # the turbomind model
         import yaml
-        config_file = os.path.join(model_path, 'triton_models', 'weights',
-                                   'config.yaml')
+        config_file = os.path.join(model_path, 'triton_models', 'weights', 'config.yaml')
         with open(config_file, 'r') as f:
             config = yaml.safe_load(f)
 
@@ -173,12 +166,10 @@ def get_model_arch(model_path: str):
     else:
         # transformers model
         try:
-            cfg = AutoConfig.from_pretrained(model_path,
-                                             trust_remote_code=True)
+            cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
         except Exception as e:  # noqa
             from transformers import PretrainedConfig
-            cfg = PretrainedConfig.from_pretrained(model_path,
-                                                   trust_remote_code=True)
+            cfg = PretrainedConfig.from_pretrained(model_path, trust_remote_code=True)
 
         _cfg = cfg.to_dict()
         if _cfg.get('architectures', None):
@@ -187,12 +178,10 @@ def get_model_arch(model_path: str):
                 for _, v in _cfg['auto_map'].items():
                     if 'InternLMXComposer2ForCausalLM' in v:
                         arch = 'InternLMXComposer2ForCausalLM'
-        elif _cfg.get('auto_map',
-                      None) and 'AutoModelForCausalLM' in _cfg['auto_map']:
+        elif _cfg.get('auto_map', None) and 'AutoModelForCausalLM' in _cfg['auto_map']:
             arch = _cfg['auto_map']['AutoModelForCausalLM'].split('.')[-1]
         else:
-            raise RuntimeError(
-                f'Could not find model architecture from config: {_cfg}')
+            raise RuntimeError(f'Could not find model architecture from config: {_cfg}')
         return arch, cfg
 
 

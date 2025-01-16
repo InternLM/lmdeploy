@@ -34,8 +34,7 @@ class DetokenizeState:
 
     def as_tuple(self) -> Tuple:
         """Return a tuple of states."""
-        return (self.ids_offset, self.prev_tokens, self.prefix_offset,
-                self.read_offset)
+        return (self.ids_offset, self.prev_tokens, self.prefix_offset, self.read_offset)
 
 
 class SentencePieceTokenizer:
@@ -76,10 +75,7 @@ class SentencePieceTokenizer:
         """tokens without prefix space."""
         if self._prefix_space_tokens is None:
             vocab = self.model.IdToPiece(list(range(self.vocab_size)))
-            self._prefix_space_tokens = {
-                i
-                for i, tok in enumerate(vocab) if tok.startswith('▁')
-            }
+            self._prefix_space_tokens = {i for i, tok in enumerate(vocab) if tok.startswith('▁')}
         return self._prefix_space_tokens
 
     def _maybe_add_prefix_space(self, tokens, decoded):
@@ -105,9 +101,8 @@ class SentencePieceTokenizer:
         indexes = [i for i, voc in enumerate(vocab) if token in voc]
         if len(indexes) > self.max_indexes_num:
             indexes = self.encode(token, add_bos=False)[-1:]
-            self.logger.warning(
-                f'There are too many(>{self.max_indexes_num}) possible '
-                f'indexes may decoding {token}, we will use {indexes} only')
+            self.logger.warning(f'There are too many(>{self.max_indexes_num}) possible '
+                                f'indexes may decoding {token}, we will use {indexes} only')
         self._indexes_tokens_deque.append((token, indexes))
         return indexes
 
@@ -121,11 +116,7 @@ class SentencePieceTokenizer:
         """
         return self.model.Encode(s, add_bos=add_bos, **kwargs)
 
-    def decode(self,
-               t: Sequence[int],
-               offset: Optional[int] = None,
-               skip_special_tokens: bool = True,
-               **kwargs):
+    def decode(self, t: Sequence[int], offset: Optional[int] = None, skip_special_tokens: bool = True, **kwargs):
         """De-tokenize.
 
         Args:
@@ -167,8 +158,7 @@ class SentencePieceTokenizer:
         """
         out_string = self.model.Decode(all_input_ids)
         if state.prev_tokens is not None:
-            out_string = self._maybe_add_prefix_space(all_input_ids,
-                                                      out_string)
+            out_string = self._maybe_add_prefix_space(all_input_ids, out_string)
         state.prev_tokens = []  # not None for the above condition
         return out_string, state
 
@@ -199,13 +189,11 @@ class HuggingFaceTokenizer:
         self._check_transformers_version(model_dir)
         from transformers import AutoTokenizer
         self.logger = get_logger('lmdeploy')
-        self.model = AutoTokenizer.from_pretrained(model_dir,
-                                                   trust_remote_code=True)
+        self.model = AutoTokenizer.from_pretrained(model_dir, trust_remote_code=True)
         self._prefix_space_tokens = None
 
         if self.model.eos_token_id is None:
-            generation_config_file = osp.join(model_dir,
-                                              'generation_config.json')
+            generation_config_file = osp.join(model_dir, 'generation_config.json')
             if osp.exists(generation_config_file):
                 with open(generation_config_file, 'r') as f:
                     cfg = json.load(f)
@@ -272,12 +260,10 @@ class HuggingFaceTokenizer:
     def prefix_space_tokens(self):
         """tokens without prefix space."""
         if self._prefix_space_tokens is None:
-            vocab = self.model.convert_ids_to_tokens(
-                list(range(self.vocab_size)))
+            vocab = self.model.convert_ids_to_tokens(list(range(self.vocab_size)))
             self._prefix_space_tokens = {
                 i
-                for i, tok in enumerate(vocab)
-                if tok.startswith('▁' if isinstance(tok, str) else b' ')
+                for i, tok in enumerate(vocab) if tok.startswith('▁' if isinstance(tok, str) else b' ')
             }
         return self._prefix_space_tokens
 
@@ -294,8 +280,7 @@ class HuggingFaceTokenizer:
         """Check if self.model.convert_ids_to_tokens return not a str value."""
         if self._maybe_decode_bytes is None:
             self._maybe_decode_bytes = False
-            vocab = self.model.convert_ids_to_tokens(
-                list(range(self.vocab_size)))
+            vocab = self.model.convert_ids_to_tokens(list(range(self.vocab_size)))
             for tok in vocab:
                 if not isinstance(tok, str):
                     self._maybe_decode_bytes = True
@@ -322,10 +307,7 @@ class HuggingFaceTokenizer:
                         # some tokens just can't be decoded by `decode`
                         pass
             else:
-                self.token2id = {
-                    self.model.convert_ids_to_tokens(i): i
-                    for i in range(self.vocab_size)
-                }
+                self.token2id = {self.model.convert_ids_to_tokens(i): i for i in range(self.vocab_size)}
         if token == ' ':  # ' ' is special
             token = '▁'
         indexes = [i for _token, i in self.token2id.items() if token in _token]
@@ -333,25 +315,19 @@ class HuggingFaceTokenizer:
             # multiple id decode to same token
             indexes = [i for i in indexes if self.decode([i]) == token]
             indexes = indexes[:self.max_indexes_num]
-            self.logger.warning(
-                f'There are too many(>{self.max_indexes_num}) possible '
-                f'indexes may decoding {token}, we will use {indexes} only')
+            self.logger.warning(f'There are too many(>{self.max_indexes_num}) possible '
+                                f'indexes may decoding {token}, we will use {indexes} only')
         # there might be token id that exceeds self.vocab_size
         if len(indexes) == 0:
             indexes = self.encode(token, False)
             if len(indexes) != 1:
-                self.logger.warning(
-                    f'The token {token}, its length of indexes {indexes} is '
-                    'not 1. Currently, it can not be used as stop words')
+                self.logger.warning(f'The token {token}, its length of indexes {indexes} is '
+                                    'not 1. Currently, it can not be used as stop words')
                 indexes = []
         self._indexes_tokens_deque.append((token, indexes))
         return indexes
 
-    def encode(self,
-               s: str,
-               add_bos: bool = True,
-               add_special_tokens: bool = True,
-               **kwargs):
+    def encode(self, s: str, add_bos: bool = True, add_special_tokens: bool = True, **kwargs):
         """Tokenize a prompt.
 
         Args:
@@ -363,19 +339,14 @@ class HuggingFaceTokenizer:
         Returns:
             list[int]: token ids
         """
-        encoded = self.model.encode(s,
-                                    add_special_tokens=add_special_tokens,
-                                    **kwargs)
+        encoded = self.model.encode(s, add_special_tokens=add_special_tokens, **kwargs)
         if not add_bos:
             # in the middle of a session
             if len(encoded) and encoded[0] == self.bos_token_id:
                 encoded = encoded[1:]
         return encoded
 
-    def decode(self,
-               t: Sequence[int],
-               offset: Optional[int] = None,
-               skip_special_tokens: bool = True):
+    def decode(self, t: Sequence[int], offset: Optional[int] = None, skip_special_tokens: bool = True):
         """De-tokenize.
 
         Args:
@@ -388,8 +359,7 @@ class HuggingFaceTokenizer:
             str: text of decoding tokens
         """
         t = t[offset:]
-        out_string = self.model.decode(t,
-                                       skip_special_tokens=skip_special_tokens)
+        out_string = self.model.decode(t, skip_special_tokens=skip_special_tokens)
         if offset:
             logger = get_logger('lmdeploy')
             logger.warning('For incrementally detokenization, please try '
@@ -416,8 +386,7 @@ class HuggingFaceTokenizer:
                 continue
             if token in tokenizer.get_added_vocab():
                 if current_sub_text:
-                    sub_text = tokenizer.convert_tokens_to_string(
-                        current_sub_text)
+                    sub_text = tokenizer.convert_tokens_to_string(current_sub_text)
                     sub_texts.append(sub_text)
                     current_sub_text = []
                 sub_texts.append(token)
@@ -457,19 +426,16 @@ class HuggingFaceTokenizer:
         tokenizer = self.model
         ids_offset, prev_tokens, prefix_offset, read_offset = state.as_tuple()
         # This is the first iteration for this sequence
-        new_tokens = tokenizer.convert_ids_to_tokens(
-            all_input_ids[ids_offset:],
-            skip_special_tokens=skip_special_tokens)
+        new_tokens = tokenizer.convert_ids_to_tokens(all_input_ids[ids_offset:],
+                                                     skip_special_tokens=skip_special_tokens)
         if prev_tokens is None:
             # Please notice that in VLLM, indexes are detokenized one by one
             # while in LMDeploy, every turn, the detokenized indexes length
             # can be different.
-            prev_tokens = tokenizer.convert_ids_to_tokens(
-                all_input_ids[:ids_offset],
-                skip_special_tokens=skip_special_tokens)
+            prev_tokens = tokenizer.convert_ids_to_tokens(all_input_ids[:ids_offset],
+                                                          skip_special_tokens=skip_special_tokens)
             read_offset = len(prev_tokens)
-            if skip_special_tokens and new_tokens and new_tokens[
-                    0] in tokenizer.all_special_ids:
+            if skip_special_tokens and new_tokens and new_tokens[0] in tokenizer.all_special_ids:
                 read_offset = read_offset + 1  # skip special token
 
         output_tokens = prev_tokens + new_tokens
@@ -499,8 +465,7 @@ class HuggingFaceTokenizer:
         else:
             new_text = ''
 
-        return new_text, DetokenizeState(len(all_input_ids), prev_tokens,
-                                         prefix_offset, read_offset)
+        return new_text, DetokenizeState(len(all_input_ids), prev_tokens, prefix_offset, read_offset)
 
     def __call__(self, s: Union[str, Sequence[str]]):
         """Tokenize prompts.
@@ -529,18 +494,11 @@ class ChatGLM4Tokenizer(HuggingFaceTokenizer):
         # fix for transformers>4.45.0
         self.model._pad = __pad
 
-    def encode(self,
-               s: str,
-               add_bos: bool = True,
-               add_special_tokens: bool = True,
-               **kwargs):
+    def encode(self, s: str, add_bos: bool = True, add_special_tokens: bool = True, **kwargs):
         """tokenize a prompt."""
         # ChtGLM4Tokenizer hardcode `add_speical_tokens=False` when tokenizing
         # a prompt. Refer to https://huggingface.co/THUDM/glm-4-9b-chat/blob/main/tokenization_chatglm.py#L227 # noqa E501
-        return super(ChatGLM4Tokenizer, self).encode(s,
-                                                     add_bos,
-                                                     add_special_tokens=False,
-                                                     **kwargs)
+        return super(ChatGLM4Tokenizer, self).encode(s, add_bos, add_special_tokens=False, **kwargs)
 
 
 class ChatGLMTokenizer(HuggingFaceTokenizer):
@@ -583,8 +541,7 @@ class Tokenizer:
         else:
             from transformers.models.auto.tokenization_auto import \
                 get_tokenizer_config
-            tokenizer_config = get_tokenizer_config(model_folder,
-                                                    trust_remote_code=True)
+            tokenizer_config = get_tokenizer_config(model_folder, trust_remote_code=True)
             config_tokenizer_class = tokenizer_config.get('tokenizer_class')
             if config_tokenizer_class == 'ChatGLM4Tokenizer':
                 self.model = ChatGLM4Tokenizer(model_folder)
@@ -608,11 +565,7 @@ class Tokenizer:
         """end of the sentence token id."""
         return self.model.eos_token_id
 
-    def encode(self,
-               s: str,
-               add_bos: bool = True,
-               add_special_tokens: bool = True,
-               **kwargs):
+    def encode(self, s: str, add_bos: bool = True, add_special_tokens: bool = True, **kwargs):
         """Tokenize a prompt.
 
         Args:
@@ -626,10 +579,9 @@ class Tokenizer:
         """
         encoded = self.model.encode(s, add_bos, add_special_tokens, **kwargs)
         if encoded[:2] == [self.bos_token_id] * 2:
-            get_logger('lmdeploy').warn(
-                f'Detected duplicate bos token {self.bos_token_id} in prompt, '
-                'this will likely reduce response quality, one of them will be'
-                'removed')
+            get_logger('lmdeploy').warn(f'Detected duplicate bos token {self.bos_token_id} in prompt, '
+                                        'this will likely reduce response quality, one of them will be'
+                                        'removed')
             encoded = encoded[1:]
         return encoded
 
@@ -673,11 +625,10 @@ class Tokenizer:
             state (DetokenizeState): an instance of DetokenizeState. Consists
                 of incrementally decoding states.
         """
-        return self.model.detokenize_incrementally(
-            all_input_ids,
-            state=state,
-            skip_special_tokens=skip_special_tokens,
-            spaces_between_special_tokens=spaces_between_special_tokens)
+        return self.model.detokenize_incrementally(all_input_ids,
+                                                   state=state,
+                                                   skip_special_tokens=skip_special_tokens,
+                                                   spaces_between_special_tokens=spaces_between_special_tokens)
 
     def __call__(self, s: Union[str, Sequence[str]]):
         """Tokenize prompts.
@@ -694,8 +645,7 @@ class Tokenizer:
         the input token."""
         encoded = self.encode(token, add_bos=False)
         if len(encoded) > 1:
-            self.logger.warning(
-                f'The token {token}, its length of indexes {encoded} is over '
-                'than 1. Currently, it can not be used as stop words')
+            self.logger.warning(f'The token {token}, its length of indexes {encoded} is over '
+                                'than 1. Currently, it can not be used as stop words')
             return []
         return self.model.indexes_containing_token(token)
