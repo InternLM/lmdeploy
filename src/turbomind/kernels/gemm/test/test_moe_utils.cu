@@ -205,7 +205,12 @@ bool test_moe_gate(int                     tokens,  //
     cudaMemPrefetchAsync(scales.data().get(), sizeof(float) * scales.size(), 0);
     cudaMemPrefetchAsync(logits.data().get(), sizeof(float) * logits.size(), 0);
 
-    // invokeMaskMoeTopKGroups(logits.data().get(), tokens, expert_num, expert_num / 8, 3, nullptr);
+    bool softmax = true;
+
+    if (1) {
+        invokeMoeSoftmaxMaskTopKGroups(logits.data().get(), tokens, expert_num, expert_num / 8, 8, nullptr);
+        softmax = false;
+    }
 
     for (int i = 0; i < 1; ++i) {
         gemm::CacheFlushing::flush();
@@ -222,6 +227,7 @@ bool test_moe_gate(int                     tokens,  //
                          tokens_padded,
                          expert_num,
                          experts_per_token,
+                         softmax,
                          false,
                          1.f,
                          nullptr);
@@ -307,8 +313,8 @@ bool test_moe_gate(int                     tokens,  //
 
         // thrust::host_vector<int4> tile_offsets(tape.max_ctas);
         // std::cout << tape.max_ctas << std::endl;
-        // cudaMemcpy(tile_offsets.data(), tape.tile_offsets, sizeof(int4) * tile_offsets.size(), cudaMemcpyDefault);
-        // cudaDeviceSynchronize();
+        // cudaMemcpy(tile_offsets.data(), tape.tile_offsets, sizeof(int4) * tile_offsets.size(),
+        // cudaMemcpyDefault); cudaDeviceSynchronize();
 
         // std::cout << "coords:\n";
         // int last = -1;
@@ -342,6 +348,7 @@ int main()
     // test_moe_gate(8, 60, 4, tape, tiling);
 
     test_moe_gate(16, 160, 6, tape, tiling);
+
     return 0;
 
     for (int i = 1; i < 16384; ++i) {
