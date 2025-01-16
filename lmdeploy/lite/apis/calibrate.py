@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 from pathlib import Path
-from typing import Union
+from typing import Literal, Union
 
 import torch
 from torch import nn
@@ -11,10 +11,12 @@ from lmdeploy.archs import get_task
 from lmdeploy.lite.quantization import CalibrationContext, CalibrationContextV2
 from lmdeploy.lite.utils import (collect_target_modules, get_calib_loaders,
                                  load_hf_from_pretrained)
+from lmdeploy.vl.model.builder import load_vl_model
 
 LAYER_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMDecoderLayer',
     'InternLM2ForCausalLM': 'InternLM2DecoderLayer',
+    'InternLM3ForCausalLM': 'InternLM3DecoderLayer',
     'QWenLMHeadModel': 'QWenBlock',
     'Qwen2ForCausalLM': 'Qwen2DecoderLayer',
     'BaiChuanForCausalLM': 'DecoderLayer',  # Baichuan 7B
@@ -24,12 +26,16 @@ LAYER_TYPE_MAP = {
     'MGMLlamaForCausalLM': 'LlamaDecoderLayer',  # mini gemini
     'InternLMXComposer2ForCausalLM': 'InternLM2DecoderLayer',
     'Phi3ForCausalLM': 'Phi3DecoderLayer',
-    'ChatGLMForConditionalGeneration': 'GLMBlock'
+    'ChatGLMForConditionalGeneration': 'GLMBlock',
+    'MixtralForCausalLM': 'MixtralDecoderLayer',
+    'Qwen2VLForConditionalGeneration': 'Qwen2VLDecoderLayer',
+    'MistralForCausalLM': 'MistralDecoderLayer',
 }
 
 NORM_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMRMSNorm',
     'InternLM2ForCausalLM': 'InternLM2RMSNorm',
+    'InternLM3ForCausalLM': 'InternLM3RMSNorm',
     'QWenLMHeadModel': 'RMSNorm',
     'Qwen2ForCausalLM': 'Qwen2RMSNorm',
     'BaiChuanForCausalLM': 'RMSNorm',  # Baichuan 7B
@@ -39,12 +45,16 @@ NORM_TYPE_MAP = {
     'MGMLlamaForCausalLM': 'LlamaRMSNorm',  # mini gemini
     'InternLMXComposer2ForCausalLM': 'InternLM2RMSNorm',
     'Phi3ForCausalLM': 'Phi3RMSNorm',
-    'ChatGLMForConditionalGeneration': 'RMSNorm'
+    'ChatGLMForConditionalGeneration': 'RMSNorm',
+    'MixtralForCausalLM': 'MixtralRMSNorm',
+    'Qwen2VLForConditionalGeneration': 'Qwen2RMSNorm',
+    'MistralForCausalLM': 'MistralRMSNorm',
 }
 
 HEAD_NAME_MAP = {
     'InternLMForCausalLM': 'lm_head',
     'InternLM2ForCausalLM': 'output',
+    'InternLM3ForCausalLM': 'output',
     'QWenLMHeadModel': 'lm_head',
     'Qwen2ForCausalLM': 'lm_head',
     'BaiChuanForCausalLM': 'lm_head',  # Baichuan 7B
@@ -54,7 +64,10 @@ HEAD_NAME_MAP = {
     'MGMLlamaForCausalLM': 'lm_head',  # mini gemini
     'InternLMXComposer2ForCausalLM': 'output',
     'Phi3ForCausalLM': 'lm_head',
-    'ChatGLMForConditionalGeneration': 'output_layer'
+    'ChatGLMForConditionalGeneration': 'output_layer',
+    'MixtralForCausalLM': 'lm_head',
+    'Qwen2VLForConditionalGeneration': 'lm_head',
+    'MistralForCausalLM': 'lm_head',
 }
 
 
@@ -150,6 +163,42 @@ def make_compatible_internvl_config(model_path):
             PretrainedConfig._get_non_default_generation_parameters = _get_non_default_generation_parameters  # noqa
 
 
+def update_moe_mapping(model, model_type):
+    """Update moe mapping."""
+    from lmdeploy.lite.quantization.awq import FC_FCS_MAP, NORM_FCS_MAP
+
+    # get experts num
+    num_experts = 0
+    for n, m in model.named_modules():
+        if type(m).__name__ == LAYER_TYPE_MAP[model_type]:
+            fc2fcs = FC_FCS_MAP[LAYER_TYPE_MAP[model_type]]
+            for k, v in fc2fcs.items():
+                if '{i}' in k:
+                    break
+            num_experts = len(m.get_submodule(k.split('.{i}')[0]))
+            break
+
+    # update FC_FCS_MAP
+    updated_fc2fcs = dict()
+    for prev_fc, post_fc in fc2fcs.items():
+        if '{i}' in prev_fc:
+            for i in range(num_experts):
+                updated_fc2fcs.update(
+                    {prev_fc.format(i=i): [v.format(i=i) for v in post_fc]})
+        else:
+            updated_fc2fcs.update({prev_fc: post_fc})
+    FC_FCS_MAP[LAYER_TYPE_MAP[model_type]] = updated_fc2fcs
+    # update NORM_FCS_MAP
+    norm2fcs = NORM_FCS_MAP[LAYER_TYPE_MAP[model_type]]
+    updated_norm2fcs = dict()
+    for norm, fc in norm2fcs.items():
+        updated_norm2fcs.update({
+            norm:
+            list(set([v.format(i=i) for v in fc for i in range(num_experts)]))
+        })
+    NORM_FCS_MAP[LAYER_TYPE_MAP[model_type]] = updated_norm2fcs
+
+
 def calibrate(model: str,
               calib_dataset: str = 'ptb',
               calib_samples: int = 128,
@@ -159,6 +208,7 @@ def calibrate(model: str,
               w_bits: int = 4,
               w_group_size: int = 128,
               search_scale: bool = False,
+              dtype: Literal['float16', 'bfloat16', 'auto'] = 'auto',
               batch_size: int = 1) -> None:
     """The main function for loading the model and performing calibration on a
     given dataset.
@@ -179,6 +229,7 @@ def calibrate(model: str,
         w_group_size (int): Group size for weight quantization statistics.
         search_scale (bool): Whether search scale ratio. Default to False,
             which means only smooth quant with 0.5 ratio will be applied.
+        dtype (str): Data type for loading model weights and calib infer.
         batch_size (int): The batch size for running the calib samples.
             Low GPU mem requires small batch_size. Large batch_size
             reduces the calibration time while costs more VRAM.
@@ -194,27 +245,44 @@ def calibrate(model: str,
 
     model_type, _ = get_task(model)
     make_compatible_internvl_config(model)
-    if model_type == 'llm':
-        # Load tokenizer and configuration
-        tokenizer = AutoTokenizer.from_pretrained(model,
-                                                  use_fast=False,
-                                                  trust_remote_code=True)
 
+    # Load tokenizer and configuration
+    tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=True)
+
+    if model_type == 'llm':
         model = load_hf_from_pretrained(model,
-                                        torch_dtype=torch.float16,
+                                        dtype=dtype,
                                         trust_remote_code=True)
         vl_model = None
     elif model_type == 'vlm':
-        from lmdeploy.vl.model.builder import vl_model_with_tokenizer
-        vl_model, model, tokenizer = vl_model_with_tokenizer(model_path=model)
+        vl_model = load_vl_model(model, backend=None, with_llm=True).vl_model
+        model = vl_model
+        if hasattr(vl_model, 'language_model'):  # deepseek-vl, ...
+            model = vl_model.language_model
+        if hasattr(vl_model, 'llm'):  # MiniCPMV, ...
+            model = vl_model.llm
+        model.config.use_cache = False
+        if dtype == 'float16':
+            model.half()
+        elif dtype == 'bfloat16':
+            assert torch.cuda.is_bf16_supported(
+            ), 'your device does not support bfloat16 please set --dtype float16'  # noqa
+            model.to(torch.bfloat16)
+        elif dtype == 'auto' and model.config.torch_dtype == torch.bfloat16:
+            print('Warning: we cast model to float16 to prevent OOM. You'
+                  ' may enforce it bfloat16 by `--dtype bfloat16`')
+            model.half()
+        model.eval()
 
-    model.config.use_cache = False
     model_type = type(model).__name__
     if model_type not in LAYER_TYPE_MAP or model_type not in NORM_TYPE_MAP:
         raise RuntimeError(
             f'Currently, quantification and calibration of {model_type} are '
             f'not supported. The supported model types are '
             f"{', '.join(LAYER_TYPE_MAP.keys())}.")
+
+    if model_type in ['MixtralForCausalLM']:
+        update_moe_mapping(model, model_type)
 
     if model_type == 'QWenLMHeadModel':
         try:

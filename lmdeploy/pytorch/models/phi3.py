@@ -165,7 +165,7 @@ class Phi3DecoderLayer(nn.Module):
         # build attention layer
         self.self_attn = Phi3Attention(config, dtype=dtype, device=device)
 
-        # builf MLP
+        # build MLP
         self.mlp = Phi3MLP(config, dtype=dtype, device=device)
 
         # build input layer norm
@@ -226,7 +226,6 @@ class Phi3Model(nn.Module):
         super().__init__()
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
-        quantization_config = getattr(config, 'quantization_config', None)
 
         self.embed_tokens = nn.Embedding(config.vocab_size,
                                          config.hidden_size,
@@ -243,7 +242,6 @@ class Phi3Model(nn.Module):
         # build norm
         self.norm = RMSNorm(config.hidden_size,
                             config.rms_norm_eps,
-                            quant_config=quantization_config,
                             dtype=dtype,
                             device=device)
 
@@ -435,7 +433,3 @@ class Phi3ForCausalLM(nn.Module, CudaGraphMixin):
             else:
                 param = params_dict[name]
                 load_weight(param, loaded_weight)
-
-
-class Phi3VForCausalLM(Phi3ForCausalLM):
-    ...

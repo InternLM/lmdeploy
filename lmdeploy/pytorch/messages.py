@@ -8,6 +8,7 @@ import numpy as np
 from torch import Tensor
 
 from lmdeploy.messages import GenerationConfig, LogitsProcessor
+from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
 from lmdeploy.utils import get_logger
 
 from .block import LogicalTokenBlocks
@@ -49,6 +50,8 @@ class SamplingParam:
     min_new_tokens: int = 0
     response_format: Optional[str] = None
     logits_processors: Optional[List[LogitsProcessor]] = None
+    out_logits: bool = False
+    out_last_hidden_states: bool = False
 
     @classmethod
     def from_gen_config(self, gen_config: GenerationConfig):
@@ -69,6 +72,16 @@ class SamplingParam:
         max_new_tokens = gen_config.max_new_tokens
         response_format = gen_config.response_format
 
+        output_logits = gen_config.output_logits
+        if output_logits:
+            if (output_logits != 'all' or gen_config.max_new_tokens > 0):
+                output_logits = None
+                logger.warning(
+                    'Pytorch Engine only support output_logits="all"'
+                    ' with max_new_tokens=0')
+        if gen_config.output_last_hidden_state is not None:
+            logger.warning(
+                'Pytorch Engine does not support output last hidden states.')
         if top_p < 0 or top_p > 1.0:
             logger.warning('`top_p` has to be a float > 0 and < 1'
                            f' but is {top_p}')
@@ -109,7 +122,8 @@ class SamplingParam:
                              response_format=response_format,
                              max_new_tokens=max_new_tokens,
                              min_new_tokens=min_new_tokens,
-                             logits_processors=gen_config.logits_processors)
+                             logits_processors=gen_config.logits_processors,
+                             out_logits=(output_logits is not None))
 
 
 class MessageStatus(enum.Enum):
@@ -205,10 +219,9 @@ class SchedulerSession:
             sampling_param: SamplingParam = None,
             adapter_name: str = None,
             return_logits: bool = False,
-            input_embeddings: List[InputEmbeddings] = None,
-            mrope_position_ids: Tensor = None,
-            mrope_position_delta: Tensor = None,
-            cross_attention_states: Tensor = None) -> 'SchedulerSequence':
+            multimodals: MultiModalInputs = None,
+            input_embeddings: List[InputEmbeddings] = None
+    ) -> 'SchedulerSequence':
         """Add a new message."""
         if isinstance(token_ids, Tensor):
             token_ids = token_ids.numpy()
@@ -228,10 +241,8 @@ class SchedulerSession:
             adapter_name=adapter_name,
             arrive_time=time.time(),
             history_embeddings=HistoryEmbeddings(input_embeddings),
+            history_multimodals=HistoryMultiModals(multimodals),
             return_logits=return_logits,
-            mrope_position_ids=mrope_position_ids,
-            mrope_position_delta=mrope_position_delta,
-            cross_attention_states=cross_attention_states,
         )
         self.sequences[seq.seq_id] = seq
         if self.seq_manager is not None:
@@ -361,6 +372,66 @@ class HistoryTokenIds:
         return self.clone()
 
 
+class HistoryMultiModals:
+
+    def __init__(self, multimodals: MultiModalInputs):
+        if multimodals is None:
+            multimodals = dict()
+        self.multimodals = multimodals
+
+    def get_datas(self, start=0, end=-1):
+        """get multimodals from prompts position [start, end)."""
+        outs = dict()
+        test_range = range(start, end)
+        for modal_type, modal_datas in self.multimodals.items():
+            data = []
+            for modal_data in modal_datas:
+                if (modal_data.start not in test_range
+                        and modal_data.end not in test_range):
+                    continue
+                data.append(modal_data)
+            if len(data) > 0:
+                outs[modal_type] = data
+        return outs
+
+    def add_inputs(self, input_mms: MultiModalInputs):
+        """add new inputs."""
+        for modal_type, vals in input_mms.items():
+            if modal_type in self.multimodals:
+                self.multimodals[modal_type] += vals
+            else:
+                self.multimodals[modal_type] = vals
+
+    def empty(self):
+        if len(self.multimodals) == 0:
+            return 0
+
+        return all(len(vals) == 0 for vals in self.multimodals)
+
+    @staticmethod
+    def update_multimodals(input_mms: MultiModalInputs, prev_len: int):
+        """update multimodals."""
+        for vals in input_mms.values():
+            for val in vals:
+                val.start += prev_len
+                val.end += prev_len
+        return input_mms
+
+    def get_encoder_len(self, start=0, end=-1):
+        """get lens of encoder."""
+        test_range = range(start, end)
+        out_len = 0
+        for _, modal_datas in self.multimodals.items():
+            for modal_data in modal_datas:
+                if modal_data.encoder_len is None:
+                    continue
+                if (modal_data.start not in test_range
+                        and modal_data.end not in test_range):
+                    continue
+                out_len += modal_data.encoder_len
+        return out_len
+
+
 @dataclass
 class SchedulerSequence:
     """Scheduler message."""
@@ -369,12 +440,12 @@ class SchedulerSequence:
     history_cache: HistoryTokenIds = field(default_factory=HistoryTokenIds)
     history_embeddings: HistoryEmbeddings = field(
         default_factory=HistoryEmbeddings)
+    history_multimodals: HistoryMultiModals = field(
+        default_factory=HistoryMultiModals)
     num_new_tokens: int = 0
     sampling_param: SamplingParam = field(default_factory=SamplingParam)
     logical_blocks: LogicalTokenBlocks = field(
         default_factory=LogicalTokenBlocks)
-    sender_id: int = -1
-    req_id: int = -1
     adapter_name: str = None
     arrive_time: float = 0.0
     meta: Any = None
@@ -382,10 +453,7 @@ class SchedulerSequence:
     random_offsets: int = 0
     _status: MessageStatus = field(default=MessageStatus.WAITING, init=False)
     num_ignored_history: int = 0
-    mrope_position_ids: Optional[Tensor] = None
-    mrope_position_delta: Optional[int] = None
-    cross_attention_states: Optional[Tensor] = None
-    history_cross_kv_seqlens: int = 0
+    model_meta: Dict[str, Any] = None
 
     def __post_init__(self):
         """post init."""
@@ -393,6 +461,10 @@ class SchedulerSequence:
         self._num_history_images: int = 0
         self._num_images: int = len(self.history_embeddings)
         self._num_token_ids: int = len(self.history_cache)
+
+        self._num_history_cross: int = 0
+        self._num_cross: int = self.history_multimodals.get_encoder_len(
+            0, self._num_token_ids)
 
     @property
     def block_size(self) -> int:
@@ -465,6 +537,16 @@ class SchedulerSequence:
         return self.history_len + self._num_token_ids
 
     @property
+    def num_cross(self):
+        """num cross."""
+        return self._num_cross
+
+    @property
+    def num_history_cross(self):
+        """num history cross."""
+        return self._num_history_cross
+
+    @property
     def num_blocks(self):
         """num blocks."""
         return len(self.logical_blocks)
@@ -489,22 +571,22 @@ class SchedulerSequence:
 
     def num_all_cross_tokens(self):
         """num of all cross tokens."""
-        if self.cross_attention_states is None:
-            self.history_cross_kv_seqlens = 0
-        else:
-            self.history_cross_kv_seqlens = self.cross_attention_states.shape[
-                -2]
-        return self.history_cross_kv_seqlens
+        return self._num_cross + self._num_history_cross
+
+    def get_input_multimodals(self):
+        """get input multimodals."""
+        start = self.num_history_ids
+        end = self.num_all_ids
+        return self.history_multimodals.get_datas(start, end)
 
     def update_token_ids(self,
                          token_ids: Tensor,
+                         multimodals: MultiModalInputs = None,
                          embeddings: List[InputEmbeddings] = None,
-                         cross_attention_states: List[Tensor] = None):
+                         model_meta: Dict[str, Any] = None):
         """Update token ids, old token ids will be added to history."""
-        # cross attention
-        if cross_attention_states is not None:
-            self.history_cross_kv_seqlens += cross_attention_states.shape[-2]
-            self.cross_attention_states = cross_attention_states
+        old_num_history_ids = self._num_history_ids
+
         self._num_history_ids += self._num_token_ids
         # update history image nums
         self._num_history_images += self._num_images
@@ -515,6 +597,23 @@ class SchedulerSequence:
             ]
             self._num_images = len(new_embeddings)
             self.history_embeddings.append(new_embeddings)
+
+        # update multimodals
+        if multimodals is not None:
+            multimodals = HistoryMultiModals.update_multimodals(
+                multimodals, self.num_all_ids)
+            self.history_multimodals.add_inputs(multimodals)
+
+        # cross
+        self._num_history_cross += self._num_cross
+        if multimodals is not None:
+            self._num_cross = self.history_multimodals.get_encoder_len(
+                old_num_history_ids, self._num_history_ids)
+        else:
+            self._num_cross = 0
+
+        if model_meta is not None:
+            self.model_meta = model_meta
 
         if isinstance(token_ids, Tensor):
             token_ids = token_ids.numpy()
@@ -539,3 +638,12 @@ class SchedulerSequence:
         self._num_history_ids = step
         self._num_token_ids = num_all_ids - step
         self.num_ignored_history = min(step, self.num_ignored_history)
+
+        self.model_meta = None
+
+        # cross
+        if self.history_multimodals is not None:
+            self._num_history_cross = self.history_multimodals.get_encoder_len(
+                0, self.num_history_ids)
+            self._num_cross = self.history_multimodals.get_encoder_len(
+                self._num_history_ids, num_all_ids)

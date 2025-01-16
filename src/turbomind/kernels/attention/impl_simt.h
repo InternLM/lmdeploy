@@ -2,12 +2,16 @@
 
 #pragma once
 
-#include "src/turbomind/kernels/attention/impl.h"
+#include <limits>
+#include <numeric>
+#include <type_traits>
+
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/layout.h"
 #include "src/turbomind/kernels/core/thread_map.h"
-#include <limits>
-#include <type_traits>
+
+#include "src/turbomind/kernels/attention/impl.h"
+#include "src/turbomind/kernels/attention/quantization.h"
 
 namespace turbomind::attention {
 
@@ -51,7 +55,7 @@ struct Impl<MMA_SIMT, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S,
     static constexpr int T_D = 8;                // warp thread C
     static constexpr int T_S = WARP_SIZE / T_D;  // warp thread S
 
-    // warp footprint
+    // warp footprint (1x4x64)
     static constexpr int OP_H = 1;
     static constexpr int OP_S = T_S;
     static constexpr int OP_D = VEC * T_D;
@@ -76,7 +80,7 @@ struct Impl<MMA_SIMT, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S,
         static constexpr int S_S_thr = 1;
         static constexpr int S_D     = VEC;
         static constexpr int S_S     = T_S;
-        static constexpr int LDS     = K_K;
+        static constexpr int LDS     = std::gcd(16 / sizeof(Array<Tkv, VEC>), K_K);
     };
 
     struct LinearD {

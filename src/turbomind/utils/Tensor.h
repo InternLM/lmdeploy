@@ -515,9 +515,44 @@ public:
         return tensor_map_.end();
     }
 
+    int count(const std::string& key) const
+    {
+        return tensor_map_.count(key);
+    }
+
+    bool empty() const
+    {
+        return tensor_map_.empty();
+    }
+
     std::string      toString();
     static TensorMap fromNpyFolder(const std::string& base_folder);
     void             saveNpy(const std::string& base_folder);
+};
+
+struct ManagedTensor {
+    Tensor                tensor;
+    std::shared_ptr<void> data_holder;
+
+    Tensor* operator->() noexcept
+    {
+        return &tensor;
+    }
+
+    const Tensor* operator->() const noexcept
+    {
+        return &tensor;
+    }
+
+    Tensor& operator*() noexcept
+    {
+        return tensor;
+    }
+
+    const Tensor& operator*() const noexcept
+    {
+        return tensor;
+    }
 };
 
 }  // namespace turbomind

@@ -6,9 +6,11 @@ LMDEPLOY_PYTORCH_MODEL_PATH = 'lmdeploy.pytorch.models'
 MODULE_MAP = dict()
 ASCEND_MODULE_MAP = dict()
 MACA_MODULE_MAP = dict()
+CAMB_MODULE_MAP = dict()
 
 DEVICE_SPECIAL_MODULE_MAP = dict(ascend=ASCEND_MODULE_MAP,
-                                 maca=MACA_MODULE_MAP)
+                                 maca=MACA_MODULE_MAP,
+                                 camb=CAMB_MODULE_MAP)
 
 # llama
 MODULE_MAP.update({
@@ -82,17 +84,19 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v2.DeepseekV2ForCausalLM'
 })
 
+# deepseek-v3
+MODULE_MAP.update({
+    'DeepseekV3ForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek_v2.DeepseekV2ForCausalLM'
+})
+
 # llava
 MODULE_MAP.update(
     {
-        'LlavaLlamaForCausalLM':
-        f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlavaLlamaForCausalLM',
-        'LlavaMistralForCausalLM':
-        f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mistral.LlavaMistralForCausalLM',
         'LlavaForConditionalGeneration':
         f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llava.LlavaForConditionalGeneration',  # noqa: E501
         'LlavaNextForConditionalGeneration':  # noqa: E501
-        f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llava.LlavaForConditionalGeneration'
+        f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llava.LlavaNextForConditionalGeneration'  # noqa: E501
     })
 
 # qwen
@@ -149,10 +153,16 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internvl.InternVLChatModel'
 })
 
+# mono-internvl
+MODULE_MAP.update({
+    'InternLM2VEForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2_ve.InternLM2VEForCausalLM',
+})
+
 # phi3 vision
 MODULE_MAP.update({
     'Phi3VForCausalLM':
-    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3.Phi3VForCausalLM',
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.phi3_v.Phi3VForCausalLM',
 })
 
 # phi-3.5-moe
@@ -167,10 +177,22 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.minicpm3.MiniCPM3ForCausalLM',
 })
 
+# minicpmv2_6
+MODULE_MAP.update({
+    'MiniCPMV':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.minicpmv26.MiniCPMVForCausalLM',
+})
+
 # mllama
 MODULE_MAP.update({
     'MllamaForConditionalGeneration':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.mllama.MllamaForConditionalGeneration',
+})
+
+# internlm3
+MODULE_MAP.update({
+    'InternLM3ForCausalLM':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm3.InternLM3ForCausalLM',
 })
 
 CUSTOM_MODULE_MAP = dict()

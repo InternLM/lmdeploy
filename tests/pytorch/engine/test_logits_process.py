@@ -35,8 +35,9 @@ def test_process_bad_words():
         [4, 4],
         [-1, -1],
     ])
+    mask = bad_words >= 0
 
-    out_scores = _process_bad_words_(scores, bad_words)
+    out_scores = _process_bad_words_(scores, bad_words.where(mask, 0), mask)
 
     for score, bw in zip(out_scores, bad_words):
         bw = bw.tolist()

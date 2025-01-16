@@ -357,7 +357,7 @@ public:
             }
         }
 
-        ((MoeGemmContext*)ctx_.get())->set_offsets(moe_m_offsets_.data().get());
+        ((MoeGemmContext*)ctx_.get())->update(experts_, exp_per_tok_, moe_m_offsets_.data().get());
 
         CHECK(batch_dim == 0);
         CHECK(a_desc_.order == kRowMajor);
@@ -514,18 +514,22 @@ public:
                             c_e_.data().get(),
                             moe_scales_.data().get(),
                             moe_en2f_.data().get(),
+                            nullptr,
                             batch_size_,
                             expert_ids_.size() / batch_size_,
                             output_dims_,
+                            0.f,
                             stream_);
 
             invokeMoeReduce(c_ref_.data().get(),
                             c_e_ref_.data().get(),
                             moe_scales_.data().get(),
                             moe_en2f_.data().get(),
+                            nullptr,
                             batch_size_,
                             expert_ids_.size() / batch_size_,
                             output_dims_,
+                            0.f,
                             stream_);
 
             cudaDeviceSynchronize();

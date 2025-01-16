@@ -22,9 +22,12 @@ class DlinferOpsBackend(DefaultOpsBackend):
     @classmethod
     def get_layer_impl_builder(cls, layer_type: OpType):
         """get dlinfer layer builder."""
-        if layer_type == OpType.Attention:
+        if layer_type == OpType.PagedAttention:
             from .attention import DlinferAttentionBuilder
             return DlinferAttentionBuilder
+        elif layer_type == OpType.FlashAttention:
+            from .flash_attention import DlinferFlashAttentionBuilder
+            return DlinferFlashAttentionBuilder
         elif layer_type == OpType.ApplyRotaryEmb:
             from .apply_rotary_emb import DlinferApplyRotaryEmbBuilder
             return DlinferApplyRotaryEmbBuilder
@@ -40,6 +43,9 @@ class DlinferOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.FusedMoE:
             from .moe import DlinferFusedMoEBuilder
             return DlinferFusedMoEBuilder
+        elif layer_type == OpType.Linear:
+            from .linear import DlinferLinearBuilder
+            return DlinferLinearBuilder
         elif layer_type == OpType.LinearW4A16:
             from .awq_modules import AwqLinearW4A16Builder
             return AwqLinearW4A16Builder

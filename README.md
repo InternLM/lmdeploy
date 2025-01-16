@@ -26,6 +26,7 @@ ______________________________________________________________________
 <details open>
 <summary><b>2024</b></summary>
 
+- \[2024/11\] Support Mono-InternVL with PyTorch engine
 - \[2024/10\] PyTorchEngine supports graph mode on ascend platform, doubling the inference speed
 - \[2024/09\] LMDeploy PyTorchEngine adds support for [Huawei Ascend](./docs/en/get_started/ascend/get_started.md). See supported models [here](docs/en/supported_models/supported_models.md)
 - \[2024/09\] LMDeploy PyTorchEngine achieves 1.3x faster on Llama3-8B inference by introducing CUDA graph
@@ -124,6 +125,8 @@ For detailed inference benchmarks in more devices and more settings, please refe
   <li>Qwen1.5 (0.5B - 110B)</li>
   <li>Qwen1.5 - MoE (0.5B - 72B)</li>
   <li>Qwen2 (0.5B - 72B)</li>
+  <li>Qwen2-MoE (57BA14B)</li>
+  <li>Qwen2.5 (0.5B - 32B)</li>
   <li>Baichuan (7B)</li>
   <li>Baichuan2 (7B-13B)</li>
   <li>Code Llama (7B - 34B)</li>
@@ -135,6 +138,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
   <li>Mistral (7B)</li>
   <li>DeepSeek-MoE (16B)</li>
   <li>DeepSeek-V2 (16B, 236B)</li>
+  <li>DeepSeek-V2.5 (236B)</li>
   <li>Mixtral (8x7B, 8x22B)</li>
   <li>Gemma (2B - 7B)</li>
   <li>Dbrx (132B)</li>
@@ -155,6 +159,8 @@ For detailed inference benchmarks in more devices and more settings, please refe
   <li>DeepSeek-VL (7B)</li>
   <li>InternVL-Chat (v1.1-v1.5)</li>
   <li>InternVL2 (1B-76B)</li>
+  <li>Mono-InternVL (2B)</li>
+  <li>ChemVLM (8B-26B)</li>
   <li>MiniGeminiLlama (7B)</li>
   <li>CogVLM-Chat (17B)</li>
   <li>CogVLM2-Chat (19B)</li>
@@ -164,6 +170,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
   <li>Phi-3.5-vision (4.2B)</li>
   <li>GLM-4V (9B)</li>
   <li>Llama3.2-vision (11B, 90B)</li>
+  <li>Molmo (7B-D,72B)</li>
 </ul>
 </td>
 </tr>

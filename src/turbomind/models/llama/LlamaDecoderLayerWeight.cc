@@ -52,29 +52,44 @@ static bool is_fuse_silu_act()
 }
 
 template<typename T>
-LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(int        layer_idx,
-                                                    size_t     head_num,
-                                                    size_t     kv_head_num,
-                                                    size_t     size_per_head,
-                                                    size_t     hidden_units,
-                                                    size_t     inter_size,
-                                                    WeightType weight_type,
-                                                    int        group_size,
-                                                    LoraParam  lora_param,
-                                                    bool       attn_bias,
-                                                    MoeParam   moe_param,
-                                                    size_t     tensor_para_size,
-                                                    size_t     tensor_para_rank):
-    head_num_(head_num),
-    kv_head_num_(kv_head_num),
-    size_per_head_(size_per_head),
-    hidden_units_(hidden_units),
-    inter_size_(inter_size),
-    weight_type_(weight_type),
-    attn_bias_(attn_bias),
-    tensor_para_size_(tensor_para_size),
-    tensor_para_rank_(tensor_para_rank)
+LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(int               layer_id,
+                                                    const ModelParam& model,
+                                                    const LoraParam&  lora_param,
+                                                    const MoeParam&   moe_param,
+                                                    size_t            tp_size,
+                                                    size_t            tp_rank):
+    head_num_(model.head_num),
+    kv_head_num_(model.kv_head_num),
+    size_per_head_(model.head_dim),
+    hidden_units_(model.hidden_units),
+    inter_size_(model.inter_size.at(layer_id)),
+    weight_type_(model.weight_type),
+    attn_bias_(model.attn_bias),
+    tensor_para_size_(tp_size),
+    tensor_para_rank_(tp_rank)
 {
+    self_attn_weights = LlamaAttentionWeight<T>{hidden_units_,
+                                                size_per_head_,
+                                                head_num_,
+                                                kv_head_num_,
+                                                model.mla,
+                                                attn_bias_,
+                                                tensor_para_size_,
+                                                weight_type_,
+                                                model.group_size};
+
+    ffn_weights = LlamaFfnWeight<T>{
+        hidden_units_,
+        inter_size_,
+        tensor_para_size_,
+        weight_type_,
+        model.group_size,
+        weight_type_ == WeightType::kINT4 && is_fuse_silu_act(),
+    };
+
+    moe_weights = MoeFfnWeight<T>{
+        layer_id, moe_param, hidden_units_, weight_type_, model.group_size, tensor_para_size_, is_fuse_silu_act()};
+
     if (lora_param.policy == LoraPolicy::kPlora) {
         std::vector<std::string> keys = {
             "attention.w_qkv", "attention.wo", "feed_forward.w1", "feed_forward.w2", "feed_forward.w3"};
@@ -88,7 +103,7 @@ LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(int        layer_idx,
             auto&       weight    = *weights[i];
             int         rank      = lora_param.r;
             float       scale     = lora_param.scale;
-            std::string full_name = "layers." + std::to_string(layer_idx) + "." + name;
+            std::string full_name = "layers." + std::to_string(layer_id) + "." + name;
 
             for (const auto& [re, pr] : lora_param.rank_pattern) {
                 if (std::regex_search(full_name, pr.first)) {
@@ -113,36 +128,23 @@ LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(int        layer_idx,
     }
 
     fused_up_and_gate_ = ffn_weights.gating.lora.policy != LoraPolicy::kPlora;
+}
 
-    self_attn_weights.qkv.input_dims  = hidden_units_;
-    self_attn_weights.qkv.output_dims = (head_num + 2 * kv_head_num) * size_per_head / tensor_para_size_;
-    self_attn_weights.qkv.type        = weight_type;
-    self_attn_weights.qkv.group_size  = group_size;
+template<typename T>
+void LlamaDecoderLayerWeight<T>::malloc(cudaStream_t st)
+{
+    deviceMalloc((T**)&self_attn_norm_weights, hidden_units_, st);
+    deviceMalloc((T**)&ffn_norm_weights, hidden_units_, st);
 
-    self_attn_weights.output.input_dims  = (head_num * size_per_head) / tensor_para_size_;
-    self_attn_weights.output.output_dims = hidden_units_;
-    self_attn_weights.output.type        = weight_type;
-    self_attn_weights.output.group_size  = group_size;
+    self_attn_weights.malloc(st);
 
-    ffn_weights = LlamaFfnWeight<T>{
-        hidden_units_,
-        inter_size_,
-        tensor_para_size_,
-        weight_type_,
-        group_size,
-        weight_type_ == WeightType::kINT4 && is_fuse_silu_act(),
-    };
+    if (inter_size_) {
+        ffn_weights.malloc(st);
+    }
 
-    moe_weights = MoeFfnWeight<T>{hidden_units_,
-                                  moe_param.inter_size,
-                                  moe_param.expert_num,
-                                  moe_param.method,
-                                  tensor_para_size_,
-                                  weight_type,
-                                  group_size,
-                                  is_fuse_silu_act()};
-
-    mallocWeights();
+    if (!moe_weights.experts.empty()) {
+        moe_weights.malloc(st);
+    }
 }
 
 template<typename T>
@@ -165,52 +167,6 @@ size_t LlamaDecoderLayerWeight<T>::workspace_size() const noexcept
     }
 
     return size * sizeof(uint16_t);
-}
-
-template<typename T>
-void freeWeights(LlamaDenseWeight<T>& weights)
-{
-    cudaFree(weights.kernel);
-    cudaFree(weights.bias);
-    cudaFree(weights.scales);
-    cudaFree(weights.zeros);
-
-    weights.kernel = nullptr;
-    weights.bias   = nullptr;
-    weights.scales = nullptr;
-    weights.zeros  = nullptr;
-
-    {
-        cudaFree(weights.lora.a);
-        cudaFree(weights.lora.b);
-        weights.lora.a = nullptr;
-        weights.lora.b = nullptr;
-    }
-}
-
-template<typename T>
-void LlamaDecoderLayerWeight<T>::mallocWeights(LlamaDenseWeight<T>& weights, bool bias)
-{
-    if (bias) {
-        deviceMalloc((T**)&weights.bias, weights.output_dims);
-    }
-    const size_t bit_size = getBitSize(weights.type);
-    if (bit_size >= 16) {  // fp16, fp32
-        deviceMalloc((T**)&weights.kernel, weights.input_dims * weights.output_dims);
-    }
-    else {  // int8, int4
-        const int factor = sizeof(float) * 8 / bit_size;
-        FT_CHECK(weights.input_dims % factor == 0);
-        deviceMalloc((int**)&weights.kernel, weights.input_dims * weights.output_dims / factor);
-        deviceMemSetZero((int*)weights.kernel, weights.input_dims * weights.output_dims / factor);
-        deviceMalloc((T**)&weights.scales, weights.input_dims / weights.group_size * weights.output_dims);
-        deviceMalloc((T**)&weights.zeros, weights.input_dims / weights.group_size * weights.output_dims);
-    }
-
-    if (weights.lora.r > 0) {
-        deviceMalloc((T**)&weights.lora.a, weights.input_dims * weights.lora.r);
-        deviceMalloc((T**)&weights.lora.b, weights.lora.r * weights.output_dims);
-    }
 }
 
 template<typename FirstArg, typename... Args>
@@ -304,45 +260,61 @@ void loadWeights(
 }
 
 template<typename T>
-void LlamaDecoderLayerWeight<T>::mallocWeights()
+void loadWeights(LlamaDenseWeight<T>& w, std::string prefix, FtCudaDataType model_file_type)
 {
-    deviceMalloc((T**)&self_attn_norm_weights, hidden_units_);
-    deviceMalloc((T**)&ffn_norm_weights, hidden_units_);
+    auto weight_file  = prefix + ".weight";
+    auto qweight_file = prefix + ".qweight";
 
-    mallocWeights(self_attn_weights.qkv, attn_bias_);
-    mallocWeights(self_attn_weights.output, attn_bias_);
-
-    if (moe_weights.experts.empty()) {
-        mallocWeights(ffn_weights.gating, false);
-        mallocWeights(ffn_weights.intermediate, false);
-        mallocWeights(ffn_weights.output, false);
+    if (!std::filesystem::exists(weight_file) && !std::filesystem::exists(qweight_file)) {
+        TM_LOG_ERROR("%s and %s does not exist", weight_file.c_str(), qweight_file.c_str());
+        FT_CHECK(false);
     }
-    else {
-        mallocWeights(moe_weights.gate, false);
-        for (auto& e : moe_weights.experts) {
-            mallocWeights(e.gating, false);
-            mallocWeights(e.intermediate, false);
-            mallocWeights(e.output, false);
-        }
+
+    size_t     dim0 = w.input_dims;
+    size_t     dim1 = w.output_dims;
+    const auto type = model_file_type;
+
+    if (w.bias) {
+        loadWeightFromBin((T*)w.bias, {1, dim1}, prefix + ".bias", type);
+    }
+    const size_t bit_size = getBitSize(w.type);
+    if (bit_size >= 16) {  // fp16, fp32
+        loadWeightFromBin((T*)w.kernel, {dim0, dim1}, prefix + ".weight", type);
+    }
+    else {  // int8, int4
+        const int factor = sizeof(float) * 8 / bit_size;
+
+        FT_CHECK(dim1 % factor == 0);
+
+        std::vector<size_t> w_shape{dim0, dim1 / factor * sizeof(uint32_t)};
+        loadWeightFromBin((int8_t*)w.kernel, w_shape, prefix + ".qweight", FtCudaDataType::INT8);
+
+        const size_t group_count = w.group_size > 0 ? dim0 / w.group_size : 1;
+
+        loadWeightFromBin((half*)w.scales, {group_count, dim1}, prefix + ".scales", type);
+        loadWeightFromBin((half*)w.zeros, {group_count, dim1}, prefix + ".zeros", type);
     }
 }
 
 template<typename T>
-LlamaDecoderLayerWeight<T>::~LlamaDecoderLayerWeight()
+void LlamaDecoderLayerWeight<T>::free(cudaStream_t st)
 {
-    cudaFree((void*)self_attn_norm_weights);
-    cudaFree((void*)ffn_norm_weights);
-    self_attn_norm_weights = nullptr;
-    ffn_norm_weights       = nullptr;
+    deviceFree(self_attn_norm_weights, st);
+    deviceFree(ffn_norm_weights, st);
 
-    freeWeights(self_attn_weights.qkv);
-    freeWeights(self_attn_weights.output);
+    self_attn_weights.free(st);
 
-    freeWeights(ffn_weights.fused_gating_intermediate);
-    freeWeights(ffn_weights.gating);
-    freeWeights(ffn_weights.intermediate);
-    freeWeights(ffn_weights.output);
+    if (inter_size_) {
+        ffn_weights.free(st);
+    }
+
+    if (!moe_weights.experts.empty()) {
+        moe_weights.free(st);
+    }
 }
+
+template<typename T>
+LlamaDecoderLayerWeight<T>::~LlamaDecoderLayerWeight() = default;
 
 template<typename T>
 void LlamaDecoderLayerWeight<T>::loadModel(std::string dir_path, FtCudaDataType model_file_type)
@@ -357,10 +329,40 @@ void LlamaDecoderLayerWeight<T>::loadModel(std::string dir_path, FtCudaDataType 
     loadWeights(self_attn_weights.qkv, dir_path + ".attention.w_qkv", tensor_para_rank_, type, tensor_para_size_);
 
     loadWeights(self_attn_weights.output, dir_path + ".attention.wo", tensor_para_rank_, type, tensor_para_size_);
+    if (moe_weights.experts.empty()) {
+        loadWeights(ffn_weights.gating, dir_path + ".feed_forward.w1", tensor_para_rank_, type, tensor_para_size_);
+        loadWeights(
+            ffn_weights.intermediate, dir_path + ".feed_forward.w3", tensor_para_rank_, type, tensor_para_size_);
+        loadWeights(ffn_weights.output, dir_path + ".feed_forward.w2", tensor_para_rank_, type, tensor_para_size_);
+    }
+    else {
+        loadWeights(moe_weights.gate, dir_path + ".moe_ffn.gate", type);
+        for (size_t i = 0; i < moe_weights.experts.size(); ++i) {
+            std::string weight_name = dir_path + ".moe_ffn.experts." + std::to_string(i);
+            loadWeights(moe_weights.experts[i].gating, weight_name + ".w1", tensor_para_rank_, type, tensor_para_size_);
+            loadWeights(
+                moe_weights.experts[i].intermediate, weight_name + ".w3", tensor_para_rank_, type, tensor_para_size_);
+            loadWeights(moe_weights.experts[i].output, weight_name + ".w2", tensor_para_rank_, type, tensor_para_size_);
+        }
+    }
+}
 
-    loadWeights(ffn_weights.gating, dir_path + ".feed_forward.w1", tensor_para_rank_, type, tensor_para_size_);
-    loadWeights(ffn_weights.intermediate, dir_path + ".feed_forward.w3", tensor_para_rank_, type, tensor_para_size_);
-    loadWeights(ffn_weights.output, dir_path + ".feed_forward.w2", tensor_para_rank_, type, tensor_para_size_);
+template<class T>
+void getMLATensor(LlamaAttentionWeight<T>& w, const std::string& p, TensorMap& m, int tp_rank)
+{
+    if (w.q_proj.output_dims) {
+        getWeightTensor(w.q_proj, false, concat(p, "attention.q_proj", tp_rank), m);
+    }
+    else {
+        getWeightTensor(w.q_a_proj, false, concat(p, "attention.q_a_proj"), m);
+        getWeightTensor(w.q_b_proj, false, concat(p, "attention.q_b_proj", tp_rank), m);
+        m.insert(concat(p, "attention.q_a_layernorm"),
+                 Tensor{MEMORY_GPU, getTensorType<T>(), {sizeof(T) * w.q_b_proj.input_dims}, w.q_a_layernorm});
+    }
+    getWeightTensor(w.kv_a_proj, false, concat(p, "attention.kv_a_proj"), m);
+    getWeightTensor(w.kv_b_proj, false, concat(p, "attention.kv_b_proj", tp_rank), m);
+    m.insert(concat(p, "attention.kv_a_layernorm"),
+             Tensor{MEMORY_GPU, getTensorType<T>(), {sizeof(T) * w.kv_b_proj.input_dims}, w.kv_a_layernorm});
 }
 
 template<typename T>
@@ -376,25 +378,37 @@ TensorMap LlamaDecoderLayerWeight<T>::getParams(std::string prefix)
 
     auto get_prefix = [=](std::string_view name) { return concat(prefix, name, tensor_para_rank_); };
 
-    getWeightTensor(self_attn_weights.qkv, attn_bias_, get_prefix("attention.w_qkv"), output);
+    if (self_attn_weights.qkv.output_dims) {
+        getWeightTensor(self_attn_weights.qkv, attn_bias_, get_prefix("attention.w_qkv"), output);
+    }
+    else {
+        getMLATensor(self_attn_weights, prefix, output, tensor_para_rank_);
+    }
     getWeightTensor(self_attn_weights.output, attn_bias_, get_prefix("attention.wo"), output);
 
-    if (moe_weights.experts.empty()) {
+    if (inter_size_) {
         getWeightTensor(ffn_weights.gating, false, get_prefix("feed_forward.w1"), output);
         getWeightTensor(ffn_weights.intermediate, false, get_prefix("feed_forward.w3"), output);
         getWeightTensor(ffn_weights.output, false, get_prefix("feed_forward.w2"), output);
     }
-    else {
+
+    if (!moe_weights.experts.empty()) {
         output.insert(
             concat(prefix, "moe_ffn.gate.weight"),
             Tensor{MEMORY_GPU, getTensorType<T>(), {moe_weights.gate.kernel_size()}, moe_weights.gate.kernel});
         auto& experts = moe_weights.experts;
         for (size_t i = 0; i < experts.size(); ++i) {
             const std::string name = "moe_ffn.experts." + std::to_string(i);
-            // std::cerr << "FUCK " << get_prefix(concat(name, "w1")) << "\n";
             getWeightTensor(experts[i].gating, false, get_prefix(concat(name, "w1")), output);
             getWeightTensor(experts[i].intermediate, false, get_prefix(concat(name, "w3")), output);
             getWeightTensor(experts[i].output, false, get_prefix(concat(name, "w2")), output);
+        }
+        if (moe_weights.shared_gate.kernel) {
+            output.insert(concat(prefix, "moe_ffn.shared_gate.weight"),
+                          Tensor{MEMORY_GPU,
+                                 getTensorType<T>(),
+                                 {moe_weights.shared_gate.kernel_size()},
+                                 moe_weights.shared_gate.kernel});
         }
     }
 
@@ -402,7 +416,8 @@ TensorMap LlamaDecoderLayerWeight<T>::getParams(std::string prefix)
 }
 
 // template<class T>
-static void convert_u4(LlamaDenseWeight<half>& weight, bool is_fused_moe, void* workspace, size_t size, bool use_simt)
+static void convert_u4(
+    LlamaDenseWeight<half>& weight, bool is_fused_moe, void* workspace, size_t size, bool use_simt, cudaStream_t st)
 {
     FT_CHECK(weight.type == WeightType::kINT4);
 
@@ -412,11 +427,11 @@ static void convert_u4(LlamaDenseWeight<half>& weight, bool is_fused_moe, void* 
         get_weight_and_scales_layout(gemm::DataType::U4, is_fused_moe, getSMVersion(), use_simt);
 
     if (order_b == kColMajor) {
-        transpose_u4((uint4_t*)workspace, (const uint4_t*)weight.kernel, weight.input_dims, weight.output_dims);
-        cudaMemcpy(weight.kernel, workspace, weight.input_dims * weight.output_dims / 2, cudaMemcpyDefault);
+        transpose_u4((uint4_t*)workspace, (const uint4_t*)weight.kernel, weight.input_dims, weight.output_dims, st);
+        cudaMemcpyAsync(weight.kernel, workspace, weight.input_dims * weight.output_dims / 2, cudaMemcpyDefault, st);
     }
 
-    extend_to_u16((uint16_t*)workspace, (const uint4_t*)weight.kernel, weight.input_dims * weight.output_dims);
+    extend_to_u16((uint16_t*)workspace, (const uint4_t*)weight.kernel, weight.input_dims * weight.output_dims, st);
     sync_check_cuda_error();
 
     MatrixLayout w_desc{
@@ -431,25 +446,22 @@ static void convert_u4(LlamaDenseWeight<half>& weight, bool is_fused_moe, void* 
     k_desc.type         = gemm::DataType::U4;
     k_desc.pack         = pack_b;
 
-    cudaMemset(weight.kernel, 0, weight.input_dims * weight.output_dims / 2);
+    cudaMemsetAsync(weight.kernel, 0, weight.input_dims * weight.output_dims / 2, st);
 
-    FT_CHECK(Convert(workspace, w_desc, weight.kernel, k_desc, 0) == 0);
+    FT_CHECK(Convert(workspace, w_desc, weight.kernel, k_desc, st) == 0);
     sync_check_cuda_error();
 
     const int scale_count = (weight.input_dims / weight.group_size) * weight.output_dims;
 
     // std::cout << "fuse_scales_and_zeros\n";
-    fuse_scales_and_zeros((half*)workspace, weight.scales, weight.zeros, scale_count);
+    fuse_scales_and_zeros((half*)workspace, weight.scales, weight.zeros, scale_count, st);
     // cudaMemset((T*)workspace, 0, sizeof(T) * scale_count * 2);
     sync_check_cuda_error();
 
-    cudaDeviceSynchronize();
+    deviceFree(weight.scales, st);
+    deviceFree(weight.zeros, st);
 
-    cudaFree(weight.scales);
-    cudaFree(weight.zeros);
-    weight.scales = weight.zeros = nullptr;
-
-    deviceMalloc((half**)&weight.scales_zeros, scale_count * 2);
+    deviceMalloc((half**)&weight.scales_zeros, scale_count * 2, st);
 
     MatrixLayout s_desc{
         gemm::DataType::U32,
@@ -462,7 +474,7 @@ static void convert_u4(LlamaDenseWeight<half>& weight, bool is_fused_moe, void* 
     MatrixLayout q_desc = s_desc;
     q_desc.pack         = pack_v;
 
-    FT_CHECK(Convert(workspace, s_desc, weight.scales_zeros, q_desc, 0) == 0);
+    FT_CHECK(Convert(workspace, s_desc, weight.scales_zeros, q_desc, st) == 0);
     sync_check_cuda_error();
 
     weight.k_desc = k_desc;
@@ -472,7 +484,8 @@ static void convert_u4(LlamaDenseWeight<half>& weight, bool is_fused_moe, void* 
 }
 
 template<class T>
-static void convert_fp(LlamaDenseWeight<T>& weight, bool is_fused_moe, void* workspace, size_t size, bool use_simt)
+static void
+convert_fp(LlamaDenseWeight<T>& weight, bool is_fused_moe, void* workspace, size_t size, bool use_simt, cudaStream_t st)
 {
     using namespace gemm;
 
@@ -487,12 +500,13 @@ static void convert_fp(LlamaDenseWeight<T>& weight, bool is_fused_moe, void* wor
     const int output_dim = weight.output_dims;
 
     if (order_b == kColMajor) {
-        invokeTransposeAxis01((uint16_t*)workspace, (uint16_t*)weight.kernel, input_dim, output_dim, 1, nullptr);
+        invokeTransposeAxis01((uint16_t*)workspace, (uint16_t*)weight.kernel, input_dim, output_dim, 1, st);
         sync_check_cuda_error();
         // FT_CHECK(0);
     }
     else {
-        check_cuda_error(cudaMemcpy(workspace, weight.kernel, sizeof(T) * input_dim * output_dim, cudaMemcpyDefault));
+        check_cuda_error(
+            cudaMemcpyAsync(workspace, weight.kernel, sizeof(T) * input_dim * output_dim, cudaMemcpyDefault, st));
     }
 
     MatrixLayout src{
@@ -507,35 +521,42 @@ static void convert_fp(LlamaDenseWeight<T>& weight, bool is_fused_moe, void* wor
     dst.pack         = pack_b;
 
     if (pack_b) {
-        FT_CHECK(Convert(workspace, src, weight.kernel, dst, nullptr) == 0);
+        FT_CHECK(Convert(workspace, src, weight.kernel, dst, st) == 0);
         sync_check_cuda_error();
         // FT_CHECK(0);
     }
     else {
-        check_cuda_error(cudaMemcpy(weight.kernel, workspace, sizeof(T) * input_dim * output_dim, cudaMemcpyDefault));
+        check_cuda_error(
+            cudaMemcpyAsync(weight.kernel, workspace, sizeof(T) * input_dim * output_dim, cudaMemcpyDefault, st));
     }
 
     weight.k_desc = dst;
 }
 
 template<class T>
-static void convert(LlamaDenseWeight<T>& weight, bool is_fused_moe, void* workspace, size_t size, bool use_simt)
+static void
+convert(LlamaDenseWeight<T>& weight, bool is_fused_moe, void* workspace, size_t size, bool use_simt, cudaStream_t st)
 {
     if (weight.type == WeightType::kINT4) {
         if constexpr (std::is_same_v<T, half>) {
-            convert_u4(weight, is_fused_moe, workspace, size, use_simt);
+            convert_u4(weight, is_fused_moe, workspace, size, use_simt, st);
         }
         else {
             FT_CHECK(0);
         }
     }
     else {
-        convert_fp(weight, is_fused_moe, workspace, size, use_simt);
+        convert_fp(weight, is_fused_moe, workspace, size, use_simt, st);
     }
 }
 
 template<class T>
-void interleave(LlamaDenseWeight<T>& c, LlamaDenseWeight<T>& a, LlamaDenseWeight<T>& b, void* workspace, size_t size)
+void interleave(LlamaDenseWeight<T>& c,
+                LlamaDenseWeight<T>& a,
+                LlamaDenseWeight<T>& b,
+                void*                workspace,
+                size_t               size,
+                cudaStream_t         st)
 {
     FT_CHECK(c.input_dims == a.input_dims);
     FT_CHECK(c.input_dims == b.input_dims);
@@ -552,18 +573,18 @@ void interleave(LlamaDenseWeight<T>& c, LlamaDenseWeight<T>& a, LlamaDenseWeight
         const auto sentinel = tmp_c + c.output_dims * c.input_dims;
         FT_CHECK(sentinel <= (uint8_t*)workspace + size);
 
-        extend_to_u8(tmp_a, (const uint4_t*)a.kernel, a.output_dims * a.input_dims);
-        extend_to_u8(tmp_b, (const uint4_t*)b.kernel, b.output_dims * b.input_dims);
+        extend_to_u8(tmp_a, (const uint4_t*)a.kernel, a.output_dims * a.input_dims, st);
+        extend_to_u8(tmp_b, (const uint4_t*)b.kernel, b.output_dims * b.input_dims, st);
 
-        interleave_output_dims(tmp_c, tmp_a, tmp_b, a.output_dims, a.input_dims, 0);
+        interleave_output_dims(tmp_c, tmp_a, tmp_b, a.output_dims, a.input_dims, st);
 
-        compact_to_u4((uint4_t*)c.kernel, tmp_c, c.output_dims * c.input_dims);
+        compact_to_u4((uint4_t*)c.kernel, tmp_c, c.output_dims * c.input_dims, st);
 
-        interleave_output_dims(c.scales, a.scales, b.scales, a.output_dims, a.input_dims / a.group_size, 0);
-        interleave_output_dims(c.zeros, a.zeros, b.zeros, a.output_dims, a.input_dims / a.group_size, 0);
+        interleave_output_dims(c.scales, a.scales, b.scales, a.output_dims, a.input_dims / a.group_size, st);
+        interleave_output_dims(c.zeros, a.zeros, b.zeros, a.output_dims, a.input_dims / a.group_size, st);
     }
     else {
-        interleave_output_dims((T*)c.kernel, (const T*)a.kernel, (const T*)b.kernel, a.output_dims, a.input_dims, 0);
+        interleave_output_dims((T*)c.kernel, (const T*)a.kernel, (const T*)b.kernel, a.output_dims, a.input_dims, st);
     }
 
     // Check at function level
@@ -571,7 +592,7 @@ void interleave(LlamaDenseWeight<T>& c, LlamaDenseWeight<T>& a, LlamaDenseWeight
 }
 
 template<class T>
-void chunk(LlamaDenseWeight<T>& c, LlamaDenseWeight<T>& a, LlamaDenseWeight<T>& b, void*, size_t)
+void chunk(LlamaDenseWeight<T>& c, LlamaDenseWeight<T>& a, LlamaDenseWeight<T>& b, void*, size_t, cudaStream_t st)
 {
     FT_CHECK(c.input_dims == a.input_dims);
     FT_CHECK(c.input_dims == b.input_dims);
@@ -580,9 +601,11 @@ void chunk(LlamaDenseWeight<T>& c, LlamaDenseWeight<T>& a, LlamaDenseWeight<T>& 
     FT_CHECK(c.group_size == a.group_size);
     FT_CHECK(c.group_size == b.group_size);
 
-    auto _chunks = [](auto c, auto a, auto b, int height, int width) {
-        check_cuda_error(cudaMemcpy2D((char*)c + 0x000, width * 2, a, width, width, height, cudaMemcpyDefault));
-        check_cuda_error(cudaMemcpy2D((char*)c + width, width * 2, b, width, width, height, cudaMemcpyDefault));
+    auto _chunks = [&](auto c, auto a, auto b, int height, int width) {
+        check_cuda_error(
+            cudaMemcpy2DAsync((char*)c + 0x000, width * 2, a, width, width, height, cudaMemcpyDefault, st));
+        check_cuda_error(
+            cudaMemcpy2DAsync((char*)c + width, width * 2, b, width, width, height, cudaMemcpyDefault, st));
     };
 
     if (c.type == WeightType::kINT4) {
@@ -599,43 +622,46 @@ void chunk(LlamaDenseWeight<T>& c, LlamaDenseWeight<T>& a, LlamaDenseWeight<T>& 
 }
 
 template<typename T>
-void LlamaDecoderLayerWeight<T>::prepare(void* workspace, size_t size, const cudaDeviceProp& prop)
+void LlamaDecoderLayerWeight<T>::prepare(void* workspace, size_t size, const cudaDeviceProp& prop, cudaStream_t st)
 {
     const bool is_16xx = is_16xx_series(prop.name);
 
-    convert(self_attn_weights.qkv, false, workspace, size, is_16xx);
-    convert(self_attn_weights.output, false, workspace, size, is_16xx);
+    convert(self_attn_weights.qkv, false, workspace, size, is_16xx, st);
+    convert(self_attn_weights.output, false, workspace, size, is_16xx, st);
 
     auto process_ffn = [&](LlamaFfnWeight<T>& ffn, bool is_fused_moe) {
         if (fused_up_and_gate_) {
             auto& fused_up_and_gate = ffn.fused_gating_intermediate;
 
-            mallocWeights(fused_up_and_gate, false);
+            fused_up_and_gate.malloc(st);
 
             if (ffn.is_fused_silu) {
-                interleave(fused_up_and_gate, ffn.gating, ffn.intermediate, workspace, size);
+                interleave(fused_up_and_gate, ffn.gating, ffn.intermediate, workspace, size, st);
             }
             else {
-                chunk(fused_up_and_gate, ffn.gating, ffn.intermediate, workspace, size);
+                chunk(fused_up_and_gate, ffn.gating, ffn.intermediate, workspace, size, st);
             }
 
-            convert(ffn.fused_gating_intermediate, is_fused_moe, workspace, size, is_16xx);
+            convert(ffn.fused_gating_intermediate, is_fused_moe, workspace, size, is_16xx, st);
 
-            freeWeights(ffn.gating);
-            freeWeights(ffn.intermediate);
+            ffn.gating.free(st);
+            ffn.intermediate.free(st);
         }
         else {
-            convert(ffn.gating, is_fused_moe, workspace, size, is_16xx);
-            convert(ffn.intermediate, is_fused_moe, workspace, size, is_16xx);
+            convert(ffn.gating, is_fused_moe, workspace, size, is_16xx, st);
+            convert(ffn.intermediate, is_fused_moe, workspace, size, is_16xx, st);
         }
 
-        convert(ffn.output, is_fused_moe, workspace, size, is_16xx);
+        convert(ffn.output, is_fused_moe, workspace, size, is_16xx, st);
     };
 
-    if (moe_weights.experts.empty()) {
+    if (inter_size_) {
+        // std::cerr << "process FFN\n";
         process_ffn(ffn_weights, false);
     }
-    else {
+
+    if (!moe_weights.experts.empty()) {
+        // std::cerr << "process MoE\n";
         std::vector<std::pair<void*, int>> fused_ptrs;
         std::vector<std::pair<void*, int>> output_ptrs;
         std::vector<std::pair<void*, int>> fused_param_ptrs;
@@ -643,7 +669,7 @@ void LlamaDecoderLayerWeight<T>::prepare(void* workspace, size_t size, const cud
 
         for (auto& e : moe_weights.experts) {
 
-            process_ffn(e, moe_weights.method);
+            process_ffn(e, moe_weights.method == MoeParam::kFused);
 
             const auto& fused  = e.fused_gating_intermediate;
             const auto& output = e.output;
@@ -664,12 +690,12 @@ void LlamaDecoderLayerWeight<T>::prepare(void* workspace, size_t size, const cud
         auto& output = moe_weights.block.output;
 
         // TODO: free these ptrs
-        fused.kernel  = gemm::make_blocked_ptrs(fused_ptrs, nullptr);
-        output.kernel = gemm::make_blocked_ptrs(output_ptrs, nullptr);
+        fused.kernel  = gemm::make_blocked_ptrs(fused_ptrs, st);
+        output.kernel = gemm::make_blocked_ptrs(output_ptrs, st);
 
         if (!fused_param_ptrs.empty()) {
-            fused.scales_zeros  = (T*)gemm::make_blocked_ptrs(fused_param_ptrs, nullptr);
-            output.scales_zeros = (T*)gemm::make_blocked_ptrs(output_param_ptrs, nullptr);
+            fused.scales_zeros  = (T*)gemm::make_blocked_ptrs(fused_param_ptrs, st);
+            output.scales_zeros = (T*)gemm::make_blocked_ptrs(output_param_ptrs, st);
         }
 
         fused.k_desc.ld = output.k_desc.ld = 0;

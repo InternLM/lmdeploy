@@ -1,20 +1,18 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import argparse
-import csv
+import asyncio
 import json
 import os
 import random
-import time
 from queue import Queue
-from threading import Thread
 from typing import List, Tuple, Union
 
-import numpy as np
 from tqdm import tqdm
 
 from lmdeploy.cli.utils import ArgumentHelper, DefaultsAndTypesHelpFormatter
 from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
                                TurbomindEngineConfig)
+from lmdeploy.profiler import Profiler, Session
 from lmdeploy.pytorch.engine import EngineInstance
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import get_logger
@@ -71,7 +69,7 @@ class Engine:
 
     def __init__(self, model_path: str,
                  engine_config: Union[PytorchEngineConfig,
-                                      TurbomindEngineConfig], csv: str):
+                                      TurbomindEngineConfig]):
         if isinstance(engine_config, TurbomindEngineConfig):
             from lmdeploy.turbomind import TurboMind
             tm_model = TurboMind.from_pretrained(model_path,
@@ -83,165 +81,104 @@ class Engine:
         self.tm_model = tm_model
         self.tokenizer = tm_model.tokenizer
 
-        self.csv = csv
         self.pbar = None
 
-    def _inference(self, req_queue: Queue, res_queue: Queue, session_id: int,
-                   temperature: float, top_p: float, top_k: int,
-                   stream_output: bool):
+    async def _inference(self, req_queue: Queue, session_id: int,
+                         temperature: float, top_p: float, top_k: int,
+                         stream_output: bool, skip_tokenize: bool,
+                         skip_detokenize: bool):
         model_inst = self.tm_model.create_instance()
-        stats = []
-        # get each generated token's latency
-        per_token_latency_stats = []
-        for prompt, input_seqlen, output_seqlen in iter(
-                req_queue.get, [None, None, None]):
-            _per_token_latency_stats = [0] * (output_seqlen + 1)
-            prev = time.perf_counter()
-            n_prev_token = 0
+        sess: Session = None
+        for prompt, _, output_seqlen, cancel_after, sess in iter(
+                req_queue.get_nowait, None):
 
-            input_ids = self.tokenizer(prompt).input_ids
+            sess.tick(0)
+
+            if skip_tokenize:
+                input_ids = prompt
+            else:
+                input_ids = self.tokenizer(prompt).input_ids
+
             state = DetokenizeState(len(input_ids))
 
-            for outputs in model_inst.stream_infer(
-                    session_id,
-                    input_ids=input_ids,
-                    gen_config=GenerationConfig(max_new_tokens=output_seqlen,
-                                                temperature=temperature,
-                                                top_p=top_p,
-                                                top_k=top_k,
-                                                ignore_eos=True),
-                    sequence_start=True,
-                    sequence_end=True,
-                    stream_output=stream_output):
-                res, n_token = input_ids + outputs.token_ids, outputs.num_token
-                _, state = self.tokenizer.detokenize_incrementally(res, state)
-                now = time.perf_counter()
-                if n_prev_token != n_token:
-                    _per_token_latency_stats[n_prev_token] = np.round(
-                        now - prev, 3)
-                    n_prev_token = n_token
-                prev = now
+            prev_len = 0
+            token_ids = input_ids.copy()
+
+            generator = model_inst.async_stream_infer(
+                session_id,
+                input_ids=input_ids,
+                gen_config=GenerationConfig(max_new_tokens=output_seqlen,
+                                            temperature=temperature,
+                                            top_p=top_p,
+                                            top_k=top_k,
+                                            ignore_eos=True),
+                sequence_start=True,
+                sequence_end=True,
+                stream_output=stream_output)
+            try:
+                async for outputs in generator:
+                    n_token = outputs.num_token
+                    if n_token > prev_len:
+                        token_ids += outputs.token_ids[prev_len - n_token:]
+                        if not skip_detokenize:
+                            _, state = self.tokenizer.detokenize_incrementally(
+                                token_ids, state)
+                        sess.tick(n_token)
+                        prev_len = n_token
+                        if n_token > cancel_after:
+                            break
+                sess.finish(Session.SUCCESS)
+            finally:
+                await generator.aclose()
+
             # for pytorch engine to restart a session
             if isinstance(model_inst, EngineInstance):
-                model_inst.end(session_id)
-            assert output_seqlen <= n_token <= output_seqlen + 1, \
-                f'Error. session_id({session_id}) request {output_seqlen} ' \
-                f'tokens, but generate {n_token} tokens.\n' \
-                f'prompt: {prompt}'
+                await model_inst.async_end(session_id)
 
-            first_token_latency = _per_token_latency_stats[0]
-            completion_tokens = n_token
-            total_tokens = n_token + input_seqlen
-            stats.append([
-                first_token_latency, completion_tokens, output_seqlen,
-                total_tokens
-            ])
-            # skip the first token latency
-            per_token_latency_stats.append(_per_token_latency_stats[1:])
             self.pbar.update(1)
-        res_queue.put((session_id, stats, per_token_latency_stats))
 
-    def process_request(self, requests, concurrency, temperature, top_p, top_k,
-                        stream_output):
-        res_queue = Queue()
+    def process_request(self, requests, profiler: Profiler, concurrency,
+                        temperature, top_p, top_k, stream_output,
+                        skip_tokenize, skip_detokenize, cancel_rate):
         req_queue = Queue()
-        threads = []
+
+        # feed request to q
+        for prompt, input_len, output_len in requests:
+            cancel_after = output_len + 1
+            if cancel_rate > 0:
+                if random.random() < cancel_rate:
+                    cancel_after = random.randint(0, cancel_after)
+            sess = profiler.new_session(input_len, output_len)
+            req = [prompt, input_len, output_len, cancel_after, sess]
+            if skip_tokenize:
+                req[0] = self.tokenizer.encode(prompt)
+            req_queue.put(req)
+        for i in range(concurrency):
+            req_queue.put(None)
+
+        # start threads
+        tasks = []
+        for i in range(concurrency):
+            task = self._inference(req_queue, i, temperature, top_p, top_k,
+                                   stream_output, skip_tokenize,
+                                   skip_detokenize)
+            tasks.append(task)
+
+        async def _gather_tasks(tasks):
+            return await asyncio.gather(*tasks)
 
         self.pbar = tqdm(total=len(requests))
 
-        # feed request to q
-        for req in requests:
-            req_queue.put(req)
-        for i in range(concurrency):
-            req_queue.put([None, None, None])
+        event_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(event_loop)
 
-        start = time.time()
+        profiler.start()
 
-        # start threads
-        for i in range(concurrency):
-            t = Thread(target=self._inference,
-                       args=(req_queue, res_queue, i, temperature, top_p,
-                             top_k, stream_output),
-                       daemon=True)
-            t.start()
-            threads.append(t)
+        asyncio.run(_gather_tasks(tasks))
 
-        # wait for finish
-        for t in threads:
-            t.join()
+        profiler.finish()
 
-        elapsed_time = time.time() - start
-
-        stats = []
-        per_token_latency_stats = []
-        while not res_queue.empty():
-            session_id, _stats, _per_token_latency_stats = res_queue.get()
-            stats.append(np.array(_stats))
-            per_token_latency_stats += [
-                item for sublist in _per_token_latency_stats
-                for item in sublist
-            ]
-        stats = np.concatenate(stats).reshape(-1, 4)
-
-        first_token_latency_min = np.min(stats[:, 0], axis=0)
-        first_token_latency_max = np.max(stats[:, 0], axis=0)
-        first_token_latency_ave = np.mean(stats[:, 0], axis=0)
-        completion_tokens = np.sum(stats[:, 1], axis=0)
-        total_tokens = np.sum(stats[:, 3], axis=0)
-        prompt_tokens = total_tokens - completion_tokens
-        completion_token_throughput = completion_tokens / elapsed_time
-        total_token_throughput = total_tokens / elapsed_time
-        rps = len(requests) / elapsed_time
-        rpm = rps * 60
-
-        per_token_latency_stats.sort()
-        percentiles = [
-            np.round(
-                per_token_latency_stats[int(percent *
-                                            len(per_token_latency_stats))], 3)
-            for percent in [0.5, 0.75, 0.95, 0.99]
-        ]
-
-        print(f'\n{"-" * 50}\nconcurrency: {concurrency}\n'
-              f'elapsed_time: {elapsed_time:.3f}s\n')
-        if stream_output:
-            print(f'first token latency(s)(min, max, ave): '
-                  f'{first_token_latency_min:.3f}, '
-                  f'{first_token_latency_max:.3f}, '
-                  f'{first_token_latency_ave:.3f}')
-            print(f'per-token latency(s) percentile(50, 75, 95, 99): '
-                  f'{percentiles}\n')
-        print(
-            f'number of prompt tokens: {prompt_tokens:.0f}\n'
-            f'number of completion tokens: {completion_tokens:.0f}\n'
-            f'token throughput (completion token): {completion_token_throughput:.3f} token/s\n'  # noqa
-            f'token throughput (prompt + completion token): {total_token_throughput:.3f} token/s\n'  # noqa
-            f'RPS (request per second): {rps:.3f} req/s\n'
-            f'RPM (request per minute): {rpm:.3f} req/min\n'
-            f'{"-" * 50}\n')
-
-        if self.csv:
-            with open(self.csv, 'w') as csvfile:
-                writer = csv.writer(csvfile)
-                writer.writerow([
-                    'batch', 'num_promts', 'RPS', 'RPM', 'FTL(ave)(s)',
-                    'FTL(min)(s)', 'FTL(max)(s)', '50%(s)', '75%(s)', '95%(s)',
-                    '99%(s)', 'throughput(out tok/s)',
-                    'throughput(total tok/s)'
-                ])
-                writer.writerow([
-                    concurrency,
-                    len(requests), f'{rps:.3f}', f'{rpm:.3f}',
-                    f'{first_token_latency_ave:.3f}' if stream_output else '-',
-                    f'{first_token_latency_min:.3f}' if stream_output else '-',
-                    f'{first_token_latency_max:.3f}' if stream_output else '-',
-                    f'{percentiles[0]:.3f}' if stream_output else '-',
-                    f'{percentiles[1]:.3f}' if stream_output else '-',
-                    f'{percentiles[2]:.3f}' if stream_output else '-',
-                    f'{percentiles[3]:.3f}' if stream_output else '-',
-                    f'{completion_token_throughput:.3f}',
-                    f'{total_token_throughput:.3f}'
-                ])
+        self.pbar.close()
 
 
 def parse_args():
@@ -265,6 +202,20 @@ def parse_args():
                         type=int,
                         help='Number of prompts to process',
                         default=5000)
+    parser.add_argument('--no-stream-output',
+                        action='store_true',
+                        help='Use stream output')
+    parser.add_argument('--skip-tokenize',
+                        action='store_true',
+                        help='Pre-tokenize input prompts before starting')
+    parser.add_argument('--skip-detokenize',
+                        action='store_true',
+                        help='Skip detokenizing output tokens')
+    parser.add_argument('--cancel-rate',
+                        type=float,
+                        help='Possibility of a request being canceled',
+                        default=0)
+    parser.add_argument('--use-uvloop', action='store_true')
     parser.add_argument('--csv',
                         type=str,
                         help='Where to save the result.',
@@ -333,24 +284,48 @@ def main():
             block_size=args.cache_block_seq_len,
             max_batch_size=args.concurrency,
             tp=args.tp,
-            thread_safe=True,
             eager_mode=args.eager_mode,
             enable_prefix_caching=args.enable_prefix_caching,
             quant_policy=args.quant_policy,
             dtype=args.dtype,
         )
 
-    engine = Engine(args.model_path, engine_config, csv=args.csv)
+    if args.use_uvloop:
+        import uvloop
+        asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+
+    engine = Engine(args.model_path, engine_config)
 
     requests = sample_requests(args.dataset, args.num_prompts,
                                engine.tokenizer)
 
-    engine.process_request(requests,
-                           temperature=args.temperature,
-                           top_p=args.top_p,
-                           top_k=args.top_k,
-                           concurrency=args.concurrency,
-                           stream_output=True)
+    stream_output = not args.no_stream_output
+
+    profiler = Profiler(stream_output, [50, 75, 95, 99])
+
+    engine.process_request(
+        requests,
+        profiler,
+        temperature=args.temperature,
+        top_p=args.top_p,
+        top_k=args.top_k,
+        concurrency=args.concurrency
+        if args.concurrency < args.num_prompts else args.num_prompts,
+        stream_output=not args.no_stream_output,
+        skip_tokenize=args.skip_tokenize,
+        skip_detokenize=args.skip_detokenize,
+        cancel_rate=args.cancel_rate)
+
+    hyperparams = [('Concurrency', args.concurrency),
+                   ('Cancel rate', args.cancel_rate),
+                   ('Stream output', str(stream_output).lower()),
+                   ('Skip tokenize', str(args.skip_tokenize).lower()),
+                   ('Skip detokenize', str(args.skip_detokenize).lower())]
+    profiler.compute_metrics()
+    profiler.summarize(title='Profile Throughput', hyperparams=hyperparams)
+    if args.csv:
+        profiler.save_csv(args.csv, (('batch', args.concurrency),
+                                     ('num_prompts', args.num_prompts)))
 
 
 if __name__ == '__main__':

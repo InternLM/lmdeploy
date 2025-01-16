@@ -61,9 +61,15 @@ struct Impl<MMA_1688, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, He
     using FragV = Array<T, 2>[V_K][V_N];  // ((d8, s4), (Sk, Dn), (s2))
                                           //    1   2     8   8     1
 
-    using SmemLayoutQ = SmemLayoutV2<CTA_Q * CTA_H, HeadDim, 64, 128, Swizzle<3, 3, 4>>;
-    using SmemLayoutK = SmemLayoutV2<CTA_S, HeadDim, 32, 128, Swizzle<3, 3, 4>>;  // load by (s32,d8) tile
-    using SmemLayoutV = SmemLayoutV2<CTA_S, HeadDim, 16, 128, Swizzle<3, 3, 4>>;  // load by (s8,d32) tile
+    using SmemLayoutQ = std::conditional_t<HeadDim == 128,
+                                           SmemLayoutV2<CTA_Q * CTA_H, HeadDim, 64, 128, Swizzle<3, 3, 4>>,
+                                           SmemLayoutV2<CTA_Q * CTA_H, HeadDim, 64, 64, Swizzle<3, 3, 3>>>;
+    using SmemLayoutK = std::conditional_t<HeadDim == 128,  // load by (s32,d8) tile
+                                           SmemLayoutV2<CTA_S, HeadDim, 32, 128, Swizzle<3, 3, 4>>,
+                                           SmemLayoutV2<CTA_S, HeadDim, 32, 64, Swizzle<3, 3, 3>>>;
+    using SmemLayoutV = std::conditional_t<HeadDim == 128,  // load by (s8,d32) tile
+                                           SmemLayoutV2<CTA_S, HeadDim, 16, 128, Swizzle<3, 3, 4>>,
+                                           SmemLayoutV2<CTA_S, HeadDim, 16, 64, Swizzle<3, 3, 3>>>;
 
     using SmemLayoutKVp = void;
 

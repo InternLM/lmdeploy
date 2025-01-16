@@ -1,35 +1,42 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
-#include "src/turbomind/python/dlpack.h"
-#include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
-#include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
-#include "src/turbomind/utils/cuda_utils.h"
-#include "src/turbomind/utils/nccl_utils.h"
-#include <cuda_runtime.h>
 #include <memory>
+#include <sstream>
+#include <stdexcept>
+
+#include <cuda_runtime.h>
+
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/pytypes.h>
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
-#include <stdexcept>
+
+#include "src/turbomind/engine/model_request.h"
+#include "src/turbomind/python/dlpack.h"
+#include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
+#include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
+#include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/nccl_utils.h"
 
 namespace py = pybind11;
 namespace ft = turbomind;
 using namespace pybind11::literals;
 
+using ft::ManagedTensor;
+using ft::Tensor;
+
 // prepare to bind container
-using TensorVector = std::vector<triton::Tensor>;
-PYBIND11_MAKE_OPAQUE(TensorVector);
-using TensorMap = std::unordered_map<std::string, triton::Tensor>;
+using TensorMap = std::unordered_map<std::string, ft::ManagedTensor>;
 PYBIND11_MAKE_OPAQUE(TensorMap);
 static const char kDlTensorCapsuleName[] = "dltensor";
 
-DLDevice getDLDevice(triton::Tensor& tensor)
+DLDevice getDLDevice(const ft::Tensor& tensor)
 {
     int device_id = 0;
-    if (tensor.where == triton::MEMORY_GPU) {
-        cudaPointerAttributes ptr_attr;
+    if (tensor.where == ft::MEMORY_GPU) {
+        cudaPointerAttributes ptr_attr{};
         cudaPointerGetAttributes(&ptr_attr, tensor.data);
         device_id = ptr_attr.device;
     }
@@ -37,13 +44,13 @@ DLDevice getDLDevice(triton::Tensor& tensor)
     DLDevice device{kDLCPU, device_id};
 
     switch (tensor.where) {
-        case triton::MEMORY_CPU:
+        case ft::MEMORY_CPU:
             device.device_type = DLDeviceType::kDLCPU;
             break;
-        case triton::MEMORY_CPU_PINNED:
+        case ft::MEMORY_CPU_PINNED:
             device.device_type = DLDeviceType::kDLCUDAHost;
             break;
-        case triton::MEMORY_GPU:
+        case ft::MEMORY_GPU:
             device.device_type = DLDeviceType::kDLCUDA;
             break;
         default:
@@ -53,150 +60,162 @@ DLDevice getDLDevice(triton::Tensor& tensor)
     return device;
 }
 
-DLManagedTensor* TritonTensorToDLManagedTensor(triton::Tensor& tensor)
+DLManagedTensor* TritonTensorToDLManagedTensor(ManagedTensor& tensor)
 {
-    DLDevice device = getDLDevice(tensor);
+    DLDevice device = getDLDevice(*tensor);
 
     DLDataType data_type{0, 0, 1};
-    switch (tensor.type) {
-        case triton::TYPE_BOOL:
+    switch (tensor->type) {
+        case ft::TYPE_BOOL:
             data_type.code = DLDataTypeCode::kDLBool;
             data_type.bits = 8;
             break;
-        case triton::TYPE_UINT8:
+        case ft::TYPE_UINT8:
             data_type.code = DLDataTypeCode::kDLUInt;
             data_type.bits = 8;
             break;
-        case triton::TYPE_UINT16:
+        case ft::TYPE_UINT16:
             data_type.code = DLDataTypeCode::kDLUInt;
             data_type.bits = 16;
             break;
-        case triton::TYPE_UINT32:
+        case ft::TYPE_UINT32:
             data_type.code = DLDataTypeCode::kDLUInt;
             data_type.bits = 32;
             break;
-        case triton::TYPE_UINT64:
+        case ft::TYPE_UINT64:
             data_type.code = DLDataTypeCode::kDLUInt;
             data_type.bits = 64;
             break;
-        case triton::TYPE_INT8:
-        case triton::TYPE_BYTES:
+        case ft::TYPE_INT8:
+        case ft::TYPE_BYTES:
             data_type.code = DLDataTypeCode::kDLInt;
             data_type.bits = 8;
             break;
-        case triton::TYPE_INT16:
+        case ft::TYPE_INT16:
             data_type.code = DLDataTypeCode::kDLInt;
             data_type.bits = 16;
             break;
-        case triton::TYPE_INT32:
+        case ft::TYPE_INT32:
             data_type.code = DLDataTypeCode::kDLInt;
             data_type.bits = 32;
             break;
-        case triton::TYPE_INT64:
+        case ft::TYPE_INT64:
             data_type.code = DLDataTypeCode::kDLInt;
             data_type.bits = 64;
             break;
-        case triton::TYPE_FP16:
+        case ft::TYPE_FP16:
             data_type.code = DLDataTypeCode::kDLFloat;
             data_type.bits = 16;
             break;
-        case triton::TYPE_FP32:
+        case ft::TYPE_FP32:
             data_type.code = DLDataTypeCode::kDLFloat;
             data_type.bits = 32;
             break;
-        case triton::TYPE_FP64:
+        case ft::TYPE_FP64:
             data_type.code = DLDataTypeCode::kDLFloat;
             data_type.bits = 64;
             break;
-        case triton::TYPE_BF16:
+        case ft::TYPE_BF16:
             data_type.code = DLDataTypeCode::kDLBfloat;
             data_type.bits = 16;
             break;
         default:
             break;
     }
-    DLTensor dl_tensor{const_cast<void*>(tensor.data),
+    ManagedTensor* ctx = new ManagedTensor(tensor);
+    DLTensor       dl_tensor{const_cast<void*>((*ctx)->data),
                        device,
-                       (int32_t)(tensor.shape.size()),
+                       (int32_t)((*ctx)->shape.size()),
                        data_type,
-                       reinterpret_cast<int64_t*>(const_cast<size_t*>(tensor.shape.data())),
+                       reinterpret_cast<int64_t*>(const_cast<size_t*>((*ctx)->shape.data())),
                        (int64_t*)(nullptr),
                        0};
-    return new DLManagedTensor{dl_tensor, nullptr, [](DLManagedTensor* dlmt) { delete dlmt; }};
+    return new DLManagedTensor{dl_tensor, ctx, [](DLManagedTensor* dlmt) {  //
+                                   //    auto&             x = *(ManagedTensor*)dlmt->manager_ctx;
+                                   //    std::stringstream ss;
+                                   //    ss << "(";
+                                   //    for (const auto& d : x->shape) {
+                                   //        ss << d << ",";
+                                   //    }
+                                   //    ss << ")";
+                                   //    std::cerr << "turbomind tensor dtor " << ss.str() << " " << std::endl;
+                                   delete (ManagedTensor*)dlmt->manager_ctx;
+                                   delete dlmt;
+                               }};
 }
 
-triton::MemoryType getMemoryType(DLDevice device)
+ft::MemoryType getMemoryType(DLDevice device)
 {
     switch (device.device_type) {
         case DLDeviceType::kDLCUDAHost:
-            return triton::MemoryType::MEMORY_CPU_PINNED;
+            return ft::MemoryType::MEMORY_CPU_PINNED;
         case DLDeviceType::kDLCUDA:
-            return triton::MemoryType::MEMORY_GPU;
+            return ft::MemoryType::MEMORY_GPU;
         case DLDeviceType::kDLCPU:
         default:
-            return triton::MemoryType::MEMORY_CPU;
+            return ft::MemoryType::MEMORY_CPU;
     }
 }
 
-triton::DataType getDataType(DLDataType data_type)
+ft::DataType getDataType(DLDataType data_type)
 {
     switch (data_type.code) {
         case DLDataTypeCode::kDLUInt:
             switch (data_type.bits) {
                 case 8:
-                    return triton::TYPE_UINT8;
+                    return ft::TYPE_UINT8;
                 case 16:
-                    return triton::TYPE_UINT16;
+                    return ft::TYPE_UINT16;
                 case 32:
-                    return triton::TYPE_UINT32;
+                    return ft::TYPE_UINT32;
                 case 64:
-                    return triton::TYPE_UINT64;
+                    return ft::TYPE_UINT64;
                 default:
-                    return triton::TYPE_INVALID;
+                    return ft::TYPE_INVALID;
             }
             break;
         case DLDataTypeCode::kDLInt:
             switch (data_type.bits) {
                 case 8:
-                    return triton::TYPE_INT8;
+                    return ft::TYPE_INT8;
                 case 16:
-                    return triton::TYPE_INT16;
+                    return ft::TYPE_INT16;
                 case 32:
-                    return triton::TYPE_INT32;
+                    return ft::TYPE_INT32;
                 case 64:
-                    return triton::TYPE_INT64;
+                    return ft::TYPE_INT64;
                 default:
-                    return triton::TYPE_INVALID;
+                    return ft::TYPE_INVALID;
             }
             break;
         case DLDataTypeCode::kDLFloat:
             switch (data_type.bits) {
                 case 16:
-                    return triton::TYPE_FP16;
+                    return ft::TYPE_FP16;
                 case 32:
-                    return triton::TYPE_FP32;
+                    return ft::TYPE_FP32;
                 case 64:
-                    return triton::TYPE_FP64;
+                    return ft::TYPE_FP64;
                 default:
-                    return triton::TYPE_INVALID;
+                    return ft::TYPE_INVALID;
             }
             break;
         case DLDataTypeCode::kDLBfloat:
             switch (data_type.bits) {
                 case 16:
-                    return triton::TYPE_BF16;
+                    return ft::TYPE_BF16;
                 default:
-                    return triton::TYPE_INVALID;
+                    return ft::TYPE_INVALID;
             }
             break;
         case DLDataTypeCode::kDLBool:
-            return triton::TYPE_BOOL;
+            return ft::TYPE_BOOL;
         default:
-            return triton::TYPE_INVALID;
+            return ft::TYPE_INVALID;
     }
 }
 
-std::shared_ptr<triton::Tensor> DLManagedTensorToTritonTensor(DLManagedTensor* tensor)
+std::shared_ptr<ManagedTensor> DLManagedTensorToTritonTensor(DLManagedTensor* tensor)
 {
     auto& dl_tensor = tensor->dl_tensor;
     auto  where     = getMemoryType(dl_tensor.device);
@@ -205,15 +224,81 @@ std::shared_ptr<triton::Tensor> DLManagedTensorToTritonTensor(DLManagedTensor* t
     std::vector<size_t> shape(dl_tensor.shape, dl_tensor.shape + dl_tensor.ndim);
     auto                data = dl_tensor.data;
 
-    return std::make_shared<triton::Tensor>(where, dtype, shape, data);
+    auto ret    = std::make_shared<ManagedTensor>();
+    ret->tensor = Tensor(where, dtype, std::move(shape), data);
+    ret->data_holder.reset((void*)nullptr, [tensor](void*) {
+        // std::cerr << "dlpack tensor dtor" << std::endl;
+        if (tensor->deleter) {
+            tensor->deleter(tensor);
+        }
+    });
+    return ret;
 }
 
-DLTensor GetDLTensor(py::object obj)
+static void safe_memcpy(void* dst, const void* src, size_t size)
 {
-    py::capsule      cap  = obj.attr("__dlpack__")();
-    DLManagedTensor* dlmt = static_cast<DLManagedTensor*>(PyCapsule_GetPointer(cap.ptr(), kDlTensorCapsuleName));
-    return dlmt->dl_tensor;
+    cudaPointerAttributes dat{};
+    cudaPointerAttributes sat{};
+    ft::check_cuda_error(cudaPointerGetAttributes(&dat, dst));
+    ft::check_cuda_error(cudaPointerGetAttributes(&sat, src));
+    try {
+        if (dat.devicePointer && sat.devicePointer) {
+            // Both can be accessed from current context
+            ft::check_cuda_error(cudaMemcpy(dst, src, size, cudaMemcpyDefault));
+        }
+        else if (dat.type == cudaMemoryTypeDevice && sat.type == cudaMemoryTypeDevice) {
+            if (dat.device != sat.device) {
+                // On different devices, try peer memcpy
+                ft::check_cuda_error(cudaMemcpyPeer(dst, dat.device, src, sat.device, size));
+            }
+            else {
+                // Same device, switch to the device first (this is unlikely)
+                ft::CudaDeviceGuard guard(dat.device);
+                ft::check_cuda_error(cudaMemcpy(dst, src, size, cudaMemcpyDefault));
+            }
+        }
+        else {
+            // Unknown case, give it a try anyway
+            ft::check_cuda_error(cudaMemcpy(dst, src, size, cudaMemcpyDefault));
+        }
+    }
+    catch (...) {
+        int device_id{-1};
+        cudaGetDevice(&device_id);
+        TM_LOG_ERROR("cudaMemcpy failed: dst=(%d, %d, %p, %p), src=(%d, %d, %p, %p), size=%s, device=%d",
+                     (int)dat.type,
+                     dat.device,
+                     dat.devicePointer,
+                     dat.hostPointer,
+                     (int)sat.type,
+                     sat.device,
+                     sat.devicePointer,
+                     sat.hostPointer,
+                     std::to_string(size).c_str(),
+                     device_id);
+        throw;
+    }
 }
+
+namespace {
+
+struct ScopedGIL {
+    ScopedGIL(const ScopedGIL&) = delete;
+    ScopedGIL& operator=(const ScopedGIL&) = delete;
+    ScopedGIL(ScopedGIL&&)                 = delete;
+    ScopedGIL& operator=(ScopedGIL&&) = delete;
+    ScopedGIL()
+    {
+        state = PyGILState_Ensure();
+    }
+    ~ScopedGIL()
+    {
+        PyGILState_Release(state);
+    }
+    PyGILState_STATE state;
+};
+
+}  // namespace
 
 PYBIND11_MODULE(_turbomind, m)
 {
@@ -223,78 +308,120 @@ PYBIND11_MODULE(_turbomind, m)
         .def("__str__", &ft::NcclParam::toString);
 
     // custom comm
-    py::class_<ft::AbstractCustomComm, std::shared_ptr<ft::AbstractCustomComm>>(m, "AbstractCustomComm");
+    (void)py::class_<ft::AbstractCustomComm, std::shared_ptr<ft::AbstractCustomComm>>(m, "AbstractCustomComm");
 
-    // instance comm
-    py::class_<ft::AbstractInstanceComm>(m, "AbstractInstanceComm");
+    py::class_<ft::SessionParam>(m, "SessionParam")
+        .def(py::init([](uint64_t id, int step, bool start, bool end) {
+                 if (!start && end) {
+                     throw std::logic_error("unsupported arguments: start=false, end=true");
+                 }
+                 ft::SessionParam param{};
+                 param.id         = id;
+                 param.step       = step;
+                 param.start_flag = start;
+                 param.end_flag   = end;
+                 return param;
+             }),
+             "id"_a,
+             "step"_a,
+             "start"_a,
+             "end"_a)
+        .def_readwrite("id", &ft::SessionParam::id)
+        .def_readwrite("step", &ft::SessionParam::step)
+        .def_readwrite("start", &ft::SessionParam::start_flag)
+        .def_readwrite("end", &ft::SessionParam::end_flag);
+
+    py::class_<ft::GenerationConfig>(m, "GenerationConfig")
+        .def(py::init())
+        .def_readwrite("max_new_tokens", &ft::GenerationConfig::max_new_tokens)
+        .def_readwrite("min_new_tokens", &ft::GenerationConfig::min_new_tokens)
+        .def_readwrite("top_p", &ft::GenerationConfig::top_p)
+        .def_readwrite("top_k", &ft::GenerationConfig::top_k)
+        .def_readwrite("min_p", &ft::GenerationConfig::min_p)
+        .def_readwrite("temperature", &ft::GenerationConfig::temperature)
+        .def_readwrite("repetition_penalty", &ft::GenerationConfig::repetition_penalty)
+        .def_readwrite("random_seed", &ft::GenerationConfig::random_seed)
+        .def_readwrite("output_logprobs", &ft::GenerationConfig::output_logprobs)
+        .def_readwrite("output_last_hidden_state", &ft::GenerationConfig::output_last_hidden_state)
+        .def_readwrite("output_logits", &ft::GenerationConfig::output_logits)
+        .def("__repr__", [](const ft::GenerationConfig& c) {
+            std::ostringstream oss;
+            oss << c;
+            return oss.str();
+        });
+
+    py::class_<ft::RequestState, std::unique_ptr<ft::RequestState>>(m, "RequestState")
+        .def_readonly("status", &ft::RequestState::status)
+        .def_readonly("seq_len", &ft::RequestState::seq_len);
+
+    py::class_<ft::AtomicRequestState, std::shared_ptr<ft::AtomicRequestState>>(m, "AtomicRequestState")
+        .def("consume", [](ft::AtomicRequestState& s) { return s.exchange(nullptr); });
 
     // data type
-    py::enum_<triton::DataType>(m, "DataType")
-        .value("TYPE_INVALID", triton::DataType::TYPE_INVALID)
-        .value("TYPE_BOOL", triton::DataType::TYPE_BOOL)
-        .value("TYPE_UINT8", triton::DataType::TYPE_UINT8)
-        .value("TYPE_UINT16", triton::DataType::TYPE_UINT16)
-        .value("TYPE_UINT32", triton::DataType::TYPE_UINT32)
-        .value("TYPE_UINT64", triton::DataType::TYPE_UINT64)
-        .value("TYPE_INT8", triton::DataType::TYPE_INT8)
-        .value("TYPE_INT16", triton::DataType::TYPE_INT16)
-        .value("TYPE_INT32", triton::DataType::TYPE_INT32)
-        .value("TYPE_INT64", triton::DataType::TYPE_INT64)
-        .value("TYPE_FP16", triton::DataType::TYPE_FP16)
-        .value("TYPE_FP32", triton::DataType::TYPE_FP32)
-        .value("TYPE_FP64", triton::DataType::TYPE_FP64)
-        .value("TYPE_BYTES", triton::DataType::TYPE_BYTES)
-        .value("TYPE_BF16", triton::DataType::TYPE_BF16);
+    py::enum_<ft::DataType>(m, "DataType")
+        .value("TYPE_INVALID", ft::DataType::TYPE_INVALID)
+        .value("TYPE_BOOL", ft::DataType::TYPE_BOOL)
+        .value("TYPE_UINT8", ft::DataType::TYPE_UINT8)
+        .value("TYPE_UINT16", ft::DataType::TYPE_UINT16)
+        .value("TYPE_UINT32", ft::DataType::TYPE_UINT32)
+        .value("TYPE_UINT64", ft::DataType::TYPE_UINT64)
+        .value("TYPE_INT8", ft::DataType::TYPE_INT8)
+        .value("TYPE_INT16", ft::DataType::TYPE_INT16)
+        .value("TYPE_INT32", ft::DataType::TYPE_INT32)
+        .value("TYPE_INT64", ft::DataType::TYPE_INT64)
+        .value("TYPE_FP16", ft::DataType::TYPE_FP16)
+        .value("TYPE_FP32", ft::DataType::TYPE_FP32)
+        .value("TYPE_FP64", ft::DataType::TYPE_FP64)
+        .value("TYPE_BYTES", ft::DataType::TYPE_BYTES)
+        .value("TYPE_BF16", ft::DataType::TYPE_BF16);
 
     // memory type
-    py::enum_<triton::MemoryType>(m, "MemoryType")
-        .value("MEMORY_CPU", triton::MemoryType::MEMORY_CPU)
-        .value("MEMORY_CPU_PINNED", triton::MemoryType::MEMORY_CPU_PINNED)
-        .value("MEMORY_GPU", triton::MemoryType::MEMORY_GPU);
+    py::enum_<ft::MemoryType>(m, "MemoryType")
+        .value("MEMORY_CPU", ft::MemoryType::MEMORY_CPU)
+        .value("MEMORY_CPU_PINNED", ft::MemoryType::MEMORY_CPU_PINNED)
+        .value("MEMORY_GPU", ft::MemoryType::MEMORY_GPU);
 
     // tensor
-    py::class_<triton::Tensor, std::shared_ptr<triton::Tensor>>(m, "Tensor")
-        .def_readonly("where", &triton::Tensor::where)
-        .def_readonly("type", &triton::Tensor::type)
-        .def_readonly("shape", &triton::Tensor::shape)
-        .def_readonly("data", &triton::Tensor::data)
-        .def(py::init([](const triton::MemoryType   where,
-                         const triton::DataType     type,
-                         const std::vector<size_t>& shape,
-                         const long                 data) {
-            auto data_ptr = reinterpret_cast<void*>(data);
-            return new triton::Tensor(where, type, shape, data_ptr);
-        }))
+    py::class_<ManagedTensor, std::shared_ptr<ManagedTensor>>(m, "Tensor")
+        .def_property_readonly("where", [](const ManagedTensor& t) { return t->where; })
+        .def_property_readonly("type", [](const ManagedTensor& t) { return t->type; })
+        .def_property_readonly("shape", [](const ManagedTensor& t) { return t->shape; })
+        .def_property_readonly("data", [](const ManagedTensor& t) { return t->data; })
         .def(
             "view",
-            [](triton::Tensor* self, triton::DataType new_type) {
-                return new triton::Tensor(self->where, new_type, self->shape, self->data);
+            [](const ManagedTensor& self, ft::DataType new_type) {
+                auto x  = self;
+                x->type = new_type;
+                return std::make_shared<ManagedTensor>(std::move(x));
             },
             "new_type"_a)
         .def(
             "view",
-            [](triton::Tensor* self, std::vector<size_t> new_shape) {
-                return new triton::Tensor(self->where, self->type, new_shape, self->data);
+            [](const ManagedTensor& self, std::vector<size_t> new_shape) {
+                auto x   = self;
+                x->shape = new_shape;
+                return std::make_shared<ManagedTensor>(std::move(x));
             },
             "new_shape"_a)
         .def(
             "copy_from",
-            [](triton::Tensor* self, py::object obj) {
+            [](ManagedTensor& self, py::object obj) {
                 py::capsule      cap = obj.attr("__dlpack__")();
                 DLManagedTensor* dlmt =
                     static_cast<DLManagedTensor*>(PyCapsule_GetPointer(cap.ptr(), kDlTensorCapsuleName));
                 auto src = DLManagedTensorToTritonTensor(dlmt);
+                // take ownership of capsule's payload
+                cap.set_name("used_dltensor");
                 switch (self->type) {
-                    case triton::TYPE_FP16:
-                    case triton::TYPE_FP32:
-                    case triton::TYPE_INT32:
-                    case triton::TYPE_BF16: {
-                        auto num_element =
-                            std::accumulate(src->shape.begin(), src->shape.end(), 1LL, std::multiplies<int64_t>());
+                    case ft::TYPE_FP16:
+                    case ft::TYPE_FP32:
+                    case ft::TYPE_INT32:
+                    case ft::TYPE_BF16: {
+                        auto num_element = std::accumulate(
+                            (*src)->shape.begin(), (*src)->shape.end(), 1LL, std::multiplies<int64_t>());
                         auto num_bytes = num_element * dlmt->dl_tensor.dtype.bits / 8;
                         ft::FT_CHECK(self->shape.size() == 1 && num_bytes == self->shape[0]);
-                        cudaMemcpy(
-                            const_cast<void*>(self->data), const_cast<void*>(src->data), num_bytes, cudaMemcpyDefault);
+                        safe_memcpy(const_cast<void*>(self->data), (*src)->data, num_bytes);
                         break;
                     }
                     default:
@@ -304,8 +431,8 @@ PYBIND11_MODULE(_turbomind, m)
             "tensor"_a)
         .def(
             "__dlpack__",
-            [](triton::Tensor* self, long stream) {
-                DLManagedTensor* dlmt = TritonTensorToDLManagedTensor(*self);
+            [](ManagedTensor& self, long stream) {
+                DLManagedTensor* dlmt = TritonTensorToDLManagedTensor(self);
                 return py::capsule(dlmt, kDlTensorCapsuleName, [](PyObject* obj) {
                     DLManagedTensor* dlmt =
                         static_cast<DLManagedTensor*>(PyCapsule_GetPointer(obj, kDlTensorCapsuleName));
@@ -320,7 +447,7 @@ PYBIND11_MODULE(_turbomind, m)
                 });
             },
             "stream"_a = 0)
-        .def("__dlpack_device__", [](triton::Tensor* self) {
+        .def("__dlpack_device__", [](const ManagedTensor& self) {
             auto device = getDLDevice(*self);
             return std::tuple<int, int>(int(device.device_type), device.device_id);
         });
@@ -331,31 +458,63 @@ PYBIND11_MODULE(_turbomind, m)
             DLManagedTensor* dlmt =
                 static_cast<DLManagedTensor*>(PyCapsule_GetPointer(cap.ptr(), kDlTensorCapsuleName));
             auto ret = DLManagedTensorToTritonTensor(dlmt);
+            // take ownership of capsule's payload
+            cap.set_name("used_dltensor");
             return ret;
         },
         "dl_managed_tensor"_a);
 
     // transformer model instance
+    using ft::ModelRequest;
     py::bind_map<TensorMap, std::shared_ptr<TensorMap>>(m, "TensorMap");
-    py::class_<AbstractTransformerModelInstance>(m, "AbstractTransformerModelInstance")
+    py::class_<ModelRequest>(m, "ModelRequest")
         .def(
             "forward",
-            [](AbstractTransformerModelInstance* model,
-               std::shared_ptr<TensorMap>        input_tensors,
-               ft::AbstractInstanceComm*         inst_comm) { return model->forward(input_tensors, inst_comm); },
+            [](ModelRequest*               model_request,
+               std::shared_ptr<TensorMap>  input_tensors,
+               const ft::SessionParam&     session,
+               const ft::GenerationConfig& gen_cfg,
+               bool                        stream_output,
+               std::function<void()>       cb) {
+                ModelRequest::InputParam param{};
+                param.tensors       = std::move(input_tensors);
+                param.session       = session;
+                param.gen_cfg       = gen_cfg;
+                param.stream_output = stream_output;
+                auto ret            = model_request->Forward(std::move(param), [cb = std::move(cb)]() {
+                    try {
+                        cb();
+                    }
+                    catch (const py::error_already_set& e) {
+                        std::cerr << e.what() << std::endl;
+                    }
+                });
+                return std::make_tuple(std::move(ret.tensors), std::move(ret.state));
+            },
             py::call_guard<py::gil_scoped_release>(),
             "input_tensors"_a,
-            "inst_comm"_a = nullptr)
+            "session"_a,
+            "gen_cfg"_a,
+            "stream_output"_a,
+            "cb"_a)
         .def(
-            "register_callback",
-            [](AbstractTransformerModelInstance* self, triton_stream_cb_t cb, py::object ctx) {
-                self->registerCallback(cb, ctx.ptr());
+            "cancel",
+            [](ModelRequest* model_request) {
+                model_request->Cancel();  //
             },
-            "callback"_a,
-            "context"_a = nullptr)
-        .def("unregister_callback", &AbstractTransformerModelInstance::unRegisterCallback);
+            py::call_guard<py::gil_scoped_release>())
+        .def(
+            "end",
+            [](ModelRequest* model_request, std::function<void(int)> cb, uint64_t session_id) {
+                model_request->End(std::move(cb), session_id);  //
+            },
+            py::call_guard<py::gil_scoped_release>(),
+            "cb"_a,
+            "session_id"_a);
 
     // transformer model
+    using ft::AbstractTransformerModel;
+    using ft::LlamaTritonModel;
     py::class_<AbstractTransformerModel, std::shared_ptr<AbstractTransformerModel>>(m, "AbstractTransformerModel")
         .def_static(
             "create_llama_model",
@@ -365,25 +524,19 @@ PYBIND11_MODULE(_turbomind, m)
                size_t      pipeline_para_size,
                int         enable_custom_all_reduce,
                std::string data_type) -> std::shared_ptr<AbstractTransformerModel> {
-                auto gil_control = [state = PyGILState_STATE{}](int op) mutable {
-                    if (op) {
-                        state = PyGILState_Ensure();
-                    }
-                    else {
-                        PyGILState_Release(state);
-                    }
+                auto gil_factory = [] {  //
+                    // erase the type
+                    return std::static_pointer_cast<void>(std::make_shared<ScopedGIL>());
                 };
                 if (data_type == "half" || data_type == "fp16" || data_type == "float16" || data_type == "int4") {
                     auto model = std::make_shared<LlamaTritonModel<half>>(
-                        tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir, config);
-                    model->set_ffi_lock(gil_control);
+                        tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir, config, gil_factory);
                     return model;
                 }
                 else if (data_type == "bf16" || data_type == "bfloat16") {
 #ifdef ENABLE_BF16
                     auto model = std::make_shared<LlamaTritonModel<__nv_bfloat16>>(
-                        tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir, config);
-                    model->set_ffi_lock(gil_control);
+                        tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir, config, gil_factory);
                     return model;
 #else
                     throw std::runtime_error("Error: turbomind has not been built with bf16 support.");
@@ -392,8 +545,7 @@ PYBIND11_MODULE(_turbomind, m)
                 else {
 #ifdef ENABLE_FP32
                     auto model = std::make_shared<LlamaTritonModel<float>>(
-                        tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir, config);
-                    model->set_ffi_lock(gil_control);
+                        tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir, config, gil_factory);
                     return model;
 #else
                     throw std::runtime_error("Error: turbomind has not been built with fp32 support.");
@@ -419,24 +571,11 @@ PYBIND11_MODULE(_turbomind, m)
                 return ret;
             },
             "world_size"_a)
-        .def("create_instance_comm", &AbstractTransformerModel::createInstanceComm, "size"_a)
         .def(
             "create_model_instance",
-            [](AbstractTransformerModel*                                         model,
-               int                                                               deviceId,
-               int                                                               rank,
-               long                                                              stream_id,
-               std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>> nccl_params,
-               std::shared_ptr<ft::AbstractCustomComm>                           custom_all_reduce_comm = nullptr) {
-                cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_id);
-                return model->createModelInstance(deviceId, rank, stream, nccl_params, custom_all_reduce_comm);
-            },
+            [](AbstractTransformerModel* model, int deviceId) { return model->createModelInstance(deviceId); },
             py::call_guard<py::gil_scoped_release>(),
-            "device_id"_a,
-            "rank"_a,
-            "stream"_a,
-            "nccl_params"_a,
-            "custom_all_reduce_comm"_a = nullptr)
+            "device_id"_a)
         .def("create_shared_weights",
              &AbstractTransformerModel::createSharedWeights,
              py::call_guard<py::gil_scoped_release>(),
@@ -445,8 +584,13 @@ PYBIND11_MODULE(_turbomind, m)
         .def(
             "get_params",
             [](AbstractTransformerModel* model, int deviceId, int rank) {
-                TensorMap output = model->getParams(deviceId, rank);
-                return output;
+                auto      output = model->getParams(deviceId, rank);
+                TensorMap ret;
+                for (const auto& [k, v] : output) {
+                    // export reference to weight data only (no ownership)
+                    ret.emplace(k, ManagedTensor{v});
+                }
+                return ret;
             },
             py::call_guard<py::gil_scoped_release>(),
             "device_id"_a,

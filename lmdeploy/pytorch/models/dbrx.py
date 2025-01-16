@@ -9,7 +9,7 @@ from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, LayerNorm,
                                  RopeType, build_rotary_embedding)
 from lmdeploy.pytorch.nn.linear import build_qkv_proj, build_rowwise_linear
-from lmdeploy.pytorch.nn.moe import FusedMoE, SoftmaxTopK
+from lmdeploy.pytorch.nn.moe import SoftmaxTopK, build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
@@ -165,7 +165,7 @@ class DbrxExperts(nn.Module):
         act_fn_name = ffn_act_fn.get('name', None)
         assert act_fn_name == 'silu'
 
-        self.mlp = FusedMoE(
+        self.mlp = build_fused_moe(
             hidden_size,
             ffn_hidden_size,
             moe_num_experts,
@@ -301,7 +301,7 @@ class DbrxBlock(nn.Module):
                                                     dtype=dtype,
                                                     device=device)
 
-        # builf MLP
+        # build MLP
         self.ffn = DbrxFFN(config, dtype=dtype, device=device)
 
     def forward(
@@ -522,7 +522,7 @@ class DbrxForCausalLM(nn.Module, CudaGraphMixin):
             if '.experts' in name:
                 loaded_weight = loaded_weight.unflatten(0, (num_experts, -1))
                 if '.w1' in name:
-                    name = name.replace('.w1', '.gate_up_weights')
+                    name = name.replace('.w1', '.gate_up.weight')
                     param = params_dict[name]
                     for exp_id in range(num_experts):
                         weight = loaded_weight[exp_id]
@@ -531,7 +531,7 @@ class DbrxForCausalLM(nn.Module, CudaGraphMixin):
                                     expert_id=exp_id,
                                     shard_id='gate')
                 elif '.v1' in name:
-                    name = name.replace('.v1', '.gate_up_weights')
+                    name = name.replace('.v1', '.gate_up.weight')
                     param = params_dict[name]
                     for exp_id in range(num_experts):
                         weight = loaded_weight[exp_id]
@@ -540,7 +540,7 @@ class DbrxForCausalLM(nn.Module, CudaGraphMixin):
                                     expert_id=exp_id,
                                     shard_id='up')
                 elif '.w2' in name:
-                    name = name.replace('.w2', '.down_weights')
+                    name = name.replace('.w2', '.down.weight')
                     param = params_dict[name]
                     for exp_id in range(num_experts):
                         weight = loaded_weight[exp_id].t()

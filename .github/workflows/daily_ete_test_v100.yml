@@ -17,12 +17,17 @@ on:
         required: true
         description: 'Set backend testcase filter: turbomind or pytorch or turbomind, pytorch. Default is "["turbomind", "pytorch"]"'
         type: string
-        default: "['turbomind', 'pytorch', 'turbomind_vl']"
+        default: "['turbomind', 'pytorch']"
       model:
         required: true
-        description: 'Set testcase module filter: chat, restful, pipeline, quantization. Default contains all models'
+        description: 'Set testcase module filter: llm, vllm. Default contains all models'
         type: string
-        default: "['pipeline','restful','chat']"
+        default: "['llm','mllm']"
+      function:
+        required: true
+        description: 'Set testcase function filter: chat, restful, pipeline. Default contains all functions'
+        type: string
+        default: '["pipeline", "restful", "chat"]'
       offline_mode:
         required: true
         description: 'Whether start a offline mode, if true, you should prepare code and whl package by yourself'
@@ -34,7 +39,7 @@ on:
         type: string
         default: "['quant', 'tools','restful','pipeline','benchmark','evaluation']"
   schedule:
-    - cron:  '00 16 * * 0-4'
+    - cron:  '00 17 * * 0-4'
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
@@ -153,8 +158,7 @@ jobs:
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
-          python3 -m pip install /root/packages/xformers-0.0.28.post1-cp310-cp310-manylinux_2_28_x86_64.whl --no-deps
+          python3 -m pip install /root/packages/xformers-*.whl --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
@@ -162,7 +166,6 @@ jobs:
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
-          pip install triton==3.0.0
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
@@ -194,21 +197,27 @@ jobs:
           chmod -R 777 $workdir
 
   test_tools:
-    needs: test_quantization
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'tools'))}}
     runs-on: linux-v100
+    needs: test_quantization
     timeout-minutes: 240
     strategy:
       fail-fast: false
       matrix:
-        backend: ${{ fromJSON(inputs.backend) || fromJSON('["turbomind", "pytorch", "turbomind_vl"]')}}
-        model: ${{ fromJSON(inputs.model) || fromJSON('["pipeline","restful","chat"]')}}
+        backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
+        model: ${{ fromJSON(inputs.model || '["llm", "mllm"]')}}
+        function: ${{ fromJSON(inputs.function || '["pipeline","restful","chat"]')}}
         exclude:
-          - backend: turbomind_vl
-            model: chat
+          - backend: turbomind
+            model: mllm
+            function: chat
+          - backend: pytorch
+            model: mllm
+            function: chat
         include:
           - backend: turbomind
-            model: local_case
+            model: llm
+            function: local_case
     env:
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /root/modelscope_hub
@@ -234,8 +243,7 @@ jobs:
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
-          python3 -m pip install /root/packages/xformers-0.0.28.post1-cp310-cp310-manylinux_2_28_x86_64.whl --no-deps
+          python3 -m pip install /root/packages/xformers-*.whl --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
@@ -243,7 +251,6 @@ jobs:
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
-          pip install triton==3.0.0
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
@@ -255,7 +262,7 @@ jobs:
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
       - name: Test lmdeploy - chat workspace
         continue-on-error: true
-        if: matrix.backend == 'turbomind' && matrix.model == 'chat'
+        if: matrix.backend == 'turbomind' && matrix.model == 'llm' && matrix.function == 'chat'
         run: |
           pytest autotest/tools/chat/test_command_chat_workspace.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
@@ -263,7 +270,7 @@ jobs:
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - chat
         continue-on-error: true
-        if: (matrix.backend == 'pytorch' || matrix.backend == 'turbomind') && matrix.model == 'chat'
+        if: (matrix.backend == 'pytorch' || matrix.backend == 'turbomind') && matrix.model == 'llm' && matrix.function == 'chat'
         run: |
           pytest autotest/tools/chat/test_command_chat_hf_${{matrix.backend}}.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
@@ -271,30 +278,30 @@ jobs:
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - pipeline
         continue-on-error: true
-        if: matrix.model == 'pipeline'
+        if: matrix.function == 'pipeline'
         run: |
-          pytest autotest/tools/pipeline/test_pipeline_chat_${{matrix.backend}}.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/pipeline/test_pipeline_chat_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/tools/pipeline/test_pipeline_chat_${{matrix.backend}}.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/pipeline/test_pipeline_chat_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - restful
         continue-on-error: true
-        if: matrix.model == 'restful'
+        if: matrix.function == 'restful'
         run: |
-          pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - restful workspace
         continue-on-error: true
-        if: matrix.backend == 'turbomind' && matrix.model == 'restful'
+        if: matrix.backend == 'turbomind' && matrix.model == 'llm' && matrix.function == 'restful'
         run: |
           pytest autotest/tools/restful/test_restful_chat_workspace.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
           pytest autotest/tools/restful/test_restful_chat_workspace.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - local testcase
-        if: matrix.backend == 'turbomind' && matrix.model == 'local_case'
+        if: matrix.backend == 'turbomind' && matrix.model == 'llm' && matrix.function == 'local_case'
         run: |
           pytest /local_case/issue_regression --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}}|| true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
@@ -315,7 +322,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: ['turbomind', 'pytorch']
+        backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
     timeout-minutes: 120
     container:
       image: openmmlab/lmdeploy:latest-cu12
@@ -334,8 +341,7 @@ jobs:
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
-          python3 -m pip install /root/packages/xformers-0.0.28.post1-cp310-cp310-manylinux_2_28_x86_64.whl --no-deps
+          python3 -m pip install /root/packages/xformers-*.whl --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
@@ -343,7 +349,6 @@ jobs:
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
-          pip install triton==3.0.0
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
@@ -426,8 +431,7 @@ jobs:
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
-          python3 -m pip install /root/packages/xformers-0.0.28.post1-cp310-cp310-manylinux_2_28_x86_64.whl --no-deps
+          python3 -m pip install /root/packages/xformers-*.whl --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
@@ -435,7 +439,6 @@ jobs:
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
-          pip install triton==3.0.0
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
@@ -487,8 +490,7 @@ jobs:
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
-          python3 -m pip install /root/packages/xformers-0.0.28.post1-cp310-cp310-manylinux_2_28_x86_64.whl --no-deps
+          python3 -m pip install /root/packages/xformers-*.whl --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
@@ -496,7 +498,6 @@ jobs:
           python3 -m pip install -r requirements/test.txt
       - name: Check env
         run: |
-          pip install triton==3.0.0
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
@@ -549,8 +550,7 @@ jobs:
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
-          python3 -m pip install /root/packages/xformers-0.0.28.post1-cp310-cp310-manylinux_2_28_x86_64.whl --no-deps
+          python3 -m pip install /root/packages/xformers-*.whl --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
@@ -564,7 +564,6 @@ jobs:
           echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
       - name: Check env
         run: |
-          pip install triton==3.0.0
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
@@ -582,13 +581,13 @@ jobs:
         run: |
           export LMDEPLOY_DIR=$(pwd)
 
-          python3 .github/scripts/action_tools.py evaluate "[turbomind_internlm2_5_7b_chat, turbomind_internlm2_5_7b_chat_4bits, turbomind_internlm2_5_7b_chat_kvint4, pt_internlm2_5_7b_chat, turbomind_internlm2_5_20b_chat, turbomind_internlm2_5_20b_chat_4bits, turbomind_internlm2_5_20b_chat_kvint4, pt_internlm2_5_20b_chat, turbomind_llama_3d1_8b_instruct, pt_llama_3d1_8b_instruct, turbomind_llama_3d1_8b_instruct_4bits, turbomind_llama_3d1_8b_instruct_kvint4, turbomind_qwen2_7b_instruct, turbomind_qwen2_7b_instruct_4bits, pt_qwen1_5_moe_2_7b_chat, pt_gemma_2_9b_it]" "[*race_datasets, *gsm8k_datasets]" /root/evaluation-reports/${{ github.run_id }} chat true
+          python3 .github/scripts/action_tools.py evaluate "[turbomind_internlm2_chat_7b, pytorch_internlm2_chat_7b, turbomind_internlm2_5_7b_chat, pytorch_internlm2_5_7b_chat, turbomind_internlm2_5_20b_chat, pytorch_internlm2_5_20b_chat, turbomind_qwen1_5_7b_chat, pytorch_qwen1_5_7b_chat, turbomind_llama2_7b_chat, turbomind_llama3_8b_instruct, pytorch_llama3_8b_instruct, turbomind_llama3_1_8b_instruct, pytorch_llama3_1_8b_instruct, turbomind_qwen2_7b_instruct, pytorch_qwen2_7b_instruct, pytorch_qwen1_5_moe_2_7b_chat, pytorch_gemma_2_9b_it]" "[*race_datasets, *gsm8k_datasets, *ifeval_datasets]" /root/evaluation-reports/${{ github.run_id }} chat true
       - name: Evaluate base models
         if: matrix.evaluate_type == 'base'
         run: |
           export LMDEPLOY_DIR=$(pwd)
 
-          python3 .github/scripts/action_tools.py evaluate "[turbomind_internlm2_5_7b, turbomind_qwen2_7b, turbomind_internlm2_5_7b_batch1]" "[*mmlu_datasets, *gsm8k_datasets]" /root/evaluation-reports/${{ github.run_id }} base true
+          python3 .github/scripts/action_tools.py evaluate "[turbomind_internlm2_5_7b, turbomind_qwen2_5_14b]" "[*race_datasets, *gsm8k_datasets, *gpqa_datasets, *winogrande_datasets]" /root/evaluation-reports/${{ github.run_id }} base true
       - name: Clear workspace
         if: always()
         run: |

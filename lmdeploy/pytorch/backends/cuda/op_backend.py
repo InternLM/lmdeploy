@@ -23,9 +23,12 @@ class CudaOpsBackend(DefaultOpsBackend):
     @classmethod
     def get_layer_impl_builder(cls, layer_type: OpType):
         """get cuda layer builder."""
-        if layer_type == OpType.Attention:
+        if layer_type == OpType.PagedAttention:
             from .attention import TritonAttentionBuilder
             return TritonAttentionBuilder
+        elif layer_type == OpType.FlashAttention:
+            from .flash_attention import TritonFlashAttentionBuilder
+            return TritonFlashAttentionBuilder
         elif layer_type == OpType.ApplyRotaryEmb:
             from .apply_rotary_emb import TritonApplyRotaryEmbBuilder
             return TritonApplyRotaryEmbBuilder
@@ -48,17 +51,20 @@ class CudaOpsBackend(DefaultOpsBackend):
             from .activation import TritonSiluAndMulBuilder
             return TritonSiluAndMulBuilder
         elif layer_type == OpType.LinearW4A16:
-            from awq.modules.linear.gemm import AWQ_INSTALLED
-            if AWQ_INSTALLED:
-                from .awq_modules import AwqLinearW4A16Builder
-                return AwqLinearW4A16Builder
-            else:
-                logger.debug(
-                    f'Op {layer_type} fallback to default implementation.')
-                return super().get_layer_impl_builder(layer_type)
+            from .awq_modules import AwqLinearW4A16Builder
+            return AwqLinearW4A16Builder
         elif layer_type == OpType.FusedMoE:
             from .moe import TritonFusedMoEBuilder
             return TritonFusedMoEBuilder
+        elif layer_type == OpType.FusedMoEW8A8:
+            from .moe import TritonFusedMoEW8A8Builder
+            return TritonFusedMoEW8A8Builder
+        elif layer_type == OpType.FusedMoEBlockedF8:
+            from .moe import TritonFusedMoEBlockedF8Builder
+            return TritonFusedMoEBlockedF8Builder
+        elif layer_type == OpType.LinearBlockedF8:
+            from .blockedf8_modules import TritonLinearBlockedF8Builder
+            return TritonLinearBlockedF8Builder
         else:
             logger.debug(
                 f'Op {layer_type} fallback to default implementation.')
@@ -104,31 +110,47 @@ class CudaOpsBackend(DefaultOpsBackend):
         attn_meta_cls = cls.get_attention_metadata_cls()
         q_seqlens = step_context.q_seqlens
         q_start_loc = q_seqlens.cumsum(0) - q_seqlens
+        kv_seqlens = step_context.kv_seqlens
+        kv_start_loc = None
+        kv_flatten_size = None
+        if not step_context.is_decoding:
+            kv_start_loc = kv_seqlens.cumsum(0) - kv_seqlens
+            kv_flatten_size = kv_seqlens.sum().item()
         attn_metadata = attn_meta_cls(
             step_context.is_decoding,
             step_context.block_offsets,
             q_start_loc=q_start_loc,
             q_seqlens=q_seqlens,
-            kv_seqlens=step_context.kv_seqlens,
+            kv_start_loc=kv_start_loc,
+            kv_seqlens=kv_seqlens,
+            kv_flatten_size=kv_flatten_size,
             quant_policy=step_context.kv_quant_policy,
         )
 
+        cross_seqlens = step_context.cross_seqlens
+        cross_kv_seqlens = step_context.cross_kv_seqlens
         cross_attn_metadata = None
-        fill_seqlens = None
-        if step_context.cross_attention_states is not None:
-            fill_seqlens = torch.zeros_like(q_seqlens)
-            for idx, state in enumerate(step_context.cross_attention_states):
-                if state is not None:
-                    fill_seqlens[idx] = state.shape[-2]
-        cross_attn_metadata = attn_meta_cls(
-            step_context.is_decoding,
-            step_context.block_offsets,
-            q_start_loc=q_start_loc,
-            q_seqlens=q_seqlens,
-            kv_seqlens=step_context.cross_kv_seqlens,
-            fill_seqlens=fill_seqlens,
-            quant_policy=step_context.kv_quant_policy,
-        )
+        if cross_seqlens is not None:
+            fill_seqlens = cross_seqlens
+            if fill_seqlens.sum().item() == 0:
+                fill_seqlens = None
+            cross_kv_start_loc = None
+            cross_kv_flatten_size = None
+            if not step_context.is_decoding and cross_kv_seqlens is not None:
+                cross_kv_start_loc = cross_kv_seqlens.cumsum(
+                    0) - cross_kv_seqlens
+                cross_kv_flatten_size = cross_kv_seqlens.sum().item()
+            cross_attn_metadata = attn_meta_cls(
+                step_context.is_decoding,
+                step_context.block_offsets,
+                q_start_loc=q_start_loc,
+                q_seqlens=q_seqlens,
+                kv_start_loc=cross_kv_start_loc,
+                kv_seqlens=cross_kv_seqlens,
+                kv_flatten_size=cross_kv_flatten_size,
+                fill_seqlens=fill_seqlens,
+                quant_policy=step_context.kv_quant_policy,
+            )
 
         step_context.attn_metadata = attn_metadata
         step_context.cross_attn_metadata = cross_attn_metadata

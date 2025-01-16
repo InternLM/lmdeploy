@@ -2,6 +2,8 @@
 
 我们基于 LMDeploy 的 PytorchEngine，增加了华为昇腾设备的支持。所以，在华为昇腾上使用 LDMeploy 的方法与在英伟达 GPU 上使用 PytorchEngine 后端的方法几乎相同。在阅读本教程之前，请先阅读原版的[快速开始](../get_started.md)。
 
+支持的模型列表在[这里](../../supported_models/supported_models.md#PyTorchEngine-华为昇腾平台).
+
 ## 安装
 
 我们强烈建议用户构建一个 Docker 镜像以简化环境设置。
@@ -15,15 +17,15 @@ cd lmdeploy
 
 ### 环境准备
 
-Docker 版本应不低于 18.03。并且需按照[官方指南](https://www.hiascend.com/document/detail/zh/mindx-dl/60rc2/clusterscheduling/clusterschedulingig/clusterschedulingig/dlug_installation_012.html)安装 Ascend Docker Runtime。
+Docker 版本应不低于 18.09。并且需按照[官方指南](https://www.hiascend.com/document/detail/zh/mindx-dl/60rc2/clusterscheduling/clusterschedulingig/clusterschedulingig/dlug_installation_012.html)安装 Ascend Docker Runtime。
 
 > \[!CAUTION\]
 > 如果在后续容器内出现`libascend_hal.so: cannot open shared object file`错误，说明Ascend Docker Runtime没有被正确安装。
 
 #### Drivers，Firmware 和 CANN
 
-目标机器需安装华为驱动程序和固件版本 23.0.3，请参考
-[CANN 驱动程序和固件安装](https://www.hiascend.com/document/detail/zh/CANNCommunityEdition/80RC1alpha003/softwareinst/instg/instg_0019.html)
+目标机器需安装华为驱动程序和固件版本至少为 23.0.3，请参考
+[CANN 驱动程序和固件安装](https://www.hiascend.com/document/detail/zh/CANNCommunityEdition/800alpha001/softwareinst/instg/instg_0005.html)
 和[下载资源](https://www.hiascend.com/hardware/firmware-drivers/community?product=4&model=26&cann=8.0.RC2.beta1&driver=1.0.25.alpha)。
 
 另外，`docker/Dockerfile_aarch64_ascend`没有提供CANN 安装包，用户需要自己从[昇腾资源下载中心](https://www.hiascend.com/developer/download/community/result?module=cann&cann=8.0.RC2.beta1&product=4&model=26)下载CANN(version 8.0.RC2.beta1)软件包。
@@ -38,6 +40,8 @@ DOCKER_BUILDKIT=1 docker build -t lmdeploy-aarch64-ascend:latest \
     -f docker/Dockerfile_aarch64_ascend .
 ```
 
+上述`Dockerfile_aarch64_ascend`适用于鲲鹏CPU. 如果是Intel CPU的机器，请尝试[这个dockerfile](https://github.com/InternLM/lmdeploy/issues/2745#issuecomment-2473285703) (未经过测试)
+
 如果以下命令执行没有任何错误，这表明环境设置成功。
 
 ```bash
@@ -49,7 +53,7 @@ docker run -e ASCEND_VISIBLE_DEVICES=0 --rm --name lmdeploy -t lmdeploy-aarch64-
 ## 离线批处理
 
 > \[!TIP\]
-> 图模式已经支持了Atlas 800T A2。目前，单卡下的LLaMa3-8B/LLaMa2-7B/Qwen2-7B已经通过测试。用户可以设定`eager_mode=False`来开启图模式，或者设定`eager_mode=True`来关闭图模式。(启动图模式需要事先source `/usr/local/Ascend/nnal/atb/set_env.sh`)
+> 图模式已经支持了Atlas 800T A2。用户可以设定`eager_mode=False`来开启图模式，或者设定`eager_mode=True`来关闭图模式。(启动图模式需要事先source `/usr/local/Ascend/nnal/atb/set_env.sh`)
 
 ### LLM 推理
 
@@ -84,7 +88,7 @@ if __name__ == "__main__":
 ## 在线服务
 
 > \[!TIP\]
-> 图模式已经支持Atlas 800T A2。目前，单卡下的InternLM2-7B/LLaMa2-7B/Qwen2-7B已经通过测试。
+> 图模式已经支持Atlas 800T A2。
 > 在线服务时，图模式默认开启，用户可以添加`--eager-mode`来关闭图模式。(启动图模式需要事先source `/usr/local/Ascend/nnal/atb/set_env.sh`)
 
 ### LLM 模型服务
@@ -129,3 +133,9 @@ lmdeploy lite auto_awq $HF_MODEL --work-dir $WORK_DIR --device npu
 ```
 
 支持的模型列表请参考[支持的模型](../../supported_models/supported_models.md)。
+
+### int8 KV-cache 量化
+
+昇腾后端现在支持了在eager模式下的离线int8 KV-cache量化。
+
+详细使用方式请请参考这篇[文章](https://github.com/DeepLink-org/dlinfer/blob/main/docs/quant/ascend_kv_quant.md)。

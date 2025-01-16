@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from dataclasses import dataclass
-from typing import Optional, Sequence
+from typing import Dict, Optional, Sequence
 
 from torch import Tensor
 
@@ -15,6 +15,8 @@ class DlinferAttentionMetadata(AttentionMetadata):
     is_unpaged_prefill: Optional[bool] = None
     max_q_seq_len: int = 1
     max_kv_seq_len: int = 1
+    quant_meta: Dict = None
+    cu_seq_lens_kv: Optional[Tensor] = None
 
 
 class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
@@ -30,8 +32,10 @@ class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
         alibi: bool = None,
         sliding_window: int = None,
         logit_softcapping: float = None,
+        causal: bool = True,
         **kwargs,
     ):
+        assert causal
         super().__init__(
             num_heads,
             head_size,
@@ -41,6 +45,7 @@ class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
             alibi,
             sliding_window,
             logit_softcapping,
+            causal=causal,
             **kwargs,
         )
 
@@ -74,10 +79,39 @@ class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
         is_unpaged_prefill = attn_metadata.is_unpaged_prefill
         max_q_seq_len = attn_metadata.max_q_seq_len
         max_kv_seq_len = attn_metadata.max_kv_seq_len
+        quant_bits = attn_metadata.quant_policy
+        cu_seq_lens_kv = attn_metadata.cu_seq_lens_kv
+
+        if attn_metadata.quant_meta is not None:
+            k_scales_zeros = [
+                next(attn_metadata.quant_meta['k_scales']),
+                next(attn_metadata.quant_meta['k_zeros'])
+            ] if 'k_scales' in attn_metadata.quant_meta else []
+            v_scales_zeros = [
+                next(attn_metadata.quant_meta['v_scales']),
+                next(attn_metadata.quant_meta['v_zeros'])
+            ] if 'v_scales' in attn_metadata.quant_meta else []
+            kv_scales = next(
+                attn_metadata.quant_meta['kv_scales']
+            ) if 'kv_scales' in attn_metadata.quant_meta else None
+            kv_zeros = next(
+                attn_metadata.quant_meta['kv_zeros']
+            ) if 'kv_zeros' in attn_metadata.quant_meta else None
+        else:
+            k_scales_zeros = []
+            v_scales_zeros = []
+            kv_scales = None
+            kv_zeros = None
 
         # fill kv cache
-        k_cache, v_cache = self.fill_kv_cache(key, value, k_cache, v_cache,
-                                              kv_start_indices)
+        k_cache, v_cache = self.fill_kv_cache(key,
+                                              value,
+                                              k_cache,
+                                              v_cache,
+                                              kv_start_indices,
+                                              k_scales_zeros=k_scales_zeros,
+                                              v_scales_zeros=v_scales_zeros,
+                                              quant_bits=quant_bits)
 
         if inplace:
             attn_output = query[..., :self.v_head_size]
@@ -97,12 +131,16 @@ class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
             q_start_loc=q_start_loc,
             q_seqlens=q_seqlens,
             kv_seqlens=kv_seqlens,
+            cu_seq_lens_kv=cu_seq_lens_kv,
             max_q_seq_len=max_q_seq_len,
             max_kv_seq_len=max_kv_seq_len,
             is_decoding=is_decoding,
             block_size=block_size,
             attn_mask=attn_mask,
             is_unpaged_prefill=is_unpaged_prefill,
+            kv_scales=kv_scales,
+            kv_zeros=kv_zeros,
+            quant_bits=quant_bits,
         )
 
         return attn_output
@@ -121,6 +159,7 @@ class DlinferAttentionBuilder(AttentionBuilder[DlinferAttentionMetadata]):
         alibi_scale: float = None,
         sliding_window: int = None,
         logical_softcapping: float = None,
+        causal: bool = True,
         **kwargs,
     ) -> DlinferAttentionImpl:
         """build."""
@@ -132,4 +171,5 @@ class DlinferAttentionBuilder(AttentionBuilder[DlinferAttentionMetadata]):
                                     alibi_scale=alibi_scale,
                                     sliding_window=sliding_window,
                                     logical_softcapping=logical_softcapping,
+                                    causal=causal,
                                     **kwargs)

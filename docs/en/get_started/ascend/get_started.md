@@ -3,6 +3,8 @@
 The usage of lmdeploy on a Huawei Ascend device is almost the same as its usage on CUDA with PytorchEngine in lmdeploy.
 Please read the original [Get Started](../get_started.md) guide before reading this tutorial.
 
+Here is the [supported model list](../../supported_models/supported_models.md#PyTorchEngine-on-Huawei-Ascend-Platform).
+
 ## Installation
 
 We highly recommend that users build a Docker image for streamlined environment setup.
@@ -16,15 +18,15 @@ cd lmdeploy
 
 ### Environment Preparation
 
-The Docker version is supposed to be no less than `18.03`. And `Ascend Docker Runtime` should be installed by following [the official guide](https://www.hiascend.com/document/detail/zh/mindx-dl/60rc2/clusterscheduling/clusterschedulingig/.clusterschedulingig/dlug_installation_012.html).
+The Docker version is supposed to be no less than `18.09`. And `Ascend Docker Runtime` should be installed by following [the official guide](https://www.hiascend.com/document/detail/zh/mindx-dl/60rc2/clusterscheduling/clusterschedulingig/.clusterschedulingig/dlug_installation_012.html).
 
 > \[!CAUTION\]
 > If error message `libascend_hal.so: cannot open shared object file` shows, that means **Ascend Docker Runtime** is not installed correctly!
 
 #### Ascend Drivers, Firmware and CANN
 
-The target machine needs to install the Huawei driver and firmware version 23.0.3, refer to
-[CANN Driver and Firmware Installation](https://www.hiascend.com/document/detail/zh/CANNCommunityEdition/80RC1alpha003/softwareinst/instg/instg_0019.html)
+The target machine needs to install the Huawei driver and firmware version not lower than 23.0.3, refer to
+[CANN Driver and Firmware Installation](https://www.hiascend.com/document/detail/zh/CANNCommunityEdition/800alpha001/softwareinst/instg/instg_0005.html)
 and [download resources](https://www.hiascend.com/hardware/firmware-drivers/community?product=4&model=26&cann=8.0.RC2.beta1&driver=1.0.25.alpha).
 
 And the CANN (version 8.0.RC2.beta1) software packages should also be downloaded from [Ascend Resource Download Center](https://www.hiascend.com/developer/download/community/result?module=cann&cann=8.0.RC2.beta1&product=4&model=26) themselves. Make sure to place the `Ascend-cann-kernels-910b*.run`, `Ascend-cann-nnal_*.run` and `Ascend-cann-toolkit*-aarch64.run` under the root directory of lmdeploy source code
@@ -38,6 +40,8 @@ DOCKER_BUILDKIT=1 docker build -t lmdeploy-aarch64-ascend:latest \
     -f docker/Dockerfile_aarch64_ascend .
 ```
 
+The `Dockerfile_aarch64_ascend` is tested on Kunpeng CPU. For intel CPU, please try [this dockerfile](https://github.com/InternLM/lmdeploy/issues/2745#issuecomment-2473285703) (which is not fully tested)
+
 If the following command executes without any errors, it indicates that the environment setup is successful.
 
 ```bash
@@ -49,7 +53,7 @@ For more information about running the Docker client on Ascend devices, please r
 ## Offline batch inference
 
 > \[!TIP\]
-> Graph mode has been supported on Atlas 800T A2. Currently, LLaMa3-8B/LLaMa2-7B/Qwen2-7B are tested on graph mode.
+> Graph mode has been supported on Atlas 800T A2.
 > Users can set `eager_mode=False` to enable graph mode, or, set `eager_mode=True` to disable graph mode.
 > (Please source `/usr/local/Ascend/nnal/atb/set_env.sh` before enabling graph mode)
 
@@ -86,7 +90,7 @@ if __name__ == "__main__":
 ## Online serving
 
 > \[!TIP\]
-> Graph mode has been supported on Atlas 800T A2. Currently, InternLM2-7B/LLaMa2-7B/Qwen2-7B are tested on graph mode.
+> Graph mode has been supported on Atlas 800T A2.
 > Graph mode is default enabled in online serving. Users can add `--eager-mode` to disable graph mode.
 > (Please source `/usr/local/Ascend/nnal/atb/set_env.sh` before enabling graph mode)
 
@@ -132,3 +136,9 @@ lmdeploy lite auto_awq $HF_MODEL --work-dir $WORK_DIR --device npu
 ```
 
 Please check [supported_models](../../supported_models/supported_models.md) before use this feature.
+
+### int8 KV-cache Quantization
+
+Ascend backend has supported offline int8 KV-cache Quantization on eager mode.
+
+Please refer this [doc](https://github.com/DeepLink-org/dlinfer/blob/main/docs/quant/ascend_kv_quant.md) for details.

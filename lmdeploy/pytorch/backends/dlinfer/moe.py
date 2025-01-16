@@ -1,5 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+from typing import List
+
 import torch
 
 from lmdeploy.pytorch.kernels.dlinfer import fused_moe, moe_gating_topk_softmax
@@ -17,9 +19,8 @@ class DlinferSoftmaxTopKImpl(SoftmaxTopKImpl):
 
     def forward(self, x: torch.Tensor):
         routing_weights, selected_experts = moe_gating_topk_softmax(
-            x, self.top_k)
-        return routing_weights.to(torch.float32), selected_experts.to(
-            torch.int64)
+            x.to(torch.float32), self.top_k)
+        return routing_weights, selected_experts
 
 
 class DlinferSoftmaxTopKBuilder(SoftmaxTopKBuilder):
@@ -38,18 +39,22 @@ class DlinferFusedMoEImpl(FusedMoEImpl):
         self.top_k = top_k
         self.renormalize = renormalize
 
-    def forward(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor,
-                topk_ids: torch.LongTensor, gate_up_weights: torch.Tensor,
-                down_weights: torch.Tensor):
+    def forward(self,
+                hidden_states: torch.Tensor,
+                topk_weights: torch.Tensor,
+                topk_ids: torch.LongTensor,
+                gate_up_weights: torch.Tensor,
+                down_weights: torch.Tensor,
+                expert_list: List[int] = None):
         """forward."""
-        return fused_moe(hidden_states, self.top_k, topk_ids, topk_weights,
-                         gate_up_weights, down_weights)
+        return fused_moe(hidden_states, gate_up_weights, down_weights,
+                         topk_weights, topk_ids, self.top_k, self.renormalize)
 
 
 class DlinferFusedMoEBuilder(FusedMoEBuilder):
     """dlinfer fused moe builder."""
 
     @staticmethod
-    def build(top_k: int, renormalize: bool = False):
+    def build(top_k: int, num_experts: int, renormalize: bool = False):
         """build from mlp."""
         return DlinferFusedMoEImpl(top_k=top_k, renormalize=renormalize)

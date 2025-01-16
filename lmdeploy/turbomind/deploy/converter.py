@@ -6,7 +6,7 @@ import shutil
 import fire
 import torch
 
-from lmdeploy.archs import get_model_arch
+from lmdeploy.archs import get_model_arch, search_nested_config
 from lmdeploy.messages import TurbomindEngineConfig
 from lmdeploy.model import MODELS, best_match_model
 from lmdeploy.utils import get_logger, get_model
@@ -129,16 +129,17 @@ def get_output_model_registered_name_and_config(model_path: str,
         ] else 'float16'
     elif dtype in ['float16', 'bfloat16']:
         if weight_type == 'int4':
-            logger.warn(f'The model {model_path} is a quantized model, so the '
-                        f'specified data type {dtype} is ignored')
+            logger.warning(
+                f'The model {model_path} is a quantized model, so the '
+                f'specified data type {dtype} is ignored')
         else:
             weight_type = dtype
     else:
         assert 0, f'unsupported specified data type {dtype}'
 
     if weight_type == 'bfloat16' and not is_bf16_supported():
-        logger.warn('data type fallback to float16 since '
-                    'torch.cuda.is_bf16_supported is False')
+        logger.warning('data type fallback to float16 since '
+                       'torch.cuda.is_bf16_supported is False')
         weight_type = 'float16'
     config.model_config.model_arch = model_arch
     config.model_config.weight_type = weight_type
@@ -174,23 +175,6 @@ def pack_model_repository(workspace_path: str):
                dst=osp.join(model_repo_dir, 'postprocessing'))
 
 
-def find_quantization_config(nested, target_key):
-    if isinstance(nested, dict):
-        for key, value in nested.items():
-            if key == target_key:
-                return value
-            if isinstance(value, (dict, list)):
-                result = find_quantization_config(value, target_key)
-                if result is not None:
-                    return result
-    elif isinstance(nested, list):
-        for item in nested:
-            result = find_quantization_config(item, target_key)
-            if result is not None:
-                return result
-    return None
-
-
 def get_tm_model(model_path,
                  model_name,
                  chat_template_name,
@@ -213,8 +197,7 @@ def get_tm_model(model_path,
             If it is None, the turbomind model won't be saved
     """
     _, cfg = get_model_arch(model_path)
-    quant_config = find_quantization_config(cfg.to_dict(),
-                                            'quantization_config')
+    quant_config = search_nested_config(cfg.to_dict(), 'quantization_config')
     if quant_config:
         quant_method = quant_config.get('quant_method')
         _group_size = int(quant_config.get('group_size', 0))
@@ -241,11 +224,10 @@ def get_tm_model(model_path,
         engine_config.model_format = quant_method
         group_size = _group_size
 
-    # Compatible to awq models that are quantized by lmdeploy (<=v0.3.0)
-    if not group_size:
-        group_size = 128
-
     if engine_config.model_format in ['awq', 'gptq']:
+        # Compatible to awq models that are quantized by lmdeploy (<=v0.3.0)
+        if not group_size:
+            group_size = 128
         assert group_size == 128, \
             f'model format is "{engine_config.model_format}" ' \
             f'but group_size is {group_size}. Currently, only 128 ' \

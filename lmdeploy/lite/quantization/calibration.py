@@ -6,8 +6,7 @@ import torch
 from torch import nn
 from transformers import PreTrainedTokenizer
 
-from lmdeploy.lite.quantization.activation import (ActivationObserver,
-                                                   KVCacheObserver)
+from lmdeploy.lite.quantization.activation import ActivationObserver
 from lmdeploy.lite.quantization.awq import FC_FCS_MAP, NORM_FCS_MAP
 from lmdeploy.lite.utils import (bimap_name_mod, collect_target_modules,
                                  concat_decoder_layer_outputs,
@@ -27,8 +26,6 @@ class CalibrationContext():
 
     inp_obs_group = 'inputs'
     out_obs_group = 'outputs'
-    key_obs_group = 'keys'
-    value_obs_group = 'values'
 
     def __init__(self,
                  model: nn.Module,
@@ -45,6 +42,9 @@ class CalibrationContext():
             tokenizer (PreTrainedTokenizer): Tokenizer of the given model.
             layer_type (Union[str, type]): Type of the layers to be observed.
             norm_type (Union[str, type]): Norm type used in the model.
+            batch_size (int): The batch size for running the calib samples.
+                Low GPU mem requires small batch_size. Large batch_size
+                reduces the calibration time while costs more VRAM.
             device (str, optional): Device where the model should run.
                 Defaults to 'cuda'.
         """
@@ -75,7 +75,6 @@ class CalibrationContext():
         self._init_input_observers(self.name2fc)
         self._init_output_observers(self.name2norm)
         self._init_output_observers(self.name2fc)
-        self._init_kv_observers(self.name2layer)
 
         self.device = device
 
@@ -101,14 +100,6 @@ class CalibrationContext():
         for name, mod in name2mod.items():
             obs = ActivationObserver(mod.weight.size(0))
             obs.global_available(name, group=self.out_obs_group)
-
-    def _init_kv_observers(self, name2mod):
-        """Initialize KV observers for given modules."""
-        for name in name2mod.keys():
-            k_obs = KVCacheObserver(self.num_kv_heads, self.head_dim)
-            v_obs = KVCacheObserver(self.num_kv_heads, self.head_dim)
-            k_obs.global_available(name, group=self.key_obs_group)
-            v_obs.global_available(name, group=self.value_obs_group)
 
     def _insert_input_observers(self):
         """Insert input observers into the target modules.
@@ -221,27 +212,6 @@ class CalibrationContext():
             outputs_stats['absmean'][name] = obs.absmean_val
         return outputs_stats
 
-    def collect_kv_stats(self):
-        """Collect statistics (min, max, absmax values) of the observed keys
-        and values.
-
-        Returns a tuple of two dictionaries with these collected stats.
-        """
-        key_stats = {'max': {}, 'min': {}, 'absmax': {}}
-        obs_group = KVCacheObserver.find_group(self.key_obs_group)
-        for name, obs in obs_group.items():
-            key_stats['max'][name] = obs.max_val
-            key_stats['min'][name] = obs.min_val
-            key_stats['absmax'][name] = obs.absmax_val
-
-        value_stats = {'max': {}, 'min': {}, 'absmax': {}}
-        obs_group = KVCacheObserver.find_group(self.value_obs_group)
-        for name, obs in obs_group.items():
-            value_stats['max'][name] = obs.max_val
-            value_stats['min'][name] = obs.min_val
-            value_stats['absmax'][name] = obs.absmax_val
-        return key_stats, value_stats
-
     def export(self, out_dir):
         """Export the calibration statistics (inputs, outputs, keys and values)
         to specified directory.
@@ -253,9 +223,11 @@ class CalibrationContext():
 
         inp_stats = self.collect_inputs_stats()
         torch.save(inp_stats, out_dir / 'inputs_stats.pth')
+        torch.cuda.empty_cache()
 
         out_stats = self.collect_outputs_stats()
         torch.save(out_stats, out_dir / 'outputs_stats.pth')
+        torch.cuda.empty_cache()
 
     def calibrate(self, data):
         """Forward pass through the model in inference mode with given data."""
@@ -267,6 +239,7 @@ class CalibrationContext():
             model = self.model.model
         with torch.inference_mode():
             _ = model(data.to(self.device))
+        torch.cuda.empty_cache()
 
     def __enter__(self):
         """Prepares the Calibration object for a 'with' statement by
@@ -320,9 +293,14 @@ def auto_scale_block(module, module_kwargs, w_bit, w_group_size, input_feat,
 
         org_sd = {k: v.cpu() for k, v in block.state_dict().items()}
         for ratio in range(0, n_grid):
-            ratio = ratio * 1 / n_grid
-            scales = (x_max.pow(ratio) /
-                      w_mean.pow(1 - ratio)).clamp(min=1e-4).view(-1)
+            ratio = ratio / n_grid
+            w_mean_pow = w_mean.pow(1 - ratio)
+            if w_mean_pow.min().item() == 0:
+                print('w_mean.pow(1 - ratio).min is zero, '
+                      'clamping w_mean.pow(1 - ratio) to 1e-4')
+                w_mean_pow = w_mean_pow.clamp(min=1e-4)
+            scales = (x_max.pow(ratio) / w_mean_pow).clamp(min=1e-4).view(-1)
+
             scales = scales / (scales.max() * scales.min()).sqrt()
             for fc in linears2scale:
                 fc.weight.mul_(scales.view(1, -1).to(fc.weight.device))
@@ -440,6 +418,7 @@ class CalibrationContextV2(CalibrationContext):
             inputs_stats['absmean'][name] = obs.absmean_val
             inputs_stats['ratios'][name] = obs.ratio
         torch.save(inputs_stats, out_dir / 'inputs_stats.pth')
+        torch.cuda.empty_cache()
 
     def _wrap_decoder_layers_for_search(self):
         """Method to wrap the decoder layers' forward functions for observing

@@ -114,6 +114,16 @@ class ArgumentHelper:
             'the model is a quantized model')
 
     @staticmethod
+    def quant_dtype(parser, default: str = 'int8'):
+        return parser.add_argument(
+            '--quant-dtype',
+            type=str,
+            default=default,
+            choices=['int8', 'float8_e4m3fn', 'float8_e5m2', 'fp8'],
+            help='data type for the quantized model weights and activations.'
+            'Note "fp8" is the short version of "float8_e4m3fn"')
+
+    @staticmethod
     def model_format(parser, default: str = None):
         return parser.add_argument(
             '--model-format',
@@ -354,20 +364,20 @@ class ArgumentHelper:
 
     @staticmethod
     def calib_search_scale(parser):
-        """Add argument batch_size to parser."""
+        """Add argument search_scale to parser."""
 
         return parser.add_argument(
             '--search-scale',
-            type=bool,
+            action='store_true',
             default=False,
             help=\
-            'Whether search scale ratio. Default to False, which means only smooth quant with 0.5 ratio will be applied'  # noqa
+            'Whether search scale ratio. Default to be disabled, which means only smooth quant with 0.5 ratio will be applied'  # noqa
         )
 
     @staticmethod
     def device(parser,
                default: str = 'cuda',
-               choices: List[str] = ['cuda', 'ascend', 'maca']):
+               choices: List[str] = ['cuda', 'ascend', 'maca', 'camb']):
         """Add argument device to parser."""
 
         return parser.add_argument('--device',

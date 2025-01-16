@@ -2,22 +2,13 @@
 
 LMDeploy abstracts the complex inference process of multi-modal Vision-Language Models (VLM) into an easy-to-use pipeline, similar to the Large Language Model (LLM) inference [pipeline](../llm/pipeline.md).
 
-Currently, it supports the following models.
+The supported models are listed [here](../supported_models/supported_models.md). We genuinely invite the community to contribute new VLM support to LMDeploy. Your involvement is truly appreciated.
 
-- [Qwen-VL-Chat](https://huggingface.co/Qwen/Qwen-VL-Chat)
-- LLaVA series: [v1.5](https://huggingface.co/collections/liuhaotian/llava-15-653aac15d994e992e2677a7e), [v1.6](https://huggingface.co/collections/liuhaotian/llava-16-65b9e40155f60fd046a5ccf2)
-- [Yi-VL](https://huggingface.co/01-ai/Yi-VL-6B)
-- [DeepSeek-VL](https://huggingface.co/deepseek-ai/deepseek-vl-7b-chat)
-- [InternVL](https://huggingface.co/OpenGVLab/InternVL-Chat-V1-5)
-- [MGM](https://huggingface.co/YanweiLi/MGM-7B)
-- [XComposer](https://huggingface.co/internlm/internlm-xcomposer2-vl-7b)
-- [CogVLM](https://github.com/InternLM/lmdeploy/tree/main/docs/en/multi_modal/cogvlm.md)
-
-We genuinely invite the community to contribute new VLM support to LMDeploy. Your involvement is truly appreciated.
-
-This article showcases the VLM pipeline using the [liuhaotian/llava-v1.6-vicuna-7b](https://huggingface.co/liuhaotian/llava-v1.6-vicuna-7b) model as a case study.
+This article showcases the VLM pipeline using the [OpenGVLab/InternVL2_5-8B](https://huggingface.co/OpenGVLab/InternVL2_5-8B) model as a case study.
 You'll learn about the simplest ways to leverage the pipeline and how to gradually unlock more advanced features by adjusting engine parameters and generation arguments, such as tensor parallelism, context window sizing, random sampling, and chat template customization.
 Moreover, we will provide practical inference examples tailored to scenarios with multiple images, batch prompts etc.
+
+Using the pipeline interface to infer other VLM models is similar, with the main difference being the configuration and installation dependencies of the models. You can read [here](https://lmdeploy.readthedocs.io/en/latest/multi_modal/index.html) for environment installation and configuration methods for different models.
 
 ## A 'Hello, world' example
 
@@ -25,7 +16,7 @@ Moreover, we will provide practical inference examples tailored to scenarios wit
 from lmdeploy import pipeline
 from lmdeploy.vl import load_image
 
-pipe = pipeline('liuhaotian/llava-v1.6-vicuna-7b')
+pipe = pipeline('OpenGVLab/InternVL2_5-8B')
 
 image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
 response = pipe(('describe this image', image))
@@ -39,7 +30,7 @@ In the above example, the inference prompt is a tuple structure consisting of (p
 ```python
 from lmdeploy import pipeline
 
-pipe = pipeline('liuhaotian/llava-v1.6-vicuna-7b')
+pipe = pipeline('OpenGVLab/InternVL2_5-8B')
 
 prompts = [
     {
@@ -62,7 +53,7 @@ Tensor paramllelism can be activated by setting the engine parameter `tp`
 from lmdeploy import pipeline, TurbomindEngineConfig
 from lmdeploy.vl import load_image
 
-pipe = pipeline('liuhaotian/llava-v1.6-vicuna-7b',
+pipe = pipeline('OpenGVLab/InternVL2_5-8B',
                 backend_config=TurbomindEngineConfig(tp=2))
 
 image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
@@ -78,7 +69,7 @@ When creating the pipeline, you can customize the size of the context window by 
 from lmdeploy import pipeline, TurbomindEngineConfig
 from lmdeploy.vl import load_image
 
-pipe = pipeline('liuhaotian/llava-v1.6-vicuna-7b',
+pipe = pipeline('OpenGVLab/InternVL2_5-8B',
                 backend_config=TurbomindEngineConfig(session_len=8192))
 
 image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
@@ -94,7 +85,7 @@ You can change the default sampling parameters of pipeline by passing `Generatio
 from lmdeploy import pipeline, GenerationConfig, TurbomindEngineConfig
 from lmdeploy.vl import load_image
 
-pipe = pipeline('liuhaotian/llava-v1.6-vicuna-7b',
+pipe = pipeline('OpenGVLab/InternVL2_5-8B',
                 backend_config=TurbomindEngineConfig(tp=2, session_len=8192))
 gen_config = GenerationConfig(top_k=40, top_p=0.8, temperature=0.6)
 image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
@@ -148,22 +139,19 @@ response = pipe(('describe this image', image))
 print(response)
 ```
 
-### Calculate logits
-
-We provide support for custom inputs. Users can utilize 'prepare_inputs' to understand how the inputs are organized.
+### Output logits for generated tokens
 
 ```python
-from lmdeploy import pipeline, TurbomindEngineConfig
+from lmdeploy import pipeline, GenerationConfig
 from lmdeploy.vl import load_image
-pipe = pipeline('internlm/internlm-xcomposer2-7b', backend_config=TurbomindEngineConfig(cache_max_entry_count=0.5))
+pipe = pipeline('OpenGVLab/InternVL2_5-8B')
 
-# logits
 image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
-inputs = pipe.prepare_inputs(('describe this image', image))
-input_ids = inputs['input_ids']
-embeddings = inputs['input_embeddings']
-embedding_ranges = inputs['input_embedding_ranges']
-logits = pipe.get_logits(input_ids, embeddings, embedding_ranges)
+
+response = pipe(('describe this image', image),
+                gen_config=GenerationConfig(output_logits='generation'))
+logits = response.logits
+print(logits)
 ```
 
 ## Multi-images inference
@@ -174,7 +162,7 @@ When dealing with multiple images, you can put them all in one list. Keep in min
 from lmdeploy import pipeline, TurbomindEngineConfig
 from lmdeploy.vl import load_image
 
-pipe = pipeline('liuhaotian/llava-v1.6-vicuna-7b',
+pipe = pipeline('OpenGVLab/InternVL2_5-8B',
                 backend_config=TurbomindEngineConfig(session_len=8192))
 
 image_urls=[
@@ -195,7 +183,7 @@ Conducting inference with batch prompts is quite straightforward; just place the
 from lmdeploy import pipeline, TurbomindEngineConfig
 from lmdeploy.vl import load_image
 
-pipe = pipeline('liuhaotian/llava-v1.6-vicuna-7b',
+pipe = pipeline('OpenGVLab/InternVL2_5-8B',
                 backend_config=TurbomindEngineConfig(session_len=8192))
 
 image_urls=[
@@ -215,7 +203,7 @@ There are two ways to do the multi-turn conversations with the pipeline. One is 
 from lmdeploy import pipeline, TurbomindEngineConfig, GenerationConfig
 from lmdeploy.vl import load_image
 
-pipe = pipeline('liuhaotian/llava-v1.6-vicuna-7b',
+pipe = pipeline('OpenGVLab/InternVL2_5-8B',
                 backend_config=TurbomindEngineConfig(session_len=8192))
 
 image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/demo/resources/human-pose.jpg')

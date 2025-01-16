@@ -31,7 +31,8 @@ class GemmaAttention(nn.Module):
         num_key_value_heads = config.num_key_value_heads
         hidden_size = config.hidden_size
         head_dim = config.head_dim
-
+        num_replicate_kv_heads = getattr(config,
+                                         'num_replicate_key_value_heads', 1)
         # packed qkv
         self.qkv_proj = build_qkv_proj(
             hidden_size,
@@ -42,7 +43,7 @@ class GemmaAttention(nn.Module):
             quant_config=quantization_config,
             dtype=dtype,
             device=device,
-        )
+            num_replicate_kv_heads=num_replicate_kv_heads)
 
         # rotary embedding
         self.apply_rotary_pos_emb = ApplyRotaryEmb()
@@ -177,7 +178,7 @@ class GemmaDecoderLayer(nn.Module):
                                         dtype=dtype,
                                         device=device)
 
-        # builf MLP
+        # build MLP
         self.mlp = GemmaMLP(config, dtype=dtype, device=device)
 
         # build input layer norm
@@ -262,7 +263,6 @@ class GemmaModel(nn.Module):
         self.config = config
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
-        quantization_config = getattr(config, 'quantization_config', None)
 
         self.embed_tokens = nn.Embedding(config.vocab_size,
                                          config.hidden_size,
@@ -279,7 +279,6 @@ class GemmaModel(nn.Module):
         # build norm
         self.norm = RMSNorm(config.hidden_size,
                             config.rms_norm_eps,
-                            quant_config=quantization_config,
                             dtype=dtype,
                             device=device)
 
@@ -383,6 +382,8 @@ class GemmaForCausalLM(nn.Module, CudaGraphMixin):
                                             bias=False,
                                             dtype=dtype,
                                             device=device)
+        self.final_logit_softcapping = getattr(config,
+                                               'final_logit_softcapping', None)
 
     def forward(
         self,
@@ -405,7 +406,12 @@ class GemmaForCausalLM(nn.Module, CudaGraphMixin):
 
     def get_logits(self, hidden_states: torch.Tensor):
         """compute logits of the model output."""
-        return self.lm_head(hidden_states)
+        logits = self.lm_head(hidden_states)
+        if self.final_logit_softcapping is not None:
+            logits = logits / self.final_logit_softcapping
+            logits = torch.tanh(logits)
+            logits = logits * self.final_logit_softcapping
+        return logits
 
     def get_input_embeddings(self):
         """get input embeddings."""

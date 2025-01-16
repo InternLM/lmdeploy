@@ -2,6 +2,7 @@
 import inspect
 import json
 from dataclasses import asdict, fields
+from typing import List
 
 # use pydantic.dataclasses.dataclass to check data type
 from pydantic.dataclasses import dataclass
@@ -35,21 +36,41 @@ class ModelConfig:
     kv_head_num: int = None
     hidden_units: int = None
     vocab_size: int = None
+    # Turbomind used to assume token_embedding and lm_head has the same size
+    # at vocab dim, i.e. `vocab_size`
+    # But in molmo, embedding.shape is [vocab_size + 128, hidden_units]
+    # while lm_head shape is [hidden_units, vocab_size].
+    # Therefore, we add a new attr "embedding_size" to represent the vocab dim
+    # of token_embedding
+    embedding_size: int = 0
     num_layer: int = None
-    inter_size: int = None
+    inter_size: List[int] = None
     norm_eps: float = None
     attn_bias: int = 0
     start_id: int = None
     end_id: int = None
     size_per_head: int = 128
-    group_size: int = 0
+    group_size: int = 64
     weight_type: str = None
     session_len: int = None
     tp: int = 1
     model_format: str = 'hf'
-    expert_num: int = 0
+    expert_num: List[int] = ()
     expert_inter_size: int = 0
     experts_per_token: int = 0
+    moe_shared_gate: bool = False
+    norm_topk_prob: bool = False
+    routed_scale: float = 1.0
+    topk_group: int = 1
+    topk_method: str = 'greedy'
+    moe_group_num: int = 1
+    # MLA
+    q_lora_rank: int = 0
+    kv_lora_rank: int = 0
+    qk_rope_dim: int = 0
+    v_head_dim: int = 0
+    # tuning
+    tune_layer_num: int = 1
 
     def verify(self):
         invalid = {}
@@ -63,6 +84,8 @@ class ModelConfig:
 class AttentionConfig:
     rotary_embedding: int = 128
     rope_theta: float = 10000.0
+    softmax_scale: float = 0
+    attention_factor: float = None
     max_position_embeddings: int = 0
     original_max_position_embeddings: int = 0
     rope_scaling_type: str = ''
@@ -70,6 +93,8 @@ class AttentionConfig:
     use_dynamic_ntk: int = 0
     low_freq_factor: float = 1.0
     high_freq_factor: float = 1.0
+    beta_fast: float = 32.0
+    beta_slow: float = 1.0
     use_logn_attn: int = 0
     cache_block_seq_len: int = 64
 

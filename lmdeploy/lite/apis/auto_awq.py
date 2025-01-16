@@ -2,6 +2,7 @@
 import os
 import os.path as osp
 import shutil
+from typing import Literal
 
 import torch
 from torch import nn
@@ -12,9 +13,7 @@ from lmdeploy.lite.quantization.awq import (FC_FCS_MAP, NORM_FCS_MAP,
 from lmdeploy.lite.utils import collect_target_modules
 from lmdeploy.pytorch.check_env import try_import_deeplink
 
-from .calibrate import LAYER_TYPE_MAP, NORM_TYPE_MAP, calibrate
-
-NORM_TYPE_MAP = NORM_TYPE_MAP  # legacy
+from .calibrate import LAYER_TYPE_MAP, calibrate
 
 
 def save_vl_model(vl_model, model_path, dst_path):
@@ -56,6 +55,7 @@ def auto_awq(model: str,
              search_scale: bool = False,
              device: str = 'cuda',
              revision: str = None,
+             dtype: Literal['float16', 'bfloat16', 'auto'] = 'auto',
              download_dir: str = None):
     """Perform weight quantization using AWQ algorithm.
 
@@ -77,6 +77,7 @@ def auto_awq(model: str,
         revision (str): The specific model version to use. It can be a
             branch name, a tag name, or a commit id. If unspecified,
             will use the default version.
+        dtype (str): Data type for loading model weights and calib infer.
         download_dir (str): Directory to download and load the weights,
             default to the default cache directory of huggingface.
     """
@@ -96,12 +97,13 @@ def auto_awq(model: str,
                                                      w_bits=w_bits,
                                                      w_group_size=w_group_size,
                                                      search_scale=search_scale,
+                                                     dtype=dtype,
                                                      batch_size=batch_size)
 
     layer_type = LAYER_TYPE_MAP[type(model).__name__]
     fc2fcs = FC_FCS_MAP[layer_type]
     norm2fcs = NORM_FCS_MAP[layer_type]
-    input_stats = torch.load(work_dir / 'inputs_stats.pth')
+    input_stats = torch.load(osp.join(work_dir, 'inputs_stats.pth'))
     layers = collect_target_modules(model, layer_type)
     fcs = {}
     for l_name, layer in layers.items():
@@ -117,13 +119,7 @@ def auto_awq(model: str,
         act_scales = input_stats['absmax']
         smooth_layers(layers, fc2fcs, norm2fcs, act_scales, w_group_size,
                       device)
-    quant_weights(model,
-                  fcs,
-                  w_bits,
-                  w_sym,
-                  w_group_size,
-                  device,
-                  skip_if_contains='lora')  # TODO quant lora weight
+    quant_weights(model, fcs, w_bits, w_sym, w_group_size, device)
     quantization_config = dict(quant_method='awq',
                                version='gemm',
                                bits=w_bits,

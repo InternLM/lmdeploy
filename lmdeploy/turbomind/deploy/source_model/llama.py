@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import json
+import math
 import os.path as osp
 import re
 
@@ -152,32 +153,45 @@ class LlamaModel(BaseInputModel):
             max_position_embeddings = int(
                 model_arg.get('max_position_embeddings', 0))
             rope_scaling = model_arg.get('rope_scaling', None)
+            head_dim = model_arg.get('head_dim', hidden_units // attn_head_num)
             scaling_factor = 0.0
             use_dynamic_ntk = 0
             scaling_type = ''
             low_freq_factor = 1.0
             high_freq_factor = 1.0
+            attention_factor = -1.0
+            beta_fast = 32.0
+            beta_slow = 1.0
             original_max_position_embeddings = 0
             if isinstance(rope_scaling, dict):
-                llama2_scaling_type = model_arg['rope_scaling'].get('type', '')
-                llama3_scaling_type = model_arg['rope_scaling'].get(
-                    'rope_type', '')
-                scaling_factor = model_arg['rope_scaling'].get('factor', '')
-                low_freq_factor = model_arg['rope_scaling'].get(
-                    'low_freq_factor', 1.0)
-                high_freq_factor = model_arg['rope_scaling'].get(
-                    'high_freq_factor', 1.0)
-                original_max_position_embeddings = model_arg[
-                    'rope_scaling'].get('original_max_position_embeddings', 0)
+                llama2_scaling_type = rope_scaling.get('type', '')
+                llama3_scaling_type = rope_scaling.get('rope_type', '')
                 if llama2_scaling_type and llama3_scaling_type:
                     raise ValueError(
                         f'Ambiguous rope_scaling in config: {model_arg}')
                 scaling_type = llama2_scaling_type if llama2_scaling_type \
                     else llama3_scaling_type
+                scaling_factor = rope_scaling.get('factor', 0.0)
                 if scaling_type == 'dynamic':
                     use_dynamic_ntk = 1
+                elif scaling_type == 'llama3':
+                    low_freq_factor = rope_scaling.get('low_freq_factor', 1.0)
+                    high_freq_factor = rope_scaling.get(
+                        'high_freq_factor', 1.0)
+                    original_max_position_embeddings = model_arg[
+                        'rope_scaling'].get('original_max_position_embeddings',
+                                            0)
+                elif scaling_type == 'yarn':
+                    attention_factor = rope_scaling.get(
+                        'attention_factor', None)
+                    if attention_factor is None:
+                        attention_factor = 0.1 * math.log(scaling_factor) + 1.0
+                    beta_fast = rope_scaling.get('beta_fast', 32.0)
+                    beta_slow = rope_scaling.get('beta_slow', 1.0)
 
         return dict(
+            size_per_head=head_dim,
+            rotary_embedding=head_dim,
             num_layer=num_layer,
             norm_eps=norm_eps,
             head_num=attn_head_num,
@@ -192,4 +206,7 @@ class LlamaModel(BaseInputModel):
             rope_scaling_type=scaling_type,
             rope_scaling_factor=scaling_factor,
             low_freq_factor=low_freq_factor,
-            high_freq_factor=high_freq_factor)
+            high_freq_factor=high_freq_factor,
+            attention_factor=attention_factor,
+            beta_fast=beta_fast,
+            beta_slow=beta_slow)

@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from lmdeploy.archs import get_model_arch
+from lmdeploy.archs import get_model_arch, search_nested_config
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -13,6 +13,8 @@ SUPPORTED_ARCHS = dict(
     InternLMForCausalLM='llama',
     # internlm2
     InternLM2ForCausalLM='internlm2',
+    # internlm3
+    InternLM3ForCausalLM='llama',
     # llama, llama2, alpaca, vicuna, codellama, ultracm, yi,
     # deepseek-coder, deepseek-llm
     LlamaForCausalLM='llama',
@@ -20,17 +22,20 @@ SUPPORTED_ARCHS = dict(
     QWenLMHeadModel='qwen',
     # Qwen2
     Qwen2ForCausalLM='qwen2',
+    Qwen2MoeForCausalLM='qwen2-moe',
     # mistral
     MistralForCausalLM='llama',
     # llava
     LlavaLlamaForCausalLM='llama',
     LlavaMistralForCausalLM='llama',
+    LlavaForConditionalGeneration='llava',
     # xcomposer2
     InternLMXComposer2ForCausalLM='xcomposer2',
     # internvl
     InternVLChatModel='internvl',
     # deepseek-vl
     MultiModalityCausalLM='deepseekvl',
+    DeepseekV2ForCausalLM='deepseek2',
     # MiniCPMV
     MiniCPMV='minicpmv',
     # mini gemini
@@ -40,7 +45,9 @@ SUPPORTED_ARCHS = dict(
     ChatGLMModel='glm4',
     ChatGLMForConditionalGeneration='glm4',
     # mixtral
-    MixtralForCausalLM='mixtral')
+    MixtralForCausalLM='mixtral',
+    MolmoForCausalLM='molmo',
+)
 
 
 def is_supported(model_path: str):
@@ -65,18 +72,22 @@ def is_supported(model_path: str):
     """  # noqa: E501
     import os
 
-    def _is_head_dim_128(cfg):
+    def _is_head_dim_supported(cfg):
         num_attn_head = cfg.num_attention_heads
         hidden_size = cfg.hidden_size
-        # turbomind support head_dim=128
-        return (hidden_size // num_attn_head) == 128
+        return (hidden_size // num_attn_head) in [128, 64]
 
     support_by_turbomind = False
     triton_model_path = os.path.join(model_path, 'triton_models')
     if os.path.exists(triton_model_path):
         support_by_turbomind = True
     else:
+
         arch, cfg = get_model_arch(model_path)
+        quant_method = search_nested_config(cfg.to_dict(), 'quant_method')
+        if quant_method and quant_method in ['smooth_quant']:
+            # tm hasn't support quantized models by applying smoothquant
+            return False
 
         if arch in SUPPORTED_ARCHS.keys():
             support_by_turbomind = True
@@ -87,9 +98,7 @@ def is_supported(model_path: str):
                     # baichuan-13B, baichuan2-13B not supported by turbomind
                     support_by_turbomind = False
             elif arch in ['Qwen2ForCausalLM', 'LlamaForCausalLM']:
-                # the head_dim of qwen2 0.5b and llama3.2-1b is 64, which
-                # hasn't been supported by turbomind yet
-                support_by_turbomind = _is_head_dim_128(cfg)
+                support_by_turbomind = _is_head_dim_supported(cfg)
             elif arch in ('ChatGLMModel', 'ChatGLMForConditionalGeneration'):
                 # chatglm1/2/3 is not working yet
                 support_by_turbomind = cfg.num_layers == 40
@@ -97,7 +106,17 @@ def is_supported(model_path: str):
                     # glm-4v-9b not supported
                     support_by_turbomind = False
             elif arch == 'InternVLChatModel':
-                # internvl2-4b,internlm2-1b are not working yet
-                support_by_turbomind = _is_head_dim_128(cfg.llm_config)
+                llm_arch = cfg.llm_config.architectures[0]
+                support_by_turbomind = (llm_arch in SUPPORTED_ARCHS and
+                                        _is_head_dim_supported(cfg.llm_config))
+            elif arch == 'LlavaForConditionalGeneration':
+                llm_arch = cfg.text_config.architectures[0]
+                if llm_arch in ['Qwen2ForCausalLM', 'LlamaForCausalLM']:
+                    support_by_turbomind = _is_head_dim_supported(
+                        cfg.text_config)
+            elif arch == 'MolmoForCausalLM':
+                kv_heads = cfg.num_key_value_heads
+                # TM hasn't supported allenai/Molmo-7B-O-0924 yet
+                support_by_turbomind = kv_heads is not None
 
     return support_by_turbomind

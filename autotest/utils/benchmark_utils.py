@@ -27,7 +27,8 @@ def generation_test(config,
     model_path = '/'.join([config.get('model_path'), model])
     log_path = config.get('log_path')
     benchmark_log = os.path.join(
-        log_path, 'benchmark_' + model.split('/')[1] + worker_id + '.log')
+        log_path,
+        'benchmark_generation_' + model.split('/')[1] + worker_id + '.log')
     benchmark_path = '/'.join([
         config.get('benchmark_path'), run_id, model,
         f'benchmark-generation-{backend}'
@@ -86,7 +87,8 @@ def throughput_test(config,
     log_path = config.get('log_path')
     dataset_path = config.get('dataset_path')
     benchmark_log = os.path.join(
-        log_path, 'benchmark_' + model.split('/')[1] + worker_id + '.log')
+        log_path,
+        'benchmark_throughput_' + model.split('/')[1] + worker_id + '.log')
     if backend == 'turbomind' and quant_policy != 0:
         benchmark_path = '/'.join([
             config.get('benchmark_path'), run_id, model,
@@ -150,7 +152,8 @@ def restful_test(config,
     log_path = config.get('log_path')
     dataset_path = config.get('dataset_path')
     benchmark_log = os.path.join(
-        log_path, 'benchmark_' + model.split('/')[1] + worker_id + '.log')
+        log_path,
+        'benchmark_restful_' + model.split('/')[1] + worker_id + '.log')
     if backend == 'turbomind' and quant_policy != 0:
         benchmark_path = '/'.join([
             config.get('benchmark_path'), run_id, model,
@@ -178,7 +181,7 @@ def restful_test(config,
     if is_smoke:
         command += ' --num-prompts 200'
     else:
-        command += ' --num-prompts 2000'
+        command += ' --num-prompts 5000'
 
     for batch in [128, 256]:
         csv_path = f'{benchmark_path}/restful_batch_{batch}_1th.csv'

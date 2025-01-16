@@ -11,8 +11,9 @@ class MLlamaModelConfigBuilder(AutoModelConfigBuilder):
         return hf_config.architectures[0] == 'MllamaForConditionalGeneration'
 
     @classmethod
-    def build(cls, hf_config, model_path: str = None):
+    def build(cls, hf_config, model_path: str = None, **kwargs):
         """build llava hf."""
-        cfg = DefaultModelConfigBuilder.build(hf_config.text_config)
+        cfg = DefaultModelConfigBuilder.build(hf_config.text_config,
+                                              model_path, **kwargs)
         cfg.hf_config = hf_config
         return cfg

@@ -23,7 +23,7 @@ pip install lmdeploy
 默认的预构建包是在 **CUDA 12** 上编译的。如果需要 CUDA 11+ (>=11.3)，你可以使用以下命令安装 lmdeploy：
 
 ```shell
-export LMDEPLOY_VERSION=0.6.2
+export LMDEPLOY_VERSION=0.7.0
 export PYTHON_VERSION=38
 pip install https://github.com/InternLM/lmdeploy/releases/download/v${LMDEPLOY_VERSION}/lmdeploy-${LMDEPLOY_VERSION}+cu118-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-manylinux2014_x86_64.whl --extra-index-url https://download.pytorch.org/whl/cu118
 ```
@@ -65,7 +65,7 @@ cd lmdeploy
 **步骤 3** - 以交互模式启动 docker 容器
 
 ```shell
-docker run --gpus all --net host --shm-size 16g -v $(pwd):/opt/lmdeploy --name lmdeploy -it openmmlab/lmdeploy:latest bin/bash
+docker run --gpus all --net host --shm-size 16g -v $(pwd):/opt/lmdeploy --name lmdeploy -it openmmlab/lmdeploy:latest /bin/bash
 ```
 
 **步骤 4** - 编译与安装

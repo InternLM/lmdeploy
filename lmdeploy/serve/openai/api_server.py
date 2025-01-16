@@ -149,7 +149,8 @@ def _create_completion_logprobs(tokenizer: Tokenizer,
                                 skip_special_tokens: bool = True,
                                 offset: int = 0,
                                 all_token_ids: List[int] = None,
-                                state: DetokenizeState = None):
+                                state: DetokenizeState = None,
+                                spaces_between_special_tokens: bool = True):
     """create openai LogProbs for completion.
 
     Args:
@@ -162,6 +163,9 @@ def _create_completion_logprobs(tokenizer: Tokenizer,
         offset (int): text offset.
         all_token_ids (int): the history output token ids.
         state (DetokenizeState): tokenizer decode state.
+        spaces_between_special_tokens (bool): Whether or not to add spaces
+            around special tokens. The behavior of Fast tokenizers is to have
+            this to False. This is setup to True in slow tokenizers.
     """
     if logprobs is None or len(logprobs) == 0:
         return None, None, None, None
@@ -183,7 +187,8 @@ def _create_completion_logprobs(tokenizer: Tokenizer,
             response, _state = tokenizer.detokenize_incrementally(
                 all_token_ids + [top_id],
                 copy.deepcopy(state),
-                skip_special_tokens=skip_special_tokens)
+                skip_special_tokens=skip_special_tokens,
+                spaces_between_special_tokens=spaces_between_special_tokens)
             res[response] = prob
             if top_id == token_id:
                 out_state = _state
@@ -323,6 +328,15 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     - ignore_eos (bool): indicator for ignoring eos
     - skip_special_tokens (bool): Whether or not to remove special tokens
         in the decoding. Default to be True.
+    - spaces_between_special_tokens (bool): Whether or not to add spaces
+        around special tokens. The behavior of Fast tokenizers is to have
+        this to False. This is setup to True in slow tokenizers.
+    - min_new_tokens (int): To generate at least numbers of tokens.
+    - min_p (float): Minimum token probability, which will be scaled by the
+        probability of the most likely token. It must be a value between
+        0 and 1. Typical values are in the 0.01-0.2 range, comparably
+        selective as setting `top_p` in the 0.99-0.8 range (use the
+        opposite of normal `top_p` values)
 
     Currently we do not support the following features:
     - presence_penalty (replaced with repetition_penalty)
@@ -334,8 +348,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     error_check_ret = await check_request(request)
     if error_check_ret is not None:
         return error_check_ret
-    if VariableInterface.async_engine.id2step.get(str(request.session_id),
-                                                  0) != 0:
+    if VariableInterface.async_engine.id2step.get(request.session_id, 0) != 0:
         return create_error_response(
             HTTPStatus.BAD_REQUEST,
             f'The session_id `{request.session_id}` is occupied.')
@@ -386,7 +399,10 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         skip_special_tokens=request.skip_special_tokens,
         response_format=response_format,
         logits_processors=logits_processors,
-        random_seed=random_seed)
+        min_new_tokens=request.min_new_tokens,
+        min_p=request.min_p,
+        random_seed=random_seed,
+        spaces_between_special_tokens=request.spaces_between_special_tokens)
 
     tools = None
     if request.tools and request.tool_choice != 'none':
@@ -487,20 +503,21 @@ async def chat_completions_v1(request: ChatCompletionRequest,
             final_logprobs.extend(res.logprobs)
 
     tool_calls = None
-    if request.tool_choice != 'none' and ('<|plugin|>' in text
-                                          or '<function=' in text):
+    if request.tool_choice != 'none' and ('<|plugin|>' in text or '<function='
+                                          in text or '<tool_call>' in text):
         if final_res.finish_reason == 'stop':
             final_res.finish_reason = 'tool_calls'
         try:  # TODO add json_schema guidance to turbomind
-            text, action_id, name, parameters = VariableInterface.async_engine.parse_tool_response(  # noqa
+            text, call_info_list = VariableInterface.async_engine.parse_tool_response(  # noqa
                 text, request.tools)
             tool_calls = [
-                ToolCall(id=str(action_id),
-                         function=FunctionResponse(name=name,
-                                                   arguments=parameters))
+                ToolCall(id=str(call_info[0]),
+                         function=FunctionResponse(name=call_info[1],
+                                                   arguments=call_info[2]))
+                for call_info in call_info_list
             ]
         except Exception as e:
-            logger.error(f'Exception: {e}')
+            logger.error(f'Failed to parse {text}. Exception: {e}.')
             return create_error_response(
                 HTTPStatus.BAD_REQUEST,
                 'Failed to parse fc related info to json format!')
@@ -573,6 +590,9 @@ async def completions_v1(request: CompletionRequest,
     - ignore_eos (bool): indicator for ignoring eos
     - skip_special_tokens (bool): Whether or not to remove special tokens
         in the decoding. Default to be True.
+    - spaces_between_special_tokens (bool): Whether or not to add spaces
+        around special tokens. The behavior of Fast tokenizers is to have
+        this to False. This is setup to True in slow tokenizers.
     - top_k (int): The number of the highest probability vocabulary
         tokens to keep for top-k-filtering
 
@@ -587,8 +607,7 @@ async def completions_v1(request: CompletionRequest,
     error_check_ret = await check_request(request)
     if error_check_ret is not None:
         return error_check_ret
-    if VariableInterface.async_engine.id2step.get(str(request.session_id),
-                                                  0) != 0:
+    if VariableInterface.async_engine.id2step.get(request.session_id, 0) != 0:
         return create_error_response(
             HTTPStatus.BAD_REQUEST,
             f'The session_id `{request.session_id}` is occupied.')
@@ -616,7 +635,8 @@ async def completions_v1(request: CompletionRequest,
         ignore_eos=request.ignore_eos,
         stop_words=request.stop,
         skip_special_tokens=request.skip_special_tokens,
-        random_seed=random_seed)
+        random_seed=random_seed,
+        spaces_between_special_tokens=request.spaces_between_special_tokens)
     generators = []
     for i in range(len(request.prompt)):
         result_generator = VariableInterface.async_engine.generate(
@@ -665,7 +685,7 @@ async def completions_v1(request: CompletionRequest,
                         VariableInterface.async_engine.tokenizer,
                         res.token_ids, res.logprobs,
                         gen_config.skip_special_tokens, offset, all_token_ids,
-                        state)
+                        state, gen_config.spaces_between_special_tokens)
                 if request.stream_options and request.stream_options.include_usage:  # noqa E501
                     final_res = res
                     total_tokens = sum([
@@ -717,8 +737,12 @@ async def completions_v1(request: CompletionRequest,
         logprobs = None
         if request.logprobs and len(final_logprobs):
             logprobs, _, _, _ = _create_completion_logprobs(
-                VariableInterface.async_engine.tokenizer, final_token_ids,
-                final_logprobs, gen_config.skip_special_tokens)
+                VariableInterface.async_engine.tokenizer,
+                final_token_ids,
+                final_logprobs,
+                gen_config.skip_special_tokens,
+                spaces_between_special_tokens=gen_config.
+                spaces_between_special_tokens)
 
         assert final_res is not None
         choice_data = CompletionResponseChoice(
@@ -826,6 +850,12 @@ async def chat_interactive_v1(request: GenerateRequest,
         in the decoding. Default to be True.
     - adapter_name (str): For slora inference. Choose which lora to do the
         inference.
+    - min_new_tokens (int): To generate at least numbers of tokens.
+    - min_p (float): Minimum token probability, which will be scaled by the
+        probability of the most likely token. It must be a value between
+        0 and 1. Typical values are in the 0.01-0.2 range, comparably
+        selective as setting `top_p` in the 0.99-0.8 range (use the
+        opposite of normal `top_p` values)
     """
     if request.cancel:
         if request.session_id != -1:
@@ -850,10 +880,21 @@ async def chat_interactive_v1(request: GenerateRequest,
         request.session_id = VariableInterface.session_id
 
     async_engine = VariableInterface.async_engine
-    sequence_start = async_engine.id2step.get(str(request.session_id), 0) == 0
+    sequence_start = async_engine.id2step.get(request.session_id, 0) == 0
     sequence_end = not request.interactive_mode
     if isinstance(request.stop, str):
         request.stop = [request.stop]
+
+    end_session = sequence_end and not sequence_start \
+        and request.prompt == '' and request.request_output_len == 0
+    if end_session:
+        await async_engine.end_session(request.session_id)
+        return JSONResponse(
+            dict(text='',
+                 tokens=0,
+                 input_tokens=0,
+                 history_tokens=0,
+                 finish_reason=None))
 
     random_seed = request.seed if request.seed else None
 
@@ -867,6 +908,8 @@ async def chat_interactive_v1(request: GenerateRequest,
         ignore_eos=request.ignore_eos,
         stop_words=request.stop,
         skip_special_tokens=request.skip_special_tokens,
+        min_new_tokens=request.min_new_tokens,
+        min_p=request.min_p,
         random_seed=random_seed)
     if request.image_url:
         from lmdeploy.vl import load_image
@@ -927,6 +970,20 @@ async def chat_interactive_v1(request: GenerateRequest,
             'finish_reason': finish_reason
         }
         return JSONResponse(ret)
+
+
+def handle_torchrun():
+    """To disable mmengine logging logic when using torchrun."""
+
+    def dummy_get_device_id():
+        return 0
+
+    if int(os.environ.get('LOCAL_RANK', -1)) > 0:
+        from lmdeploy.vl.model.utils import _set_func
+
+        # the replacement can't be recovered
+        _set_func('mmengine.logging.logger._get_device_id',
+                  dummy_get_device_id)
 
 
 @router.on_event('startup')
@@ -1052,8 +1109,8 @@ def serve(model_path: str,
         ssl_certfile = os.environ['SSL_CERTFILE']
         http_or_https = 'https'
 
+    handle_torchrun()
     _, pipeline_class = get_task(model_path)
-
     VariableInterface.async_engine = pipeline_class(
         model_path=model_path,
         model_name=model_name,

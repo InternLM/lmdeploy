@@ -8,6 +8,10 @@ pwd = os.path.dirname(__file__)
 version_file = 'lmdeploy/version.py'
 
 
+def get_target_device():
+    return os.getenv('LMDEPLOY_TARGET_DEVICE', 'cuda')
+
+
 def readme():
     with open(os.path.join(pwd, 'README.md'), encoding='utf-8') as f:
         content = f.read()
@@ -145,9 +149,11 @@ if __name__ == '__main__':
         include_package_data=True,
         setup_requires=parse_requirements('requirements/build.txt'),
         tests_require=parse_requirements('requirements/test.txt'),
-        install_requires=parse_requirements('requirements/runtime.txt'),
+        install_requires=parse_requirements(
+            f'requirements/runtime_{get_target_device()}.txt'),
         extras_require={
-            'all': parse_requirements('requirements.txt'),
+            'all':
+            parse_requirements(f'requirements_{get_target_device()}.txt'),
             'lite': parse_requirements('requirements/lite.txt'),
             'serve': parse_requirements('requirements/serve.txt')
         },

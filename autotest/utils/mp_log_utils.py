@@ -1,7 +1,7 @@
 import os
 
 import allure
-from pytest import assume
+from pytest_assume.plugin import assume
 
 
 def write_log(config,

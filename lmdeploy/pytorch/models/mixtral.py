@@ -8,7 +8,7 @@ from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, RopeType,
                                  build_rotary_embedding)
 from lmdeploy.pytorch.nn.linear import build_qkv_proj, build_rowwise_linear
-from lmdeploy.pytorch.nn.moe import FusedMoE, SoftmaxTopK
+from lmdeploy.pytorch.nn.moe import SoftmaxTopK, build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
@@ -22,7 +22,7 @@ class MixtralAttention(nn.Module):
                  dtype: torch.dtype = None,
                  device: torch.device = None):
         super().__init__()
-        quantization_config = None
+        quantization_config = getattr(config, 'quantization_config', None)
 
         num_heads = config.num_attention_heads
         num_key_value_heads = config.num_key_value_heads
@@ -112,6 +112,7 @@ class MixtralSparseMoeBlock(nn.Module):
                  dtype: torch.dtype = None,
                  device: torch.device = None):
         super().__init__()
+        quantization_config = getattr(config, 'quantization_config', None)
         self.hidden_dim = config.hidden_size
         self.ffn_dim = config.intermediate_size
         self.num_experts = config.num_local_experts
@@ -124,11 +125,12 @@ class MixtralSparseMoeBlock(nn.Module):
             dtype=dtype,
             device=device,
             is_tp=False,
+            quant_config=None,
         )
 
         self.softmax_topk = SoftmaxTopK(self.top_k)
 
-        self.experts = FusedMoE(
+        self.experts = build_fused_moe(
             self.hidden_dim,
             self.ffn_dim,
             self.num_experts,
@@ -137,6 +139,7 @@ class MixtralSparseMoeBlock(nn.Module):
             dtype=dtype,
             device=device,
             all_reduce=True,
+            quant_config=quantization_config,
         )
 
     def forward(self, hidden_states: torch.Tensor):
@@ -166,7 +169,7 @@ class MixtralDecoderLayer(nn.Module):
                  device: torch.device = None):
         super().__init__()
         self.layer_idx = layer_idx
-        quantization_config = None
+        quantization_config = getattr(config, 'quantization_config', None)
 
         # build attention layer
         self.self_attn = MixtralAttention(config, dtype=dtype, device=device)
@@ -182,12 +185,10 @@ class MixtralDecoderLayer(nn.Module):
                                        device=device)
 
         # build attention layer norm
-        self.post_attention_layernorm = RMSNorm(
-            config.hidden_size,
-            config.rms_norm_eps,
-            quant_config=quantization_config,
-            dtype=dtype,
-            device=device)
+        self.post_attention_layernorm = RMSNorm(config.hidden_size,
+                                                config.rms_norm_eps,
+                                                dtype=dtype,
+                                                device=device)
 
     def forward(
         self,
@@ -340,17 +341,6 @@ class MixtralForCausalLM(nn.Module, CudaGraphMixin):
         """compute logits of the model output."""
         return self.lm_head(hidden_states)
 
-    def support_cuda_graph(
-        self,
-        input_ids: torch.Tensor,
-        **kwargs,
-    ):
-        """support cudagraph."""
-        seq_lens = input_ids.size(1)
-        if seq_lens <= 512:
-            return True
-        return False
-
     def get_input_embeddings(self):
         """get input embeddings."""
         return self.model.get_input_embeddings()
@@ -387,12 +377,12 @@ class MixtralForCausalLM(nn.Module, CudaGraphMixin):
         num_experts = self.config.num_local_experts
         expert_params_mapping = []
         for exp_id in range(num_experts):
-            gate_param = ('.experts.gate_up_weights',
-                          f'.experts.{exp_id}.w1.weight', exp_id, 'gate')
-            up_param = ('.experts.gate_up_weights',
-                        f'.experts.{exp_id}.w3.weight', exp_id, 'up')
-            down_param = ('.experts.down_weights',
-                          f'.experts.{exp_id}.w2.weight', exp_id, 'down')
+            gate_param = ('.experts.gate_up', f'.experts.{exp_id}.w1', exp_id,
+                          'gate')
+            up_param = ('.experts.gate_up', f'.experts.{exp_id}.w3', exp_id,
+                        'up')
+            down_param = ('.experts.down', f'.experts.{exp_id}.w2', exp_id,
+                          'down')
             expert_params_mapping += [gate_param, up_param, down_param]
 
         params_dict = dict(self.named_parameters())

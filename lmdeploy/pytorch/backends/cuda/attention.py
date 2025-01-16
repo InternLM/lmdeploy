@@ -1,4 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from dataclasses import dataclass
+from typing import Literal
+
 import torch
 
 from lmdeploy.pytorch.distributed import get_world_rank
@@ -6,9 +9,23 @@ from lmdeploy.pytorch.distributed import get_world_rank
 from ..attention import AttentionBuilder, AttentionImpl, AttentionMetadata
 
 
+@dataclass
 class TritonAttentionMetadata(AttentionMetadata):
     """triton attention metadata."""
-    pass
+    is_decoding: bool
+    block_offsets: torch.Tensor
+    q_start_loc: torch.Tensor = None
+    q_seqlens: torch.Tensor = None
+    kv_start_loc: torch.Tensor = None
+    kv_seqlens: torch.Tensor = None
+    fill_seqlens: torch.Tensor = None
+    quant_policy: Literal[0, 4, 8] = 0
+    kv_flatten_size: int = None
+
+
+def _cdiv(a, b):
+    """perform div up."""
+    return (a + b - 1) // b
 
 
 class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
@@ -24,6 +41,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         alibi: bool = False,
         sliding_window: int = None,
         logit_softcapping: float = None,
+        causal: bool = True,
         **kwargs,
     ):
         super().__init__(
@@ -35,15 +53,21 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             alibi=alibi,
             sliding_window=sliding_window,
             logit_softcapping=logit_softcapping,
+            causal=causal,
             **kwargs,
         )
+        assert not (alibi and not causal)
 
         from lmdeploy.pytorch.kernels.cuda import (alibi_paged_attention_fwd,
                                                    fill_kv_cache,
+                                                   flash_attention_fwd,
+                                                   flatten_kv_cache,
                                                    paged_attention_fwd)
         self.fill_kv_cache = fill_kv_cache
         self.paged_attention_fwd = paged_attention_fwd
         self.alibi_paged_attention_fwd = alibi_paged_attention_fwd
+        self.flatten_kv_cache = flatten_kv_cache
+        self.flash_attention_fwd = flash_attention_fwd
 
         # for alibi attention
         world_size, rank = get_world_rank()
@@ -69,9 +93,14 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         fill_q_start_loc = q_start_loc
         q_seqlens = attn_metadata.q_seqlens
         fill_seqlens = q_seqlens
+        kv_start_loc = attn_metadata.kv_start_loc
         kv_seqlens = attn_metadata.kv_seqlens
+        kv_flatten_size = attn_metadata.kv_flatten_size
         quant_policy = attn_metadata.quant_policy
-        max_q_seqlen = query.numel() // (query.size(-1) * query.size(-2))
+        if attn_metadata.is_decoding:
+            max_q_seqlen = 1
+        else:
+            max_q_seqlen = query.numel() // (query.size(-1) * query.size(-2))
         fill_max_q_seqlen = max_q_seqlen
         if attn_metadata.fill_seqlens is not None:
             fill_seqlens = attn_metadata.fill_seqlens
@@ -95,31 +124,59 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
                 quant_policy=quant_policy,
             )
 
-        if inplace:
-            attn_output = query[..., :self.v_head_size]
-        else:
-            q_shape = query.shape
-            o_shape = q_shape[:-1] + (self.v_head_size, )
-            attn_output = query.new_empty(o_shape)
+        q_shape = query.shape
+        o_shape = q_shape[:-1] + (self.v_head_size, )
+        attn_output = query.new_empty(o_shape)
 
+        is_decoding = attn_metadata.is_decoding
         if not self.alibi:
-            self.paged_attention_fwd(
-                query,
-                k_cache,
-                v_cache,
-                attn_output,
-                block_offsets,
-                q_start_loc=q_start_loc,
-                q_seqlens=q_seqlens,
-                kv_seqlens=kv_seqlens,
-                max_seqlen=max_q_seqlen,
-                k_scales_zeros=k_scales_zeros,
-                v_scales_zeros=v_scales_zeros,
-                quant_policy=quant_policy,
-                window_size=self.sliding_window,
-                sm_scale=self.scale,
-                logit_softcapping=self.logit_softcapping,
-            )
+            if is_decoding:
+                self.paged_attention_fwd(
+                    query,
+                    k_cache,
+                    v_cache,
+                    attn_output,
+                    block_offsets,
+                    kv_seqlens=kv_seqlens,
+                    k_scales_zeros=k_scales_zeros,
+                    v_scales_zeros=v_scales_zeros,
+                    quant_policy=quant_policy,
+                    window_size=self.sliding_window,
+                    sm_scale=self.scale,
+                    logit_softcapping=self.logit_softcapping,
+                )
+            else:
+                BLOCK_BS = k_cache.size(1)
+                # pad one more block to avoid invalid kv visit
+                out_size = (_cdiv(kv_flatten_size, BLOCK_BS) * BLOCK_BS +
+                            BLOCK_BS)
+                flatten_k, flatten_v = self.flatten_kv_cache(
+                    k_cache,
+                    v_cache,
+                    kv_seqlens,
+                    block_offsets,
+                    start_loc=kv_start_loc,
+                    out_size=out_size,
+                    out_dtype=query.dtype,
+                    k_scales_zeros=k_scales_zeros,
+                    v_scales_zeros=v_scales_zeros,
+                    quant_policy=quant_policy,
+                )
+                self.flash_attention_fwd(
+                    query,
+                    flatten_k,
+                    flatten_v,
+                    attn_output,
+                    q_start_loc=q_start_loc,
+                    q_seqlens=q_seqlens,
+                    kv_start_loc=kv_start_loc,
+                    kv_seqlens=kv_seqlens,
+                    max_seqlen=max_q_seqlen,
+                    window_size=self.sliding_window,
+                    sm_scale=self.scale,
+                    logit_softcapping=self.logit_softcapping,
+                    causal=self.causal,
+                )
         else:
             self.alibi_paged_attention_fwd(
                 query,
@@ -154,6 +211,7 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
         alibi: bool = False,
         sliding_window: int = None,
         logical_softcapping: float = None,
+        causal: bool = True,
         **kwargs,
     ) -> TritonAttentionImpl:
         """build."""
@@ -165,4 +223,5 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
                                    alibi=alibi,
                                    sliding_window=sliding_window,
                                    logical_softcapping=logical_softcapping,
+                                   causal=causal,
                                    **kwargs)

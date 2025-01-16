@@ -174,7 +174,7 @@ class QWenBlock(torch.nn.Module):
         # build attention layer
         self.attn = QWenAttention(config, dtype=dtype, device=device)
 
-        # builf MLP
+        # build MLP
         self.mlp = QWenMLP(config, dtype=dtype, device=device)
 
         # build input layer norm
@@ -229,7 +229,6 @@ class QWenModel(nn.Module):
                  dtype: torch.dtype = None,
                  device: torch.device = None):
         super().__init__()
-        quantization_config = getattr(config, 'quantization_config', None)
         self.vocab_size = config.vocab_size
         self.embed_dim = config.hidden_size
         self.wte = nn.Embedding(self.vocab_size,
@@ -263,7 +262,6 @@ class QWenModel(nn.Module):
 
         self.ln_f = RMSNorm(self.embed_dim,
                             eps=config.layer_norm_epsilon,
-                            quant_config=quantization_config,
                             dtype=dtype,
                             device=device)
 

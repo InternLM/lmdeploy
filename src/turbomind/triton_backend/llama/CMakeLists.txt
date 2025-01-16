@@ -19,7 +19,6 @@ cmake_minimum_required(VERSION 3.8)
 
 set(llama_triton_backend_files
     LlamaTritonModel.cc
-    LlamaTritonModelInstance.cc
 )
 
 find_package(CUDAToolkit REQUIRED)

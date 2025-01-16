@@ -408,7 +408,7 @@ def test_gen_config_min_new_tokens(config, model, backend, worker_id):
         result = True
         for i in range(2):
             result &= response[i].finish_reason == 'length'
-            result &= response[i].session_id == i
+            result &= response[i].index == i
         save_pipeline_common_log(config, file_name, result, response)
         del pipe
         torch.cuda.empty_cache()
@@ -958,7 +958,9 @@ def test_backend_config_validate_turbomind(config, model, backend, worker_id):
         backend_config = backend(tp=0)
         pipeline(model_path, backend_config=backend_config)
 
-    with pytest.raises(pydantic.ValidationError):
+    with pytest.raises(
+            AssertionError,
+            match='max_batch_size should be greater than 0, but got 0'):
         backend_config = backend(max_batch_size=0)
         pipeline(model_path, backend_config=backend_config)
 
@@ -995,23 +997,23 @@ def test_backend_config_validate_pytorch(config, model, backend, worker_id):
     model_path = '/'.join([config.get('model_path'), model])
     with pytest.raises(AssertionError):
         backend_config = backend(tp=0)
-        pipeline(model_path, backend_config=backend_config)
+        init_pipeline(model_path, backend_config=backend_config)
 
     with pytest.raises(AssertionError):
         backend_config = backend(max_batch_size=0)
-        pipeline(model_path, backend_config=backend_config)
+        init_pipeline(model_path, backend_config=backend_config)
 
     with pytest.raises(AssertionError):
         backend_config = backend(cache_max_entry_count=0)
-        pipeline(model_path, backend_config=backend_config)
+        init_pipeline(model_path, backend_config=backend_config)
 
     with pytest.raises(AssertionError):
         backend_config = backend(num_cpu_blocks=-1)
-        pipeline(model_path, backend_config=backend_config)
+        init_pipeline(model_path, backend_config=backend_config)
 
     with pytest.raises(AssertionError):
         backend_config = backend(num_gpu_blocks=-1)
-        pipeline(model_path, backend_config=backend_config)
+        init_pipeline(model_path, backend_config=backend_config)
 
     if 'gw' in worker_id:
         del os.environ['CUDA_VISIBLE_DEVICES']
