@@ -3,10 +3,15 @@ import asyncio
 import copy
 import os
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any, Dict, List
 
 import numpy as np
 import torch
+import torch.distributed
+import torch.distributed.elastic
+from torch import distributed as dist
+from torch import multiprocessing as mp
 
 from lmdeploy.messages import PytorchEngineConfig, ResponseType
 from lmdeploy.utils import (get_logger, get_max_batch_size, get_model,
@@ -15,6 +20,7 @@ from lmdeploy.utils import (get_logger, get_max_batch_size, get_model,
 from ..adapter.adapter import AdapterManager
 from ..config import BackendConfig, CacheConfig, SchedulerConfig
 from ..devices import DeviceContext, get_device_manager
+from ..distributed import DistContext, get_dist_manager
 from ..messages import MessageStatus, SchedulerSequence
 from ..model_inputs import ModelInputs, VisionModelInputs
 from ..paging import Scheduler
@@ -99,6 +105,209 @@ def _build_backend_config(engine_config: PytorchEngineConfig):
     return backend_config
 
 
+def _init_environ(rank: int, world_size: int, nproc_per_node: int):
+    """init environ."""
+    os.environ['RANK'] = str(rank)
+    os.environ['LOCAL_RANK'] = str(rank % nproc_per_node)
+    os.environ['WORLD_SIZE'] = str(world_size)
+
+
+DIST_TIMEOUT = timedelta(days=35600)
+
+
+class DistProcManager:
+
+    def __init__(self,
+                 model_path: str,
+                 engine_config: PytorchEngineConfig,
+                 trust_remote_code: bool = True):
+
+        # distribute args
+        node_rank = engine_config.node_rank
+        nproc_per_node = engine_config.nproc_per_node
+        nnodes = engine_config.nnodes
+        tp = engine_config.tp
+        dp = 1
+        world_size = DistContext.get_world_size(tp, dp)
+        if nproc_per_node is None:
+            nproc_per_node = world_size // nnodes
+            engine_config.nproc_per_node = nproc_per_node
+        assert (nnodes * nproc_per_node == world_size), (
+            'nnodes * nproc_per_node != world_size')
+
+        # get global ranks, rank0 in main process
+        global_rank0 = node_rank * nproc_per_node
+        global_ranks = [global_rank0 + idx for idx in range(1, nproc_per_node)]
+
+        # fields
+        self.model_path = model_path
+        self.engine_config = engine_config
+        self.trust_remote_code = trust_remote_code
+        self.global_rank0 = global_rank0
+        self.world_size = world_size
+        self.global_ranks = global_ranks
+
+        # generate mp pool
+        self.mp_ctx = mp.get_context('spawn')
+        self.procs: List[mp.Process] = []
+        self.watchdog = None
+
+    @staticmethod
+    def _find_available_port() -> bool:
+        """find available port."""
+        import socket
+        port = 29500
+        while True:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                if s.connect_ex(('localhost', port)) != 0:
+                    return port
+                port += 1
+
+    @staticmethod
+    def setup_master_addr():
+        """setup master addr."""
+        port = DistProcManager._find_available_port()
+        os.environ.setdefault('MASTER_ADDR', '127.0.0.1')
+        os.environ.setdefault('MASTER_PORT', str(port))
+        addr = os.environ['MASTER_ADDR']
+        port = os.environ['MASTER_PORT']
+        logger.info(f'MASTER_ADDR={addr}, MASTER_PORT={port}')
+
+    @staticmethod
+    def init_process_group(rank: int, world_size: int, nproc_per_node: int):
+        """init process group."""
+        dist.init_process_group(backend='gloo',
+                                rank=rank,
+                                world_size=world_size,
+                                timeout=DIST_TIMEOUT)
+        assert dist.is_initialized()
+        _init_environ(rank, world_size, nproc_per_node)
+
+    @staticmethod
+    def _dist_process(rank: int,
+                      world_size: int,
+                      model_path: str,
+                      engine_config: PytorchEngineConfig,
+                      trust_remote_code: bool = True):
+        """distributed."""
+        # rank == 0 should never enter this proc.
+        assert rank != 0
+        try:
+            DistProcManager.init_process_group(
+                rank,
+                world_size=world_size,
+                nproc_per_node=engine_config.nproc_per_node,
+            )
+            # engine would call `dist_run_forever()`
+            # and blocked in initialize.
+            Engine.from_pretrained(
+                model_path,
+                engine_config=engine_config,
+                trust_remote_code=trust_remote_code,
+            )
+        finally:
+            if dist.is_initialized():
+                logger.debug(f'rank[{rank}]: destroy process group.')
+                dist.destroy_process_group()
+
+    def start(self):
+        """start process."""
+        from threading import Thread
+        logger.debug('Starting dist processes.')
+        DistProcManager.setup_master_addr()
+        engine_config = self.engine_config
+
+        for rank in self.global_ranks:
+            proc = self.mp_ctx.Process(
+                target=self._dist_process,
+                kwargs=dict(rank=rank,
+                            world_size=self.world_size,
+                            model_path=self.model_path,
+                            engine_config=engine_config,
+                            trust_remote_code=self.trust_remote_code),
+                daemon=True)
+            proc.start()
+            self.procs.append(proc)
+
+        DistProcManager.init_process_group(
+            self.global_rank0,
+            world_size=self.world_size,
+            nproc_per_node=engine_config.nproc_per_node)
+
+        self.watchdog = Thread(target=self._mp_watchdog,
+                               args=(1, ),
+                               daemon=True)
+        self.watchdog.start()
+
+    def _check_context_alive(self):
+        """check context alive."""
+        procs = self.procs
+        failed_procs = list(idx for idx, p in enumerate(procs)
+                            if not p.is_alive())
+        if len(failed_procs) == 0:
+            return
+
+        log_procs = []
+        for idx, p in enumerate(procs):
+            if p.is_alive():
+                p.terminate()
+            else:
+                exitcode = p.exitcode
+                if exitcode > 0:
+                    # terminated exitcode < 0
+                    log_procs.append((idx, exitcode))
+                p.close()
+        for idx, exitcode in log_procs:
+            logger.error(f'TP process[{idx}] failed with exitcode={exitcode}.')
+        # TODO: not safe exit.
+        exit_code = 1 if len(log_procs) > 0 else 0
+        os._exit(exit_code)
+
+    def _mp_watchdog(self, timeout: int = 1):
+        """watch dog of mp context.
+
+        Args:
+            timeout: timeout
+        """
+        import time
+        while True:
+            self._check_context_alive()
+            time.sleep(timeout)
+
+
+def _braodcast_obj(obj, rank, group):
+    """broadcast object."""
+    objs = [None]
+    if rank == 0:
+        objs = [obj]
+    dist.broadcast_object_list(objs, group=group)
+    return objs[0]
+
+
+def _broadcast_inputs(rank: int, inputs: Any, group: dist.group):
+    """get input tensor parallel."""
+
+    dist.barrier(group)
+
+    # broadcast meta info
+    if rank != 0:
+        inputs = [None, None, None]
+    else:
+        device_inputs = inputs[0]
+        meta_inputs = device_inputs.to_device('meta')
+        inputs[0] = meta_inputs
+
+    dist.broadcast_object_list(inputs, group=group)
+    if rank == 0:
+        device_inputs.broadcast()
+    else:
+        device_inputs = inputs[0].broadcast()
+
+    inputs[0] = device_inputs
+
+    return inputs
+
+
 class Engine:
     """The inference engine of lmdeploy pytorch.
 
@@ -112,6 +321,7 @@ class Engine:
                  model_path: str,
                  engine_config: PytorchEngineConfig = None,
                  trust_remote_code: bool = True) -> None:
+        # make sure engine exits
         if engine_config is None:
             engine_config = PytorchEngineConfig()
         else:
@@ -120,32 +330,57 @@ class Engine:
             engine_config.max_batch_size = get_max_batch_size(
                 engine_config.device_type)
 
+        # process distributed
+        (rank, local_rank, world_size, dist_proc_mgr) = self._init_dist(
+            model_path,
+            engine_config=engine_config,
+            trust_remote_code=trust_remote_code,
+        )
+        tp = engine_config.tp
+        dp = 1
+        nproc_per_node = engine_config.nproc_per_node
+        dist_ctx = DistContext.build(rank,
+                                     tp,
+                                     dp,
+                                     nproc_per_node=nproc_per_node)
+
+        self.tp = tp
+
+        # download models and adapters
+        if not os.path.exists(model_path):
+            if local_rank == 0:
+                model_path = get_model(model_path, engine_config.download_dir,
+                                       engine_config.revision)
+            if world_size > 1:
+                with get_dist_manager().context(dist_ctx):
+                    model_path = _braodcast_obj(model_path, local_rank,
+                                                dist_ctx.local_cpu_group)
+
+        adapters = engine_config.adapters
+        if adapters is not None and len(adapters) > 0:
+            if local_rank == 0:
+                adapters = self._download_adapters(adapters, engine_config)
+            if world_size > 1:
+                with get_dist_manager().context(dist_ctx):
+                    adapters = _braodcast_obj(adapters, local_rank,
+                                              dist_ctx.local_cpu_group)
+
+        # check environment
         checker = EngineChecker(model_path=model_path,
                                 engine_config=engine_config,
                                 trust_remote_code=trust_remote_code,
                                 logger=logger)
         checker.handle()
 
-        adapters = engine_config.adapters
-        self.engine_config = engine_config
-        self.tp = engine_config.tp
-
-        self.device_context = DeviceContext(
-            device_type=engine_config.device_type)
-
-        if not os.path.exists(model_path):
-            model_path = get_model(model_path, engine_config.download_dir,
-                                   engine_config.revision)
-        self.model_path = model_path
-
-        if adapters is not None and len(adapters) > 0:
-            adapters = self._download_adapters(adapters, engine_config)
-
+        # build configs
         scheduler_config = _build_scheduler_config(engine_config)
         cache_config = _build_cache_config(engine_config)
         backend_config = _build_backend_config(engine_config)
 
-        with get_device_manager().context(self.device_context):
+        # build model agent
+        self.device_ctx = DeviceContext(device_type=engine_config.device_type)
+        with get_dist_manager().context(
+                dist_ctx), get_device_manager().context(self.device_ctx):
             self.model_agent = build_model_agent(
                 model_path,
                 cache_config=cache_config,
@@ -162,6 +397,16 @@ class Engine:
         self.adapter_manager = self._build_adapter_manager(adapters)
         self.scheduler = Scheduler(scheduler_config, cache_config)
 
+        # dist args
+        self.rank = rank
+        self.local_rank = local_rank
+        self.world_size = world_size
+        self.dist_proc_mgr = dist_proc_mgr
+        self.dist_ctx = dist_ctx
+
+        # engine args
+        self.model_path = model_path
+        self.engine_config = engine_config
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
         self.backend_config = backend_config
@@ -169,6 +414,9 @@ class Engine:
         self.max_session_len = self._get_max_session_len()
 
         self.req_manager = self._bind_request_manager()
+
+        if rank != 0:
+            self.dist_run_forever()
 
         # create main thread
         self._start_loop()
@@ -226,6 +474,32 @@ class Engine:
             new_adapters[name] = new_path
 
         return new_adapters
+
+    def _init_dist(
+        self,
+        model_path: str,
+        engine_config: PytorchEngineConfig = None,
+        trust_remote_code: bool = True,
+    ):
+        """init distribute."""
+        # process distributed
+        if engine_config.tp > 1 and not dist.is_initialized():
+            mgr = DistProcManager(model_path=model_path,
+                                  engine_config=engine_config,
+                                  trust_remote_code=trust_remote_code)
+            mgr.start()
+            rank = mgr.global_rank0
+            world_size = mgr.world_size
+            local_rank = 0
+        else:
+            mgr = None
+            rank = int(os.environ.get('RANK', '0'))
+            local_rank = int(os.environ.get('LOCAL_RANK', '0'))
+            world_size = int(os.environ.get('WORLD_SIZE', '1'))
+
+        if local_rank != 0:
+            torch.cuda.set_device(local_rank)
+        return rank, local_rank, world_size, mgr
 
     def _build_adapter_manager(self, adapters):
         return AdapterManager(adapters)
@@ -779,7 +1053,17 @@ class Engine:
         num_appendable_ids = num_appendable_ids.cuda()
         num_ignore_eos = num_ignore_eos.cuda()
 
+        # dist tools
+        dist_ctx = get_dist_manager().current_context()
+
         for idx in range(loop_count):
+
+            # broadcast inputs
+            if dist_ctx.tp > 1:
+                tp_cpu_group = dist_ctx.tp_cpu_group
+                (inputs, swap_in_map, swap_out_map) = _broadcast_inputs(
+                    0, [inputs, swap_in_map, swap_out_map], tp_cpu_group)
+
             # inference
             output = await self._async_model_forward(
                 inputs,
@@ -1064,9 +1348,43 @@ class Engine:
 
     async def async_loop(self):
         device_manager = get_device_manager()
-        with device_manager.context(self.device_context), torch.cuda.stream(
-                self.stream):
-            await self._async_loop()
+        dist_mgr = get_dist_manager()
+        with dist_mgr.context(self.dist_ctx), device_manager.context(
+                self.device_ctx), torch.cuda.stream(self.stream):
+            try:
+                await self._async_loop()
+            finally:
+                if dist.is_initialized():
+                    logger.debug('rank[0]: destroy process group.')
+                    dist.destroy_process_group()
+
+    @torch.inference_mode()
+    async def _dist_run_forever(self):
+        """implement dist run forever."""
+        dist_ctx = get_dist_manager().current_context()
+        tp_cpu_group = dist_ctx.tp_cpu_group
+        rank = dist_ctx.rank
+        logger.info(f'rank[{rank}]: Start dist loop.')
+        while True:
+            # share inputs
+            inputs, swap_in_map, swap_out_map = _broadcast_inputs(
+                rank, None, tp_cpu_group)
+
+            # forward
+            await self._async_model_forward(inputs,
+                                            swap_in_map,
+                                            swap_out_map,
+                                            return_logits=False)
+
+    def dist_run_forever(self):
+        """distributed run forever."""
+        device_mgr = get_device_manager()
+        dist_mgr = get_dist_manager()
+        with dist_mgr.context(self.dist_ctx), device_mgr.context(
+                self.device_ctx), torch.cuda.stream(self.stream):
+            event_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(event_loop)
+            event_loop.run_until_complete(self._dist_run_forever())
 
     def create_instance(self, cuda_stream_id=0):
         """Create a pytorch engine instance.

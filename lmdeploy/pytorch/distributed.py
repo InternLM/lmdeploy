@@ -13,50 +13,74 @@ class DistContext:
     world_size: int = 1
     tp: int = 1
     dp: int = 1
+    local_rank: int = 0
     world_cpu_group: dist.ProcessGroup = None
-    world_gpu_group: dist.ProcessGroup = None
+    local_cpu_group: dist.ProcessGroup = None
     tp_cpu_group: dist.ProcessGroup = None
     tp_gpu_group: dist.ProcessGroup = None
     dp_cpu_group: dist.ProcessGroup = None
     dp_gpu_group: dist.ProcessGroup = None
 
     @classmethod
-    def build(ctx, rank: int = 0, tp: int = 1, dp: int = 1):
+    def get_world_size(cls, tp: int, dp: int):
+        return tp * dp
+
+    @classmethod
+    def build(cls,
+              rank: int = 0,
+              tp: int = 1,
+              dp: int = 1,
+              node_rank: int = 0,
+              nproc_per_node: int = None):
         """build dist context."""
         from datetime import timedelta
         cpu_backend = 'gloo'
         gpu_backend = 'nccl'
         timeout = timedelta(days=35600)
 
-        world_size = tp * dp
+        world_size = cls.get_world_size(tp, dp)
         if world_size == 1:
             return DistContext()
+
+        if nproc_per_node is None:
+            nproc_per_node = world_size
+
+        local_rank = rank % nproc_per_node
 
         assert dist.is_initialized()
         # world(assume world group is gloo)
         world_cpu_group = dist.GroupMember.WORLD
-        world_gpu_group = dist.new_group(timeout=timeout, backend=gpu_backend)
+
+        if nproc_per_node == world_size or nproc_per_node is None:
+            local_cpu_group = world_cpu_group
+        else:
+            local_rank0 = node_rank * nproc_per_node
+            local_ranks = list(range(local_rank0,
+                                     local_rank0 + nproc_per_node))
+            local_cpu_group = dist.new_group(ranks=local_ranks,
+                                             timeout=timeout,
+                                             backend=cpu_backend)
 
         # tp
+        tp_cpu_group = None
+        tp_gpu_group = None
         if tp > 1:
-            first_tp_rank = rank // tp
-            tp_ranks = list(range(first_tp_rank, first_tp_rank + tp))
-            tp_cpu_group = dist.new_group(ranks=tp_ranks,
-                                          timeout=timeout,
-                                          backend=cpu_backend)
+            tp_rank0 = rank // tp
+            tp_ranks = list(range(tp_rank0, tp_rank0 + tp))
+            if tp == nproc_per_node:
+                tp_cpu_group = local_cpu_group
+            else:
+                tp_cpu_group = dist.new_group(ranks=tp_ranks,
+                                              timeout=timeout,
+                                              backend=cpu_backend)
             tp_gpu_group = dist.new_group(ranks=tp_ranks,
                                           timeout=timeout,
                                           backend=gpu_backend)
-        else:
-            tp_cpu_group = None
-            tp_gpu_group = None
 
         # dp
-        if dp == 1 or rank % tp != 0:
-            # do not initialize dp group for none dp head
-            dp_cpu_group = None
-            dp_gpu_group = None
-        else:
+        dp_cpu_group = None
+        dp_gpu_group = None
+        if dp > 1 and rank % tp == 0:
             dp_ranks = list(range(0, world_size, tp))
             dp_cpu_group = dist.new_group(ranks=dp_ranks,
                                           timeout=timeout,
@@ -70,8 +94,9 @@ class DistContext:
             world_size=world_size,
             tp=tp,
             dp=dp,
+            local_rank=local_rank,
             world_cpu_group=world_cpu_group,
-            world_gpu_group=world_gpu_group,
+            local_cpu_group=local_cpu_group,
             tp_cpu_group=tp_cpu_group,
             tp_gpu_group=tp_gpu_group,
             dp_cpu_group=dp_cpu_group,
@@ -146,7 +171,7 @@ def get_process_group(device: str = None):
     if device == 'cpu':
         return ctx.world_cpu_group
     else:
-        return ctx.world_gpu_group
+        raise RuntimeError('gpu world group is not supported.')
 
 
 def get_tp_group(device: str = 'gpu'):
@@ -185,14 +210,14 @@ def get_group(group_type: str, device: str):
         raise RuntimeError(f'Unknown group type: {group_type}')
 
 
-def all_reduce(tensor, op=ReduceOp.SUM, group=None, async_op=False):
+def all_reduce(tensor, op=ReduceOp.SUM, group='tp', async_op=False):
     """all reduce."""
     if isinstance(group, str):
         group = get_group(group, 'gpu')
     dist.all_reduce(tensor, op, group, async_op)
 
 
-def broadcast(tensor, src, group=None, async_op=False):
+def broadcast(tensor, src, group='tp', async_op=False):
     """broadcast."""
     if isinstance(group, str):
         group = get_group(group, 'gpu')
