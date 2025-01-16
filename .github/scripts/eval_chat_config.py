@@ -255,12 +255,12 @@ for model in [v for k, v in locals().items() if k.startswith('pytorch_')]:
     model['backend'] = 'pytorch'
     model['engine_config']['max_batch_size'] = 512
     model['gen_config']['do_sample'] = False
-    model['batch_size'] = 100
+    model['batch_size'] = 1000
 
 for model in [v for k, v in locals().items() if '_batch1' in k]:
     model['abbr'] = model['abbr'] + '_batch1'
     model['engine_config']['max_batch_size'] = 1
-    model['batch_size'] = 100
+    model['batch_size'] = 1
 
 basic_pytorch_chat_tp1 = dict(type=TurboMindModelwithChatTemplate,
                               engine_config=dict(session_len=MAX_SESSION_LEN,
