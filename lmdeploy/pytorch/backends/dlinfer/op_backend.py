@@ -52,6 +52,12 @@ class DlinferOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.RotaryEmbedding:
             from .rotary_embedding import DlinferRotaryEmbeddingBuilder
             return DlinferRotaryEmbeddingBuilder
+        elif layer_type == OpType.LinearW8A8:
+            from .qmodules import DlinferLinearW8A8Builder
+            return DlinferLinearW8A8Builder
+        elif layer_type == OpType.RMSNormW8A8:
+            from .qmodules import DlinferRMSNormW8A8Builder
+            return DlinferRMSNormW8A8Builder
         else:
             logger.debug(
                 f'Op {layer_type} fallback to default implementation.')
