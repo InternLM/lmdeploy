@@ -581,7 +581,7 @@ template<typename T>
 __global__ void batchApplyMinLengthPenalty(T*         logits,
                                            const int  batch_size,
                                            const int* min_lengths,
-                                           const int* end_ids,
+                                           const int* __restrict__ end_ids,
                                            const int  end_ids_len,
                                            const int* sequence_lengths,
                                            const int  vocab_size_padded)
@@ -592,8 +592,9 @@ __global__ void batchApplyMinLengthPenalty(T*         logits,
     }
     // In decoder, sequence_lengths means length of sequence that has kv cache already computed
     if (sequence_lengths[bid] + 1 < min_lengths[bid]) {
-        T mask_val                                             = (std::is_same<T, half>::value) ? -65504.0f : -FLT_MAX;
-        logits[bid * vocab_size_padded + end_ids[threadIdx.y]] = mask_val;
+        T   mask_val                             = (std::is_same<T, half>::value) ? -65504.0f : -FLT_MAX;
+        int end_id                               = __ldg(end_ids + blockIdx.y);
+        logits[bid * vocab_size_padded + end_id] = mask_val;
     }
 }
 
@@ -608,8 +609,8 @@ void invokeMinLengthPenalty(T*           logits,
                             cudaStream_t stream)
 
 {
-    const dim3 block(std::min(batch_size, 1024 / end_ids_len), end_ids_len);
-    const dim3 grid((batch_size + block.x + block.x - 1) / block.x);
+    const dim3 block(std::min(batch_size, 1024));
+    const dim3 grid((batch_size + block.x - 1) / block.x, end_ids_len);
     batchApplyMinLengthPenalty<<<grid, block, 0, stream>>>(
         logits, batch_size, min_lengths, end_ids, end_ids_len, sequnece_lengths, vocab_size_padded);
 }

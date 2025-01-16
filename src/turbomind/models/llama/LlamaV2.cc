@@ -390,7 +390,7 @@ void LlamaV2<T>::dynamicDecode(int*            token_ids,
         {"sequence_limit_length", {MEMORY_GPU, TYPE_UINT32, {batch_size}, seq_limit_len}},
         {"input_lengths", {MEMORY_GPU, TYPE_INT32, {batch_size, 1}, context_length}},
         {"ite", {MEMORY_CPU, TYPE_UINT32, {1}, &ite}},
-        {"end_id", {MEMORY_GPU, TYPE_INT32, {batch_size}, end_ids}},
+        {"end_id", {MEMORY_GPU, TYPE_INT32, {end_id_.size()}, end_ids}},
         {"local_batch_size", {MEMORY_CPU, TYPE_INT32, {1}, &local_batch_size}},
     };
 
