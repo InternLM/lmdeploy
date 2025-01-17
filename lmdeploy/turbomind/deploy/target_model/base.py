@@ -118,9 +118,9 @@ class BaseOutputModel(ABC):
                 eos_id = [cfg.eos_token_id]
             elif isinstance(cfg.eos_token_id, list):
                 eos_id = cfg.eos_token_id
-        except:
-            assert isinstance(eos_id, int)
-            eos_id = [eos_id]
+        except OSError:
+            if isinstance(eos_id, int):
+                eos_id = [eos_id]
         final_cfg = config_to_dict(self.model_config)
         final_cfg.update(dict(start_id=bos_id, end_id=eos_id))
         final_cfg.update(self.input_model_info)
