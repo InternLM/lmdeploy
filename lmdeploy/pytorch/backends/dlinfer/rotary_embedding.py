@@ -24,14 +24,12 @@ def _rotary_embedding_fwd(position_ids: torch.Tensor,
     else:
         position_ids = position_ids.float()
 
-    inv_freq_expanded = inv_freq.view(1, -1, 1).expand(position_ids.size(0), -1, 1)
-    position_ids_expanded = position_ids.unsqueeze(1)
+    position_ids = position_ids.unsqueeze(-1)
+    angles = position_ids * inv_freq.view(1, 1, -1)
+    angles = torch.cat((angles, angles), dim=-1)
 
-    tmp = torch.bmm(inv_freq_expanded, position_ids_expanded)
-    freqs = tmp.transpose(1, 2)
-    emb = torch.cat((freqs, freqs), dim=-1)
-    cos = emb.cos()
-    sin = emb.sin()
+    sin = angles.sin()
+    cos = angles.cos()
 
     if mscale is not None:
         cos = cos * mscale
