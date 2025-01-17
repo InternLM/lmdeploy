@@ -536,7 +536,7 @@ class TurboMindInstance:
             stop_words = gen_config.stop_token_ids or []
             for eos_id in self.eos_id:
                 if eos_id not in stop_words:
-                    stop_words.append(self.eos_id)
+                    stop_words.append(eos_id)
         stop_words = _construct_stop_or_bad_words(stop_words)
         bad_words = _construct_stop_or_bad_words(bad_words)
 
