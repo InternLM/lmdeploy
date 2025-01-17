@@ -65,7 +65,7 @@ def _gen_out_to_response(out: GenOut, index) -> Response:
                     generate_token_len=out.generate_token_len,
                     input_token_len=out.input_token_len,
                     finish_reason=out.finish_reason,
-                    token_ids=out.token_ids,
+                    token_ids=out.token_ids or [],
                     logprobs=out.logprobs,
                     last_hidden_state=out.last_hidden_state,
                     logits=out.logits,
@@ -574,7 +574,6 @@ class AsyncEngine(LogitsMixin):
                           **kwargs)
 
     async def _get_prompt_input(self,
-                                session_id: int,
                                 prompt: str,
                                 do_preprocess: bool,
                                 sequence_start: bool,

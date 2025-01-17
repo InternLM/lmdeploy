@@ -120,6 +120,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
   <li>Llama3.2 (1B, 3B)</li>
   <li>InternLM (7B - 20B)</li>
   <li>InternLM2 (7B - 20B)</li>
+  <li>InternLM3 (8B)</li>
   <li>InternLM2.5 (7B)</li>
   <li>Qwen (1.8B - 72B)</li>
   <li>Qwen1.5 (0.5B - 110B)</li>
@@ -200,7 +201,7 @@ For more information on installing on CUDA 11+ platform, or for instructions on 
 
 ```python
 import lmdeploy
-pipe = lmdeploy.pipeline("internlm/internlm2-chat-7b")
+pipe = lmdeploy.pipeline("internlm/internlm3-8b-instruct")
 response = pipe(["Hi, pls intro yourself", "Shanghai is"])
 print(response)
 ```
