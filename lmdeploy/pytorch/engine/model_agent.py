@@ -335,6 +335,10 @@ class BaseModelAgent(AutoModelAgent):
         """get input processor.."""
         return self.patched_model.get_input_processor()
 
+    def reset_graph_runner(self):
+        """reset graph runner to prevent tp hanging."""
+        self.patched_model.reset()
+
 
 def build_model_agent(model_path: str,
                       cache_config: CacheConfig,

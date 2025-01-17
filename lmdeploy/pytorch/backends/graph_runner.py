@@ -69,3 +69,7 @@ class GraphRunner:
             return self.model.get_input_processor()
         else:
             return None
+
+    def reset(self):
+        """remove all graphs to prevent hanging on exit."""
+        pass

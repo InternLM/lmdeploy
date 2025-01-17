@@ -192,23 +192,18 @@ class DistProcManager:
         """distributed."""
         # rank == 0 should never enter this proc.
         assert rank != 0
-        try:
-            DistProcManager.init_process_group(
-                rank,
-                world_size=world_size,
-                nproc_per_node=engine_config.nproc_per_node,
-            )
-            # engine would call `dist_run_forever()`
-            # and blocked in initialize.
-            Engine.from_pretrained(
-                model_path,
-                engine_config=engine_config,
-                trust_remote_code=trust_remote_code,
-            )
-        finally:
-            if dist.is_initialized():
-                logger.debug(f'rank[{rank}]: destroy process group.')
-                dist.destroy_process_group()
+        DistProcManager.init_process_group(
+            rank,
+            world_size=world_size,
+            nproc_per_node=engine_config.nproc_per_node,
+        )
+        # engine would call `dist_run_forever()`
+        # and blocked in initialize.
+        Engine.from_pretrained(
+            model_path,
+            engine_config=engine_config,
+            trust_remote_code=trust_remote_code,
+        )
 
     def start(self):
         """start process."""
@@ -225,6 +220,7 @@ class DistProcManager:
                             model_path=self.model_path,
                             engine_config=engine_config,
                             trust_remote_code=self.trust_remote_code),
+                name=f'ProcRank{rank}',
                 daemon=True)
             proc.start()
             self.procs.append(proc)
@@ -239,16 +235,10 @@ class DistProcManager:
                                daemon=True)
         self.watchdog.start()
 
-    def _check_context_alive(self):
-        """check context alive."""
-        procs = self.procs
-        failed_procs = list(idx for idx, p in enumerate(procs)
-                            if not p.is_alive())
-        if len(failed_procs) == 0:
-            return
-
+    def terminate_all_procs(self):
+        """terminate all process."""
         log_procs = []
-        for idx, p in enumerate(procs):
+        for idx, p in enumerate(self.procs):
             if p.is_alive():
                 p.terminate()
             else:
@@ -259,6 +249,17 @@ class DistProcManager:
                 p.close()
         for idx, exitcode in log_procs:
             logger.error(f'TP process[{idx}] failed with exitcode={exitcode}.')
+        return log_procs
+
+    def _check_context_alive(self):
+        """check context alive."""
+        procs = self.procs
+        failed_procs = list(idx for idx, p in enumerate(procs)
+                            if not p.is_alive())
+        if len(failed_procs) == 0:
+            return
+
+        log_procs = self.terminate_all_procs()
         # TODO: not safe exit.
         exit_code = 1 if len(log_procs) > 0 else 0
         os._exit(exit_code)
@@ -293,11 +294,17 @@ def _broadcast_inputs(rank: int, inputs: Any, group: dist.group):
     if rank != 0:
         inputs = [None, None, None]
     else:
-        device_inputs = inputs[0]
-        meta_inputs = device_inputs.to_device('meta')
-        inputs[0] = meta_inputs
+        if inputs[0] is not None:
+            device_inputs = inputs[0]
+            meta_inputs = device_inputs.to_device('meta')
+            inputs[0] = meta_inputs
 
     dist.broadcast_object_list(inputs, group=group)
+
+    if inputs[0] is None:
+        return [None, None, None]
+
+    # device cast
     if rank == 0:
         device_inputs.broadcast()
     else:
@@ -475,6 +482,15 @@ class Engine:
 
         return new_adapters
 
+    @staticmethod
+    def _is_launched_by_torchrun():
+        # check env variable
+        # TODO: Find a better check
+        if ('RANK' in os.environ and 'LOCAL_RANK' in os.environ
+                and 'WORLD_SIZE' in os.environ):
+            return True
+        return False
+
     def _init_dist(
         self,
         model_path: str,
@@ -483,7 +499,7 @@ class Engine:
     ):
         """init distribute."""
         # process distributed
-        if engine_config.tp > 1 and not dist.is_initialized():
+        if engine_config.tp > 1 and not self._is_launched_by_torchrun():
             mgr = DistProcManager(model_path=model_path,
                                   engine_config=engine_config,
                                   trust_remote_code=trust_remote_code)
@@ -496,6 +512,11 @@ class Engine:
             rank = int(os.environ.get('RANK', '0'))
             local_rank = int(os.environ.get('LOCAL_RANK', '0'))
             world_size = int(os.environ.get('WORLD_SIZE', '1'))
+            if engine_config.tp > 1 and not dist.is_initialized():
+                dist.init_process_group(backend='gloo',
+                                        timeout=DIST_TIMEOUT,
+                                        rank=rank,
+                                        world_size=world_size)
 
         if local_rank != 0:
             torch.cuda.set_device(local_rank)
@@ -1346,6 +1367,31 @@ class Engine:
             await has_runable_event.wait()
             await __step()
 
+    def _finally_rank0(self):
+        """finall process for rank0."""
+        if self.dist_proc_mgr is not None:
+            # if process is create by rank0, kill them all
+            self.dist_proc_mgr.terminate_all_procs()
+        else:
+            # broadcast exit signal.
+            try:
+                _broadcast_inputs(0, [None, None, None],
+                                  group=self.dist_ctx.world_cpu_group)
+            except Exception:
+                logger.warning('Can not broadcast exit signal.')
+
+    def _loop_finally(self):
+        """finally process for dist."""
+        self.model_agent.reset_graph_runner()
+        if not dist.is_initialized():
+            return
+        if self.rank == 0:
+            # send empty info to stop other ranks.
+            self._finally_rank0()
+        logger.debug(f'rank[{self.rank}]: destroy process group.')
+        # WARNING: destroy process group might block the watchdog.
+        # dist.destroy_process_group()
+
     async def async_loop(self):
         device_manager = get_device_manager()
         dist_mgr = get_dist_manager()
@@ -1354,9 +1400,7 @@ class Engine:
             try:
                 await self._async_loop()
             finally:
-                if dist.is_initialized():
-                    logger.debug('rank[0]: destroy process group.')
-                    dist.destroy_process_group()
+                self._loop_finally()
 
     @torch.inference_mode()
     async def _dist_run_forever(self):
@@ -1370,6 +1414,9 @@ class Engine:
             inputs, swap_in_map, swap_out_map = _broadcast_inputs(
                 rank, None, tp_cpu_group)
 
+            if inputs is None:
+                return
+
             # forward
             await self._async_model_forward(inputs,
                                             swap_in_map,
@@ -1380,11 +1427,15 @@ class Engine:
         """distributed run forever."""
         device_mgr = get_device_manager()
         dist_mgr = get_dist_manager()
-        with dist_mgr.context(self.dist_ctx), device_mgr.context(
-                self.device_ctx), torch.cuda.stream(self.stream):
-            event_loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(event_loop)
-            event_loop.run_until_complete(self._dist_run_forever())
+        try:
+            with dist_mgr.context(self.dist_ctx), device_mgr.context(
+                    self.device_ctx), torch.cuda.stream(self.stream):
+                event_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(event_loop)
+                event_loop.run_until_complete(self._dist_run_forever())
+        finally:
+            self._loop_finally()
+            exit()
 
     def create_instance(self, cuda_stream_id=0):
         """Create a pytorch engine instance.
