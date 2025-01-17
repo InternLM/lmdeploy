@@ -1427,15 +1427,26 @@ class Engine:
         """distributed run forever."""
         device_mgr = get_device_manager()
         dist_mgr = get_dist_manager()
+        rank = self.dist_ctx.rank
+        exit_code = 0
         try:
             with dist_mgr.context(self.dist_ctx), device_mgr.context(
                     self.device_ctx), torch.cuda.stream(self.stream):
                 event_loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(event_loop)
                 event_loop.run_until_complete(self._dist_run_forever())
+        except RuntimeError as e:
+            if 'Connection closed by peer' in e.args[0]:
+                logger.info(f'rank[{rank}] closed by peer.')
+            else:
+                exit_code = 1
+                logger.exception(f'rank[{rank}] failed.')
+        except Exception:
+            exit_code = 1
+            logger.exception(f'rank[{rank}] failed.')
         finally:
             self._loop_finally()
-            exit()
+            exit(exit_code)
 
     def create_instance(self, cuda_stream_id=0):
         """Create a pytorch engine instance.
