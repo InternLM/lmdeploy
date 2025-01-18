@@ -24,6 +24,7 @@ void invokeMoeGate_V2(int*         f2n,
                       bool         softmax,
                       bool         norm_topk,
                       float        routed_scale,
+                      int2         expert_range,
                       cudaStream_t st);
 
 template<class T>
@@ -66,5 +67,7 @@ void invokeMoeSoftmaxMaskTopKGroups(
 std::vector<int> SampleUniform(int token_num, int expert_num, int exp_per_tok, std::mt19937& g);
 
 std::vector<int> SampleBalanced(int token_num, int expert_num, int exp_per_tok, std::mt19937& g);
+
+void invokeMoveOffsets(int* offsets, int expert, int2 expert_range, cudaStream_t st);
 
 }  // namespace turbomind

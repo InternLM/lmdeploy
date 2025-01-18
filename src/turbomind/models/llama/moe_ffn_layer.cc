@@ -80,7 +80,8 @@ template<class T>
 void MoeFfnLayer<T>::forward(T* output, const T* input, int tokens, int layer_id, const MoeFfnWeight<T>& moe)
 {
     const size_t padded     = (tokens + kMoeGateVecSize - 1) / kMoeGateVecSize * kMoeGateVecSize;
-    const int    expert_num = moe.experts.size();
+    const int    expert_num = param_.enable_ep ? moe.experts.size() * tensor_para_.world_size_ : moe.experts.size();
+    const int    local_expert_num = moe.experts.size();
 
     FT_CHECK(expert_num);
 
@@ -118,6 +119,11 @@ void MoeFfnLayer<T>::forward(T* output, const T* input, int tokens, int layer_id
         softmax = false;
     }
 
+    expert_range_ = {0, local_expert_num};
+    if (param_.enable_ep) {
+        expert_range_ = {tensor_para_.rank_ * local_expert_num, (1 + tensor_para_.rank_) * local_expert_num};
+    }
+
     /// TODO: fix illegal memory access even if NaN are present in logits
     invokeMoeGate_V2(f2n_,
                      en2f_,
@@ -133,6 +139,7 @@ void MoeFfnLayer<T>::forward(T* output, const T* input, int tokens, int layer_id
                      softmax,
                      param_.norm_topk_prob,
                      param_.routed_scale,
+                     expert_range_,
                      stream_);
     sync_check_cuda_error();
 
@@ -151,22 +158,25 @@ void MoeFfnLayer<T>::forward(T* output, const T* input, int tokens, int layer_id
             cudaMemcpyAsync(offsets_, h_offsets_, sizeof(int) * (expert_num + 1), cudaMemcpyDefault, stream_));
     }
 
+    if (param_.enable_ep) {
+        invokeMoveOffsets(offsets_, expert_num, expert_range_, stream_);
+    }
+
     if (param_.method == MoeParam::kNaive) {
 
         dispatchMoeGather(inout_buf_, input, f2n_, tokens, param_.experts_per_token, hidden_dim_, stream_);
         sync_check_cuda_error();
 
         check_cuda_error(
-            cudaMemcpyAsync(h_offsets_, offsets_, sizeof(int) * (expert_num + 1), cudaMemcpyDefault, stream_));
+            cudaMemcpyAsync(h_offsets_, offsets_, sizeof(int) * (local_expert_num + 1), cudaMemcpyDefault, stream_));
 
         check_cuda_error(cudaStreamSynchronize(stream_));
 
-        if (h_offsets_[expert_num] != tokens * param_.experts_per_token) {
-            FT_CHECK_WITH_INFO(0, fmtstr("%d vs %d", h_offsets_[expert_num], tokens * param_.experts_per_token));
+        if (!param_.enable_ep && h_offsets_[local_expert_num] != tokens * param_.experts_per_token) {
+            FT_CHECK_WITH_INFO(0, fmtstr("%d vs %d", h_offsets_[local_expert_num], tokens * param_.experts_per_token));
         }
 
-        for (int i = 0; i < expert_num; ++i) {
-
+        for (int i = 0; i < local_expert_num; ++i) {
             FT_CHECK(moe.experts[i].is_fused_silu == false);
 
             if (size_t count = h_offsets_[i + 1] - h_offsets_[i]) {
@@ -181,7 +191,7 @@ void MoeFfnLayer<T>::forward(T* output, const T* input, int tokens, int layer_id
         }
     }
     else {
-        context_->update(expert_num, param_.experts_per_token, offsets_);
+        context_->update(local_expert_num, param_.experts_per_token, offsets_);
 
         auto& block = moe.block;
 

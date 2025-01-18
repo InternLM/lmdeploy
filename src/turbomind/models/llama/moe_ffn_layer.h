@@ -17,7 +17,7 @@ template<class T>
 class MoeFfnLayer {
 public:
     MoeFfnLayer(ModelParam model, const MoeParam& param, const NcclParam& tp, const Context<T>& ctx):
-        inter_size_(param.inter_size / tp.world_size_),
+        inter_size_(param.enable_ep ? param.inter_size : param.inter_size / tp.world_size_),
         hidden_dim_(model.hidden_units),
         param_(param),
         dtype_(getTensorType<T>()),
@@ -93,6 +93,8 @@ private:
 
     int* accum_{};
     int* offsets_{};
+
+    int2 expert_range_{};
 };
 
 }  // namespace turbomind
