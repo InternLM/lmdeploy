@@ -48,10 +48,8 @@ def create_workspace(_path: str):
         shutil.rmtree(_path)
     print(f'create workspace in directory {_path}')
     weight_path = osp.join(_path, 'triton_models', 'weights')
-    tokenizer_path = osp.join(_path, 'triton_models', 'tokenizer')
     os.makedirs(weight_path)
-    os.makedirs(tokenizer_path)
-    return weight_path, tokenizer_path
+    return weight_path, _path
 
 
 def copy_tokenizer(model_path: str, tokenizer_path: str,
@@ -275,7 +273,8 @@ def main(model_name: str,
     """deploy llama family models via turbomind.
 
     Args:
-        model_name (str): unused any longer
+        model_name (str): the served model name, which can be accessed by
+            `v1/model`
         model_path (str): the directory path of the model
         model_format (str): the format of the model, should choose from
             ['meta_llama', 'hf', 'awq', 'gptq']. 'meta_llama' stands for META's
@@ -300,12 +299,6 @@ def main(model_name: str,
             default to the default cache directory of huggingface.
         kwargs (dict): other params for convert
     """
-    if model_name:
-        logger.warning(
-            'The argument `<model_name>` is deprecated and unused now. '
-            'It will be removed on 2024.12.31. It was originally used to '
-            'specify the name of the built-in chat template, but now it '
-            'is substituted with a clearer parameter `--chat-template`')
     if chat_template is None:
         chat_template = best_match_model(model_path)
     assert chat_template in MODELS.module_dict.keys(), \
