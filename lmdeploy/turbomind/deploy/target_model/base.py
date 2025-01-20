@@ -118,6 +118,8 @@ class BaseOutputModel(ABC):
                 eos_id = [cfg.eos_token_id]
             elif isinstance(cfg.eos_token_id, list):
                 eos_id = cfg.eos_token_id
+            elif cfg.eos_token_id is None:
+                eos_id = [eos_id]
         except OSError:
             if isinstance(eos_id, int):
                 eos_id = [eos_id]
