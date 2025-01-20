@@ -226,6 +226,7 @@ class BlockedF8Linear(nn.Module):
                                   world_size: int):
         """weight loader for rowwise linear."""
         if loaded_weight.dim() == 2:
+            loaded_weight = loaded_weight.to(param.device)
             weight = loaded_weight.chunk(world_size, 1)[rank]
             return default_weight_loader(param, weight)
         else:
@@ -1188,6 +1189,7 @@ class BaseLinear(nn.Module):
                                   world_size: int):
         """weight loader for rowwise linear."""
         if loaded_weight.dim() == 2:
+            loaded_weight = loaded_weight.to(param.device)
             weight = _chunk_align(loaded_weight, world_size, 1,
                                   self.tp_align_size)[rank]
             return default_weight_loader(param, weight)

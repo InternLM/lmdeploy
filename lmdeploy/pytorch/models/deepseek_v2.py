@@ -758,6 +758,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                                params_dict: Dict[str, nn.Parameter],
                                update_pe_mapping: List):
         """load weight attention."""
+        device = next(iter(params_dict.values())).device
 
         def __update_pe(weight, head_dim: int, pe_dim_offset: int):
             # (num_heads, q_head_dim, input_dim)
@@ -828,6 +829,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             if name.endswith('.scale'):
                 weight = loaded_weight
             else:
+                loaded_weight = loaded_weight.to(device)
                 weight = __update_pe(loaded_weight, head_dim, pe_dim_offset)
             param = params_dict[name]
             load_weight(param, weight)
@@ -839,6 +841,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                 if quantization_config is not None:
                     quant_method = quantization_config.get('quant_method')
 
+                loaded_weight = loaded_weight.to(device)
                 if quant_method == 'fp8':
                     # update blocked fp8 weight
                     __load_kcvc_blocked_fp8(name, loaded_weight)
