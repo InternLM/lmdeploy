@@ -1,9 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+# yapf: disable
 from lmdeploy.utils import get_max_batch_size
 
 from .cli import CLI
 from .utils import (ArgumentHelper, DefaultsAndTypesHelpFormatter,
                     convert_args, get_chat_template, get_lora_adapters)
+
+# yapf: enable
 
 
 class SubCliServe:
@@ -208,9 +211,11 @@ class SubCliServe:
     @staticmethod
     def gradio(args):
         """Serve LLMs with web UI using gradio."""
+        # yapf: disable
         from lmdeploy.archs import autoget_backend
         from lmdeploy.messages import (PytorchEngineConfig,
                                        TurbomindEngineConfig)
+        # yapf: enable
         from lmdeploy.serve.gradio.app import run
         max_batch_size = args.max_batch_size if args.max_batch_size \
             else get_max_batch_size(args.device)

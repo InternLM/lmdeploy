@@ -1,7 +1,10 @@
+# yapf: disable
 import pytest
 from utils.benchmark_utils import throughput_test
 from utils.config_utils import (get_benchmark_model_list,
                                 get_cuda_prefix_by_workerid)
+
+# yapf: enable
 
 
 @pytest.mark.gpu_num_1

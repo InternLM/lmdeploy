@@ -1,3 +1,4 @@
+# yapf: disable
 import os
 from multiprocessing import get_context
 
@@ -6,6 +7,7 @@ from utils.config_utils import get_cuda_id_by_workerid, get_torch_model_list
 from utils.pipeline_chat import (assert_pipeline_vl_chat_log,
                                  run_pipeline_vl_chat_test)
 
+# yapf: enable
 BACKEND = 'pytorch'
 
 

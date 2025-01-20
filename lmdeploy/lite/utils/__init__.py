@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+# yapf: disable
 from .batch_split import (concat_decoder_layer_outputs,
                           split_decoder_layer_inputs)
 from .cal_qparams import (QParams, cal_qparams_per_channel_absmax,

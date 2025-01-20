@@ -1,8 +1,11 @@
+# yapf: disable
 import pytest
 import torch
 
 from lmdeploy.pytorch.tools.layout_convert import (batch_tensor,
                                                    continuous_tensor)
+
+# yapf: enable
 
 
 class TestContinuous:

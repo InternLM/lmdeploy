@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+# yapf: disable
 import argparse
 import json
 import os
@@ -14,6 +15,7 @@ from lmdeploy.cli.utils import ArgumentHelper, DefaultsAndTypesHelpFormatter
 from lmdeploy.profiler import Profiler, Session
 from lmdeploy.utils import get_logger
 
+# yapf: enable
 logger = get_logger('lmdeploy')
 
 

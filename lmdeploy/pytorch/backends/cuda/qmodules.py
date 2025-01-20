@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+# yapf: disable
 from typing import Optional
 
 import torch
@@ -10,6 +11,8 @@ from lmdeploy.pytorch.models.q_modules import QTensor
 
 from ..qmodules import (LinearW8A8Builder, LinearW8A8Impl, RMSNormW8A8Builder,
                         RMSNormW8A8Impl)
+
+# yapf: enable
 
 
 class TritonRMSNormW8A8Impl(RMSNormW8A8Impl):

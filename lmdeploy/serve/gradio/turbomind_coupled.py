@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+# yapf: disable
 import random
 from threading import Lock
 from typing import Literal, Optional, Sequence, Union
@@ -10,6 +11,8 @@ from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
 from lmdeploy.model import ChatTemplateConfig
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.gradio.constants import CSS, THEME, disable_btn, enable_btn
+
+# yapf: enable
 
 
 class InterFace:

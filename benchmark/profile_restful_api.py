@@ -9,7 +9,7 @@ python3 -m sglang.bench_serving --backend sglang --num-prompt 10
 python3 -m sglang.bench_serving --backend sglang --dataset-name random --num-prompts 3000 --random-input 1024 --random-output 1024 --random-range-ratio 0.5
 python3 -m sglang.bench_serving --backend sglang --dataset-name random --request-rate-range 1,2,4,8,16,32 --random-input 4096 --random-output 1024 --random-range-ratio 0.125 --multi
 """  # noqa
-
+# yapf: disable
 import argparse
 import asyncio
 import json
@@ -32,6 +32,7 @@ from tqdm.asyncio import tqdm
 from transformers import (AutoTokenizer, PreTrainedTokenizer,
                           PreTrainedTokenizerBase, PreTrainedTokenizerFast)
 
+# yapf: enable
 AIOHTTP_TIMEOUT = aiohttp.ClientTimeout(total=6 * 60 * 60)
 
 global args

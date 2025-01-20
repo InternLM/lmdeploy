@@ -1,3 +1,4 @@
+# yapf: disable
 import random
 from concurrent.futures import ThreadPoolExecutor
 from random import randint
@@ -13,6 +14,7 @@ from utils.restful_return_check import (assert_chat_completions_batch_return,
 
 from lmdeploy.serve.openai.api_client import APIClient, get_model_list
 
+# yapf: enable
 BASE_HTTP_URL = 'http://localhost'
 DEFAULT_PORT = 23333
 MODEL = 'internlm/internlm2_5-20b-chat'

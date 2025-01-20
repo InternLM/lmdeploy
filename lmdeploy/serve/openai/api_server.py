@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+# yapf: disable
 import asyncio
 import copy
 import os
@@ -31,6 +32,7 @@ from lmdeploy.serve.openai.protocol import (  # noqa: E501
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import get_logger
 
+# yapf: enable
 logger = get_logger('lmdeploy')
 
 

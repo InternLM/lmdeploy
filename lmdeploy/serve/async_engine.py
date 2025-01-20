@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+# yapf: disable
 import asyncio
 import atexit
 import concurrent.futures
@@ -26,6 +27,7 @@ from lmdeploy.serve.utils import LogitsMixin
 from lmdeploy.tokenizer import DetokenizeState
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_logger
 
+# yapf: enable
 logger = get_logger('lmdeploy')
 
 

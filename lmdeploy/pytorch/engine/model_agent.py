@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+# yapf: disable
 import asyncio
 import atexit
 import os
@@ -23,6 +24,7 @@ from ..utils import get_gpu_memory
 from ..weight_loader.model_weight_loader import load_model_weights
 from .cache_engine import CacheEngine
 
+# yapf: enable
 logger = get_logger('lmdeploy')
 
 

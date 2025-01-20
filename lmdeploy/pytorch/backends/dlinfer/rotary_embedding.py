@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+# yapf: disable
 import math
 
 import torch
@@ -8,6 +9,8 @@ from ..default.rotary_embedding import LlamaDynamicNTKScalingRotaryEmbedding
 from ..rotary_embedding import (Llama3Parameters, LongRoPEScalingParameters,
                                 RopeType, RotaryEmbeddingBuilder,
                                 RotaryEmbeddingImpl, YarnParameters)
+
+# yapf: enable
 
 
 def _rotary_embedding_fwd(position_ids: torch.Tensor,
@@ -47,8 +50,10 @@ class DlinferRotaryEmbeddingImpl(RotaryEmbeddingImpl, nn.Module):
         self.scaling_factor = scaling_factor
         self.dim = dim
         self.base = base
+        # yapf: disable
         inv_freq = 1.0 / (self.base
                           ** (torch.arange(0, self.dim, 2, dtype=torch.int64).float() / self.dim)).float().cuda()
+        # yapf: enable
         self.register_buffer('inv_freq', inv_freq, persistent=False)
 
     def forward(self, x, position_ids):

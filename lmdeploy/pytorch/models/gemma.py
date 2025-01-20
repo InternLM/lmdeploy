@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+# yapf: disable
 import math
 from typing import Any, Iterable, List, Optional, Tuple
 
@@ -14,6 +15,8 @@ from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
+
+# yapf: enable
 
 
 class GemmaAttention(nn.Module):

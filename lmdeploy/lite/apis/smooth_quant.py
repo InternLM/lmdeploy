@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-
+# yapf: disable
 import os.path as osp
 from typing import Literal
 
@@ -14,6 +14,8 @@ from lmdeploy.lite.quantization.awq import (FC_FCS_MAP, NORM_FCS_MAP,
                                             smooth_layers)
 from lmdeploy.lite.utils import collect_target_modules
 from lmdeploy.pytorch.models import QLinear, QRMSNorm
+
+# yapf: enable
 
 
 def smooth_quant(model: str,

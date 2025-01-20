@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-
+# yapf: disable
 from typing import List
 
 import torch
@@ -15,6 +15,8 @@ from lmdeploy.pytorch.models.q_modules import QTensor
 from ..moe import (FusedMoEBlockedF8Builder, FusedMoEBlockedF8Impl,
                    FusedMoEBuilder, FusedMoEImpl, FusedMoEW8A8Builder,
                    FusedMoEW8A8Impl)
+
+# yapf: enable
 
 
 class TritonFusedMoEImpl(FusedMoEImpl):

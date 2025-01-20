@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+# yapf: disable
 import json
 import os.path as osp
 
@@ -10,6 +11,7 @@ from transformers.utils import (SAFE_WEIGHTS_INDEX_NAME, SAFE_WEIGHTS_NAME,
 from lmdeploy.pytorch.distributed import get_world_rank
 from lmdeploy.utils import get_logger
 
+# yapf: enable
 logger = get_logger('lmdeploy')
 
 

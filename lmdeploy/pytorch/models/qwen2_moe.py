@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+# yapf: disable
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import torch
@@ -19,6 +20,7 @@ from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 from .utils.cudagraph import CudaGraphMixin
 
 
+# yapf: enable
 class Qwen2MoeAttention(nn.Module):
     """Rewrite module of Qwen2MoeAttention."""
 

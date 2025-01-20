@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+# yapf: disable
 import asyncio
 from typing import Dict, List, Literal, Optional, Tuple, Union
 
@@ -12,6 +13,7 @@ from lmdeploy.utils import get_logger
 from lmdeploy.vl.engine import ImageEncoder
 from lmdeploy.vl.utils import load_image
 
+# yapf: enable
 logger = get_logger('lmdeploy')
 
 VLPromptType = Union[str, Tuple[str, PIL.Image.Image], Tuple[str, List[PIL.Image.Image]]]

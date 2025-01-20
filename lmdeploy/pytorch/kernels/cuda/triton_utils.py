@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+# yapf: disable
 import functools
 import inspect
 from typing import Callable, Dict, Sequence, Union, cast, overload
@@ -8,6 +9,7 @@ import triton
 from packaging import version
 from triton import JITFunction
 
+# yapf: enable
 if version.parse(triton.__version__) <= version.parse('2.2.0'):
 
     def get_kernel_meta(tensor: torch.Tensor):
@@ -84,11 +86,13 @@ class JitFunction220Wrapper:
 
     def _make_launcher(self, jit_func: triton.JITFunction):
         """make input builder."""
+        # yapf: disable
         from triton.common.backend import get_backend, get_cuda_version_key
         from triton.compiler import (CompiledKernel,
                                      get_arch_default_num_stages,
                                      get_arch_default_num_warps)
 
+        # yapf: enable
         def _make_spec_key_str(key):
             anno = self.type_hint[key]
             if anno == torch.Tensor:

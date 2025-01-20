@@ -1,7 +1,10 @@
+# yapf: disable
 import torch
 from transformers.generation.logits_process import (
     MinPLogitsWarper, RepetitionPenaltyLogitsProcessor,
     TemperatureLogitsWarper, TopKLogitsWarper, TopPLogitsWarper)
+
+# yapf: enable
 
 
 def test_process_temperature():

@@ -1,9 +1,12 @@
+# yapf: disable
 from transformers import AutoConfig
 
 from lmdeploy.turbomind.deploy.config import (ModelConfig,
                                               TurbomindModelConfig,
                                               config_from_dict)
 from lmdeploy.utils import _get_and_verify_max_len
+
+# yapf: enable
 
 
 def test_get_and_verify_max_len():

@@ -1,3 +1,4 @@
+# yapf: disable
 import os
 import subprocess
 from subprocess import PIPE
@@ -7,6 +8,8 @@ import pytest
 from utils.config_utils import (get_cuda_prefix_by_workerid,
                                 get_turbomind_model_list)
 from utils.get_run_config import get_command_with_extra, get_model_name
+
+# yapf: enable
 
 
 @pytest.mark.order(5)

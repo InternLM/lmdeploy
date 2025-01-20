@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+# yapf: disable
 import asyncio
 import copy
 import os
@@ -23,6 +24,7 @@ from .logits_process import FusedLogitsProcessor, SamplingInputs
 from .model_agent import build_model_agent
 from .request import Request, RequestManager, RequestType, Response
 
+# yapf: enable
 logger = get_logger('lmdeploy')
 
 SeqList = List[SchedulerSequence]

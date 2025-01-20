@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+# yapf: disable
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Union
@@ -10,6 +11,7 @@ from lmdeploy.messages import (PytorchEngineConfig, TurbomindEngineConfig,
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.builder import load_vl_model
 
+# yapf: enable
 logger = get_logger('lmdeploy')
 
 

@@ -1,3 +1,4 @@
+# yapf: disable
 import os
 
 import allure
@@ -5,6 +6,8 @@ import pytest
 from utils.config_utils import (get_cuda_prefix_by_workerid,
                                 get_quantization_model_list)
 from utils.quantization_utils import quantization
+
+# yapf: enable
 
 
 @pytest.mark.order(3)

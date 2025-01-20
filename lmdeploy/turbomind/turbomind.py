@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+# yapf: disable
 import asyncio
 import copy
 import json
@@ -35,6 +36,7 @@ import _turbomind as _tm  # noqa: E402
 logger = get_logger('lmdeploy')
 
 MAX_LOGPROBS = 1024
+# yapf: enable
 
 
 def _construct_stop_or_bad_words(words: List[int] = None):

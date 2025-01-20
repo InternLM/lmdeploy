@@ -8,12 +8,11 @@ repos:
     rev: 5.11.5
     hooks:
       - id: isort
-  # - repo: https://github.com/google/yapf
-  #   rev: v0.43.0
-  #   hooks:
-  #     - id: yapf
-  #       args: ['-i', '--style={based_on_style: pep8, column_limit: 120}']
-
+  - repo: https://github.com/google/yapf
+    rev: v0.43.0
+    hooks:
+      - id: yapf
+        args: ['-i', '--style={based_on_style: pep8, column_limit: 120}']
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.3.0
     hooks:

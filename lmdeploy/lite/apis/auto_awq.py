@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+# yapf: disable
 import os
 import os.path as osp
 import shutil
@@ -14,6 +15,8 @@ from lmdeploy.lite.utils import collect_target_modules
 from lmdeploy.pytorch.check_env import try_import_deeplink
 
 from .calibrate import LAYER_TYPE_MAP, calibrate
+
+# yapf: enable
 
 
 def save_vl_model(vl_model, model_path, dst_path):

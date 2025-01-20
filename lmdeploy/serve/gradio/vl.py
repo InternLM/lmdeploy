@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+# yapf: disable
 import time
 from dataclasses import dataclass, field
 from itertools import count
@@ -16,6 +17,7 @@ from lmdeploy.serve.gradio.constants import CSS, THEME, disable_btn, enable_btn
 from lmdeploy.tokenizer import DetokenizeState
 from lmdeploy.utils import get_logger
 
+# yapf: enable
 BATCH_SIZE = 32
 logger = get_logger('lmdeploy')
 

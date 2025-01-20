@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+# yapf: disable
 import asyncio
 import copy
 import json
@@ -31,6 +32,7 @@ from lmdeploy.serve.proxy.constants import (API_READ_TIMEOUT,
                                             Strategy, err_msg)
 from lmdeploy.utils import get_logger
 
+# yapf: enable
 logger = get_logger('lmdeploy')
 
 

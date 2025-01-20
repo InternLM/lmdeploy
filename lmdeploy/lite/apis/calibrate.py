@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-
+# yapf: disable
 from pathlib import Path
 from typing import Literal, Union
 
@@ -13,6 +13,7 @@ from lmdeploy.lite.utils import (collect_target_modules, get_calib_loaders,
                                  load_hf_from_pretrained)
 from lmdeploy.vl.model.builder import load_vl_model
 
+# yapf: enable
 LAYER_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMDecoderLayer',
     'InternLM2ForCausalLM': 'InternLM2DecoderLayer',

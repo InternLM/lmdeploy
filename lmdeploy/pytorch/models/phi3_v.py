@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+# yapf: disable
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import torch
@@ -15,6 +16,7 @@ from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 from .phi3 import Phi3ForCausalLM, Phi3Model
 from .utils.model import DeployModelMixin
 
+# yapf: enable
 CLIP_VIT_LARGE_PATCH14_336_CONFIG = CLIPVisionConfig(attention_dropout=0.0,
                                                      dropout=0.0,
                                                      hidden_act='quick_gelu',
