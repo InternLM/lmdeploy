@@ -4,8 +4,6 @@ import triton
 import triton.language as tl
 from torch import Tensor
 
-from .triton_utils import get_kernel_meta, wrap_jit_func
-
 
 @triton.jit
 def _compute_rms_norm(x, w, eps: tl.constexpr, N_COLS: tl.constexpr):
@@ -18,15 +16,6 @@ def _compute_rms_norm(x, w, eps: tl.constexpr, N_COLS: tl.constexpr):
     return out
 
 
-@wrap_jit_func(type_hint=dict(
-    input=Tensor,
-    weight=Tensor,
-    output=Tensor,
-    input_row_stride=int,
-    eps=float,
-    N_COLS=torch.int32,
-    BLOCK_N=torch.int32,
-))
 @triton.jit
 def rms_norm_kernel(input, weight, output, input_row_stride: tl.constexpr,
                     eps: tl.constexpr, N_COLS: tl.constexpr,
@@ -45,18 +34,6 @@ def rms_norm_kernel(input, weight, output, input_row_stride: tl.constexpr,
     tl.store(out_ptr + offsets, out, mask=offsets < N_COLS)
 
 
-@wrap_jit_func(type_hint=dict(
-    input=Tensor,
-    weight=Tensor,
-    residual=Tensor,
-    output=Tensor,
-    out_residual=Tensor,
-    input_row_stride=int,
-    residual_row_stride=int,
-    eps=float,
-    N_COLS=torch.int32,
-    BLOCK_N=torch.int32,
-))
 @triton.jit
 def add_rms_norm_kernel(input, weight, residual, output, out_residual,
                         input_row_stride: tl.constexpr,
@@ -95,6 +72,7 @@ def rms_norm(hidden_states: Tensor,
         hidden_states = hidden_states.contiguous()
 
     feat_size = weight.shape[0]
+    assert hidden_states.size(-1) == feat_size
     seq_len = hidden_states.numel() // hidden_states.size(-1)
     input_stride = hidden_states.stride(-2)
 
@@ -103,39 +81,40 @@ def rms_norm(hidden_states: Tensor,
     if out is None:
         out = torch.empty_like(hidden_states)
 
-    kernel_meta = get_kernel_meta(hidden_states)
     grid = (seq_len, )
 
     if residual is None:
-        rms_norm_kernel[grid](hidden_states,
-                              weight,
-                              out,
-                              input_row_stride=input_stride,
-                              eps=eps,
-                              N_COLS=feat_size,
-                              BLOCK_N=BLOCK_N,
-                              num_warps=4,
-                              num_stages=2,
-                              **kernel_meta)
+        rms_norm_kernel[grid](
+            hidden_states,
+            weight,
+            out,
+            input_row_stride=input_stride,
+            eps=eps,
+            N_COLS=feat_size,
+            BLOCK_N=BLOCK_N,
+            num_warps=4,
+            num_stages=2,
+        )
         return out
     else:
         if out_residual is None:
             out_residual = torch.empty_like(hidden_states)
 
         res_stride = residual.stride(-2)
-        add_rms_norm_kernel[grid](hidden_states,
-                                  weight,
-                                  residual,
-                                  out,
-                                  out_residual,
-                                  input_row_stride=input_stride,
-                                  residual_row_stride=res_stride,
-                                  eps=eps,
-                                  N_COLS=feat_size,
-                                  BLOCK_N=BLOCK_N,
-                                  num_warps=4,
-                                  num_stages=2,
-                                  **kernel_meta)
+        add_rms_norm_kernel[grid](
+            hidden_states,
+            weight,
+            residual,
+            out,
+            out_residual,
+            input_row_stride=input_stride,
+            residual_row_stride=res_stride,
+            eps=eps,
+            N_COLS=feat_size,
+            BLOCK_N=BLOCK_N,
+            num_warps=4,
+            num_stages=2,
+        )
         return out, out_residual
 
 

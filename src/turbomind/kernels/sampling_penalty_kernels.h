@@ -69,6 +69,14 @@ void invokeBatchApplyTemperaturePenalty(T*           logits,
                                         const int    vocab_size_padd,
                                         cudaStream_t stream);
 
+void invokeBatchApplyTemperaturePenalty_v2(float*       logits,
+                                           const float* bias,
+                                           const float* temperatures,
+                                           const int    batch_size,
+                                           const int    vocab_size,
+                                           const int    vocab_size_padd,
+                                           cudaStream_t stream);
+
 template<typename T>
 void invokeMinLengthPenalty(T*           logits,
                             const int*   min_lengths,

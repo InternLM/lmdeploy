@@ -47,9 +47,9 @@ _SUPPORTED_ARCHS = dict(
     # cogvlm-chat
     CogVLMForCausalLM=True,
     # llava
-    LlavaLlamaForCausalLM=True,
+    LlavaLlamaForCausalLM=False,
     # llava mistral
-    LlavaMistralForCausalLM=True,
+    LlavaMistralForCausalLM=False,
     # deepseekvl
     MultiModalityCausalLM=False,
     # StarCoder2
@@ -72,6 +72,8 @@ _SUPPORTED_ARCHS = dict(
     MllamaForConditionalGeneration=True,
     # MiniCPM-V-2_6
     MiniCPMVForCausalLM=True,
+    # internlm3
+    InternLM3ForCausalLM=True,
 )
 
 

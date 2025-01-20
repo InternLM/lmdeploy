@@ -46,6 +46,8 @@ class ChatTemplateConfig:
         eoh (str | None): end of the user prompt
         assistant (str | None): begin of the assistant prompt
         eoa (str | None): end of the assistant prompt
+        tool (str | None): begin of the tool prompt
+        eotool (str | None): end of the tool prompt
         capability: ('completion' | 'infilling' | 'chat' | 'python') = None
     """  # noqa: E501
 
@@ -57,6 +59,8 @@ class ChatTemplateConfig:
     eoh: Optional[str] = None
     assistant: Optional[str] = None
     eoa: Optional[str] = None
+    tool: Optional[str] = None
+    eotool: Optional[str] = None
     separator: Optional[str] = None
     capability: Optional[Literal['completion', 'infilling', 'chat',
                                  'python']] = None
@@ -173,6 +177,8 @@ class BaseChatTemplate(BaseModel):
                  assistant='',
                  eoa='',
                  separator='',
+                 tool='',
+                 eotool='',
                  **kwargs):
         super().__init__(**kwargs)
         self.system = system
@@ -183,6 +189,8 @@ class BaseChatTemplate(BaseModel):
         self.separator = separator
         self.eosys = eosys
         self.assistant = assistant
+        self.tool = tool
+        self.eotool = eotool
 
     def get_prompt(self, prompt, sequence_start=True):
         """Return the prompt that is concatenated with other elements in the
@@ -223,10 +231,12 @@ class BaseChatTemplate(BaseModel):
             return self.get_prompt(messages, sequence_start)
         box_map = dict(user=self.user,
                        assistant=self.assistant,
-                       system=self.system)
+                       system=self.system,
+                       tool=self.tool)
         eox_map = dict(user=self.eoh,
                        assistant=self.eoa + self.separator,
-                       system=self.eosys)
+                       system=self.eosys,
+                       tool=self.eotool)
         ret = ''
         if self.meta_instruction is not None and sequence_start:
             if len(messages) and messages[0]['role'] != 'system':
@@ -433,11 +443,12 @@ class InternLMChat7B(BaseChatTemplate):
             model_path (str): the model path used for matching.
         """
         path = model_path.lower()
-        if all([c not in path for c in ['internlm2', '8k']]) and \
+        if all([c not in path for c in ['internlm3', 'internlm2', '8k']]) and \
                 all([c in path for c in ['internlm', 'chat']]):
             return 'internlm'
 
 
+@MODELS.register_module(name='internlm3')
 @MODELS.register_module(name='internlm2')
 class InternLM2Chat7B(InternLMChat7B):
     """Chat template and generation parameters of InternLM2-Chat-7B."""
@@ -480,6 +491,9 @@ class InternLM2Chat7B(InternLMChat7B):
         path = model_path.lower()
         if 'internlm2' in path and ('chat' in path or 'math' in path):
             return 'internlm2'
+
+        if 'internlm3' in path and ('instruct' in path):
+            return 'internlm3'
 
     def messages2prompt(self,
                         messages,
@@ -819,7 +833,7 @@ class Llama3_1(Llama3):
 
     def __init__(
             self,
-            tools="""# Tool Instructions
+            tool="""# Tool Instructions
 - Always execute python code in messages that you share.
 - When looking for real time information use relevant functions if available else fallback to brave_search
 
@@ -828,7 +842,7 @@ class Llama3_1(Llama3):
 You have access to the following functions:
 
 """,  # noqa
-            eotools="""
+            eotool="""
 
 If a you choose to call a function ONLY reply in the following format:
 <{start_tag}={function_name}>{parameters}{end_tag}
@@ -847,7 +861,7 @@ Reminder:
 - Only call one function at a time
 - Put the entire function call reply on one line"
 - Always add your sources when using search results to answer the user query\n\n""",  # noqa
-            knowledge='Cutting Knowledge Date: December 2023\nToday Date: 23 Jul 2024\n\n',
+            knowledge='Cutting Knowledge Date: December 2023\nToday Date: 26 Jul 2024\n\n',
             meta_instruction='You are a helpful assistant.',
             ipython='<|start_header_id|>ipython<|end_header_id|>\n\n',
             eoi='<|eot_id|>',
@@ -858,8 +872,8 @@ Reminder:
                          **kwargs)
         self.ipython = ipython
         self.eoi = eoi
-        self.tools = tools
-        self.eotools = eotools
+        self.tool = tool
+        self.eotool = eotool
         self.knowledge = knowledge
 
     def messages2prompt(self,
@@ -899,7 +913,7 @@ Reminder:
                 if tools is None:
                     ret += f'{self.system}{self.knowledge}{self.meta_instruction}{self.eosys}'
                 else:
-                    ret += f'{self.system}{self.knowledge}{self.tools}{tool_prompt}{self.eotools}{self.meta_instruction}{self.eosys}'
+                    ret += f'{self.system}{self.knowledge}{self.tool}{tool_prompt}{self.eotool}{self.meta_instruction}{self.eosys}'
         for message in messages:
             role = message['role']
             content = get_text(message['content'])
@@ -907,7 +921,7 @@ Reminder:
                                         or '</function>' in content):
                 ret += f'{box_map[role]}{content}<|eom_id|>'
             elif role == 'system' and tools is not None:
-                ret += f'{box_map[role]}{self.tools}{tool_prompt}{self.eotools}{content}{eox_map[role]}'
+                ret += f'{box_map[role]}{self.tool}{tool_prompt}{self.eotool}{content}{eox_map[role]}'
             else:
                 ret += f'{box_map[role]}{content}{eox_map[role]}'
         if sequence_start and not isinstance(messages, str):
@@ -1921,5 +1935,5 @@ def best_match_model(query: str) -> Optional[str]:
     for name, model in MODELS.module_dict.items():
         if model.match(query):
             return model.match(query)
-    logger.warn(f'Did not find a chat template matching {query}.')
+    logger.warning(f'Did not find a chat template matching {query}.')
     return 'base'

@@ -104,6 +104,8 @@ class ActivationObserver(GlobalAvailMixin):
             return
         assert x.size(-1) == self.dim
         cur_val = x.flatten(0, 1)
+        if any([s == 0 for s in cur_val.shape]):
+            return
         cur_max = cur_val.max(0)[0].cpu()
         cur_min = cur_val.min(0)[0].cpu()
         cur_mean = cur_val.mean(0).cpu()

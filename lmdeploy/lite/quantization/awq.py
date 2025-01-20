@@ -19,6 +19,11 @@ NORM_FCS_MAP = {
         'attention_norm': ['attention.wqkv'],
         'ffn_norm': ['feed_forward.w1', 'feed_forward.w3']
     },
+    'InternLM3DecoderLayer': {
+        'input_layernorm':
+        ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
+        'post_attention_layernorm': ['mlp.gate_proj', 'mlp.up_proj']
+    },
     'QWenBlock': {
         'ln_1': ['attn.c_attn'],
         'ln_2': ['mlp.w1', 'mlp.w2']
@@ -43,8 +48,10 @@ NORM_FCS_MAP = {
     'MixtralDecoderLayer': {
         'input_layernorm':
         ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
-        'post_attention_layernorm':
-        ['block_sparse_moe.experts.{i}.w1', 'block_sparse_moe.experts.{i}.w3']
+        'post_attention_layernorm': [
+            'block_sparse_moe.gate', 'block_sparse_moe.experts.{i}.w1',
+            'block_sparse_moe.experts.{i}.w3'
+        ]
     },
     'Qwen2VLDecoderLayer': {
         'input_layernorm':
@@ -69,6 +76,10 @@ FC_FCS_MAP = {
     },
     'InternLM2DecoderLayer': {
         'feed_forward.w3': ['feed_forward.w2']
+    },
+    'InternLM3DecoderLayer': {
+        'self_attn.v_proj': ['self_attn.o_proj'],
+        'mlp.up_proj': ['mlp.down_proj']
     },
     'QWenBlock': {
         'attn.c_attn': ['attn.c_proj'],
@@ -120,7 +131,12 @@ def get_weight_scale(weight, q_group_size=-1):
     org_shape = weight.shape
     if q_group_size > 0:
         weight = weight.view(-1, q_group_size)
-    scale = weight.abs() / weight.abs().amax(dim=1, keepdim=True)
+    abs_weight = weight.abs()
+    abs_weight_amax = abs_weight.amax(dim=1, keepdim=True)
+    if abs_weight_amax.min().item() == 0:
+        print('weight.amax.min is zero, clamping weight.amax to 1e-4')
+        abs_weight_amax = abs_weight_amax.clamp(min=1e-4)
+    scale = abs_weight / abs_weight_amax
     scale = scale.view(org_shape)
     scale = scale.mean(0)
     return scale
@@ -153,8 +169,13 @@ def smooth_ln_fcs(ln: torch.nn.Module,
     concat_w = torch.cat([fc.weight for fc in fcs], dim=0)
     w_scales = get_weight_scale(concat_w, group_size)
 
+    w_scales_pow = w_scales.pow(1 - alpha)
+    if w_scales_pow.min().item() == 0:
+        print('w_scales.pow(1 - alpha).min is zero, '
+              'clamping w_scales.pow(1 - alpha) to 1e-4')
+        w_scales_pow = w_scales_pow.clamp(min=1e-4)
     scales = (act_scales.pow(alpha) /
-              w_scales.pow(1 - alpha)).clamp(min=1e-4).to(device).to(dtype)
+              w_scales_pow).clamp(min=1e-4).to(device).to(dtype)
 
     scales = scales / (scales[nonzero_positions].max() *
                        scales[nonzero_positions].min()).sqrt()
@@ -204,8 +225,13 @@ def smooth_fc_fcs(pre_fc: torch.nn.Module,
     concat_w = torch.cat([fc.weight for fc in fcs], dim=0)
     w_scales = get_weight_scale(concat_w, group_size)
 
+    w_scales_pow = w_scales.pow(1 - alpha)
+    if w_scales_pow.min().item() == 0:
+        print('w_scales.pow(1 - alpha).min is zero, '
+              'clamping w_scales.pow(1 - alpha) to 1e-4')
+        w_scales_pow = w_scales_pow.clamp(min=1e-4)
     scales = (act_scales.pow(alpha) /
-              w_scales.pow(1 - alpha)).clamp(min=1e-4).to(device).to(dtype)
+              w_scales_pow).clamp(min=1e-4).to(device).to(dtype)
     scales = scales / (scales.max() * scales.min()).sqrt()
 
     # (for qwen&baichuan) pre_fc is packed QKV, only V needs to scale
@@ -287,6 +313,7 @@ def quant_weights(model, fcs, bits, symmetry, group_size=-1, device='cuda'):
                                                          scales, zeros))
         setattr(parent, child_name, q_linear)
         fc.to('cpu')
+        torch.cuda.empty_cache()
 
         print(f'{name} weight {pack_or_skip}.')
 
@@ -301,23 +328,37 @@ def smooth_layers(layers,
 
     for l_name, layer in layers.items():
         layer.to(device)
+        submodule_names = [name for name, _ in layer.named_modules()]
         for ln_name, fc_names in norm2fcs.items():
-            a_name = [f'{l_name}.{n}' for n in fc_names][0]
+            a_name = [
+                f'{l_name}.{n}' for n in fc_names if n in submodule_names
+            ][0]
 
             ln = layer.get_submodule(ln_name)
-            fcs = [layer.get_submodule(n) for n in fc_names]
+            fcs = [
+                layer.get_submodule(n) for n in fc_names
+                if n in submodule_names
+            ]
             smooth_ln_fcs(ln, fcs, a_scales[a_name], group_size)
 
         for f_name, fc_names in fc2fcs.items():
-            a_name = [f'{l_name}.{n}' for n in fc_names][0]
+            a_name = [
+                f'{l_name}.{n}' for n in fc_names if n in submodule_names
+            ][0]
 
             fc = layer.get_submodule(f_name)
-            fcs = [layer.get_submodule(n) for n in fc_names]
+            fcs = [
+                layer.get_submodule(n) for n in fc_names
+                if n in submodule_names
+            ]
 
             smooth_fc_fcs(fc, fcs, a_scales[a_name], group_size)
 
         layer.to('cpu')
-        print(f'{l_name} smooth weight done.')
+        torch.cuda.empty_cache()
+        max_memory = torch.cuda.max_memory_allocated() / 1024 / 1024 / 1024
+        print(f'{l_name} smooth weight done.'
+              f' max gpu memory: {max_memory:.2f} GB')
 
 
 def pseudo_quantize_tensor(w,
@@ -385,4 +426,7 @@ def awq_layers(layers,
             smooth_fc_fcs(fc, fcs, a_scales[a_name], group_size, ratio)
 
         layer.to('cpu')
-        print(f'{l_name} smooth weight done.')
+        torch.cuda.empty_cache()
+        max_memory = torch.cuda.max_memory_allocated() / 1024 / 1024 / 1024
+        print(f'{l_name} smooth weight done.'
+              f' max gpu memory: {max_memory:.2f} GB')

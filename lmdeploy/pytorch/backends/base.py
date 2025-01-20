@@ -12,7 +12,8 @@ from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 
 class OpType(Enum):
     """Layer type enumerate."""
-    Attention = auto()
+    PagedAttention = auto()
+    FlashAttention = auto()
     Linear = auto()
     RotaryEmbedding = auto()
     ApplyRotaryEmb = auto()
@@ -27,6 +28,9 @@ class OpType(Enum):
     LinearW4A16 = auto()
     SoftmaxTopK = auto()
     FusedMoE = auto()
+    FusedMoEW8A8 = auto()
+    LinearBlockedF8 = auto()
+    FusedMoEBlockedF8 = auto()
 
 
 class OpsBackend(ABC):

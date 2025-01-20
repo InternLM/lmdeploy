@@ -60,6 +60,23 @@ def test_restful_chat_tp2(config, common_case_config, worker_id):
                      port=DEFAULT_PORT + get_workerid(worker_id))
 
 
+@pytest.mark.order(7)
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.restful_api
+@pytest.mark.gpu_num_4
+@pytest.mark.parametrize('prepare_environment',
+                         getModelList(tp_num=4),
+                         indirect=True)
+def test_restful_chat_tp4(config, common_case_config, worker_id):
+    if get_workerid(worker_id) is None:
+        run_all_step(config, common_case_config)
+    else:
+        run_all_step(config,
+                     common_case_config,
+                     worker_id=worker_id,
+                     port=DEFAULT_PORT + get_workerid(worker_id))
+
+
 def getKvintModelList(tp_num, quant_policy):
     return [{
         'model': item,
@@ -106,6 +123,23 @@ def test_restful_chat_kvint4_tp2(config, common_case_config, worker_id):
 @pytest.mark.order(7)
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.restful_api
+@pytest.mark.gpu_num_4
+@pytest.mark.parametrize('prepare_environment',
+                         getKvintModelList(tp_num=4, quant_policy=4),
+                         indirect=True)
+def test_restful_chat_kvint4_tp4(config, common_case_config, worker_id):
+    if get_workerid(worker_id) is None:
+        run_all_step(config, common_case_config)
+    else:
+        run_all_step(config,
+                     common_case_config,
+                     worker_id=worker_id,
+                     port=DEFAULT_PORT + get_workerid(worker_id))
+
+
+@pytest.mark.order(7)
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.restful_api
 @pytest.mark.gpu_num_1
 @pytest.mark.parametrize('prepare_environment',
                          getKvintModelList(tp_num=1, quant_policy=8),
@@ -140,26 +174,53 @@ def test_restful_chat_kvint8_tp2(config, common_case_config, worker_id):
 @pytest.mark.order(7)
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.restful_api
+@pytest.mark.gpu_num_4
+@pytest.mark.parametrize('prepare_environment',
+                         getKvintModelList(tp_num=4, quant_policy=8),
+                         indirect=True)
+def test_restful_chat_kvint8_tp4(config, common_case_config, worker_id):
+    if get_workerid(worker_id) is None:
+        run_all_step(config, common_case_config)
+    else:
+        run_all_step(config,
+                     common_case_config,
+                     worker_id=worker_id,
+                     port=DEFAULT_PORT + get_workerid(worker_id))
+
+
+@pytest.mark.order(7)
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.restful_api
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_2
 @pytest.mark.pr_test
-@pytest.mark.parametrize('prepare_environment', [{
-    'model': 'internlm/internlm2_5-20b-chat',
-    'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6',
-    'tp_num': 2
-}, {
-    'model': 'internlm/internlm2_5-20b-chat-inner-4bits',
-    'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6',
-    'tp_num': 2
-}],
+@pytest.mark.parametrize('prepare_environment', [
+    {
+        'model': 'internlm/internlm2_5-20b-chat',
+        'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6',
+        'tp_num': 2
+    },
+    {
+        'model': 'internlm/internlm2_5-20b-chat-inner-4bits',
+        'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6',
+        'tp_num': 2
+    },
+    {
+        'model': 'mistralai/Mixtral-8x7B-Instruct-v0.1',
+        'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6',
+        'tp_num': 2
+    },
+],
                          indirect=True)
 def test_restful_chat_pr(config, common_case_config):
-    run_all_step(
-        config, {
-            key: value
-            for key, value in common_case_config.items()
-            if key == 'memory_test'
-        })
+    case_config = {
+        k: v
+        for k, v in common_case_config.items() if k == 'memory_test'
+    }
+    run_all_step(config, {
+        key: value
+        for key, value in case_config.items() if key == 'memory_test'
+    })
 
 
 @pytest.mark.order(7)

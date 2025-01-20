@@ -269,4 +269,61 @@ void invokeTransposeAxis01(
 template void invokeTransposeAxis01(
     int* out, int* in, const int* in_skipping_dim1, const int dim0, const int dim1, cudaStream_t stream);
 
+template<int TILE_DIM, int BLOCK_ROWS, class T>
+__global__ void transpose_2d_kernel(T* __restrict__ dst, const T* __restrict__ src, int rows, int cols, bool swap_xy)
+{
+    __shared__ T smem[TILE_DIM][TILE_DIM + 1];
+
+    const int block_idx_x = swap_xy ? blockIdx.y : blockIdx.x;
+    const int block_idx_y = swap_xy ? blockIdx.x : blockIdx.y;
+
+    {
+        const int j = block_idx_x * TILE_DIM + threadIdx.x;
+        const int i = block_idx_y * TILE_DIM + threadIdx.y;
+
+#pragma unroll
+        for (int y = 0; y < TILE_DIM; y += BLOCK_ROWS) {
+            if (i + y < rows && j < cols) {
+                smem[threadIdx.y + y][threadIdx.x] = src[(i + y) * cols + j];
+            }
+        }
+    }
+
+    __syncthreads();
+
+    {
+        const int j = block_idx_y * TILE_DIM + threadIdx.x;
+        const int i = block_idx_x * TILE_DIM + threadIdx.y;
+
+#pragma unroll
+        for (int y = 0; y < TILE_DIM; y += BLOCK_ROWS) {
+            if (i + y < cols && j < rows) {
+                dst[(i + y) * rows + j] = smem[threadIdx.x][threadIdx.y + y];
+            }
+        }
+    }
+}
+
+template<class T>
+void invokeTranspose2D_(T* dst, const T* src, int rows, int cols, cudaStream_t st)
+{
+    constexpr int TILE_DIM   = 32;  // warp size
+    constexpr int BLOCK_ROWS = 8;
+
+    const dim3 block(TILE_DIM, BLOCK_ROWS);
+
+    dim3 grid((cols + TILE_DIM - 1) / TILE_DIM,  //
+              (rows + TILE_DIM - 1) / TILE_DIM);
+    bool swap_xy = false;
+
+    if (grid.y > 65535) {  // max dim for grid.y
+        std::swap(grid.x, grid.y);
+        swap_xy = true;
+    }
+
+    transpose_2d_kernel<TILE_DIM, BLOCK_ROWS><<<grid, block, 0, st>>>(dst, src, rows, cols, swap_xy);
+}
+
+template void invokeTranspose2D_(uint32_t*, const uint32_t*, int, int, cudaStream_t);
+
 }  // namespace turbomind
