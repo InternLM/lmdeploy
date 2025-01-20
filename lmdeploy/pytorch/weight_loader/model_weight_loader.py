@@ -1,12 +1,14 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import json
 import os.path as osp
+from contextlib import contextmanager
 
 import torch
 from transformers.modeling_utils import load_state_dict
 from transformers.utils import (SAFE_WEIGHTS_INDEX_NAME, SAFE_WEIGHTS_NAME,
                                 WEIGHTS_INDEX_NAME, WEIGHTS_NAME)
 
+from lmdeploy.pytorch.devices import get_device_manager
 from lmdeploy.pytorch.distributed import get_world_rank
 from lmdeploy.utils import get_logger
 
@@ -115,13 +117,37 @@ class ModelWeightLoader:
             path, _ = _get_weight_path(model_path, weight_type)
             return (path, )
 
+    def _load_shard_safetensors(self, path: str):
+        """load safetensors."""
+        from safetensors import safe_open
+        dev_ctx = get_device_manager().current_context()
+        device_type = dev_ctx.device_type
+        if device_type == 'cuda':
+            safe_device = torch.cuda.current_device()
+        else:
+            safe_device = 'cpu'
+        with safe_open(path, framework='pt', device=safe_device) as f:
+            for k in f.keys():
+                tensor = f.get_tensor(k)
+                if self._prefix is not None:
+                    k = f'{self._prefix}{k}'
+                yield k, tensor
+
+    def _load_shard_default(self, path: str):
+        """default load shard."""
+        state_dict = load_state_dict(path)
+        for k, v in state_dict.items():
+            if self._prefix is not None:
+                k = f'{self._prefix}{k}'
+            yield k, v
+
+    @contextmanager
     def _load_shard(self, path: str):
         """load shards."""
-        state_dict = load_state_dict(path)
-        if self._prefix is not None:
-            state_dict = dict(
-                (f'{self._prefix}{k}', v) for k, v in state_dict.items())
-        return state_dict
+        if path.endswith('.safetensors'):
+            yield self._load_shard_safetensors(path)
+        else:
+            yield self._load_shard_default(path)
 
     def load_model_weights(
         self,
@@ -142,8 +168,8 @@ class ModelWeightLoader:
             logger.info(msg)
 
             # process
-            state_dict = self._load_shard(path)
-            model.load_weights(state_dict.items())
+            with self._load_shard(path) as state_dict:
+                model.load_weights(state_dict)
         if device is not None:
             device = model.to(device)
 
