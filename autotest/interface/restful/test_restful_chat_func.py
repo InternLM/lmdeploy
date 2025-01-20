@@ -6,10 +6,8 @@ from random import randint
 import pytest
 from openai import OpenAI
 from tqdm import tqdm
-from utils.restful_return_check import (assert_chat_completions_batch_return,
-                                        assert_chat_completions_stream_return,
-                                        assert_chat_interactive_batch_return,
-                                        assert_chat_interactive_stream_return,
+from utils.restful_return_check import (assert_chat_completions_batch_return, assert_chat_completions_stream_return,
+                                        assert_chat_interactive_batch_return, assert_chat_interactive_stream_return,
                                         get_repeat_times)
 
 from lmdeploy.serve.openai.api_client import APIClient, get_model_list

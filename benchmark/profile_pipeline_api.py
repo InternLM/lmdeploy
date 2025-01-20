@@ -9,8 +9,7 @@ from typing import List, Tuple
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
-from lmdeploy import (GenerationConfig, PytorchEngineConfig,
-                      TurbomindEngineConfig, pipeline)
+from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
 from lmdeploy.cli.utils import ArgumentHelper, DefaultsAndTypesHelpFormatter
 from lmdeploy.profiler import Profiler, Session
 from lmdeploy.utils import get_logger

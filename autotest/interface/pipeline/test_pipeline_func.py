@@ -6,16 +6,12 @@ import pydantic
 import pytest
 import torch
 from utils.config_utils import get_cuda_id_by_workerid
-from utils.pipeline_chat import (assert_pipeline_batch_return,
-                                 assert_pipeline_batch_stream_return,
-                                 assert_pipeline_common_log,
-                                 assert_pipeline_single_return,
-                                 assert_pipeline_single_stream_return,
-                                 save_pipeline_common_log)
+from utils.pipeline_chat import (assert_pipeline_batch_return, assert_pipeline_batch_stream_return,
+                                 assert_pipeline_common_log, assert_pipeline_single_return,
+                                 assert_pipeline_single_stream_return, save_pipeline_common_log)
 from utils.restful_return_check import get_repeat_times
 
-from lmdeploy import (GenerationConfig, PytorchEngineConfig,
-                      TurbomindEngineConfig, pipeline)
+from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
 from lmdeploy.utils import is_bf16_supported
 
 

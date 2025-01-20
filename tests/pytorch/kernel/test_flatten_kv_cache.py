@@ -87,8 +87,7 @@ class TestFlattenKVCache:
         yield k_states, v_states
 
     def test_flatten_kv_cache(self, k_caches, v_caches, kv_seqlens, block_offsets, out_size, gt):
-        from lmdeploy.pytorch.kernels.cuda.flatten_kv_cache import \
-            flatten_kv_cache
+        from lmdeploy.pytorch.kernels.cuda.flatten_kv_cache import flatten_kv_cache
 
         k_states, v_states = flatten_kv_cache(k_caches, v_caches, kv_seqlens, block_offsets, out_size=out_size)
         torch.testing.assert_close(k_states, gt[0])
@@ -136,8 +135,7 @@ class TestFlattenKVCacheQuant8(TestFlattenKVCache):
 
     def test_flatten_kv_cache(self, k_quant, v_quant, kv_seqlens, block_offsets, out_size, out_dtype, nbits, gt, atol,
                               rtol):
-        from lmdeploy.pytorch.kernels.cuda.flatten_kv_cache import \
-            flatten_kv_cache
+        from lmdeploy.pytorch.kernels.cuda.flatten_kv_cache import flatten_kv_cache
 
         k_caches, k_sz = k_quant
         v_caches, v_sz = v_quant

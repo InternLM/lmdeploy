@@ -88,9 +88,7 @@ class JitFunction220Wrapper:
         """make input builder."""
         # yapf: disable
         from triton.common.backend import get_backend, get_cuda_version_key
-        from triton.compiler import (CompiledKernel,
-                                     get_arch_default_num_stages,
-                                     get_arch_default_num_warps)
+        from triton.compiler import CompiledKernel, get_arch_default_num_stages, get_arch_default_num_warps
 
         # yapf: enable
         def _make_spec_key_str(key):

@@ -13,8 +13,7 @@ from transformers import AutoConfig, AutoModelForCausalLM
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
-from lmdeploy.vl.model.utils import (add_device_hook, disable_logging,
-                                     rewrite_ctx)
+from lmdeploy.vl.model.utils import add_device_hook, disable_logging, rewrite_ctx
 
 # yapf: enable
 logger = get_logger('lmdeploy')
@@ -72,8 +71,7 @@ def init_empty_vit(model_path):
 
     model_type, _ = get_xcomposer_type(model_path)
     if model_type == ModelType.XCOMPOSER2D5:
-        from transformers.dynamic_module_utils import \
-            get_class_from_dynamic_module
+        from transformers.dynamic_module_utils import get_class_from_dynamic_module
         from transformers.utils import TRANSFORMERS_DYNAMIC_MODULE_NAME
         _ = get_class_from_dynamic_module('modeling_internlm_xcomposer2.get_font', model_path)
         folder = model_path.rstrip(os.sep).split(os.sep)[-1]

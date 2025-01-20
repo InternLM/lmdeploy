@@ -52,8 +52,7 @@ class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
             **kwargs,
         )
         # yapf: disable
-        from lmdeploy.pytorch.kernels.dlinfer import (fill_kv_cache,
-                                                      paged_attention_fwd)
+        from lmdeploy.pytorch.kernels.dlinfer import fill_kv_cache, paged_attention_fwd
 
         # yapf: enable
         self.fill_kv_cache = fill_kv_cache

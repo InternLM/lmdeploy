@@ -9,8 +9,7 @@ import tqdm
 import yaml
 from mmengine import Registry
 
-from ..config import (AttentionConfig, LoraConfig, ModelConfig,
-                      TurbomindModelConfig, config_from_dict, config_to_dict)
+from ..config import AttentionConfig, LoraConfig, ModelConfig, TurbomindModelConfig, config_from_dict, config_to_dict
 from ..source_model.base import BaseInputModel
 
 # yapf: enable

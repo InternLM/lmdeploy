@@ -31,14 +31,12 @@ def autoget_backend(model_path: str) -> Literal['turbomind', 'pytorch']:
     Returns:
         str: the backend type.
     """
-    from lmdeploy.pytorch.supported_models import \
-        is_supported as is_supported_pytorch
+    from lmdeploy.pytorch.supported_models import is_supported as is_supported_pytorch
 
     pytorch_has, turbomind_has = False, False
     is_turbomind_installed = True
     try:
-        from lmdeploy.turbomind.supported_models import \
-            is_supported as is_supported_turbomind
+        from lmdeploy.turbomind.supported_models import is_supported as is_supported_turbomind
         turbomind_has = is_supported_turbomind(model_path)
     except ImportError:
         is_turbomind_installed = False

@@ -61,11 +61,8 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         )
         assert not (alibi and not causal)
         # yapf: disable
-        from lmdeploy.pytorch.kernels.cuda import (alibi_paged_attention_fwd,
-                                                   fill_kv_cache,
-                                                   flash_attention_fwd,
-                                                   flatten_kv_cache,
-                                                   paged_attention_fwd)
+        from lmdeploy.pytorch.kernels.cuda import (alibi_paged_attention_fwd, fill_kv_cache, flash_attention_fwd,
+                                                   flatten_kv_cache, paged_attention_fwd)
 
         # yapf: enable
         self.fill_kv_cache = fill_kv_cache

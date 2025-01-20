@@ -5,15 +5,12 @@ from typing import List
 import torch
 
 from lmdeploy.pytorch.kernels.cuda import fused_moe, fused_moe_w8a8
-from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import \
-    fused_moe_blocked_fp8
+from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import fused_moe_blocked_fp8
 from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
-from lmdeploy.pytorch.kernels.cuda.w8a8_triton_kernels import \
-    per_token_quant_int8
+from lmdeploy.pytorch.kernels.cuda.w8a8_triton_kernels import per_token_quant_int8
 from lmdeploy.pytorch.models.q_modules import QTensor
 
-from ..moe import (FusedMoEBlockedF8Builder, FusedMoEBlockedF8Impl,
-                   FusedMoEBuilder, FusedMoEImpl, FusedMoEW8A8Builder,
+from ..moe import (FusedMoEBlockedF8Builder, FusedMoEBlockedF8Impl, FusedMoEBuilder, FusedMoEImpl, FusedMoEW8A8Builder,
                    FusedMoEW8A8Impl)
 
 # yapf: enable

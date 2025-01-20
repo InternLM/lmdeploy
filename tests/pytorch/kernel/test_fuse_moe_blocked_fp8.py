@@ -177,8 +177,7 @@ class TestFusedMoeBlockedFP8:
     @torch.inference_mode()
     def test_fused_moe(self, states_quanted, states_scale, w1_quant, w1_scale, w2_quant, w2_scale, topk_weights,
                        topk_idx, top_k, renormalize, gt):
-        from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import \
-            fused_moe_blocked_fp8
+        from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import fused_moe_blocked_fp8
         output = fused_moe_blocked_fp8(states_quanted,
                                        states_scale,
                                        w1_quant,

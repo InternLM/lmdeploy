@@ -246,8 +246,7 @@ class LlavaVisionModel(LlavaHfVisionModel):
                 f'expect model_type llava and llava_llama '\
                 f'but got {self.config.model_type}'
         elif self.arch == 'LlavaMistralForCausalLM':
-            from llava.model.language_model.llava_mistral import \
-                LlavaMistralConfig
+            from llava.model.language_model.llava_mistral import LlavaMistralConfig
             self.config = LlavaMistralConfig.from_pretrained(self.model_path)
         else:
             assert 0, f'unsupported arch {self.arch}'
@@ -325,8 +324,7 @@ class LlavaVisionModel(LlavaHfVisionModel):
             the message list with forwarding results included
         """
         # yapf: disable
-        from llava.model.llava_arch import (get_anyres_image_grid_shape,
-                                            unpad_image)
+        from llava.model.llava_arch import get_anyres_image_grid_shape, unpad_image
 
         # yapf: enable
         inputs = [x['content'] for x in messages if x['role'] == 'preprocess']

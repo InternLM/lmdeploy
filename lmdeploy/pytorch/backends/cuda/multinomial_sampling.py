@@ -4,8 +4,7 @@ import torch
 
 from lmdeploy.pytorch.kernels.cuda import multinomial_sampling
 
-from ..multinomial_sampling import (MultinomialSamplingBuilder,
-                                    MultinomialSamplingImpl)
+from ..multinomial_sampling import MultinomialSamplingBuilder, MultinomialSamplingImpl
 
 # yapf: enable
 

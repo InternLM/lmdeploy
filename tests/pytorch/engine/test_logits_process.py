@@ -1,8 +1,7 @@
 # yapf: disable
 import torch
-from transformers.generation.logits_process import (
-    MinPLogitsWarper, RepetitionPenaltyLogitsProcessor,
-    TemperatureLogitsWarper, TopKLogitsWarper, TopPLogitsWarper)
+from transformers.generation.logits_process import (MinPLogitsWarper, RepetitionPenaltyLogitsProcessor,
+                                                    TemperatureLogitsWarper, TopKLogitsWarper, TopPLogitsWarper)
 
 # yapf: enable
 
@@ -51,8 +50,7 @@ def test_process_bad_words():
 
 
 def test_processrepetition_penalty():
-    from lmdeploy.pytorch.engine.logits_process import \
-        _process_repetition_penalty_
+    from lmdeploy.pytorch.engine.logits_process import _process_repetition_penalty_
     batch_size = 4
     num_tokens = 16
     scores = torch.rand(batch_size, num_tokens)

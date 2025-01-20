@@ -172,7 +172,6 @@ class TestGemmFP8:
         yield A @ B
 
     def test_gemm_fp8(self, quant_A, scale_A, quant_B, scale_B, out_dtype, gt):
-        from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import \
-            blocked_gemm_fp8
+        from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import blocked_gemm_fp8
         C = blocked_gemm_fp8(quant_A, scale_A, quant_B, scale_B, out_dtype=out_dtype)
         torch.testing.assert_close(C, gt, atol=0.5, rtol=1e-4)

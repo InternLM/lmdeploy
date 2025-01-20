@@ -11,8 +11,7 @@ from typing import List, Tuple, Union
 from tqdm import tqdm
 
 from lmdeploy.cli.utils import ArgumentHelper, DefaultsAndTypesHelpFormatter
-from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
-                               TurbomindEngineConfig)
+from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig
 from lmdeploy.profiler import Profiler, Session
 from lmdeploy.pytorch.engine import EngineInstance
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer

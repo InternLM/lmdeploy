@@ -2,8 +2,7 @@
 # yapf: disable
 from torch import nn
 
-from ..activation import (GeluAndMulBuilder, GeluAndMulImpl, SiluAndMulBuilder,
-                          SiluAndMulImpl)
+from ..activation import GeluAndMulBuilder, GeluAndMulImpl, SiluAndMulBuilder, SiluAndMulImpl
 
 # yapf: enable
 

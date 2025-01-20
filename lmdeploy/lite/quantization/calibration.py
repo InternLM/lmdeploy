@@ -9,8 +9,7 @@ from transformers import PreTrainedTokenizer
 
 from lmdeploy.lite.quantization.activation import ActivationObserver
 from lmdeploy.lite.quantization.awq import FC_FCS_MAP, NORM_FCS_MAP
-from lmdeploy.lite.utils import (bimap_name_mod, collect_target_modules,
-                                 concat_decoder_layer_outputs,
+from lmdeploy.lite.utils import (bimap_name_mod, collect_target_modules, concat_decoder_layer_outputs,
                                  split_decoder_layer_inputs)
 
 

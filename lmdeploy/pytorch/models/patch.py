@@ -15,8 +15,7 @@ from lmdeploy.utils import get_logger
 
 from ..config import ModelConfig
 from ..devices import get_device_manager
-from .module_map import (CUSTOM_MODULE_MAP, DEVICE_SPECIAL_MODULE_MAP,
-                         MODULE_MAP)
+from .module_map import CUSTOM_MODULE_MAP, DEVICE_SPECIAL_MODULE_MAP, MODULE_MAP
 
 # yapf: enable
 logger = get_logger('lmdeploy')
@@ -207,9 +206,7 @@ def add_adapters(model: torch.nn.Module,
     from peft.tuners.lora import LoraConfig
 
     # yapf: disable
-    from lmdeploy.pytorch.adapter.adapter import (find_all_target,
-                                                  get_ranks_and_scalings,
-                                                  load_lora_weights)
+    from lmdeploy.pytorch.adapter.adapter import find_all_target, get_ranks_and_scalings, load_lora_weights
     # yapf: enable
     from lmdeploy.pytorch.nn.linear import LoRA
     num_adapters = len(adapters)

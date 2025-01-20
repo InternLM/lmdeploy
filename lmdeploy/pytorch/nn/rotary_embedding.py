@@ -4,9 +4,7 @@ from torch import Tensor, nn
 from transformers import PretrainedConfig
 
 from ..backends import OpType, get_backend
-from ..backends.rotary_embedding import (Llama3Parameters,
-                                         LongRoPEScalingParameters, RopeType,
-                                         YarnParameters)
+from ..backends.rotary_embedding import Llama3Parameters, LongRoPEScalingParameters, RopeType, YarnParameters
 
 # yapf: enable
 

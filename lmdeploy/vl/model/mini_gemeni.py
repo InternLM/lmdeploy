@@ -9,9 +9,7 @@ import torch
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
-from lmdeploy.vl.model.utils import (add_device_hook, disable_logging,
-                                     disable_transformers_logging,
-                                     hack_import_with)
+from lmdeploy.vl.model.utils import add_device_hook, disable_logging, disable_transformers_logging, hack_import_with
 
 logger = get_logger('lmdeploy')
 
@@ -30,8 +28,7 @@ def check_mini_gemini_install():
 
 def _build_vision_tower(vision_tower_cfg, **kwargs):
     # yapf: disable
-    from mgm.model.multimodal_encoder.builder import (CLIPVisionTower,
-                                                      EVAVisionTower)
+    from mgm.model.multimodal_encoder.builder import CLIPVisionTower, EVAVisionTower
 
     # yapf: enable
     vision_tower = getattr(vision_tower_cfg, 'mm_vision_tower', getattr(vision_tower_cfg, 'vision_tower', None))
@@ -48,8 +45,7 @@ def _build_vision_tower(vision_tower_cfg, **kwargs):
 
 def _build_vision_tower_aux(vision_tower_cfg, **kwargs):
     # yapf: disable
-    from mgm.model.multimodal_encoder.builder import (CLIPVisionTower,
-                                                      OpenCLIPVisionTower)
+    from mgm.model.multimodal_encoder.builder import CLIPVisionTower, OpenCLIPVisionTower
 
     # yapf: enable
     vision_tower_aux = getattr(vision_tower_cfg, 'mm_vision_tower_aux',
@@ -74,8 +70,7 @@ def _clip_vision_tower__init__(self, vision_tower, args, delay_load=False):
 
 
 def _clip_vision_tower_load_model(self):
-    from mgm.model.multimodal_encoder.clip_encoder import (  # noqa
-        CLIPVisionModel, VideoFramesProcessor)
+    from mgm.model.multimodal_encoder.clip_encoder import CLIPVisionModel, VideoFramesProcessor  # noqa
     self.image_processor = VideoFramesProcessor.from_pretrained(self.vision_tower_name)
     from transformers import CLIPVisionConfig
     config = CLIPVisionConfig.from_pretrained(self.vision_tower_name, trust_remote_code=True)
@@ -106,8 +101,7 @@ def _openclip_vision_tower_load_model(self):
             self.model_type = 'convnext_xxlarge'
             self.model_channel = [384, 768, 1536, 3072]
 
-    from mgm.model.multimodal_encoder.openclip_encoder import (  # noqa
-        CLIP, get_model_config)
+    from mgm.model.multimodal_encoder.openclip_encoder import CLIP, get_model_config  # noqa
     clip_model = CLIP(**get_model_config(self.model_type))
     clip_model.visual.trunk.norm_pre = None
     clip_model.visual.trunk.head = None

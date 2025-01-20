@@ -7,11 +7,9 @@ import numpy as np
 import pytest
 from utils.config_utils import get_cuda_id_by_workerid
 from utils.get_run_config import get_tp_num
-from utils.pipeline_chat import (assert_pipeline_common_log,
-                                 save_pipeline_common_log)
+from utils.pipeline_chat import assert_pipeline_common_log, save_pipeline_common_log
 
-from lmdeploy import (GenerationConfig, PytorchEngineConfig,
-                      TurbomindEngineConfig, pipeline)
+from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
 
 # yapf: enable
 SESSION_LEN = 198000

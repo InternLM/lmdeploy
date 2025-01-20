@@ -1,6 +1,5 @@
 # yapf: disable
-from utils.restful_return_check import (assert_completions_batch_return,
-                                        assert_completions_stream_return)
+from utils.restful_return_check import assert_completions_batch_return, assert_completions_stream_return
 
 from lmdeploy.serve.openai.api_client import APIClient
 

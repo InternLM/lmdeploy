@@ -1,8 +1,7 @@
 # yapf: disable
 from lmdeploy import TurbomindEngineConfig
-from lmdeploy.turbomind.deploy.converter import (
-    get_input_model_registered_name,
-    get_output_model_registered_name_and_config)
+from lmdeploy.turbomind.deploy.converter import (get_input_model_registered_name,
+                                                 get_output_model_registered_name_and_config)
 from lmdeploy.turbomind.deploy.source_model.base import INPUT_MODELS
 
 # yapf: enable

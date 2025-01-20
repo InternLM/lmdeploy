@@ -8,8 +8,7 @@ from typing import Dict, List
 from lmdeploy.utils import get_logger, logging_timer
 
 from ..config import CacheConfig, SchedulerConfig
-from ..messages import (MessageStatus, SchedulerSequence, SchedulerSession,
-                        SequenceManager)
+from ..messages import MessageStatus, SchedulerSequence, SchedulerSession, SequenceManager
 from .block_manager import build_block_manager
 from .block_trie import BlockTrie
 

@@ -19,19 +19,16 @@ logger = get_logger('lmdeploy')
 
 def check_llava_install():
     try:
-        from llava.model.multimodal_encoder.clip_encoder import \
-            InternVisionModel  # noqa: F401
+        from llava.model.multimodal_encoder.clip_encoder import InternVisionModel  # noqa: F401
     except ImportError:
         raise ImportError(
             'To use LlavaVLModel, please install llava by '
-            '`pip install git+https://github.com/OpenGVLab/InternVL#subdirectory=internvl_chat_llava --no-deps`'  # noqa: E501
-        )
+            '`pip install git+https://github.com/OpenGVLab/InternVL#subdirectory=internvl_chat_llava --no-deps`')
 
 
 def _intern_vision_model__from_pretrained(vision_tower_name: str):
     logger.info(f'init empty InternVisionModel: {vision_tower_name}')
-    from llava.model.multimodal_encoder.intern_vit_6b.modeling_intern_vit import (  # noqa: E501
-        InternVisionConfig, InternVisionModel)
+    from llava.model.multimodal_encoder.intern_vit_6b.modeling_intern_vit import InternVisionConfig, InternVisionModel
     config = InternVisionConfig.from_pretrained(vision_tower_name)
     model = InternVisionModel._from_config(config)
     model.requires_grad_(False)
@@ -41,8 +38,7 @@ def _intern_vision_model__from_pretrained(vision_tower_name: str):
 def _intern_vl_model__from_pretrained(vision_tower_name: str):
     logger.info(f'init empty InternVLModel: {vision_tower_name}')
     # yapf: disable
-    from llava.model.multimodal_encoder.internvl_14b.modeling_internvl import (
-        InternVLConfig, InternVLModel)
+    from llava.model.multimodal_encoder.internvl_14b.modeling_internvl import InternVLConfig, InternVLModel
 
     # yapf: enable
     config = InternVLConfig.from_pretrained(vision_tower_name)
@@ -85,8 +81,7 @@ class InternVLLlavaVisionModel(LlavaVisionModel):
         load the whole VLM model when `self.with_llm==True`"""
         check_llava_install()
         # currently, only support llava llama
-        from llava.model.language_model.llava_llama import (  # noqa
-            LlavaConfig, LlavaLlamaForCausalLM)
+        from llava.model.language_model.llava_llama import LlavaConfig, LlavaLlamaForCausalLM  # noqa
         self.config = LlavaConfig.from_pretrained(self.model_path)
         assert self.config.model_type in ['llava', 'llava_llama'], \
             'currently, only support llava llama'

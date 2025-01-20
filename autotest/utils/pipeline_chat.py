@@ -13,8 +13,7 @@ from utils.get_run_config import get_model_name, get_tp_num
 from utils.rule_condition_assert import assert_result
 
 from lmdeploy import pipeline
-from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
-                               TurbomindEngineConfig)
+from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig
 from lmdeploy.utils import is_bf16_supported
 from lmdeploy.vl import load_image
 from lmdeploy.vl.constants import IMAGE_TOKEN

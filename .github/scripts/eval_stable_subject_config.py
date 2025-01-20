@@ -14,8 +14,7 @@ with read_base():
         arenahard_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.subjective.compassarena.compassarena_compare import \
         compassarena_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.subjective.fofo.fofo_bilingual_judge import \
-        fofo_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.subjective.fofo.fofo_bilingual_judge import fofo_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.subjective.multiround.mtbench101_judge import \
         mtbench101_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.subjective.wildbench.wildbench_pair_judge import \

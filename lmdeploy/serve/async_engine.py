@@ -14,14 +14,12 @@ from functools import partial
 from itertools import count
 from queue import Queue
 from threading import Thread
-from typing import (Any, AsyncIterator, Dict, Iterator, List, Literal,
-                    Optional, Tuple, Union)
+from typing import Any, AsyncIterator, Dict, Iterator, List, Literal, Optional, Tuple, Union
 
 import tqdm
 
 from lmdeploy.logger import RequestLogger
-from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig, Response,
-                               ResponseType, TurbomindEngineConfig)
+from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, Response, ResponseType, TurbomindEngineConfig
 from lmdeploy.model import MODELS, ChatTemplateConfig, best_match_model
 from lmdeploy.serve.utils import LogitsMixin
 from lmdeploy.tokenizer import DetokenizeState

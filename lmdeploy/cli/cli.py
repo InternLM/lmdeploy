@@ -4,8 +4,7 @@ import argparse
 import os
 
 from ..version import __version__
-from .utils import (ArgumentHelper, DefaultsAndTypesHelpFormatter,
-                    convert_args, get_chat_template, get_lora_adapters)
+from .utils import ArgumentHelper, DefaultsAndTypesHelpFormatter, convert_args, get_chat_template, get_lora_adapters
 
 # yapf: enable
 

@@ -65,8 +65,7 @@ class LlavaNextVisionModel(LlavaHfVisionModel):
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """refers to the spec of `super.preprocess()"""
-        from transformers.models.llava_next.modeling_llava_next import \
-            image_size_to_num_patches
+        from transformers.models.llava_next.modeling_llava_next import image_size_to_num_patches
         images = self.collect_images(messages)
         outputs = []
         for image, params in images:

@@ -5,8 +5,7 @@ import os.path as osp
 
 import torch
 from transformers.modeling_utils import load_state_dict
-from transformers.utils import (SAFE_WEIGHTS_INDEX_NAME, SAFE_WEIGHTS_NAME,
-                                WEIGHTS_INDEX_NAME, WEIGHTS_NAME)
+from transformers.utils import SAFE_WEIGHTS_INDEX_NAME, SAFE_WEIGHTS_NAME, WEIGHTS_INDEX_NAME, WEIGHTS_NAME
 
 from lmdeploy.pytorch.distributed import get_world_rank
 from lmdeploy.utils import get_logger

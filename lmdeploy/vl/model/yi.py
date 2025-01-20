@@ -9,8 +9,7 @@ import torch.nn as nn
 from transformers import AutoConfig
 
 from lmdeploy.vl.model.base import VISION_MODELS
-from lmdeploy.vl.model.llava import (LlavaVisionModel, check_llava_install,
-                                     process_images)
+from lmdeploy.vl.model.llava import LlavaVisionModel, check_llava_install, process_images
 
 from .utils import disable_transformers_logging, rewrite_ctx
 

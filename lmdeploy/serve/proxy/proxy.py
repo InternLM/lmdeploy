@@ -22,14 +22,10 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from requests.exceptions import RequestException
 
-from lmdeploy.serve.openai.api_server import (check_api_key,
-                                              create_error_response)
-from lmdeploy.serve.openai.protocol import (  # noqa: E501
-    ChatCompletionRequest, CompletionRequest, ModelCard, ModelList,
-    ModelPermission)
-from lmdeploy.serve.proxy.constants import (API_READ_TIMEOUT,
-                                            LATENCY_DEQUE_LEN, ErrorCodes,
-                                            Strategy, err_msg)
+from lmdeploy.serve.openai.api_server import check_api_key, create_error_response
+from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, CompletionRequest, ModelCard,  # noqa: E501
+                                            ModelList, ModelPermission)
+from lmdeploy.serve.proxy.constants import API_READ_TIMEOUT, LATENCY_DEQUE_LEN, ErrorCodes, Strategy, err_msg
 from lmdeploy.utils import get_logger
 
 # yapf: enable

@@ -6,8 +6,7 @@ import torch
 from torch import nn
 
 from ..default.rotary_embedding import LlamaDynamicNTKScalingRotaryEmbedding
-from ..rotary_embedding import (Llama3Parameters, LongRoPEScalingParameters,
-                                RopeType, RotaryEmbeddingBuilder,
+from ..rotary_embedding import (Llama3Parameters, LongRoPEScalingParameters, RopeType, RotaryEmbeddingBuilder,
                                 RotaryEmbeddingImpl, YarnParameters)
 
 # yapf: enable

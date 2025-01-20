@@ -180,8 +180,7 @@ class TestFlashAttention:
     @pytest.mark.parametrize(['q_seqlens', 'history_lens'], [([30, 50, 70, 90], [50, 40, 30, 20])], indirect=True)
     def test_flash_attention(self, conti_q, conti_kv, q_start_loc, q_seqlens, kv_start_loc, kv_seqlens, head_dim_v,
                              causal, conti_gt):
-        from lmdeploy.pytorch.kernels.cuda.flashattention import \
-            flash_attention_fwd
+        from lmdeploy.pytorch.kernels.cuda.flashattention import flash_attention_fwd
         max_seq_len = q_seqlens.max().item()
 
         conti_k, conti_v = conti_kv
@@ -221,8 +220,7 @@ class TestFlashAttention:
     @pytest.mark.parametrize('win_size', (32, ), indirect=True)
     def test_window_attention(self, conti_q, conti_kv, q_start_loc, q_seqlens, kv_start_loc, kv_seqlens, head_dim_v,
                               win_size, window_gt):
-        from lmdeploy.pytorch.kernels.cuda.flashattention import \
-            flash_attention_fwd
+        from lmdeploy.pytorch.kernels.cuda.flashattention import flash_attention_fwd
         max_seq_len = q_seqlens.max().item()
 
         conti_k, conti_v = conti_kv

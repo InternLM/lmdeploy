@@ -6,8 +6,7 @@ from typing import Literal, Optional, Sequence, Union
 
 import gradio as gr
 
-from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
-                               TurbomindEngineConfig)
+from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig
 from lmdeploy.model import ChatTemplateConfig
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.gradio.constants import CSS, THEME, disable_btn, enable_btn

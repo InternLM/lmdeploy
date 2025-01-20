@@ -1,8 +1,7 @@
 # yapf: disable
 import pytest
 from utils.config_utils import get_turbomind_model_list, get_workerid
-from utils.run_restful_chat import (run_all_step, start_restful_api,
-                                    stop_restful_api)
+from utils.run_restful_chat import run_all_step, start_restful_api, stop_restful_api
 
 # yapf: enable
 DEFAULT_PORT = 23333

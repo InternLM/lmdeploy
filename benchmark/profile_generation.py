@@ -9,15 +9,13 @@ from dataclasses import dataclass
 from typing import List, Union
 
 import numpy as np
-from pynvml import (NVMLError, nvmlDeviceGetCount, nvmlDeviceGetHandleByIndex,
-                    nvmlDeviceGetMemoryInfo, nvmlDeviceGetName,
-                    nvmlDeviceGetPowerState, nvmlDeviceGetTemperature,
-                    nvmlInit, nvmlShutdown, nvmlSystemGetDriverVersion)
+from pynvml import (NVMLError, nvmlDeviceGetCount, nvmlDeviceGetHandleByIndex, nvmlDeviceGetMemoryInfo,
+                    nvmlDeviceGetName, nvmlDeviceGetPowerState, nvmlDeviceGetTemperature, nvmlInit, nvmlShutdown,
+                    nvmlSystemGetDriverVersion)
 from tqdm import tqdm
 
 from lmdeploy.cli.utils import ArgumentHelper, DefaultsAndTypesHelpFormatter
-from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
-                               TurbomindEngineConfig)
+from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig
 from lmdeploy.utils import get_logger
 
 # yapf: enable

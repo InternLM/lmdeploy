@@ -19,8 +19,7 @@ import yaml
 from torch.nn.utils.rnn import pad_sequence
 
 import lmdeploy
-from lmdeploy.messages import (EngineOutput, GenerationConfig, ResponseType,
-                               TurbomindEngineConfig)
+from lmdeploy.messages import EngineOutput, GenerationConfig, ResponseType, TurbomindEngineConfig
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model
 

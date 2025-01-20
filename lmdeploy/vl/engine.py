@@ -6,8 +6,7 @@ from typing import Dict, List, Optional, Union
 
 import torch
 
-from lmdeploy.messages import (PytorchEngineConfig, TurbomindEngineConfig,
-                               VisionConfig)
+from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig, VisionConfig
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.builder import load_vl_model
 

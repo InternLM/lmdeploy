@@ -9,8 +9,7 @@ import gradio as gr
 from packaging.version import Version, parse
 from PIL import Image
 
-from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
-                               TurbomindEngineConfig, VisionConfig)
+from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, VisionConfig
 from lmdeploy.model import ChatTemplateConfig
 from lmdeploy.pytorch.engine.request import _run_until_complete
 from lmdeploy.serve.gradio.constants import CSS, THEME, disable_btn, enable_btn

@@ -7,11 +7,8 @@ import fire
 import torch
 from torch import nn
 
-from lmdeploy.lite.apis.calibrate import (LAYER_TYPE_MAP, NORM_TYPE_MAP,
-                                          calibrate)
-from lmdeploy.lite.quantization.awq import (FC_FCS_MAP, NORM_FCS_MAP,
-                                            awq_layers, skipped_module,
-                                            smooth_layers)
+from lmdeploy.lite.apis.calibrate import LAYER_TYPE_MAP, NORM_TYPE_MAP, calibrate
+from lmdeploy.lite.quantization.awq import FC_FCS_MAP, NORM_FCS_MAP, awq_layers, skipped_module, smooth_layers
 from lmdeploy.lite.utils import collect_target_modules
 from lmdeploy.pytorch.models import QLinear, QRMSNorm
 

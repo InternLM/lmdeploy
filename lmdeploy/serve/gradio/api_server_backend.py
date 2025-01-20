@@ -6,8 +6,7 @@ from typing import Sequence
 import gradio as gr
 
 from lmdeploy.serve.gradio.constants import CSS, THEME, disable_btn, enable_btn
-from lmdeploy.serve.openai.api_client import (get_model_list,
-                                              get_streaming_response)
+from lmdeploy.serve.openai.api_client import get_model_list, get_streaming_response
 
 # yapf: enable
 

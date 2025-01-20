@@ -3,8 +3,7 @@ import os
 
 import allure
 import pytest
-from utils.config_utils import (get_cuda_prefix_by_workerid,
-                                get_torch_model_list)
+from utils.config_utils import get_cuda_prefix_by_workerid, get_torch_model_list
 from utils.run_client_chat import hf_command_line_test
 
 # yapf: enable

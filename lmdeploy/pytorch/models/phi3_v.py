@@ -6,8 +6,7 @@ import torch
 from torch import nn
 from transformers import CLIPVisionConfig, CLIPVisionModel, PretrainedConfig
 
-from lmdeploy.pytorch.engine.input_process import (BaseModelInputProcessor,
-                                                   PreprocessInputResult)
+from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
 from lmdeploy.pytorch.nn.linear import build_rowwise_linear

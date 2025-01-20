@@ -10,8 +10,7 @@ import numpy as np
 import torch
 
 from lmdeploy.messages import PytorchEngineConfig, ResponseType
-from lmdeploy.utils import (get_logger, get_max_batch_size, get_model,
-                            logging_timer)
+from lmdeploy.utils import get_logger, get_max_batch_size, get_model, logging_timer
 
 from ..adapter.adapter import AdapterManager
 from ..config import BackendConfig, CacheConfig, SchedulerConfig

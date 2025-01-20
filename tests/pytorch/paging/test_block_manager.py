@@ -3,10 +3,8 @@ import pytest
 import torch
 
 from lmdeploy.pytorch.messages import SchedulerSession
-from lmdeploy.pytorch.paging.block_manager import (DefaultBlockManager,
-                                                   WindowBlockManager)
-from lmdeploy.pytorch.paging.block_manager.base_block_manager import \
-    LogicalAllocator
+from lmdeploy.pytorch.paging.block_manager import DefaultBlockManager, WindowBlockManager
+from lmdeploy.pytorch.paging.block_manager.base_block_manager import LogicalAllocator
 
 # yapf: enable
 

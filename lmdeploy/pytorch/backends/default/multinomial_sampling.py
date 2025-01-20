@@ -2,8 +2,7 @@
 # yapf: disable
 import torch
 
-from ..multinomial_sampling import (MultinomialSamplingBuilder,
-                                    MultinomialSamplingImpl)
+from ..multinomial_sampling import MultinomialSamplingBuilder, MultinomialSamplingImpl
 
 # yapf: enable
 

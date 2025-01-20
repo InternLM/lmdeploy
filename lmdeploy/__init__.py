@@ -1,8 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # yapf: disable
 from .api import client, pipeline, serve
-from .messages import (GenerationConfig, PytorchEngineConfig,
-                       TurbomindEngineConfig, VisionConfig)
+from .messages import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, VisionConfig
 from .model import ChatTemplateConfig
 from .tokenizer import Tokenizer
 from .version import __version__, version_info

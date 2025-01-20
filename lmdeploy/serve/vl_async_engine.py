@@ -5,8 +5,7 @@ from typing import Dict, List, Literal, Optional, Tuple, Union
 
 import PIL
 
-from lmdeploy.messages import (PytorchEngineConfig, TurbomindEngineConfig,
-                               VisionConfig)
+from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig, VisionConfig
 from lmdeploy.pytorch.check_env import try_import_deeplink
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.utils import get_logger

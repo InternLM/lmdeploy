@@ -112,8 +112,7 @@ class TestFusedMoEKernelLauncher:
 
     @torch.inference_mode()
     def test_launcher(self, A, B, sorted_idx, exp_start, exp_end, weights, enable_weights, top_k, M, gt):
-        from lmdeploy.pytorch.kernels.cuda.fused_moe import \
-            fused_moe_kernel_launcher
+        from lmdeploy.pytorch.kernels.cuda.fused_moe import fused_moe_kernel_launcher
         N = B.size(1)
         C = B.new_empty(M * top_k, N)
 
@@ -236,14 +235,12 @@ class TestFusedMoeW8A8(TestFusedMoe):
 
     @pytest.fixture
     def quant_states(self, hidden_states):
-        from lmdeploy.pytorch.kernels.cuda.w8a8_triton_kernels import \
-            per_token_quant_int8
+        from lmdeploy.pytorch.kernels.cuda.w8a8_triton_kernels import per_token_quant_int8
         states_i8, states_scale = per_token_quant_int8(hidden_states, 1e-7)
         yield states_i8, states_scale
 
     def quant_weight(self, w):
-        from lmdeploy.pytorch.kernels.cuda.w8a8_triton_kernels import \
-            per_channel_quant
+        from lmdeploy.pytorch.kernels.cuda.w8a8_triton_kernels import per_channel_quant
         num_experts, num_outs, _ = w.shape
         w = w.flatten(0, -2)
         w_i8, w_scale = per_channel_quant(w, torch.int8)

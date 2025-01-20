@@ -6,18 +6,15 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from transformers.models.llama import LlamaConfig
-from transformers.models.mllama.modeling_mllama import (MllamaTextConfig,
-                                                        MllamaVisionConfig)
+from transformers.models.mllama.modeling_mllama import MllamaTextConfig, MllamaVisionConfig
 
-from lmdeploy.pytorch.engine.input_process import (BaseModelInputProcessor,
-                                                   PreprocessInputResult)
+from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, LayerNorm, RMSNorm,
-                                 RopeType, SiluAndMul, build_rotary_embedding)
-from lmdeploy.pytorch.nn.linear import (build_colwise_linear,
-                                        build_merged_colwise_linear,
-                                        build_qkv_proj, build_rowwise_linear)
+from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, LayerNorm, RMSNorm, RopeType, SiluAndMul,
+                                 build_rotary_embedding)
+from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_merged_colwise_linear, build_qkv_proj,
+                                        build_rowwise_linear)
 from lmdeploy.pytorch.nn.rotary_embedding import Llama3Parameters
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 

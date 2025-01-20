@@ -24,8 +24,7 @@ def read_config(config_file: str):
 
     import yaml
 
-    from lmdeploy.turbomind.deploy.target_model.base import \
-        TurbomindModelConfig
+    from lmdeploy.turbomind.deploy.target_model.base import TurbomindModelConfig
     with open(config_file, 'r') as f:
         _cfg = yaml.safe_load(f)
     cfg = TurbomindModelConfig.from_dict(_cfg)

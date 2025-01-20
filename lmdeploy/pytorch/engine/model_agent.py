@@ -18,8 +18,7 @@ from ..config import BackendConfig, CacheConfig, ModelConfig
 from ..devices import DeviceContext, get_device_manager
 from ..distributed import DistContext, get_dist_manager, get_world_rank
 from ..model_inputs import ModelInputs
-from ..models.patch import (add_adapters, build_patched_model,
-                            update_custom_module_map)
+from ..models.patch import add_adapters, build_patched_model, update_custom_module_map
 from ..utils import get_gpu_memory
 from ..weight_loader.model_weight_loader import load_model_weights
 from .cache_engine import CacheEngine

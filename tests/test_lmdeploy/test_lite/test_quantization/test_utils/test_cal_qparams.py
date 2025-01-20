@@ -1,12 +1,9 @@
 # yapf: disable
 import torch
 
-from lmdeploy.lite.utils import (cal_qparams_per_channel_absmax,
-                                 cal_qparams_per_channel_minmax,
-                                 cal_qparams_per_group_absmax,
-                                 cal_qparams_per_group_minmax,
-                                 cal_qparams_per_tensor_absmax,
-                                 cal_qparams_per_tensor_minmax)
+from lmdeploy.lite.utils import (cal_qparams_per_channel_absmax, cal_qparams_per_channel_minmax,
+                                 cal_qparams_per_group_absmax, cal_qparams_per_group_minmax,
+                                 cal_qparams_per_tensor_absmax, cal_qparams_per_tensor_minmax)
 
 
 # yapf: enable

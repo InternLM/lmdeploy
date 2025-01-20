@@ -5,9 +5,7 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 
-from ..kernels.w8a8_triton_kernels import (matmul_kernel_dynamic_quant,
-                                           per_channel_quant,
-                                           per_token_quant_int8,
+from ..kernels.w8a8_triton_kernels import (matmul_kernel_dynamic_quant, per_channel_quant, per_token_quant_int8,
                                            rms_norm_dynamic_quant)
 
 # yapf: enable
