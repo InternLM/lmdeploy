@@ -158,6 +158,7 @@ class ModelWeightLoader:
         _, rank = get_world_rank()
         disable_tqdm = rank != 0
 
+        paths = sorted(paths)
         for path in tqdm(paths,
                          desc='Loading weights from safetensors',
                          disable=disable_tqdm):
