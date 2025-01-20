@@ -169,8 +169,7 @@ summarizer = dict(
         'mmlu_pro_psychology',
         'mmlu_pro_other',
     ],
-    summary_groups=sum(
-        [v for k, v in locals().items() if k.endswith('_summary_groups')], []),
+    summary_groups=sum([v for k, v in locals().items() if k.endswith('_summary_groups')], []),
 )
 
 turbomind_qwen1_5_7b = deepcopy(*lmdeploy_qwen1_5_7b)

@@ -13,8 +13,7 @@ def prepare_environment(request, config, worker_id):
     model = param['model']
     model_path = config.get('model_path') + '/' + model
 
-    pid, startRes = start_restful_api(config, param, model, model_path,
-                                      'pytorch', worker_id)
+    pid, startRes = start_restful_api(config, param, model, model_path, 'pytorch', worker_id)
     yield
     stop_restful_api(pid, startRes, param)
 
@@ -30,9 +29,7 @@ def getModelList(tp_num):
 @pytest.mark.order(7)
 @pytest.mark.restful_api_vl
 @pytest.mark.gpu_num_1
-@pytest.mark.parametrize('prepare_environment',
-                         getModelList(tp_num=1),
-                         indirect=True)
+@pytest.mark.parametrize('prepare_environment', getModelList(tp_num=1), indirect=True)
 def test_restful_chat_tp1(config, worker_id):
     if get_workerid(worker_id) is None:
         run_vl_testcase(config)
@@ -43,9 +40,7 @@ def test_restful_chat_tp1(config, worker_id):
 @pytest.mark.order(7)
 @pytest.mark.restful_api_vl
 @pytest.mark.gpu_num_2
-@pytest.mark.parametrize('prepare_environment',
-                         getModelList(tp_num=2),
-                         indirect=True)
+@pytest.mark.parametrize('prepare_environment', getModelList(tp_num=2), indirect=True)
 def test_restful_chat_tp2(config, worker_id):
     if get_workerid(worker_id) is None:
         run_vl_testcase(config)
@@ -56,9 +51,7 @@ def test_restful_chat_tp2(config, worker_id):
 @pytest.mark.order(7)
 @pytest.mark.restful_api_vl
 @pytest.mark.gpu_num_4
-@pytest.mark.parametrize('prepare_environment',
-                         getModelList(tp_num=4),
-                         indirect=True)
+@pytest.mark.parametrize('prepare_environment', getModelList(tp_num=4), indirect=True)
 def test_restful_chat_tp4(config, worker_id):
     if get_workerid(worker_id) is None:
         run_vl_testcase(config)
@@ -72,16 +65,13 @@ def getKvintModelList(tp_num, quant_policy: int = None):
         'cuda_prefix': None,
         'tp_num': tp_num,
         'extra': f'--quant-policy {quant_policy}'
-    } for item in get_torch_model_list(
-        tp_num, quant_policy=quant_policy, model_type='vl_model')]
+    } for item in get_torch_model_list(tp_num, quant_policy=quant_policy, model_type='vl_model')]
 
 
 @pytest.mark.order(7)
 @pytest.mark.restful_api_vl
 @pytest.mark.gpu_num_1
-@pytest.mark.parametrize('prepare_environment',
-                         getKvintModelList(tp_num=1, quant_policy=4),
-                         indirect=True)
+@pytest.mark.parametrize('prepare_environment', getKvintModelList(tp_num=1, quant_policy=4), indirect=True)
 def test_restful_chat_kvint4_tp1(config, worker_id):
     if get_workerid(worker_id) is None:
         run_vl_testcase(config)
@@ -92,9 +82,7 @@ def test_restful_chat_kvint4_tp1(config, worker_id):
 @pytest.mark.order(7)
 @pytest.mark.restful_api_vl
 @pytest.mark.gpu_num_2
-@pytest.mark.parametrize('prepare_environment',
-                         getKvintModelList(tp_num=2, quant_policy=4),
-                         indirect=True)
+@pytest.mark.parametrize('prepare_environment', getKvintModelList(tp_num=2, quant_policy=4), indirect=True)
 def test_restful_chat_kvint4_tp2(config, worker_id):
     if get_workerid(worker_id) is None:
         run_vl_testcase(config)
@@ -105,9 +93,7 @@ def test_restful_chat_kvint4_tp2(config, worker_id):
 @pytest.mark.order(7)
 @pytest.mark.restful_api_vl
 @pytest.mark.gpu_num_4
-@pytest.mark.parametrize('prepare_environment',
-                         getKvintModelList(tp_num=4, quant_policy=4),
-                         indirect=True)
+@pytest.mark.parametrize('prepare_environment', getKvintModelList(tp_num=4, quant_policy=4), indirect=True)
 def test_restful_chat_kvint4_tp4(config, worker_id):
     if get_workerid(worker_id) is None:
         run_vl_testcase(config)
@@ -118,9 +104,7 @@ def test_restful_chat_kvint4_tp4(config, worker_id):
 @pytest.mark.order(7)
 @pytest.mark.restful_api_vl
 @pytest.mark.gpu_num_1
-@pytest.mark.parametrize('prepare_environment',
-                         getKvintModelList(tp_num=1, quant_policy=8),
-                         indirect=True)
+@pytest.mark.parametrize('prepare_environment', getKvintModelList(tp_num=1, quant_policy=8), indirect=True)
 def test_restful_chat_kvint8_tp1(config, worker_id):
     if get_workerid(worker_id) is None:
         run_vl_testcase(config)
@@ -131,9 +115,7 @@ def test_restful_chat_kvint8_tp1(config, worker_id):
 @pytest.mark.order(7)
 @pytest.mark.restful_api_vl
 @pytest.mark.gpu_num_2
-@pytest.mark.parametrize('prepare_environment',
-                         getKvintModelList(tp_num=2, quant_policy=8),
-                         indirect=True)
+@pytest.mark.parametrize('prepare_environment', getKvintModelList(tp_num=2, quant_policy=8), indirect=True)
 def test_restful_chat_kvint8_tp2(config, worker_id):
     if get_workerid(worker_id) is None:
         run_vl_testcase(config)
@@ -144,9 +126,7 @@ def test_restful_chat_kvint8_tp2(config, worker_id):
 @pytest.mark.order(7)
 @pytest.mark.restful_api_vl
 @pytest.mark.gpu_num_4
-@pytest.mark.parametrize('prepare_environment',
-                         getKvintModelList(tp_num=4, quant_policy=8),
-                         indirect=True)
+@pytest.mark.parametrize('prepare_environment', getKvintModelList(tp_num=4, quant_policy=8), indirect=True)
 def test_restful_chat_kvint8_tp4(config, worker_id):
     if get_workerid(worker_id) is None:
         run_vl_testcase(config)

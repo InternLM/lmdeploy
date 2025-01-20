@@ -148,8 +148,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             else:
                 BLOCK_BS = k_cache.size(1)
                 # pad one more block to avoid invalid kv visit
-                out_size = (_cdiv(kv_flatten_size, BLOCK_BS) * BLOCK_BS +
-                            BLOCK_BS)
+                out_size = (_cdiv(kv_flatten_size, BLOCK_BS) * BLOCK_BS + BLOCK_BS)
                 flatten_k, flatten_v = self.flatten_kv_cache(
                     k_cache,
                     v_cache,

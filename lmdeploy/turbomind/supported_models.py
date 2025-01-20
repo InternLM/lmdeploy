@@ -107,13 +107,11 @@ def is_supported(model_path: str):
                     support_by_turbomind = False
             elif arch == 'InternVLChatModel':
                 llm_arch = cfg.llm_config.architectures[0]
-                support_by_turbomind = (llm_arch in SUPPORTED_ARCHS and
-                                        _is_head_dim_supported(cfg.llm_config))
+                support_by_turbomind = (llm_arch in SUPPORTED_ARCHS and _is_head_dim_supported(cfg.llm_config))
             elif arch == 'LlavaForConditionalGeneration':
                 llm_arch = cfg.text_config.architectures[0]
                 if llm_arch in ['Qwen2ForCausalLM', 'LlamaForCausalLM']:
-                    support_by_turbomind = _is_head_dim_supported(
-                        cfg.text_config)
+                    support_by_turbomind = _is_head_dim_supported(cfg.text_config)
             elif arch == 'MolmoForCausalLM':
                 kv_heads = cfg.num_key_value_heads
                 # TM hasn't supported allenai/Molmo-7B-O-0924 yet

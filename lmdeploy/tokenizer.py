@@ -539,7 +539,8 @@ class Tokenizer:
         if not use_hf_model:
             self.model = SentencePieceTokenizer(model_file)
         else:
-            from transformers.models.auto.tokenization_auto import get_tokenizer_config
+            from transformers.models.auto.tokenization_auto import \
+                get_tokenizer_config
             tokenizer_config = get_tokenizer_config(model_folder, trust_remote_code=True)
             config_tokenizer_class = tokenizer_config.get('tokenizer_class')
             if config_tokenizer_class == 'ChatGLM4Tokenizer':

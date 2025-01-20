@@ -1,7 +1,4 @@
-def assert_chat_completions_batch_return(output,
-                                         model_name,
-                                         check_logprobs: bool = False,
-                                         logprobs_num: int = 5):
+def assert_chat_completions_batch_return(output, model_name, check_logprobs: bool = False, logprobs_num: int = 5):
     assert_usage(output.get('usage'))
     assert output.get('id') is not None
     assert output.get('object') == 'chat.completion'
@@ -14,16 +11,12 @@ def assert_chat_completions_batch_return(output,
         assert len(message.get('message').get('content')) > 0
         assert message.get('message').get('role') == 'assistant'
         if check_logprobs:
-            len(message.get('logprobs').get('content')) == output.get(
-                'usage').get('completion_tokens')
+            len(message.get('logprobs').get('content')) == output.get('usage').get('completion_tokens')
             for logprob in message.get('logprobs').get('content'):
                 assert_logprobs(logprob, logprobs_num)
 
 
-def assert_completions_batch_return(output,
-                                    model_name,
-                                    check_logprobs: bool = False,
-                                    logprobs_num: int = 5):
+def assert_completions_batch_return(output, model_name, check_logprobs: bool = False, logprobs_num: int = 5):
     assert_usage(output.get('usage'))
     assert output.get('id') is not None
     assert output.get('object') == 'text_completion'
@@ -35,8 +28,7 @@ def assert_completions_batch_return(output,
         assert message.get('index') == 0
         assert len(message.get('text')) > 0
         if check_logprobs:
-            len(message.get('logprobs').get('content')) == output.get(
-                'usage').get('completion_tokens')
+            len(message.get('logprobs').get('content')) == output.get('usage').get('completion_tokens')
             for logprob in message.get('logprobs').get('content'):
                 assert_logprobs(logprob, logprobs_num)
 
@@ -45,8 +37,7 @@ def assert_usage(usage):
     assert usage.get('prompt_tokens') > 0
     assert usage.get('total_tokens') > 0
     assert usage.get('completion_tokens') > 0
-    assert usage.get('completion_tokens') + usage.get(
-        'prompt_tokens') == usage.get('total_tokens')
+    assert usage.get('completion_tokens') + usage.get('prompt_tokens') == usage.get('total_tokens')
 
 
 def assert_logprobs(logprobs, logprobs_num):
@@ -128,9 +119,7 @@ def assert_chat_interactive_batch_return(output):
     assert len(output.get('text')) > 0
 
 
-def assert_chat_interactive_stream_return(output,
-                                          is_last: bool = False,
-                                          index: int = None):
+def assert_chat_interactive_stream_return(output, is_last: bool = False, index: int = None):
     assert output.get('input_tokens') > 0
     if index is not None:
         assert output.get('tokens') >= index

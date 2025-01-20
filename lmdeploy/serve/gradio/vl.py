@@ -61,8 +61,7 @@ class Session:
 def run_local(model_path: str,
               model_name: Optional[str] = None,
               backend: Literal['turbomind', 'pytorch'] = 'turbomind',
-              backend_config: Optional[Union[PytorchEngineConfig,
-                                             TurbomindEngineConfig]] = None,
+              backend_config: Optional[Union[PytorchEngineConfig, TurbomindEngineConfig]] = None,
               chat_template_config: Optional[ChatTemplateConfig] = None,
               server_name: str = '0.0.0.0',
               server_port: int = 6006,
@@ -114,15 +113,11 @@ def run_local(model_path: str,
             prompt = history[-1][0][0]
             images = history[-1][0][1:]
             # convert prompt into GPT4V format
-            prompt = [
-                dict(role='user', content=[dict(type='text', text=prompt)])
-            ]
+            prompt = [dict(role='user', content=[dict(type='text', text=prompt)])]
             for image in images:
-                prompt[0]['content'].append(
-                    dict(type='image_data', image_data=dict(data=image)))
+                prompt[0]['content'].append(dict(type='image_data', image_data=dict(data=image)))
         t0 = time.perf_counter()
-        inputs = _run_until_complete(
-            engine._get_prompt_input(prompt, True, sequence_start, ''))
+        inputs = _run_until_complete(engine._get_prompt_input(prompt, True, sequence_start, ''))
         t1 = time.perf_counter()
         logger.info('preprocess cost %.3fs' % (t1 - t0))
 
@@ -140,20 +135,18 @@ def run_local(model_path: str,
                                           stop_token_ids=engine.stop_words)
             step = session.step
             state = DetokenizeState(len(input_ids))
-            for outputs in generator.stream_infer(
-                    session_id=session._session_id,
-                    **inputs,
-                    sequence_start=sequence_start,
-                    step=step,
-                    gen_config=gen_config,
-                    stream_output=True):
+            for outputs in generator.stream_infer(session_id=session._session_id,
+                                                  **inputs,
+                                                  sequence_start=sequence_start,
+                                                  step=step,
+                                                  gen_config=gen_config,
+                                                  stream_output=True):
                 res, tokens = input_ids + outputs.token_ids, outputs.num_token
                 response, state = engine.tokenizer.detokenize_incrementally(
                     res,
                     state,
                     skip_special_tokens=gen_config.skip_special_tokens,
-                    spaces_between_special_tokens=gen_config.
-                    spaces_between_special_tokens)  # noqa
+                    spaces_between_special_tokens=gen_config.spaces_between_special_tokens)  # noqa
                 if chatbot[-1][1] is None:
                     chatbot[-1][1] = ''
                     history[-1][1] = ''
@@ -194,47 +187,30 @@ def run_local(model_path: str,
             gr.Markdown('## LMDeploy VL Playground')
 
             chatbot = gr.Chatbot(elem_id='chatbot', label=engine.model_name)
-            query = gr.Textbox(placeholder='Please input the instruction',
-                               label='Instruction')
+            query = gr.Textbox(placeholder='Please input the instruction', label='Instruction')
             session = gr.State()
 
             with gr.Row():
-                addimg_btn = gr.UploadButton('Upload Image',
-                                             file_types=['image'])
+                addimg_btn = gr.UploadButton('Upload Image', file_types=['image'])
                 cancel_btn = gr.Button(value='Cancel', interactive=False)
                 reset_btn = gr.Button(value='Reset')
             with gr.Row():
-                max_new_tokens = gr.Slider(1,
-                                           2048,
-                                           value=512,
-                                           step=1,
-                                           label='Maximum new tokens')
+                max_new_tokens = gr.Slider(1, 2048, value=512, step=1, label='Maximum new tokens')
                 top_p = gr.Slider(0.01, 1, value=0.8, step=0.01, label='Top_p')
                 top_k = gr.Slider(1, 100, value=50, step=1, label='Top_k')
-                temperature = gr.Slider(0.01,
-                                        1.5,
-                                        value=0.7,
-                                        step=0.01,
-                                        label='Temperature')
+                temperature = gr.Slider(0.01, 1.5, value=0.7, step=0.01, label='Temperature')
 
-        addimg_btn.upload(add_image, [chatbot, session, addimg_btn],
-                          [chatbot, session],
-                          show_progress=True,
-                          queue=True)
+        addimg_btn.upload(add_image, [chatbot, session, addimg_btn], [chatbot, session], show_progress=True, queue=True)
 
-        send_event = query.submit(
-            add_text, [chatbot, session, query], [chatbot, session]).then(
-                chat,
-                [chatbot, session, max_new_tokens, top_p, top_k, temperature],
-                [chatbot, session, query, cancel_btn, reset_btn])
+        send_event = query.submit(add_text, [chatbot, session, query], [chatbot, session]).then(
+            chat, [chatbot, session, max_new_tokens, top_p, top_k, temperature],
+            [chatbot, session, query, cancel_btn, reset_btn])
         query.submit(lambda: gr.update(value=''), None, [query])
 
-        cancel_btn.click(cancel, [chatbot, session],
-                         [chatbot, session, cancel_btn, reset_btn, query],
+        cancel_btn.click(cancel, [chatbot, session], [chatbot, session, cancel_btn, reset_btn, query],
                          cancels=[send_event])
 
-        reset_btn.click(reset, [session], [chatbot, session, query],
-                        cancels=[send_event])
+        reset_btn.click(reset, [session], [chatbot, session, query], cancels=[send_event])
 
         demo.load(lambda: Session(), inputs=None, outputs=[session])
 

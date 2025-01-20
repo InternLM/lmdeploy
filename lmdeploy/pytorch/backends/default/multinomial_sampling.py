@@ -14,9 +14,7 @@ class DefaultMultinomialSamplingImpl(MultinomialSamplingImpl):
                 offsets: torch.LongTensor,
                 indices: torch.Tensor = None):
         """forward."""
-        sampled_index = torch.multinomial(scores,
-                                          num_samples=1,
-                                          replacement=True)
+        sampled_index = torch.multinomial(scores, num_samples=1, replacement=True)
         outputs = torch.gather(indices, dim=1, index=sampled_index)
         return outputs.view(-1)
 

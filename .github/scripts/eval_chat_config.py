@@ -154,10 +154,8 @@ pytorch_internlm2_5_7b_chat_w8a8 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
 # ===== Configs for internlm/internlm2_5_20b_chat =====
 turbomind_internlm2_5_20b_chat = deepcopy(*lmdeploy_internlm2_5_20b_chat)
 turbomind_internlm2_5_20b_chat_4bits = deepcopy(*lmdeploy_internlm2_5_20b_chat)
-turbomind_internlm2_5_20b_chat_kvint4 = deepcopy(
-    *lmdeploy_internlm2_5_20b_chat)
-turbomind_internlm2_5_20b_chat_kvint8 = deepcopy(
-    *lmdeploy_internlm2_5_20b_chat)
+turbomind_internlm2_5_20b_chat_kvint4 = deepcopy(*lmdeploy_internlm2_5_20b_chat)
+turbomind_internlm2_5_20b_chat_kvint8 = deepcopy(*lmdeploy_internlm2_5_20b_chat)
 pytorch_internlm2_5_20b_chat = deepcopy(*lmdeploy_internlm2_5_20b_chat)
 
 # ===== Configs for internlm/internlm2_chat_20b =====
@@ -190,13 +188,10 @@ pytorch_llama3_8b_instruct = deepcopy(*lmdeploy_llama3_8b_instruct)
 
 # ===== Configs for meta-llama/Meta-Llama-3.1-8B-Instruct =====
 turbomind_llama3_1_8b_instruct = deepcopy(*lmdeploy_llama3_1_8b_instruct)
-turbomind_llama3_1_8b_instruct[
-    'path'] = 'meta-llama/Meta-Llama-3-1-8B-Instruct'
+turbomind_llama3_1_8b_instruct['path'] = 'meta-llama/Meta-Llama-3-1-8B-Instruct'
 turbomind_llama3_1_8b_instruct_4bits = deepcopy(turbomind_llama3_1_8b_instruct)
-turbomind_llama3_1_8b_instruct_kvint4 = deepcopy(
-    turbomind_llama3_1_8b_instruct)
-turbomind_llama3_1_8b_instruct_kvint8 = deepcopy(
-    turbomind_llama3_1_8b_instruct)
+turbomind_llama3_1_8b_instruct_kvint4 = deepcopy(turbomind_llama3_1_8b_instruct)
+turbomind_llama3_1_8b_instruct_kvint8 = deepcopy(turbomind_llama3_1_8b_instruct)
 pytorch_llama3_1_8b_instruct = deepcopy(turbomind_llama3_1_8b_instruct)
 pytorch_llama3_1_8b_instruct_w8a8 = deepcopy(turbomind_llama3_1_8b_instruct)
 
@@ -252,11 +247,8 @@ for model in [v for k, v in locals().items() if k.startswith('pytorch_')]:
     model['batch_size'] = 100
 
 basic_pytorch_chat_tp1 = dict(type=TurboMindModelwithChatTemplate,
-                              engine_config=dict(session_len=MAX_SESSION_LEN,
-                                                 max_batch_size=1,
-                                                 tp=1),
-                              gen_config=dict(do_sample=False,
-                                              max_new_tokens=MAX_NEW_TOKENS),
+                              engine_config=dict(session_len=MAX_SESSION_LEN, max_batch_size=1, tp=1),
+                              gen_config=dict(do_sample=False, max_new_tokens=MAX_NEW_TOKENS),
                               max_out_len=MAX_NEW_TOKENS,
                               max_seq_len=MAX_SESSION_LEN,
                               batch_size=100,
@@ -369,6 +361,5 @@ summarizer = dict(
         'ds1000_Pytorch',
         'ds1000_Matplotlib',
     ],
-    summary_groups=sum(
-        [v for k, v in locals().items() if k.endswith('_summary_groups')], []),
+    summary_groups=sum([v for k, v in locals().items() if k.endswith('_summary_groups')], []),
 )

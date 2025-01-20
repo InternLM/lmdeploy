@@ -18,29 +18,24 @@ from .utils.cudagraph import CudaGraphMixin
 class InternLMAttention(nn.Module):
     """Rewrite module of LlamaAttention."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         num_heads = config.num_attention_heads
         num_key_value_heads = config.num_key_value_heads
         hidden_size = config.hidden_size
         head_dim = getattr(config, 'head_dim', hidden_size // num_heads)
-        num_replicate_kv_heads = getattr(config,
-                                         'num_replicate_key_value_heads', 1)
+        num_replicate_kv_heads = getattr(config, 'num_replicate_key_value_heads', 1)
         # packed qkv
-        self.qkv_proj = build_qkv_proj(
-            hidden_size,
-            num_q_heads=num_heads,
-            num_kv_heads=num_key_value_heads,
-            head_size=head_dim,
-            bias=config.bias,
-            quant_config=quantization_config,
-            dtype=dtype,
-            device=device,
-            num_replicate_kv_heads=num_replicate_kv_heads)
+        self.qkv_proj = build_qkv_proj(hidden_size,
+                                       num_q_heads=num_heads,
+                                       num_kv_heads=num_key_value_heads,
+                                       head_size=head_dim,
+                                       bias=config.bias,
+                                       quant_config=quantization_config,
+                                       dtype=dtype,
+                                       device=device,
+                                       num_replicate_kv_heads=num_replicate_kv_heads)
 
         # rotary embedding
         self.apply_rotary_pos_emb = ApplyRotaryEmb()
@@ -74,8 +69,7 @@ class InternLMAttention(nn.Module):
         qkv_states = self.qkv_proj(hidden_states)
         # (-1, heads, head_dim)
         qkv_states = qkv_states.flatten(0, -2)
-        query_states, key_states, value_states = self.qkv_proj.split_qkv(
-            qkv_states)
+        query_states, key_states, value_states = self.qkv_proj.split_qkv(qkv_states)
 
         # apply rotary embedding
         cos, sin = rotary_pos_emb
@@ -95,10 +89,8 @@ class InternLMAttention(nn.Module):
             past_key_value[0],
             past_key_value[1],
             attn_metadata,
-            k_scales_zeros=None
-            if len(past_key_value) == 2 else past_key_value[2],
-            v_scales_zeros=None
-            if len(past_key_value) == 2 else past_key_value[3],
+            k_scales_zeros=None if len(past_key_value) == 2 else past_key_value[2],
+            v_scales_zeros=None if len(past_key_value) == 2 else past_key_value[3],
             inplace=True,
         )
         attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
@@ -111,10 +103,7 @@ class InternLMAttention(nn.Module):
 class InternLMMLP(nn.Module):
     """mlp."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         # gate up
@@ -173,12 +162,11 @@ class InternLMDecoderLayer(nn.Module):
                                        device=device)
 
         # build attention layer norm
-        self.post_attention_layernorm = RMSNorm(
-            config.hidden_size,
-            config.rms_norm_eps,
-            quant_config=quantization_config,
-            dtype=dtype,
-            device=device)
+        self.post_attention_layernorm = RMSNorm(config.hidden_size,
+                                                config.rms_norm_eps,
+                                                quant_config=quantization_config,
+                                                dtype=dtype,
+                                                device=device)
 
     def forward(
         self,
@@ -193,8 +181,7 @@ class InternLMDecoderLayer(nn.Module):
             residual = hidden_states
             hidden_states = self.input_layernorm(hidden_states)
         else:
-            hidden_states, residual = self.input_layernorm(
-                hidden_states, residual)
+            hidden_states, residual = self.input_layernorm(hidden_states, residual)
 
         # Self Attention
         hidden_states = self.self_attn(
@@ -205,8 +192,7 @@ class InternLMDecoderLayer(nn.Module):
         )
 
         # Fully Connected
-        hidden_states, residual = self.post_attention_layernorm(
-            hidden_states, residual)
+        hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
         hidden_states = self.mlp(hidden_states)
 
         outputs = (hidden_states, residual)
@@ -216,10 +202,7 @@ class InternLMDecoderLayer(nn.Module):
 class InternLMModel(nn.Module):
     """model."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
@@ -237,10 +220,7 @@ class InternLMModel(nn.Module):
         ])
 
         # build norm
-        self.norm = RMSNorm(config.hidden_size,
-                            config.rms_norm_eps,
-                            dtype=dtype,
-                            device=device)
+        self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
 
         # build rotary embedding in LlamaModel
         rope_dim = config.hidden_size // config.num_attention_heads
@@ -385,9 +365,7 @@ class InternLMForCausalLM(nn.Module, CudaGraphMixin):
         if vision_embeddings is not None and len(vision_embeddings) > 0:
             if inputs_embeds is None:
                 inputs_embeds = self.get_input_embeddings()(input_ids)
-            inputs_embeds[:,
-                          vision_embedding_indexing, :] = vision_embeddings.to(
-                              inputs_embeds)
+            inputs_embeds[:, vision_embedding_indexing, :] = vision_embeddings.to(inputs_embeds)
 
         # inputs of forward
         return dict(
@@ -414,8 +392,7 @@ class InternLMForCausalLM(nn.Module, CudaGraphMixin):
         for name, loaded_weight in weights:
             if 'rotary_emb.inv_freq' in name:
                 continue
-            if ('rotary_emb.cos_cached' in name
-                    or 'rotary_emb.sin_cached' in name):
+            if ('rotary_emb.cos_cached' in name or 'rotary_emb.sin_cached' in name):
                 continue
             if self.config.tie_word_embeddings and 'lm_head.weight' in name:
                 continue

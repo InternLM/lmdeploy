@@ -76,12 +76,10 @@ class SamplingParam:
         if output_logits:
             if (output_logits != 'all' or gen_config.max_new_tokens > 0):
                 output_logits = None
-                logger.warning(
-                    'Pytorch Engine only support output_logits="all"'
-                    ' with max_new_tokens=0')
+                logger.warning('Pytorch Engine only support output_logits="all"'
+                               ' with max_new_tokens=0')
         if gen_config.output_last_hidden_state is not None:
-            logger.warning(
-                'Pytorch Engine does not support output last hidden states.')
+            logger.warning('Pytorch Engine does not support output last hidden states.')
         if top_p < 0 or top_p > 1.0:
             logger.warning('`top_p` has to be a float > 0 and < 1'
                            f' but is {top_p}')
@@ -187,8 +185,7 @@ class SequenceManager:
         self._seq_map.pop(seq_id)
         status_map.pop(seq_id)
 
-    def update_sequence_status(self, seq: 'SchedulerSequence',
-                               new_status: MessageStatus):
+    def update_sequence_status(self, seq: 'SchedulerSequence', new_status: MessageStatus):
         """update status."""
         old_status = seq.status
         if new_status == old_status:
@@ -203,25 +200,20 @@ class SequenceManager:
 class SchedulerSession:
     """Scheduler session."""
 
-    def __init__(self,
-                 session_id: int,
-                 block_size: int,
-                 seq_manager: SequenceManager = None) -> None:
+    def __init__(self, session_id: int, block_size: int, seq_manager: SequenceManager = None) -> None:
         self.session_id = session_id
         self.block_size = block_size
         self.status: MessageStatus = MessageStatus.RUNNING
         self.sequences: SeqMap = dict()
         self.seq_manager = seq_manager
 
-    def add_sequence(
-            self,
-            token_ids: Tensor,
-            sampling_param: SamplingParam = None,
-            adapter_name: str = None,
-            return_logits: bool = False,
-            multimodals: MultiModalInputs = None,
-            input_embeddings: List[InputEmbeddings] = None
-    ) -> 'SchedulerSequence':
+    def add_sequence(self,
+                     token_ids: Tensor,
+                     sampling_param: SamplingParam = None,
+                     adapter_name: str = None,
+                     return_logits: bool = False,
+                     multimodals: MultiModalInputs = None,
+                     input_embeddings: List[InputEmbeddings] = None) -> 'SchedulerSequence':
         """Add a new message."""
         if isinstance(token_ids, Tensor):
             token_ids = token_ids.numpy()
@@ -291,8 +283,7 @@ class HistoryEmbeddings:
         num_all_images = len(self._embeddings)
         history_image_num = 0
         if num_all_images > 0:
-            history_image_num = sum(
-                [1 for emb in self._embeddings if emb.end <= step])
+            history_image_num = sum([1 for emb in self._embeddings if emb.end <= step])
             if history_image_num < num_all_images:
                 emb = self._embeddings[history_image_num]
                 # for case step in middle of an image
@@ -386,8 +377,7 @@ class HistoryMultiModals:
         for modal_type, modal_datas in self.multimodals.items():
             data = []
             for modal_data in modal_datas:
-                if (modal_data.start not in test_range
-                        and modal_data.end not in test_range):
+                if (modal_data.start not in test_range and modal_data.end not in test_range):
                     continue
                 data.append(modal_data)
             if len(data) > 0:
@@ -425,8 +415,7 @@ class HistoryMultiModals:
             for modal_data in modal_datas:
                 if modal_data.encoder_len is None:
                     continue
-                if (modal_data.start not in test_range
-                        and modal_data.end not in test_range):
+                if (modal_data.start not in test_range and modal_data.end not in test_range):
                     continue
                 out_len += modal_data.encoder_len
         return out_len
@@ -438,14 +427,11 @@ class SchedulerSequence:
     seq_id: int
     session: SchedulerSession
     history_cache: HistoryTokenIds = field(default_factory=HistoryTokenIds)
-    history_embeddings: HistoryEmbeddings = field(
-        default_factory=HistoryEmbeddings)
-    history_multimodals: HistoryMultiModals = field(
-        default_factory=HistoryMultiModals)
+    history_embeddings: HistoryEmbeddings = field(default_factory=HistoryEmbeddings)
+    history_multimodals: HistoryMultiModals = field(default_factory=HistoryMultiModals)
     num_new_tokens: int = 0
     sampling_param: SamplingParam = field(default_factory=SamplingParam)
-    logical_blocks: LogicalTokenBlocks = field(
-        default_factory=LogicalTokenBlocks)
+    logical_blocks: LogicalTokenBlocks = field(default_factory=LogicalTokenBlocks)
     adapter_name: str = None
     arrive_time: float = 0.0
     meta: Any = None
@@ -463,8 +449,7 @@ class SchedulerSequence:
         self._num_token_ids: int = len(self.history_cache)
 
         self._num_history_cross: int = 0
-        self._num_cross: int = self.history_multimodals.get_encoder_len(
-            0, self._num_token_ids)
+        self._num_cross: int = self.history_multimodals.get_encoder_len(0, self._num_token_ids)
 
     @property
     def block_size(self) -> int:
@@ -484,10 +469,7 @@ class SchedulerSequence:
     @property
     def history_image_token_len(self) -> int:
         """get history image token length."""
-        return sum([
-            emb.end - emb.start
-            for emb in self.history_embeddings[:self._num_history_images]
-        ])
+        return sum([emb.end - emb.start for emb in self.history_embeddings[:self._num_history_images]])
 
     @property
     def session_id(self) -> int:
@@ -592,23 +574,19 @@ class SchedulerSequence:
         self._num_history_images += self._num_images
         self._num_images = 0
         if embeddings is not None:
-            new_embeddings = [
-                emb.move_position(self._num_history_ids) for emb in embeddings
-            ]
+            new_embeddings = [emb.move_position(self._num_history_ids) for emb in embeddings]
             self._num_images = len(new_embeddings)
             self.history_embeddings.append(new_embeddings)
 
         # update multimodals
         if multimodals is not None:
-            multimodals = HistoryMultiModals.update_multimodals(
-                multimodals, self.num_all_ids)
+            multimodals = HistoryMultiModals.update_multimodals(multimodals, self.num_all_ids)
             self.history_multimodals.add_inputs(multimodals)
 
         # cross
         self._num_history_cross += self._num_cross
         if multimodals is not None:
-            self._num_cross = self.history_multimodals.get_encoder_len(
-                old_num_history_ids, self._num_history_ids)
+            self._num_cross = self.history_multimodals.get_encoder_len(old_num_history_ids, self._num_history_ids)
         else:
             self._num_cross = 0
 
@@ -643,7 +621,5 @@ class SchedulerSequence:
 
         # cross
         if self.history_multimodals is not None:
-            self._num_history_cross = self.history_multimodals.get_encoder_len(
-                0, self.num_history_ids)
-            self._num_cross = self.history_multimodals.get_encoder_len(
-                self._num_history_ids, num_all_ids)
+            self._num_history_cross = self.history_multimodals.get_encoder_len(0, self.num_history_ids)
+            self._num_cross = self.history_multimodals.get_encoder_len(self._num_history_ids, num_all_ids)

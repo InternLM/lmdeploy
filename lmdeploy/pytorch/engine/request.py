@@ -122,16 +122,12 @@ class RequestSender:
                             event=event,
                             data=None,
                             err_msg=None)
-            req = Request(type=rtype,
-                          sender_id=self.sender_id,
-                          data=rdata,
-                          resp=resp)
+            req = Request(type=rtype, sender_id=self.sender_id, data=rdata, resp=resp)
             resps.append(resp)
             reqs.append(req)
         return resps, reqs
 
-    def batched_send_async(self, req_types: List[RequestType],
-                           data: List[Any]):
+    def batched_send_async(self, req_types: List[RequestType], data: List[Any]):
         """Batched send request asynchronize."""
         resps, reqs = self._gather_request(req_types, data)
         self._req_put(reqs)
@@ -182,8 +178,7 @@ class RequestManager:
         self.senders: Dict[int, RequestSender] = dict()
         self.callbacks: Dict[RequestType, Callable] = dict()
         self.request_priority: List[RequestType] = [
-            RequestType.STOP_ENGINE, RequestType.STOP_SESSION,
-            RequestType.END_SESSION, RequestType.ADD_SESSION,
+            RequestType.STOP_ENGINE, RequestType.STOP_SESSION, RequestType.END_SESSION, RequestType.ADD_SESSION,
             RequestType.ADD_MESSAGE
         ]
         self.requests: asyncio.Queue = None
@@ -195,10 +190,8 @@ class RequestManager:
         """create coro task."""
         logger.debug('creating engine loop task.')
         event_loop = asyncio.get_event_loop()
-        assert self._loop_coro is not None, (
-            'Please set loop task with manager.start_loop')
-        loop_unshielded = event_loop.create_task(self._loop_coro(),
-                                                 name='EngineMainLoop')
+        assert self._loop_coro is not None, ('Please set loop task with manager.start_loop')
+        loop_unshielded = event_loop.create_task(self._loop_coro(), name='EngineMainLoop')
         self._loop_task = asyncio.shield(loop_unshielded)
         self.requests = asyncio.Queue()
         return self._loop_task
@@ -267,8 +260,7 @@ class RequestManager:
             __proc_reqs(elem)
 
         # gather requests
-        reqs_by_type: Dict[RequestType, Request] = dict(
-            (t, []) for t in RequestType)
+        reqs_by_type: Dict[RequestType, Request] = dict((t, []) for t in RequestType)
         for req in reqs:
             reqs_by_type[req.type].append(req)
         return reqs_by_type

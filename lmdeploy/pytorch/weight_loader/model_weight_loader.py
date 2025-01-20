@@ -13,8 +13,7 @@ from lmdeploy.utils import get_logger
 logger = get_logger('lmdeploy')
 
 
-def load_weight(param: torch.nn.Parameter, loaded_weight: torch.Tensor,
-                **kwargs):
+def load_weight(param: torch.nn.Parameter, loaded_weight: torch.Tensor, **kwargs):
     """load weight."""
     if hasattr(param, 'weight_loader'):
         param.weight_loader(param, loaded_weight, **kwargs)
@@ -23,15 +22,13 @@ def load_weight(param: torch.nn.Parameter, loaded_weight: torch.Tensor,
         default_weight_loader(param, loaded_weight)
 
 
-def default_weight_loader(param: torch.nn.Parameter,
-                          loaded_weight: torch.Tensor):
+def default_weight_loader(param: torch.nn.Parameter, loaded_weight: torch.Tensor):
     """default weight loader."""
     if param.numel() == 1 and loaded_weight.numel() == 1:
         param.data.fill_(loaded_weight.item())
     else:
-        assert param.size() == loaded_weight.size(), (
-            f'Attempted to load weight ({loaded_weight.size()}) '
-            f'into parameter ({param.size()})')
+        assert param.size() == loaded_weight.size(), (f'Attempted to load weight ({loaded_weight.size()}) '
+                                                      f'into parameter ({param.size()})')
         param.data.copy_(loaded_weight)
 
 
@@ -39,12 +36,10 @@ def _get_weight_type(model_path: str, use_safetensors: bool = None):
     """get weight type."""
     weight_type = None
     is_sharded = False
-    if use_safetensors is not False and osp.isfile(
-            osp.join(model_path, SAFE_WEIGHTS_NAME)):
+    if use_safetensors is not False and osp.isfile(osp.join(model_path, SAFE_WEIGHTS_NAME)):
         # Load from a safetensors checkpoint
         weight_type = 'safetensors'
-    elif use_safetensors is not False and osp.isfile(
-            osp.join(model_path, SAFE_WEIGHTS_INDEX_NAME)):
+    elif use_safetensors is not False and osp.isfile(osp.join(model_path, SAFE_WEIGHTS_INDEX_NAME)):
         # Load from a sharded safetensors checkpoint
         weight_type = 'safetensors'
         is_sharded = True
@@ -100,8 +95,7 @@ class ModelWeightLoader:
         self._weight_type = weight_type
         self._is_sharded = is_sharded
         self._prefix = prefix
-        self._shard_paths = self._get_shard_paths(model_path, is_sharded,
-                                                  weight_type)
+        self._shard_paths = self._get_shard_paths(model_path, is_sharded, weight_type)
 
     @staticmethod
     def _get_shard_paths(model_path: str, is_sharded: bool, weight_type: str):
@@ -119,8 +113,7 @@ class ModelWeightLoader:
         """load shards."""
         state_dict = load_state_dict(path)
         if self._prefix is not None:
-            state_dict = dict(
-                (f'{self._prefix}{k}', v) for k, v in state_dict.items())
+            state_dict = dict((f'{self._prefix}{k}', v) for k, v in state_dict.items())
         return state_dict
 
     def load_model_weights(
@@ -149,10 +142,7 @@ class ModelWeightLoader:
 
 
 @torch.inference_mode()
-def load_model_weights(model: torch.nn.Module,
-                       checkpoint_path: str,
-                       prefix: str = None,
-                       device: torch.device = None):
+def load_model_weights(model: torch.nn.Module, checkpoint_path: str, prefix: str = None, device: torch.device = None):
     """Loading model weights."""
     loader = ModelWeightLoader(checkpoint_path, prefix=prefix)
     loader.load_model_weights(model, device=device)

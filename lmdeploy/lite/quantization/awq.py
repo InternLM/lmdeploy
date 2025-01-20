@@ -6,13 +6,11 @@ import torch
 # Maps that describe the structure of your model.
 NORM_FCS_MAP = {
     'LlamaDecoderLayer': {
-        'input_layernorm':
-        ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
+        'input_layernorm': ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
         'post_attention_layernorm': ['mlp.gate_proj', 'mlp.up_proj']
     },
     'InternLMDecoderLayer': {
-        'input_layernorm':
-        ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
+        'input_layernorm': ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
         'post_attention_layernorm': ['mlp.gate_proj', 'mlp.up_proj']
     },
     'InternLM2DecoderLayer': {
@@ -20,8 +18,7 @@ NORM_FCS_MAP = {
         'ffn_norm': ['feed_forward.w1', 'feed_forward.w3']
     },
     'InternLM3DecoderLayer': {
-        'input_layernorm':
-        ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
+        'input_layernorm': ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
         'post_attention_layernorm': ['mlp.gate_proj', 'mlp.up_proj']
     },
     'QWenBlock': {
@@ -29,8 +26,7 @@ NORM_FCS_MAP = {
         'ln_2': ['mlp.w1', 'mlp.w2']
     },
     'Qwen2DecoderLayer': {
-        'input_layernorm':
-        ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
+        'input_layernorm': ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
         'post_attention_layernorm': ['mlp.gate_proj', 'mlp.up_proj']
     },
     'DecoderLayer': {
@@ -46,21 +42,16 @@ NORM_FCS_MAP = {
         'post_attention_layernorm': ['mlp.dense_h_to_4h']
     },
     'MixtralDecoderLayer': {
-        'input_layernorm':
-        ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
-        'post_attention_layernorm': [
-            'block_sparse_moe.gate', 'block_sparse_moe.experts.{i}.w1',
-            'block_sparse_moe.experts.{i}.w3'
-        ]
+        'input_layernorm': ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
+        'post_attention_layernorm':
+        ['block_sparse_moe.gate', 'block_sparse_moe.experts.{i}.w1', 'block_sparse_moe.experts.{i}.w3']
     },
     'Qwen2VLDecoderLayer': {
-        'input_layernorm':
-        ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
+        'input_layernorm': ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
         'post_attention_layernorm': ['mlp.gate_proj', 'mlp.up_proj']
     },
     'MistralDecoderLayer': {
-        'input_layernorm':
-        ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
+        'input_layernorm': ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
         'post_attention_layernorm': ['mlp.gate_proj', 'mlp.up_proj']
     },
 }
@@ -174,11 +165,9 @@ def smooth_ln_fcs(ln: torch.nn.Module,
         print('w_scales.pow(1 - alpha).min is zero, '
               'clamping w_scales.pow(1 - alpha) to 1e-4')
         w_scales_pow = w_scales_pow.clamp(min=1e-4)
-    scales = (act_scales.pow(alpha) /
-              w_scales_pow).clamp(min=1e-4).to(device).to(dtype)
+    scales = (act_scales.pow(alpha) / w_scales_pow).clamp(min=1e-4).to(device).to(dtype)
 
-    scales = scales / (scales[nonzero_positions].max() *
-                       scales[nonzero_positions].min()).sqrt()
+    scales = scales / (scales[nonzero_positions].max() * scales[nonzero_positions].min()).sqrt()
 
     scales[zero_positions] = 1
 
@@ -230,8 +219,7 @@ def smooth_fc_fcs(pre_fc: torch.nn.Module,
         print('w_scales.pow(1 - alpha).min is zero, '
               'clamping w_scales.pow(1 - alpha) to 1e-4')
         w_scales_pow = w_scales_pow.clamp(min=1e-4)
-    scales = (act_scales.pow(alpha) /
-              w_scales_pow).clamp(min=1e-4).to(device).to(dtype)
+    scales = (act_scales.pow(alpha) / w_scales_pow).clamp(min=1e-4).to(device).to(dtype)
     scales = scales / (scales.max() * scales.min()).sqrt()
 
     # (for qwen&baichuan) pre_fc is packed QKV, only V needs to scale
@@ -303,14 +291,12 @@ def quant_weights(model, fcs, bits, symmetry, group_size=-1, device='cuda'):
             q_linear = fc
             pack_or_skip = 'skipped'
         else:
-            quantizer = WeightQuantizer(bits, symmetry, 'per_group',
-                                        group_size)
-            fc.weight.data, scales, zeros = pseudo_quantize_tensor(
-                fc.weight.data, bits, group_size, return_scale_zeros=True)
-            q_linear = WeightOnlyQLinear.from_linear(fc,
-                                                     quantizer,
-                                                     qparams=QParams(
-                                                         scales, zeros))
+            quantizer = WeightQuantizer(bits, symmetry, 'per_group', group_size)
+            fc.weight.data, scales, zeros = pseudo_quantize_tensor(fc.weight.data,
+                                                                   bits,
+                                                                   group_size,
+                                                                   return_scale_zeros=True)
+            q_linear = WeightOnlyQLinear.from_linear(fc, quantizer, qparams=QParams(scales, zeros))
         setattr(parent, child_name, q_linear)
         fc.to('cpu')
         torch.cuda.empty_cache()
@@ -318,39 +304,24 @@ def quant_weights(model, fcs, bits, symmetry, group_size=-1, device='cuda'):
         print(f'{name} weight {pack_or_skip}.')
 
 
-def smooth_layers(layers,
-                  fc2fcs,
-                  norm2fcs,
-                  a_scales,
-                  group_size=-1,
-                  device='cuda'):
+def smooth_layers(layers, fc2fcs, norm2fcs, a_scales, group_size=-1, device='cuda'):
     """Apply weight smoothing based on input scales."""
 
     for l_name, layer in layers.items():
         layer.to(device)
         submodule_names = [name for name, _ in layer.named_modules()]
         for ln_name, fc_names in norm2fcs.items():
-            a_name = [
-                f'{l_name}.{n}' for n in fc_names if n in submodule_names
-            ][0]
+            a_name = [f'{l_name}.{n}' for n in fc_names if n in submodule_names][0]
 
             ln = layer.get_submodule(ln_name)
-            fcs = [
-                layer.get_submodule(n) for n in fc_names
-                if n in submodule_names
-            ]
+            fcs = [layer.get_submodule(n) for n in fc_names if n in submodule_names]
             smooth_ln_fcs(ln, fcs, a_scales[a_name], group_size)
 
         for f_name, fc_names in fc2fcs.items():
-            a_name = [
-                f'{l_name}.{n}' for n in fc_names if n in submodule_names
-            ][0]
+            a_name = [f'{l_name}.{n}' for n in fc_names if n in submodule_names][0]
 
             fc = layer.get_submodule(f_name)
-            fcs = [
-                layer.get_submodule(n) for n in fc_names
-                if n in submodule_names
-            ]
+            fcs = [layer.get_submodule(n) for n in fc_names if n in submodule_names]
 
             smooth_fc_fcs(fc, fcs, a_scales[a_name], group_size)
 
@@ -361,10 +332,7 @@ def smooth_layers(layers,
               f' max gpu memory: {max_memory:.2f} GB')
 
 
-def pseudo_quantize_tensor(w,
-                           w_bit=8,
-                           w_group_size=-1,
-                           return_scale_zeros=False):
+def pseudo_quantize_tensor(w, w_bit=8, w_group_size=-1, return_scale_zeros=False):
     """Pseudo quantize tensor."""
     org_w_shape = w.shape
     if w_group_size > 0:
@@ -386,21 +354,14 @@ def pseudo_quantize_tensor(w,
 
     if return_scale_zeros:
         zeros = zeros.view(org_w_shape[0], org_w_shape[-1] // w_group_size, -1)
-        scales = scales.view(org_w_shape[0], org_w_shape[-1] // w_group_size,
-                             -1)
+        scales = scales.view(org_w_shape[0], org_w_shape[-1] // w_group_size, -1)
         q_w = q_w.reshape(org_w_shape)
         return q_w, scales, zeros
     w = w.reshape(org_w_shape)
     return w
 
 
-def awq_layers(layers,
-               fc2fcs,
-               norm2fcs,
-               a_scales,
-               a_ratios=None,
-               group_size=-1,
-               device='cuda'):
+def awq_layers(layers, fc2fcs, norm2fcs, a_scales, a_ratios=None, group_size=-1, device='cuda'):
     """Apply awq based on input scales."""
 
     for l_name, layer in layers.items():

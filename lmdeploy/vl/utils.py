@@ -25,9 +25,7 @@ def encode_image_base64(image: Union[str, Image.Image]) -> str:
         if isinstance(image, str):
             url_or_path = image
             if url_or_path.startswith('http'):
-                response = requests.get(url_or_path,
-                                        headers=headers,
-                                        timeout=FETCH_TIMEOUT)
+                response = requests.get(url_or_path, headers=headers, timeout=FETCH_TIMEOUT)
                 response.raise_for_status()
                 buffered.write(response.content)
             elif os.path.exists(url_or_path):
@@ -64,9 +62,7 @@ def load_image(image_url: Union[str, Image.Image]) -> Image.Image:
         if isinstance(image_url, Image.Image):
             img = image_url
         elif image_url.startswith('http'):
-            response = requests.get(image_url,
-                                    headers=headers,
-                                    timeout=FETCH_TIMEOUT)
+            response = requests.get(image_url, headers=headers, timeout=FETCH_TIMEOUT)
             response.raise_for_status()
             img = Image.open(BytesIO(response.content))
         elif image_url.startswith('data:image'):

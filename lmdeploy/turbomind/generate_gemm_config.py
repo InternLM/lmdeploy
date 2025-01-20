@@ -52,8 +52,7 @@ def main(head_num: int = 32,
                              'triton_models', 'weights', 'config.yaml'))
         else:
             from transformers import AutoConfig
-            config = AutoConfig.from_pretrained(model_path,
-                                                trust_remote_code=True)
+            config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
 
             for key in ['language_config', 'llm_config', 'text_config']:
                 config = getattr(config, key, config)

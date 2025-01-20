@@ -54,8 +54,8 @@ with read_base():
     from opencompass.configs.datasets.wikibench.wikibench_gen_0978ad import \
         wikibench_datasets  # noqa: F401, E501
 
-datasets = sum((v for k, v in locals().items() if k.endswith('_datasets')
-                and 'scicode' not in k.lower() and 'teval' not in k), [])
+datasets = sum(
+    (v for k, v in locals().items() if k.endswith('_datasets') and 'scicode' not in k.lower() and 'teval' not in k), [])
 datasets += teval_en_datasets
 datasets += teval_zh_datasets
 datasets += SciCode_datasets

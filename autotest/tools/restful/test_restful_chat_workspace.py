@@ -12,8 +12,7 @@ def prepare_environment(request, config, worker_id):
     model = param['model']
     model_path = config.get('dst_path') + '/workspace_' + model
 
-    pid, startRes = start_restful_api(config, param, model, model_path,
-                                      'turbomind', worker_id)
+    pid, startRes = start_restful_api(config, param, model, model_path, 'turbomind', worker_id)
     yield param
     stop_restful_api(pid, startRes, param)
 
@@ -30,35 +29,24 @@ def getModelList(tp_num):
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.restful_api
 @pytest.mark.gpu_num_1
-@pytest.mark.parametrize('prepare_environment',
-                         getModelList(tp_num=1),
-                         indirect=True)
-def test_restful_chat_tp1(config, common_case_config, prepare_environment,
-                          worker_id):
+@pytest.mark.parametrize('prepare_environment', getModelList(tp_num=1), indirect=True)
+def test_restful_chat_tp1(config, common_case_config, prepare_environment, worker_id):
     if get_workerid(worker_id) is None:
         run_all_step(config, common_case_config)
     else:
-        run_all_step(config,
-                     common_case_config,
-                     worker_id=worker_id,
-                     port=DEFAULT_PORT + get_workerid(worker_id))
+        run_all_step(config, common_case_config, worker_id=worker_id, port=DEFAULT_PORT + get_workerid(worker_id))
 
 
 @pytest.mark.order(7)
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.restful_api
 @pytest.mark.gpu_num_2
-@pytest.mark.parametrize('prepare_environment',
-                         getModelList(tp_num=2),
-                         indirect=True)
+@pytest.mark.parametrize('prepare_environment', getModelList(tp_num=2), indirect=True)
 def test_restful_chat_tp2(config, common_case_config, worker_id):
     if get_workerid(worker_id) is None:
         run_all_step(config, common_case_config)
     else:
-        run_all_step(config,
-                     common_case_config,
-                     worker_id=worker_id,
-                     port=DEFAULT_PORT + get_workerid(worker_id))
+        run_all_step(config, common_case_config, worker_id=worker_id, port=DEFAULT_PORT + get_workerid(worker_id))
 
 
 @pytest.mark.order(7)
@@ -78,9 +66,4 @@ def test_restful_chat_tp2(config, common_case_config, worker_id):
 }],
                          indirect=True)
 def test_restful_chat_pr(config, common_case_config):
-    run_all_step(
-        config, {
-            key: value
-            for key, value in common_case_config.items()
-            if key == 'memory_test'
-        })
+    run_all_step(config, {key: value for key, value in common_case_config.items() if key == 'memory_test'})

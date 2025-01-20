@@ -18,10 +18,7 @@ from .utils.cudagraph import CudaGraphMixin
 class Starcoder2Attention(nn.Module):
     """Rewrite module of Starcoder2Attention."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         num_heads = config.num_attention_heads
@@ -75,8 +72,7 @@ class Starcoder2Attention(nn.Module):
         qkv_states = self.qkv_proj(hidden_states)
         # (-1, heads, head_dim)
         qkv_states = qkv_states.flatten(0, -2)
-        query_states, key_states, value_states = self.qkv_proj.split_qkv(
-            qkv_states)
+        query_states, key_states, value_states = self.qkv_proj.split_qkv(qkv_states)
 
         # apply rotary embedding
         cos, sin = rotary_pos_emb
@@ -96,10 +92,8 @@ class Starcoder2Attention(nn.Module):
             past_key_value[0],
             past_key_value[1],
             attn_metadata,
-            k_scales_zeros=None
-            if len(past_key_value) == 2 else past_key_value[2],
-            v_scales_zeros=None
-            if len(past_key_value) == 2 else past_key_value[3],
+            k_scales_zeros=None if len(past_key_value) == 2 else past_key_value[2],
+            v_scales_zeros=None if len(past_key_value) == 2 else past_key_value[3],
             inplace=True,
         )
         attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
@@ -112,10 +106,7 @@ class Starcoder2Attention(nn.Module):
 class Starcoder2MLP(nn.Module):
     """mlp."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         # gate up
@@ -164,18 +155,13 @@ class Starcoder2DecoderLayer(nn.Module):
         self.layer_idx = layer_idx
 
         # build attention layer
-        self.self_attn = Starcoder2Attention(config,
-                                             dtype=dtype,
-                                             device=device)
+        self.self_attn = Starcoder2Attention(config, dtype=dtype, device=device)
 
         # build MLP
         self.mlp = Starcoder2MLP(config, dtype=dtype, device=device)
 
         # build input layer norm
-        self.input_layernorm = LayerNorm(config.hidden_size,
-                                         eps=config.norm_epsilon,
-                                         dtype=dtype,
-                                         device=device)
+        self.input_layernorm = LayerNorm(config.hidden_size, eps=config.norm_epsilon, dtype=dtype, device=device)
 
         # build attention layer norm
         self.post_attention_layernorm = LayerNorm(config.hidden_size,
@@ -195,8 +181,7 @@ class Starcoder2DecoderLayer(nn.Module):
             residual = hidden_states
             hidden_states = self.input_layernorm(hidden_states)
         else:
-            hidden_states, residual = self.input_layernorm(
-                hidden_states, residual)
+            hidden_states, residual = self.input_layernorm(hidden_states, residual)
 
         # Self Attention
         hidden_states = self.self_attn(
@@ -207,8 +192,7 @@ class Starcoder2DecoderLayer(nn.Module):
         )
 
         # Fully Connected
-        hidden_states, residual = self.post_attention_layernorm(
-            hidden_states, residual)
+        hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
         hidden_states = self.mlp(hidden_states)
 
         outputs = (hidden_states, residual)
@@ -218,10 +202,7 @@ class Starcoder2DecoderLayer(nn.Module):
 class Starcoder2Model(nn.Module):
     """model."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
@@ -234,18 +215,12 @@ class Starcoder2Model(nn.Module):
 
         # build all decode layers
         self.layers = nn.ModuleList([
-            Starcoder2DecoderLayer(config,
-                                   layer_idx,
-                                   dtype=dtype,
-                                   device=device)
+            Starcoder2DecoderLayer(config, layer_idx, dtype=dtype, device=device)
             for layer_idx in range(config.num_hidden_layers)
         ])
 
         # build norm
-        self.norm = LayerNorm(config.hidden_size,
-                              eps=config.norm_epsilon,
-                              dtype=dtype,
-                              device=device)
+        self.norm = LayerNorm(config.hidden_size, eps=config.norm_epsilon, dtype=dtype, device=device)
 
         # build rotary embedding
         emb_type = RopeType.LinearScaling
@@ -379,9 +354,7 @@ class Starcoder2ForCausalLM(nn.Module, CudaGraphMixin):
         if vision_embeddings is not None and len(vision_embeddings) > 0:
             if inputs_embeds is None:
                 inputs_embeds = self.get_input_embeddings()(input_ids)
-            inputs_embeds[:,
-                          vision_embedding_indexing, :] = vision_embeddings.to(
-                              inputs_embeds)
+            inputs_embeds[:, vision_embedding_indexing, :] = vision_embeddings.to(inputs_embeds)
 
         # inputs of forward
         return dict(
@@ -406,8 +379,7 @@ class Starcoder2ForCausalLM(nn.Module, CudaGraphMixin):
         for name, loaded_weight in weights:
             if 'rotary_emb.inv_freq' in name:
                 continue
-            if ('rotary_emb.cos_cached' in name
-                    or 'rotary_emb.sin_cached' in name):
+            if ('rotary_emb.cos_cached' in name or 'rotary_emb.sin_cached' in name):
                 continue
             if self.config.tie_word_embeddings and 'lm_head.weight' in name:
                 continue
