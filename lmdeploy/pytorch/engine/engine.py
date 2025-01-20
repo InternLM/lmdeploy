@@ -110,6 +110,7 @@ class Engine:
 
     def __init__(self,
                  model_path: str,
+                 tokenizer: object,
                  engine_config: PytorchEngineConfig = None,
                  trust_remote_code: bool = True) -> None:
         if engine_config is None:
@@ -126,6 +127,7 @@ class Engine:
                                 logger=logger)
         checker.handle()
 
+        self.tokenizer = tokenizer
         adapters = engine_config.adapters
         self.engine_config = engine_config
         self.tp = engine_config.tp
@@ -201,14 +203,6 @@ class Engine:
         return cls(model_path=pretrained_model_name_or_path,
                    engine_config=engine_config,
                    trust_remote_code=trust_remote_code)
-
-    @property
-    def tokenizer(self):
-        """create tokenizer."""
-        from lmdeploy.tokenizer import Tokenizer
-        if not hasattr(self, '_tokenizer'):
-            self._tokenizer = Tokenizer(self.model_path)
-        return self._tokenizer
 
     def _download_adapters(self, adapters: Dict[str, str],
                            engine_config: PytorchEngineConfig):
