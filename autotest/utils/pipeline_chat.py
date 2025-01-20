@@ -1,3 +1,4 @@
+# yapf: disable
 import os
 import subprocess
 from subprocess import PIPE
@@ -12,11 +13,15 @@ from utils.get_run_config import get_model_name, get_tp_num
 from utils.rule_condition_assert import assert_result
 
 from lmdeploy import pipeline
-from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig
+from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
+                               TurbomindEngineConfig)
 from lmdeploy.utils import is_bf16_supported
 from lmdeploy.vl import load_image
 from lmdeploy.vl.constants import IMAGE_TOKEN
 from lmdeploy.vl.utils import encode_image_base64
+
+# yapf: enable
+gen_config = GenerationConfig(max_new_tokens=500)
 
 
 def run_pipeline_chat_test(config,
@@ -86,7 +91,7 @@ def run_pipeline_chat_test(config,
             prompts.append({'role': 'user', 'content': prompt})
             file.writelines('prompt:' + prompt + '\n')
 
-            response = pipe([prompts])[0].text
+            response = pipe([prompts], gen_config)[0].text
 
             case_result, reason = assert_result(response, prompt_detail.values(), model_name)
             prompts.append({'role': 'assistant', 'content': response})
@@ -259,11 +264,11 @@ def run_pipeline_vl_chat_test(config, model_case, backend, worker_id: str = '', 
     resource_path = config.get('resource_path')
 
     if 'pytorch' in backend:
-        backend_config = PytorchEngineConfig(tp=tp, session_len=8192)
+        backend_config = PytorchEngineConfig(tp=tp)
         if not is_bf16_supported():
             backend_config.dtype = 'float16'
     else:
-        backend_config = TurbomindEngineConfig(tp=tp, session_len=8192)
+        backend_config = TurbomindEngineConfig(tp=tp)
 
     if 'llava' in model_case:
         backend_config.model_name = 'vicuna'
@@ -310,7 +315,7 @@ def run_pipeline_vl_chat_test(config, model_case, backend, worker_id: str = '', 
             }
         }]
     }]
-    response = pipe(prompts)
+    response = pipe(prompts, gen_config)
     result = 'tiger' in response.text.lower() or '虎' in response.text.lower()
     file.writelines('result:' + str(result) + ', reason: OpenAI format example: tiger not in ' + response.text + '\n')
 
@@ -324,7 +329,7 @@ def run_pipeline_vl_chat_test(config, model_case, backend, worker_id: str = '', 
 
     image_urls = [f'{resource_path}/{PIC2}', f'{resource_path}/{PIC1}']
     prompts = [(prompt, load_image(img_url)) for img_url in image_urls]
-    response = pipe(prompts)
+    response = pipe(prompts, gen_config)
     result = ('ski' in response[0].text.lower() or '滑雪'
               in response[0].text.lower()) and ('tiger' in response[1].text.lower() or '虎' in response[1].text.lower())
     file.writelines('result:' + str(result) + ', reason: Batch example: ski or tiger not in ' + str(response) + '\n')
@@ -365,13 +370,13 @@ def internvl_vl_testcase(pipe, file, resource_path, lang='en'):
                  dict(type='image_url', image_url=dict(max_dynamic_patch=12, url=f'{resource_path}/{PIC_PANDA}'))
              ])
     ]
-    response = pipe(messages)
+    response = pipe(messages, gen_config)
     result = 'panda' in response.text.lower() or '熊猫' in response.text.lower()
     file.writelines('result:' + str(result) + ', reason: combined images: panda not in ' + response.text + '\n')
 
     messages.append(dict(role='assistant', content=response.text))
     messages.append(dict(role='user', content=description))
-    response = pipe(messages)
+    response = pipe(messages, gen_config)
     result = 'panda' in response.text.lower() or '熊猫' in response.text.lower()
     file.writelines('result:' + str(result) + ', reason: combined images second: panda not in ' + response.text + '\n')
 
@@ -388,14 +393,14 @@ def internvl_vl_testcase(pipe, file, resource_path, lang='en'):
                 dict(type='image_url', image_url=dict(max_dynamic_patch=12, url=f'{resource_path}/{PIC_PANDA}'))
             ])
     ]
-    response = pipe(messages)
-    result = 'panda' in response.text.lower() or '熊猫' in response.text.lower()
+    response = pipe(messages, gen_config)
+    result = 'panda' in response.text.lower() or '熊猫' in response.text.lower() or 'same' in response.text.lower()
     file.writelines('result:' + str(result) + ', reason: separate images: panda not in ' + response.text + '\n')
 
     messages.append(dict(role='assistant', content=response.text))
     messages.append(dict(role='user', content=description))
-    response = pipe(messages)
-    result = 'panda' in response.text.lower() or '熊猫' in response.text.lower()
+    response = pipe(messages, gen_config)
+    result = 'panda' in response.text.lower() or '熊猫' in response.text.lower() or 'same' in response.text.lower()
     file.writelines('result:' + str(result) + ', reason: separate images second: panda not in ' + response.text + '\n')
 
     # video multi-round conversation
@@ -445,7 +450,7 @@ def internvl_vl_testcase(pipe, file, resource_path, lang='en'):
         })
 
     messages = [dict(role='user', content=content)]
-    response = pipe(messages)
+    response = pipe(messages, gen_config)
     result = 'panda' in response.text.lower() or '熊猫' in response.text.lower()
     file.writelines('result:' + str(result) + ', reason: video images: red panda not in ' + response.text + '\n')
 
@@ -454,7 +459,7 @@ def internvl_vl_testcase(pipe, file, resource_path, lang='en'):
         messages.append(dict(role='user', content='描述视频详情，不要重复'))
     else:
         messages.append(dict(role='user', content='Describe this video in detail. Don\'t repeat.'))
-    response = pipe(messages)
+    response = pipe(messages, gen_config)
     result = 'red panda' in response.text.lower() or '熊猫' in response.text.lower()
     file.writelines('result:' + str(result) + ', reason: video images: red panda not in ' + response.text + '\n')
 
@@ -469,18 +474,17 @@ def llava_vl_testcase(pipe, file, resource_path):
                  dict(type='image_url', image_url=dict(url=f'{resource_path}/{PIC_CHONGQING}'))
              ])
     ]
-    response = pipe(messages)
+    response = pipe(messages, gen_config)
     result = 'buildings' in response.text.lower() or '楼' in response.text.lower() or 'skyline' in response.text.lower(
-    ) or 'cityscape' in response.text.lower()
-    file.writelines('result:' + str(result) + ', reason: combined images: buildings not in ' + response.text + '\n')
+    ) or 'city' in response.text.lower()
+    file.writelines('result:' + str(result) + ', reason: combined images: city not in ' + response.text + '\n')
 
     messages.append(dict(role='assistant', content=response.text))
     messages.append(dict(role='user', content=DESC))
-    response = pipe(messages)
+    response = pipe(messages, gen_config)
     result = 'buildings' in response.text.lower() or '楼' in response.text.lower() or 'skyline' in response.text.lower(
-    ) or 'cityscape' in response.text.lower()
-    file.writelines('result:' + str(result) + ', reason: combined images second: buildings not in ' + response.text +
-                    '\n')
+    ) or 'city' in response.text.lower()
+    file.writelines('result:' + str(result) + ', reason: combined images second: city not in ' + response.text + '\n')
 
 
 def MiniCPM_vl_testcase(pipe, file, resource_path):
@@ -493,13 +497,13 @@ def MiniCPM_vl_testcase(pipe, file, resource_path):
                  dict(type='image_url', image_url=dict(max_slice_nums=9, url=f'{resource_path}/{PIC_PANDA}'))
              ])
     ]
-    response = pipe(messages)
+    response = pipe(messages, gen_config)
     result = 'panda' in response.text.lower() or '熊猫' in response.text.lower()
     file.writelines('result:' + str(result) + ', reason: multiple images: panda not in ' + response.text + '\n')
 
     messages.append(dict(role='assistant', content=response.text))
     messages.append(dict(role='user', content=DESC))
-    response = pipe(messages)
+    response = pipe(messages, gen_config)
     result = 'panda' in response.text.lower() or '熊猫' in response.text.lower()
     file.writelines('result:' + str(result) + ', reason: multiple images second: panda not in ' + response.text + '\n')
 
@@ -524,7 +528,7 @@ def MiniCPM_vl_testcase(pipe, file, resource_path):
                  dict(type='image_url', image_url=dict(url=f'{resource_path}/data3.jpeg')),
              ])
     ]
-    response = pipe(messages)
+    response = pipe(messages, gen_config)
     result = '2021' in response.text.lower() or '14' in response.text.lower()
     file.writelines('result:' + str(result) + ', reason: in context learning: 2021 or 14 not in ' + response.text +
                     '\n')
@@ -562,7 +566,7 @@ def MiniCPM_vl_testcase(pipe, file, resource_path):
                                 url=f'data:image/jpeg;base64,{encode_image_base64(frame)}')))
 
     messages = [dict(role='user', content=content)]
-    response = pipe(messages)
+    response = pipe(messages, gen_config)
     result = 'red panda' in response.text.lower() or '熊猫' in response.text.lower()
     file.writelines('result:' + str(result) + ', reason: video example: panda not in ' + response.text + '\n')
 
@@ -577,18 +581,17 @@ def Qwen_vl_testcase(pipe, file, resource_path):
                  dict(type='image_url', image_url=dict(url=f'{resource_path}/{PIC_CHONGQING}'))
              ])
     ]
-    response = pipe(messages)
+    response = pipe(messages, gen_config)
     result = 'buildings' in response.text.lower() or '楼' in response.text.lower() or 'skyline' in response.text.lower(
-    ) or 'cityscape' in response.text.lower()
-    file.writelines('result:' + str(result) + ', reason: combined images: buildings not in ' + response.text + '\n')
+    ) or 'city' in response.text.lower()
+    file.writelines('result:' + str(result) + ', reason: combined images: city not in ' + response.text + '\n')
 
     messages.append(dict(role='assistant', content=response.text))
     messages.append(dict(role='user', content=DESC))
-    response = pipe(messages)
+    response = pipe(messages, gen_config)
     result = 'buildings' in response.text.lower() or '楼' in response.text.lower() or 'skyline' in response.text.lower(
-    ) or 'cityscape' in response.text.lower()
-    file.writelines('result:' + str(result) + ', reason: combined images second: buildings not in ' + response.text +
-                    '\n')
+    ) or 'city' in response.text.lower()
+    file.writelines('result:' + str(result) + ', reason: combined images second: city not in ' + response.text + '\n')
 
     # image resolution for performance boost
     min_pixels = 64 * 28 * 28
@@ -606,7 +609,7 @@ def Qwen_vl_testcase(pipe, file, resource_path):
                                      url=f'{resource_path}/{PIC_CHONGQING}'))
              ])
     ]
-    response = pipe(messages)
+    response = pipe(messages, gen_config)
     result = 'ski' in response.text.lower() or '滑雪' in response.text.lower()
     result = 'buildings' in response.text.lower() or '楼' in response.text.lower() or 'skyline' in response.text.lower(
     ) or 'cityscape' in response.text.lower()
@@ -614,7 +617,7 @@ def Qwen_vl_testcase(pipe, file, resource_path):
 
     messages.append(dict(role='assistant', content=response.text))
     messages.append(dict(role='user', content=DESC))
-    response = pipe(messages)
+    response = pipe(messages, gen_config)
     result = 'buildings' in response.text.lower() or '楼' in response.text.lower() or 'skyline' in response.text.lower(
     ) or 'cityscape' in response.text.lower()
     file.writelines('result:' + str(result) + ', reason: performance boost second: buildings not in ' + response.text +

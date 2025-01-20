@@ -54,10 +54,6 @@ with read_base():
         models as hf_internlm2_chat_7b  # noqa: F401, E501
     from opencompass.configs.models.hf_internlm.hf_internlm2_chat_20b import \
         models as hf_internlm2_chat_20b  # noqa: F401, E501
-    from opencompass.configs.models.hf_internlm.hf_internlm_chat_7b import \
-        models as hf_internlm_chat_7b  # noqa: F401, E501
-    from opencompass.configs.models.hf_internlm.hf_internlm_chat_20b import \
-        models as hf_internlm_chat_20b  # noqa: F401, E501
     from opencompass.configs.models.hf_internlm.lmdeploy_internlm2_5_7b_chat import \
         models as lmdeploy_internlm2_5_7b_chat  # noqa: F401, E501
     from opencompass.configs.models.hf_internlm.lmdeploy_internlm2_5_20b_chat import \
@@ -131,11 +127,6 @@ llama2_meta_template = dict(round=[
 MAX_SESSION_LEN = 2048
 MAX_NEW_TOKENS = 1024
 
-# ===== Configs for internlm/internlm-chat-7b =====
-turbomind_internlm_chat_7b = deepcopy(*lmdeploy_internlm_chat_7b)
-turbomind_internlm_chat_7b_4bits = deepcopy(*lmdeploy_internlm_chat_7b)
-pytorch_internlm_chat_7b = deepcopy(*lmdeploy_internlm_chat_7b)
-
 # ===== Configs for internlm/internlm2-chat-7b =====
 turbomind_internlm2_chat_7b = deepcopy(*lmdeploy_internlm2_chat_7b)
 turbomind_internlm2_chat_7b_4bits = deepcopy(*lmdeploy_internlm2_chat_7b)
@@ -150,6 +141,18 @@ turbomind_internlm2_5_7b_chat_kvint4 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
 turbomind_internlm2_5_7b_chat_kvint8 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
 pytorch_internlm2_5_7b_chat = deepcopy(*lmdeploy_internlm2_5_7b_chat)
 pytorch_internlm2_5_7b_chat_w8a8 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
+turbomind_internlm2_5_7b_chat_batch1 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
+turbomind_internlm2_5_7b_chat_batch1_4bits = deepcopy(*lmdeploy_internlm2_5_7b_chat)
+
+turbomind_internlm3_8b_instruct = deepcopy(*lmdeploy_internlm2_5_7b_chat)
+turbomind_internlm3_8b_instruct_4bits = deepcopy(*lmdeploy_internlm2_5_7b_chat)
+turbomind_internlm3_8b_instruct_kvint4 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
+turbomind_internlm3_8b_instruct_kvint8 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
+pytorch_internlm3_8b_instruct = deepcopy(*lmdeploy_internlm2_5_7b_chat)
+pytorch_internlm3_8b_instruct_w8a8 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
+for model in [v for k, v in locals().items() if 'internlm3_8b_instruct' in k]:
+    model['abbr'] = 'turbomind-internlm3-8b-instruct'
+    model['path'] = 'internlm/internlm3-8b-instruct'
 
 # ===== Configs for internlm/internlm2_5_20b_chat =====
 turbomind_internlm2_5_20b_chat = deepcopy(*lmdeploy_internlm2_5_20b_chat)
@@ -218,9 +221,9 @@ turbomind_llama2_7b_chat_kvint4 = deepcopy(*lmdeploy_llama2_7b_chat)
 turbomind_llama2_7b_chat_kvint8 = deepcopy(*lmdeploy_llama2_7b_chat)
 
 for model in [v for k, v in locals().items() if k.startswith('turbomind_')]:
-    model['engine_config']['max_batch_size'] = 1
+    model['engine_config']['max_batch_size'] = 512
     model['gen_config']['do_sample'] = False
-    model['batch_size'] = 100
+    model['batch_size'] = 1000
 
 for model in [v for k, v in locals().items() if k.endswith('_4bits')]:
     model['engine_config']['model_format'] = 'awq'
@@ -242,16 +245,21 @@ for model in [v for k, v in locals().items() if k.endswith('_kvint8')]:
 for model in [v for k, v in locals().items() if k.startswith('pytorch_')]:
     model['abbr'] = model['abbr'].replace('turbomind', 'pytorch')
     model['backend'] = 'pytorch'
-    model['engine_config']['max_batch_size'] = 1
+    model['engine_config']['max_batch_size'] = 512
     model['gen_config']['do_sample'] = False
-    model['batch_size'] = 100
+    model['batch_size'] = 1000
+
+for model in [v for k, v in locals().items() if '_batch1' in k]:
+    model['abbr'] = model['abbr'] + '_batch1'
+    model['engine_config']['max_batch_size'] = 1
+    model['batch_size'] = 1
 
 basic_pytorch_chat_tp1 = dict(type=TurboMindModelwithChatTemplate,
-                              engine_config=dict(session_len=MAX_SESSION_LEN, max_batch_size=1, tp=1),
+                              engine_config=dict(session_len=MAX_SESSION_LEN, max_batch_size=512, tp=1),
                               gen_config=dict(do_sample=False, max_new_tokens=MAX_NEW_TOKENS),
                               max_out_len=MAX_NEW_TOKENS,
                               max_seq_len=MAX_SESSION_LEN,
-                              batch_size=100,
+                              batch_size=1000,
                               run_cfg=dict(num_gpus=1))
 
 # ===== Configs for Qwen/Qwen1.5-MoE-A2.7B-Chat =====
