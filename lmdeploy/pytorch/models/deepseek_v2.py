@@ -332,7 +332,7 @@ class MoEGate(nn.Module):
         if self.topk_method == 'greedy':
             topk_weight, topk_idx = self.softmax_topk(router_logits)
         elif self.topk_method == 'group_limited_greedy':
-            scores = self._compute_scores(router_logits)
+            scores = router_logits
             grouped_logits = scores.unflatten(-1, (self.n_group, -1))
             group_scores = (grouped_logits.max(-1).values)
             group_idx = torch.topk(group_scores,
