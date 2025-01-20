@@ -536,9 +536,13 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
         """load weights."""
 
         lang_prefix = 'language_model.'
+        lang_prefix_length = len(lang_prefix)
+        new_weights = dict()
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:
             if name.startswith(lang_prefix):
+                new_key = name[lang_prefix_length:]
+                new_weights[new_key] = loaded_weight
                 continue
 
             if 'qkv' in name:
@@ -550,14 +554,6 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
             else:
                 param = params_dict[name]
                 load_weight(param, loaded_weight)
-
-        lang_prefix_length = len(lang_prefix)
-        new_weights = dict()
-        for key, val in weights:
-            if not key.startswith(lang_prefix):
-                continue
-            new_key = key[lang_prefix_length:]
-            new_weights[new_key] = val
 
         self.language_model.load_weights(new_weights.items())
 

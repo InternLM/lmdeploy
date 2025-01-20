@@ -95,7 +95,9 @@ class LinearWeights(nn.Module):
             weight = loaded_weight.chunk(world_size, dim=0)[rank]
         elif shard_id == 'down':
             param_data = param.data[expert_id]
-            weight = loaded_weight.chunk(world_size, dim=1)[rank]
+            # weight is not contiguous, chunk and copy in cpu is slow
+            weight = loaded_weight.to(param_data.device)
+            weight = weight.chunk(world_size, dim=1)[rank]
         else:
             raise RuntimeError(f'Unknown shard_id: {shard_id}')
         param_data.copy_(weight)
@@ -403,6 +405,7 @@ class LinearWeightsBlockedF8(LinearWeights):
             weight = loaded_weight.chunk(world_size, dim=0)[rank]
         elif shard_id == 'down':
             param_data = param.data[expert_id]
+            loaded_weight = loaded_weight.to(param_data.device)
             weight = loaded_weight.chunk(world_size, dim=1)[rank]
         else:
             raise RuntimeError(f'Unknown shard_id: {shard_id}')
