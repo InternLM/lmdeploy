@@ -125,6 +125,7 @@ class LoRA(nn.Module):
 
         if self.is_tp and not self.colwise:
             world_size, rank = get_world_rank()
+            loaded_weight = loaded_weight.to(param_r.device)
             loaded_weight = loaded_weight.chunk(world_size, dim=1)[rank]
 
         param_r.copy_(loaded_weight)
@@ -888,6 +889,7 @@ class W8A8Linear(nn.Module):
         if loaded_weight.dim() == 2 and param.dtype in (torch.int8,
                                                         torch.float8_e4m3fn,
                                                         torch.float8_e5m2):
+            loaded_weight = loaded_weight.to(param.device)
             weight = loaded_weight.chunk(world_size, 1)[rank]
             return default_weight_loader(param, weight)
         elif loaded_weight.dim() == 2 and loaded_weight.size(1) == 1:
