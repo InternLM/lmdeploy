@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import json
 import os.path as osp
-from typing import List
 
 import torch
 from safetensors.torch import safe_open
@@ -92,26 +91,26 @@ def _get_weight_path(model_path: str, weight_type: str):
     return weight_path, weight_name
 
 
-def _get_safetensors_weights_iterator(hf_files: List[str], disable_tqdm: bool):
+def _get_safetensors_weights_iterator(file: str, prefix: str):
     """get safeternsors weights iterator."""
-    for file in tqdm(hf_files,
-                     desc='Loading weights from safetensors',
-                     disable=disable_tqdm):
-        with safe_open(file, framework='pt') as f:
-            for name in f.keys():
-                param = f.get_tensor(name)
-                yield name, param
+    with safe_open(file, framework='pt') as f:
+        for name in f.keys():
+            param = f.get_tensor(name)
+            if prefix is not None:
+                name = f'{prefix}{name}'
+            yield name, param
 
 
-def _get_pt_weights_iterator(hf_files: List[str], disable_tqdm: bool):
+def _get_pt_weights_iterator(file: str, prefix: str):
     """get pt weights iterator."""
-    for file in tqdm(hf_files,
-                     desc='Loading weights from pt ckpt',
-                     disable=disable_tqdm):
-        state = torch.load(file, weights_only=True, map_location='cpu')
+    state = torch.load(file, weights_only=True, map_location='cpu')
+    if prefix is None:
         yield from state.items()
-        del state
-        torch.cuda.empty_cache()
+    else:
+        for k, v in state.items():
+            yield f'{prefix}{k}', v
+    del state
+    torch.cuda.empty_cache()
 
 
 class ModelWeightLoader:
@@ -139,16 +138,13 @@ class ModelWeightLoader:
             path, _ = _get_weight_path(model_path, weight_type)
             return (path, )
 
-    def _get_weights_iterator(self, paths: List[str], disable_tqdm: bool):
+    def _get_weights_iterator(self, path: str):
         """get weights iterator."""
         if self._weight_type == 'safetensors':
             weights_iterator = _get_safetensors_weights_iterator(
-                paths, disable_tqdm)
+                path, self._prefix)
         else:
-            weights_iterator = _get_pt_weights_iterator(paths, disable_tqdm)
-        if self._prefix is not None:
-            weights_iterator = ((self._prefix + name, tensor)
-                                for name, tensor in weights_iterator)
+            weights_iterator = _get_pt_weights_iterator(path, self._prefix)
         return weights_iterator
 
     def load_model_weights(
@@ -161,8 +157,12 @@ class ModelWeightLoader:
         paths = self._shard_paths
         _, rank = get_world_rank()
         disable_tqdm = rank != 0
-        weights_iterator = self._get_weights_iterator(paths, disable_tqdm)
-        model.load_weights(weights_iterator)
+
+        for path in tqdm(paths,
+                         desc='Loading weights from safetensors',
+                         disable=disable_tqdm):
+            weights_iterator = self._get_weights_iterator(path)
+            model.load_weights(weights_iterator)
         if device is not None:
             device = model.to(device)
 
