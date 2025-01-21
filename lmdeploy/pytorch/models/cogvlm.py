@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-# yapf: disable
+
 from argparse import Namespace
 from typing import Any, Iterable, List, Optional, Tuple
 
@@ -20,8 +20,6 @@ from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
 from .utils.model import DeployModelMixin
-
-# yapf: enable
 
 
 class VisionExpertAttention(nn.Module):

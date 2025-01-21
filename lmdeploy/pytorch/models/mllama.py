@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-# yapf: disable
+
 from typing import Any, Iterable, List, Optional, Tuple
 
 import torch
@@ -20,8 +20,6 @@ from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin, next_power_of_2
 from .utils.model import DeployModelMixin
-
-# yapf: enable
 
 MLLAMA_IMAGE_TOKEN_ID = 128256
 MLLAMA_IMAGE_TOKEN = '<|image|>'

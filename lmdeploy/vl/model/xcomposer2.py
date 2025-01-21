@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-# yapf: disable
+
 import enum
 import os
 import sys
@@ -15,7 +15,6 @@ from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
 from lmdeploy.vl.model.utils import add_device_hook, disable_logging, rewrite_ctx
 
-# yapf: enable
 logger = get_logger('lmdeploy')
 
 

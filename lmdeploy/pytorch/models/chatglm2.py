@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-# yapf: disable
+
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import torch
@@ -18,7 +18,6 @@ from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 from .utils.cudagraph import CudaGraphMixin
 from .utils.model import DeployModelMixin
 
-# yapf: enable
 LANGUAGE_TOKEN_TYPE = 0
 VISION_TOKEN_TYPE = 1
 

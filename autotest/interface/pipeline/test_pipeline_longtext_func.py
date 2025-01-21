@@ -1,4 +1,3 @@
-# yapf: disable
 import json
 import os
 from multiprocessing import Process
@@ -11,7 +10,6 @@ from utils.pipeline_chat import assert_pipeline_common_log, save_pipeline_common
 
 from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
 
-# yapf: enable
 SESSION_LEN = 198000
 SESSION_LEN_PASSKEY = 168000
 SESSION_LEN_PASSKEY_1M = 1048576

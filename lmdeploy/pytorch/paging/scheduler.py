@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
-# yapf: disable
+
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Dict, List
@@ -12,7 +12,6 @@ from ..messages import MessageStatus, SchedulerSequence, SchedulerSession, Seque
 from .block_manager import build_block_manager
 from .block_trie import BlockTrie
 
-# yapf: enable
 logger = get_logger('lmdeploy')
 
 SeqList = List[SchedulerSequence]

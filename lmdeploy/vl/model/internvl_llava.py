@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-# yapf: disable
+
 import warnings
 from contextlib import contextmanager
 from typing import Dict, List
@@ -13,7 +13,6 @@ from lmdeploy.vl.model.utils import rewrite_ctx
 
 from .utils import disable_logging, disable_transformers_logging
 
-# yapf: enable
 logger = get_logger('lmdeploy')
 
 
@@ -37,10 +36,9 @@ def _intern_vision_model__from_pretrained(vision_tower_name: str):
 
 def _intern_vl_model__from_pretrained(vision_tower_name: str):
     logger.info(f'init empty InternVLModel: {vision_tower_name}')
-    # yapf: disable
+
     from llava.model.multimodal_encoder.internvl_14b.modeling_internvl import InternVLConfig, InternVLModel
 
-    # yapf: enable
     config = InternVLConfig.from_pretrained(vision_tower_name)
     model = InternVLModel._from_config(config)
     model.requires_grad_(False)

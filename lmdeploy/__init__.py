@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-# yapf: disable
+
 from .api import client, pipeline, serve
 from .messages import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, VisionConfig
 from .model import ChatTemplateConfig
@@ -10,4 +10,3 @@ __all__ = [
     'pipeline', 'serve', 'client', 'Tokenizer', 'GenerationConfig', '__version__', 'version_info', 'ChatTemplateConfig',
     'PytorchEngineConfig', 'TurbomindEngineConfig', 'VisionConfig'
 ]
-# yapf: enable

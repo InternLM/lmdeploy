@@ -1,12 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-# yapf: disable
+
 from torch import Tensor, nn
 from transformers import PretrainedConfig
 
 from ..backends import OpType, get_backend
 from ..backends.rotary_embedding import Llama3Parameters, LongRoPEScalingParameters, RopeType, YarnParameters
-
-# yapf: enable
 
 
 def _get_default_rope_parameters(config: PretrainedConfig):

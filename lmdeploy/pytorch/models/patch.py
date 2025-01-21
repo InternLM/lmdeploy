@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-# yapf: disable
+
 import importlib
 import inspect
 import os.path as osp
@@ -17,7 +17,6 @@ from ..config import ModelConfig
 from ..devices import get_device_manager
 from .module_map import CUSTOM_MODULE_MAP, DEVICE_SPECIAL_MODULE_MAP, MODULE_MAP
 
-# yapf: enable
 logger = get_logger('lmdeploy')
 
 
@@ -205,9 +204,7 @@ def add_adapters(model: torch.nn.Module,
     from peft import PeftConfig
     from peft.tuners.lora import LoraConfig
 
-    # yapf: disable
     from lmdeploy.pytorch.adapter.adapter import find_all_target, get_ranks_and_scalings, load_lora_weights
-    # yapf: enable
     from lmdeploy.pytorch.nn.linear import LoRA
     num_adapters = len(adapters)
     if num_adapters == 0:

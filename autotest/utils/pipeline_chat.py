@@ -1,4 +1,3 @@
-# yapf: disable
 import os
 import subprocess
 from subprocess import PIPE
@@ -19,7 +18,6 @@ from lmdeploy.vl import load_image
 from lmdeploy.vl.constants import IMAGE_TOKEN
 from lmdeploy.vl.utils import encode_image_base64
 
-# yapf: enable
 gen_config = GenerationConfig(max_new_tokens=500)
 
 

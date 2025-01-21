@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # Modified from https://github.com/haotian-liu/LLaVA.git
-# yapf: disable
+
 import ast
 import math
 import warnings
@@ -15,7 +15,6 @@ from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.llava_hf import VISION_MODELS, LlavaHfVisionModel
 from lmdeploy.vl.model.utils import disable_logging, rewrite_ctx
 
-# yapf: enable
 logger = get_logger('lmdeploy')
 
 
@@ -323,10 +322,9 @@ class LlavaVisionModel(LlavaHfVisionModel):
         Return:
             the message list with forwarding results included
         """
-        # yapf: disable
+
         from llava.model.llava_arch import get_anyres_image_grid_shape, unpad_image
 
-        # yapf: enable
         inputs = [x['content'] for x in messages if x['role'] == 'preprocess']
         inputs = inputs[0]
         outputs = []

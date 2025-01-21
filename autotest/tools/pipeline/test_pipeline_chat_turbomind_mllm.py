@@ -1,4 +1,3 @@
-# yapf: disable
 import os
 from multiprocessing import get_context
 
@@ -6,7 +5,6 @@ import pytest
 from utils.config_utils import get_all_model_list, get_cuda_id_by_workerid
 from utils.pipeline_chat import assert_pipeline_vl_chat_log, run_pipeline_vl_chat_test
 
-# yapf: enable
 BACKEND = 'turbomind'
 
 

@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-# yapf: disable
 import argparse
 import asyncio
 import csv
@@ -18,7 +17,6 @@ from lmdeploy.cli.utils import ArgumentHelper, DefaultsAndTypesHelpFormatter
 from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig
 from lmdeploy.utils import get_logger
 
-# yapf: enable
 get_logger('lmdeploy').setLevel('ERROR')
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 

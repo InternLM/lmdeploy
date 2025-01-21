@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-# yapf: disable
+
 from functools import partial
 from typing import Union
 
@@ -13,7 +13,6 @@ from lmdeploy.lite.utils import (bimap_name_mod, collect_target_modules, concat_
                                  split_decoder_layer_inputs)
 
 
-# yapf: enable
 class CalibrationContext():
     """Calibration context manager for model quantization.
 

@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-# yapf: disable
+
 from typing import Callable, Dict, Optional
 
 import torch
@@ -8,8 +8,6 @@ from lmdeploy.lite.utils import (QParams, cal_qparams_per_channel_absmax, cal_qp
                                  cal_qparams_per_group_absmax, cal_qparams_per_group_minmax,
                                  cal_qparams_per_tensor_absmax, cal_qparams_per_tensor_minmax, precise_round)
 from lmdeploy.lite.utils.global_avail import GlobalAvailMixin
-
-# yapf: enable
 
 
 class WeightQuantizer(GlobalAvailMixin):

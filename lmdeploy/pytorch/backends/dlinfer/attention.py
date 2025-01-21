@@ -1,13 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-# yapf: disable
+
 from dataclasses import dataclass
 from typing import Dict, Optional, Sequence
 
 from torch import Tensor
 
 from ..attention import AttentionBuilder, AttentionImpl, AttentionMetadata
-
-# yapf: enable
 
 
 @dataclass
@@ -51,10 +49,9 @@ class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
             causal=causal,
             **kwargs,
         )
-        # yapf: disable
+
         from lmdeploy.pytorch.kernels.dlinfer import fill_kv_cache, paged_attention_fwd
 
-        # yapf: enable
         self.fill_kv_cache = fill_kv_cache
         self.paged_attention_fwd = paged_attention_fwd
 

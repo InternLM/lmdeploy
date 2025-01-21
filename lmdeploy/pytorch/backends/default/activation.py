@@ -1,10 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-# yapf: disable
+
 from torch import nn
 
 from ..activation import GeluAndMulBuilder, GeluAndMulImpl, SiluAndMulBuilder, SiluAndMulImpl
-
-# yapf: enable
 
 
 class DefaultSiluAndMulImpl(SiluAndMulImpl):

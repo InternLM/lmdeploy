@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-# yapf: disable
 import argparse
 import asyncio
 import json
@@ -17,7 +16,6 @@ from lmdeploy.pytorch.engine import EngineInstance
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import get_logger
 
-# yapf: enable
 get_logger('lmdeploy').setLevel('ERROR')
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 

@@ -1,9 +1,7 @@
-# yapf: disable
 import pytest
 from utils.config_utils import get_torch_model_list, get_workerid
 from utils.run_restful_chat import run_vl_testcase, start_restful_api, stop_restful_api
 
-# yapf: enable
 BASE_HTTP_URL = 'http://localhost'
 DEFAULT_PORT = 23333
 

@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-# yapf: disable
+
 import os.path as osp
 import warnings
 from contextlib import contextmanager
@@ -14,7 +14,6 @@ from lmdeploy.vl.model.utils import add_device_hook, disable_logging, disable_tr
 logger = get_logger('lmdeploy')
 
 
-# yapf: enable
 def check_mini_gemini_install():
     """check mini gemini install."""
     try:
@@ -27,10 +26,9 @@ def check_mini_gemini_install():
 
 
 def _build_vision_tower(vision_tower_cfg, **kwargs):
-    # yapf: disable
+
     from mgm.model.multimodal_encoder.builder import CLIPVisionTower, EVAVisionTower
 
-    # yapf: enable
     vision_tower = getattr(vision_tower_cfg, 'mm_vision_tower', getattr(vision_tower_cfg, 'vision_tower', None))
     image_processor = getattr(vision_tower_cfg, 'image_processor',
                               getattr(vision_tower_cfg, 'image_processor', '../processor/clip-patch14-224'))
@@ -44,10 +42,9 @@ def _build_vision_tower(vision_tower_cfg, **kwargs):
 
 
 def _build_vision_tower_aux(vision_tower_cfg, **kwargs):
-    # yapf: disable
+
     from mgm.model.multimodal_encoder.builder import CLIPVisionTower, OpenCLIPVisionTower
 
-    # yapf: enable
     vision_tower_aux = getattr(vision_tower_cfg, 'mm_vision_tower_aux',
                                getattr(vision_tower_cfg, 'vision_tower_aux', None))
 

@@ -1,10 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-# yapf: disable
+
 import torch
 
 from ..multinomial_sampling import MultinomialSamplingBuilder, MultinomialSamplingImpl
-
-# yapf: enable
 
 
 class DefaultMultinomialSamplingImpl(MultinomialSamplingImpl):

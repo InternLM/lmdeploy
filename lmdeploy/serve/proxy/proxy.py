@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-# yapf: disable
+
 import asyncio
 import copy
 import json
@@ -23,12 +23,11 @@ from pydantic import BaseModel, Field
 from requests.exceptions import RequestException
 
 from lmdeploy.serve.openai.api_server import check_api_key, create_error_response
-from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, CompletionRequest, ModelCard,  # noqa: E501
-                                            ModelList, ModelPermission)
+from lmdeploy.serve.openai.protocol import ModelCard  # noqa: E501
+from lmdeploy.serve.openai.protocol import ChatCompletionRequest, CompletionRequest, ModelList, ModelPermission
 from lmdeploy.serve.proxy.constants import API_READ_TIMEOUT, LATENCY_DEQUE_LEN, ErrorCodes, Strategy, err_msg
 from lmdeploy.utils import get_logger
 
-# yapf: enable
 logger = get_logger('lmdeploy')
 
 
@@ -294,7 +293,7 @@ class NodeManager:
             async with httpx.AsyncClient() as client:
                 response = await client.post(node_url + endpoint, json=request, timeout=API_READ_TIMEOUT)
                 return response.text
-        except (Exception, GeneratorExit, RequestException, asyncio.CancelledError) as e:  # noqa  # yapf: disable
+        except (Exception, GeneratorExit, RequestException, asyncio.CancelledError) as e:  # noqa
             logger.error(f'catched an exception: {e}')
             return self.handle_api_timeout(node_url)
 

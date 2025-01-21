@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-# yapf: disable
+
 import inspect
 import os
 import sys
@@ -12,8 +12,6 @@ from safetensors.torch import load_file
 from transformers.utils import (SAFE_WEIGHTS_INDEX_NAME, SAFE_WEIGHTS_NAME, WEIGHTS_INDEX_NAME, WEIGHTS_NAME,
                                 is_safetensors_available)
 from transformers.utils.hub import get_checkpoint_shard_files
-
-# yapf: enable
 
 
 def load_weight_ckpt(ckpt: str) -> Dict[str, torch.Tensor]:

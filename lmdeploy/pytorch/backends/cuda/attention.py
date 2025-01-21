@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-# yapf: disable
+
 from dataclasses import dataclass
 from typing import Literal
 
@@ -8,8 +8,6 @@ import torch
 from lmdeploy.pytorch.distributed import get_world_rank
 
 from ..attention import AttentionBuilder, AttentionImpl, AttentionMetadata
-
-# yapf: enable
 
 
 @dataclass
@@ -60,11 +58,10 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             **kwargs,
         )
         assert not (alibi and not causal)
-        # yapf: disable
+
         from lmdeploy.pytorch.kernels.cuda import (alibi_paged_attention_fwd, fill_kv_cache, flash_attention_fwd,
                                                    flatten_kv_cache, paged_attention_fwd)
 
-        # yapf: enable
         self.fill_kv_cache = fill_kv_cache
         self.paged_attention_fwd = paged_attention_fwd
         self.alibi_paged_attention_fwd = alibi_paged_attention_fwd

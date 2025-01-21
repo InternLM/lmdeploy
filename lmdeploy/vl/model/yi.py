@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-# yapf: disable
+
 import os
 from contextlib import contextmanager
 from os import path as osp
@@ -13,7 +13,6 @@ from lmdeploy.vl.model.llava import LlavaVisionModel, check_llava_install, proce
 
 from .utils import disable_transformers_logging, rewrite_ctx
 
-# yapf: enable
 _model_path = None
 
 

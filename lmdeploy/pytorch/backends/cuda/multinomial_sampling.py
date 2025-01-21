@@ -1,12 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-# yapf: disable
+
 import torch
 
 from lmdeploy.pytorch.kernels.cuda import multinomial_sampling
 
 from ..multinomial_sampling import MultinomialSamplingBuilder, MultinomialSamplingImpl
-
-# yapf: enable
 
 
 class TritonMultinomialSamplingImpl(MultinomialSamplingImpl):

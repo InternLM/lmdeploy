@@ -1,9 +1,7 @@
-# yapf: disable
 from utils.restful_return_check import assert_completions_batch_return, assert_completions_stream_return
 
 from lmdeploy.serve.openai.api_client import APIClient
 
-# yapf: enable
 BASE_HTTP_URL = 'http://localhost'
 DEFAULT_PORT = 23333
 MODEL = 'internlm/internlm2_5-20b'

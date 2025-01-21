@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-# yapf: disable
+
 import math
 
 import torch
@@ -7,8 +7,6 @@ from torch import nn
 
 from ..rotary_embedding import (Llama3Parameters, LongRoPEScalingParameters, RopeType, RotaryEmbeddingBuilder,
                                 RotaryEmbeddingImpl, YarnParameters)
-
-# yapf: enable
 
 
 def _rotary_embedding_fwd(position_ids: torch.Tensor,

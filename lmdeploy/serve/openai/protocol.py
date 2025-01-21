@@ -106,19 +106,20 @@ class ResponseFormat(BaseModel):
 class ChatCompletionRequest(BaseModel):
     """Chat completion request."""
     model: str
-    # yapf: disable
+
     messages: Union[str, List[Dict[str, Any]]] = Field(examples=[[{'role': 'user', 'content': 'hi'}]])  # noqa
     temperature: Optional[float] = 0.7
     top_p: Optional[float] = 1.0
     tools: Optional[List[Tool]] = Field(default=None, examples=[None])
-    tool_choice: Union[ToolChoice, Literal['auto', 'required', 'none']] = Field(default='auto', examples=['none'])  # noqa
+    tool_choice: Union[ToolChoice, Literal['auto', 'required', 'none']] = Field(default='auto',
+                                                                                examples=['none'])  # noqa
     logprobs: Optional[bool] = False
     top_logprobs: Optional[int] = None
     n: Optional[int] = 1
     logit_bias: Optional[Dict[str, float]] = Field(default=None, examples=[None])  # noqa
     max_tokens: Optional[int] = Field(default=None, examples=[None])
     stop: Optional[Union[str, List[str]]] = Field(default=None, examples=[None])  # noqa
-    # yapf: enable
+
     stream: Optional[bool] = False
     stream_options: Optional[StreamOptions] = Field(default=None, examples=[None])
     presence_penalty: Optional[float] = 0.0

@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-# yapf: disable
+
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 import torch
@@ -17,8 +17,6 @@ from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin, next_power_of_2
 from .utils.model import DeployModelMixin
-
-# yapf: enable
 
 
 def _apply_mrope_selection(hidden_states: torch.Tensor, mrope_position_ids: torch.Tensor, mrope_section: List[int],

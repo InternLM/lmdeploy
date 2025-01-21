@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-# yapf: disable
+
 from typing import List
 
 import torch
@@ -7,8 +7,6 @@ import torch
 from lmdeploy.pytorch.kernels.dlinfer import fused_moe, moe_gating_topk_softmax
 
 from ..moe import FusedMoEBuilder, FusedMoEImpl, SoftmaxTopKBuilder, SoftmaxTopKImpl
-
-# yapf: enable
 
 
 class DlinferSoftmaxTopKImpl(SoftmaxTopKImpl):
