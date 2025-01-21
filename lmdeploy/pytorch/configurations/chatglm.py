@@ -26,8 +26,7 @@ class ChatGLMModelConfigBuilder(AutoModelConfigBuilder):
 
         tp = kwargs.get('tp', 1)
         # update num_kv_heads for tp mode
-        num_key_value_heads = cls.update_num_kv_heads(hf_config, tp,
-                                                      num_key_value_heads)
+        num_key_value_heads = cls.update_num_kv_heads(hf_config, tp, num_key_value_heads)
 
         cfg = ModelConfig(hidden_size=hf_config.hidden_size,
                           num_layers=hf_config.num_layers,

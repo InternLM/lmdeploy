@@ -4,102 +4,67 @@ from mmengine.config import read_base
 
 with read_base():
     # choose a list of datasets
-    from opencompass.configs.datasets.ARC_c.ARC_c_few_shot_ppl import \
-        ARC_c_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.bbh.bbh_gen_98fba6 import \
-        bbh_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.ceval.ceval_ppl import \
-        ceval_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.cmmlu.cmmlu_ppl_041cbf import \
-        cmmlu_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.crowspairs.crowspairs_ppl import \
-        crowspairs_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.drop.drop_gen_a2697c import \
-        drop_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.ARC_c.ARC_c_few_shot_ppl import ARC_c_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.bbh.bbh_gen_98fba6 import bbh_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.ceval.ceval_ppl import ceval_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.cmmlu.cmmlu_ppl_041cbf import cmmlu_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.crowspairs.crowspairs_ppl import crowspairs_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.drop.drop_gen_a2697c import drop_datasets  # noqa: F401, E501
     # Corebench v1.7
     from opencompass.configs.datasets.GaokaoBench.GaokaoBench_no_subjective_gen_d21e37 import \
         GaokaoBench_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.gpqa.gpqa_few_shot_ppl_4b5a83 import \
-        gpqa_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.gsm8k.gsm8k_gen_17d0dc import \
-        gsm8k_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.gpqa.gpqa_few_shot_ppl_4b5a83 import gpqa_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.gsm8k.gsm8k_gen_17d0dc import gsm8k_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.hellaswag.hellaswag_10shot_ppl_59c85e import \
         hellaswag_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.humaneval.internal_humaneval_gen_ce6b06 import \
         humaneval_datasets as humaneval_v2_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.humaneval.internal_humaneval_gen_d2537e import \
         humaneval_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.math.math_4shot_base_gen_43d5b6 import \
-        math_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.math.math_4shot_base_gen_43d5b6 import math_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.MathBench.mathbench_2024_few_shot_mixed_4a3fd4 import \
         mathbench_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.mbpp.sanitized_mbpp_gen_742f0c import \
-        sanitized_mbpp_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.mmlu.mmlu_ppl_ac766d import \
-        mmlu_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.mmlu_pro.mmlu_pro_few_shot_gen_bfaf90 import \
-        mmlu_pro_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.nq.nq_open_1shot_gen_20a989 import \
-        nq_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.race.race_few_shot_ppl import \
-        race_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.mbpp.sanitized_mbpp_gen_742f0c import sanitized_mbpp_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.mmlu.mmlu_ppl_ac766d import mmlu_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.mmlu_pro.mmlu_pro_few_shot_gen_bfaf90 import mmlu_pro_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.nq.nq_open_1shot_gen_20a989 import nq_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.race.race_few_shot_ppl import race_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.SuperGLUE_BoolQ.SuperGLUE_BoolQ_few_shot_ppl import \
         BoolQ_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.TheoremQA.TheoremQA_5shot_gen_6f0af8 import \
-        TheoremQA_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.TheoremQA.TheoremQA_5shot_gen_6f0af8 import TheoremQA_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.triviaqa.triviaqa_wiki_1shot_gen_20a989 import \
         triviaqa_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.wikibench.wikibench_few_shot_ppl_c23d79 import \
         wikibench_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.winogrande.winogrande_5shot_ll_252f01 import \
         winogrande_datasets  # noqa: F401, E501
-    from opencompass.configs.models.baichuan.hf_baichuan_7b import \
-        models as hf_baichuan_7b  # noqa: F401, E501
-    from opencompass.configs.models.gemma.hf_gemma_7b import \
-        models as hf_gemma_7b  # noqa: F401, E501
-    from opencompass.configs.models.hf_internlm.hf_internlm2_5_7b import \
-        models as hf_internlm2_5_7b  # noqa: F401, E501
-    from opencompass.configs.models.hf_internlm.hf_internlm2_7b import \
-        models as hf_internlm2_7b  # noqa: F401, E501
-    from opencompass.configs.models.hf_internlm.hf_internlm2_20b import \
-        models as hf_internlm2_20b  # noqa: F401, E501
-    from opencompass.configs.models.hf_internlm.hf_internlm_7b import \
-        models as hf_internlm_7b  # noqa: F401, E501
-    from opencompass.configs.models.hf_internlm.hf_internlm_20b import \
-        models as hf_internlm_20b  # noqa: F401, E501
+    from opencompass.configs.models.baichuan.hf_baichuan_7b import models as hf_baichuan_7b  # noqa: F401, E501
+    from opencompass.configs.models.gemma.hf_gemma_7b import models as hf_gemma_7b  # noqa: F401, E501
+    from opencompass.configs.models.hf_internlm.hf_internlm2_5_7b import models as hf_internlm2_5_7b  # noqa: F401, E501
+    from opencompass.configs.models.hf_internlm.hf_internlm2_7b import models as hf_internlm2_7b  # noqa: F401, E501
+    from opencompass.configs.models.hf_internlm.hf_internlm2_20b import models as hf_internlm2_20b  # noqa: F401, E501
+    from opencompass.configs.models.hf_internlm.hf_internlm_7b import models as hf_internlm_7b  # noqa: F401, E501
+    from opencompass.configs.models.hf_internlm.hf_internlm_20b import models as hf_internlm_20b  # noqa: F401, E501
     from opencompass.configs.models.hf_internlm.lmdeploy_internlm2_5_7b import \
         models as lmdeploy_internlm2_5_7b  # noqa: F401, E501
-    from opencompass.configs.models.hf_llama.hf_llama2_7b import \
-        models as hf_llama2_7b  # noqa: F401, E501
-    from opencompass.configs.models.hf_llama.hf_llama3_8b import \
-        models as hf_llama3_8b  # noqa: F401, E501
-    from opencompass.configs.models.mistral.hf_mistral_7b_v0_1 import \
-        models as hf_mistral_7b_v0_1  # noqa: F401, E501
+    from opencompass.configs.models.hf_llama.hf_llama2_7b import models as hf_llama2_7b  # noqa: F401, E501
+    from opencompass.configs.models.hf_llama.hf_llama3_8b import models as hf_llama3_8b  # noqa: F401, E501
+    from opencompass.configs.models.mistral.hf_mistral_7b_v0_1 import models as hf_mistral_7b_v0_1  # noqa: F401, E501
     from opencompass.configs.models.mistral.hf_mixtral_8x7b_v0_1 import \
         models as hf_mixtral_8x7b_v0_1  # noqa: F401, E501
-    from opencompass.configs.models.qwen2_5.lmdeploy_qwen2_5_7b import \
-        models as lmdeploy_qwen2_5_7b  # noqa: F401, E501
-    from opencompass.configs.models.qwen.hf_qwen1_5_7b import \
-        models as hf_qwen1_5_7b  # noqa: F401, E501
-    from opencompass.configs.models.qwen.hf_qwen2_7b import \
-        models as hf_qwen2_7b  # noqa: F401, E501
-    from opencompass.configs.models.qwen.hf_qwen_7b import \
-        models as hf_qwen_7b  # noqa: F401, E501
-    from opencompass.configs.models.qwen.lmdeploy_qwen1_5_7b import \
-        models as lmdeploy_qwen1_5_7b  # noqa: F401, E501
-    from opencompass.configs.models.qwen.lmdeploy_qwen2_7b import \
-        models as lmdeploy_qwen2_7b  # noqa: F401, E501
+    from opencompass.configs.models.qwen2_5.lmdeploy_qwen2_5_7b import models as lmdeploy_qwen2_5_7b  # noqa: F401, E501
+    from opencompass.configs.models.qwen.hf_qwen1_5_7b import models as hf_qwen1_5_7b  # noqa: F401, E501
+    from opencompass.configs.models.qwen.hf_qwen2_7b import models as hf_qwen2_7b  # noqa: F401, E501
+    from opencompass.configs.models.qwen.hf_qwen_7b import models as hf_qwen_7b  # noqa: F401, E501
+    from opencompass.configs.models.qwen.lmdeploy_qwen1_5_7b import models as lmdeploy_qwen1_5_7b  # noqa: F401, E501
+    from opencompass.configs.models.qwen.lmdeploy_qwen2_7b import models as lmdeploy_qwen2_7b  # noqa: F401, E501
     # Summary Groups
-    from opencompass.configs.summarizers.groups.cmmlu import \
-        cmmlu_summary_groups  # noqa: F401, E501
-    from opencompass.configs.summarizers.groups.GaokaoBench import \
-        GaokaoBench_summary_groups  # noqa: F401, E501
+    from opencompass.configs.summarizers.groups.cmmlu import cmmlu_summary_groups  # noqa: F401, E501
+    from opencompass.configs.summarizers.groups.GaokaoBench import GaokaoBench_summary_groups  # noqa: F401, E501
     from opencompass.configs.summarizers.groups.mathbench_v1_2024 import \
         mathbench_2024_summary_groups  # noqa: F401, E501
-    from opencompass.configs.summarizers.groups.mmlu import \
-        mmlu_summary_groups  # noqa: F401, E501
-    from opencompass.configs.summarizers.groups.mmlu_pro import \
-        mmlu_pro_summary_groups  # noqa: F401, E501
+    from opencompass.configs.summarizers.groups.mmlu import mmlu_summary_groups  # noqa: F401, E501
+    from opencompass.configs.summarizers.groups.mmlu_pro import mmlu_pro_summary_groups  # noqa: F401, E501
 
     # read models
 race_datasets = [race_datasets[1]]
@@ -169,8 +134,7 @@ summarizer = dict(
         'mmlu_pro_psychology',
         'mmlu_pro_other',
     ],
-    summary_groups=sum(
-        [v for k, v in locals().items() if k.endswith('_summary_groups')], []),
+    summary_groups=sum([v for k, v in locals().items() if k.endswith('_summary_groups')], []),
 )
 
 turbomind_qwen1_5_7b = deepcopy(*lmdeploy_qwen1_5_7b)

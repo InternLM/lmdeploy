@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
 from typing import Any, Iterable, List, Optional, Tuple
 
 import torch
@@ -6,10 +7,8 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, RopeType,
-                                 SiluAndMul, build_rotary_embedding)
-from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
-                                        build_qkv_proj, build_rowwise_linear)
+from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
+from lmdeploy.pytorch.nn.linear import build_merged_colwise_linear, build_qkv_proj, build_rowwise_linear
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
@@ -18,18 +17,14 @@ from .utils.cudagraph import CudaGraphMixin
 class InternLM2Attention(nn.Module):
     """Rewrite module of InternLM2Attention."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         num_heads = config.num_attention_heads
         num_key_value_heads = config.num_key_value_heads
         hidden_size = config.hidden_size
         head_dim = hidden_size // num_heads
-        num_replicate_kv_heads = getattr(config,
-                                         'num_replicate_key_value_heads', 1)
+        num_replicate_kv_heads = getattr(config, 'num_replicate_key_value_heads', 1)
         # packed qkv
         self.wqkv = build_qkv_proj(
             hidden_size,
@@ -74,8 +69,7 @@ class InternLM2Attention(nn.Module):
         qkv_states = self.wqkv(hidden_states)
         # (-1, heads, head_dim)
         qkv_states = qkv_states.flatten(0, -2)
-        query_states, key_states, value_states = self.wqkv.split_qkv(
-            qkv_states)
+        query_states, key_states, value_states = self.wqkv.split_qkv(qkv_states)
 
         # apply rotary embedding
         cos, sin = rotary_pos_emb
@@ -95,10 +89,8 @@ class InternLM2Attention(nn.Module):
             past_key_value[0],
             past_key_value[1],
             attn_metadata,
-            k_scales_zeros=None
-            if len(past_key_value) == 2 else past_key_value[2],
-            v_scales_zeros=None
-            if len(past_key_value) == 2 else past_key_value[3],
+            k_scales_zeros=None if len(past_key_value) == 2 else past_key_value[2],
+            v_scales_zeros=None if len(past_key_value) == 2 else past_key_value[3],
             inplace=True,
         )
         attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
@@ -111,10 +103,7 @@ class InternLM2Attention(nn.Module):
 class InternLM2MLP(nn.Module):
     """mlp."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         # gate up
@@ -192,8 +181,7 @@ class InternLM2DecoderLayer(nn.Module):
             residual = hidden_states
             hidden_states = self.attention_norm(hidden_states)
         else:
-            hidden_states, residual = self.attention_norm(
-                hidden_states, residual)
+            hidden_states, residual = self.attention_norm(hidden_states, residual)
 
         # Self Attention
         hidden_states = self.attention(
@@ -214,10 +202,7 @@ class InternLM2DecoderLayer(nn.Module):
 class InternLM2Model(nn.Module):
     """internlm2 model."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
@@ -230,18 +215,12 @@ class InternLM2Model(nn.Module):
 
         # build all decode layers
         self.layers = nn.ModuleList([
-            InternLM2DecoderLayer(config,
-                                  layer_idx,
-                                  dtype=dtype,
-                                  device=device)
+            InternLM2DecoderLayer(config, layer_idx, dtype=dtype, device=device)
             for layer_idx in range(config.num_hidden_layers)
         ])
 
         # build norm
-        self.norm = RMSNorm(config.hidden_size,
-                            config.rms_norm_eps,
-                            dtype=dtype,
-                            device=device)
+        self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
 
         # build rotary embedding in Model
         rope_scaling = config.rope_scaling
@@ -382,9 +361,7 @@ class InternLM2ForCausalLM(nn.Module, CudaGraphMixin):
         if vision_embeddings is not None and len(vision_embeddings) > 0:
             if inputs_embeds is None:
                 inputs_embeds = self.get_input_embeddings()(input_ids)
-            inputs_embeds[:,
-                          vision_embedding_indexing, :] = vision_embeddings.to(
-                              inputs_embeds)
+            inputs_embeds[:, vision_embedding_indexing, :] = vision_embeddings.to(inputs_embeds)
 
         # inputs of forward
         return dict(
@@ -395,8 +372,7 @@ class InternLM2ForCausalLM(nn.Module, CudaGraphMixin):
             inputs_embeds=inputs_embeds,
         )
 
-    def load_lora_weights(self, weights: Iterable[Tuple[str, torch.Tensor]],
-                          adapter_id: int):
+    def load_lora_weights(self, weights: Iterable[Tuple[str, torch.Tensor]], adapter_id: int):
         """load lora weights."""
 
         from lmdeploy.pytorch.adapter.adapter import load_lora_weights
@@ -410,8 +386,7 @@ class InternLM2ForCausalLM(nn.Module, CudaGraphMixin):
         def _rearange_wqkv(weights):
             for name, loaded_weight in weights:
                 if 'wqkv.lora_B' in name:
-                    loaded_weight = loaded_weight.unflatten(
-                        0, (-1, 2 + group_size, head_dim))
+                    loaded_weight = loaded_weight.unflatten(0, (-1, 2 + group_size, head_dim))
                     q = loaded_weight[:, :-2].flatten(0, 2)
                     k = loaded_weight[:, -2].flatten(0, 1)
                     v = loaded_weight[:, -1].flatten(0, 1)
@@ -434,8 +409,7 @@ class InternLM2ForCausalLM(nn.Module, CudaGraphMixin):
         for name, loaded_weight in weights:
             if 'rotary_emb.inv_freq' in name:
                 continue
-            if ('rotary_emb.cos_cached' in name
-                    or 'rotary_emb.sin_cached' in name):
+            if ('rotary_emb.cos_cached' in name or 'rotary_emb.sin_cached' in name):
                 continue
             for (param_name, weight_name, shard_id) in stacked_params_mapping:
                 if weight_name not in name:

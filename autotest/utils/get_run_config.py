@@ -15,8 +15,7 @@ def get_conda_allcate_prefix(config, model):
     if len(available_cuda) < tp_num:
         raise torch.cuda.OutOfMemoryError
 
-    cuda_prefix = 'CUDA_VISIBLE_DEVICES=' + ','.join(
-        random.sample(available_cuda, tp_num))
+    cuda_prefix = 'CUDA_VISIBLE_DEVICES=' + ','.join(random.sample(available_cuda, tp_num))
 
     torch.cuda.empty_cache()
     return cuda_prefix
@@ -67,8 +66,7 @@ def get_command_with_extra(cmd,
 
 def get_model_name(model):
     model_names = [
-        'llama', 'llama2', 'llama3', 'internlm', 'internlm2', 'baichuan2',
-        'chatglm2', 'falcon', 'yi', 'qwen'
+        'llama', 'llama2', 'llama3', 'internlm', 'internlm2', 'baichuan2', 'chatglm2', 'falcon', 'yi', 'qwen'
     ]
     model_names += list(MODELS.module_dict.keys())
     model_names.sort()
@@ -101,8 +99,7 @@ def get_model_name(model):
         return 'internlm-xcomposer2'
     if ('glm-4') in model_name:
         return 'glm4'
-    if len(model_name.split('-')) > 2 and '-'.join(
-            model_name.split('-')[0:2]) in model_names:
+    if len(model_name.split('-')) > 2 and '-'.join(model_name.split('-')[0:2]) in model_names:
         return '-'.join(model_name.split('-')[0:2])
     return model_name.split('-')[0]
 
@@ -114,8 +111,7 @@ def _get_available_cude():
     for i in range(devices):
         if (torch.cuda.utilization(i) > 5):
             continue
-        if ('no processes are running'
-                not in torch.cuda.list_gpu_processes(i)):
+        if ('no processes are running' not in torch.cuda.list_gpu_processes(i)):
             continue
 
         available_cuda.append(str(i))

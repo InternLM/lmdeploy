@@ -10,8 +10,7 @@ from tritonclient.utils import np_to_triton_dtype
 
 def prepare_tensor(name, input_tensor):
     """Create grpcclient's InferInput instance according to a given tensor."""
-    t = grpcclient.InferInput(name, list(input_tensor.shape),
-                              np_to_triton_dtype(input_tensor.dtype))
+    t = grpcclient.InferInput(name, list(input_tensor.shape), np_to_triton_dtype(input_tensor.dtype))
     t.set_data_from_numpy(input_tensor)
     return t
 
@@ -54,26 +53,19 @@ if __name__ == '__main__':
 
     with grpcclient.InferenceServerClient('0.0.0.0:33337') as client:
         inputs = [
-            prepare_tensor('prompt',
-                           np.array([prompts.encode()], dtype=np.object_)),
-            prepare_tensor('max_tokens', np.array([max_tokens],
-                                                  dtype=np.int32)),
-            prepare_tensor('temperature',
-                           np.array([temperature], dtype=np.float_)),
+            prepare_tensor('prompt', np.array([prompts.encode()], dtype=np.object_)),
+            prepare_tensor('max_tokens', np.array([max_tokens], dtype=np.int32)),
+            prepare_tensor('temperature', np.array([temperature], dtype=np.float_)),
             prepare_tensor('top_p', np.array([top_p], dtype=np.float_)),
             prepare_tensor('top_k', np.array([top_k], dtype=np.int32)),
-            prepare_tensor('ignore_eos', np.array([ignore_eos],
-                                                  dtype=np.bool_)),
+            prepare_tensor('ignore_eos', np.array([ignore_eos], dtype=np.bool_)),
             prepare_tensor('stream', np.array([stream], dtype=np.bool_)),
             prepare_tensor('bad_words', np.array(bad_words, dtype=np.object_)),
         ]
 
         # async_stream
         client.start_stream(partial(stream_callback, res_que))
-        client.async_stream_infer(model_name,
-                                  inputs,
-                                  sequence_start=True,
-                                  sequence_end=True)
+        client.async_stream_infer(model_name, inputs, sequence_start=True, sequence_end=True)
 
     res_que.put(None)
     process_thread.join()

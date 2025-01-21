@@ -7,11 +7,8 @@ import fire
 import torch
 from torch import nn
 
-from lmdeploy.lite.apis.calibrate import (LAYER_TYPE_MAP, NORM_TYPE_MAP,
-                                          calibrate)
-from lmdeploy.lite.quantization.awq import (FC_FCS_MAP, NORM_FCS_MAP,
-                                            awq_layers, skipped_module,
-                                            smooth_layers)
+from lmdeploy.lite.apis.calibrate import LAYER_TYPE_MAP, NORM_TYPE_MAP, calibrate
+from lmdeploy.lite.quantization.awq import FC_FCS_MAP, NORM_FCS_MAP, awq_layers, skipped_module, smooth_layers
 from lmdeploy.lite.utils import collect_target_modules
 from lmdeploy.pytorch.models import QLinear, QRMSNorm
 
@@ -26,8 +23,7 @@ def smooth_quant(model: str,
                  w_bits: int = 8,
                  dtype: Literal['float16', 'bfloat16', 'auto'] = 'auto',
                  device: str = 'cuda',
-                 quant_dtype: Literal['int8', 'fp8', 'float8_e4m3fn',
-                                      'float8_e5m2'] = 'int8',
+                 quant_dtype: Literal['int8', 'fp8', 'float8_e4m3fn', 'float8_e5m2'] = 'int8',
                  revision: str = None,
                  download_dir: str = None):
     if quant_dtype == 'fp8':
@@ -65,19 +61,17 @@ def smooth_quant(model: str,
 
     model_type = type(model).__name__
     if model_type not in LAYER_TYPE_MAP or model_type not in NORM_TYPE_MAP:
-        raise RuntimeError(
-            f'Currently, quantification and calibration of {model_type} are '
-            f'not supported. The supported model types are '
-            f"{', '.join(LAYER_TYPE_MAP.keys())}.")
+        raise RuntimeError(f'Currently, quantification and calibration of {model_type} are '
+                           f'not supported. The supported model types are '
+                           f"{', '.join(LAYER_TYPE_MAP.keys())}.")
 
     if model_type == 'QWenLMHeadModel':
         try:
             import flash_attn  # noqa: F401
         except ImportError:
-            raise RuntimeError(
-                'When using Qwen, you need to `pip install flash-attn` first, '
-                'otherwise calibration and quantification will not work '
-                'properly.')
+            raise RuntimeError('When using Qwen, you need to `pip install flash-attn` first, '
+                               'otherwise calibration and quantification will not work '
+                               'properly.')
 
     layer_type = LAYER_TYPE_MAP[type(model).__name__]
     norm_type = NORM_TYPE_MAP[type(model).__name__]
@@ -93,8 +87,7 @@ def smooth_quant(model: str,
     if search_scale:
         awq_ratios = inp_stats['ratios']
         act_scales = inp_stats['absmean']
-        awq_layers(layers, fc2fcs, norm2fcs, act_scales, awq_ratios, -1,
-                   device)
+        awq_layers(layers, fc2fcs, norm2fcs, act_scales, awq_ratios, -1, device)
     else:
         smooth_layers(layers, fc2fcs, norm2fcs, act_scales, -1, device)
 
@@ -129,12 +122,8 @@ def smooth_quant(model: str,
         save_vl_model(vl_model, model_path, work_dir)
     else:
         quant_dtype_s = str(quant_dtype).split('.')[1]
-        model.config.update(
-            dict(quantization_config=dict(quant_method='smooth_quant',
-                                          quant_dtype=f'{quant_dtype_s}')))
-        model.save_pretrained(work_dir,
-                              max_shard_size='2GB',
-                              safe_serialization=False)
+        model.config.update(dict(quantization_config=dict(quant_method='smooth_quant', quant_dtype=f'{quant_dtype_s}')))
+        model.save_pretrained(work_dir, max_shard_size='2GB', safe_serialization=False)
     tokenizer.save_pretrained(work_dir)
 
 

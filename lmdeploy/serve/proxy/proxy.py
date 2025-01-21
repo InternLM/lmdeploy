@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
 import asyncio
 import copy
 import json
@@ -21,14 +22,10 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from requests.exceptions import RequestException
 
-from lmdeploy.serve.openai.api_server import (check_api_key,
-                                              create_error_response)
-from lmdeploy.serve.openai.protocol import (  # noqa: E501
-    ChatCompletionRequest, CompletionRequest, ModelCard, ModelList,
-    ModelPermission)
-from lmdeploy.serve.proxy.constants import (API_READ_TIMEOUT,
-                                            LATENCY_DEQUE_LEN, ErrorCodes,
-                                            Strategy, err_msg)
+from lmdeploy.serve.openai.api_server import check_api_key, create_error_response
+from lmdeploy.serve.openai.protocol import ModelCard  # noqa: E501
+from lmdeploy.serve.openai.protocol import ChatCompletionRequest, CompletionRequest, ModelList, ModelPermission
+from lmdeploy.serve.proxy.constants import API_READ_TIMEOUT, LATENCY_DEQUE_LEN, ErrorCodes, Strategy, err_msg
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -38,8 +35,7 @@ class Status(BaseModel):
     """Status protocol consists of models' information."""
     models: Optional[List[str]] = Field(default=[], examples=[[]])
     unfinished: int = 0
-    latency: Deque = Field(default=deque(maxlen=LATENCY_DEQUE_LEN),
-                           examples=[[]])
+    latency: Deque = Field(default=deque(maxlen=LATENCY_DEQUE_LEN), examples=[[]])
     speed: Optional[int] = Field(default=None, examples=[None])
 
 
@@ -49,8 +45,7 @@ class Node(BaseModel):
     status: Optional[Status] = None
 
 
-CONTROLLER_HEART_BEAT_EXPIRATION = int(
-    os.getenv('LMDEPLOY_CONTROLLER_HEART_BEAT_EXPIRATION', 90))
+CONTROLLER_HEART_BEAT_EXPIRATION = int(os.getenv('LMDEPLOY_CONTROLLER_HEART_BEAT_EXPIRATION', 90))
 
 
 def heart_beat_controller(proxy_controller):
@@ -75,28 +70,22 @@ class NodeManager:
                 to.
     """
 
-    def __init__(self,
-                 config_path: Optional[str] = None,
-                 strategy: str = 'min_expected_latency') -> None:
+    def __init__(self, config_path: Optional[str] = None, strategy: str = 'min_expected_latency') -> None:
         self.nodes = dict()
         self.strategy = Strategy.from_str(strategy)
         self.latencies = dict()
-        self.config_path = osp.join(osp.dirname(osp.realpath(__file__)),
-                                    'proxy_config.yml')
+        self.config_path = osp.join(osp.dirname(osp.realpath(__file__)), 'proxy_config.yml')
         if config_path is not None:
             self.config_path = config_path
         if osp.exists(self.config_path):
             with open(self.config_path, 'r') as config_file:
                 self.nodes = yaml.safe_load(config_file)['nodes']
                 for url, status in self.nodes.items():
-                    latency = deque(status.get('latency', []),
-                                    maxlen=LATENCY_DEQUE_LEN)
+                    latency = deque(status.get('latency', []), maxlen=LATENCY_DEQUE_LEN)
                     status['latency'] = latency
                     status = Status(**status)
                     self.nodes[url] = status
-        self.heart_beat_thread = threading.Thread(target=heart_beat_controller,
-                                                  args=(self, ),
-                                                  daemon=True)
+        self.heart_beat_thread = threading.Thread(target=heart_beat_controller, args=(self, ), daemon=True)
         self.heart_beat_thread.start()
 
     def update_config_file(self):
@@ -195,8 +184,7 @@ class NodeManager:
             # some nodes does not contain speed
             # we can set them the average speed value
             average_speed = sum(speeds) / len(speeds) if len(speeds) else 1
-            all_the_speeds = speeds + [average_speed
-                                       ] * len(urls_without_speeds)
+            all_the_speeds = speeds + [average_speed] * len(urls_without_speeds)
             return all_matched_urls, all_the_speeds
 
         if self.strategy == Strategy.RANDOM:
@@ -205,8 +193,7 @@ class NodeManager:
                 return None
             speed_sum = sum(all_the_speeds)
             weights = [speed / speed_sum for speed in all_the_speeds]
-            index = random.choices(range(len(all_matched_urls)),
-                                   weights=weights)[0]
+            index = random.choices(range(len(all_matched_urls)), weights=weights)[0]
             url = all_matched_urls[index]
             return url
         elif self.strategy == Strategy.MIN_EXPECTED_LATENCY:
@@ -219,8 +206,7 @@ class NodeManager:
             all_indexes = [i for i in range(len(all_the_speeds))]
             random.shuffle(all_indexes)
             for index in all_indexes:
-                latency = self.nodes[
-                    all_matched_urls[index]].unfinished / all_the_speeds[index]
+                latency = self.nodes[all_matched_urls[index]].unfinished / all_the_speeds[index]
                 if min_latency > latency:
                     min_latency = latency
                     min_index = index
@@ -231,8 +217,7 @@ class NodeManager:
             for node_url, node_status in self.nodes.items():
                 if model_name in node_status.models:
                     if len(node_status.latency):
-                        latencies.append(np.mean(np.array(
-                            node_status.latency)))
+                        latencies.append(np.mean(np.array(node_status.latency)))
                     else:
                         latencies.append(float('inf'))
                     all_matched_urls.append(node_url)
@@ -247,8 +232,7 @@ class NodeManager:
         """Check if a request is valid."""
         if model_name in self.model_list:
             return
-        ret = create_error_response(
-            HTTPStatus.NOT_FOUND, f'The model `{model_name}` does not exist.')
+        ret = create_error_response(HTTPStatus.NOT_FOUND, f'The model `{model_name}` does not exist.')
         return ret
 
     def handle_unavailable_model(self, model_name):
@@ -288,8 +272,7 @@ class NodeManager:
                 stream=True,
                 timeout=(5, API_READ_TIMEOUT),
             )
-            for chunk in response.iter_lines(decode_unicode=False,
-                                             delimiter=b'\n'):
+            for chunk in response.iter_lines(decode_unicode=False, delimiter=b'\n'):
                 if chunk:
                     yield chunk + b'\n\n'
         except (Exception, GeneratorExit, RequestException) as e:  # noqa
@@ -308,11 +291,9 @@ class NodeManager:
         try:
             import httpx
             async with httpx.AsyncClient() as client:
-                response = await client.post(node_url + endpoint,
-                                             json=request,
-                                             timeout=API_READ_TIMEOUT)
+                response = await client.post(node_url + endpoint, json=request, timeout=API_READ_TIMEOUT)
                 return response.text
-        except (Exception, GeneratorExit, RequestException, asyncio.CancelledError) as e:  # noqa  # yapf: disable
+        except (Exception, GeneratorExit, RequestException, asyncio.CancelledError) as e:  # noqa
             logger.error(f'catched an exception: {e}')
             return self.handle_api_timeout(node_url)
 
@@ -363,10 +344,7 @@ def available_models():
     """Show available models."""
     model_cards = []
     for model_name in node_manager.model_list:
-        model_cards.append(
-            ModelCard(id=model_name,
-                      root=model_name,
-                      permission=[ModelPermission()]))
+        model_cards.append(ModelCard(id=model_name, root=model_name, permission=[ModelPermission()]))
     return ModelList(data=model_cards)
 
 
@@ -413,8 +391,7 @@ def remove_node(node_url: str):
 
 
 @app.post('/v1/chat/completions', dependencies=[Depends(check_api_key)])
-async def chat_completions_v1(request: ChatCompletionRequest,
-                              raw_request: Request = None):
+async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Request = None):
     """Completion API similar to OpenAI's API.
 
     Refer to  `https://platform.openai.com/docs/api-reference/chat/create`
@@ -480,20 +457,17 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     request_dict = request.model_dump()
     start = node_manager.pre_call(node_url)
     if request.stream is True:
-        response = node_manager.stream_generate(request_dict, node_url,
-                                                '/v1/chat/completions')
+        response = node_manager.stream_generate(request_dict, node_url, '/v1/chat/completions')
         background_task = node_manager.create_background_tasks(node_url, start)
         return StreamingResponse(response, background=background_task)
     else:
-        response = await node_manager.generate(request_dict, node_url,
-                                               '/v1/chat/completions')
+        response = await node_manager.generate(request_dict, node_url, '/v1/chat/completions')
         node_manager.post_call(node_url, start)
         return JSONResponse(json.loads(response))
 
 
 @app.post('/v1/completions', dependencies=[Depends(check_api_key)])
-async def completions_v1(request: CompletionRequest,
-                         raw_request: Request = None):
+async def completions_v1(request: CompletionRequest, raw_request: Request = None):
     """Completion API similar to OpenAI's API.
 
     Go to `https://platform.openai.com/docs/api-reference/completions/create`
@@ -540,21 +514,18 @@ async def completions_v1(request: CompletionRequest,
     request_dict = request.model_dump()
     start = node_manager.pre_call(node_url)
     if request.stream is True:
-        response = node_manager.stream_generate(request_dict, node_url,
-                                                '/v1/completions')
+        response = node_manager.stream_generate(request_dict, node_url, '/v1/completions')
         background_task = node_manager.create_background_tasks(node_url, start)
         return StreamingResponse(response, background=background_task)
     else:
-        response = await node_manager.generate(request_dict, node_url,
-                                               '/v1/completions')
+        response = await node_manager.generate(request_dict, node_url, '/v1/completions')
         node_manager.post_call(node_url, start)
         return JSONResponse(json.loads(response))
 
 
 def proxy(server_name: str = '0.0.0.0',
           server_port: int = 8000,
-          strategy: Literal['random', 'min_expected_latency',
-                            'min_observed_latency'] = 'min_expected_latency',
+          strategy: Literal['random', 'min_expected_latency', 'min_observed_latency'] = 'min_expected_latency',
           api_keys: Optional[Union[List[str], str]] = None,
           ssl: bool = False,
           log_level: str = 'INFO',

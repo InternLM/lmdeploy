@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
 import os
 from contextlib import contextmanager
 from os import path as osp
@@ -8,8 +9,7 @@ import torch.nn as nn
 from transformers import AutoConfig
 
 from lmdeploy.vl.model.base import VISION_MODELS
-from lmdeploy.vl.model.llava import (LlavaVisionModel, check_llava_install,
-                                     process_images)
+from lmdeploy.vl.model.llava import LlavaVisionModel, check_llava_install, process_images
 
 from .utils import disable_transformers_logging, rewrite_ctx
 
@@ -42,12 +42,10 @@ def _build_vision_projector(config, delay_load=False, **kwargs):
         for _ in range(1, mlp_depth):
             modules.append(nn.GELU())
             if use_norm:
-                modules.append(
-                    nn.Linear(config.hidden_size, config.hidden_size))
+                modules.append(nn.Linear(config.hidden_size, config.hidden_size))
                 modules.append(nn.LayerNorm(config.hidden_size))
             else:
-                modules.append(
-                    nn.Linear(config.hidden_size, config.hidden_size))
+                modules.append(nn.Linear(config.hidden_size, config.hidden_size))
         return nn.Sequential(*modules)
 
     if projector_type == 'identity':
@@ -59,16 +57,14 @@ def _build_vision_projector(config, delay_load=False, **kwargs):
 def _build_vision_tower(vision_tower_cfg, **kwargs):
     """build yi vision tower."""
     cfg = vision_tower_cfg
-    vision_tower = getattr(cfg, 'mm_vision_tower',
-                           getattr(cfg, 'vision_tower', None))
+    vision_tower = getattr(cfg, 'mm_vision_tower', getattr(cfg, 'vision_tower', None))
     if os.path.exists(os.path.join(_model_path, vision_tower)):
         vision_tower = os.path.join(_model_path, vision_tower)
 
     from llava.model.multimodal_encoder.clip_encoder import CLIPVisionTower
     is_absolute_path_exists = os.path.exists(vision_tower)
-    if is_absolute_path_exists or vision_tower.startswith(
-            'openai') or vision_tower.startswith(
-                'laion') or 'ShareGPT4V' in vision_tower:
+    if is_absolute_path_exists or vision_tower.startswith('openai') or vision_tower.startswith(
+            'laion') or 'ShareGPT4V' in vision_tower:
         return CLIPVisionTower(vision_tower, args=vision_tower_cfg, **kwargs)
 
     raise ValueError(f'Unknown vision tower: {vision_tower}')
@@ -101,10 +97,8 @@ class YiVisionModel(LlavaVisionModel):
 
     def build_preprocessor(self):
         from transformers import CLIPImageProcessor
-        vision_tower_name = osp.join(self.model_path,
-                                     self.hf_config.mm_vision_tower)
-        self.image_processor = CLIPImageProcessor.from_pretrained(
-            vision_tower_name)
+        vision_tower_name = osp.join(self.model_path, self.hf_config.mm_vision_tower)
+        self.image_processor = CLIPImageProcessor.from_pretrained(vision_tower_name)
         config = AutoConfig.from_pretrained(vision_tower_name)
         image_size = config.image_size
         patch_size = config.patch_size
@@ -129,8 +123,7 @@ class YiVisionModel(LlavaVisionModel):
         outputs = []
         for image, params in images:
             image = image.convert('RGB')
-            pixel_values = process_images([image], self.image_processor,
-                                          self.config)
+            pixel_values = process_images([image], self.image_processor, self.config)
             outputs.append(
                 dict(pixel_values=pixel_values,
                      image_size=image.size,

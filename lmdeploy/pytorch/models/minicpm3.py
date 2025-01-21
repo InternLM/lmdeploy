@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
 import math
 from typing import Any, Iterable, List, Optional, Tuple
 
@@ -8,13 +9,9 @@ from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.distributed import get_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import (Attention, RMSNorm, RopeType, SiluAndMul,
-                                 build_rotary_embedding)
-from lmdeploy.pytorch.nn.linear import (build_colwise_linear,
-                                        build_merged_colwise_linear,
-                                        build_rowwise_linear)
-from lmdeploy.pytorch.nn.rotary_embedding import (ApplyRotaryEmb,
-                                                  LongRoPEScalingParameters)
+from lmdeploy.pytorch.nn import Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
+from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_merged_colwise_linear, build_rowwise_linear
+from lmdeploy.pytorch.nn.rotary_embedding import ApplyRotaryEmb, LongRoPEScalingParameters
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
@@ -24,10 +21,7 @@ from .utils.cudagraph import CudaGraphMixin
 class MiniCPMAttention(nn.Module):
     """minicpm3 attention."""
 
-    def __init__(self,
-                 config: Any,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: Any, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         quantization_config = None
         self.q_lora_rank = config.q_lora_rank
@@ -86,8 +80,7 @@ class MiniCPMAttention(nn.Module):
                                       device=device)
         self.kv_b_proj = build_colwise_linear(
             config.kv_lora_rank,
-            self.num_heads *
-            (self.q_head_dim - self.qk_rope_head_dim + self.v_head_dim),
+            self.num_heads * (self.q_head_dim - self.qk_rope_head_dim + self.v_head_dim),
             bias=False,
             dtype=dtype,
             device=device,
@@ -127,18 +120,15 @@ class MiniCPMAttention(nn.Module):
 
         q = self.q_b_proj(self.q_a_layernorm(self.q_a_proj(hidden_states)))
         q = q.view(bsz, q_len, num_heads, self.q_head_dim)
-        q_nope, q_pe = torch.split(
-            q, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1)
+        q_nope, q_pe = torch.split(q, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1)
 
         compressed_kv = self.kv_a_proj_with_mqa(hidden_states)
-        compressed_kv, k_pe = torch.split(
-            compressed_kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1)
+        compressed_kv, k_pe = torch.split(compressed_kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1)
         k_pe = k_pe.view(bsz, q_len, 1, self.qk_rope_head_dim)
-        kv = (self.kv_b_proj(self.kv_a_layernorm(compressed_kv)).view(
-            bsz, q_len, num_heads, self.qk_nope_head_dim + self.v_head_dim))
+        kv = (self.kv_b_proj(self.kv_a_layernorm(compressed_kv)).view(bsz, q_len, num_heads,
+                                                                      self.qk_nope_head_dim + self.v_head_dim))
 
-        k_nope, value_states = torch.split(
-            kv, [self.qk_nope_head_dim, self.v_head_dim], dim=-1)
+        k_nope, value_states = torch.split(kv, [self.qk_nope_head_dim, self.v_head_dim], dim=-1)
 
         # apply rotary embedding
         cos, sin = rotary_pos_emb
@@ -150,19 +140,16 @@ class MiniCPMAttention(nn.Module):
             inplace=True,
         )
 
-        query_states = k_pe.new_empty(bsz, q_len, self.num_heads,
-                                      self.q_head_dim)
+        query_states = k_pe.new_empty(bsz, q_len, self.num_heads, self.q_head_dim)
         query_states[:, :, :, :self.qk_nope_head_dim] = q_nope
         query_states[:, :, :, self.qk_nope_head_dim:] = q_pe
 
-        key_states = k_pe.new_empty(bsz, q_len, self.num_heads,
-                                    self.q_head_dim)
+        key_states = k_pe.new_empty(bsz, q_len, self.num_heads, self.q_head_dim)
         key_states[:, :, :, :self.qk_nope_head_dim] = k_nope
         key_states[:, :, :, self.qk_nope_head_dim:] = k_pe
 
         if self.q_head_dim != self.v_head_dim:
-            value_states = torch.nn.functional.pad(
-                value_states, [0, self.q_head_dim - self.v_head_dim])
+            value_states = torch.nn.functional.pad(value_states, [0, self.q_head_dim - self.v_head_dim])
 
         attn_output = self.attn_fwd(
             query_states,
@@ -176,8 +163,7 @@ class MiniCPMAttention(nn.Module):
         if self.q_head_dim != self.v_head_dim:
             attn_output = attn_output[:, :, :, :self.v_head_dim]
 
-        attn_output = attn_output.reshape(bsz, q_len, self.num_heads *
-                                          self.v_head_dim).contiguous()
+        attn_output = attn_output.reshape(bsz, q_len, self.num_heads * self.v_head_dim).contiguous()
         attn_output = self.o_proj(attn_output)
 
         return attn_output
@@ -186,10 +172,7 @@ class MiniCPMAttention(nn.Module):
 class MiniCPMMLP(nn.Module):
     """mlp."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         # gate up
@@ -248,12 +231,11 @@ class MiniCPMDecoderLayer(nn.Module):
                                        device=device)
 
         # build attention layer norm
-        self.post_attention_layernorm = RMSNorm(
-            config.hidden_size,
-            config.rms_norm_eps,
-            quant_config=quantization_config,
-            dtype=dtype,
-            device=device)
+        self.post_attention_layernorm = RMSNorm(config.hidden_size,
+                                                config.rms_norm_eps,
+                                                quant_config=quantization_config,
+                                                dtype=dtype,
+                                                device=device)
         self.scale_depth = config.scale_depth
         self.num_hidden_layers = config.num_hidden_layers
 
@@ -276,16 +258,14 @@ class MiniCPMDecoderLayer(nn.Module):
             attn_metadata=attn_metadata,
         )
 
-        hidden_states = residual + hidden_states * (
-            self.scale_depth / math.sqrt(self.num_hidden_layers))
+        hidden_states = residual + hidden_states * (self.scale_depth / math.sqrt(self.num_hidden_layers))
 
         # Fully Connected
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
 
         hidden_states = self.mlp(hidden_states)
-        hidden_states = residual + hidden_states * (
-            self.scale_depth / math.sqrt(self.num_hidden_layers))
+        hidden_states = residual + hidden_states * (self.scale_depth / math.sqrt(self.num_hidden_layers))
 
         outputs = (hidden_states, residual)
         return outputs
@@ -294,10 +274,7 @@ class MiniCPMDecoderLayer(nn.Module):
 class MiniCPM3Model(nn.Module):
     """model."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
@@ -316,10 +293,7 @@ class MiniCPM3Model(nn.Module):
         ])
 
         # build norm
-        self.norm = RMSNorm(config.hidden_size,
-                            config.rms_norm_eps,
-                            dtype=dtype,
-                            device=device)
+        self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
         # build rotary embedding
         emb_type = RopeType.LinearScaling
         rope_dim = config.qk_rope_head_dim
@@ -330,13 +304,11 @@ class MiniCPM3Model(nn.Module):
             scaling_type = rope_scaling['type']
             assert scaling_type in ['longrope', 'su']
             emb_type = RopeType.LongRoPEScaling
-            ori_pos_emb = getattr(config, 'original_max_position_embeddings',
-                                  rope_max_pos_emb)
+            ori_pos_emb = getattr(config, 'original_max_position_embeddings', rope_max_pos_emb)
 
-            longrope_params = LongRoPEScalingParameters(
-                short_factor=rope_scaling['short_factor'],
-                long_factor=rope_scaling['long_factor'],
-                original_max_position_embeddings=ori_pos_emb)
+            longrope_params = LongRoPEScalingParameters(short_factor=rope_scaling['short_factor'],
+                                                        long_factor=rope_scaling['long_factor'],
+                                                        original_max_position_embeddings=ori_pos_emb)
             self.rotary_emb = build_rotary_embedding(
                 rope_dim,
                 rope_max_pos_emb,
@@ -437,9 +409,7 @@ class MiniCPM3ForCausalLM(nn.Module, CudaGraphMixin):
             inputs_embeds=inputs_embeds,
         )
 
-        logits = self.lm_head(
-            hidden_states /
-            (self.config.hidden_size / self.config.dim_model_base))
+        logits = self.lm_head(hidden_states / (self.config.hidden_size / self.config.dim_model_base))
         return logits
 
     def update_weights(self):
@@ -469,9 +439,7 @@ class MiniCPM3ForCausalLM(nn.Module, CudaGraphMixin):
         if vision_embeddings is not None and len(vision_embeddings) > 0:
             if inputs_embeds is None:
                 inputs_embeds = self.get_input_embeddings()(input_ids)
-            inputs_embeds[:,
-                          vision_embedding_indexing, :] = vision_embeddings.to(
-                              inputs_embeds)
+            inputs_embeds[:, vision_embedding_indexing, :] = vision_embeddings.to(inputs_embeds)
 
         # inputs of forward
         return dict(
@@ -498,8 +466,7 @@ class MiniCPM3ForCausalLM(nn.Module, CudaGraphMixin):
         for name, loaded_weight in weights:
             if 'rotary_emb.inv_freq' in name:
                 continue
-            if ('rotary_emb.cos_cached' in name
-                    or 'rotary_emb.sin_cached' in name):
+            if ('rotary_emb.cos_cached' in name or 'rotary_emb.sin_cached' in name):
                 continue
             if self.config.tie_word_embeddings and 'lm_head.weight' in name:
                 continue

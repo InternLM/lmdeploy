@@ -72,8 +72,7 @@ class TestFusedLoRA:
         yield torch.cat(lora_b, dim=0).contiguous()
 
     @pytest.fixture
-    def gt(self, input, start_loc, seq_lens, adapter_ids, lora_a, lora_b,
-           scaling):
+    def gt(self, input, start_loc, seq_lens, adapter_ids, lora_a, lora_b, scaling):
         out = []
         for loc, s_len, r_id in zip(start_loc, seq_lens, adapter_ids):
             inp = input[loc:loc + s_len]
@@ -87,10 +86,8 @@ class TestFusedLoRA:
     @pytest.mark.parametrize('seq_lens', [
         (2, 4, 6, 8),
         (1, 1, 1, 1),
-    ],
-                             indirect=True)
-    def test_fused_lora(self, input, fused_lora_a, fused_lora_b, start_loc,
-                        seq_lens, adapter_ids, scaling, ranks, gt):
+    ], indirect=True)
+    def test_fused_lora(self, input, fused_lora_a, fused_lora_b, start_loc, seq_lens, adapter_ids, scaling, ranks, gt):
         max_seq_len = max(seq_lens).item()
         max_rank = max(ranks).item()
         rank_offset = ranks.cumsum(0) - ranks

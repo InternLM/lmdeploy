@@ -19,12 +19,11 @@ PromptType = Union[str, List[Dict]]
 class LogitsMixin:
     """Helper class to calculate ppl."""
 
-    async def _async_get_logits(
-            self,
-            input_ids,
-            steps: List[int] = None,
-            sequence_start: bool = True,
-            sequence_end: bool = True) -> List[torch.Tensor]:
+    async def _async_get_logits(self,
+                                input_ids,
+                                steps: List[int] = None,
+                                sequence_start: bool = True,
+                                sequence_end: bool = True) -> List[torch.Tensor]:
         assert input_ids and all(isinstance(_, List) for _ in input_ids)
         assert steps is None or (len(steps) == len(input_ids))
 
@@ -35,8 +34,7 @@ class LogitsMixin:
                 input_len = len(input_ids[i])
                 # TODO(lvhan): Fix the ugly code later on
                 max_new_tokens = 1 if self.backend == 'turbomind' else 0
-                gen_config = GenerationConfig(max_new_tokens=max_new_tokens,
-                                              output_logits='all')
+                gen_config = GenerationConfig(max_new_tokens=max_new_tokens, output_logits='all')
                 async with self.safe_run(inst,
                                          session_id=i,
                                          input_ids=input_ids[i],
@@ -56,8 +54,7 @@ class LogitsMixin:
 
         return logits
 
-    def get_ppl(self, input_ids: Union[List[int],
-                                       List[List[int]]]) -> List[float]:
+    def get_ppl(self, input_ids: Union[List[int], List[List[int]]]) -> List[float]:
         """Get perplexity scores given a list of input tokens that have to be
         of the same length.
 
@@ -79,9 +76,7 @@ class LogitsMixin:
         max_input_len = 2 * 1024**3 // (vocab_size * 4)
         sizes = [len(_) for _ in input_ids]
         result = []
-        sorted_index_values = sorted(list(enumerate(sizes)),
-                                     key=lambda x: x[1],
-                                     reverse=True)
+        sorted_index_values = sorted(list(enumerate(sizes)), key=lambda x: x[1], reverse=True)
         sizes = [value for index, value in sorted_index_values]
         indices = [index for index, value in sorted_index_values]
         logger.info(f'sorted sizes: {sizes}')
@@ -90,8 +85,7 @@ class LogitsMixin:
             logger.info(f'start: {start}, end: {end}')
             if start == end:
                 _input_ids = input_ids[indices[start]]
-                res = self._get_long_text_ppl(input_ids=_input_ids,
-                                              max_input_len=max_input_len)
+                res = self._get_long_text_ppl(input_ids=_input_ids, max_input_len=max_input_len)
                 result.append(res)
             else:
                 _input_ids = [input_ids[indices[i]] for i in range(start, end)]
@@ -117,8 +111,7 @@ class LogitsMixin:
             current_sum = 0
             start_index = i
 
-            while i < len(
-                    sizes) and current_sum + sizes[start_index] <= max_value:
+            while i < len(sizes) and current_sum + sizes[start_index] <= max_value:
                 current_sum += sizes[start_index]
                 i += 1
 
@@ -142,13 +135,12 @@ class LogitsMixin:
             # shift token_ids by 1 to the left
             target_ids = input_ids[i + 1:i + 1 + max_input_len]
 
-            loss, target_count = self._get_ppl(
-                input_ids=[token_ids],
-                max_input_len=max_input_len,
-                target_ids=[target_ids],
-                steps=step,
-                sequence_start=(i == 0),
-                sequence_end=(i + max_input_len >= seq_len))
+            loss, target_count = self._get_ppl(input_ids=[token_ids],
+                                               max_input_len=max_input_len,
+                                               target_ids=[target_ids],
+                                               steps=step,
+                                               sequence_start=(i == 0),
+                                               sequence_end=(i + max_input_len >= seq_len))
             losses.extend(loss)
             target_counts.extend(target_count)
         loss_sum = sum(losses)
@@ -162,8 +154,7 @@ class LogitsMixin:
                  steps=None,
                  sequence_start: bool = True,
                  sequence_end: bool = True):
-        assert (isinstance(input_ids, List)
-                and all(isinstance(_, List) for _ in input_ids))
+        assert (isinstance(input_ids, List) and all(isinstance(_, List) for _ in input_ids))
         assert steps is None or len(steps) == len(input_ids)
         assert target_ids is None or len(target_ids) == len(input_ids)
 
@@ -175,24 +166,17 @@ class LogitsMixin:
                     f'total_len: {total_len}')
         torch.cuda.empty_cache()
 
-        logits = self._run(
-            coro=self._async_get_logits(input_ids=input_ids,
-                                        steps=steps,
-                                        sequence_start=sequence_start,
-                                        sequence_end=sequence_end)).result()
+        logits = self._run(coro=self._async_get_logits(
+            input_ids=input_ids, steps=steps, sequence_start=sequence_start, sequence_end=sequence_end)).result()
         padding_token_id = -100
         if target_ids is None:
             target_ids = [x[1:] + [padding_token_id] for x in input_ids]
         else:
             target_ids = [
-                target_ids[i] + [padding_token_id]
-                if len(target_ids[i]) < len(input_ids[i]) else target_ids[i]
+                target_ids[i] + [padding_token_id] if len(target_ids[i]) < len(input_ids[i]) else target_ids[i]
                 for i in range(len(input_ids))
             ]
-        target_ids = [
-            torch.Tensor(torch.LongTensor(_target_ids))
-            for _target_ids in target_ids
-        ]
+        target_ids = [torch.Tensor(torch.LongTensor(_target_ids)) for _target_ids in target_ids]
 
         result = []
         for _logits, _target_ids in zip(logits, target_ids):
@@ -203,11 +187,10 @@ class LogitsMixin:
             # compute cross entropy loss
             flat_logits = _logits.contiguous().view(-1, vocab_size)
             flat_target_ids = _target_ids.contiguous().view(-1)
-            flat_loss_matrix = torch.nn.functional.cross_entropy(
-                flat_logits,
-                flat_target_ids,
-                reduction='none',
-                ignore_index=padding_token_id)
+            flat_loss_matrix = torch.nn.functional.cross_entropy(flat_logits,
+                                                                 flat_target_ids,
+                                                                 reduction='none',
+                                                                 ignore_index=padding_token_id)
             loss = flat_loss_matrix.sum()
             target_count = target_mask.sum()
             result.append(loss.item() / target_count.item())

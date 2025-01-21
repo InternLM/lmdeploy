@@ -107,8 +107,7 @@ def is_supported(model_path: str):
                        'which can only be ran with turbomind engine.')
     else:
         try:
-            cfg = AutoConfig.from_pretrained(model_path,
-                                             trust_remote_code=True)
+            cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
         except Exception as e:  # noqa
             logger.warning('AutoConfig.from_pretrained failed for '
                            f'{model_path}. Exception: {e}')
@@ -116,12 +115,10 @@ def is_supported(model_path: str):
 
         if hasattr(cfg, 'architectures'):
             arch = cfg.architectures[0]
-        elif hasattr(cfg,
-                     'auto_map') and 'AutoModelForCausalLM' in cfg.auto_map:
+        elif hasattr(cfg, 'auto_map') and 'AutoModelForCausalLM' in cfg.auto_map:
             arch = cfg.auto_map['AutoModelForCausalLM'].split('.')[-1]
         else:
-            raise RuntimeError(
-                f'Could not find model architecture from config: {cfg}')
+            raise RuntimeError(f'Could not find model architecture from config: {cfg}')
 
         if arch in _SUPPORTED_ARCHS:
             support_by_torch = _SUPPORTED_ARCHS[arch]

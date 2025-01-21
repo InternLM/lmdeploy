@@ -1,9 +1,11 @@
+# yapf: disable
 import asyncio
 
 import pytest
 
-from lmdeploy.pytorch.engine.request import (RequestManager, RequestType,
-                                             ResponseType)
+from lmdeploy.pytorch.engine.request import RequestManager, RequestType, ResponseType
+
+# yapf: enable
 
 
 class TestRequestHander:

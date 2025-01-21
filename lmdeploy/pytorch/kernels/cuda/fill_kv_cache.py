@@ -106,11 +106,9 @@ def _fill_kv_cache_kernel(
     d_off = d_off % head_dim
 
     ks_ptr = KStates + head_id * stride_ksh
-    ks_ptrs = ks_ptr + q_offs[:,
-                              None] * stride_kss + d_off[None, :] * stride_ksd
+    ks_ptrs = ks_ptr + q_offs[:, None] * stride_kss + d_off[None, :] * stride_ksd
     kc_ptr = KCaches + block_off * stride_kcn + head_id * stride_kch
-    kc_ptrs = kc_ptr + page_offs[:, None] * stride_kcb + d_off[
-        None, :] * stride_kcd
+    kc_ptrs = kc_ptr + page_offs[:, None] * stride_kcb + d_off[None, :] * stride_kcd
 
     if BLOCK_DV > 0:
         dv_off = tl.arange(0, BLOCK_DV)
@@ -118,11 +116,9 @@ def _fill_kv_cache_kernel(
         mask_vc = mask_vs & (dv_off[None, :] < head_dim_v)
         dv_off = dv_off % head_dim_v
         vs_ptr = VStates + head_id * stride_vsh
-        vs_ptrs = vs_ptr + q_offs[:, None] * stride_vss + dv_off[
-            None, :] * stride_vsd
+        vs_ptrs = vs_ptr + q_offs[:, None] * stride_vss + dv_off[None, :] * stride_vsd
         vc_ptr = VCaches + block_off * stride_vcn + head_id * stride_vch
-        vc_ptrs = vc_ptr + page_offs[:, None] * stride_vcb + dv_off[
-            None, :] * stride_vcd
+        vc_ptrs = vc_ptr + page_offs[:, None] * stride_vcb + dv_off[None, :] * stride_vcd
 
     k = tl.load(ks_ptrs, mask=mask_ks)
     if BLOCK_DV > 0:
@@ -202,8 +198,7 @@ def _fill_kv_cache_quant_kernel(
 
     block0_first_tokenloc = history_seqlen % BLOCK
 
-    state_token_offset = tl.maximum(block_id * BLOCK - block0_first_tokenloc,
-                                    0)
+    state_token_offset = tl.maximum(block_id * BLOCK - block0_first_tokenloc, 0)
     kv_block_id = _div_up(history_seqlen + 1, BLOCK) - 1 + block_id
     kv_block_id = min(kv_block_id, stride_boff - 1)
     block_off = tl.load(BlockOffsets + batch_id * stride_boff + kv_block_id)
@@ -221,80 +216,55 @@ def _fill_kv_cache_quant_kernel(
     c_first_tokenloc = block0_first_tokenloc
     if block_id != 0:
         c_first_tokenloc *= 0
-    c_last_tokenloc = tl.minimum(
-        BLOCK, q_seqlen + block0_first_tokenloc - block_id * BLOCK)
+    c_last_tokenloc = tl.minimum(BLOCK, q_seqlen + block0_first_tokenloc - block_id * BLOCK)
 
     for bidx in range(c_first_tokenloc, c_last_tokenloc):
         sidx = bidx - c_first_tokenloc
         mask = (h_off[:, None] < num_heads) & (d_off[None, :] < head_dim)
         if quant_policy == 4:
-            k1 = tl.load(ks_ptr + sidx * stride_kss +
-                         h_off[:, None] * stride_ksh +
-                         d_off[None, :] * stride_ksd,
+            k1 = tl.load(ks_ptr + sidx * stride_kss + h_off[:, None] * stride_ksh + d_off[None, :] * stride_ksd,
                          mask=mask)
-            k2 = tl.load(ks_ptr + sidx * stride_kss +
-                         h_off[:, None] * stride_ksh +
-                         d_off[None, :] * stride_ksd + head_dim * stride_ksd,
+            k2 = tl.load(ks_ptr + sidx * stride_kss + h_off[:, None] * stride_ksh + d_off[None, :] * stride_ksd +
+                         head_dim * stride_ksd,
                          mask=mask)
             q_k, k_scales, k_zeros = _quant_int4(k1, k2)
         else:
-            k = tl.load(ks_ptr + sidx * stride_kss +
-                        h_off[:, None] * stride_ksh +
-                        d_off[None, :] * stride_ksd,
+            k = tl.load(ks_ptr + sidx * stride_kss + h_off[:, None] * stride_ksh + d_off[None, :] * stride_ksd,
                         mask=mask)
             q_k, k_scales, k_zeros = _quant_int8(k)
-        tl.store(kc_ptr + bidx * stride_kcb + h_off[:, None] * stride_kch +
-                 d_off[None, :] * stride_kcd,
-                 q_k,
-                 mask=mask)
-        tl.store(ksz_ptr + bidx * stride_kszb + h_off[:, None] * stride_kszh +
-                 szd_off[None, :] * stride_kszd,
+        tl.store(kc_ptr + bidx * stride_kcb + h_off[:, None] * stride_kch + d_off[None, :] * stride_kcd, q_k, mask=mask)
+        tl.store(ksz_ptr + bidx * stride_kszb + h_off[:, None] * stride_kszh + szd_off[None, :] * stride_kszd,
                  k_scales[:, None],
                  mask=(h_off[:, None] < num_heads) & (szd_off[None, :] < 1))
-        tl.store(ksz_ptr + bidx * stride_kszb + h_off[:, None] * stride_kszh +
-                 szd_off[None, :] * stride_kszd,
+        tl.store(ksz_ptr + bidx * stride_kszb + h_off[:, None] * stride_kszh + szd_off[None, :] * stride_kszd,
                  k_zeros[:, None],
                  mask=(h_off[:, None] < num_heads) & (szd_off[None, :] == 1))
 
         if BLOCK_DV > 0:
             if quant_policy == 4:
-                dv_off = tl.arange(0, BLOCK_DV //
-                                   2)  # int4 pack, half the head_dim
-                maskv = (h_off[:, None] < num_heads) & (dv_off[None, :] <
-                                                        head_dim_v // 2)
-                v1 = tl.load(vs_ptr + sidx * stride_vss +
-                             h_off[:, None] * stride_vsh +
-                             dv_off[None, :] * stride_vsd,
+                dv_off = tl.arange(0, BLOCK_DV // 2)  # int4 pack, half the head_dim
+                maskv = (h_off[:, None] < num_heads) & (dv_off[None, :] < head_dim_v // 2)
+                v1 = tl.load(vs_ptr + sidx * stride_vss + h_off[:, None] * stride_vsh + dv_off[None, :] * stride_vsd,
                              mask=maskv)
-                v2 = tl.load(vs_ptr + sidx * stride_vss +
-                             h_off[:, None] * stride_vsh +
-                             dv_off[None, :] * stride_vsd +
+                v2 = tl.load(vs_ptr + sidx * stride_vss + h_off[:, None] * stride_vsh + dv_off[None, :] * stride_vsd +
                              head_dim_v // 2 * stride_vsd,
                              mask=maskv)
                 q_v, v_scales, v_zeros = _quant_int4(v1, v2)
             else:
                 dv_off = tl.arange(0, BLOCK_DV)
-                maskv = (h_off[:, None] < num_heads) & (dv_off[None, :] <
-                                                        head_dim_v)
-                v = tl.load(vs_ptr + sidx * stride_vss +
-                            h_off[:, None] * stride_vsh +
-                            dv_off[None, :] * stride_vsd,
+                maskv = (h_off[:, None] < num_heads) & (dv_off[None, :] < head_dim_v)
+                v = tl.load(vs_ptr + sidx * stride_vss + h_off[:, None] * stride_vsh + dv_off[None, :] * stride_vsd,
                             mask=maskv)
                 q_v, v_scales, v_zeros = _quant_int8(v)
-            tl.store(vc_ptr + bidx * stride_vcb + h_off[:, None] * stride_vch +
-                     dv_off[None, :] * stride_vcd,
+            tl.store(vc_ptr + bidx * stride_vcb + h_off[:, None] * stride_vch + dv_off[None, :] * stride_vcd,
                      q_v,
                      mask=maskv)
-            tl.store(
-                vsz_ptr + bidx * stride_vszb + h_off[:, None] * stride_vszh +
-                szd_off[None, :] * stride_vszd,
-                v_scales[:, None],
-                mask=(h_off[:, None] < num_heads) & (szd_off[None, :] < 1))
-            tl.store(
-                vsz_ptr + bidx * stride_vszb + h_off[:, None] * stride_vszh +
-                szd_off[None, :] * stride_vszd,
-                v_zeros[:, None],
-                mask=(h_off[:, None] < num_heads) & (szd_off[None, :] == 1))
+            tl.store(vsz_ptr + bidx * stride_vszb + h_off[:, None] * stride_vszh + szd_off[None, :] * stride_vszd,
+                     v_scales[:, None],
+                     mask=(h_off[:, None] < num_heads) & (szd_off[None, :] < 1))
+            tl.store(vsz_ptr + bidx * stride_vszb + h_off[:, None] * stride_vszh + szd_off[None, :] * stride_vszd,
+                     v_zeros[:, None],
+                     mask=(h_off[:, None] < num_heads) & (szd_off[None, :] == 1))
 
 
 def fill_kv_cache(k_states: Tensor,

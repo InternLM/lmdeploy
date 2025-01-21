@@ -9,8 +9,7 @@ class TestAutoBackend:
 
     @pytest.fixture
     def turbomind_workspace(self):
-        workspace = tempfile.TemporaryDirectory(
-            'internlm-chat-7b-turbomind').name
+        workspace = tempfile.TemporaryDirectory('internlm-chat-7b-turbomind').name
         os.makedirs(os.path.join(workspace, 'triton_models'), exist_ok=True)
         return workspace
 

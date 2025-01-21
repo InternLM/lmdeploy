@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
 import math
 from typing import Any, Iterable, List, Optional, Tuple
 
@@ -7,10 +8,8 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, GeluAndMul,
-                                 RMSNorm, RopeType, build_rotary_embedding)
-from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
-                                        build_qkv_proj, build_rowwise_linear)
+from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, GeluAndMul, RMSNorm, RopeType, build_rotary_embedding
+from lmdeploy.pytorch.nn.linear import build_merged_colwise_linear, build_qkv_proj, build_rowwise_linear
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
@@ -31,19 +30,17 @@ class GemmaAttention(nn.Module):
         num_key_value_heads = config.num_key_value_heads
         hidden_size = config.hidden_size
         head_dim = config.head_dim
-        num_replicate_kv_heads = getattr(config,
-                                         'num_replicate_key_value_heads', 1)
+        num_replicate_kv_heads = getattr(config, 'num_replicate_key_value_heads', 1)
         # packed qkv
-        self.qkv_proj = build_qkv_proj(
-            hidden_size,
-            num_q_heads=num_heads,
-            num_kv_heads=num_key_value_heads,
-            head_size=head_dim,
-            bias=config.attention_bias,
-            quant_config=quantization_config,
-            dtype=dtype,
-            device=device,
-            num_replicate_kv_heads=num_replicate_kv_heads)
+        self.qkv_proj = build_qkv_proj(hidden_size,
+                                       num_q_heads=num_heads,
+                                       num_kv_heads=num_key_value_heads,
+                                       head_size=head_dim,
+                                       bias=config.attention_bias,
+                                       quant_config=quantization_config,
+                                       dtype=dtype,
+                                       device=device,
+                                       num_replicate_kv_heads=num_replicate_kv_heads)
 
         # rotary embedding
         self.apply_rotary_pos_emb = ApplyRotaryEmb()
@@ -52,8 +49,7 @@ class GemmaAttention(nn.Module):
         self.scaling = 1 / math.sqrt(config.head_dim)
         if hasattr(config, 'query_pre_attn_scalar'):
             self.scaling = config.query_pre_attn_scalar**-0.5
-        self.sliding_window = (getattr(config, 'sliding_window', -1)
-                               if not bool(layer_idx % 2) else -1)
+        self.sliding_window = (getattr(config, 'sliding_window', -1) if not bool(layer_idx % 2) else -1)
         logit_softcapping = getattr(config, 'attn_logit_softcapping', None)
         self.attn_fwd = Attention(num_heads,
                                   head_dim,
@@ -83,8 +79,7 @@ class GemmaAttention(nn.Module):
         qkv_states = self.qkv_proj(hidden_states)
         # (-1, heads, head_dim)
         qkv_states = qkv_states.flatten(0, -2)
-        query_states, key_states, value_states = self.qkv_proj.split_qkv(
-            qkv_states)
+        query_states, key_states, value_states = self.qkv_proj.split_qkv(qkv_states)
 
         # apply rotary embedding
         cos, sin = rotary_pos_emb
@@ -104,10 +99,8 @@ class GemmaAttention(nn.Module):
             past_key_value[0],
             past_key_value[1],
             attn_metadata,
-            k_scales_zeros=None
-            if len(past_key_value) == 2 else past_key_value[2],
-            v_scales_zeros=None
-            if len(past_key_value) == 2 else past_key_value[3],
+            k_scales_zeros=None if len(past_key_value) == 2 else past_key_value[2],
+            v_scales_zeros=None if len(past_key_value) == 2 else past_key_value[3],
             inplace=True,
         )
         attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
@@ -120,10 +113,7 @@ class GemmaAttention(nn.Module):
 class GemmaMLP(nn.Module):
     """mlp."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         # gate up
@@ -173,10 +163,7 @@ class GemmaDecoderLayer(nn.Module):
         quantization_config = getattr(config, 'quantization_config', None)
 
         # build attention layer
-        self.self_attn = GemmaAttention(config,
-                                        layer_idx,
-                                        dtype=dtype,
-                                        device=device)
+        self.self_attn = GemmaAttention(config, layer_idx, dtype=dtype, device=device)
 
         # build MLP
         self.mlp = GemmaMLP(config, dtype=dtype, device=device)
@@ -189,27 +176,24 @@ class GemmaDecoderLayer(nn.Module):
                                        device=device)
 
         # build attention layer norm
-        self.post_attention_layernorm = RMSNorm(
-            config.hidden_size,
-            config.rms_norm_eps,
-            quant_config=quantization_config,
-            dtype=dtype,
-            device=device)
+        self.post_attention_layernorm = RMSNorm(config.hidden_size,
+                                                config.rms_norm_eps,
+                                                quant_config=quantization_config,
+                                                dtype=dtype,
+                                                device=device)
 
         self.model_type = config.model_type
         if self.model_type == 'gemma2':
-            self.pre_feedforward_layernorm = RMSNorm(
-                config.hidden_size,
-                config.rms_norm_eps,
-                quant_config=quantization_config,
-                dtype=dtype,
-                device=device)
-            self.post_feedforward_layernorm = RMSNorm(
-                config.hidden_size,
-                config.rms_norm_eps,
-                quant_config=quantization_config,
-                dtype=dtype,
-                device=device)
+            self.pre_feedforward_layernorm = RMSNorm(config.hidden_size,
+                                                     config.rms_norm_eps,
+                                                     quant_config=quantization_config,
+                                                     dtype=dtype,
+                                                     device=device)
+            self.post_feedforward_layernorm = RMSNorm(config.hidden_size,
+                                                      config.rms_norm_eps,
+                                                      quant_config=quantization_config,
+                                                      dtype=dtype,
+                                                      device=device)
 
     def forward(
         self,
@@ -224,8 +208,7 @@ class GemmaDecoderLayer(nn.Module):
             residual = hidden_states
             hidden_states = self.input_layernorm(hidden_states)
         else:
-            hidden_states, residual = self.input_layernorm(
-                hidden_states, residual)
+            hidden_states, residual = self.input_layernorm(hidden_states, residual)
 
         # Self Attention
         hidden_states = self.self_attn(
@@ -239,13 +222,11 @@ class GemmaDecoderLayer(nn.Module):
 
         if self.model_type == 'gemma2':
             hidden_states = self.post_attention_layernorm(hidden_states)
-            hidden_states, residual = self.pre_feedforward_layernorm(
-                hidden_states, residual)
+            hidden_states, residual = self.pre_feedforward_layernorm(hidden_states, residual)
             hidden_states = self.mlp(hidden_states)
             hidden_states = self.post_feedforward_layernorm(hidden_states)
         else:
-            hidden_states, residual = self.post_attention_layernorm(
-                hidden_states, residual)
+            hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
             hidden_states = self.mlp(hidden_states)
 
         outputs = (hidden_states, residual)
@@ -255,10 +236,7 @@ class GemmaDecoderLayer(nn.Module):
 class GemmaModel(nn.Module):
     """model."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.config = config
         self.padding_idx = config.pad_token_id
@@ -277,10 +255,7 @@ class GemmaModel(nn.Module):
         ])
 
         # build norm
-        self.norm = RMSNorm(config.hidden_size,
-                            config.rms_norm_eps,
-                            dtype=dtype,
-                            device=device)
+        self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
 
         # build rotary embedding
         rope_scaling = getattr(config, 'rope_scaling', None)
@@ -382,8 +357,7 @@ class GemmaForCausalLM(nn.Module, CudaGraphMixin):
                                             bias=False,
                                             dtype=dtype,
                                             device=device)
-        self.final_logit_softcapping = getattr(config,
-                                               'final_logit_softcapping', None)
+        self.final_logit_softcapping = getattr(config, 'final_logit_softcapping', None)
 
     def forward(
         self,
@@ -435,9 +409,7 @@ class GemmaForCausalLM(nn.Module, CudaGraphMixin):
         if vision_embeddings is not None and len(vision_embeddings) > 0:
             if inputs_embeds is None:
                 inputs_embeds = self.get_input_embeddings()(input_ids)
-            inputs_embeds[:,
-                          vision_embedding_indexing, :] = vision_embeddings.to(
-                              inputs_embeds)
+            inputs_embeds[:, vision_embedding_indexing, :] = vision_embeddings.to(inputs_embeds)
 
         # inputs of forward
         return dict(
@@ -464,16 +436,15 @@ class GemmaForCausalLM(nn.Module, CudaGraphMixin):
             ('.gate_up_proj', '.up_proj', 1),
         ]
         norm_layers = [
-            '.norm', '.input_layernorm', '.post_attention_layernorm',
-            'pre_feedforward_layernorm', 'post_feedforward_layernorm'
+            '.norm', '.input_layernorm', '.post_attention_layernorm', 'pre_feedforward_layernorm',
+            'post_feedforward_layernorm'
         ]
 
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:
             if 'rotary_emb.inv_freq' in name:
                 continue
-            if ('rotary_emb.cos_cached' in name
-                    or 'rotary_emb.sin_cached' in name):
+            if ('rotary_emb.cos_cached' in name or 'rotary_emb.sin_cached' in name):
                 continue
             if 'lm_head' in name:
                 continue

@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
 from typing import Any, Iterable, List, Optional, Tuple
 
 import torch
@@ -6,10 +7,8 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, RopeType,
-                                 SiluAndMul, build_rotary_embedding)
-from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
-                                        build_qkv_proj, build_rowwise_linear)
+from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
+from lmdeploy.pytorch.nn.linear import build_merged_colwise_linear, build_qkv_proj, build_rowwise_linear
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
@@ -18,14 +17,10 @@ from .utils.cudagraph import CudaGraphMixin
 class QWenAttention(torch.nn.Module):
     """Parallel self-attention layer abstract class.
 
-    Self-attention layer takes input with size [s, b, h] and returns output of
-    the same size.
+    Self-attention layer takes input with size [s, b, h] and returns output of the same size.
     """
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
 
@@ -78,8 +73,7 @@ class QWenAttention(torch.nn.Module):
         qkv_states = self.c_attn(hidden_states)
         # (-1, heads, head_dim)
         qkv_states = qkv_states.flatten(0, -2)
-        (query_states, key_states,
-         value_states) = self.c_attn.split_qkv(qkv_states)
+        (query_states, key_states, value_states) = self.c_attn.split_qkv(qkv_states)
 
         # apply rotary embedding
         cos, sin = rotary_pos_emb
@@ -99,10 +93,8 @@ class QWenAttention(torch.nn.Module):
             past_key_value[0],
             past_key_value[1],
             attn_metadata,
-            k_scales_zeros=None
-            if len(past_key_value) == 2 else past_key_value[2],
-            v_scales_zeros=None
-            if len(past_key_value) == 2 else past_key_value[3],
+            k_scales_zeros=None if len(past_key_value) == 2 else past_key_value[2],
+            v_scales_zeros=None if len(past_key_value) == 2 else past_key_value[3],
             inplace=True,
         )
         attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
@@ -115,10 +107,7 @@ class QWenAttention(torch.nn.Module):
 class QWenMLP(nn.Module):
     """mlp."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         ff_dim_in = config.intermediate_size // 2
@@ -155,8 +144,7 @@ class QWenMLP(nn.Module):
 class QWenBlock(torch.nn.Module):
     """A single transformer layer.
 
-    Transformer layer takes input with size [s, b, h] and returns an output of
-    the same size.
+    Transformer layer takes input with size [s, b, h] and returns an output of the same size.
     """
 
     def __init__(self,
@@ -224,23 +212,15 @@ class QWenBlock(torch.nn.Module):
 
 class QWenModel(nn.Module):
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.vocab_size = config.vocab_size
         self.embed_dim = config.hidden_size
-        self.wte = nn.Embedding(self.vocab_size,
-                                self.embed_dim,
-                                dtype=dtype,
-                                device=device)
+        self.wte = nn.Embedding(self.vocab_size, self.embed_dim, dtype=dtype, device=device)
 
         # build all decode layers
-        self.h = nn.ModuleList([
-            QWenBlock(config, layer_idx, dtype=dtype, device=device)
-            for layer_idx in range(config.num_hidden_layers)
-        ])
+        self.h = nn.ModuleList(
+            [QWenBlock(config, layer_idx, dtype=dtype, device=device) for layer_idx in range(config.num_hidden_layers)])
 
         # build rotary embedding
         emb_type = RopeType.LinearScaling
@@ -249,8 +229,7 @@ class QWenModel(nn.Module):
         else:
             assert config.rotary_pct < 1
             self.rotary_ndims = int(config.kv_channels * config.rotary_pct)
-        rope_dim = (self.rotary_ndims
-                    if self.rotary_ndims is not None else config.kv_channels)
+        rope_dim = (self.rotary_ndims if self.rotary_ndims is not None else config.kv_channels)
         rope_max_pos_emb = getattr(config, 'max_position_embeddings', 4096)
         rope_base = config.rotary_emb_base
         self.rotary_emb = build_rotary_embedding(
@@ -260,10 +239,7 @@ class QWenModel(nn.Module):
             emb_type=emb_type,
         )
 
-        self.ln_f = RMSNorm(self.embed_dim,
-                            eps=config.layer_norm_epsilon,
-                            dtype=dtype,
-                            device=device)
+        self.ln_f = RMSNorm(self.embed_dim, eps=config.layer_norm_epsilon, dtype=dtype, device=device)
 
     def forward(
         self,
@@ -381,9 +357,7 @@ class QWenLMHeadModel(nn.Module, CudaGraphMixin):
         if vision_embeddings is not None and len(vision_embeddings) > 0:
             if inputs_embeds is None:
                 inputs_embeds = self.get_input_embeddings()(input_ids)
-            inputs_embeds[:,
-                          vision_embedding_indexing, :] = vision_embeddings.to(
-                              inputs_embeds)
+            inputs_embeds[:, vision_embedding_indexing, :] = vision_embeddings.to(inputs_embeds)
 
         # inputs of forward
         return dict(
@@ -409,8 +383,7 @@ class QWenLMHeadModel(nn.Module, CudaGraphMixin):
                 continue
             if 'rotary_pos_emb.inv_freq' in name:
                 continue
-            if ('rotary_pos_emb.cos_cached' in name
-                    or 'rotary_pos_emb.sin_cached' in name):
+            if ('rotary_pos_emb.cos_cached' in name or 'rotary_pos_emb.sin_cached' in name):
                 continue
             if (self.config.tie_word_embeddings and 'lm_head.weight' in name):
                 continue

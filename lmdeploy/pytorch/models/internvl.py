@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import torch
@@ -6,13 +7,11 @@ import torch.nn.functional as F
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
-from lmdeploy.pytorch.engine.input_process import (BaseModelInputProcessor,
-                                                   PreprocessInputResult)
+from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
 from lmdeploy.pytorch.nn import LayerNorm, RMSNorm
-from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_qkv_proj,
-                                        build_rowwise_linear)
+from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_qkv_proj, build_rowwise_linear
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .patch import build_model_from_hf_config
@@ -23,18 +22,14 @@ from .utils.model import DeployModelMixin
 class InternVisionEmbeddings(nn.Module):
     """intern vision embedding."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.config = config
         self.embed_dim = config.hidden_size
         self.image_size = config.image_size
         self.patch_size = config.patch_size
 
-        self.class_embedding = nn.Parameter(
-            torch.empty(1, 1, self.embed_dim, dtype=dtype, device=device), )
+        self.class_embedding = nn.Parameter(torch.empty(1, 1, self.embed_dim, dtype=dtype, device=device), )
 
         self.patch_embedding = nn.Conv2d(in_channels=3,
                                          out_channels=self.embed_dim,
@@ -47,40 +42,27 @@ class InternVisionEmbeddings(nn.Module):
         self.num_positions = self.num_patches + 1
 
         self.position_embedding = nn.Parameter(
-            torch.empty(1,
-                        self.num_positions,
-                        self.embed_dim,
-                        dtype=dtype,
-                        device=device))
+            torch.empty(1, self.num_positions, self.embed_dim, dtype=dtype, device=device))
 
     def _get_pos_embed(self, pos_embed, H, W):
         target_dtype = pos_embed.dtype
-        pos_embed = pos_embed.float().reshape(
-            1, self.image_size // self.patch_size,
-            self.image_size // self.patch_size, -1).permute(0, 3, 1, 2)
-        pos_embed = F.interpolate(pos_embed,
-                                  size=(H, W),
-                                  mode='bicubic',
-                                  align_corners=False).reshape(
-                                      1, -1, H * W).permute(0, 2,
-                                                            1).to(target_dtype)
+        pos_embed = pos_embed.float().reshape(1, self.image_size // self.patch_size, self.image_size // self.patch_size,
+                                              -1).permute(0, 3, 1, 2)
+        pos_embed = F.interpolate(pos_embed, size=(H, W), mode='bicubic',
+                                  align_corners=False).reshape(1, -1, H * W).permute(0, 2, 1).to(target_dtype)
         return pos_embed
 
     def forward(self, pixel_values: torch.FloatTensor) -> torch.Tensor:
         target_dtype = self.patch_embedding.weight.dtype
-        patch_embeds = self.patch_embedding(
-            pixel_values)  # shape = [*, channel, width, height]
+        patch_embeds = self.patch_embedding(pixel_values)  # shape = [*, channel, width, height]
         batch_size, _, height, width = patch_embeds.shape
         patch_embeds = patch_embeds.flatten(2).transpose(1, 2)
-        class_embeds = self.class_embedding.expand(batch_size, 1,
-                                                   -1).to(target_dtype)
+        class_embeds = self.class_embedding.expand(batch_size, 1, -1).to(target_dtype)
         embeddings = torch.cat([class_embeds, patch_embeds], dim=1)
-        position_embedding = torch.cat([
-            self.position_embedding[:, :1, :],
-            self._get_pos_embed(self.position_embedding[:, 1:, :], height,
-                                width)
-        ],
-                                       dim=1)
+        position_embedding = torch.cat(
+            [self.position_embedding[:, :1, :],
+             self._get_pos_embed(self.position_embedding[:, 1:, :], height, width)],
+            dim=1)
         embeddings = embeddings + position_embedding.to(target_dtype)
         return embeddings
 
@@ -94,10 +76,7 @@ NORM2FN = {
 class InternAttention(nn.Module):
     """intern vl attention."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.config = config
         quantization_config = getattr(config, 'quantization_config', None)
@@ -176,10 +155,7 @@ class InternAttention(nn.Module):
 class InternMLP(nn.Module):
     """intern vl mlp."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         from transformers.activations import ACT2FN
         self.config = config
@@ -214,10 +190,7 @@ class InternMLP(nn.Module):
 class InternVisionEncoderLayer(nn.Module):
     """intern vision encoder layer."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.config = config
         self.embed_dim = config.hidden_size
@@ -226,30 +199,20 @@ class InternVisionEncoderLayer(nn.Module):
 
         self.attn = InternAttention(config, dtype=dtype, device=device)
         self.mlp = InternMLP(config, dtype=dtype, device=device)
-        self.norm1 = NORM2FN[self.norm_type](self.embed_dim,
-                                             eps=config.layer_norm_eps,
-                                             dtype=dtype,
-                                             device=device)
-        self.norm2 = NORM2FN[self.norm_type](self.embed_dim,
-                                             eps=config.layer_norm_eps,
-                                             dtype=dtype,
-                                             device=device)
+        self.norm1 = NORM2FN[self.norm_type](self.embed_dim, eps=config.layer_norm_eps, dtype=dtype, device=device)
+        self.norm2 = NORM2FN[self.norm_type](self.embed_dim, eps=config.layer_norm_eps, dtype=dtype, device=device)
 
-        self.ls1 = nn.Parameter(
-            torch.empty(self.embed_dim, dtype=dtype, device=device))
-        self.ls2 = nn.Parameter(
-            torch.empty(self.embed_dim, dtype=dtype, device=device))
+        self.ls1 = nn.Parameter(torch.empty(self.embed_dim, dtype=dtype, device=device))
+        self.ls2 = nn.Parameter(torch.empty(self.embed_dim, dtype=dtype, device=device))
 
     def forward(
         self,
         hidden_states: torch.Tensor,
     ):
         """forward."""
-        hidden_states = hidden_states + self.attn(
-            self.norm1(hidden_states).to(hidden_states.dtype)) * self.ls1
+        hidden_states = hidden_states + self.attn(self.norm1(hidden_states).to(hidden_states.dtype)) * self.ls1
 
-        hidden_states = hidden_states + self.mlp(
-            self.norm2(hidden_states).to(hidden_states.dtype)) * self.ls2
+        hidden_states = hidden_states + self.mlp(self.norm2(hidden_states).to(hidden_states.dtype)) * self.ls2
 
         return hidden_states
 
@@ -257,16 +220,11 @@ class InternVisionEncoderLayer(nn.Module):
 class InternVisionEncoder(nn.Module):
     """intern vision encoder."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.config = config
-        self.layers = nn.ModuleList([
-            InternVisionEncoderLayer(config, dtype=dtype, device=device)
-            for idx in range(config.num_hidden_layers)
-        ])
+        self.layers = nn.ModuleList(
+            [InternVisionEncoderLayer(config, dtype=dtype, device=device) for idx in range(config.num_hidden_layers)])
 
     def forward(
         self,
@@ -283,16 +241,11 @@ class InternVisionEncoder(nn.Module):
 class InternVisionModel(nn.Module):
     """intern vision model."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.config = config
 
-        self.embeddings = InternVisionEmbeddings(config,
-                                                 dtype=dtype,
-                                                 device=device)
+        self.embeddings = InternVisionEmbeddings(config, dtype=dtype, device=device)
         self.encoder = InternVisionEncoder(config, dtype=dtype, device=device)
 
     def forward(
@@ -334,35 +287,22 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
                 device=device,
             )
         else:
-            self.vision_model = InternVisionModel(vision_config,
-                                                  dtype=dtype,
-                                                  device=device)
+            self.vision_model = InternVisionModel(vision_config, dtype=dtype, device=device)
 
-        self.language_model = build_model_from_hf_config(llm_config,
-                                                         dtype=dtype,
-                                                         device=device)
+        self.language_model = build_model_from_hf_config(llm_config, dtype=dtype, device=device)
 
         vit_hidden_size = config.vision_config.hidden_size
         llm_hidden_size = config.llm_config.hidden_size
         self.downsample_ratio = config.downsample_ratio
         self.mlp1 = nn.Sequential(
-            nn.LayerNorm(vit_hidden_size * int(1 / self.downsample_ratio)**2,
-                         dtype=dtype,
-                         device=device),
-            nn.Linear(vit_hidden_size * int(1 / self.downsample_ratio)**2,
-                      llm_hidden_size,
-                      dtype=dtype,
-                      device=device), nn.GELU(),
-            nn.Linear(llm_hidden_size,
-                      llm_hidden_size,
-                      dtype=dtype,
-                      device=device))
+            nn.LayerNorm(vit_hidden_size * int(1 / self.downsample_ratio)**2, dtype=dtype, device=device),
+            nn.Linear(vit_hidden_size * int(1 / self.downsample_ratio)**2, llm_hidden_size, dtype=dtype, device=device),
+            nn.GELU(), nn.Linear(llm_hidden_size, llm_hidden_size, dtype=dtype, device=device))
 
         # for Mono-InternVL
         if self.is_mono:
-            assert dtype != torch.float16, (
-                'Currently Mono-InternVL does not support FP16 due to'
-                'numerical instability. Please use BF16 instead.')
+            assert dtype != torch.float16, ('Currently Mono-InternVL does not support FP16 due to'
+                                            'numerical instability. Please use BF16 instead.')
 
         self.input_processor = InternVLInputProcessor(self.config, dtype)
 
@@ -374,8 +314,7 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
         x = x.permute(0, 2, 1, 3).contiguous()
         # N, H * scale, W, C // scale -->
         # N, H * scale, W * scale, C // (scale ** 2)
-        x = x.view(n, int(h * scale_factor), int(w * scale_factor),
-                   int(c / (scale_factor * scale_factor)))
+        x = x.view(n, int(h * scale_factor), int(w * scale_factor), int(c / (scale_factor * scale_factor)))
         x = x.permute(0, 2, 1, 3).contiguous()
         return x
 
@@ -391,10 +330,8 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
 
         h = w = int(vit_embeds.shape[1]**0.5)
         vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], h, w, -1)
-        vit_embeds = self.pixel_shuffle(vit_embeds,
-                                        scale_factor=self.downsample_ratio)
-        vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], -1,
-                                        vit_embeds.shape[-1])
+        vit_embeds = self.pixel_shuffle(vit_embeds, scale_factor=self.downsample_ratio)
+        vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], -1, vit_embeds.shape[-1])
         vit_embeds = self.mlp1(vit_embeds)
         return vit_embeds
 
@@ -420,14 +357,13 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
             inputs_embeds = lang_embeds
 
         if self.is_mono:
-            return self.language_model.forward(
-                input_ids=input_ids,
-                inputs_embeds=inputs_embeds,
-                past_key_values=past_key_values,
-                position_ids=position_ids,
-                attn_metadata=attn_metadata,
-                vision_embedding_indexing=vision_embedding_indexing,
-                text_embedding_indexing=text_embedding_indexing)
+            return self.language_model.forward(input_ids=input_ids,
+                                               inputs_embeds=inputs_embeds,
+                                               past_key_values=past_key_values,
+                                               position_ids=position_ids,
+                                               attn_metadata=attn_metadata,
+                                               vision_embedding_indexing=vision_embedding_indexing,
+                                               text_embedding_indexing=text_embedding_indexing)
         else:
             return self.language_model.forward(input_ids=input_ids,
                                                inputs_embeds=inputs_embeds,
@@ -460,14 +396,9 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
         pixel_values = None
         image_mask = None
         if context.input_multimodals is not None:
-            pixel_values = [
-                input_mm.get('image', [])
-                for input_mm in context.input_multimodals
-            ]
+            pixel_values = [input_mm.get('image', []) for input_mm in context.input_multimodals]
             # flatten batch
-            pixel_values = [
-                data for im_data in pixel_values for data in im_data
-            ]
+            pixel_values = [data for im_data in pixel_values for data in im_data]
             if len(pixel_values) > 0:
                 image_token_id = pixel_values[0].meta['image_token_id']
                 image_mask = input_ids == image_token_id
@@ -477,24 +408,19 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
                 image_mask = None
 
         if self.is_mono and pixel_values is not None:
-            vision_embedding_indexing = torch.arange(input_ids.shape[1],
-                                                     device=input_ids.device)
-            vision_embedding_indexing = vision_embedding_indexing[
-                image_mask[0]]
+            vision_embedding_indexing = torch.arange(input_ids.shape[1], device=input_ids.device)
+            vision_embedding_indexing = vision_embedding_indexing[image_mask[0]]
 
         # get inputs from context
         if vision_embeddings is not None and len(vision_embeddings) > 0:
             vision_embedding_indexing = context.input_embedding_indexing
             if inputs_embeds is None:
                 inputs_embeds = self.get_input_embeddings()(input_ids)
-            inputs_embeds[:,
-                          vision_embedding_indexing, :] = vision_embeddings.to(
-                              inputs_embeds)
+            inputs_embeds[:, vision_embedding_indexing, :] = vision_embeddings.to(inputs_embeds)
 
         if self.is_mono and vision_embedding_indexing is not None:
             all_indices = torch.arange(input_ids.shape[1]).to(input_ids)
-            text_embedding_indexing = all_indices[
-                ~torch.isin(all_indices, vision_embedding_indexing)]
+            text_embedding_indexing = all_indices[~torch.isin(all_indices, vision_embedding_indexing)]
             if vision_embedding_indexing.numel() == 0:
                 vision_embedding_indexing = None
             if text_embedding_indexing.numel() == 0:
@@ -521,8 +447,7 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
                 inputs_embeds=inputs_embeds,
             )
 
-    def load_lora_weights(self, weights: Iterable[Tuple[str, torch.Tensor]],
-                          adapter_id: int):
+    def load_lora_weights(self, weights: Iterable[Tuple[str, torch.Tensor]], adapter_id: int):
         """load lora weights."""
 
         if hasattr(self.language_model, 'load_lora_weights'):
@@ -536,9 +461,13 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
         """load weights."""
 
         lang_prefix = 'language_model.'
+        lang_prefix_length = len(lang_prefix)
+        new_weights = dict()
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:
             if name.startswith(lang_prefix):
+                new_key = name[lang_prefix_length:]
+                new_weights[new_key] = loaded_weight
                 continue
 
             if 'qkv' in name:
@@ -550,14 +479,6 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
             else:
                 param = params_dict[name]
                 load_weight(param, loaded_weight)
-
-        lang_prefix_length = len(lang_prefix)
-        new_weights = dict()
-        for key, val in weights:
-            if not key.startswith(lang_prefix):
-                continue
-            new_key = key[lang_prefix_length:]
-            new_weights[new_key] = val
 
         self.language_model.load_weights(new_weights.items())
 
@@ -597,11 +518,10 @@ class InternVLInputProcessor(BaseModelInputProcessor):
             if isinstance(num_pad, torch.Tensor):
                 num_pad = num_pad.item()
 
-            mm_data = MultiModalTensor(
-                data=pixel_values,
-                start=offset,
-                end=offset + num_pad,
-                meta=dict(image_token_id=image_token_id))
+            mm_data = MultiModalTensor(data=pixel_values,
+                                       start=offset,
+                                       end=offset + num_pad,
+                                       meta=dict(image_token_id=image_token_id))
             input_imgs.append(mm_data)
 
         result = PreprocessInputResult(
