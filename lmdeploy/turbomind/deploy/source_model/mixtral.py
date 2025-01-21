@@ -18,8 +18,7 @@ class MixtralReader(LlamaReader):
         return (*result, )
 
     def moe_ffn_gate(self, i):
-        return self.params.get(
-            f'model.layers.{i}.block_sparse_moe.gate.weight')
+        return self.params.get(f'model.layers.{i}.block_sparse_moe.gate.weight')
 
 
 @INPUT_MODELS.register_module(name='mixtral')

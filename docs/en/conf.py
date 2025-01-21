@@ -186,8 +186,7 @@ latex_elements = {
 # (source start file, target name, title,
 #  author, documentclass [howto, manual, or own class]).
 latex_documents = [
-    (master_doc, 'lmdeploy.tex', 'lmdeploy Documentation',
-     'LMDeploy Contributors', 'manual'),
+    (master_doc, 'lmdeploy.tex', 'lmdeploy Documentation', 'LMDeploy Contributors', 'manual'),
 ]
 
 # -- Options for manual page output ------------------------------------------
@@ -202,8 +201,8 @@ man_pages = [(master_doc, 'lmdeploy', 'lmdeploy Documentation', [author], 1)]
 # (source start file, target name, title, author,
 #  dir menu entry, description, category)
 texinfo_documents = [
-    (master_doc, 'lmdeploy', 'lmdeploy Documentation', author, 'lmdeploy',
-     'One line description of project.', 'Miscellaneous'),
+    (master_doc, 'lmdeploy', 'lmdeploy Documentation', author, 'lmdeploy', 'One line description of project.',
+     'Miscellaneous'),
 ]
 
 # -- Options for Epub output -------------------------------------------------
@@ -243,8 +242,7 @@ autodoc_mock_imports = [
 
 intersphinx_mapping = {
     'python': ('https://docs.python.org/3.10', None),
-    'typing_extensions':
-    ('https://typing-extensions.readthedocs.io/en/latest', None),
+    'typing_extensions': ('https://typing-extensions.readthedocs.io/en/latest', None),
     'pillow': ('https://pillow.readthedocs.io/en/stable', None),
     'numpy': ('https://numpy.org/doc/stable', None),
     'torch': ('https://pytorch.org/docs/stable', None),

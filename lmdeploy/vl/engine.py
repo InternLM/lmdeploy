@@ -1,12 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Union
 
 import torch
 
-from lmdeploy.messages import (PytorchEngineConfig, TurbomindEngineConfig,
-                               VisionConfig)
+from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig, VisionConfig
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.builder import load_vl_model
 
@@ -31,12 +31,9 @@ class ImageEncoder:
         model_path: str,
         backend: str,
         vision_config: VisionConfig = None,
-        backend_config: Optional[Union[TurbomindEngineConfig,
-                                       PytorchEngineConfig]] = None,
+        backend_config: Optional[Union[TurbomindEngineConfig, PytorchEngineConfig]] = None,
     ):
-        self.model = load_vl_model(model_path,
-                                   backend,
-                                   backend_config=backend_config)
+        self.model = load_vl_model(model_path, backend, backend_config=backend_config)
         if vision_config is None:
             vision_config = VisionConfig()
         self.vision_config = vision_config
@@ -46,8 +43,7 @@ class ImageEncoder:
 
     async def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """preprocess multimodal data in the messages."""
-        future = asyncio.get_event_loop().run_in_executor(
-            self.executor, self.model.preprocess, messages)
+        future = asyncio.get_event_loop().run_in_executor(self.executor, self.model.preprocess, messages)
         future.add_done_callback(_raise_exception_on_finish)
         outputs = await future
         return outputs
@@ -59,14 +55,13 @@ class ImageEncoder:
             messages (List[Dict]): a list of message, which is the output
             of `preprocess()`
         """
-        future = asyncio.get_event_loop().run_in_executor(
-            self.executor, self.model.forward, messages, self.max_batch_size)
+        future = asyncio.get_event_loop().run_in_executor(self.executor, self.model.forward, messages,
+                                                          self.max_batch_size)
         future.add_done_callback(_raise_exception_on_finish)
         outputs = await future
         return outputs
 
-    async def wrap_for_pytorch(self, messages: List[Dict], chat_template,
-                               tokenizer, sequence_start) -> List[Dict]:
+    async def wrap_for_pytorch(self, messages: List[Dict], chat_template, tokenizer, sequence_start) -> List[Dict]:
         """
         Args:
             messages (List[Dict]): a list of message, which is supposed to be
@@ -83,16 +78,14 @@ class ImageEncoder:
                 ]
             )
         """
-        result = self.model.to_pytorch(messages, chat_template, tokenizer,
-                                       sequence_start)
+        result = self.model.to_pytorch(messages, chat_template, tokenizer, sequence_start)
         # clear data
         for i, message in enumerate(messages):
             if isinstance(message['content'], List):
                 messages[i]['preprocess'] = None
         return result
 
-    async def wrap_for_turbomind(self, messages: List[Dict], chat_template,
-                                 tokenizer, sequence_start) -> Dict:
+    async def wrap_for_turbomind(self, messages: List[Dict], chat_template, tokenizer, sequence_start) -> Dict:
         """
         Args:
             messages (List[Dict]): a list of message, which is supposed to be
@@ -107,8 +100,7 @@ class ImageEncoder:
                 'input_embedding_ranges': list[torch.Tensor],
                 ...
         """
-        result = self.model.to_turbomind(messages, chat_template, tokenizer,
-                                         sequence_start)
+        result = self.model.to_turbomind(messages, chat_template, tokenizer, sequence_start)
         # clear data
         for i, message in enumerate(messages):
             if isinstance(message['content'], List):

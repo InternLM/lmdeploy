@@ -7,10 +7,7 @@ import numpy as np
 import torch
 
 
-def _export_weight(into: str,
-                   kv_qparams: np.array,
-                   out_path: str,
-                   tm_params: dict = None):
+def _export_weight(into: str, kv_qparams: np.array, out_path: str, tm_params: dict = None):
     """Save kv_qparams to disk or copy to tm_params."""
     if tm_params is None:
         print(into)
@@ -97,8 +94,7 @@ def _export_asym(key_stats: dict,
             k_zp = (k_max + k_min) / 2
             v_zp = (v_max + v_min) / 2
 
-            kv_qparams = np.array([k_scale, k_zp, v_scale, v_zp],
-                                  dtype=np.float32)
+            kv_qparams = np.array([k_scale, k_zp, v_scale, v_zp], dtype=np.float32)
             out_path = out_dir / f'layers.{layer_idx}.past_kv_scale.{i}.weight'
             info = f'Layer {layer_idx} MP {i} qparam: ' \
                 f'\t{k_scale} \t{k_zp} \t{v_scale} \t{v_zp}'
@@ -136,8 +132,7 @@ def main(work_dir: str,
     if kv_sym:
         _export_sym(key_stats, value_stats, kv_bits, tm_dir, num_tp, tm_params)
     else:
-        _export_asym(key_stats, value_stats, kv_bits, tm_dir, num_tp,
-                     tm_params)
+        _export_asym(key_stats, value_stats, kv_bits, tm_dir, num_tp, tm_params)
 
 
 if __name__ == '__main__':

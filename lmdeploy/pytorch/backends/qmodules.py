@@ -9,25 +9,17 @@ class RMSNormW8A8Impl(ABC):
     """RMS norm w8a8 implementation api."""
 
     @staticmethod
-    def create_weight(hidden_size: int,
-                      dtype: torch.dtype = None,
-                      device: torch.device = None):
+    def create_weight(hidden_size: int, dtype: torch.dtype = None, device: torch.device = None):
         """create weight."""
         if dtype is None:
             dtype = torch.float16
         if device is None:
             device = 'cuda'
-        weight = torch.nn.Parameter(torch.ones(hidden_size,
-                                               dtype=dtype,
-                                               device=device),
-                                    requires_grad=False)
+        weight = torch.nn.Parameter(torch.ones(hidden_size, dtype=dtype, device=device), requires_grad=False)
         return weight
 
     @abstractmethod
-    def forward(self,
-                x: torch.Tensor,
-                weight: torch.Tensor,
-                residual: torch.Tensor = None):
+    def forward(self, x: torch.Tensor, weight: torch.Tensor, residual: torch.Tensor = None):
         """forward."""
         raise NotImplementedError
 
@@ -37,9 +29,7 @@ class RMSNormW8A8Builder(ABC):
 
     @staticmethod
     @abstractmethod
-    def build(hidden_size: int,
-              eps: float = 1e-6,
-              quant_dtype: torch.dtype = torch.int8):
+    def build(hidden_size: int, eps: float = 1e-6, quant_dtype: torch.dtype = torch.int8):
         """build."""
         raise NotImplementedError
 
@@ -47,10 +37,7 @@ class RMSNormW8A8Builder(ABC):
 class LinearW8A8Impl(ABC):
     """linear w8a8 implementation api."""
 
-    def update_weights(self,
-                       weight: torch.Tensor,
-                       scale: torch.Tensor,
-                       bias: Optional[torch.Tensor] = None):
+    def update_weights(self, weight: torch.Tensor, scale: torch.Tensor, bias: Optional[torch.Tensor] = None):
         """update weights."""
         return weight, scale, bias
 

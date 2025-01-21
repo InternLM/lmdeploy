@@ -10,9 +10,8 @@ from lmdeploy.pytorch.model_inputs import StepContext
 class GraphRunner:
     """graph runner."""
 
-    def __init__(self, model: torch.nn.Module, model_config: ModelConfig,
-                 cache_config: CacheConfig, backend_config: BackendConfig,
-                 device: torch.device, **kwargs):
+    def __init__(self, model: torch.nn.Module, model_config: ModelConfig, cache_config: CacheConfig,
+                 backend_config: BackendConfig, device: torch.device, **kwargs):
         self.model = model
         self.ctx_mgr = model.ctx_mgr
         self.device = device

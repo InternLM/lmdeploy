@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # Modified from https://github.com/haotian-liu/LLaVA.git
+
 import ast
 import math
 import warnings
@@ -22,10 +23,9 @@ def check_llava_install():
     try:
         import llava  # noqa: F401
     except ImportError:
-        raise ImportError(
-            'To use LlavaVLModel, please install llava by '
-            '`pip install git+https://github.com/haotian-liu/LLaVA.git --no-deps`'  # noqa: E501
-        )
+        raise ImportError('To use LlavaVLModel, please install llava by '
+                          '`pip install git+https://github.com/haotian-liu/LLaVA.git --no-deps`'  # noqa: E501
+                          )
 
 
 def _clip_vision_tower_load_model(self, **kwargs):
@@ -70,15 +70,12 @@ def select_best_resolution(original_size, possible_resolutions):
 
     for width, height in possible_resolutions:
         scale = min(width / original_width, height / original_height)
-        downscaled_width, downscaled_height = int(original_width * scale), int(
-            original_height * scale)
-        effective_resolution = min(downscaled_width * downscaled_height,
-                                   original_width * original_height)
+        downscaled_width, downscaled_height = int(original_width * scale), int(original_height * scale)
+        effective_resolution = min(downscaled_width * downscaled_height, original_width * original_height)
         wasted_resolution = (width * height) - effective_resolution
 
-        if effective_resolution > max_effective_resolution or (
-                effective_resolution == max_effective_resolution
-                and wasted_resolution < min_wasted_resolution):
+        if effective_resolution > max_effective_resolution or (effective_resolution == max_effective_resolution
+                                                               and wasted_resolution < min_wasted_resolution):
             max_effective_resolution = effective_resolution
             min_wasted_resolution = wasted_resolution
             best_fit = (width, height)
@@ -162,14 +159,11 @@ def process_anyres_image(image, processor, grid_pinpoints):
 
     patches = divide_to_patches(image_padded, processor.crop_size['height'])
 
-    image_original_resize = image.resize(
-        (processor.size['shortest_edge'], processor.size['shortest_edge']))
+    image_original_resize = image.resize((processor.size['shortest_edge'], processor.size['shortest_edge']))
 
     image_patches = [image_original_resize] + patches
     image_patches = [
-        processor.preprocess(image_patch,
-                             return_tensors='pt')['pixel_values'][0]
-        for image_patch in image_patches
+        processor.preprocess(image_patch, return_tensors='pt')['pixel_values'][0] for image_patch in image_patches
     ]
     return torch.stack(image_patches, dim=0)
 
@@ -193,15 +187,12 @@ def process_images(images, image_processor, model_cfg):
     new_images = []
     if image_aspect_ratio == 'pad':
         for image in images:
-            image = expand2square(
-                image, tuple(int(x * 255) for x in image_processor.image_mean))
-            image = image_processor.preprocess(
-                image, return_tensors='pt')['pixel_values'][0]
+            image = expand2square(image, tuple(int(x * 255) for x in image_processor.image_mean))
+            image = image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
             new_images.append(image)
     elif image_aspect_ratio == 'anyres':
         for image in images:
-            image = process_anyres_image(image, image_processor,
-                                         model_cfg.image_grid_pinpoints)
+            image = process_anyres_image(image, image_processor, model_cfg.image_grid_pinpoints)
             new_images.append(image)
     else:
         return image_processor(images, return_tensors='pt')['pixel_values']
@@ -232,8 +223,7 @@ class LlavaVisionModel(LlavaHfVisionModel):
 
     def build_preprocessor(self):
         from transformers import CLIPImageProcessor
-        self.image_processor = CLIPImageProcessor.from_pretrained(
-            self.hf_config.mm_vision_tower)
+        self.image_processor = CLIPImageProcessor.from_pretrained(self.hf_config.mm_vision_tower)
         config = AutoConfig.from_pretrained(self.hf_config.mm_vision_tower)
         image_size = config.vision_config.image_size
         patch_size = config.vision_config.patch_size
@@ -255,8 +245,7 @@ class LlavaVisionModel(LlavaHfVisionModel):
                 f'expect model_type llava and llava_llama '\
                 f'but got {self.config.model_type}'
         elif self.arch == 'LlavaMistralForCausalLM':
-            from llava.model.language_model.llava_mistral import \
-                LlavaMistralConfig
+            from llava.model.language_model.llava_mistral import LlavaMistralConfig
             self.config = LlavaMistralConfig.from_pretrained(self.model_path)
         else:
             assert 0, f'unsupported arch {self.arch}'
@@ -267,10 +256,8 @@ class LlavaVisionModel(LlavaHfVisionModel):
         with init_empty_weights(), warnings.catch_warnings(), \
                 init_llava_vision_tower(self.config):
             warnings.simplefilter('ignore')
-            self.config.quantization_config = {
-            }  # disable vision part quantization
-            model = AutoModelForCausalLM.from_config(self.config,
-                                                     trust_remote_code=True)
+            self.config.quantization_config = {}  # disable vision part quantization
+            model = AutoModelForCausalLM.from_config(self.config, trust_remote_code=True)
 
         self.vl_model = model
         if not self.with_llm:
@@ -291,13 +278,12 @@ class LlavaVisionModel(LlavaHfVisionModel):
 
         from accelerate import load_checkpoint_and_dispatch
         with disable_logging():
-            load_checkpoint_and_dispatch(
-                model=model,
-                max_memory=self.max_memory,
-                checkpoint=self.model_path,
-                device_map='auto' if not self.with_llm else {'': 'cpu'},
-                no_split_module_classes=['CLIPEncoderLayer'],
-                dtype=torch.half)
+            load_checkpoint_and_dispatch(model=model,
+                                         max_memory=self.max_memory,
+                                         checkpoint=self.model_path,
+                                         device_map='auto' if not self.with_llm else {'': 'cpu'},
+                                         no_split_module_classes=['CLIPEncoderLayer'],
+                                         dtype=torch.half)
 
         self.model = model.model.eval()
         self.vision_tower = model.model.vision_tower.half().eval()
@@ -315,8 +301,7 @@ class LlavaVisionModel(LlavaHfVisionModel):
         outputs = []
         for image, params in images:
             image = image.convert('RGB')
-            pixel_values = process_images([image], self.image_processor,
-                                          self.config)
+            pixel_values = process_images([image], self.image_processor, self.config)
             outputs.append(
                 dict(pixel_values=pixel_values,
                      image_size=image.size,
@@ -326,9 +311,7 @@ class LlavaVisionModel(LlavaHfVisionModel):
         return messages
 
     @torch.no_grad()
-    def forward(self,
-                messages: List[Dict],
-                max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
         """extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
@@ -339,31 +322,25 @@ class LlavaVisionModel(LlavaHfVisionModel):
         Return:
             the message list with forwarding results included
         """
-        from llava.model.llava_arch import (get_anyres_image_grid_shape,
-                                            unpad_image)
+
+        from llava.model.llava_arch import get_anyres_image_grid_shape, unpad_image
+
         inputs = [x['content'] for x in messages if x['role'] == 'preprocess']
         inputs = inputs[0]
         outputs = []
         for idx in range(0, len(inputs), max_batch_size):
-            image_sizes = [
-                x['image_size'] for x in inputs[idx:idx + max_batch_size]
-            ]
-            pixel_values = [
-                x['pixel_values'] for x in inputs[idx:idx + max_batch_size]
-            ]
+            image_sizes = [x['image_size'] for x in inputs[idx:idx + max_batch_size]]
+            pixel_values = [x['pixel_values'] for x in inputs[idx:idx + max_batch_size]]
             if pixel_values[0].ndim == 5:
                 split_sizes = [x.shape[1] for x in pixel_values]
                 pixel_values = torch.cat([x for x in pixel_values], dim=1)
                 logger.info(f'vision forward shape: {pixel_values.shape}')
                 pixel_values = pixel_values.squeeze(0)
-                pixel_values = pixel_values.to(device=self.vision_tower.device,
-                                               dtype=torch.float16)
+                pixel_values = pixel_values.to(device=self.vision_tower.device, dtype=torch.float16)
                 feats = self.encode_images(pixel_values)
                 feats = torch.split(feats, split_sizes, dim=0)
-                mm_patch_merge_type = getattr(self.config,
-                                              'mm_patch_merge_type', 'flat')
-                image_aspect_ratio = getattr(self.config, 'image_aspect_ratio',
-                                             'square')
+                mm_patch_merge_type = getattr(self.config, 'mm_patch_merge_type', 'flat')
+                image_aspect_ratio = getattr(self.config, 'image_aspect_ratio', 'square')
                 if mm_patch_merge_type == 'flat':
                     outputs.expand([x.flatten(0, 1) for x in feats])
                 elif mm_patch_merge_type.startswith('spatial'):
@@ -380,20 +357,16 @@ class LlavaVisionModel(LlavaHfVisionModel):
                                         image_sizes[img_idx],
                                         self.config.image_grid_pinpoints,
                                         self.vision_tower.config.image_size)
-                                feat = feat.view(num_patch_height,
-                                                 num_patch_width, height,
-                                                 width, -1)
+                                feat = feat.view(num_patch_height, num_patch_width, height, width, -1)
                             else:
                                 raise NotImplementedError
                             if 'unpad' in mm_patch_merge_type:
                                 feat = feat.permute(4, 0, 2, 1, 3).contiguous()
                                 feat = feat.flatten(1, 2).flatten(2, 3)
                                 feat = unpad_image(feat, image_sizes[img_idx])
-                                feat = torch.cat(
-                                    (feat, self.model.
-                                     image_newline[:, None, None].expand(
-                                         *feat.shape[:-1], 1).to(feat.device)),
-                                    dim=-1)
+                                feat = torch.cat((feat, self.model.image_newline[:, None, None].expand(
+                                    *feat.shape[:-1], 1).to(feat.device)),
+                                                 dim=-1)
                                 feat = feat.flatten(1, 2).transpose(0, 1)
                             else:
                                 feat = feat.permute(0, 2, 1, 3, 4).contiguous()
@@ -402,18 +375,14 @@ class LlavaVisionModel(LlavaHfVisionModel):
                         else:
                             feat = feat[0]
                             if 'unpad' in mm_patch_merge_type:
-                                feat = torch.cat(
-                                    (feat, self.model.image_newline[None].to(
-                                        feat.device)),
-                                    dim=0)
+                                feat = torch.cat((feat, self.model.image_newline[None].to(feat.device)), dim=0)
                         outputs.append(feat)
                 else:
                     raise ValueError('Unexpected mm_patch_merge_type: '
                                      f'{self.config.mm_patch_merge_type}')
             else:
                 pixel_values = torch.cat(pixel_values, dim=0)
-                pixel_values = pixel_values.to(device=self.vision_tower.device,
-                                               dtype=torch.float16)
+                pixel_values = pixel_values.to(device=self.vision_tower.device, dtype=torch.float16)
                 logger.info(f'vision forward shape: {pixel_values.shape}')
                 feats = self.encode_images(pixel_values)
                 outputs.extend([x for x in feats])

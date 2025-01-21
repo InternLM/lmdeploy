@@ -23,12 +23,11 @@ class DBRXModelConfigBuilder(AutoModelConfigBuilder):
         bos_token_id = getattr(hf_config, 'bos_token_id', None)
         if bos_token_id is None:
             bos_token_id = eos_token_id
-        return ModelConfig(
-            hidden_size=hidden_size,
-            num_layers=hf_config.n_layers,
-            num_attention_heads=num_heads,
-            num_key_value_heads=hf_config.attn_config.kv_n_heads,
-            bos_token_id=bos_token_id,
-            eos_token_id=eos_token_id,
-            head_dim=head_dim,
-            vocab_size=hf_config.vocab_size)
+        return ModelConfig(hidden_size=hidden_size,
+                           num_layers=hf_config.n_layers,
+                           num_attention_heads=num_heads,
+                           num_key_value_heads=hf_config.attn_config.kv_n_heads,
+                           bos_token_id=bos_token_id,
+                           eos_token_id=eos_token_id,
+                           head_dim=head_dim,
+                           vocab_size=hf_config.vocab_size)

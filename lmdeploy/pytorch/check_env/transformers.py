@@ -25,5 +25,4 @@ class TransformersChecker(BaseChecker):
                                'but found version: '
                                f'{transformers.__version__}')
         except Exception as e:
-            self.log_and_exit(e, 'transformers',
-                              'transformers is not available.')
+            self.log_and_exit(e, 'transformers', 'transformers is not available.')

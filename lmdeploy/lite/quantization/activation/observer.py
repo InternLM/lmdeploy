@@ -18,15 +18,9 @@ class KVCacheObserver(GlobalAvailMixin):
         """
         self.num_head = num_head
         self.head_dim = head_dim
-        self.max_val = torch.full((num_head, head_dim),
-                                  -torch.inf,
-                                  dtype=torch.float16)
-        self.min_val = torch.full((num_head, head_dim),
-                                  torch.inf,
-                                  dtype=torch.float16)
-        self.absmax_val = torch.full((num_head, head_dim),
-                                     0,
-                                     dtype=torch.float16)
+        self.max_val = torch.full((num_head, head_dim), -torch.inf, dtype=torch.float16)
+        self.min_val = torch.full((num_head, head_dim), torch.inf, dtype=torch.float16)
+        self.absmax_val = torch.full((num_head, head_dim), 0, dtype=torch.float16)
 
     @torch.no_grad()
     def observe(self, x: torch.Tensor) -> None:
@@ -122,12 +116,9 @@ class ActivationObserver(GlobalAvailMixin):
 
         # Update mean and absmean value with accumulated sum divided
         # by total number of batches
-        self.mean_val = (
-            (self.mean_val * self.num_batches_tracked + cur_mean) /
-            (self.num_batches_tracked + 1))
-        self.absmean_val = (
-            (self.absmean_val * self.num_batches_tracked + cur_absmean) /
-            (self.num_batches_tracked + 1))
+        self.mean_val = ((self.mean_val * self.num_batches_tracked + cur_mean) / (self.num_batches_tracked + 1))
+        self.absmean_val = ((self.absmean_val * self.num_batches_tracked + cur_absmean) /
+                            (self.num_batches_tracked + 1))
 
         # Increment the count of batches tracked
         self.num_batches_tracked += 1
@@ -136,6 +127,5 @@ class ActivationObserver(GlobalAvailMixin):
     def save_ratio(self, ratio: float) -> None:
         if self.ratio is None:
             self.ratio = 0
-        self.ratio = (self.ratio * self.num_ratio_tracked +
-                      ratio) / (self.num_ratio_tracked + 1)
+        self.ratio = (self.ratio * self.num_ratio_tracked + ratio) / (self.num_ratio_tracked + 1)
         self.num_ratio_tracked += 1

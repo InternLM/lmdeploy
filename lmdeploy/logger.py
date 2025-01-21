@@ -31,8 +31,7 @@ class RequestLogger:
         logger.info(f'session={session_id}, '
                     f'prompt={prompt!r}')
 
-    def log_inputs(self, session_id: int, prompt: Optional[str],
-                   prompt_token_ids: Optional[List[int]],
+    def log_inputs(self, session_id: int, prompt: Optional[str], prompt_token_ids: Optional[List[int]],
                    gen_config: GenerationConfig, adapter_name: str) -> None:
         max_log_len = self.max_log_len
         input_tokens = len(prompt_token_ids)

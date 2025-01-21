@@ -59,8 +59,7 @@ class DlinferOpsBackend(DefaultOpsBackend):
             from .qmodules import DlinferRMSNormW8A8Builder
             return DlinferRMSNormW8A8Builder
         else:
-            logger.debug(
-                f'Op {layer_type} fallback to default implementation.')
+            logger.debug(f'Op {layer_type} fallback to default implementation.')
             return super().get_layer_impl_builder(layer_type)
 
     @staticmethod

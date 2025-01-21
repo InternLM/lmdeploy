@@ -1,14 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
 from typing import Callable, Dict, Optional
 
 import torch
 
-from lmdeploy.lite.utils import (QParams, cal_qparams_per_channel_absmax,
-                                 cal_qparams_per_channel_minmax,
-                                 cal_qparams_per_group_absmax,
-                                 cal_qparams_per_group_minmax,
-                                 cal_qparams_per_tensor_absmax,
-                                 cal_qparams_per_tensor_minmax, precise_round)
+from lmdeploy.lite.utils import (QParams, cal_qparams_per_channel_absmax, cal_qparams_per_channel_minmax,
+                                 cal_qparams_per_group_absmax, cal_qparams_per_group_minmax,
+                                 cal_qparams_per_tensor_absmax, cal_qparams_per_tensor_minmax, precise_round)
 from lmdeploy.lite.utils.global_avail import GlobalAvailMixin
 
 
@@ -58,19 +56,14 @@ class WeightQuantizer(GlobalAvailMixin):
         },
     }
 
-    def __init__(self,
-                 bits: int,
-                 symmetry: bool,
-                 granularity: str,
-                 group_size: Optional[int] = -1):
+    def __init__(self, bits: int, symmetry: bool, granularity: str, group_size: Optional[int] = -1):
 
         assert bits in [4, 8], "The 'bits' argument must be either 4 or 8."
         self.bits = bits
 
         if granularity not in ['per_channel', 'per_tensor', 'per_group']:
-            raise NotImplementedError(
-                "The 'granularity' argument must be one of 'per_channel', "
-                "'per_tensor', or 'per_group'.")
+            raise NotImplementedError("The 'granularity' argument must be one of 'per_channel', "
+                                      "'per_tensor', or 'per_group'.")
 
         self.granularity = granularity
 
@@ -102,10 +95,7 @@ class WeightQuantizer(GlobalAvailMixin):
         else:
             return cal_func(weight, self.bits)
 
-    def quant(self,
-              weight: torch.Tensor,
-              qparams: Optional[QParams] = None,
-              real: bool = False) -> torch.Tensor:
+    def quant(self, weight: torch.Tensor, qparams: Optional[QParams] = None, real: bool = False) -> torch.Tensor:
         """Perform fake quantization on the given weight tensor.
 
         Args:
@@ -145,8 +135,7 @@ class WeightQuantizer(GlobalAvailMixin):
         else:
             assert not self.symmetry
 
-            real_qweight = precise_round(
-                (float_w - float_w.min(-1, keepdim=True)[0]) / scales)
+            real_qweight = precise_round((float_w - float_w.min(-1, keepdim=True)[0]) / scales)
             fake_qweight = (real_qweight - zero_points) * scales
 
         if len(scales.shape) > 2:

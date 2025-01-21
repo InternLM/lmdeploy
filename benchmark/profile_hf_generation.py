@@ -125,11 +125,7 @@ class TimingStreamer:
           a list of times in ms for (first prompt, avg next token, total time)
         """
         first = self.evts[0].elapsed_time(self.evts[1])
-        rest = [
-            self.evts[i].elapsed_time(self.evts[i + 1])
-            for i in range(1,
-                           len(self.evts) - 1)
-        ]
+        rest = [self.evts[i].elapsed_time(self.evts[i + 1]) for i in range(1, len(self.evts) - 1)]
         avg = sum(rest) / len(rest)
         return first + sum(rest), first, avg
 
@@ -180,9 +176,7 @@ class CSVWritter:
 def init_hf_model(model_path: str):
     start = time.monotonic()
     with LoadNoInit():
-        model = AutoModelForCausalLM.from_pretrained(model_path,
-                                                     torch_dtype=torch.float16,
-                                                     trust_remote_code=True)
+        model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.float16, trust_remote_code=True)
     print(f'load model in {time.monotonic() -start} s')
     return model
 
@@ -249,15 +243,12 @@ def main(model_path: str,
         start = time.monotonic()
         fake_outputs = model.generate(
             fake_inputs,
-            GenerationConfig(max_new_tokens=gen_seqlen,
-                             do_sample=False,
-                             eos_token_id=[-1]),
+            GenerationConfig(max_new_tokens=gen_seqlen, do_sample=False, eos_token_id=[-1]),
             streamer=ts,
         )
         torch.cuda.synchronize()
         end = time.monotonic()
-        assert fake_outputs.size() == (batch_size,
-                                       total_seqlen), fake_outputs.size()
+        assert fake_outputs.size() == (batch_size, total_seqlen), fake_outputs.size()
 
         # total_time, first_time, _ = ts.get_times()
         if no_streamer:
@@ -281,9 +272,8 @@ def main(model_path: str,
         if test_round > 1 and r > 0:
             # First round is warm up
             csvwritter.write([
-                model_log_name, batch_size, input_seqlen, gen_seqlen,
-                total_seqlen, first_time, next_time, last_time, total_time, tt,
-                tg
+                model_log_name, batch_size, input_seqlen, gen_seqlen, total_seqlen, first_time, next_time, last_time,
+                total_time, tt, tg
             ])
 
 

@@ -5,36 +5,26 @@ from typing import List
 import torch
 
 from lmdeploy.pytorch.kernels.cuda import fused_moe, fused_moe_w8a8
-from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import \
-    fused_moe_blocked_fp8
+from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import fused_moe_blocked_fp8
 from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
-from lmdeploy.pytorch.kernels.cuda.w8a8_triton_kernels import \
-    per_token_quant_int8
+from lmdeploy.pytorch.kernels.cuda.w8a8_triton_kernels import per_token_quant_int8
 from lmdeploy.pytorch.models.q_modules import QTensor
 
-from ..moe import (FusedMoEBlockedF8Builder, FusedMoEBlockedF8Impl,
-                   FusedMoEBuilder, FusedMoEImpl, FusedMoEW8A8Builder,
+from ..moe import (FusedMoEBlockedF8Builder, FusedMoEBlockedF8Impl, FusedMoEBuilder, FusedMoEImpl, FusedMoEW8A8Builder,
                    FusedMoEW8A8Impl)
 
 
 class TritonFusedMoEImpl(FusedMoEImpl):
     """triton fused moe implementation."""
 
-    def __init__(self,
-                 top_k: int,
-                 num_experts: int,
-                 renormalize: bool = False):
+    def __init__(self, top_k: int, num_experts: int, renormalize: bool = False):
         self.num_experts = num_experts
         self.top_k = top_k
         self.renormalize = renormalize
 
-    def update_weights(self, gate_up_weights: torch.Tensor,
-                       down_weights: torch.Tensor):
-        gate_up_weights = gate_up_weights.transpose(1,
-                                                    2).contiguous().transpose(
-                                                        1, 2)
-        down_weights = down_weights.transpose(1,
-                                              2).contiguous().transpose(1, 2)
+    def update_weights(self, gate_up_weights: torch.Tensor, down_weights: torch.Tensor):
+        gate_up_weights = gate_up_weights.transpose(1, 2).contiguous().transpose(1, 2)
+        down_weights = down_weights.transpose(1, 2).contiguous().transpose(1, 2)
         return gate_up_weights, down_weights
 
     def support_ep(self):
@@ -79,9 +69,7 @@ class TritonFusedMoEBuilder(FusedMoEBuilder):
     @staticmethod
     def build(top_k: int, num_experts: int, renormalize: bool = False):
         """build from mlp."""
-        return TritonFusedMoEImpl(top_k=top_k,
-                                  num_experts=num_experts,
-                                  renormalize=renormalize)
+        return TritonFusedMoEImpl(top_k=top_k, num_experts=num_experts, renormalize=renormalize)
 
 
 class TritonFusedMoEW8A8Impl(FusedMoEW8A8Impl):
@@ -101,8 +89,7 @@ class TritonFusedMoEW8A8Impl(FusedMoEW8A8Impl):
         self.out_dtype = out_dtype
         self.quant_dtype = quant_dtype
 
-    def update_weights(self, gate_up_weights: torch.Tensor,
-                       down_weights: torch.Tensor, gate_up_scale: torch.Tensor,
+    def update_weights(self, gate_up_weights: torch.Tensor, down_weights: torch.Tensor, gate_up_scale: torch.Tensor,
                        down_scale: torch.Tensor):
         # do not transpose weight for int8/fp8
         return gate_up_weights, down_weights, gate_up_scale, down_scale
@@ -132,12 +119,10 @@ class TritonFusedMoEW8A8Impl(FusedMoEW8A8Impl):
 
         if isinstance(hidden_states, torch.Tensor):
             hidden_states = hidden_states.contiguous()
-            input_quant, input_scale = per_token_quant_int8(
-                hidden_states, 1e-7, quant_dtype=self.quant_dtype)
+            input_quant, input_scale = per_token_quant_int8(hidden_states, 1e-7, quant_dtype=self.quant_dtype)
         else:
             assert isinstance(hidden_states, QTensor)
-            input_quant, input_scale = (hidden_states.tensor,
-                                        hidden_states.scale)
+            input_quant, input_scale = (hidden_states.tensor, hidden_states.scale)
 
         expert_offset = 0
         num_experts = None
@@ -218,9 +203,7 @@ class TritonFusedMoEBlockedF8Impl(FusedMoEBlockedF8Impl):
         """forward."""
         input_size = hidden_states.shape
         hidden_states = hidden_states.flatten(0, -2)
-        input_quant, input_scale = quant_fp8(hidden_states,
-                                             self.block_size,
-                                             dtype=gate_up_weights.dtype)
+        input_quant, input_scale = quant_fp8(hidden_states, self.block_size, dtype=gate_up_weights.dtype)
 
         expert_offset = 0
         num_experts = None

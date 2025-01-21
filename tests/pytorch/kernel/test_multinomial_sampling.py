@@ -6,8 +6,7 @@ from lmdeploy.utils import is_bf16_supported
 
 
 def _bf16_mark():
-    return pytest.mark.skipif(not is_bf16_supported(),
-                              reason='bf16 not supported.')
+    return pytest.mark.skipif(not is_bf16_supported(), reason='bf16 not supported.')
 
 
 class TestMultinomialSampling:
@@ -56,15 +55,11 @@ class TestMultinomialSampling:
         batch_ids = torch.arange(batch_size).cuda()
         yield indices[batch_ids, select_ids]
 
-    @pytest.mark.parametrize('dtype', [
-        torch.float32, torch.half,
-        pytest.param(torch.bfloat16, marks=_bf16_mark())
-    ])
+    @pytest.mark.parametrize('dtype', [torch.float32, torch.half, pytest.param(torch.bfloat16, marks=_bf16_mark())])
     @pytest.mark.parametrize(['num_tokens', 'select_ids'], [
         (8, (4, 2) * 30),
         (2000, (500, 1500)),
-    ],
-                             indirect=True)
+    ], indirect=True)
     def test_multinomial_sampling(self, scores, seeds, offsets, indices, gt):
         output = multinomial_sampling(scores, seeds, offsets, indices)
         torch.testing.assert_close(output, gt)
