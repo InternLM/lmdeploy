@@ -65,8 +65,7 @@ class InternLM2VEDecoderLayer(nn.Module):
             residual = hidden_states
             hidden_states = self.attention_norm(hidden_states)
         else:
-            hidden_states, residual = self.attention_norm(
-                hidden_states, residual)
+            hidden_states, residual = self.attention_norm(hidden_states, residual)
 
         # Self Attention
         hidden_states = self.attention(
@@ -79,15 +78,11 @@ class InternLM2VEDecoderLayer(nn.Module):
         # Fully Connected
         hidden_states, residual = self.ffn_norm(hidden_states, residual)
         if vision_embedding_indexing is not None:
-            hidden_states[:,
-                          vision_embedding_indexing, :] = self.feed_forward_ve(
-                              hidden_states[:, vision_embedding_indexing, :].
-                              reshape(-1, self.hidden_size)).unsqueeze(0)
+            hidden_states[:, vision_embedding_indexing, :] = self.feed_forward_ve(
+                hidden_states[:, vision_embedding_indexing, :].reshape(-1, self.hidden_size)).unsqueeze(0)
             if text_embedding_indexing is not None:
-                hidden_states[:,
-                              text_embedding_indexing, :] = self.feed_forward(
-                                  hidden_states[:, text_embedding_indexing, :].
-                                  reshape(-1, self.hidden_size)).unsqueeze(0)
+                hidden_states[:, text_embedding_indexing, :] = self.feed_forward(
+                    hidden_states[:, text_embedding_indexing, :].reshape(-1, self.hidden_size)).unsqueeze(0)
         else:
             hidden_states = self.feed_forward(hidden_states)
 
@@ -98,10 +93,7 @@ class InternLM2VEDecoderLayer(nn.Module):
 class InternLM2VEModel(nn.Module):
     """internlm2 model with visual expert."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
@@ -114,18 +106,12 @@ class InternLM2VEModel(nn.Module):
 
         # build all decode layers
         self.layers = nn.ModuleList([
-            InternLM2VEDecoderLayer(config,
-                                    layer_idx,
-                                    dtype=dtype,
-                                    device=device)
+            InternLM2VEDecoderLayer(config, layer_idx, dtype=dtype, device=device)
             for layer_idx in range(config.num_hidden_layers)
         ])
 
         # build norm
-        self.norm = RMSNorm(config.hidden_size,
-                            config.rms_norm_eps,
-                            dtype=dtype,
-                            device=device)
+        self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
 
         # build rotary embedding in Model
         rope_scaling = config.rope_scaling
@@ -288,9 +274,7 @@ class InternLM2VEForCausalLM(nn.Module, CudaGraphMixin):
         if vision_embeddings is not None and len(vision_embeddings) > 0:
             if inputs_embeds is None:
                 inputs_embeds = self.get_input_embeddings()(input_ids)
-            inputs_embeds[:,
-                          vision_embedding_indexing, :] = vision_embeddings.to(
-                              inputs_embeds)
+            inputs_embeds[:, vision_embedding_indexing, :] = vision_embeddings.to(inputs_embeds)
 
         # inputs of forward
         return dict(
@@ -314,8 +298,7 @@ class InternLM2VEForCausalLM(nn.Module, CudaGraphMixin):
         for name, loaded_weight in weights:
             if 'rotary_emb.inv_freq' in name:
                 continue
-            if ('rotary_emb.cos_cached' in name
-                    or 'rotary_emb.sin_cached' in name):
+            if ('rotary_emb.cos_cached' in name or 'rotary_emb.sin_cached' in name):
                 continue
             for (param_name, weight_name, shard_id) in stacked_params_mapping:
                 if weight_name not in name:

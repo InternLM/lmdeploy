@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
 from functools import partial
 from typing import Union
 
@@ -8,8 +9,7 @@ from transformers import PreTrainedTokenizer
 
 from lmdeploy.lite.quantization.activation import ActivationObserver
 from lmdeploy.lite.quantization.awq import FC_FCS_MAP, NORM_FCS_MAP
-from lmdeploy.lite.utils import (bimap_name_mod, collect_target_modules,
-                                 concat_decoder_layer_outputs,
+from lmdeploy.lite.utils import (bimap_name_mod, collect_target_modules, concat_decoder_layer_outputs,
                                  split_decoder_layer_inputs)
 
 
@@ -104,8 +104,7 @@ class CalibrationContext():
     def _insert_input_observers(self):
         """Insert input observers into the target modules.
 
-        This function registers a forward pre-hook on each target module to
-        observe the inputs.
+        This function registers a forward pre-hook on each target module to observe the inputs.
         """
 
         def _input_hook(mod: nn.Module, inp: torch.Tensor):
@@ -122,8 +121,7 @@ class CalibrationContext():
     def _insert_output_observers(self):
         """Insert output observers into the target modules.
 
-        This function registers a forward hook on each target module to observe
-        the outputs.
+        This function registers a forward hook on each target module to observe the outputs.
         """
 
         def _output_hook(mod: nn.Module, inp: torch.Tensor, out: torch.Tensor):
@@ -144,16 +142,14 @@ class CalibrationContext():
         def _forward(mod, *args, **kwargs):
 
             mod.to(self.device)
-            batch_args, batch_kwargs = split_decoder_layer_inputs(
-                self.batch_size, *args, **kwargs)
+            batch_args, batch_kwargs = split_decoder_layer_inputs(self.batch_size, *args, **kwargs)
             batch_outputs = []
             samples = len(batch_args)
 
             m_name = self.mod2name[mod]
 
             for i in range(len(batch_args)):
-                batch_outputs.append(self._ori_forwards[mod](
-                    *batch_args[i], **batch_kwargs[i]))
+                batch_outputs.append(self._ori_forwards[mod](*batch_args[i], **batch_kwargs[i]))
 
             outputs = concat_decoder_layer_outputs(batch_outputs)
 
@@ -174,13 +170,7 @@ class CalibrationContext():
 
         Returns a dictionary with these collected stats.
         """
-        inputs_stats = {
-            'max': {},
-            'min': {},
-            'mean': {},
-            'absmax': {},
-            'absmean': {}
-        }
+        inputs_stats = {'max': {}, 'min': {}, 'mean': {}, 'absmax': {}, 'absmean': {}}
         obs_group = ActivationObserver.find_group(self.inp_obs_group)
         for name, obs in obs_group.items():
             inputs_stats['max'][name] = obs.max_val
@@ -196,13 +186,7 @@ class CalibrationContext():
 
         Returns a dictionary with these collected stats.
         """
-        outputs_stats = {
-            'max': {},
-            'min': {},
-            'mean': {},
-            'absmax': {},
-            'absmean': {}
-        }
+        outputs_stats = {'max': {}, 'min': {}, 'mean': {}, 'absmax': {}, 'absmean': {}}
         obs_group = ActivationObserver.find_group(self.out_obs_group)
         for name, obs in obs_group.items():
             outputs_stats['max'][name] = obs.max_val
@@ -232,8 +216,7 @@ class CalibrationContext():
     def calibrate(self, data):
         """Forward pass through the model in inference mode with given data."""
 
-        if type(self.model).__name__ in ('QWenLMHeadModel',
-                                         'ChatGLMForConditionalGeneration'):
+        if type(self.model).__name__ in ('QWenLMHeadModel', 'ChatGLMForConditionalGeneration'):
             model = self.model.transformer
         else:
             model = self.model.model
@@ -267,8 +250,7 @@ class CalibrationContext():
 
 
 @torch.no_grad()
-def auto_scale_block(module, module_kwargs, w_bit, w_group_size, input_feat,
-                     mod_name):
+def auto_scale_block(module, module_kwargs, w_bit, w_group_size, input_feat, mod_name):
     if 'use_cache' in module_kwargs:
         module_kwargs.pop('use_cache')
 
@@ -304,8 +286,7 @@ def auto_scale_block(module, module_kwargs, w_bit, w_group_size, input_feat,
             scales = scales / (scales.max() * scales.min()).sqrt()
             for fc in linears2scale:
                 fc.weight.mul_(scales.view(1, -1).to(fc.weight.device))
-                fc.weight.data = pseudo_quantize_tensor(
-                    fc.weight.data, w_bit, w_group_size) / (scales.view(1, -1))
+                fc.weight.data = pseudo_quantize_tensor(fc.weight.data, w_bit, w_group_size) / (scales.view(1, -1))
             out = block(x, **kwargs)
             if isinstance(out, tuple):
                 out = out[0]
@@ -334,19 +315,16 @@ def auto_scale_block(module, module_kwargs, w_bit, w_group_size, input_feat,
             if 'im_mask' in signature(module2inspect.forward).parameters:
                 kwargs['im_mask'] = None
 
-        best_ratio = _search_module_scale(module2inspect, layers, inp.value,
-                                          kwargs)
+        best_ratio = _search_module_scale(module2inspect, layers, inp.value, kwargs)
         inp.save_ratio(best_ratio)
 
-    for i, (prev_name, layer_names) in enumerate(
-            NORM_FCS_MAP[module._get_name()].items()):
+    for i, (prev_name, layer_names) in enumerate(NORM_FCS_MAP[module._get_name()].items()):
         # attention input
         _auto_get_scale(
             layers=[module.get_submodule(name) for name in layer_names],
             inp=input_feat[f'{mod_name}.{layer_names[0]}'],
             module2inspect=module.get_submodule(layer_names[0].split('.')[0]),
-            kwargs=module_kwargs
-            if i == 0 else {},  # only attention input need
+            kwargs=module_kwargs if i == 0 else {},  # only attention input need
         )
     for prev_name, layer_names in FC_FCS_MAP[module._get_name()].items():
         # attention input
@@ -369,8 +347,7 @@ class CalibrationContextV2(CalibrationContext):
                  w_bits: int = 4,
                  w_group_size: int = 128,
                  **kwargs) -> None:
-        super().__init__(model, tokenizer, layer_type, norm_type, batch_size,
-                         device)
+        super().__init__(model, tokenizer, layer_type, norm_type, batch_size, device)
         self.w_bits = w_bits
         self.w_group_size = w_group_size
         self.search_scale = search_scale
@@ -378,8 +355,7 @@ class CalibrationContextV2(CalibrationContext):
     def _insert_input_observers(self):
         """Insert input observers into the target modules.
 
-        This function registers a forward pre-hook on each target module to
-        observe the inputs.
+        This function registers a forward pre-hook on each target module to observe the inputs.
         """
 
         def _input_hook(mod: nn.Module, inp: torch.Tensor):
@@ -428,20 +404,17 @@ class CalibrationContextV2(CalibrationContext):
         def _forward(mod, *args, **kwargs):
 
             mod.to(self.device)
-            batch_args, batch_kwargs = split_decoder_layer_inputs(
-                self.batch_size, *args, **kwargs)
+            batch_args, batch_kwargs = split_decoder_layer_inputs(self.batch_size, *args, **kwargs)
             batch_outputs = []
             samples = len(batch_args)
 
             m_name = self.mod2name[mod]
             for i in range(len(batch_args)):
-                batch_outputs.append(self._ori_forwards[mod](
-                    *batch_args[i], **batch_kwargs[i]))
+                batch_outputs.append(self._ori_forwards[mod](*batch_args[i], **batch_kwargs[i]))
                 obs_group = ActivationObserver.find_group(self.inp_obs_group)
                 mod_name = self.mod2name[mod]
                 ActivationObserver.disable()
-                auto_scale_block(mod, batch_kwargs[i], self.w_bits,
-                                 self.w_group_size, obs_group, mod_name)
+                auto_scale_block(mod, batch_kwargs[i], self.w_bits, self.w_group_size, obs_group, mod_name)
                 ActivationObserver.enable()
             for key, item in obs_group.items():
                 if key.startswith(f'{mod_name}.') and item.value is not None:

@@ -8,10 +8,8 @@ from .triton_utils import get_kernel_meta, wrap_jit_func
 
 @wrap_jit_func
 @triton.jit
-def _multinomial_sampling_kernel(Scores, Seeds, Offsets, Indices, Outputs,
-                                 stride_sb, stride_st, stride_ib, stride_it,
-                                 num_batchs, num_tokens, BLOCK: tl.constexpr,
-                                 BLOCK_N: tl.constexpr):
+def _multinomial_sampling_kernel(Scores, Seeds, Offsets, Indices, Outputs, stride_sb, stride_st, stride_ib, stride_it,
+                                 num_batchs, num_tokens, BLOCK: tl.constexpr, BLOCK_N: tl.constexpr):
     """Kernel."""
     batch_block_id = tl.program_id(0)
 
@@ -29,9 +27,7 @@ def _multinomial_sampling_kernel(Scores, Seeds, Offsets, Indices, Outputs,
     for b_idx in range(0, num_tokens, BLOCK_N):
         s_off = b_idx + n_off
         s_mask = off_mask[:, None] & (s_off[None, :] < num_tokens)
-        scores = tl.load(Scores + off[:, None] * stride_sb +
-                         s_off[None, :] * stride_st,
-                         mask=s_mask,
+        scores = tl.load(Scores + off[:, None] * stride_sb + s_off[None, :] * stride_st, mask=s_mask,
                          other=0.0).to(tl.float32)
         c_scores = tl.cumsum(scores, 1)
         cum_scores = acc[:, None] + c_scores
@@ -42,9 +38,7 @@ def _multinomial_sampling_kernel(Scores, Seeds, Offsets, Indices, Outputs,
         found_mask = tl.sum(valid_mask, 1) > 0
 
         valid_pos = b_idx + tl.argmax(valid_mask.to(tl.int32), 1)
-        indices = tl.load(Indices + off * stride_ib + valid_pos * stride_it,
-                          mask=found_mask & off_mask,
-                          other=-1)
+        indices = tl.load(Indices + off * stride_ib + valid_pos * stride_it, mask=found_mask & off_mask, other=-1)
         output = tl.where(found_mask, indices, output)
 
     tl.store(Outputs + off, output, mask=off_mask)

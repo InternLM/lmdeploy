@@ -20,8 +20,7 @@ BASE_HTTP_URL = 'http://localhost'
 DEFAULT_PORT = 23333
 
 
-def start_restful_api(config, param, model, model_path, backend_type,
-                      worker_id):
+def start_restful_api(config, param, model, model_path, backend_type, worker_id):
     log_path = config.get('log_path')
 
     cuda_prefix = param['cuda_prefix']
@@ -46,8 +45,7 @@ def start_restful_api(config, param, model, model_path, backend_type,
     else:
         port = DEFAULT_PORT + worker_num
 
-    cmd = get_command_with_extra('lmdeploy serve api_server ' + model_path +
-                                 ' --session-len 8096 --server-port ' +
+    cmd = get_command_with_extra('lmdeploy serve api_server ' + model_path + ' --session-len 8096 --server-port ' +
                                  str(port),
                                  config,
                                  model,
@@ -73,20 +71,14 @@ def start_restful_api(config, param, model, model_path, backend_type,
     if not is_bf16_supported():
         cmd += ' --cache-max-entry-count 0.5'
 
-    start_log = os.path.join(
-        log_path, 'start_restful_' + model.split('/')[1] + worker_id + '.log')
+    start_log = os.path.join(log_path, 'start_restful_' + model.split('/')[1] + worker_id + '.log')
 
     print('reproduce command restful: ' + cmd)
 
     with open(start_log, 'w') as f:
         f.writelines('reproduce command restful: ' + cmd + '\n')
 
-        startRes = subprocess.Popen([cmd],
-                                    stdout=f,
-                                    stderr=f,
-                                    shell=True,
-                                    text=True,
-                                    encoding='utf-8')
+        startRes = subprocess.Popen([cmd], stdout=f, stderr=f, shell=True, text=True, encoding='utf-8')
         pid = startRes.pid
 
     http_url = BASE_HTTP_URL + ':' + str(port)
@@ -123,10 +115,7 @@ def stop_restful_api(pid, startRes, param):
             del os.environ['LMDEPLOY_USE_MODELSCOPE']
 
 
-def run_all_step(config,
-                 cases_info,
-                 worker_id: str = '',
-                 port: int = DEFAULT_PORT):
+def run_all_step(config, cases_info, worker_id: str = '', port: int = DEFAULT_PORT):
     http_url = BASE_HTTP_URL + ':' + str(port)
 
     model = get_model(http_url)
@@ -134,34 +123,27 @@ def run_all_step(config,
     if model is None:
         assert False, 'server not start correctly'
     for case in cases_info.keys():
-        if ('coder' in model.lower()
-                or 'codellama' in model.lower()) and 'code' not in case:
+        if ('coder' in model.lower() or 'codellama' in model.lower()) and 'code' not in case:
             continue
 
         case_info = cases_info.get(case)
 
         with allure.step(case + ' step1 - command chat regression'):
-            chat_result, chat_log, msg = command_line_test(
-                config, case, case_info, model, 'api_client', http_url,
-                worker_id)
-            allure.attach.file(chat_log,
-                               attachment_type=allure.attachment_type.TEXT)
+            chat_result, chat_log, msg = command_line_test(config, case, case_info, model, 'api_client', http_url,
+                                                           worker_id)
+            allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
         with assume:
             assert chat_result, msg
 
         with allure.step(case + ' step2 - restful_test - openai chat'):
-            restful_result, restful_log, msg = open_chat_test(
-                config, case, case_info, model, http_url, worker_id)
-            allure.attach.file(restful_log,
-                               attachment_type=allure.attachment_type.TEXT)
+            restful_result, restful_log, msg = open_chat_test(config, case, case_info, model, http_url, worker_id)
+            allure.attach.file(restful_log, attachment_type=allure.attachment_type.TEXT)
         with assume:
             assert restful_result, msg
 
         with allure.step(case + ' step3 - restful_test - interactive chat'):
-            active_result, interactive_log, msg = interactive_test(
-                config, case, case_info, model, http_url, worker_id)
-            allure.attach.file(interactive_log,
-                               attachment_type=allure.attachment_type.TEXT)
+            active_result, interactive_log, msg = interactive_test(config, case, case_info, model, http_url, worker_id)
+            allure.attach.file(interactive_log, attachment_type=allure.attachment_type.TEXT)
 
         with assume:
             assert active_result, msg
@@ -170,8 +152,7 @@ def run_all_step(config,
 def open_chat_test(config, case, case_info, model, url, worker_id: str = ''):
     log_path = config.get('log_path')
 
-    restful_log = os.path.join(
-        log_path, 'restful_' + model + worker_id + '_' + case + '.log')
+    restful_log = os.path.join(log_path, 'restful_' + model + worker_id + '_' + case + '.log')
 
     file = open(restful_log, 'w')
 
@@ -189,21 +170,15 @@ def open_chat_test(config, case, case_info, model, url, worker_id: str = ''):
         messages.append({'role': 'user', 'content': prompt})
         file.writelines('prompt:' + prompt + '\n')
 
-        for output in api_client.chat_completions_v1(model=model_name,
-                                                     messages=messages,
-                                                     top_k=1,
-                                                     max_tokens=256):
+        for output in api_client.chat_completions_v1(model=model_name, messages=messages, top_k=1, max_tokens=256):
             output_message = output.get('choices')[0].get('message')
             messages.append(output_message)
 
             output_content = output_message.get('content')
             file.writelines('output:' + output_content + '\n')
 
-            case_result, reason = assert_result(output_content,
-                                                prompt_detail.values(),
-                                                model_name)
-            file.writelines('result:' + str(case_result) + ',reason:' +
-                            reason + '\n')
+            case_result, reason = assert_result(output_content, prompt_detail.values(), model_name)
+            file.writelines('result:' + str(case_result) + ',reason:' + reason + '\n')
             if not case_result:
                 msg += reason
             result = result & case_result
@@ -214,16 +189,14 @@ def open_chat_test(config, case, case_info, model, url, worker_id: str = ''):
 def interactive_test(config, case, case_info, model, url, worker_id: str = ''):
     log_path = config.get('log_path')
 
-    interactive_log = os.path.join(
-        log_path, 'interactive_' + model + worker_id + '_' + case + '.log')
+    interactive_log = os.path.join(log_path, 'interactive_' + model + worker_id + '_' + case + '.log')
 
     file = open(interactive_log, 'w')
 
     result = True
 
     api_client = APIClient(url)
-    file.writelines('available_models:' +
-                    ','.join(api_client.available_models) + '\n')
+    file.writelines('available_models:' + ','.join(api_client.available_models) + '\n')
 
     # Randomly generate 6 characters and concatenate them into a string.
     characters = string.digits
@@ -245,10 +218,8 @@ def interactive_test(config, case, case_info, model, url, worker_id: str = ''):
             output_content = output.get('text')
             file.writelines('output:' + output_content + '\n')
 
-            case_result, reason = assert_result(output_content,
-                                                prompt_detail.values(), model)
-            file.writelines('result:' + str(case_result) + ',reason:' +
-                            reason + '\n')
+            case_result, reason = assert_result(output_content, prompt_detail.values(), model)
+            file.writelines('result:' + str(case_result) + ',reason:' + reason + '\n')
             if not case_result:
                 msg += reason
             result = result & case_result
@@ -262,9 +233,7 @@ def health_check(url):
         model_name = api_client.available_models[0]
         messages = []
         messages.append({'role': 'user', 'content': '你好'})
-        for output in api_client.chat_completions_v1(model=model_name,
-                                                     messages=messages,
-                                                     top_k=1):
+        for output in api_client.chat_completions_v1(model=model_name, messages=messages, top_k=1):
             if output.get('code') is not None and output.get('code') != 0:
                 return False
             return True
@@ -292,9 +261,7 @@ def run_vl_testcase(config, port: int = DEFAULT_PORT):
     client = OpenAI(api_key='YOUR_API_KEY', base_url=http_url + '/v1')
     model_name = client.models.list().data[0].id
 
-    restful_log = os.path.join(
-        log_path,
-        'restful_vl_' + model_name.split('/')[-1] + str(port) + '.log')
+    restful_log = os.path.join(log_path, 'restful_vl_' + model_name.split('/')[-1] + str(port) + '.log')
     file = open(restful_log, 'w')
 
     prompt_messages = [{
@@ -316,24 +283,18 @@ def run_vl_testcase(config, port: int = DEFAULT_PORT):
         }],
     }]
 
-    response = client.chat.completions.create(model=model_name,
-                                              messages=prompt_messages,
-                                              temperature=0.8,
-                                              top_p=0.8)
+    response = client.chat.completions.create(model=model_name, messages=prompt_messages, temperature=0.8, top_p=0.8)
     file.writelines(str(response).lower() + '\n')
 
     api_client = APIClient(http_url)
     model_name = api_client.available_models[0]
-    for item in api_client.chat_completions_v1(model=model_name,
-                                               messages=prompt_messages):
+    for item in api_client.chat_completions_v1(model=model_name, messages=prompt_messages):
         continue
     file.writelines(str(item) + '\n')
 
-    allure.attach.file(restful_log,
-                       attachment_type=allure.attachment_type.TEXT)
+    allure.attach.file(restful_log, attachment_type=allure.attachment_type.TEXT)
 
-    assert 'tiger' in str(response).lower() or '虎' in str(
-        response).lower() or 'ski' in str(response).lower() or '滑雪' in str(
-            response).lower(), response
-    assert 'tiger' in str(item).lower() or '虎' in str(item).lower(
-    ) or 'ski' in str(item).lower() or '滑雪' in str(item).lower(), item
+    assert 'tiger' in str(response).lower() or '虎' in str(response).lower() or 'ski' in str(
+        response).lower() or '滑雪' in str(response).lower(), response
+    assert 'tiger' in str(item).lower() or '虎' in str(item).lower() or 'ski' in str(item).lower() or '滑雪' in str(
+        item).lower(), item

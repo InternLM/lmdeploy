@@ -10,15 +10,10 @@ from transformers import AutoTokenizer
 from lmdeploy.pytorch.decode import Engine
 
 
-def benchmark(model_path,
-              share_gpt_path,
-              downsample=100,
-              accel=None,
-              save_to='decode_result'):
+def benchmark(model_path, share_gpt_path, downsample=100, accel=None, save_to='decode_result'):
     """Benchmark using ShareGPT data.
 
-    Please download `ShareGPT_V3_unfiltered_cleaned_split.json` as data for
-    this benchmark.
+    Please download `ShareGPT_V3_unfiltered_cleaned_split.json` as data for this benchmark.
     """
 
     start = time.monotonic()

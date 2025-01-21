@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
 from dataclasses import dataclass
 from typing import Literal
 
@@ -58,11 +59,9 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         )
         assert not (alibi and not causal)
 
-        from lmdeploy.pytorch.kernels.cuda import (alibi_paged_attention_fwd,
-                                                   fill_kv_cache,
-                                                   flash_attention_fwd,
-                                                   flatten_kv_cache,
-                                                   paged_attention_fwd)
+        from lmdeploy.pytorch.kernels.cuda import (alibi_paged_attention_fwd, fill_kv_cache, flash_attention_fwd,
+                                                   flatten_kv_cache, paged_attention_fwd)
+
         self.fill_kv_cache = fill_kv_cache
         self.paged_attention_fwd = paged_attention_fwd
         self.alibi_paged_attention_fwd = alibi_paged_attention_fwd
@@ -148,8 +147,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             else:
                 BLOCK_BS = k_cache.size(1)
                 # pad one more block to avoid invalid kv visit
-                out_size = (_cdiv(kv_flatten_size, BLOCK_BS) * BLOCK_BS +
-                            BLOCK_BS)
+                out_size = (_cdiv(kv_flatten_size, BLOCK_BS) * BLOCK_BS + BLOCK_BS)
                 flatten_k, flatten_v = self.flatten_kv_cache(
                     k_cache,
                     v_cache,

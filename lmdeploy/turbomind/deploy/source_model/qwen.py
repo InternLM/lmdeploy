@@ -100,8 +100,7 @@ class QwenModel(LlamaModel):
 class Qwen2Model(LlamaModel):
     """Qwen model in hf format.
 
-    The weight of qwen2 model is similar to Llama, except its attention bias
-    doesn't include o_proj bias.
+    The weight of qwen2 model is similar to Llama, except its attention bias doesn't include o_proj bias.
     """
 
     Reader = LlamaReader
@@ -146,15 +145,13 @@ class Qwen2MoeReader(LlamaReader):
             return self.filter(self.ffn_pattern)
         result = []
         for key in ['gate', 'down', 'up']:
-            tensor = self.params[
-                f'model.layers.{i}.mlp.shared_expert.{key}_proj.{kind}']
+            tensor = self.params[f'model.layers.{i}.mlp.shared_expert.{key}_proj.{kind}']
             tensor = self.transform(tensor, kind)
             result.append(tensor)
         return (*result, )
 
     def moe_ffn_shared_gate(self, i):
-        return self.params.get(
-            f'model.layers.{i}.mlp.shared_expert_gate.weight')
+        return self.params.get(f'model.layers.{i}.mlp.shared_expert_gate.weight')
 
 
 @INPUT_MODELS.register_module(name='qwen2-moe')

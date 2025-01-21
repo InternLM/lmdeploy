@@ -6,8 +6,7 @@ import torch
 
 from lmdeploy.pytorch.kernels.dlinfer import fused_moe, moe_gating_topk_softmax
 
-from ..moe import (FusedMoEBuilder, FusedMoEImpl, SoftmaxTopKBuilder,
-                   SoftmaxTopKImpl)
+from ..moe import FusedMoEBuilder, FusedMoEImpl, SoftmaxTopKBuilder, SoftmaxTopKImpl
 
 
 class DlinferSoftmaxTopKImpl(SoftmaxTopKImpl):
@@ -18,8 +17,7 @@ class DlinferSoftmaxTopKImpl(SoftmaxTopKImpl):
         self.dim = dim
 
     def forward(self, x: torch.Tensor):
-        routing_weights, selected_experts = moe_gating_topk_softmax(
-            x.to(torch.float32), self.top_k)
+        routing_weights, selected_experts = moe_gating_topk_softmax(x.to(torch.float32), self.top_k)
         return routing_weights, selected_experts
 
 
@@ -47,8 +45,8 @@ class DlinferFusedMoEImpl(FusedMoEImpl):
                 down_weights: torch.Tensor,
                 expert_list: List[int] = None):
         """forward."""
-        return fused_moe(hidden_states, gate_up_weights, down_weights,
-                         topk_weights, topk_ids, self.top_k, self.renormalize)
+        return fused_moe(hidden_states, gate_up_weights, down_weights, topk_weights, topk_ids, self.top_k,
+                         self.renormalize)
 
 
 class DlinferFusedMoEBuilder(FusedMoEBuilder):

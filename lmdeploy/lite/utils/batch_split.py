@@ -4,10 +4,8 @@ from typing import Any, Dict, List, Tuple, Union
 import torch
 
 
-def split_decoder_layer_inputs(
-    batch_size, *args: Union[torch.Tensor, Any], **kwargs: Union[torch.Tensor,
-                                                                 Any]
-) -> Tuple[List[List[Any]], List[Dict[str, Any]]]:
+def split_decoder_layer_inputs(batch_size, *args: Union[torch.Tensor, Any],
+                               **kwargs: Union[torch.Tensor, Any]) -> Tuple[List[List[Any]], List[Dict[str, Any]]]:
     """This function splits batched decoder layer inputs into individual
     elements.
 
@@ -46,14 +44,11 @@ def split_decoder_layer_inputs(
         for name, val in kwargs.items():
             if isinstance(val, torch.Tensor) and val.size(0) == bs:
                 new_kwargs[name] = val[i:i + batch_size]
-            elif isinstance(val, torch.Tensor) and len(
-                    val.shape) > 1 and val.size(1) == bs:  # qwen2-vl
+            elif isinstance(val, torch.Tensor) and len(val.shape) > 1 and val.size(1) == bs:  # qwen2-vl
                 new_kwargs[name] = val[:, i:i + batch_size]
-            elif name == 'position_embeddings' and isinstance(
-                    val, Tuple) and len(
-                        val[0].shape) > 1 and val[0].size(1) == bs:  # qwen2-vl
-                new_kwargs[name] = (val[0][:, i:i + batch_size],
-                                    val[1][:, i:i + batch_size])
+            elif name == 'position_embeddings' and isinstance(val, Tuple) and len(
+                    val[0].shape) > 1 and val[0].size(1) == bs:  # qwen2-vl
+                new_kwargs[name] = (val[0][:, i:i + batch_size], val[1][:, i:i + batch_size])
             else:
                 new_kwargs[name] = val
 
@@ -63,8 +58,7 @@ def split_decoder_layer_inputs(
     return batch_args, batch_kwargs
 
 
-def concat_decoder_layer_outputs(
-        batch_outputs: List[Tuple[Any]]) -> Tuple[Any]:
+def concat_decoder_layer_outputs(batch_outputs: List[Tuple[Any]]) -> Tuple[Any]:
     """This function concatenates individual decoder layer outputs into a
     batched output.
 

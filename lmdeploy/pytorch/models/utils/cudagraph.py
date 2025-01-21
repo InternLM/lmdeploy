@@ -50,8 +50,7 @@ class CudaGraphMixin:
         """return True is model support cudagraph."""
         return attn_metadata.is_decoding
 
-    def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, *args,
-                               **kwargs) -> BuffType:
+    def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, *args, **kwargs) -> BuffType:
         """make cudagraph buffers from forward inputs."""
         max_batches = graph_meta.max_batchs
         max_tokens = graph_meta.max_tokens
@@ -59,39 +58,23 @@ class CudaGraphMixin:
         device = graph_meta.device
 
         input_buffers: BuffType = dict()
-        input_buffers['input_ids'] = torch.zeros(1,
-                                                 max_tokens,
-                                                 dtype=torch.int64,
-                                                 device=device)
-        input_buffers['position_ids'] = torch.zeros((1, max_tokens),
-                                                    dtype=torch.int64,
-                                                    device=device)
+        input_buffers['input_ids'] = torch.zeros(1, max_tokens, dtype=torch.int64, device=device)
+        input_buffers['position_ids'] = torch.zeros((1, max_tokens), dtype=torch.int64, device=device)
 
-        input_buffers['block_offsets'] = torch.zeros((max_batches, num_blocks),
-                                                     dtype=torch.int64,
-                                                     device=device)
+        input_buffers['block_offsets'] = torch.zeros((max_batches, num_blocks), dtype=torch.int64, device=device)
 
-        input_buffers['qkv_lens'] = torch.zeros(3,
-                                                max_batches,
-                                                dtype=torch.int64,
-                                                device=device)
+        input_buffers['qkv_lens'] = torch.zeros(3, max_batches, dtype=torch.int64, device=device)
         input_buffers['q_start_loc'] = input_buffers['qkv_lens'][0]
         input_buffers['q_seqlens'] = input_buffers['qkv_lens'][1]
         input_buffers['kv_seqlens'] = input_buffers['qkv_lens'][2]
-        input_buffers['local_adapter_ids'] = torch.zeros(max_batches,
-                                                         dtype=torch.int64,
-                                                         device=device)
+        input_buffers['local_adapter_ids'] = torch.zeros(max_batches, dtype=torch.int64, device=device)
         # create buffer for cross_attn_metadata here
-        input_buffers['fill_seqlens'] = torch.zeros(max_batches,
-                                                    dtype=torch.int64,
-                                                    device=device)
+        input_buffers['fill_seqlens'] = torch.zeros(max_batches, dtype=torch.int64, device=device)
 
         return input_buffers
 
-    def fill_buffers_cudagraph(self, graph_meta: CudaGraphMeta,
-                               input_ids: Tensor, position_ids: Tensor,
-                               past_key_values: List, attn_metadata: Any,
-                               inputs_embeds: Tensor,
+    def fill_buffers_cudagraph(self, graph_meta: CudaGraphMeta, input_ids: Tensor, position_ids: Tensor,
+                               past_key_values: List, attn_metadata: Any, inputs_embeds: Tensor,
                                **kwargs) -> Dict[str, Tensor]:
         """fill cudagraph buffers from forward inputs."""
 
@@ -108,8 +91,7 @@ class CudaGraphMixin:
         # fill buffer
         input_buffers['input_ids'][:, :num_tokens] = input_ids
         input_buffers['position_ids'][:, :num_tokens] = position_ids
-        input_buffers[
-            'block_offsets'][:batch_size, :num_blocks] = block_offsets
+        input_buffers['block_offsets'][:batch_size, :num_blocks] = block_offsets
 
         qkv = torch.stack((q_start_loc, q_seqlens, kv_seqlens))
         input_buffers['qkv_lens'].zero_()
@@ -118,16 +100,13 @@ class CudaGraphMixin:
             emb_size = inputs_embeds.size(-1)
             if 'inputs_embeds' not in input_buffers:
                 max_num_tokens = input_buffers['input_ids'].size(-1)
-                input_buffers['inputs_embeds'] = inputs_embeds.new_zeros(
-                    1, max_num_tokens, emb_size)
+                input_buffers['inputs_embeds'] = inputs_embeds.new_zeros(1, max_num_tokens, emb_size)
             input_buffers['inputs_embeds'][:, :num_tokens] = inputs_embeds
 
         # create inputs
         new_batch_size = next_power_of_2(batch_size)
-        attn_metadata.block_offsets = input_buffers[
-            'block_offsets'][:new_batch_size]
-        attn_metadata.q_start_loc = input_buffers[
-            'q_start_loc'][:new_batch_size]
+        attn_metadata.block_offsets = input_buffers['block_offsets'][:new_batch_size]
+        attn_metadata.q_start_loc = input_buffers['q_start_loc'][:new_batch_size]
         attn_metadata.q_seqlens = input_buffers['q_seqlens'][:new_batch_size]
         attn_metadata.kv_seqlens = input_buffers['kv_seqlens'][:new_batch_size]
 
@@ -142,32 +121,27 @@ class CudaGraphMixin:
             new_inputs['cross_attn_metadata'] = cross_attn_metadata
 
         if is_decoding:
-            new_inputs['input_ids'] = input_buffers[
-                'input_ids'][:, :new_batch_size]
-            new_inputs['position_ids'] = input_buffers[
-                'position_ids'][:, :new_batch_size]
+            new_inputs['input_ids'] = input_buffers['input_ids'][:, :new_batch_size]
+            new_inputs['position_ids'] = input_buffers['position_ids'][:, :new_batch_size]
         else:
             new_inputs['input_ids'] = input_buffers['input_ids']
             new_inputs['position_ids'] = input_buffers['position_ids']
 
         if inputs_embeds is not None:
             if is_decoding:
-                new_inputs['inputs_embeds'] = input_buffers[
-                    'inputs_embeds'][:, :new_batch_size]
+                new_inputs['inputs_embeds'] = input_buffers['inputs_embeds'][:, :new_batch_size]
             else:
                 new_inputs['inputs_embeds'] = input_buffers['inputs_embeds']
 
         new_inputs.update(kwargs)
         return new_inputs
 
-    def update_context_cudagraph(self, graph_meta: CudaGraphMeta,
-                                 context: StepContext):
+    def update_context_cudagraph(self, graph_meta: CudaGraphMeta, context: StepContext):
         """update step context with input buffers."""
         input_buffers = graph_meta.input_buffers
         local_adapter_ids = context.local_adapter_ids
         if local_adapter_ids is not None:
-            if input_buffers['local_adapter_ids'].data_ptr(
-            ) != local_adapter_ids.data_ptr():
+            if input_buffers['local_adapter_ids'].data_ptr() != local_adapter_ids.data_ptr():
                 input_buffers['local_adapter_ids'].fill_(0)
             batch_size = local_adapter_ids.size(0)
             input_buffers['local_adapter_ids'][:batch_size] = local_adapter_ids

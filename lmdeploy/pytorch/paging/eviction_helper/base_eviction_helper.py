@@ -19,8 +19,6 @@ class BaseEvictionHelper:
         """sequence need swap in."""
         raise NotImplementedError('Not implemented.')
 
-    def evict_for_seq(self, seq: SchedulerSequence,
-                      evictable_seqs: List[SchedulerSequence],
-                      prealloc_size: int):
+    def evict_for_seq(self, seq: SchedulerSequence, evictable_seqs: List[SchedulerSequence], prealloc_size: int):
         """evict seqs."""
         raise NotImplementedError('Not implemented.')

@@ -15,11 +15,9 @@ class LlavaReader(LlamaReader):
     norm_weight_key = 'language_model.model.norm.weight'
     output_weight_key = 'language_model.lm_head.weight'
 
-    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
-                 model_cfg: dict, policy):
+    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool, model_cfg: dict, policy):
         model_cfg = model_cfg.get('text_config')
-        super().__init__(new_params, unused_params, last_bin, model_cfg,
-                         policy)
+        super().__init__(new_params, unused_params, last_bin, model_cfg, policy)
 
 
 @INPUT_MODELS.register_module(name='llava')
@@ -32,8 +30,7 @@ class LlavaModel(LlamaModel):
         config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
         config = getattr(config, 'text_config', config)
         arch = config.architectures[0]
-        _readers = dict(Qwen2ForCausalLM=LlavaReader,
-                        LlamaForCausalLM=LlavaReader)
+        _readers = dict(Qwen2ForCausalLM=LlavaReader, LlamaForCausalLM=LlavaReader)
         self.Reader = _readers[arch]
         self.arch = arch
 
@@ -53,8 +50,7 @@ class LlavaModel(LlamaModel):
             else:
                 kv_head_num = model_arg.get('num_attention_heads', 32)
             rope_theta = float(model_arg.get('rope_theta', 10000.0))
-            max_position_embeddings = int(
-                model_arg.get('max_position_embeddings', 0))
+            max_position_embeddings = int(model_arg.get('max_position_embeddings', 0))
             rope_scaling = model_arg.get('rope_scaling', None)
             scaling_factor = 0.0
             use_dynamic_ntk = 0

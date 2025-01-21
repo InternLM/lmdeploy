@@ -66,8 +66,7 @@ class CudaOpsBackend(DefaultOpsBackend):
             from .blockedf8_modules import TritonLinearBlockedF8Builder
             return TritonLinearBlockedF8Builder
         else:
-            logger.debug(
-                f'Op {layer_type} fallback to default implementation.')
+            logger.debug(f'Op {layer_type} fallback to default implementation.')
             return super().get_layer_impl_builder(layer_type)
 
     @staticmethod
@@ -137,8 +136,7 @@ class CudaOpsBackend(DefaultOpsBackend):
             cross_kv_start_loc = None
             cross_kv_flatten_size = None
             if not step_context.is_decoding and cross_kv_seqlens is not None:
-                cross_kv_start_loc = cross_kv_seqlens.cumsum(
-                    0) - cross_kv_seqlens
+                cross_kv_start_loc = cross_kv_seqlens.cumsum(0) - cross_kv_seqlens
                 cross_kv_flatten_size = cross_kv_seqlens.sum().item()
             cross_attn_metadata = attn_meta_cls(
                 step_context.is_decoding,
@@ -157,11 +155,8 @@ class CudaOpsBackend(DefaultOpsBackend):
         return step_context
 
     @staticmethod
-    def build_graph_runner(model: torch.nn.Module, model_config: ModelConfig,
-                           cache_config: CacheConfig,
-                           backend_config: BackendConfig,
-                           device: torch.device):
+    def build_graph_runner(model: torch.nn.Module, model_config: ModelConfig, cache_config: CacheConfig,
+                           backend_config: BackendConfig, device: torch.device):
         """build graph runner."""
         from .graph_runner import CUDAGraphRunner
-        return CUDAGraphRunner(model, model_config, cache_config,
-                               backend_config, device)
+        return CUDAGraphRunner(model, model_config, cache_config, backend_config, device)

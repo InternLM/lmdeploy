@@ -25,15 +25,10 @@ class SoftmaxTopK(nn.Module):
         return self.impl.forward(x)
 
 
-def create_mlp_weights(hidden_dim: int, ffn_dim: int, num_experts: int,
-                       dtype: torch.dtype, device: torch.device):
+def create_mlp_weights(hidden_dim: int, ffn_dim: int, num_experts: int, dtype: torch.dtype, device: torch.device):
     """create weights."""
-    gate_up_weights = torch.empty((num_experts, ffn_dim * 2, hidden_dim),
-                                  dtype=dtype,
-                                  device=device)
-    down_weights = torch.empty((num_experts, hidden_dim, ffn_dim),
-                               dtype=dtype,
-                               device=device)
+    gate_up_weights = torch.empty((num_experts, ffn_dim * 2, hidden_dim), dtype=dtype, device=device)
+    down_weights = torch.empty((num_experts, hidden_dim, ffn_dim), dtype=dtype, device=device)
     return gate_up_weights, down_weights
 
 
@@ -58,9 +53,7 @@ class LinearWeights(nn.Module):
                  expert_list: List[int] = None,
                  ep: bool = False):
         super().__init__()
-        weight = torch.empty((num_experts, out_features, in_features),
-                             dtype=dtype,
-                             device=device)
+        weight = torch.empty((num_experts, out_features, in_features), dtype=dtype, device=device)
         weight = torch.nn.Parameter(weight, requires_grad=False)
         self.register_parameter('weight', weight)
         self.ep = ep
@@ -69,8 +62,7 @@ class LinearWeights(nn.Module):
         self.half_out = out_features // 2
 
         if self.ep:
-            self.expert_map = dict(
-                (eid, idx) for idx, eid in enumerate(expert_list))
+            self.expert_map = dict((eid, idx) for idx, eid in enumerate(expert_list))
             self.weight.weight_loader = self.weight_loader_ep
         else:
             self.weight.weight_loader = self.weight_loader_tp
@@ -82,9 +74,7 @@ class LinearWeights(nn.Module):
         weight.weight_loader = weight_loader
         self.register_parameter('weight', weight)
 
-    def weight_loader_tp(self, param: torch.nn.Parameter,
-                         loaded_weight: torch.Tensor, expert_id: int,
-                         shard_id: str):
+    def weight_loader_tp(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, expert_id: int, shard_id: str):
         """weight loader."""
         world_size, rank = get_world_rank()
         if shard_id == 'gate':
@@ -95,14 +85,14 @@ class LinearWeights(nn.Module):
             weight = loaded_weight.chunk(world_size, dim=0)[rank]
         elif shard_id == 'down':
             param_data = param.data[expert_id]
-            weight = loaded_weight.chunk(world_size, dim=1)[rank]
+            # weight is not contiguous, chunk and copy in cpu is slow
+            weight = loaded_weight.to(param_data.device)
+            weight = weight.chunk(world_size, dim=1)[rank]
         else:
             raise RuntimeError(f'Unknown shard_id: {shard_id}')
         param_data.copy_(weight)
 
-    def weight_loader_ep(self, param: torch.nn.Parameter,
-                         loaded_weight: torch.Tensor, expert_id: int,
-                         shard_id: str):
+    def weight_loader_ep(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, expert_id: int, shard_id: str):
         """weight loader."""
         expert_list = self.expert_list
         if expert_id not in expert_list:
@@ -183,15 +173,12 @@ class FusedMoE(nn.Module):
 
     def update_weights(self):
         """update weights."""
-        gate_up_weights, down_weights = self.impl.update_weights(
-            self.gate_up.weight, self.down.weight)
+        gate_up_weights, down_weights = self.impl.update_weights(self.gate_up.weight, self.down.weight)
         self.gate_up.update_weight(gate_up_weights)
         self.down.update_weight(down_weights)
 
-    def forward(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor,
-                topk_ids: torch.LongTensor):
-        ret = self.impl.forward(hidden_states, topk_weights, topk_ids,
-                                self.gate_up.weight, self.down.weight,
+    def forward(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.LongTensor):
+        ret = self.impl.forward(hidden_states, topk_weights, topk_ids, self.gate_up.weight, self.down.weight,
                                 self.expert_list)
         if self.all_reduce:
             dist.all_reduce(ret)
@@ -220,9 +207,7 @@ class LinearWeightsW8A8(LinearWeights):
             expert_list=expert_list,
             ep=ep,
         )
-        scale = torch.empty((num_experts, out_features, 1),
-                            dtype=torch.float32,
-                            device=device)
+        scale = torch.empty((num_experts, out_features, 1), dtype=torch.float32, device=device)
         scale = torch.nn.Parameter(scale, requires_grad=False)
         self.register_parameter('scale', scale)
 
@@ -239,8 +224,7 @@ class LinearWeightsW8A8(LinearWeights):
         scale.weight_loader = weight_loader
         self.register_parameter('scale', scale)
 
-    def weight_loader_scale_tp(self, param: torch.nn.Parameter,
-                               loaded_weight: torch.Tensor, expert_id: int,
+    def weight_loader_scale_tp(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, expert_id: int,
                                shard_id: str):
         """weight loader scale tp."""
         world_size, rank = get_world_rank()
@@ -278,13 +262,8 @@ class FusedMoEW8A8(nn.Module):
             device = torch.device('cpu')
         dtype = torch.float16 if dtype is None else dtype
 
-        impl_builder = get_backend().get_layer_impl_builder(
-            OpType.FusedMoEW8A8)
-        self.impl = impl_builder.build(top_k,
-                                       num_experts,
-                                       renormalize,
-                                       dtype,
-                                       quant_dtype=quant_dtype)
+        impl_builder = get_backend().get_layer_impl_builder(OpType.FusedMoEW8A8)
+        self.impl = impl_builder.build(top_k, num_experts, renormalize, dtype, quant_dtype=quant_dtype)
 
         enable_ep = enable_ep and self.impl.support_ep()
         if enable_ep:
@@ -326,19 +305,14 @@ class FusedMoEW8A8(nn.Module):
     def update_weights(self):
         """update weights."""
         (gate_up_weights, down_weights, gate_up_scale,
-         down_scale) = self.impl.update_weights(self.gate_up.weight,
-                                                self.down.weight,
-                                                self.gate_up.scale,
+         down_scale) = self.impl.update_weights(self.gate_up.weight, self.down.weight, self.gate_up.scale,
                                                 self.down.scale)
         self.gate_up.update_weight(gate_up_weights, gate_up_scale)
         self.down.update_weight(down_weights, down_scale)
 
-    def forward(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor,
-                topk_ids: torch.LongTensor):
-        ret = self.impl.forward(hidden_states, topk_weights, topk_ids,
-                                self.gate_up.weight, self.gate_up.scale,
-                                self.down.weight, self.down.scale,
-                                self.expert_list)
+    def forward(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.LongTensor):
+        ret = self.impl.forward(hidden_states, topk_weights, topk_ids, self.gate_up.weight, self.gate_up.scale,
+                                self.down.weight, self.down.scale, self.expert_list)
         if self.all_reduce:
             dist.all_reduce(ret)
         return ret
@@ -368,8 +342,7 @@ class LinearWeightsBlockedF8(LinearWeights):
             ep=ep,
         )
         self.block_size = block_size
-        scale = torch.empty((num_experts, div_up(
-            out_features, block_size), div_up(in_features, block_size)),
+        scale = torch.empty((num_experts, div_up(out_features, block_size), div_up(in_features, block_size)),
                             dtype=torch.float32,
                             device=device)
         scale = torch.nn.Parameter(scale, requires_grad=False)
@@ -388,8 +361,7 @@ class LinearWeightsBlockedF8(LinearWeights):
         scale.weight_loader = weight_loader
         self.register_parameter('scale', scale)
 
-    def weight_loader_scale_tp(self, param: torch.nn.Parameter,
-                               loaded_weight: torch.Tensor, expert_id: int,
+    def weight_loader_scale_tp(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, expert_id: int,
                                shard_id: str):
         """weight loader scale tp."""
         world_size, rank = get_world_rank()
@@ -403,6 +375,7 @@ class LinearWeightsBlockedF8(LinearWeights):
             weight = loaded_weight.chunk(world_size, dim=0)[rank]
         elif shard_id == 'down':
             param_data = param.data[expert_id]
+            loaded_weight = loaded_weight.to(param_data.device)
             weight = loaded_weight.chunk(world_size, dim=1)[rank]
         else:
             raise RuntimeError(f'Unknown shard_id: {shard_id}')
@@ -428,13 +401,8 @@ class FusedMoEBlockedF8(nn.Module):
             device = torch.device('cpu')
         dtype = torch.float16 if dtype is None else dtype
         self.block_size = 128
-        impl_builder = get_backend().get_layer_impl_builder(
-            OpType.FusedMoEBlockedF8)
-        self.impl = impl_builder.build(top_k,
-                                       num_experts,
-                                       renormalize,
-                                       block_size=self.block_size,
-                                       out_dtype=dtype)
+        impl_builder = get_backend().get_layer_impl_builder(OpType.FusedMoEBlockedF8)
+        self.impl = impl_builder.build(top_k, num_experts, renormalize, block_size=self.block_size, out_dtype=dtype)
 
         enable_ep = enable_ep and self.impl.support_ep()
         if enable_ep:
@@ -480,19 +448,14 @@ class FusedMoEBlockedF8(nn.Module):
     def update_weights(self):
         """update weights."""
         (gate_up_weights, down_weights, gate_up_scale,
-         down_scale) = self.impl.update_weights(self.gate_up.weight,
-                                                self.down.weight,
-                                                self.gate_up.scale,
+         down_scale) = self.impl.update_weights(self.gate_up.weight, self.down.weight, self.gate_up.scale,
                                                 self.down.scale)
         self.gate_up.update_weight(gate_up_weights, gate_up_scale)
         self.down.update_weight(down_weights, down_scale)
 
-    def forward(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor,
-                topk_ids: torch.LongTensor):
-        ret = self.impl.forward(hidden_states, topk_weights, topk_ids,
-                                self.gate_up.weight, self.gate_up.scale,
-                                self.down.weight, self.down.scale,
-                                self.expert_list)
+    def forward(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.LongTensor):
+        ret = self.impl.forward(hidden_states, topk_weights, topk_ids, self.gate_up.weight, self.gate_up.scale,
+                                self.down.weight, self.down.scale, self.expert_list)
         if self.all_reduce:
             dist.all_reduce(ret)
         return ret

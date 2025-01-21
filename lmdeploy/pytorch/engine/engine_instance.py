@@ -34,17 +34,14 @@ async def async_try_add_session(req_sender: RequestSender, session_id: int):
     Args:
         session_id (int): The session id to add.
     """
-    resp = await req_sender.async_send(RequestType.ADD_SESSION,
-                                       dict(session_id=session_id))
-    _check_resp(resp, [ResponseType.SUCCESS, ResponseType.SESSION_REPEAT],
-                (f'Can not add session {session_id} '
-                 f'with error: {resp.type}'))
+    resp = await req_sender.async_send(RequestType.ADD_SESSION, dict(session_id=session_id))
+    _check_resp(resp, [ResponseType.SUCCESS, ResponseType.SESSION_REPEAT], (f'Can not add session {session_id} '
+                                                                            f'with error: {resp.type}'))
 
 
 async def async_cancel(req_sender: RequestSender, session_id: int):
     """Stop current streaming inference."""
-    resp = await req_sender.async_send(RequestType.STOP_SESSION,
-                                       dict(session_id=session_id))
+    resp = await req_sender.async_send(RequestType.STOP_SESSION, dict(session_id=session_id))
     _check_resp_success(resp, (f'Failed to cancel session: {session_id}. '
                                f'Error: {resp.type}.'))
 
@@ -55,23 +52,19 @@ def try_add_session(req_sender: RequestSender, session_id: int):
     Args:
         session_id (int): The session id to add.
     """
-    resp = req_sender.send(RequestType.ADD_SESSION,
-                           dict(session_id=session_id))
-    _check_resp(resp, [ResponseType.SUCCESS, ResponseType.SESSION_REPEAT],
-                (f'Can not add session {session_id} '
-                 f'with error: {resp.type}'))
+    resp = req_sender.send(RequestType.ADD_SESSION, dict(session_id=session_id))
+    _check_resp(resp, [ResponseType.SUCCESS, ResponseType.SESSION_REPEAT], (f'Can not add session {session_id} '
+                                                                            f'with error: {resp.type}'))
 
 
 def end(req_sender: RequestSender, session_id: int):
     """End the given session."""
-    req_sender.send_async(RequestType.END_SESSION,
-                          dict(session_id=session_id, response=False))
+    req_sender.send_async(RequestType.END_SESSION, dict(session_id=session_id, response=False))
 
 
 def cancel(req_sender: RequestSender, session_id: int):
     """Stop current streaming inference."""
-    resp = req_sender.send(RequestType.STOP_SESSION,
-                           dict(session_id=session_id))
+    resp = req_sender.send(RequestType.STOP_SESSION, dict(session_id=session_id))
     _check_resp_success(resp, (f'Failed to cancel session: {session_id}. '
                                f'Error: {resp.type}.'))
 
@@ -134,8 +127,7 @@ class EngineInstance:
             return
         gen_config = gen_config or GenerationConfig()
         sampling_param = SamplingParam.from_gen_config(gen_config=gen_config)
-        self.req_sender.send_async(RequestType.ADD_SESSION,
-                                   dict(session_id=session_id, response=False))
+        self.req_sender.send_async(RequestType.ADD_SESSION, dict(session_id=session_id, response=False))
         msg = dict(
             token_ids=input_ids,
             session_id=session_id,
@@ -155,10 +147,7 @@ class EngineInstance:
                 resp_data = resp.data
                 token_ids = resp_data['token_ids'].tolist()
                 logits = resp_data['logits']
-                yield EngineOutput(resp.type,
-                                   token_ids,
-                                   len(token_ids),
-                                   logits=logits)
+                yield EngineOutput(resp.type, token_ids, len(token_ids), logits=logits)
                 break
             else:
                 yield EngineOutput(resp.type, [], 0)
@@ -224,8 +213,7 @@ class EngineInstance:
                                                **kwargs)
             while True:
                 try:
-                    yield self.req_sender.run_until_complete(
-                        coro_gen.__anext__())
+                    yield self.req_sender.run_until_complete(coro_gen.__anext__())
                 except StopAsyncIteration:
                     break
 
@@ -250,11 +238,7 @@ class EngineInstance:
             int: The number of the output tokens.
         """
         return self.req_sender.run_until_complete(
-            self.async_infer(session_id,
-                             input_ids,
-                             multimodal=multimodal,
-                             gen_config=gen_config,
-                             **kwargs))
+            self.async_infer(session_id, input_ids, multimodal=multimodal, gen_config=gen_config, **kwargs))
 
     async def async_end(self, session_id: int):
         """End the given session."""

@@ -8,7 +8,6 @@ PreparedInputs = Tuple[List[int], MultiModalInputs]
 
 class MultiModalMixin:
 
-    def prepare_multimodal_input(self, input_ids, input_multimodals,
-                                 **kwargs) -> PreparedInputs:
+    def prepare_multimodal_input(self, input_ids, input_multimodals, **kwargs) -> PreparedInputs:
         """prepare multimodals inputs."""
         raise NotImplementedError('prepare input not implemented.')

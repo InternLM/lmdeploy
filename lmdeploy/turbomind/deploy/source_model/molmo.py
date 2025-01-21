@@ -47,8 +47,7 @@ class MolmoReader(LlamaReader):
         kv_head_num = self.model_cfg['num_key_value_heads']
         head_dim = hidden_size // head_num
         assert head_dim == 128
-        fused_dims = (hidden_size, kv_head_num * head_dim,
-                      kv_head_num * head_dim)
+        fused_dims = (hidden_size, kv_head_num * head_dim, kv_head_num * head_dim)
         qkv = self.params.get(f'{self.attn_layer_prefix}.{i}.att_proj.{kind}')
         qkv = self.transform(qkv, kind)
         if qkv is not None:
@@ -61,8 +60,7 @@ class MolmoReader(LlamaReader):
 
     def _ffn(self, i: int, kind: str):
         """Get ffn kind(weight, qweight) for layer i."""
-        up_and_gate = self.params[
-            f'{self.attn_layer_prefix}.{i}.ff_proj.{kind}']
+        up_and_gate = self.params[f'{self.attn_layer_prefix}.{i}.ff_proj.{kind}']
         up_and_gate = self.transform(up_and_gate, kind)
         gate, up = up_and_gate.chunk(2, dim=0)
         down = self.params[f'{self.attn_layer_prefix}.{i}.ff_out.{kind}']

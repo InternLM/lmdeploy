@@ -17,8 +17,7 @@ def _compute_rms_norm(x, w, eps: tl.constexpr, N_COLS: tl.constexpr):
 
 
 @triton.jit
-def rms_norm_kernel(input, weight, output, input_row_stride: tl.constexpr,
-                    eps: tl.constexpr, N_COLS: tl.constexpr,
+def rms_norm_kernel(input, weight, output, input_row_stride: tl.constexpr, eps: tl.constexpr, N_COLS: tl.constexpr,
                     BLOCK_N: tl.constexpr):
     """rms norm kernel."""
     prog_id = tl.program_id(0)
@@ -35,10 +34,9 @@ def rms_norm_kernel(input, weight, output, input_row_stride: tl.constexpr,
 
 
 @triton.jit
-def add_rms_norm_kernel(input, weight, residual, output, out_residual,
-                        input_row_stride: tl.constexpr,
-                        residual_row_stride: tl.constexpr, eps: tl.constexpr,
-                        N_COLS: tl.constexpr, BLOCK_N: tl.constexpr):
+def add_rms_norm_kernel(input, weight, residual, output, out_residual, input_row_stride: tl.constexpr,
+                        residual_row_stride: tl.constexpr, eps: tl.constexpr, N_COLS: tl.constexpr,
+                        BLOCK_N: tl.constexpr):
     """rms norm kernel."""
     prog_id = tl.program_id(0)
     offsets = tl.arange(0, BLOCK_N)
@@ -126,19 +124,13 @@ if __name__ == '__main__':
         input_dtype = hidden_states.dtype
         hidden_states = hidden_states.to(torch.float32)
         variance = hidden_states.pow(2).mean(-1, keepdim=True)
-        hidden_states = hidden_states * torch.rsqrt(variance +
-                                                    variance_epsilon)
+        hidden_states = hidden_states * torch.rsqrt(variance + variance_epsilon)
         return weight * hidden_states.to(input_dtype)
 
     def test_rms_norm(bsz, ctx_len, feat_len, dtype):
         """test rms norm."""
-        input = torch.empty((bsz, ctx_len, feat_len),
-                            dtype=dtype,
-                            device='cuda').normal_(mean=0.,
-                                                   std=0.5).contiguous()
-        weight = torch.empty((feat_len), dtype=dtype,
-                             device='cuda').normal_(mean=0.,
-                                                    std=0.5).contiguous()
+        input = torch.empty((bsz, ctx_len, feat_len), dtype=dtype, device='cuda').normal_(mean=0., std=0.5).contiguous()
+        weight = torch.empty((feat_len), dtype=dtype, device='cuda').normal_(mean=0., std=0.5).contiguous()
         triton_output = rms_norm(hidden_states=input, weight=weight)
         torch_output = torch_forward(hidden_states=input, weight=weight)
         assert torch.allclose(torch_output, triton_output, atol=1e-2, rtol=0)
@@ -156,9 +148,8 @@ if __name__ == '__main__':
 
         torch_cost = (t1 - t0) / N_REPEATS * 1000
         triton_cost = (t2 - t1) / N_REPEATS * 1000
-        print(
-            'input {} weight {} dtype {}\n  torch {:.3f} triton {:.3f} (ms)\n'.
-            format(input.shape, weight.shape, dtype, torch_cost, triton_cost))
+        print('input {} weight {} dtype {}\n  torch {:.3f} triton {:.3f} (ms)\n'.format(
+            input.shape, weight.shape, dtype, torch_cost, triton_cost))
 
     test_rms_norm(1, 8128, 5120, torch.float16)
     test_rms_norm(1, 8128, 5120, torch.float32)

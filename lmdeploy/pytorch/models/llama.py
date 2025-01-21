@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
 from typing import Any, Iterable, List, Optional, Tuple
 
 import torch
@@ -6,10 +7,8 @@ from torch import nn
 from transformers.models.llama import LlamaConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, RopeType,
-                                 SiluAndMul, build_rotary_embedding)
-from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
-                                        build_qkv_proj, build_rowwise_linear)
+from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
+from lmdeploy.pytorch.nn.linear import build_merged_colwise_linear, build_qkv_proj, build_rowwise_linear
 from lmdeploy.pytorch.nn.rotary_embedding import Llama3Parameters
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
@@ -19,18 +18,14 @@ from .utils.cudagraph import CudaGraphMixin
 class LlamaAttention(nn.Module):
     """Rewrite module of LlamaAttention."""
 
-    def __init__(self,
-                 config: LlamaConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: LlamaConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         num_heads = config.num_attention_heads
         num_key_value_heads = config.num_key_value_heads
         hidden_size = config.hidden_size
         head_dim = getattr(config, 'head_dim', hidden_size // num_heads)
-        num_replicate_kv_heads = getattr(config,
-                                         'num_replicate_key_value_heads', 1)
+        num_replicate_kv_heads = getattr(config, 'num_replicate_key_value_heads', 1)
         # packed qkv
         self.qkv_proj = build_qkv_proj(
             hidden_size,
@@ -76,8 +71,7 @@ class LlamaAttention(nn.Module):
         qkv_states = self.qkv_proj(hidden_states)
         # (-1, heads, head_dim)
         qkv_states = qkv_states.flatten(0, -2)
-        query_states, key_states, value_states = self.qkv_proj.split_qkv(
-            qkv_states)
+        query_states, key_states, value_states = self.qkv_proj.split_qkv(qkv_states)
 
         # apply rotary embedding
         cos, sin = rotary_pos_emb
@@ -97,10 +91,8 @@ class LlamaAttention(nn.Module):
             past_key_value[0],
             past_key_value[1],
             attn_metadata,
-            k_scales_zeros=None
-            if len(past_key_value) == 2 else past_key_value[2],
-            v_scales_zeros=None
-            if len(past_key_value) == 2 else past_key_value[3],
+            k_scales_zeros=None if len(past_key_value) == 2 else past_key_value[2],
+            v_scales_zeros=None if len(past_key_value) == 2 else past_key_value[3],
             inplace=True,
         )
         attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
@@ -113,10 +105,7 @@ class LlamaAttention(nn.Module):
 class LlamaMLP(nn.Module):
     """llama mlp."""
 
-    def __init__(self,
-                 config: LlamaConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: LlamaConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         # gate up
@@ -153,11 +142,7 @@ class LlamaMLP(nn.Module):
 class LlamaDecoderLayer(nn.Module):
     """llama decoder layer."""
 
-    def __init__(self,
-                 config: LlamaConfig,
-                 layer_idx: int,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: LlamaConfig, layer_idx: int, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.layer_idx = layer_idx
         quantization_config = getattr(config, 'quantization_config', None)
@@ -176,12 +161,11 @@ class LlamaDecoderLayer(nn.Module):
                                        device=device)
 
         # build attention layer norm
-        self.post_attention_layernorm = RMSNorm(
-            config.hidden_size,
-            config.rms_norm_eps,
-            quant_config=quantization_config,
-            dtype=dtype,
-            device=device)
+        self.post_attention_layernorm = RMSNorm(config.hidden_size,
+                                                config.rms_norm_eps,
+                                                quant_config=quantization_config,
+                                                dtype=dtype,
+                                                device=device)
 
     def forward(
         self,
@@ -196,8 +180,7 @@ class LlamaDecoderLayer(nn.Module):
             residual = hidden_states
             hidden_states = self.input_layernorm(hidden_states)
         else:
-            hidden_states, residual = self.input_layernorm(
-                hidden_states, residual)
+            hidden_states, residual = self.input_layernorm(hidden_states, residual)
 
         # Self Attention
         hidden_states = self.self_attn(
@@ -208,8 +191,7 @@ class LlamaDecoderLayer(nn.Module):
         )
 
         # Fully Connected
-        hidden_states, residual = self.post_attention_layernorm(
-            hidden_states, residual)
+        hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
         hidden_states = self.mlp(hidden_states)
 
         outputs = (hidden_states, residual)
@@ -219,10 +201,7 @@ class LlamaDecoderLayer(nn.Module):
 class LlamaModel(nn.Module):
     """llama model."""
 
-    def __init__(self,
-                 config: LlamaConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: LlamaConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
@@ -240,10 +219,7 @@ class LlamaModel(nn.Module):
         ])
 
         # build norm
-        self.norm = RMSNorm(config.hidden_size,
-                            config.rms_norm_eps,
-                            dtype=dtype,
-                            device=device)
+        self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
 
         # build rotary embedding in LlamaModel
         rope_dim = config.hidden_size // config.num_attention_heads
@@ -269,8 +245,7 @@ class LlamaModel(nn.Module):
                 emb_type = RopeType.Llama3
                 low_freq_factor = rope_scaling.get('low_freq_factor', 1.0)
                 high_freq_factor = rope_scaling.get('high_freq_factor', 1.0)
-                llama3_params = Llama3Parameters(low_freq_factor,
-                                                 high_freq_factor)
+                llama3_params = Llama3Parameters(low_freq_factor, high_freq_factor)
             else:
                 raise RuntimeError(f'Unsupported rope type: {rope_type}')
 
@@ -408,9 +383,7 @@ class LlamaForCausalLM(nn.Module, CudaGraphMixin):
         if vision_embeddings is not None and len(vision_embeddings) > 0:
             if inputs_embeds is None:
                 inputs_embeds = self.get_input_embeddings()(input_ids)
-            inputs_embeds[:,
-                          vision_embedding_indexing, :] = vision_embeddings.to(
-                              inputs_embeds)
+            inputs_embeds[:, vision_embedding_indexing, :] = vision_embeddings.to(inputs_embeds)
 
         # inputs of forward
         return dict(
@@ -437,8 +410,7 @@ class LlamaForCausalLM(nn.Module, CudaGraphMixin):
         for name, loaded_weight in weights:
             if 'rotary_emb.inv_freq' in name:
                 continue
-            if ('rotary_emb.cos_cached' in name
-                    or 'rotary_emb.sin_cached' in name):
+            if ('rotary_emb.cos_cached' in name or 'rotary_emb.sin_cached' in name):
                 continue
             if self.config.tie_word_embeddings and 'lm_head.weight' in name:
                 continue

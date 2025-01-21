@@ -14,15 +14,13 @@ with read_base():
         arenahard_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.subjective.compassarena.compassarena_compare import \
         compassarena_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.subjective.fofo.fofo_bilingual_judge import \
-        fofo_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.subjective.fofo.fofo_bilingual_judge import fofo_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.subjective.multiround.mtbench101_judge import \
         mtbench101_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.subjective.wildbench.wildbench_pair_judge import \
         wildbench_datasets  # noqa: F401, E501
 
-datasets = sum((v for k, v in locals().items()
-                if k.endswith('_datasets') and 'wildbench' not in k), [])
+datasets = sum((v for k, v in locals().items() if k.endswith('_datasets') and 'wildbench' not in k), [])
 datasets += wildbench_datasets
 
 api_meta_template = dict(
@@ -60,7 +58,5 @@ eval = dict(
         models=models,
         judge_models=judge_models,
     ),
-    runner=dict(type=LocalRunner,
-                max_num_workers=16,
-                task=dict(type=SubjectiveEvalTask)),
+    runner=dict(type=LocalRunner, max_num_workers=16, task=dict(type=SubjectiveEvalTask)),
 )

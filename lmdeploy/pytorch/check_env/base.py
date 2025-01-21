@@ -42,10 +42,7 @@ class BaseChecker:
             self.check()
             self.is_passed = True
 
-    def log_and_exit(self,
-                     e: Exception = None,
-                     mod_name: str = None,
-                     message: str = None):
+    def log_and_exit(self, e: Exception = None, mod_name: str = None, message: str = None):
         logger = self.logger
         if mod_name is None:
             mod_name = type(self).__name__
