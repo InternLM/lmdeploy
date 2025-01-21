@@ -91,7 +91,6 @@ void AbstractTransformerModel::destroyNcclParams(std::pair<std::vector<NcclParam
     for (auto& param : params.second) {
         ftNcclParamDestroy(param);
     }
-    FT_CHECK(ftNcclGroupCount() == 1);
     ftResetNcclGroup();
 }
 

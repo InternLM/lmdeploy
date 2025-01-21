@@ -984,6 +984,9 @@ class Engine:
         with device_manager.context(self.device_context), torch.cuda.stream(self.stream):
             await self._async_loop()
 
+    def close(self):
+        logger.warning('Pytorch backend currently does not support releasing resources')
+
     def create_instance(self, cuda_stream_id=0):
         """Create a pytorch engine instance.
 
