@@ -308,6 +308,10 @@ class TurboMind:
                    model_source=model_source,
                    **kwargs)
 
+    def __del__(self):
+        """release hardware resources."""
+        self.model_comm.destroy_nccl_params(self.nccl_params)
+
     def create_instance(self, cuda_stream_id=0):
         """Create a turbomind instance.
 

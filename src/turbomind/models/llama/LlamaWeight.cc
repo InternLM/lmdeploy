@@ -83,6 +83,15 @@ LlamaWeight<T>::~LlamaWeight()
 
     // Wait for deallocations
     check_cuda_error(cudaStreamSynchronize(stream_));
+
+    // Trim mempool
+    int           device_id;
+    cudaMemPool_t mempool{};
+    check_cuda_error(cudaGetDevice(&device_id));
+    check_cuda_error(cudaDeviceGetDefaultMemPool(&mempool, device_id));
+    check_cuda_error(cudaMemPoolTrimTo(mempool, 0));
+
+    check_cuda_error(cudaStreamSynchronize(stream_));
     check_cuda_error(cudaStreamDestroy(stream_));
     stream_ = {};
 }

@@ -314,6 +314,9 @@ class AsyncEngine(LogitsMixin):
 
     def close(self):
         self.internal_thread.close()
+        self.free_insts = None
+        self.instances.clear()
+        self.engine = None
 
     def _get_free_insts(self):
         if self.free_insts is None:
