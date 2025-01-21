@@ -4,39 +4,29 @@ from typing import Optional
 import torch
 
 from lmdeploy.pytorch.kernels.dlinfer.rms_norm import rms_norm
-from lmdeploy.pytorch.kernels.dlinfer.w8a8_kernels import (
-    per_token_quant_int8, smooth_quant_matmul)
+from lmdeploy.pytorch.kernels.dlinfer.w8a8_kernels import per_token_quant_int8, smooth_quant_matmul
 from lmdeploy.pytorch.models.q_modules import QTensor
 
-from ..qmodules import (LinearW8A8Builder, LinearW8A8Impl, RMSNormW8A8Builder,
-                        RMSNormW8A8Impl)
+from ..qmodules import LinearW8A8Builder, LinearW8A8Impl, RMSNormW8A8Builder, RMSNormW8A8Impl
 
 
 class DlinferRMSNormW8A8Impl(RMSNormW8A8Impl):
     """Dlinfer RMS norm w8a8 implementation api."""
 
-    def __init__(self,
-                 hidden_size: int,
-                 eps: float = 1e-6,
-                 quant_dtype: torch.dtype = torch.int8):
+    def __init__(self, hidden_size: int, eps: float = 1e-6, quant_dtype: torch.dtype = torch.int8):
         super().__init__()
         self.hidden_size = hidden_size
         self.eps = eps
         self.quant_dtype = quant_dtype
 
-    def forward(self,
-                x: torch.Tensor,
-                weight: torch.Tensor,
-                residual: torch.Tensor = None):
+    def forward(self, x: torch.Tensor, weight: torch.Tensor, residual: torch.Tensor = None):
         """forward."""
         if residual is None:
-            (x, rms_scale) = rms_norm(x, weight, self.eps, None,
-                                      self.quant_dtype)
+            (x, rms_scale) = rms_norm(x, weight, self.eps, None, self.quant_dtype)
             x = QTensor(x, rms_scale)
             return x
         else:
-            (x, rms_scale, residual) = rms_norm(x, weight, self.eps, residual,
-                                                self.quant_dtype)
+            (x, rms_scale, residual) = rms_norm(x, weight, self.eps, residual, self.quant_dtype)
             x = QTensor(x, rms_scale)
             return x, residual
 
@@ -45,9 +35,7 @@ class DlinferRMSNormW8A8Builder(RMSNormW8A8Builder):
     """Dlinfer RMS norm w8a8 implementation builder."""
 
     @staticmethod
-    def build(hidden_size: int,
-              eps: float = 1e-6,
-              quant_dtype: torch.dtype = torch.int8):
+    def build(hidden_size: int, eps: float = 1e-6, quant_dtype: torch.dtype = torch.int8):
         """build."""
         return DlinferRMSNormW8A8Impl(hidden_size, eps, quant_dtype)
 
@@ -79,8 +67,7 @@ class DlinferLinearW8A8Impl(LinearW8A8Impl):
             assert isinstance(x, QTensor)
             input_quant, input_scale = x.tensor, x.scale
 
-        out = smooth_quant_matmul(input_quant, input_scale, weight, scale,
-                                  self.out_dtype, bias, all_reduce)
+        out = smooth_quant_matmul(input_quant, input_scale, weight, scale, self.out_dtype, bias, all_reduce)
         return out
 
 

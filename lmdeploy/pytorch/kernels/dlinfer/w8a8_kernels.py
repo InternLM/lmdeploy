@@ -9,8 +9,8 @@ from torch import Tensor
 def per_token_quant_int8(x):
     """Function to perform per-token quantization on an input tensor `x`.
 
-    It converts the tensor values into signed 8-bit integers and returns the
-    quantized tensor along with the scaling factor used for quantization.
+    It converts the tensor values into signed 8-bit integers and returns the quantized tensor along with the scaling
+    factor used for quantization.
     """
     input_quant, input_scale = ext_ops.per_token_quant_int8(x)
     return input_quant, input_scale
@@ -27,12 +27,10 @@ def smooth_quant_matmul(
 ):
     """This function performs matrix multiplication with dynamic quantization.
 
-    It takes two input tensors `a` and `b`, scales them with `rms_scale` and
-    `linear_scale`, and optionally adds a `bias`. The output is returned in the
-    specified `output_dtype`.
+    It takes two input tensors `a` and `b`, scales them with `rms_scale` and `linear_scale`, and optionally adds a
+    `bias`. The output is returned in the specified `output_dtype`.
     """
-    return ext_ops.smooth_quant_matmul(a, a_scale, b, b_scale, out_dtype, bias,
-                                       all_reduce)
+    return ext_ops.smooth_quant_matmul(a, a_scale, b, b_scale, out_dtype, bias, all_reduce)
 
 
 def rms_norm_w8a8(
@@ -45,5 +43,4 @@ def rms_norm_w8a8(
     if residual is None:
         return ext_ops.rms_norm_w8a8(hidden_states, weight, epsilon)
     else:
-        return ext_ops.add_rms_norm_w8a8(hidden_states, residual, weight,
-                                         epsilon)
+        return ext_ops.add_rms_norm_w8a8(hidden_states, residual, weight, epsilon)
