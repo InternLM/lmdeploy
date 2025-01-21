@@ -1,41 +1,30 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 import torch
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
-from lmdeploy.pytorch.engine.input_process import (BaseModelInputProcessor,
-                                                   PreprocessInputResult)
+from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, FlashAttention,
-                                 LayerNorm, RMSNorm, RopeType, SiluAndMul,
+from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, FlashAttention, LayerNorm, RMSNorm, RopeType, SiluAndMul,
                                  build_rotary_embedding)
-from lmdeploy.pytorch.nn.linear import (build_colwise_linear,
-                                        build_merged_colwise_linear,
-                                        build_qkv_proj, build_rowwise_linear)
+from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_merged_colwise_linear, build_qkv_proj,
+                                        build_rowwise_linear)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMeta, CudaGraphMixin, next_power_of_2
 from .utils.model import DeployModelMixin
 
 
-def _apply_mrope_selection(hidden_states: torch.Tensor,
-                           mrope_position_ids: torch.Tensor,
-                           mrope_section: List[int],
-                           position_ids: torch.Tensor,
-                           rotary_emb_func: Callable):
-    _mrope_position_ids = torch.zeros(3,
-                                      position_ids.shape[-1],
-                                      dtype=position_ids.dtype,
-                                      device=position_ids.device)
+def _apply_mrope_selection(hidden_states: torch.Tensor, mrope_position_ids: torch.Tensor, mrope_section: List[int],
+                           position_ids: torch.Tensor, rotary_emb_func: Callable):
+    _mrope_position_ids = torch.zeros(3, position_ids.shape[-1], dtype=position_ids.dtype, device=position_ids.device)
     _mrope_position_ids[:, :mrope_position_ids.shape[-1]] = mrope_position_ids
     cos, sin = rotary_emb_func(hidden_states, _mrope_position_ids)
-    _cos = torch.zeros(cos.shape[1],
-                       cos.shape[-1],
-                       dtype=cos.dtype,
-                       device=cos.device)
+    _cos = torch.zeros(cos.shape[1], cos.shape[-1], dtype=cos.dtype, device=cos.device)
     _sin = torch.zeros_like(_cos)
     mrope_section = mrope_section * 2
 
@@ -54,10 +43,7 @@ def _apply_mrope_selection(hidden_states: torch.Tensor,
 class Qwen2Attention(nn.Module):
     """Rewrite module of Qwen2Attention."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         num_heads = config.num_attention_heads
@@ -110,8 +96,7 @@ class Qwen2Attention(nn.Module):
         qkv_states = self.qkv_proj(hidden_states)
         # (-1, heads, head_dim)
         qkv_states = qkv_states.flatten(0, -2)
-        query_states, key_states, value_states = self.qkv_proj.split_qkv(
-            qkv_states)
+        query_states, key_states, value_states = self.qkv_proj.split_qkv(qkv_states)
 
         # apply rotary embedding
         cos, sin = rotary_pos_emb
@@ -131,10 +116,8 @@ class Qwen2Attention(nn.Module):
             past_key_value[0],
             past_key_value[1],
             attn_metadata,
-            k_scales_zeros=None
-            if len(past_key_value) == 2 else past_key_value[2],
-            v_scales_zeros=None
-            if len(past_key_value) == 2 else past_key_value[3],
+            k_scales_zeros=None if len(past_key_value) == 2 else past_key_value[2],
+            v_scales_zeros=None if len(past_key_value) == 2 else past_key_value[3],
             inplace=True,
         )
         attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
@@ -147,10 +130,7 @@ class Qwen2Attention(nn.Module):
 class Qwen2MLP(nn.Module):
     """mlp."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         # gate up
@@ -209,12 +189,11 @@ class Qwen2DecoderLayer(nn.Module):
                                        device=device)
 
         # build attention layer norm
-        self.post_attention_layernorm = RMSNorm(
-            config.hidden_size,
-            config.rms_norm_eps,
-            quant_config=quantization_config,
-            dtype=dtype,
-            device=device)
+        self.post_attention_layernorm = RMSNorm(config.hidden_size,
+                                                config.rms_norm_eps,
+                                                quant_config=quantization_config,
+                                                dtype=dtype,
+                                                device=device)
 
     def forward(
         self,
@@ -229,8 +208,7 @@ class Qwen2DecoderLayer(nn.Module):
             residual = hidden_states
             hidden_states = self.input_layernorm(hidden_states)
         else:
-            hidden_states, residual = self.input_layernorm(
-                hidden_states, residual)
+            hidden_states, residual = self.input_layernorm(hidden_states, residual)
 
         # Self Attention
         hidden_states = self.self_attn(
@@ -241,8 +219,7 @@ class Qwen2DecoderLayer(nn.Module):
         )
 
         # Fully Connected
-        hidden_states, residual = self.post_attention_layernorm(
-            hidden_states, residual)
+        hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
         hidden_states = self.mlp(hidden_states)
 
         outputs = (hidden_states, residual)
@@ -252,10 +229,7 @@ class Qwen2DecoderLayer(nn.Module):
 class Qwen2Model(nn.Module):
     """model."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
@@ -274,10 +248,7 @@ class Qwen2Model(nn.Module):
         ])
 
         # build norm
-        self.norm = RMSNorm(config.hidden_size,
-                            config.rms_norm_eps,
-                            dtype=dtype,
-                            device=device)
+        self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
 
         # build rotary embedding
         emb_type = RopeType.LinearScaling
@@ -313,9 +284,7 @@ class Qwen2Model(nn.Module):
             cos, sin = self.rotary_emb(hidden_states, position_ids)
             cos, sin = cos[0], sin[0]
         else:
-            cos, sin = _apply_mrope_selection(hidden_states,
-                                              mrope_position_ids,
-                                              self.mrope_section, position_ids,
+            cos, sin = _apply_mrope_selection(hidden_states, mrope_position_ids, self.mrope_section, position_ids,
                                               self.rotary_emb)
         rotary_pos_emb = (cos, sin)
 
@@ -368,30 +337,22 @@ class PatchEmbed(nn.Module):
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         target_dtype = self.proj.weight.dtype
-        hidden_states = hidden_states.view(-1, self.in_channels,
-                                           self.temporal_patch_size,
-                                           self.patch_size, self.patch_size)
-        hidden_states = self.proj(hidden_states.to(dtype=target_dtype)).view(
-            -1, self.embed_dim)
+        hidden_states = hidden_states.view(-1, self.in_channels, self.temporal_patch_size, self.patch_size,
+                                           self.patch_size)
+        hidden_states = self.proj(hidden_states.to(dtype=target_dtype)).view(-1, self.embed_dim)
         return hidden_states
 
 
 class VisionRotaryEmbedding(nn.Module):
     """vision rotary embedding."""
 
-    def __init__(self,
-                 dim: int,
-                 theta: float = 10000.0,
-                 device: torch.device = None) -> None:
+    def __init__(self, dim: int, theta: float = 10000.0, device: torch.device = None) -> None:
         super().__init__()
-        inv_freq = 1.0 / (theta**(
-            torch.arange(0, dim, 2, dtype=torch.float, device=device) / dim))
+        inv_freq = 1.0 / (theta**(torch.arange(0, dim, 2, dtype=torch.float, device=device) / dim))
         self.register_buffer('inv_freq', inv_freq, persistent=False)
 
     def forward(self, seqlen: int) -> torch.Tensor:
-        seq = torch.arange(seqlen,
-                           device=self.inv_freq.device,
-                           dtype=self.inv_freq.dtype)
+        seq = torch.arange(seqlen, device=self.inv_freq.device, dtype=self.inv_freq.dtype)
         freqs = torch.outer(seq, self.inv_freq)
         return freqs
 
@@ -399,10 +360,7 @@ class VisionRotaryEmbedding(nn.Module):
 class VisionAttention(nn.Module):
     """Vision attention."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         dim = config.embed_dim
@@ -441,10 +399,8 @@ class VisionAttention(nn.Module):
                                          device=device,
                                          is_tp=True)
 
-    def forward(
-        self, hidden_states: torch.Tensor, cu_seqlens: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor]
-    ) -> torch.Tensor:
+    def forward(self, hidden_states: torch.Tensor, cu_seqlens: torch.Tensor,
+                rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor]) -> torch.Tensor:
         seq_length = hidden_states.shape[0]
         # qkv proj
         qkv_states = self.qkv(hidden_states)
@@ -473,10 +429,7 @@ class VisionAttention(nn.Module):
 class VisionMlp(nn.Module):
     """Vision mlp."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         from transformers.activations import ACT2FN
         dim = config.embed_dim
@@ -494,9 +447,7 @@ class VisionMlp(nn.Module):
         )
 
         # silu and mul
-        if config.hidden_act in [
-                'gelu', 'gelu_fast', 'quick_gelu', 'gelu_python'
-        ]:
+        if config.hidden_act in ['gelu', 'gelu_fast', 'quick_gelu', 'gelu_python']:
             self.act = nn.GELU()
         else:
             self.act = ACT2FN[config.hidden_act]
@@ -525,14 +476,8 @@ class Qwen2VLVisionBlock(nn.Module):
                  device: torch.device = None):
         super().__init__()
         self.layer_idx = layer_idx
-        self.norm1 = LayerNorm(config.embed_dim,
-                               eps=1e-6,
-                               dtype=dtype,
-                               device=device)
-        self.norm2 = LayerNorm(config.embed_dim,
-                               eps=1e-6,
-                               dtype=dtype,
-                               device=device)
+        self.norm1 = LayerNorm(config.embed_dim, eps=1e-6, dtype=dtype, device=device)
+        self.norm2 = LayerNorm(config.embed_dim, eps=1e-6, dtype=dtype, device=device)
 
         self.attn = VisionAttention(config, dtype=dtype, device=device)
 
@@ -549,9 +494,7 @@ class Qwen2VLVisionBlock(nn.Module):
         else:
             hidden_states, residual = self.norm1(hidden_states, residual)
 
-        hidden_states = self.attn(hidden_states,
-                                  cu_seqlens=cu_seqlens,
-                                  rotary_pos_emb=rotary_pos_emb)
+        hidden_states = self.attn(hidden_states, cu_seqlens=cu_seqlens, rotary_pos_emb=rotary_pos_emb)
 
         hidden_states, residual = self.norm2(hidden_states, residual)
         hidden_states = self.mlp(hidden_states)
@@ -569,15 +512,9 @@ class PatchMerger(nn.Module):
                  device: torch.device = None) -> None:
         super().__init__()
         self.hidden_size = context_dim * (spatial_merge_size**2)
-        self.ln_q = nn.LayerNorm(context_dim,
-                                 eps=1e-6,
-                                 dtype=dtype,
-                                 device=device)
+        self.ln_q = nn.LayerNorm(context_dim, eps=1e-6, dtype=dtype, device=device)
         self.mlp = nn.Sequential(
-            nn.Linear(self.hidden_size,
-                      self.hidden_size,
-                      dtype=dtype,
-                      device=device),
+            nn.Linear(self.hidden_size, self.hidden_size, dtype=dtype, device=device),
             nn.GELU(),
             nn.Linear(self.hidden_size, dim, dtype=dtype, device=device),
         )
@@ -590,10 +527,7 @@ class PatchMerger(nn.Module):
 class Qwen2VisionTransformerPretrainedModel(nn.Module):
     """Vision transformer."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.config = config
         self.spatial_merge_size = config.spatial_merge_size
@@ -608,13 +542,10 @@ class Qwen2VisionTransformerPretrainedModel(nn.Module):
         )
 
         head_dim = config.embed_dim // config.num_heads
-        self.rotary_pos_emb = VisionRotaryEmbedding(head_dim // 2,
-                                                    device=device)
+        self.rotary_pos_emb = VisionRotaryEmbedding(head_dim // 2, device=device)
 
-        self.blocks = nn.ModuleList([
-            Qwen2VLVisionBlock(config, layer_idx, dtype=dtype, device=device)
-            for layer_idx in range(config.depth)
-        ])
+        self.blocks = nn.ModuleList(
+            [Qwen2VLVisionBlock(config, layer_idx, dtype=dtype, device=device) for layer_idx in range(config.depth)])
         self.merger = PatchMerger(dim=config.hidden_size,
                                   context_dim=config.embed_dim,
                                   spatial_merge_size=config.spatial_merge_size,
@@ -644,8 +575,7 @@ class Qwen2VisionTransformerPretrainedModel(nn.Module):
             )
             wpos_ids = wpos_ids.permute(0, 2, 1, 3)
             wpos_ids = wpos_ids.flatten()
-            pos_ids.append(
-                torch.stack([hpos_ids, wpos_ids], dim=-1).repeat(t, 1))
+            pos_ids.append(torch.stack([hpos_ids, wpos_ids], dim=-1).repeat(t, 1))
         pos_ids = torch.cat(pos_ids, dim=0)
         max_grid_size = grid_thw[:, 1:].max()
         rotary_pos_emb_full = self.rotary_pos_emb(max_grid_size)
@@ -670,8 +600,7 @@ class Qwen2VisionTransformerPretrainedModel(nn.Module):
         return self.merger(hidden_states)
 
 
-class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixin,
-                                      CudaGraphMixin):
+class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphMixin):
     """ModelForCausalLM."""
 
     packed_modules_mapping = {
@@ -733,13 +662,9 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixin,
             if pixel_values is not None:
                 dtype = inputs_embeds.dtype
                 pixel_values = pixel_values.to(dtype)
-                vis_pos_emb = (vis_pos_emb[0].to(dtype),
-                               vis_pos_emb[1].to(dtype))
-                image_embeds = self.visual(pixel_values,
-                                           cu_seqlens=vis_cu_seqlens,
-                                           rotary_pos_emb=vis_pos_emb)
-                inputs_embeds = inputs_embeds.masked_scatter(
-                    image_mask[..., None], image_embeds)
+                vis_pos_emb = (vis_pos_emb[0].to(dtype), vis_pos_emb[1].to(dtype))
+                image_embeds = self.visual(pixel_values, cu_seqlens=vis_cu_seqlens, rotary_pos_emb=vis_pos_emb)
+                inputs_embeds = inputs_embeds.masked_scatter(image_mask[..., None], image_embeds)
 
         hidden_states = self.model(
             input_ids=input_ids,
@@ -782,26 +707,19 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixin,
         vis_pos_emb = None
         image_mask = None
         if context.input_multimodals is not None:
-            image_data = [
-                input_mm['image'] for input_mm in context.input_multimodals
-            ]
+            image_data = [input_mm['image'] for input_mm in context.input_multimodals]
 
             if len(image_data) > 0:
                 # flatten batch
-                image_data = [
-                    data for im_data in image_data for data in im_data
-                ]
+                image_data = [data for im_data in image_data for data in im_data]
                 pixel_values = torch.cat([data.data for data in image_data])
                 image_token_id = image_data[0].meta['image_token_id']
                 image_mask = input_ids == image_token_id
-                grid_thw = torch.cat(
-                    [data.meta['grid_thw'] for data in image_data]).cpu()
+                grid_thw = torch.cat([data.meta['grid_thw'] for data in image_data]).cpu()
                 vis_pos_emb = self.visual.rot_pos_emb(grid_thw)
-                vis_cu_seqlens = torch.repeat_interleave(
-                    grid_thw[:, 1] * grid_thw[:, 2],
-                    grid_thw[:, 0]).to(pixel_values.device)
-                vis_cu_seqlens = vis_cu_seqlens.cumsum(dim=0,
-                                                       dtype=torch.int32)
+                vis_cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2],
+                                                         grid_thw[:, 0]).to(pixel_values.device)
+                vis_cu_seqlens = vis_cu_seqlens.cumsum(dim=0, dtype=torch.int32)
                 vis_pos_emb = vis_pos_emb.repeat(1, 2)
                 vis_pos_emb = (vis_pos_emb.cos(), vis_pos_emb.sin())
 
@@ -813,9 +731,7 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixin,
         if vision_embeddings is not None and len(vision_embeddings) > 0:
             if inputs_embeds is None:
                 inputs_embeds = self.get_input_embeddings()(input_ids)
-            inputs_embeds[:,
-                          vision_embedding_indexing, :] = vision_embeddings.to(
-                              inputs_embeds)
+            inputs_embeds[:, vision_embedding_indexing, :] = vision_embeddings.to(inputs_embeds)
 
         # inputs of forward
         return dict(
@@ -847,8 +763,7 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixin,
         for name, loaded_weight in weights:
             if 'rotary_emb.inv_freq' in name:
                 continue
-            if ('rotary_emb.cos_cached' in name
-                    or 'rotary_emb.sin_cached' in name):
+            if ('rotary_emb.cos_cached' in name or 'rotary_emb.sin_cached' in name):
                 continue
             if self.config.tie_word_embeddings and 'lm_head.weight' in name:
                 continue
@@ -874,20 +789,17 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixin,
         """make cudagraph buffers from forward inputs."""
         max_tokens = graph_meta.max_tokens
 
-        input_buffers = super().make_buffers_cudagraph(graph_meta=graph_meta,
-                                                       **kwargs)
+        input_buffers = super().make_buffers_cudagraph(graph_meta=graph_meta, **kwargs)
         mrope_position_ids = kwargs.get('mrope_position_ids', None)
         if mrope_position_ids is not None:
-            input_buffers['mrope_position_ids'] = mrope_position_ids.new_zeros(
-                3, max_tokens)
+            input_buffers['mrope_position_ids'] = mrope_position_ids.new_zeros(3, max_tokens)
 
         return input_buffers
 
     def fill_buffers_cudagraph(self, graph_meta: CudaGraphMeta, **kwargs):
         """fill cudagraph buffers from forward inputs."""
 
-        new_inputs = super().fill_buffers_cudagraph(graph_meta=graph_meta,
-                                                    **kwargs)
+        new_inputs = super().fill_buffers_cudagraph(graph_meta=graph_meta, **kwargs)
 
         input_ids = kwargs.get('input_ids')
         attn_metadata = kwargs.get('attn_metadata')
@@ -900,14 +812,11 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixin,
         input_buffers = graph_meta.input_buffers
         mrope_position_ids = kwargs.get('mrope_position_ids', None)
         if mrope_position_ids is not None:
-            input_buffers[
-                'mrope_position_ids'][:, :num_tokens] = mrope_position_ids
+            input_buffers['mrope_position_ids'][:, :num_tokens] = mrope_position_ids
             if is_decoding:
-                new_inputs['mrope_position_ids'] = input_buffers[
-                    'mrope_position_ids'][:, :new_batch_size]
+                new_inputs['mrope_position_ids'] = input_buffers['mrope_position_ids'][:, :new_batch_size]
             else:
-                new_inputs['mrope_position_ids'] = input_buffers[
-                    'mrope_position_ids']
+                new_inputs['mrope_position_ids'] = input_buffers['mrope_position_ids']
 
         return new_inputs
 
@@ -945,8 +854,7 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixin,
         batched_pos_ids = position_ids[0].split(context.q_seqlens.tolist())
         mrope_position_ids = []
         new_model_metas = []
-        for pos_ids, model_meta, input_mm in zip(batched_pos_ids, model_metas,
-                                                 input_multimodals):
+        for pos_ids, model_meta, input_mm in zip(batched_pos_ids, model_metas, input_multimodals):
             images = []
             if input_mm is not None:
                 images = input_mm['image']
@@ -967,8 +875,7 @@ class Qwen2VLForConditionalGeneration(nn.Module, DeployModelMixin,
                 mrope_delta -= num_pad
                 fill_start = img.start - pos_start
                 fill_end = img.end - pos_start
-                img_pos_ids = self._get_multimodal_pos_ids(
-                    grid_thw, pos_ids.device)
+                img_pos_ids = self._get_multimodal_pos_ids(grid_thw, pos_ids.device)
                 img_pos_ids += mrope_pos_ids[:, fill_start:fill_start + 1]
                 mrope_pos_ids[:, fill_end:] -= num_pad
                 mrope_pos_ids[:, fill_start:fill_end] = img_pos_ids
@@ -1027,9 +934,7 @@ class Qwen2VLInputProcessor(BaseModelInputProcessor):
             mm_data = MultiModalTensor(data=pixel_values,
                                        start=start,
                                        end=start + num_pad,
-                                       meta=dict(
-                                           grid_thw=image_grid_thw,
-                                           image_token_id=image_token_id))
+                                       meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id))
             input_imgs.append(mm_data)
 
         result = PreprocessInputResult(

@@ -11,15 +11,13 @@ def check_qwen_vl_deps_install():
     try:
         import qwen_vl_utils  # noqa: F401
     except ImportError:
-        raise ImportError(
-            'please install qwen_vl_utils by `pip install qwen_vl_utils`'  # noqa: E501
-        )
+        raise ImportError('please install qwen_vl_utils by `pip install qwen_vl_utils`'  # noqa: E501
+                          )
     try:
         from transformers import Qwen2VLForConditionalGeneration  # noqa: F401
     except ImportError:
-        raise ImportError(
-            'please install latest transformers by '
-            'pip install git+https://github.com/huggingface/transformers.git')
+        raise ImportError('please install latest transformers by '
+                          'pip install git+https://github.com/huggingface/transformers.git')
 
 
 @VISION_MODELS.register_module()
@@ -38,28 +36,18 @@ class Qwen2VLModel(VisonModel):
         from qwen_vl_utils import process_vision_info
 
         images = self.collect_images(messages)
-        optional_keys = {
-            'resized_height', 'resized_width', 'min_pixels', 'max_pixels'
-        }
+        optional_keys = {'resized_height', 'resized_width', 'min_pixels', 'max_pixels'}
         outputs = []
         for image, params in images:
             image = image.convert('RGB')
 
             item = dict(type='image', image=image)
-            item.update({
-                key: params[key]
-                for key in params.keys() if key in optional_keys
-            })
+            item.update({key: params[key] for key in params.keys() if key in optional_keys})
             image_inputs, _ = process_vision_info([dict(content=[item])])
-            result = self.processor.image_processor(images=image_inputs,
-                                                    videos=None,
-                                                    return_tensors='pt')
+            result = self.processor.image_processor(images=image_inputs, videos=None, return_tensors='pt')
             merge_length = self.processor.image_processor.merge_size**2
             image_tokens = result['image_grid_thw'].prod(dim=1) // merge_length
-            result.update(
-                dict(image_size=image.size,
-                     image_tokens=image_tokens,
-                     image_token_id=0))
+            result.update(dict(image_size=image.size, image_tokens=image_tokens, image_token_id=0))
             outputs.append(result)
         messages.append(dict(role='preprocess', content=outputs))
         return messages
@@ -68,16 +56,12 @@ class Qwen2VLModel(VisonModel):
         check_qwen_vl_deps_install()
         from transformers import Qwen2VLForConditionalGeneration
         if self.with_llm:
-            self.vl_model = Qwen2VLForConditionalGeneration.from_pretrained(
-                self.model_path, device_map='cpu')
+            self.vl_model = Qwen2VLForConditionalGeneration.from_pretrained(self.model_path, device_map='cpu')
         else:
-            raise NotImplementedError(
-                'turbomind has not supported qwen2-vl yet')
+            raise NotImplementedError('turbomind has not supported qwen2-vl yet')
 
     @torch.no_grad()
-    def forward(self,
-                messages: List[Dict],
-                max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
         """extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
@@ -101,17 +85,11 @@ class Qwen2VLModel(VisonModel):
                 continue
             elif message['role'] in ['images', 'preprocess', 'forward']:
                 continue
-            n_images = len(
-                [1 for x in message['content'] if x['type'] == 'image'])
-            content = [
-                item['text'] for item in message['content']
-                if item['type'] == 'text'
-            ]
+            n_images = len([1 for x in message['content'] if x['type'] == 'image'])
+            content = [item['text'] for item in message['content'] if item['type'] == 'text']
             prompt = content[0]
             if IMAGE_TOKEN in prompt and '<|vision_start|>' not in prompt:
-                prompt = prompt.replace(
-                    IMAGE_TOKEN,
-                    f'<|vision_start|>{IMAGE_TOKEN}<|vision_end|>')
+                prompt = prompt.replace(IMAGE_TOKEN, f'<|vision_start|>{IMAGE_TOKEN}<|vision_end|>')
             else:
                 # Qwen2-VL-2B-Instruct will concat image and user prompt
                 # according to their order in the content list
@@ -126,7 +104,5 @@ class Qwen2VLModel(VisonModel):
 
     def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
         """return to the information needed by pytorch engine."""
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template,
-                                                 sequence_start)
-        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
-                                   sequence_start)
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
+        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)

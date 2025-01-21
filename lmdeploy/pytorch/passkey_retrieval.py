@@ -15,11 +15,7 @@ os.environ['TM_LOG_LEVEL'] = 'ERROR'
 class LLM(object):
     """LLM."""
 
-    def __init__(self,
-                 model_path: str,
-                 model_name: str,
-                 tp: int = 1,
-                 max_session_len=40000) -> None:
+    def __init__(self, model_path: str, model_name: str, tp: int = 1, max_session_len=40000) -> None:
         self.tokenizer = Tokenizer(model_path)
 
         self.tm_model = tm.Engine(model_path,
@@ -75,27 +71,14 @@ def valid_str(string, coding='utf-8'):
 def parse_config():
     """parse arguments."""
     parser = argparse.ArgumentParser(description='arg parser')
-    parser.add_argument(
-        '--model_path',
-        type=str,
-        default='/models/openbuddy-llama2-13b-v8.1-fp16',
-        help='LLM path, use /models/openbuddy-llama2-13b-v8.1-fp16 by default')
-    parser.add_argument('--model_name',
+    parser.add_argument('--model_path',
                         type=str,
-                        default='llama2',
-                        help='LLM type name, use llama2 by default')
-    parser.add_argument('--max_tokens',
-                        type=int,
-                        default=50000,
-                        help='maximum token length for evaluation')
-    parser.add_argument('--interval',
-                        type=int,
-                        default=1024,
-                        help='interval for evaluation')
-    parser.add_argument('--num_tests',
-                        type=int,
-                        default=1,
-                        help='number of repeat testing for each length')
+                        default='/models/openbuddy-llama2-13b-v8.1-fp16',
+                        help='LLM path, use /models/openbuddy-llama2-13b-v8.1-fp16 by default')
+    parser.add_argument('--model_name', type=str, default='llama2', help='LLM type name, use llama2 by default')
+    parser.add_argument('--max_tokens', type=int, default=50000, help='maximum token length for evaluation')
+    parser.add_argument('--interval', type=int, default=1024, help='interval for evaluation')
+    parser.add_argument('--num_tests', type=int, default=1, help='number of repeat testing for each length')
     args = parser.parse_args()
     return args
 
@@ -134,9 +117,7 @@ def generate_prompt_landmark(n_garbage=60000, seed=666):
 def main(args):
     """main."""
     # Load model and tokenizer
-    llm = LLM(model_path=args.model_path,
-              model_name=args.model_name,
-              max_session_len=args.max_tokens)
+    llm = LLM(model_path=args.model_path, model_name=args.model_name, max_session_len=args.max_tokens)
 
     all_accuries = {}
     # This is a rough ratio to control the number of texts and tokens
@@ -147,8 +128,7 @@ def main(args):
         total_tokens = 0
 
         for j in range(args.num_tests):
-            question, pass_key = generate_prompt_landmark(n_garbage=n_garbage,
-                                                          seed=(val + j))
+            question, pass_key = generate_prompt_landmark(n_garbage=n_garbage, seed=(val + j))
             response = llm.say(question)
 
             if pass_key in response:

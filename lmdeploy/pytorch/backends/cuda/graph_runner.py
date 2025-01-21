@@ -66,8 +66,7 @@ class CUDASingleGraphRunner:
 
     def capture(self, **kwargs):
         """capture graph."""
-        self.meta.input_buffers = self.model.make_buffers_cudagraph(
-            self.meta, **kwargs)
+        self.meta.input_buffers = self.model.make_buffers_cudagraph(self.meta, **kwargs)
         padded_kwargs = self.model.fill_buffers_cudagraph(self.meta, **kwargs)
         context = self.ctx_mgr.current_context()
         self.model.update_context_cudagraph(self.meta, context)
@@ -79,10 +78,7 @@ class CUDASingleGraphRunner:
         self._graph = torch.cuda.CUDAGraph()
         # unsafe kernel call in other thread might invalid the capture
         # so we set thread_safe capture mode here.
-        with torch.cuda.graph(self._graph,
-                              pool=self.pool,
-                              stream=current_stream,
-                              capture_error_mode='thread_local'):
+        with torch.cuda.graph(self._graph, pool=self.pool, stream=current_stream, capture_error_mode='thread_local'):
             output = self.model(**padded_kwargs)
 
         output_buffers = dict(logits=output)
@@ -109,11 +105,9 @@ class CUDASingleGraphRunner:
 class CUDAGraphRunner(GraphRunner):
     """cuda graph runner."""
 
-    def __init__(self, model: torch.nn.Module, model_config: ModelConfig,
-                 cache_config: CacheConfig, backend_config: BackendConfig,
-                 device: torch.device):
-        super().__init__(model, model_config, cache_config, backend_config,
-                         device)
+    def __init__(self, model: torch.nn.Module, model_config: ModelConfig, cache_config: CacheConfig,
+                 backend_config: BackendConfig, device: torch.device):
+        super().__init__(model, model_config, cache_config, backend_config, device)
         self.max_batches = cache_config.max_batches
         self.max_tokens = cache_config.max_prefill_token_num
         self.num_blocks = cache_config.num_gpu_blocks
@@ -130,10 +124,8 @@ class CUDAGraphRunner(GraphRunner):
 
         return getattr(self.model, 'support_cuda_graph', _false)
 
-    def get_graph_key(self, input_ids: torch.Tensor,
-                      position_ids: torch.Tensor, past_key_values: List,
-                      attn_metadata: Any, inputs_embeds: torch.Tensor,
-                      **kwargs):
+    def get_graph_key(self, input_ids: torch.Tensor, position_ids: torch.Tensor, past_key_values: List,
+                      attn_metadata: Any, inputs_embeds: torch.Tensor, **kwargs):
         """get graph key."""
         context = self.ctx_mgr.current_context()
         is_decoding = context.is_decoding

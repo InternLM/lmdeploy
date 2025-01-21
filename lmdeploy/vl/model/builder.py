@@ -33,8 +33,7 @@ logger = get_logger('lmdeploy')
 def load_vl_model(model_path: str,
                   backend: str,
                   with_llm: bool = False,
-                  backend_config: Optional[Union[TurbomindEngineConfig,
-                                                 PytorchEngineConfig]] = None):
+                  backend_config: Optional[Union[TurbomindEngineConfig, PytorchEngineConfig]] = None):
     """load visual model.
 
     Args:
@@ -47,9 +46,7 @@ def load_vl_model(model_path: str,
     if not os.path.exists(model_path):
         revision = getattr(backend_config, 'revision', None)
         download_dir = getattr(backend_config, 'download_dir', None)
-        model_path = get_model(model_path,
-                               revision=revision,
-                               download_dir=download_dir)
+        model_path = get_model(model_path, revision=revision, download_dir=download_dir)
 
     max_memory = None
     if not with_llm:
@@ -57,11 +54,7 @@ def load_vl_model(model_path: str,
         max_memory = {i: torch.cuda.mem_get_info(i)[0] for i in range(tp)}
 
     _, hf_config = get_model_arch(model_path)
-    kwargs = dict(model_path=model_path,
-                  with_llm=with_llm,
-                  max_memory=max_memory,
-                  hf_config=hf_config,
-                  backend=backend)
+    kwargs = dict(model_path=model_path, with_llm=with_llm, max_memory=max_memory, hf_config=hf_config, backend=backend)
     for name, module in VISION_MODELS.module_dict.items():
         try:
             if module.match(hf_config):

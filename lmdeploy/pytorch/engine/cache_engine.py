@@ -49,8 +49,7 @@ class CacheEngine:
             elif self.cache_config.device_type in ['ascend', 'npu']:
                 self.kv_cache_dtype = torch.int8
             else:
-                raise ValueError(
-                    f'unsupported device_type {self.cache_config.device_type}')
+                raise ValueError(f'unsupported device_type {self.cache_config.device_type}')
 
         # Initialize the cache.
         self.local_gpu_cache = self.allocate_gpu_cache()
@@ -62,9 +61,8 @@ class CacheEngine:
         # Initialize the events for stream synchronization.
         self.events = torch.cuda.Event()
 
-        logger.debug(
-            f'Initialize cache engine with {cache_config.num_gpu_blocks}'
-            f' gpu blocks and {cache_config.num_cpu_blocks} cpu blocks.')
+        logger.debug(f'Initialize cache engine with {cache_config.num_gpu_blocks}'
+                     f' gpu blocks and {cache_config.num_cpu_blocks} cpu blocks.')
 
     @property
     def cpu_cache(self):
@@ -106,8 +104,7 @@ class CacheEngine:
             assert head_size % 2 == 0, \
                 f'head_size: {head_size}, quant_policy: {quant_policy}'
             head_size = head_size // 2
-        return attn_backend.get_k_block_shape(block_size, num_heads, head_size,
-                                              dtype)
+        return attn_backend.get_k_block_shape(block_size, num_heads, head_size, dtype)
 
     @classmethod
     def _get_value_block_shape_impl(cls,
@@ -130,8 +127,7 @@ class CacheEngine:
                 f'head_size: {head_size}, quant_policy: {quant_policy}'
             head_size = head_size // 2
 
-        return attn_backend.get_v_block_shape(block_size, num_heads, head_size,
-                                              dtype)
+        return attn_backend.get_v_block_shape(block_size, num_heads, head_size, dtype)
 
     def get_key_block_shape(self, local: bool = False) -> Tuple[int, int, int]:
         """get shape of key block."""
@@ -147,8 +143,7 @@ class CacheEngine:
             local=local,
         )
 
-    def get_value_block_shape(self,
-                              local: bool = False) -> Tuple[int, int, int]:
+    def get_value_block_shape(self, local: bool = False) -> Tuple[int, int, int]:
         """get shape of value block."""
         head_size = self.model_config.v_head_dim
         if head_size is None:
@@ -215,8 +210,7 @@ class CacheEngine:
         return self.local_cpu_cache
 
     @torch.inference_mode()
-    def _swap(self, src: List[torch.Tensor], dst: List[torch.Tensor],
-              src_to_dst: Dict[int, int]):
+    def _swap(self, src: List[torch.Tensor], dst: List[torch.Tensor], src_to_dst: Dict[int, int]):
         """Move caches from src memory to dst memory.
 
         Args:
@@ -299,23 +293,13 @@ class CacheEngine:
             mem_key_block = key_block.numel() * key_block.element_size()
             mem_value_block = value_block.numel() * value_block.element_size()
         elif quant_policy in (4, 8):
-            key_block = torch.empty(key_shape,
-                                    dtype=torch.uint8,
-                                    device='meta')
-            value_block = torch.empty(value_shape,
-                                      dtype=torch.uint8,
-                                      device='meta')
-            key_scale_zero_block = torch.empty((*key_shape[:-1], 2),
-                                               dtype=model_config.dtype,
-                                               device='meta')
-            value_scale_zero_block = torch.empty((*value_shape[:-1], 2),
-                                                 dtype=model_config.dtype,
-                                                 device='meta')
-            mem_key_block = key_block.numel() * key_block.element_size(
-            ) + key_scale_zero_block.numel(
+            key_block = torch.empty(key_shape, dtype=torch.uint8, device='meta')
+            value_block = torch.empty(value_shape, dtype=torch.uint8, device='meta')
+            key_scale_zero_block = torch.empty((*key_shape[:-1], 2), dtype=model_config.dtype, device='meta')
+            value_scale_zero_block = torch.empty((*value_shape[:-1], 2), dtype=model_config.dtype, device='meta')
+            mem_key_block = key_block.numel() * key_block.element_size() + key_scale_zero_block.numel(
             ) * key_scale_zero_block.element_size()
-            mem_value_block = value_block.numel() * value_block.element_size(
-            ) + value_scale_zero_block.numel(
+            mem_value_block = value_block.numel() * value_block.element_size() + value_scale_zero_block.numel(
             ) * value_scale_zero_block.element_size()
         else:
             raise ValueError(f'unsupported quant_policy {quant_policy}')

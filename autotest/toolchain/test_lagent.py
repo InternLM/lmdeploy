@@ -32,5 +32,4 @@ class TestLagent:
             print(response)
             response_list.append(response)
             assert len(response) > 10 and '$\\boxed' in response
-        assert response_list[0] != response_list[1] and response_list[
-            1] != response_list[2]
+        assert response_list[0] != response_list[1] and response_list[1] != response_list[2]

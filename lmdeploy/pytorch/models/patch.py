@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
 import importlib
 import inspect
 import os.path as osp
@@ -14,14 +15,12 @@ from lmdeploy.utils import get_logger
 
 from ..config import ModelConfig
 from ..devices import get_device_manager
-from .module_map import (CUSTOM_MODULE_MAP, DEVICE_SPECIAL_MODULE_MAP,
-                         MODULE_MAP)
+from .module_map import CUSTOM_MODULE_MAP, DEVICE_SPECIAL_MODULE_MAP, MODULE_MAP
 
 logger = get_logger('lmdeploy')
 
 
-def _get_rewrite_qualname(origin_qualname: str, module_map: Dict[str,
-                                                                 str]) -> str:
+def _get_rewrite_qualname(origin_qualname: str, module_map: Dict[str, str]) -> str:
     """get rewrite module from origin module name.
 
     Args:
@@ -97,8 +96,7 @@ def get_rewrite_cls(model: torch.nn.Module, module_map: Dict[str, str] = None):
     """get rewrite cls."""
     if module_map is None:
         module_map = _get_module_map()
-    rewrite_qualname = _find_rewrite_module_qualname(model,
-                                                     module_map=module_map)
+    rewrite_qualname = _find_rewrite_module_qualname(model, module_map=module_map)
     if rewrite_qualname is None:
         return None
     return _class_from_qualname(rewrite_qualname)
@@ -121,8 +119,7 @@ def update_custom_module_map(module_map_path: str):
     from importlib.machinery import SourceFileLoader
 
     from lmdeploy.pytorch.models.module_map import LMDEPLOY_PYTORCH_MODEL_PATH
-    assert osp.exists(module_map_path), (
-        f'custom module map path: "{module_map_path}" not exists.')
+    assert osp.exists(module_map_path), (f'custom module map path: "{module_map_path}" not exists.')
 
     module_map_path = osp.abspath(module_map_path)
     folder = osp.split(module_map_path)[0]
@@ -175,13 +172,10 @@ def _get_model_class(config, module_map):
             module_cls = _class_from_qualname(qualname)
             return module_cls
 
-    raise RuntimeError(
-        f'Can not found rewrite for architectures: {architectures}')
+    raise RuntimeError(f'Can not found rewrite for architectures: {architectures}')
 
 
-def build_model_from_hf_config(model_config: PretrainedConfig,
-                               dtype: torch.dtype = None,
-                               device: torch.device = None):
+def build_model_from_hf_config(model_config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
     """build model from hf config."""
     from lmdeploy.pytorch.model_inputs import StepContextManager
     ctx_mgr = StepContextManager()
@@ -210,9 +204,7 @@ def add_adapters(model: torch.nn.Module,
     from peft import PeftConfig
     from peft.tuners.lora import LoraConfig
 
-    from lmdeploy.pytorch.adapter.adapter import (find_all_target,
-                                                  get_ranks_and_scalings,
-                                                  load_lora_weights)
+    from lmdeploy.pytorch.adapter.adapter import find_all_target, get_ranks_and_scalings, load_lora_weights
     from lmdeploy.pytorch.nn.linear import LoRA
     num_adapters = len(adapters)
     if num_adapters == 0:
@@ -229,9 +221,7 @@ def add_adapters(model: torch.nn.Module,
     adapter_names = list(adapters.keys())
     adapter_names = sorted(adapter_names)
 
-    adapter_cfgs = [
-        PeftConfig.from_pretrained(adapters[name]) for name in adapter_names
-    ]
+    adapter_cfgs = [PeftConfig.from_pretrained(adapters[name]) for name in adapter_names]
 
     # insert one for no adapter
     adapter_cfgs = [LoraConfig(r=0, target_modules=[])] + adapter_cfgs
@@ -248,9 +238,7 @@ def add_adapters(model: torch.nn.Module,
     target_infos = dict()
     for _, target_name in enumerate(target_names):
         # get ranks and scalings
-        ranks, scalings = get_ranks_and_scalings(target_name,
-                                                 adapter_cfgs,
-                                                 device=device)
+        ranks, scalings = get_ranks_and_scalings(target_name, adapter_cfgs, device=device)
         # split in case target_name has '.' like 'attention.wo'
         # which cannot be used as name of a module
         # and it's not aligned with key in model.packed_modules_mapping
@@ -274,12 +262,8 @@ def add_adapters(model: torch.nn.Module,
                 out_features = mod.all_out_features[pack_idx]
                 base_slice = slice(prev_feats, prev_feats + out_features)
                 lora_b_spliter = None
-            lora_a = torch.empty((sum_rank, in_features),
-                                 dtype=dtype,
-                                 device=device)
-            lora_b = torch.empty((sum_rank, out_features),
-                                 dtype=dtype,
-                                 device=device)
+            lora_a = torch.empty((sum_rank, in_features), dtype=dtype, device=device)
+            lora_b = torch.empty((sum_rank, out_features), dtype=dtype, device=device)
 
             lora = LoRA(
                 in_features,

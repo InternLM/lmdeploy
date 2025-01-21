@@ -102,8 +102,7 @@ class WeightOnlyQLinear(nn.Module):
         out_features = linear.out_features
         bias = False if linear.bias is None else True
 
-        qlinear = cls(in_features, out_features, bias, w_bit, symmetry,
-                      group_size)
+        qlinear = cls(in_features, out_features, bias, w_bit, symmetry, group_size)
         qlinear.bias = linear.bias
 
         if qparams is None:
@@ -141,19 +140,15 @@ class WeightOnlyQLinear(nn.Module):
     @torch.no_grad()
     def forward(self, x):
         if awq_inference_engine is None:
-            raise RuntimeError(
-                'Run the following command to install '
-                'the kernel for 4bit inference\n\n'
-                'git clone https://github.com/mit-han-lab/llm-awq.git\n'
-                'cd awq/kernels\n'
-                'python setup.py install\n')
+            raise RuntimeError('Run the following command to install '
+                               'the kernel for 4bit inference\n\n'
+                               'git clone https://github.com/mit-han-lab/llm-awq.git\n'
+                               'cd awq/kernels\n'
+                               'python setup.py install\n')
         out_shape = x.shape[:-1] + (self.out_features, )
         inputs = x.reshape(-1, x.shape[-1])
 
-        out = awq_inference_engine.gemm_forward_cuda(inputs.half(),
-                                                     self.qweight,
-                                                     self.scales.half(),
-                                                     self.qzeros,
+        out = awq_inference_engine.gemm_forward_cuda(inputs.half(), self.qweight, self.scales.half(), self.qzeros,
                                                      self.group_size)
         out = out + self.bias if self.bias is not None else out
 

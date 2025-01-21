@@ -41,8 +41,7 @@ class Attention(nn.Module):
         num_heads, num_kv_heads = _update_num_heads(num_heads, num_kv_heads)
 
         layer_backend = get_backend()
-        impl_builder = layer_backend.get_layer_impl_builder(
-            OpType.PagedAttention)
+        impl_builder = layer_backend.get_layer_impl_builder(OpType.PagedAttention)
 
         self.impl = impl_builder.build(
             num_heads=num_heads,
@@ -107,8 +106,7 @@ class FlashAttention(nn.Module):
 
         layer_backend = get_backend()
 
-        impl_builder = layer_backend.get_layer_impl_builder(
-            OpType.FlashAttention)
+        impl_builder = layer_backend.get_layer_impl_builder(OpType.FlashAttention)
 
         self.impl = impl_builder.build(
             num_heads=num_heads,

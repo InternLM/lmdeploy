@@ -39,12 +39,8 @@ class DeepSeek2Reader(LlamaReader):
         if not kind:
             return self.filter(r'self_attn.*proj')
         result = []
-        for key in [
-                'q_a_proj', 'q_b_proj', 'q_proj', 'kv_a_proj_with_mqa',
-                'kv_b_proj', 'o_proj'
-        ]:
-            tensor = self.params.get(
-                f'{self.attn_layer_prefix}.{i}.self_attn.{key}.{kind}')
+        for key in ['q_a_proj', 'q_b_proj', 'q_proj', 'kv_a_proj_with_mqa', 'kv_b_proj', 'o_proj']:
+            tensor = self.params.get(f'{self.attn_layer_prefix}.{i}.self_attn.{key}.{kind}')
             tensor = self.transform(tensor, kind)
             result.append(tensor)
         return (*result, )
@@ -68,9 +64,7 @@ def get_yarn_params(rope_scaling: dict):
             return 1.0
         return 0.1 * mscale * math.log(scale) + 1.0
 
-    _mscale = float(
-        yarn_get_mscale(scaling_factor, mscale) /
-        yarn_get_mscale(scaling_factor, mscale_all_dim))
+    _mscale = float(yarn_get_mscale(scaling_factor, mscale) / yarn_get_mscale(scaling_factor, mscale_all_dim))
 
     softmax_scale = 0
     if mscale_all_dim:
@@ -127,8 +121,7 @@ class DeepSeek2Model(LlamaModel):
         if rope_scaling and rope_scaling['type'] == 'yarn':
             attention_factor, softmax_scale = get_yarn_params(rope_scaling)
             softmax_scale *= size_per_head**(-0.5)
-            info.update(max_position_embeddings=rope_scaling[
-                'original_max_position_embeddings'],
+            info.update(max_position_embeddings=rope_scaling['original_max_position_embeddings'],
                         attention_factor=attention_factor,
                         softmax_scale=softmax_scale)
         return info

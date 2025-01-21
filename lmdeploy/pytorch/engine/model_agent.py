@@ -11,8 +11,7 @@ from ..backends import get_backend
 from ..config import BackendConfig, CacheConfig, ModelConfig
 from ..distributed import get_dist_manager, get_world_rank
 from ..model_inputs import ModelInputs
-from ..models.patch import (add_adapters, build_patched_model,
-                            update_custom_module_map)
+from ..models.patch import add_adapters, build_patched_model, update_custom_module_map
 from ..utils import get_gpu_memory
 from ..weight_loader.model_weight_loader import load_model_weights
 from .cache_engine import CacheEngine
@@ -38,8 +37,7 @@ def _update_cache_config(model_config: ModelConfig,
         gpu_id (int): The GPU id to use.
     """
 
-    def __get_runtime_size(num_free_gpu_mem: int, cache_block_size: int,
-                           vocal_size: int):
+    def __get_runtime_size(num_free_gpu_mem: int, cache_block_size: int, vocal_size: int):
         """find best prefill num."""
         cache_max_entry_count = cache_config.cache_max_entry_count
         max_prefill_token_num = cache_config.max_prefill_token_num
@@ -47,8 +45,7 @@ def _update_cache_config(model_config: ModelConfig,
         while max_prefill_token_num > 0:
             # lm_head output(2) + to float(4) + estimated misc(1) = 7
             runtime_cache_size = int(max_prefill_token_num * vocal_size * 7)
-            num_available = (num_free_gpu_mem -
-                             runtime_cache_size) * cache_max_entry_count
+            num_available = (num_free_gpu_mem - runtime_cache_size) * cache_max_entry_count
             if int(num_available) // cache_block_size >= 16:
                 break
             max_prefill_token_num = max_prefill_token_num // 2
@@ -62,8 +59,8 @@ def _update_cache_config(model_config: ModelConfig,
                      f' {gpu_mem_physical_free>>20} mb')
         vocal_size = model_config.vocab_size
 
-        runtime_cache_size, max_prefill_token_num = __get_runtime_size(
-            gpu_mem_physical_free, cache_block_size, vocal_size)
+        runtime_cache_size, max_prefill_token_num = __get_runtime_size(gpu_mem_physical_free, cache_block_size,
+                                                                       vocal_size)
         if cache_config.max_prefill_token_num != max_prefill_token_num:
             if max_prefill_token_num <= 0:
                 raise RuntimeError('No enough gpu memory for runtime.')
@@ -83,15 +80,13 @@ def _update_cache_config(model_config: ModelConfig,
             cache_config.block_size = 32
             _, rank = get_world_rank()
             if rank == 0:
-                logger.warning(
-                    f'Update `block_size={cache_config.block_size}`'
-                    f' for large `head_dim={model_config.k_head_dim}`.')
+                logger.warning(f'Update `block_size={cache_config.block_size}`'
+                               f' for large `head_dim={model_config.k_head_dim}`.')
 
     __adjust_block_size()
 
-    cache_block_size = CacheEngine.get_cache_block_size(
-        cache_config.block_size, model_config, world_size,
-        cache_config.quant_policy)
+    cache_block_size = CacheEngine.get_cache_block_size(cache_config.block_size, model_config, world_size,
+                                                        cache_config.quant_policy)
     gpu_mem = __get_free_gpu_mem_size(cache_block_size)
     cpu_mem = host_mem_size
     if cache_config.num_cpu_blocks == 0:
@@ -120,12 +115,8 @@ def _broadcast_config(cache_config: CacheConfig):
         dist.gather_object(cache_config, gathered_configs, group=world_group)
 
         # set minimal blocks
-        num_gpu_blocks_list = [
-            config.num_gpu_blocks for config in gathered_configs
-        ]
-        num_cpu_blocks_list = [
-            config.num_cpu_blocks for config in gathered_configs
-        ]
+        num_gpu_blocks_list = [config.num_gpu_blocks for config in gathered_configs]
+        num_cpu_blocks_list = [config.num_cpu_blocks for config in gathered_configs]
         min_num_gpu_blocks = min(num_gpu_blocks_list)
         min_num_cpu_blocks = min(num_cpu_blocks_list)
         cache_config.num_cpu_blocks = min_num_cpu_blocks
@@ -141,8 +132,7 @@ def _broadcast_config(cache_config: CacheConfig):
     return config_list[0]
 
 
-def cache_swapping(cache_engine: CacheEngine, swap_in_map: dict,
-                   swap_out_map: dict):
+def cache_swapping(cache_engine: CacheEngine, swap_in_map: dict, swap_out_map: dict):
     """perform cache swapping."""
     issued_cache_op = False
     if len(swap_in_map) > 0:
@@ -200,8 +190,7 @@ class AutoModelAgent:
         self.model_config = model_config
         self.cache_config = cache_config
 
-    async def async_forward(self, inputs: ModelInputs, swap_in_map: SwapMap,
-                            swap_out_map: SwapMap):
+    async def async_forward(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
         """model forward.
 
         Args:
@@ -244,34 +233,24 @@ class BaseModelAgent(AutoModelAgent):
         dist_ctx = get_dist_manager().current_context()
         rank = dist_ctx.rank
 
-        self.patched_model = self._build_model(model_path,
-                                               adapters,
-                                               device=device,
-                                               rank=rank)
+        self.patched_model = self._build_model(model_path, adapters, device=device, rank=rank)
 
         local_rank = dist_ctx.local_rank
         tp = dist_ctx.tp
         world_size = dist_ctx.world_size
-        _update_cache_config(model_config,
-                             cache_config,
-                             gpu_id=local_rank,
-                             world_size=tp)
+        _update_cache_config(model_config, cache_config, gpu_id=local_rank, world_size=tp)
         if world_size > 1:
             # broadcast cache config
             _broadcast_config(cache_config)
 
         backend = get_backend()
-        self.patched_model = backend.build_graph_runner(
-            self.patched_model,
-            model_config=model_config,
-            cache_config=cache_config,
-            backend_config=backend_config,
-            device=device)
+        self.patched_model = backend.build_graph_runner(self.patched_model,
+                                                        model_config=model_config,
+                                                        cache_config=cache_config,
+                                                        backend_config=backend_config,
+                                                        device=device)
 
-        self.cache_engine = CacheEngine(cache_config,
-                                        model_config,
-                                        local_rank,
-                                        world_size=tp)
+        self.cache_engine = CacheEngine(cache_config, model_config, local_rank, world_size=tp)
 
         self.stream = torch.cuda.Stream()
 
@@ -292,17 +271,11 @@ class BaseModelAgent(AutoModelAgent):
         load_model_weights(patched_model, model_path, device=device)
         if adapters is not None:
             logger.info(msg_with_rank(rank, 'loading adapters.'))
-            add_adapters(patched_model,
-                         adapters,
-                         dtype=self.model_config.dtype,
-                         device=device)
+            add_adapters(patched_model, adapters, dtype=self.model_config.dtype, device=device)
         return patched_model
 
-    def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap,
-                      swap_out_map: SwapMap):
-        cache_swapping(self.cache_engine,
-                       swap_in_map=swap_in_map,
-                       swap_out_map=swap_out_map)
+    def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
+        cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
         output = model_forward(
             self.patched_model,
             inputs,
@@ -312,8 +285,7 @@ class BaseModelAgent(AutoModelAgent):
         )
         return output
 
-    async def async_forward(self, inputs: ModelInputs, swap_in_map: SwapMap,
-                            swap_out_map: SwapMap):
+    async def async_forward(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
         """model forward.
 
         Args:
@@ -321,9 +293,7 @@ class BaseModelAgent(AutoModelAgent):
             swap_in_map (SwapMap): Cache maps to swap in.
             swap_out_map (SwapMap): Cache maps to swap out.
         """
-        output = self._forward_impl(inputs,
-                                    swap_in_map=swap_in_map,
-                                    swap_out_map=swap_out_map)
+        output = self._forward_impl(inputs, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
         await asyncio.sleep(0)
         return output
 
@@ -360,8 +330,7 @@ def build_model_agent(model_path: str,
         dtype (str): the data type of model weights and activations
         custom_module_map (str): customized nn module map
     """
-    model_config = ModelConfig.from_pretrained(
-        model_path, trust_remote_code=trust_remote_code, dtype=dtype, tp=tp)
+    model_config = ModelConfig.from_pretrained(model_path, trust_remote_code=trust_remote_code, dtype=dtype, tp=tp)
     model_config.custom_module_map = custom_module_map
 
     model_agent = BaseModelAgent(model_path,

@@ -26,12 +26,7 @@ class DistContext:
         return tp * dp
 
     @classmethod
-    def build(cls,
-              rank: int = 0,
-              tp: int = 1,
-              dp: int = 1,
-              node_rank: int = 0,
-              nproc_per_node: int = None):
+    def build(cls, rank: int = 0, tp: int = 1, dp: int = 1, node_rank: int = 0, nproc_per_node: int = None):
         """build dist context."""
         from datetime import timedelta
         cpu_backend = 'gloo'
@@ -55,11 +50,8 @@ class DistContext:
             local_cpu_group = world_cpu_group
         else:
             local_rank0 = node_rank * nproc_per_node
-            local_ranks = list(range(local_rank0,
-                                     local_rank0 + nproc_per_node))
-            local_cpu_group = dist.new_group(ranks=local_ranks,
-                                             timeout=timeout,
-                                             backend=cpu_backend)
+            local_ranks = list(range(local_rank0, local_rank0 + nproc_per_node))
+            local_cpu_group = dist.new_group(ranks=local_ranks, timeout=timeout, backend=cpu_backend)
 
         # tp
         tp_cpu_group = None
@@ -70,24 +62,16 @@ class DistContext:
             if tp == nproc_per_node:
                 tp_cpu_group = local_cpu_group
             else:
-                tp_cpu_group = dist.new_group(ranks=tp_ranks,
-                                              timeout=timeout,
-                                              backend=cpu_backend)
-            tp_gpu_group = dist.new_group(ranks=tp_ranks,
-                                          timeout=timeout,
-                                          backend=gpu_backend)
+                tp_cpu_group = dist.new_group(ranks=tp_ranks, timeout=timeout, backend=cpu_backend)
+            tp_gpu_group = dist.new_group(ranks=tp_ranks, timeout=timeout, backend=gpu_backend)
 
         # dp
         dp_cpu_group = None
         dp_gpu_group = None
         if dp > 1 and rank % tp == 0:
             dp_ranks = list(range(0, world_size, tp))
-            dp_cpu_group = dist.new_group(ranks=dp_ranks,
-                                          timeout=timeout,
-                                          backend=cpu_backend)
-            dp_gpu_group = dist.new_group(ranks=dp_ranks,
-                                          timeout=timeout,
-                                          backend=gpu_backend)
+            dp_cpu_group = dist.new_group(ranks=dp_ranks, timeout=timeout, backend=cpu_backend)
+            dp_gpu_group = dist.new_group(ranks=dp_ranks, timeout=timeout, backend=gpu_backend)
 
         context = DistContext(
             rank=rank,
@@ -154,10 +138,8 @@ def get_world_rank():
 
 def _check_group_device(device: str):
     """check group device."""
-    assert (device
-            in ['cpu',
-                'gpu']), ('Expect process group device in ("cpu", "gpu"), '
-                          f'but get {device}.')
+    assert (device in ['cpu', 'gpu']), ('Expect process group device in ("cpu", "gpu"), '
+                                        f'but get {device}.')
 
 
 def get_process_group(device: str = None):
