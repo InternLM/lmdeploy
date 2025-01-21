@@ -43,9 +43,7 @@ def _quant_fp8_kernel(
     tl.store(s_ptr, scale)
 
 
-def quant_fp8(A: Tensor,
-              group_size: int,
-              dtype: torch.dtype = torch.float8_e4m3fn):
+def quant_fp8(A: Tensor, group_size: int, dtype: torch.dtype = torch.float8_e4m3fn):
     """quant online."""
     assert A.dim() == 2
     M, K = A.shape
@@ -151,12 +149,8 @@ def _gemm_fp8_kernel(
         k_start = (k + 1) * BLOCK_K
         offs_ksa = k_start // group_ak
         offs_ksb = k_start // group_bk
-        a_scale = tl.load(as_ptrs + offs_ksa * stride_ask,
-                          mask=k_start < K,
-                          other=1.0)
-        b_scale = tl.load(bs_ptrs + offs_ksb * stride_bsk,
-                          mask=k_start < K,
-                          other=1.0)
+        a_scale = tl.load(as_ptrs + offs_ksa * stride_ask, mask=k_start < K, other=1.0)
+        b_scale = tl.load(bs_ptrs + offs_ksb * stride_bsk, mask=k_start < K, other=1.0)
 
         # load ab
         a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_K, other=0.0)
@@ -189,8 +183,7 @@ def blocked_gemm_fp8(A: Tensor,
     """gemm fp8."""
 
     def grid(META):
-        return (triton.cdiv(M, META['BLOCK_M']) *
-                triton.cdiv(N, META['BLOCK_N']), )
+        return (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']), )
 
     assert A.dim() == 2
     assert A_scale.dim() == 2

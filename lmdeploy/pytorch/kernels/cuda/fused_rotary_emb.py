@@ -30,12 +30,11 @@ from .triton_utils import get_kernel_meta, wrap_jit_func
                               BLOCK_HK=torch.int32,
                               BLOCK_F=torch.int32))
 @triton.jit
-def _fused_rotary_emb_kernel(
-        Q, K, PostionIds, InvFreq, scaling_factor, OutQ, OutK, stride_bq,
-        stride_sq, stride_hq: tl.constexpr, stride_dq: tl.constexpr, stride_bk,
-        stride_sk, stride_hk: tl.constexpr, stride_dk: tl.constexpr, stride_bp,
-        stride_sp, max_seq_len, BLOCK: tl.constexpr, BLOCK_HQ: tl.constexpr,
-        BLOCK_HK: tl.constexpr, BLOCK_F: tl.constexpr):
+def _fused_rotary_emb_kernel(Q, K, PostionIds, InvFreq, scaling_factor, OutQ, OutK, stride_bq, stride_sq,
+                             stride_hq: tl.constexpr, stride_dq: tl.constexpr, stride_bk, stride_sk,
+                             stride_hk: tl.constexpr, stride_dk: tl.constexpr, stride_bp, stride_sp, max_seq_len,
+                             BLOCK: tl.constexpr, BLOCK_HQ: tl.constexpr, BLOCK_HK: tl.constexpr,
+                             BLOCK_F: tl.constexpr):
     """fused rotary emb kernel."""
     batch_id = tl.program_id(0)
     seq_block_id = tl.program_id(1)

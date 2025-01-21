@@ -11,8 +11,7 @@ def prepare_environment(request, config, worker_id):
     backend = param['backend']
     model_path = config.get('model_path') + '/' + model
 
-    pid, startRes = start_restful_api(config, param, model, model_path,
-                                      backend, worker_id)
+    pid, startRes = start_restful_api(config, param, model, model_path, backend, worker_id)
     yield param
     stop_restful_api(pid, startRes, param)
 
@@ -24,8 +23,7 @@ def getModelList(tp_num):
         if model['backend'] == 'pytorch':
             model['extra'] = '--max-batch-size 256 --cache-max-entry-count 0.8'
         elif 'Llama-2' in model['model']:
-            model[
-                'extra'] = '--max-batch-size 256 --cache-max-entry-count 0.95'
+            model['extra'] = '--max-batch-size 256 --cache-max-entry-count 0.95'
         elif 'internlm2' in model['model']:
             model['extra'] = '--max-batch-size 256 --cache-max-entry-count 0.9'
         else:
@@ -37,42 +35,27 @@ def getModelList(tp_num):
 
 @pytest.mark.gpu_num_1
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment',
-                         getModelList(tp_num=1),
-                         indirect=True)
+@pytest.mark.parametrize('prepare_environment', getModelList(tp_num=1), indirect=True)
 def test_restful_tp1(config, run_id, prepare_environment, worker_id):
-    result, msg = restful_test(config,
-                               run_id,
-                               prepare_environment,
-                               worker_id=worker_id)
+    result, msg = restful_test(config, run_id, prepare_environment, worker_id=worker_id)
 
     assert result, msg
 
 
 @pytest.mark.gpu_num_2
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment',
-                         getModelList(tp_num=2),
-                         indirect=True)
+@pytest.mark.parametrize('prepare_environment', getModelList(tp_num=2), indirect=True)
 def test_restful_tp2(config, run_id, prepare_environment, worker_id):
-    result, msg = restful_test(config,
-                               run_id,
-                               prepare_environment,
-                               worker_id=worker_id)
+    result, msg = restful_test(config, run_id, prepare_environment, worker_id=worker_id)
 
     assert result, msg
 
 
 @pytest.mark.gpu_num_4
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.parametrize('prepare_environment',
-                         getModelList(tp_num=4),
-                         indirect=True)
+@pytest.mark.parametrize('prepare_environment', getModelList(tp_num=4), indirect=True)
 def test_restful_tp4(config, run_id, prepare_environment, worker_id):
-    result, msg = restful_test(config,
-                               run_id,
-                               prepare_environment,
-                               worker_id=worker_id)
+    result, msg = restful_test(config, run_id, prepare_environment, worker_id=worker_id)
 
     assert result, msg
 
@@ -95,10 +78,6 @@ def test_restful_tp4(config, run_id, prepare_environment, worker_id):
 }],
                          indirect=True)
 def test_restful_func_tp2(config, run_id, prepare_environment, worker_id):
-    result, msg = restful_test(config,
-                               run_id,
-                               prepare_environment,
-                               worker_id=worker_id,
-                               is_smoke=True)
+    result, msg = restful_test(config, run_id, prepare_environment, worker_id=worker_id, is_smoke=True)
 
     assert result, msg

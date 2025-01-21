@@ -78,8 +78,7 @@ class ToolChoiceFuncName(BaseModel):
 class ToolChoice(BaseModel):
     """The tool choice definition."""
     function: ToolChoiceFuncName
-    type: Literal['function'] = Field(default='function',
-                                      examples=['function'])
+    type: Literal['function'] = Field(default='function', examples=['function'])
 
 
 class StreamOptions(BaseModel):
@@ -92,9 +91,7 @@ class JsonSchema(BaseModel):
     # description is not used since it depends on model
     description: Optional[str] = None
     # use alias since pydantic does not support the OpenAI key `schema`
-    json_schema: Optional[Dict[str, Any]] = Field(default=None,
-                                                  alias='schema',
-                                                  examples=[None])
+    json_schema: Optional[Dict[str, Any]] = Field(default=None, alias='schema', examples=[None])
     # strict is not used
     strict: Optional[bool] = False
 
@@ -109,27 +106,26 @@ class ResponseFormat(BaseModel):
 class ChatCompletionRequest(BaseModel):
     """Chat completion request."""
     model: str
-    # yapf: disable
+
     messages: Union[str, List[Dict[str, Any]]] = Field(examples=[[{'role': 'user', 'content': 'hi'}]])  # noqa
     temperature: Optional[float] = 0.7
     top_p: Optional[float] = 1.0
     tools: Optional[List[Tool]] = Field(default=None, examples=[None])
-    tool_choice: Union[ToolChoice, Literal['auto', 'required', 'none']] = Field(default='auto', examples=['none'])  # noqa
+    tool_choice: Union[ToolChoice, Literal['auto', 'required', 'none']] = Field(default='auto',
+                                                                                examples=['none'])  # noqa
     logprobs: Optional[bool] = False
     top_logprobs: Optional[int] = None
     n: Optional[int] = 1
     logit_bias: Optional[Dict[str, float]] = Field(default=None, examples=[None])  # noqa
     max_tokens: Optional[int] = Field(default=None, examples=[None])
     stop: Optional[Union[str, List[str]]] = Field(default=None, examples=[None])  # noqa
-    # yapf: enable
+
     stream: Optional[bool] = False
-    stream_options: Optional[StreamOptions] = Field(default=None,
-                                                    examples=[None])
+    stream_options: Optional[StreamOptions] = Field(default=None, examples=[None])
     presence_penalty: Optional[float] = 0.0
     frequency_penalty: Optional[float] = 0.0
     user: Optional[str] = None
-    response_format: Optional[ResponseFormat] = Field(default=None,
-                                                      examples=[None])  # noqa
+    response_format: Optional[ResponseFormat] = Field(default=None, examples=[None])  # noqa
     # additional argument of lmdeploy
     repetition_penalty: Optional[float] = 1.0
     session_id: Optional[int] = -1
@@ -191,8 +187,7 @@ class ChatCompletionResponseChoice(BaseModel):
     index: int
     message: ChatMessage
     logprobs: Optional[ChoiceLogprobs] = None
-    finish_reason: Optional[Literal['stop', 'length', 'tool_calls',
-                                    'error']] = None
+    finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error']] = None
 
 
 class ChatCompletionResponse(BaseModel):
@@ -238,11 +233,9 @@ class CompletionRequest(BaseModel):
     n: Optional[int] = 1
     logprobs: Optional[int] = None
     max_tokens: Optional[int] = 16
-    stop: Optional[Union[str, List[str]]] = Field(default=None,
-                                                  examples=[None])
+    stop: Optional[Union[str, List[str]]] = Field(default=None, examples=[None])
     stream: Optional[bool] = False
-    stream_options: Optional[StreamOptions] = Field(default=None,
-                                                    examples=[None])
+    stream_options: Optional[StreamOptions] = Field(default=None, examples=[None])
     top_p: Optional[float] = 1.0
     echo: Optional[bool] = False
     presence_penalty: Optional[float] = 0.0
@@ -325,15 +318,12 @@ class EncodeResponse(BaseModel):
 class GenerateRequest(BaseModel):
     """Generate request."""
     prompt: Union[str, List[Dict[str, Any]]]
-    image_url: Optional[Union[str, List[str]]] = Field(default=None,
-                                                       examples=[None])
+    image_url: Optional[Union[str, List[str]]] = Field(default=None, examples=[None])
     session_id: int = -1
     interactive_mode: bool = False
     stream: bool = False
-    stop: Optional[Union[str, List[str]]] = Field(default=None,
-                                                  examples=[None])
-    request_output_len: Optional[int] = Field(default=None,
-                                              examples=[None])  # noqa
+    stop: Optional[Union[str, List[str]]] = Field(default=None, examples=[None])
+    request_output_len: Optional[int] = Field(default=None, examples=[None])  # noqa
     top_p: float = 0.8
     top_k: int = 40
     temperature: float = 0.8

@@ -49,18 +49,16 @@ def get_slope(i, n):
     if i < closest_power_of_2:
         return _get_interleave_power_of_2(i, closest_power_of_2)
     else:
-        return _get_interleave_power_of_2((i - closest_power_of_2) * 2,
-                                          2 * closest_power_of_2)
+        return _get_interleave_power_of_2((i - closest_power_of_2) * 2, 2 * closest_power_of_2)
 
 
 @triton.jit
-def _load_block_offsets(offset_ptr, block_id, num_sub_blocks: tl.constexpr,
-                        BLOCK: tl.constexpr):
+def _load_block_offsets(offset_ptr, block_id, num_sub_blocks: tl.constexpr, BLOCK: tl.constexpr):
     if num_sub_blocks > 1:
         offs_sub = tl.arange(0, num_sub_blocks)
         offs_n = tl.arange(0, BLOCK // num_sub_blocks)
-        ret = tl.load(offset_ptr + block_id * num_sub_blocks + offs_sub)[
-            None, :] * BLOCK // num_sub_blocks + offs_n[:, None]
+        ret = tl.load(offset_ptr + block_id * num_sub_blocks +
+                      offs_sub)[None, :] * BLOCK // num_sub_blocks + offs_n[:, None]
         return tl.ravel(ret)
     else:
         offs_n = tl.arange(0, BLOCK)
@@ -114,8 +112,7 @@ def _fwd_split_kernel(
     # initialize offsets
     offs_n = tl.arange(0, BLOCK_N)
     offs_d = tl.arange(0, BLOCK_DMODEL)
-    off_q = (cur_batch * stride_qbs + cur_head * stride_qh +
-             offs_d * stride_qd)
+    off_q = (cur_batch * stride_qbs + cur_head * stride_qh + offs_d * stride_qd)
     off_k = (cur_kv_head * stride_kh + offs_d[None, :] * stride_kd)
     off_v = (cur_kv_head * stride_vh + offs_d[None, :] * stride_vd)
 
@@ -125,8 +122,7 @@ def _fwd_split_kernel(
     v_ptrs = V + off_v
 
     block_offset_ptrs = Block_offsets + cur_batch * stride_boffb
-    head_slope = get_slope(
-        cur_head.to(tl.float32) + head_offset, num_heads.to(tl.float32))
+    head_slope = get_slope(cur_head.to(tl.float32) + head_offset, num_heads.to(tl.float32))
 
     # initialize pointer to m and l
     m_i = -float('inf')
@@ -139,8 +135,7 @@ def _fwd_split_kernel(
 
     # load block offset
     start_block_id = loop_start // BLOCK_N
-    b_offset = _load_block_offsets(block_offset_ptrs, start_block_id,
-                                   num_sub_blocks, BLOCK_N)
+    b_offset = _load_block_offsets(block_offset_ptrs, start_block_id, num_sub_blocks, BLOCK_N)
 
     for start_n in range(loop_start, loop_end, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
@@ -163,8 +158,7 @@ def _fwd_split_kernel(
         # prefetch b_offset
         if start_n + BLOCK_N < loop_end:
             start_block_id += 1
-            b_offset = _load_block_offsets(block_offset_ptrs, start_block_id,
-                                           num_sub_blocks, BLOCK_N)
+            b_offset = _load_block_offsets(block_offset_ptrs, start_block_id, num_sub_blocks, BLOCK_N)
 
         qk = tl.sum(q[None, :] * k, 1)
         qk *= sm_scale
@@ -198,12 +192,10 @@ def _fwd_split_kernel(
         m_i = m_i_new
 
     # initialize pointers to output
-    off_acc = (cur_batch * stride_obs + split_k_id * stride_ok +
-               cur_head * stride_oh + offs_d * stride_od)
+    off_acc = (cur_batch * stride_obs + split_k_id * stride_ok + cur_head * stride_oh + offs_d * stride_od)
     tl.store(Acc_out + off_acc, acc)
 
-    off_meta = (cur_batch * stride_obs + split_k_id * stride_ok +
-                cur_head * stride_oh + BLOCK_DMODEL)
+    off_meta = (cur_batch * stride_obs + split_k_id * stride_ok + cur_head * stride_oh + BLOCK_DMODEL)
     tl.store(Acc_out + off_meta + tl.arange(0, 1), m_i)
     tl.store(Acc_out + off_meta + 1 + tl.arange(0, 1), l_i)
 
@@ -231,10 +223,9 @@ def _reduce_split_kernel(
     offs_d = tl.arange(0, BLOCK_DMODEL)
     offs_k = tl.arange(0, SPLIT_K)
 
-    offs_acc = (cur_batch * stride_abs + cur_head * stride_ah +
-                offs_k[:, None] * stride_ak + offs_d[None, :] * stride_ad)
-    offs_mi = (cur_batch * stride_abs + cur_head * stride_ah +
-               stride_ak * offs_k + BLOCK_DMODEL)
+    offs_acc = (cur_batch * stride_abs + cur_head * stride_ah + offs_k[:, None] * stride_ak +
+                offs_d[None, :] * stride_ad)
+    offs_mi = (cur_batch * stride_abs + cur_head * stride_ah + stride_ak * offs_k + BLOCK_DMODEL)
 
     acc_k = tl.load(Acc + offs_acc)
     m_k = tl.load(Acc + offs_mi)
@@ -249,8 +240,7 @@ def _reduce_split_kernel(
     l_sum = tl.sum(l_k, 0)
     acc = acc / l_sum
 
-    out_offs = (cur_batch * stride_obs + cur_head * stride_oh +
-                offs_d * stride_od)
+    out_offs = (cur_batch * stride_obs + cur_head * stride_oh + offs_d * stride_od)
     tl.store(Out + out_offs, acc)
 
 
@@ -301,15 +291,14 @@ def _fwd_kernel(
     history_len = cur_batch_kv_len - cur_batch_seq_len
 
     block_start_loc = BLOCK_M * start_m
-    head_slope = get_slope(
-        cur_head.to(tl.float32) + head_offset, num_heads.to(tl.float32))
+    head_slope = get_slope(cur_head.to(tl.float32) + head_offset, num_heads.to(tl.float32))
 
     # initialize offsets
     offs_n = tl.arange(0, BLOCK_N)
     offs_d = tl.arange(0, BLOCK_DMODEL)
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    off_q = ((cur_batch_in_all_start_index + offs_m[:, None]) * stride_qbs +
-             cur_head * stride_qh + offs_d[None, :] * stride_qd)
+    off_q = ((cur_batch_in_all_start_index + offs_m[:, None]) * stride_qbs + cur_head * stride_qh +
+             offs_d[None, :] * stride_qd)
     off_k = (cur_kv_head * stride_kh + offs_d[:, None] * stride_kd)
     off_v = (cur_kv_head * stride_vh + offs_d[None, :] * stride_vd)
 
@@ -327,8 +316,7 @@ def _fwd_kernel(
 
     block_mask = tl.where(block_start_loc < cur_batch_seq_len, 1, 0)
 
-    b_offset = _load_block_offsets(block_offset_ptrs, 0, num_sub_blocks,
-                                   BLOCK_N)
+    b_offset = _load_block_offsets(block_offset_ptrs, 0, num_sub_blocks, BLOCK_N)
     for start_n in range(0, block_mask * cur_batch_kv_len, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
 
@@ -346,8 +334,7 @@ def _fwd_kernel(
         )
         if start_n + BLOCK_N < cur_batch_kv_len:
             start_block_id = start_n // BLOCK_N + 1
-            b_offset = _load_block_offsets(block_offset_ptrs, start_block_id,
-                                           num_sub_blocks, BLOCK_N)
+            b_offset = _load_block_offsets(block_offset_ptrs, start_block_id, num_sub_blocks, BLOCK_N)
 
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
@@ -382,8 +369,8 @@ def _fwd_kernel(
 
     acc = acc / l_i[:, None]
     # initialize pointers to output
-    off_o = ((cur_batch_in_all_start_index + offs_m[:, None]) * stride_obs +
-             cur_head * stride_oh + offs_d[None, :] * stride_od)
+    off_o = ((cur_batch_in_all_start_index + offs_m[:, None]) * stride_obs + cur_head * stride_oh +
+             offs_d[None, :] * stride_od)
     out_ptrs = Out + off_o
     tl.store(out_ptrs, acc, mask=offs_m[:, None] < cur_batch_seq_len)
 
@@ -451,14 +438,11 @@ def _fwd_split_kernel_quant(
     offs_n = tl.arange(0, BLOCK_N)
     offs_d = tl.arange(0, BLOCK_DMODEL)
     offs_dsz = tl.arange(0, 1)
-    off_q = (cur_batch * stride_qbs + cur_head * stride_qh +
-             offs_d * stride_qd)
+    off_q = (cur_batch * stride_qbs + cur_head * stride_qh + offs_d * stride_qd)
     if quant_policy == 4:
         shift_d = offs_d // (BLOCK_DMODEL // 2) * 4
-        off_k = (cur_kv_head * stride_kh +
-                 (offs_d % (BLOCK_DMODEL // 2))[None, :] * stride_kd)
-        off_v = (cur_kv_head * stride_vh +
-                 (offs_d % (BLOCK_DMODEL // 2))[None, :] * stride_vd)
+        off_k = (cur_kv_head * stride_kh + (offs_d % (BLOCK_DMODEL // 2))[None, :] * stride_kd)
+        off_v = (cur_kv_head * stride_vh + (offs_d % (BLOCK_DMODEL // 2))[None, :] * stride_vd)
     else:
         off_k = (cur_kv_head * stride_kh + offs_d[None, :] * stride_kd)
         off_v = (cur_kv_head * stride_vh + offs_d[None, :] * stride_vd)
@@ -473,8 +457,7 @@ def _fwd_split_kernel_quant(
     vsz_ptrs = VScalesZeros + off_vsz
 
     block_offset_ptrs = Block_offsets + cur_batch * stride_boffb
-    head_slope = get_slope(
-        cur_head.to(tl.float32) + head_offset, num_heads.to(tl.float32))
+    head_slope = get_slope(cur_head.to(tl.float32) + head_offset, num_heads.to(tl.float32))
 
     # initialize pointer to m and l
     m_i = -float('inf')
@@ -487,8 +470,7 @@ def _fwd_split_kernel_quant(
 
     # load block offset
     start_block_id = loop_start // BLOCK_N
-    b_offset = _load_block_offsets(block_offset_ptrs, start_block_id,
-                                   num_sub_blocks, BLOCK_N)
+    b_offset = _load_block_offsets(block_offset_ptrs, start_block_id, num_sub_blocks, BLOCK_N)
 
     for start_n in range(loop_start, loop_end, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
@@ -537,8 +519,7 @@ def _fwd_split_kernel_quant(
         # prefetch b_offset
         if start_n + BLOCK_N < loop_end:
             start_block_id += 1
-            b_offset = _load_block_offsets(block_offset_ptrs, start_block_id,
-                                           num_sub_blocks, BLOCK_N)
+            b_offset = _load_block_offsets(block_offset_ptrs, start_block_id, num_sub_blocks, BLOCK_N)
 
         qk = tl.sum(q[None, :] * k, 1)
         qk *= sm_scale
@@ -572,12 +553,10 @@ def _fwd_split_kernel_quant(
         m_i = m_i_new
 
     # initialize pointers to output
-    off_acc = (cur_batch * stride_obs + split_k_id * stride_ok +
-               cur_head * stride_oh + offs_d * stride_od)
+    off_acc = (cur_batch * stride_obs + split_k_id * stride_ok + cur_head * stride_oh + offs_d * stride_od)
     tl.store(Acc_out + off_acc, acc)
 
-    off_meta = (cur_batch * stride_obs + split_k_id * stride_ok +
-                cur_head * stride_oh + BLOCK_DMODEL)
+    off_meta = (cur_batch * stride_obs + split_k_id * stride_ok + cur_head * stride_oh + BLOCK_DMODEL)
     tl.store(Acc_out + off_meta + tl.arange(0, 1), m_i)
     tl.store(Acc_out + off_meta + 1 + tl.arange(0, 1), l_i)
 
@@ -644,23 +623,20 @@ def _fwd_kernel_quant(
     history_len = cur_batch_kv_len - cur_batch_seq_len
 
     block_start_loc = BLOCK_M * start_m
-    head_slope = get_slope(
-        cur_head.to(tl.float32) + head_offset, num_heads.to(tl.float32))
+    head_slope = get_slope(cur_head.to(tl.float32) + head_offset, num_heads.to(tl.float32))
 
     # initialize offsets
     offs_n = tl.arange(0, BLOCK_N)
     offs_d = tl.arange(0, BLOCK_DMODEL)
     offs_dsz = tl.arange(0, 1)
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    off_q = ((cur_batch_in_all_start_index + offs_m[:, None]) * stride_qbs +
-             cur_head * stride_qh + offs_d[None, :] * stride_qd)
+    off_q = ((cur_batch_in_all_start_index + offs_m[:, None]) * stride_qbs + cur_head * stride_qh +
+             offs_d[None, :] * stride_qd)
     if quant_policy == 4:
         shift_kd = (offs_d // (BLOCK_DMODEL // 2) * 4)[:, None]
         shift_vd = (offs_d // (BLOCK_DMODEL // 2) * 4)[None, :]
-        off_k = (cur_kv_head * stride_kh +
-                 (offs_d % (BLOCK_DMODEL // 2))[:, None] * stride_kd)
-        off_v = (cur_kv_head * stride_vh +
-                 (offs_d % (BLOCK_DMODEL // 2))[None, :] * stride_vd)
+        off_k = (cur_kv_head * stride_kh + (offs_d % (BLOCK_DMODEL // 2))[:, None] * stride_kd)
+        off_v = (cur_kv_head * stride_vh + (offs_d % (BLOCK_DMODEL // 2))[None, :] * stride_vd)
     else:
         off_k = (cur_kv_head * stride_kh + offs_d[:, None] * stride_kd)
         off_v = (cur_kv_head * stride_vh + offs_d[None, :] * stride_vd)
@@ -683,8 +659,7 @@ def _fwd_kernel_quant(
 
     block_mask = tl.where(block_start_loc < cur_batch_seq_len, 1, 0)
 
-    b_offset = _load_block_offsets(block_offset_ptrs, 0, num_sub_blocks,
-                                   BLOCK_N)
+    b_offset = _load_block_offsets(block_offset_ptrs, 0, num_sub_blocks, BLOCK_N)
     for start_n in range(0, block_mask * cur_batch_kv_len, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
 
@@ -729,8 +704,7 @@ def _fwd_kernel_quant(
         k = ((k - kz) * ks).to(q.dtype)
         if start_n + BLOCK_N < cur_batch_kv_len:
             start_block_id = start_n // BLOCK_N + 1
-            b_offset = _load_block_offsets(block_offset_ptrs, start_block_id,
-                                           num_sub_blocks, BLOCK_N)
+            b_offset = _load_block_offsets(block_offset_ptrs, start_block_id, num_sub_blocks, BLOCK_N)
 
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
@@ -765,8 +739,8 @@ def _fwd_kernel_quant(
 
     acc = acc / l_i[:, None]
     # initialize pointers to output
-    off_o = ((cur_batch_in_all_start_index + offs_m[:, None]) * stride_obs +
-             cur_head * stride_oh + offs_d[None, :] * stride_od)
+    off_o = ((cur_batch_in_all_start_index + offs_m[:, None]) * stride_obs + cur_head * stride_oh +
+             offs_d[None, :] * stride_od)
     out_ptrs = Out + off_o
     tl.store(out_ptrs, acc, mask=offs_m[:, None] < cur_batch_seq_len)
 
@@ -914,48 +888,47 @@ def alibi_paged_attention_fwd(
         block_per_cta = triton.cdiv(block_offsets.size(-1), SPLIT_K)
         acc = q.new_empty(batch, head, SPLIT_K, Lq + 2, dtype=torch.float32)
         if quant_policy > 0:
-            _fwd_split_kernel_quant[grid](
-                q,
-                k,
-                v,
-                k_scales_zeros,
-                v_scales_zeros,
-                sm_scale,
-                alibi_scale,
-                b_kv_seq_len,
-                block_offsets,
-                acc,
-                stride_qbs=q.stride(-3),
-                stride_qh=q.stride(-2),
-                stride_qd=q.stride(-1),
-                stride_kbs=k.stride(-3),
-                stride_kh=k.stride(-2),
-                stride_kd=k.stride(-1),
-                stride_vbs=v.stride(-3),
-                stride_vh=v.stride(-2),
-                stride_vd=v.stride(-1),
-                stride_kszbs=k_scales_zeros.stride(-3),
-                stride_kszh=k_scales_zeros.stride(-2),
-                stride_kszd=k_scales_zeros.stride(-1),
-                stride_vszbs=v_scales_zeros.stride(-3),
-                stride_vszh=v_scales_zeros.stride(-2),
-                stride_vszd=v_scales_zeros.stride(-1),
-                quant_policy=quant_policy,
-                stride_ok=acc.stride(-2),
-                stride_obs=acc.stride(-4),
-                stride_oh=acc.stride(-3),
-                stride_od=acc.stride(-1),
-                stride_boffb=block_offsets.stride(0),
-                head_offset=head_offset,
-                num_heads=num_heads,
-                kv_group_num=kv_group_num,
-                block_per_cta=block_per_cta,
-                num_sub_blocks=num_sub_blocks,
-                BLOCK_DMODEL=Lq,
-                BLOCK_N=BLOCK,
-                num_warps=4,
-                num_stages=1,
-                **kernel_meta)
+            _fwd_split_kernel_quant[grid](q,
+                                          k,
+                                          v,
+                                          k_scales_zeros,
+                                          v_scales_zeros,
+                                          sm_scale,
+                                          alibi_scale,
+                                          b_kv_seq_len,
+                                          block_offsets,
+                                          acc,
+                                          stride_qbs=q.stride(-3),
+                                          stride_qh=q.stride(-2),
+                                          stride_qd=q.stride(-1),
+                                          stride_kbs=k.stride(-3),
+                                          stride_kh=k.stride(-2),
+                                          stride_kd=k.stride(-1),
+                                          stride_vbs=v.stride(-3),
+                                          stride_vh=v.stride(-2),
+                                          stride_vd=v.stride(-1),
+                                          stride_kszbs=k_scales_zeros.stride(-3),
+                                          stride_kszh=k_scales_zeros.stride(-2),
+                                          stride_kszd=k_scales_zeros.stride(-1),
+                                          stride_vszbs=v_scales_zeros.stride(-3),
+                                          stride_vszh=v_scales_zeros.stride(-2),
+                                          stride_vszd=v_scales_zeros.stride(-1),
+                                          quant_policy=quant_policy,
+                                          stride_ok=acc.stride(-2),
+                                          stride_obs=acc.stride(-4),
+                                          stride_oh=acc.stride(-3),
+                                          stride_od=acc.stride(-1),
+                                          stride_boffb=block_offsets.stride(0),
+                                          head_offset=head_offset,
+                                          num_heads=num_heads,
+                                          kv_group_num=kv_group_num,
+                                          block_per_cta=block_per_cta,
+                                          num_sub_blocks=num_sub_blocks,
+                                          BLOCK_DMODEL=Lq,
+                                          BLOCK_N=BLOCK,
+                                          num_warps=4,
+                                          num_stages=1,
+                                          **kernel_meta)
 
         else:
             _fwd_split_kernel[grid](q,

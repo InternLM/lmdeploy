@@ -49,10 +49,7 @@ class MultiModalTensor:
         if isinstance(self.data, Tensor):
             data = self.data.to(device=device, non_blocking=non_blocking)
         else:
-            data = [
-                d.to(device=device, non_blocking=non_blocking)
-                for d in self.data
-            ]
+            data = [d.to(device=device, non_blocking=non_blocking) for d in self.data]
         out_dict['data'] = data
 
         new_meta = None

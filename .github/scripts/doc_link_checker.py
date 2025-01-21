@@ -8,14 +8,8 @@ import re
 
 def make_parser():
     parser = argparse.ArgumentParser('Doc link checker')
-    parser.add_argument('--http',
-                        default=False,
-                        type=bool,
-                        help='check http or not ')
-    parser.add_argument('--target',
-                        default='./docs',
-                        type=str,
-                        help='the directory or file to check')
+    parser.add_argument('--http', default=False, type=bool, help='check http or not ')
+    parser.add_argument('--target', default='./docs', type=str, help='the directory or file to check')
     return parser
 
 

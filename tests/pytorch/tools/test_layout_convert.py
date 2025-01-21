@@ -1,16 +1,17 @@
+# yapf: disable
 import pytest
 import torch
 
-from lmdeploy.pytorch.tools.layout_convert import (batch_tensor,
-                                                   continuous_tensor)
+from lmdeploy.pytorch.tools.layout_convert import batch_tensor, continuous_tensor
+
+# yapf: enable
 
 
 class TestContinuous:
 
     @pytest.fixture
     def batched_tensor(self):
-        yield torch.tensor([[1, 2, 3, 0, 0], [4, 5, 6, 7, 8], [9, 10, 0, 0,
-                                                               0]])
+        yield torch.tensor([[1, 2, 3, 0, 0], [4, 5, 6, 7, 8], [9, 10, 0, 0, 0]])
 
     @pytest.fixture
     def seq_len(self):

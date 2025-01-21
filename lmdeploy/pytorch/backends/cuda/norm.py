@@ -13,10 +13,7 @@ class TritonRMSNormImpl(RMSNormImpl):
         self.hidden_size = hidden_size
         self.eps = eps
 
-    def forward(self,
-                x: torch.Tensor,
-                weight: torch.Tensor,
-                residual: torch.Tensor = None):
+    def forward(self, x: torch.Tensor, weight: torch.Tensor, residual: torch.Tensor = None):
         """forward."""
         if residual is None:
             x = rms_norm(x, weight, self.eps)

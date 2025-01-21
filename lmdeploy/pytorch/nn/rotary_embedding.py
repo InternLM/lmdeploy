@@ -1,11 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
 from torch import Tensor, nn
 from transformers import PretrainedConfig
 
 from ..backends import OpType, get_backend
-from ..backends.rotary_embedding import (Llama3Parameters,
-                                         LongRoPEScalingParameters, RopeType,
-                                         YarnParameters)
+from ..backends.rotary_embedding import Llama3Parameters, LongRoPEScalingParameters, RopeType, YarnParameters
 
 
 def _get_default_rope_parameters(config: PretrainedConfig):
@@ -24,8 +23,7 @@ def _get_dynamic_ntk_parameters(config: PretrainedConfig):
     """get dynamic ntk parameters."""
     rope_scaling = config.rope_scaling
     scaling_factor = rope_scaling['factor']
-    return dict(emb_type=RopeType.DynamicNTKScaling,
-                scaling_factor=scaling_factor)
+    return dict(emb_type=RopeType.DynamicNTKScaling, scaling_factor=scaling_factor)
 
 
 def _get_yarn_parameters(config: PretrainedConfig):
@@ -33,13 +31,10 @@ def _get_yarn_parameters(config: PretrainedConfig):
     rope_scaling = config.rope_scaling
     scaling_factor = rope_scaling['factor']
     params = YarnParameters()
-    params.attention_factor = rope_scaling.get('attention_factor',
-                                               params.attention_factor)
+    params.attention_factor = rope_scaling.get('attention_factor', params.attention_factor)
     params.beta_fast = rope_scaling.get('beta_fast', params.beta_fast)
     params.beta_slow = rope_scaling.get('beta_slow', params.beta_slow)
-    return dict(emb_type=RopeType.Yarn,
-                scaling_factor=scaling_factor,
-                yarn_params=params)
+    return dict(emb_type=RopeType.Yarn, scaling_factor=scaling_factor, yarn_params=params)
 
 
 def _get_longrope_parameters(config: PretrainedConfig):
@@ -49,11 +44,9 @@ def _get_longrope_parameters(config: PretrainedConfig):
     scaling_factor = rope_scaling['factor']
     params.long_factor = rope_scaling.long_factor
     params.short_factor = rope_scaling.long_factor
-    params.original_max_position_embeddings = rope_scaling.get(
-        'original_max_position_embeddings', config.max_position_embeddings)
-    return dict(emb_type=RopeType.LongRoPEScaling,
-                scaling_factor=scaling_factor,
-                longrope_params=params)
+    params.original_max_position_embeddings = rope_scaling.get('original_max_position_embeddings',
+                                                               config.max_position_embeddings)
+    return dict(emb_type=RopeType.LongRoPEScaling, scaling_factor=scaling_factor, longrope_params=params)
 
 
 def _get_llama3_parameters(config: PretrainedConfig):
@@ -63,12 +56,9 @@ def _get_llama3_parameters(config: PretrainedConfig):
     scaling_factor = rope_scaling['factor']
     params.low_freq_factor = rope_scaling['low_freq_factor']
     params.high_freq_factor = rope_scaling['high_freq_factor']
-    params.original_max_position_embeddings = rope_scaling.get(
-        'original_max_position_embeddings',
-        params.original_max_position_embeddings)
-    return dict(emb_type=RopeType.Llama3,
-                scaling_factor=scaling_factor,
-                llama3_params=params)
+    params.original_max_position_embeddings = rope_scaling.get('original_max_position_embeddings',
+                                                               params.original_max_position_embeddings)
+    return dict(emb_type=RopeType.Llama3, scaling_factor=scaling_factor, llama3_params=params)
 
 
 def build_rotary_params(config: PretrainedConfig):
@@ -117,11 +107,6 @@ class ApplyRotaryEmb(nn.Module):
         builder = backend.get_layer_impl_builder(OpType.ApplyRotaryEmb)
         self.impl = builder.build()
 
-    def forward(self,
-                query: Tensor,
-                key: Tensor,
-                cos: Tensor,
-                sin: Tensor,
-                inplace: bool = True):
+    def forward(self, query: Tensor, key: Tensor, cos: Tensor, sin: Tensor, inplace: bool = True):
         """forward."""
         return self.impl.forward(query, key, cos, sin, inplace)

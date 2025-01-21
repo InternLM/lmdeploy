@@ -19,8 +19,7 @@ class LlavaHfVisionModel(VisonModel):
     _arch = 'LlavaForConditionalGeneration'
 
     def build_preprocessor(self):
-        processor = AutoProcessor.from_pretrained(self.model_path,
-                                                  trust_remote_code=True)
+        processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=True)
         if hasattr(processor, 'tokenizer'):
             del processor.tokenizer
             processor.prtokenizer = None
@@ -47,15 +46,12 @@ class LlavaHfVisionModel(VisonModel):
         # fix for llava-hf/llava-interleave-qwen-7b-hf
         setattr(model.config, 'tie_word_embeddings', False)
         with disable_logging():
-            load_checkpoint_and_dispatch(
-                model=model,
-                max_memory=self.max_memory,
-                checkpoint=self.model_path,
-                device_map='auto' if not self.with_llm else {'': 'cpu'},
-                no_split_module_classes=[
-                    'CLIPEncoderLayer', 'SiglipEncoderLayer'
-                ],
-                dtype=torch.half)
+            load_checkpoint_and_dispatch(model=model,
+                                         max_memory=self.max_memory,
+                                         checkpoint=self.model_path,
+                                         device_map='auto' if not self.with_llm else {'': 'cpu'},
+                                         no_split_module_classes=['CLIPEncoderLayer', 'SiglipEncoderLayer'],
+                                         dtype=torch.half)
         model.eval()
         self.model = model
 
@@ -65,9 +61,7 @@ class LlavaHfVisionModel(VisonModel):
         outputs = []
         for image, params in images:
             image = image.convert('RGB')
-            pixel_values = self.processor(
-                image, return_tensors='pt',
-                input_data_format='channels_last').pixel_values
+            pixel_values = self.processor(image, return_tensors='pt', input_data_format='channels_last').pixel_values
             outputs.append(
                 dict(pixel_values=pixel_values,
                      image_size=image.size,
@@ -77,9 +71,7 @@ class LlavaHfVisionModel(VisonModel):
         return messages
 
     @torch.no_grad()
-    def forward(self,
-                messages: List[Dict],
-                max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
         """extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
@@ -94,25 +86,19 @@ class LlavaHfVisionModel(VisonModel):
         inputs = inputs[0]
         outputs = []
         for idx in range(0, len(inputs), max_batch_size):
-            pixel_values = [
-                x['pixel_values'] for x in inputs[idx:idx + max_batch_size]
-            ]
+            pixel_values = [x['pixel_values'] for x in inputs[idx:idx + max_batch_size]]
             pixel_values = torch.cat(pixel_values, dim=0)
-            pixel_values = pixel_values.to(device=self.model.device,
-                                           dtype=self.model.dtype)
+            pixel_values = pixel_values.to(device=self.model.device, dtype=self.model.dtype)
             logger.info(f'vision forward shape: {pixel_values.shape}')
-            image_outputs = self.model.vision_tower.forward(
-                pixel_values, output_hidden_states=True)
-            image_features = image_outputs.hidden_states[
-                self.hf_config.vision_feature_layer]
+            image_outputs = self.model.vision_tower.forward(pixel_values, output_hidden_states=True)
+            image_features = image_outputs.hidden_states[self.hf_config.vision_feature_layer]
             if self.hf_config.vision_feature_select_strategy == 'default':
                 image_features = image_features[:, 1:]
             elif self.hf_config.vision_feature_select_strategy == 'full':
                 image_features = image_features
             else:
-                raise ValueError(
-                    'Unexpected select feature strategy: '
-                    f'{self.hf_config.vision_feature_select_strategy}')
+                raise ValueError('Unexpected select feature strategy: '
+                                 f'{self.hf_config.vision_feature_select_strategy}')
             image_features = self.model.multi_modal_projector(image_features)
             image_features = torch.split(image_features, 1, dim=0)
             outputs.extend([x.squeeze() for x in image_features])
@@ -130,25 +116,17 @@ class LlavaHfVisionModel(VisonModel):
                 continue
             elif message['role'] in ['images', 'preprocess', 'forward']:
                 continue
-            n_images = len(
-                [1 for x in message['content'] if x['type'] == 'image'])
-            content = [
-                item['text'] for item in message['content']
-                if item['type'] == 'text'
-            ]
+            n_images = len([1 for x in message['content'] if x['type'] == 'image'])
+            content = [item['text'] for item in message['content'] if item['type'] == 'text']
             prompt = (IMAGE_TOKEN + '\n') * n_images + content[0]
             prompt_messages.append(dict(role='user', content=prompt))
         prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
         return prompt, IMAGE_TOKEN
 
     def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template,
-                                                 sequence_start)
-        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
-                                   sequence_start)
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
+        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
 
     def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template,
-                                                 sequence_start)
-        return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
-                                     sequence_start)
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
+        return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)

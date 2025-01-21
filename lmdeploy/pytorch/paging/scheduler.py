@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
+
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Dict, List
@@ -7,8 +8,7 @@ from typing import Dict, List
 from lmdeploy.utils import get_logger, logging_timer
 
 from ..config import CacheConfig, SchedulerConfig
-from ..messages import (MessageStatus, SchedulerSequence, SchedulerSession,
-                        SequenceManager)
+from ..messages import MessageStatus, SchedulerSequence, SchedulerSession, SequenceManager
 from .block_manager import build_block_manager
 from .block_trie import BlockTrie
 
@@ -35,8 +35,7 @@ class Scheduler:
         cache_config (CacheConfig): The config of cache info.
     """
 
-    def __init__(self, scheduler_config: SchedulerConfig,
-                 cache_config: CacheConfig) -> None:
+    def __init__(self, scheduler_config: SchedulerConfig, cache_config: CacheConfig) -> None:
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
 
@@ -45,8 +44,7 @@ class Scheduler:
         self.block_manager = build_block_manager(cache_config)
         self.block_trie = BlockTrie(self.cache_config, self.block_manager)
 
-        self.eviction_helper = self.build_eviction_helper(
-            self.scheduler_config.eviction_type)
+        self.eviction_helper = self.build_eviction_helper(self.scheduler_config.eviction_type)
 
         self.seq_manager = SequenceManager()
 
@@ -79,8 +77,7 @@ class Scheduler:
         else:
             raise TypeError(f'Unknown eviction type: {eviction_type}')
 
-    def _set_message_status(self, message: SchedulerSequence,
-                            status: MessageStatus):
+    def _set_message_status(self, message: SchedulerSequence, status: MessageStatus):
         """Set status of message.
 
         Args:
@@ -96,9 +93,7 @@ class Scheduler:
             session_id (int): New session id.
         """
         assert session_id not in self.sessions
-        session = SchedulerSession(session_id,
-                                   self.cache_config.block_size,
-                                   seq_manager=self.seq_manager)
+        session = SchedulerSession(session_id, self.cache_config.block_size, seq_manager=self.seq_manager)
         self.sessions[session_id] = session
         return session
 
@@ -108,8 +103,7 @@ class Scheduler:
         Args:
             seq (SchedulerSequence): New sequence.
         """
-        assert (seq.session_id
-                in self.sessions), f'Unknown session id {seq.session_id}'
+        assert (seq.session_id in self.sessions), f'Unknown session id {seq.session_id}'
 
         # push message to waiting queue
         self._set_message_status(seq, MessageStatus.WAITING)
@@ -154,8 +148,7 @@ class Scheduler:
         while len(waiting) > 0 and len(running) < max_batches:
             seq = waiting.pop(0)
 
-            if (len(running) > 0 and token_count + seq.num_token_ids >
-                    self.cache_config.max_prefill_token_num):
+            if (len(running) > 0 and token_count + seq.num_token_ids > self.cache_config.max_prefill_token_num):
                 break
 
             self.block_trie.match(seq)
@@ -220,10 +213,7 @@ class Scheduler:
             output = self._schedule_decoding(prealloc_size)
         running, swap_in_map, swap_out_map, copy_map = output
 
-        return SchedulerOutput(running=running,
-                               swap_in_map=swap_in_map,
-                               swap_out_map=swap_out_map,
-                               copy_map=copy_map)
+        return SchedulerOutput(running=running, swap_in_map=swap_in_map, swap_out_map=swap_out_map, copy_map=copy_map)
 
     def _set_session_status(self, session_id: int, status: MessageStatus):
         """Setup the status of session.
