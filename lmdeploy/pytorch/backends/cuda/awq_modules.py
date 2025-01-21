@@ -42,8 +42,7 @@ def wq_gemm_forward(
 class AwqLinearW4A16Impl(LinearW4A16Impl):
     """awq kernel linear."""
 
-    def __init__(self, in_features: int, out_features: int, w_bit: int,
-                 group_size: int):
+    def __init__(self, in_features: int, out_features: int, w_bit: int, group_size: int):
         self.in_features = in_features
         self.out_features = out_features
         self.w_bit = w_bit
@@ -58,8 +57,7 @@ class AwqLinearW4A16Impl(LinearW4A16Impl):
                 all_reduce: bool = False):
         """forward."""
         out_features = scales.size(1)
-        out = wq_gemm_forward(x, qweight, qzeros, scales, self.w_bit,
-                              self.group_size, bias, out_features)
+        out = wq_gemm_forward(x, qweight, qzeros, scales, self.w_bit, self.group_size, bias, out_features)
         if all_reduce:
             dist.all_reduce(out)
         return out

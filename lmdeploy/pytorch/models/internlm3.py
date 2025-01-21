@@ -1,107 +1,62 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-import math
 from typing import Any, Iterable, List, Optional, Tuple
 
 import torch
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
-from lmdeploy.pytorch.distributed import get_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
-from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_merged_colwise_linear, build_rowwise_linear
-from lmdeploy.pytorch.nn.rotary_embedding import ApplyRotaryEmb, LongRoPEScalingParameters
+from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
+from lmdeploy.pytorch.nn.linear import build_merged_colwise_linear, build_qkv_proj, build_rowwise_linear
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
 
 
-# TODO use MLA of pytorch engine
-class MiniCPMAttention(nn.Module):
-    """minicpm3 attention."""
+class InternLM3Attention(nn.Module):
+    """Rewrite module of InternLM3Attention."""
 
-    def __init__(self, config: Any, dtype: torch.dtype = None, device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
-        quantization_config = None
-        self.q_lora_rank = config.q_lora_rank
-        self.hidden_size = config.hidden_size
-        self.num_heads = config.num_attention_heads
-        self.qk_rope_head_dim = config.qk_rope_head_dim
-        self.kv_lora_rank = config.kv_lora_rank
-        self.v_head_dim = config.hidden_size // config.num_attention_heads
-        self.qk_nope_head_dim = config.qk_nope_head_dim
-        self.q_head_dim = config.qk_nope_head_dim + config.qk_rope_head_dim
-
-        if self.q_lora_rank is None:
-            self.q_proj = build_colwise_linear(
-                self.hidden_size,
-                self.num_heads * self.q_head_dim,
-                bias=False,
-                dtype=dtype,
-                device=device,
-                is_tp=True,
-            )
-        else:
-            self.q_a_proj = build_colwise_linear(
-                self.hidden_size,
-                config.q_lora_rank,
-                bias=config.attention_bias,
-                dtype=dtype,
-                device=device,
-                is_tp=False,
-            )
-            self.q_a_layernorm = RMSNorm(config.q_lora_rank,
-                                         1e-6,
-                                         quant_config=quantization_config,
-                                         dtype=dtype,
-                                         device=device)
-            self.q_b_proj = build_colwise_linear(
-                config.q_lora_rank,
-                self.num_heads * self.q_head_dim,
-                bias=False,
-                dtype=dtype,
-                device=device,
-                is_tp=True,
-            )
-
-        self.kv_a_proj_with_mqa = build_colwise_linear(
-            self.hidden_size,
-            config.kv_lora_rank + config.qk_rope_head_dim,
-            bias=config.attention_bias,
+        quantization_config = getattr(config, 'quantization_config', None)
+        num_heads = config.num_attention_heads
+        num_key_value_heads = config.num_key_value_heads
+        hidden_size = config.hidden_size
+        head_dim = getattr(config, 'head_dim', hidden_size // num_heads)
+        num_replicate_kv_heads = getattr(config, 'num_replicate_key_value_heads', 1)
+        # packed qkv
+        self.qkv_proj = build_qkv_proj(
+            hidden_size,
+            num_q_heads=num_heads,
+            num_kv_heads=num_key_value_heads,
+            head_size=head_dim,
+            bias=config.qkv_bias,
+            quant_config=quantization_config,
             dtype=dtype,
             device=device,
-            is_tp=False,
-        )
-        self.kv_a_layernorm = RMSNorm(config.kv_lora_rank,
-                                      1e-6,
-                                      quant_config=quantization_config,
-                                      dtype=dtype,
-                                      device=device)
-        self.kv_b_proj = build_colwise_linear(
-            config.kv_lora_rank,
-            self.num_heads * (self.q_head_dim - self.qk_rope_head_dim + self.v_head_dim),
-            bias=False,
-            dtype=dtype,
-            device=device,
-            is_tp=False,
+            num_replicate_kv_heads=num_replicate_kv_heads,
         )
 
+        # rotary embedding
         self.apply_rotary_pos_emb = ApplyRotaryEmb()
-        self.softmax_scale = self.q_head_dim**(-0.5)
-        self.attn_fwd = Attention(self.num_heads,
-                                  config.kv_lora_rank + self.qk_rope_head_dim,
-                                  scale=self.softmax_scale,
-                                  num_kv_heads=config.num_key_value_heads)
 
-        self.o_proj = build_rowwise_linear(
-            self.num_heads * self.v_head_dim,
-            self.hidden_size,
-            bias=config.attention_bias,
-            dtype=dtype,
-            device=device,
-            is_tp=True,
+        # attention
+        self.attn_fwd = Attention(
+            num_heads,
+            head_dim,
+            num_kv_heads=num_key_value_heads,
+            v_head_size=head_dim,
         )
+
+        # o_proj
+        self.o_proj = build_rowwise_linear(num_heads * head_dim,
+                                           hidden_size,
+                                           bias=config.bias,
+                                           quant_config=quantization_config,
+                                           dtype=dtype,
+                                           device=device,
+                                           is_tp=True)
 
     def forward(
         self,
@@ -110,47 +65,24 @@ class MiniCPMAttention(nn.Module):
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
         attn_metadata: Any = None,
     ):
-        """Rewrite of LlamaAttention.forward."""
-        world_size, _ = get_world_rank()
-        num_heads = self.num_heads // world_size
-        bsz, q_len, _ = hidden_states.size()
-
-        # qkv_proj
-        bsz, q_len, _ = hidden_states.size()
-
-        q = self.q_b_proj(self.q_a_layernorm(self.q_a_proj(hidden_states)))
-        q = q.view(bsz, q_len, num_heads, self.q_head_dim)
-        q_nope, q_pe = torch.split(q, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1)
-
-        compressed_kv = self.kv_a_proj_with_mqa(hidden_states)
-        compressed_kv, k_pe = torch.split(compressed_kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1)
-        k_pe = k_pe.view(bsz, q_len, 1, self.qk_rope_head_dim)
-        kv = (self.kv_b_proj(self.kv_a_layernorm(compressed_kv)).view(bsz, q_len, num_heads,
-                                                                      self.qk_nope_head_dim + self.v_head_dim))
-
-        k_nope, value_states = torch.split(kv, [self.qk_nope_head_dim, self.v_head_dim], dim=-1)
+        """Rewrite of InternLM3Attention.forward."""
+        # qkv proj
+        qkv_states = self.qkv_proj(hidden_states)
+        # (-1, heads, head_dim)
+        qkv_states = qkv_states.flatten(0, -2)
+        query_states, key_states, value_states = self.qkv_proj.split_qkv(qkv_states)
 
         # apply rotary embedding
         cos, sin = rotary_pos_emb
-        q_pe, k_pe = self.apply_rotary_pos_emb(
-            q_pe,
-            k_pe,
+        query_states, key_states = self.apply_rotary_pos_emb(
+            query_states,
+            key_states,
             cos,
             sin,
             inplace=True,
         )
 
-        query_states = k_pe.new_empty(bsz, q_len, self.num_heads, self.q_head_dim)
-        query_states[:, :, :, :self.qk_nope_head_dim] = q_nope
-        query_states[:, :, :, self.qk_nope_head_dim:] = q_pe
-
-        key_states = k_pe.new_empty(bsz, q_len, self.num_heads, self.q_head_dim)
-        key_states[:, :, :, :self.qk_nope_head_dim] = k_nope
-        key_states[:, :, :, self.qk_nope_head_dim:] = k_pe
-
-        if self.q_head_dim != self.v_head_dim:
-            value_states = torch.nn.functional.pad(value_states, [0, self.q_head_dim - self.v_head_dim])
-
+        # attention
         attn_output = self.attn_fwd(
             query_states,
             key_states,
@@ -158,28 +90,29 @@ class MiniCPMAttention(nn.Module):
             past_key_value[0],
             past_key_value[1],
             attn_metadata,
-            inplace=False,
+            k_scales_zeros=None if len(past_key_value) == 2 else past_key_value[2],
+            v_scales_zeros=None if len(past_key_value) == 2 else past_key_value[3],
+            inplace=True,
         )
-        if self.q_head_dim != self.v_head_dim:
-            attn_output = attn_output[:, :, :, :self.v_head_dim]
+        attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
 
-        attn_output = attn_output.reshape(bsz, q_len, self.num_heads * self.v_head_dim).contiguous()
+        # o proj
         attn_output = self.o_proj(attn_output)
-
         return attn_output
 
 
-class MiniCPMMLP(nn.Module):
-    """mlp."""
+class InternLM3MLP(nn.Module):
+    """internlm3 mlp."""
 
     def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         # gate up
+        mlp_bias = getattr(config, 'bias', False)
         self.gate_up_proj = build_merged_colwise_linear(
             config.hidden_size,
             [config.intermediate_size, config.intermediate_size],
-            bias=False,
+            bias=mlp_bias,
             dtype=dtype,
             device=device,
             quant_config=quantization_config,
@@ -192,7 +125,7 @@ class MiniCPMMLP(nn.Module):
         # down
         self.down_proj = build_rowwise_linear(config.intermediate_size,
                                               config.hidden_size,
-                                              bias=False,
+                                              bias=mlp_bias,
                                               quant_config=quantization_config,
                                               dtype=dtype,
                                               device=device,
@@ -205,8 +138,8 @@ class MiniCPMMLP(nn.Module):
         return self.down_proj(act)
 
 
-class MiniCPMDecoderLayer(nn.Module):
-    """decoder layer."""
+class InternLM3DecoderLayer(nn.Module):
+    """llama decoder layer."""
 
     def __init__(self,
                  config: PretrainedConfig,
@@ -218,10 +151,10 @@ class MiniCPMDecoderLayer(nn.Module):
         quantization_config = getattr(config, 'quantization_config', None)
 
         # build attention layer
-        self.self_attn = MiniCPMAttention(config, dtype=dtype, device=device)
+        self.self_attn = InternLM3Attention(config, dtype=dtype, device=device)
 
         # build MLP
-        self.mlp = MiniCPMMLP(config, dtype=dtype, device=device)
+        self.mlp = InternLM3MLP(config, dtype=dtype, device=device)
 
         # build input layer norm
         self.input_layernorm = RMSNorm(config.hidden_size,
@@ -236,19 +169,21 @@ class MiniCPMDecoderLayer(nn.Module):
                                                 quant_config=quantization_config,
                                                 dtype=dtype,
                                                 device=device)
-        self.scale_depth = config.scale_depth
-        self.num_hidden_layers = config.num_hidden_layers
 
     def forward(
         self,
         hidden_states: torch.Tensor,
         rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
         past_key_value: Optional[List[torch.FloatTensor]],
+        residual: Optional[torch.Tensor] = None,
         attn_metadata: Any = None,
     ):
 
-        residual = hidden_states
-        hidden_states = self.input_layernorm(hidden_states)
+        if residual is None:
+            residual = hidden_states
+            hidden_states = self.input_layernorm(hidden_states)
+        else:
+            hidden_states, residual = self.input_layernorm(hidden_states, residual)
 
         # Self Attention
         hidden_states = self.self_attn(
@@ -258,27 +193,21 @@ class MiniCPMDecoderLayer(nn.Module):
             attn_metadata=attn_metadata,
         )
 
-        hidden_states = residual + hidden_states * (self.scale_depth / math.sqrt(self.num_hidden_layers))
-
         # Fully Connected
-        residual = hidden_states
-        hidden_states = self.post_attention_layernorm(hidden_states)
-
+        hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
         hidden_states = self.mlp(hidden_states)
-        hidden_states = residual + hidden_states * (self.scale_depth / math.sqrt(self.num_hidden_layers))
 
         outputs = (hidden_states, residual)
         return outputs
 
 
-class MiniCPM3Model(nn.Module):
-    """model."""
+class InternLM3Model(nn.Module):
+    """internlm3 model."""
 
     def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
-        self.scale_emb = config.scale_emb
 
         self.embed_tokens = nn.Embedding(config.vocab_size,
                                          config.hidden_size,
@@ -288,41 +217,42 @@ class MiniCPM3Model(nn.Module):
 
         # build all decode layers
         self.layers = nn.ModuleList([
-            MiniCPMDecoderLayer(config, layer_idx, dtype=dtype, device=device)
+            InternLM3DecoderLayer(config, layer_idx, dtype=dtype, device=device)
             for layer_idx in range(config.num_hidden_layers)
         ])
 
         # build norm
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
+
         # build rotary embedding
-        emb_type = RopeType.LinearScaling
-        rope_dim = config.qk_rope_head_dim
+        rope_dim = config.hidden_size // config.num_attention_heads
         rope_max_pos_emb = config.max_position_embeddings
         rope_base = config.rope_theta
+        scaling_factor = 1.0
         rope_scaling = config.rope_scaling
-        if rope_scaling is not None:
-            scaling_type = rope_scaling['type']
-            assert scaling_type in ['longrope', 'su']
-            emb_type = RopeType.LongRoPEScaling
-            ori_pos_emb = getattr(config, 'original_max_position_embeddings', rope_max_pos_emb)
-
-            longrope_params = LongRoPEScalingParameters(short_factor=rope_scaling['short_factor'],
-                                                        long_factor=rope_scaling['long_factor'],
-                                                        original_max_position_embeddings=ori_pos_emb)
-            self.rotary_emb = build_rotary_embedding(
-                rope_dim,
-                rope_max_pos_emb,
-                rope_base,
-                longrope_params=longrope_params,
-                emb_type=emb_type,
-            )
+        if rope_scaling is None:
+            emb_type = RopeType.LinearScaling
         else:
-            self.rotary_emb = build_rotary_embedding(
-                rope_dim,
-                rope_max_pos_emb,
-                rope_base,
-                emb_type=emb_type,
-            )
+            if 'scaling_factor' in rope_scaling:
+                scaling_factor = rope_scaling['scaling_factor']
+            elif 'factor' in rope_scaling:
+                scaling_factor = rope_scaling['factor']
+
+            rope_type = rope_scaling['rope_type']
+            if rope_type == 'dynamic':
+                emb_type = RopeType.DynamicNTKScaling
+            elif rope_type == 'linear':
+                emb_type = RopeType.LinearScaling
+            else:
+                raise RuntimeError(f'Unsupported rope type: {rope_type}')
+
+        self.rotary_emb = build_rotary_embedding(
+            rope_dim,
+            rope_max_pos_emb,
+            rope_base,
+            scaling_factor,
+            emb_type=emb_type,
+        )
 
     def forward(
         self,
@@ -332,11 +262,11 @@ class MiniCPM3Model(nn.Module):
         attn_metadata: Any = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
     ):
-        """Rewrite of LlamaModel.forward."""
+        """Rewrite of InternLM3Model.forward."""
 
         # token embedding
         if inputs_embeds is None:
-            inputs_embeds = self.embed_tokens(input_ids) * self.scale_emb
+            inputs_embeds = self.embed_tokens(input_ids)
 
         hidden_states = inputs_embeds
 
@@ -344,18 +274,21 @@ class MiniCPM3Model(nn.Module):
         cos, sin = self.rotary_emb(hidden_states, position_ids)
         cos, sin = cos[0], sin[0]
         rotary_pos_emb = (cos, sin)
+
         # decoding
+        residual = None
         for idx, decoder_layer in enumerate(self.layers):
             past_key_value = past_key_values[idx]
-            hidden_states, _ = decoder_layer(
+            hidden_states, residual = decoder_layer(
                 hidden_states,
                 rotary_pos_emb=rotary_pos_emb,
                 past_key_value=past_key_value,
+                residual=residual,
                 attn_metadata=attn_metadata,
             )
 
         # norm
-        hidden_states = self.norm(hidden_states)
+        hidden_states, _ = self.norm(hidden_states, residual)
 
         return hidden_states
 
@@ -364,10 +297,15 @@ class MiniCPM3Model(nn.Module):
         return self.embed_tokens
 
 
-class MiniCPM3ForCausalLM(nn.Module, CudaGraphMixin):
-    """rewrote model of MiniCPM3ForCausalLM."""
+class InternLM3ForCausalLM(nn.Module, CudaGraphMixin):
+    """rewrote model of InternLM3ForCausalLM."""
 
     packed_modules_mapping = {
+        'qkv_proj': [
+            'q_proj',
+            'k_proj',
+            'v_proj',
+        ],
         'gate_up_proj': [
             'gate_proj',
             'up_proj',
@@ -382,8 +320,8 @@ class MiniCPM3ForCausalLM(nn.Module, CudaGraphMixin):
         super().__init__()
         self.config = config
         self.ctx_mgr = ctx_mgr
-        # build LLamaModel
-        self.model = MiniCPM3Model(config, dtype=dtype, device=device)
+        # build InternLM3Model
+        self.model = InternLM3Model(config, dtype=dtype, device=device)
         # build lm_head
         self.lm_head = build_rowwise_linear(config.hidden_size,
                                             config.vocab_size,
@@ -408,14 +346,16 @@ class MiniCPM3ForCausalLM(nn.Module, CudaGraphMixin):
             attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
         )
-
-        logits = self.lm_head(hidden_states / (self.config.hidden_size / self.config.dim_model_base))
-        return logits
+        return hidden_states
 
     def update_weights(self):
         """update weights."""
         if self.config.tie_word_embeddings:
             self.lm_head.weight = self.model.embed_tokens.weight
+
+    def get_logits(self, hidden_states: torch.Tensor):
+        """compute logits of the model output."""
+        return self.lm_head(hidden_states)
 
     def get_input_embeddings(self):
         """get input embeddings."""
@@ -455,9 +395,9 @@ class MiniCPM3ForCausalLM(nn.Module, CudaGraphMixin):
         # modify from vllm
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)
-            # ('.qkv_proj', '.q_proj', 'q'),
-            # ('.qkv_proj', '.k_proj', 'k'),
-            # ('.qkv_proj', '.v_proj', 'v'),
+            ('.qkv_proj', '.q_proj', 'q'),
+            ('.qkv_proj', '.k_proj', 'k'),
+            ('.qkv_proj', '.v_proj', 'v'),
             ('.gate_up_proj', '.gate_proj', 0),
             ('.gate_up_proj', '.up_proj', 1),
         ]

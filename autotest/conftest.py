@@ -33,10 +33,7 @@ def common_case_config():
 
 
 def pytest_addoption(parser):
-    parser.addoption('--run_id',
-                     action='store',
-                     default='',
-                     help='github run_id')
+    parser.addoption('--run_id', action='store', default='', help='github run_id')
 
 
 @pytest.fixture(scope='session')

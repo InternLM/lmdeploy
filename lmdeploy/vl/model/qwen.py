@@ -25,8 +25,7 @@ class QwenVisionModel(VisonModel):
         std = (0.26862954, 0.26130258, 0.27577711)
         image_size = self.hf_config.visual['image_size']
         self.image_transform = transforms.Compose([
-            transforms.Resize((image_size, image_size),
-                              interpolation=InterpolationMode.BICUBIC),
+            transforms.Resize((image_size, image_size), interpolation=InterpolationMode.BICUBIC),
             transforms.ToTensor(),
             transforms.Normalize(mean=mean, std=std),
         ])
@@ -38,8 +37,7 @@ class QwenVisionModel(VisonModel):
         with init_empty_weights():
             config = self.hf_config
             config.quantization_config = {}  # disable vision part quantization
-            model = AutoModelForCausalLM.from_config(config,
-                                                     trust_remote_code=True)
+            model = AutoModelForCausalLM.from_config(config, trust_remote_code=True)
             self.vl_model = model
             if not self.with_llm:
                 del model.lm_head
@@ -47,32 +45,27 @@ class QwenVisionModel(VisonModel):
                     setattr(model.transformer, key, None)
 
         from accelerate.utils import get_balanced_memory, infer_auto_device_map
-        max_memory = get_balanced_memory(
-            model,
-            max_memory=self.max_memory,
-            dtype=torch.half,
-            no_split_module_classes=['VisualAttentionBlock', 'Resampler'])
-        device_map = infer_auto_device_map(
-            model,
-            no_split_module_classes=['VisualAttentionBlock', 'Resampler'],
-            max_memory=max_memory,
-            dtype=torch.half)
-        same_device_keys = [('transformer.visual.conv1',
-                             'transformer.visual.positional_embedding'),
-                            ('transformer.visual.ln_post',
-                             'transformer.visual.proj')]
+        max_memory = get_balanced_memory(model,
+                                         max_memory=self.max_memory,
+                                         dtype=torch.half,
+                                         no_split_module_classes=['VisualAttentionBlock', 'Resampler'])
+        device_map = infer_auto_device_map(model,
+                                           no_split_module_classes=['VisualAttentionBlock', 'Resampler'],
+                                           max_memory=max_memory,
+                                           dtype=torch.half)
+        same_device_keys = [('transformer.visual.conv1', 'transformer.visual.positional_embedding'),
+                            ('transformer.visual.ln_post', 'transformer.visual.proj')]
         for (a, b) in same_device_keys:
             if a in device_map and b in device_map:
                 device_map[b] = device_map[a]
 
         from accelerate import load_checkpoint_and_dispatch
         with disable_logging():
-            load_checkpoint_and_dispatch(
-                model=model,
-                checkpoint=self.model_path,
-                device_map=device_map if not self.with_llm else {'': 'cpu'},
-                no_split_module_classes=['VisualAttentionBlock'],
-                dtype=torch.half)
+            load_checkpoint_and_dispatch(model=model,
+                                         checkpoint=self.model_path,
+                                         device_map=device_map if not self.with_llm else {'': 'cpu'},
+                                         no_split_module_classes=['VisualAttentionBlock'],
+                                         dtype=torch.half)
 
         self.model = model.transformer.visual.eval()
 
@@ -83,18 +76,12 @@ class QwenVisionModel(VisonModel):
         for image, params in images:
             image = image.convert('RGB')
             pixel_values = self.image_transform(image)
-            outputs.append(
-                dict(pixel_values=pixel_values,
-                     image_size=image.size,
-                     image_tokens=256,
-                     image_token_id=0))
+            outputs.append(dict(pixel_values=pixel_values, image_size=image.size, image_tokens=256, image_token_id=0))
         messages.append(dict(role='preprocess', content=outputs))
         return messages
 
     @torch.no_grad()
-    def forward(self,
-                messages: List[Dict],
-                max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
         """extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
@@ -109,9 +96,7 @@ class QwenVisionModel(VisonModel):
         inputs = inputs[0]
         outputs = []
         for idx in range(0, len(inputs), max_batch_size):
-            pixel_values = [
-                x['pixel_values'] for x in inputs[idx:idx + max_batch_size]
-            ]
+            pixel_values = [x['pixel_values'] for x in inputs[idx:idx + max_batch_size]]
             pixel_values = torch.stack(pixel_values, dim=0)
             logger.info(f'vision forward shape: {pixel_values.shape}')
             feats = self.model(pixel_values)
@@ -131,31 +116,21 @@ class QwenVisionModel(VisonModel):
                 continue
             elif message['role'] in ['images', 'preprocess', 'forward']:
                 continue
-            n_images = len(
-                [1 for x in message['content'] if x['type'] == 'image'])
-            content = [
-                x['text'] for x in message['content'] if x['type'] == 'text'
-            ]
+            n_images = len([1 for x in message['content'] if x['type'] == 'image'])
+            content = [x['text'] for x in message['content'] if x['type'] == 'text']
             prompt = content[0]
             if IMAGE_TOKEN in prompt:
                 pass
             else:
-                prompt = ''.join([
-                    f'Picture {str(i)}:{IMAGE_TOKEN}\n'
-                    for i in range(n_images)
-                ]) + prompt
+                prompt = ''.join([f'Picture {str(i)}:{IMAGE_TOKEN}\n' for i in range(n_images)]) + prompt
             prompt_messages.append(dict(role='user', content=prompt))
         prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
         return prompt, IMAGE_TOKEN
 
     def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template,
-                                                 sequence_start)
-        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
-                                   sequence_start)
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
+        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
 
     def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template,
-                                                 sequence_start)
-        return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
-                                     sequence_start)
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
+        return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)

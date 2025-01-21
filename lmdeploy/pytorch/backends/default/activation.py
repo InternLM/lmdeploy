@@ -1,8 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
 from torch import nn
 
-from ..activation import (GeluAndMulBuilder, GeluAndMulImpl, SiluAndMulBuilder,
-                          SiluAndMulImpl)
+from ..activation import GeluAndMulBuilder, GeluAndMulImpl, SiluAndMulBuilder, SiluAndMulImpl
 
 
 class DefaultSiluAndMulImpl(SiluAndMulImpl):

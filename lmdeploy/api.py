@@ -8,8 +8,7 @@ from .model import ChatTemplateConfig
 
 
 def pipeline(model_path: str,
-             backend_config: Optional[Union[TurbomindEngineConfig,
-                                            PytorchEngineConfig]] = None,
+             backend_config: Optional[Union[TurbomindEngineConfig, PytorchEngineConfig]] = None,
              chat_template_config: Optional[ChatTemplateConfig] = None,
              log_level: str = 'WARNING',
              max_log_len: int = None,
@@ -78,8 +77,7 @@ def pipeline(model_path: str,
     if type(backend_config) is not PytorchEngineConfig:
         # set auto backend mode
         backend_config = autoget_backend_config(model_path, backend_config)
-    backend = 'pytorch' if type(
-        backend_config) is PytorchEngineConfig else 'turbomind'
+    backend = 'pytorch' if type(backend_config) is PytorchEngineConfig else 'turbomind'
     logger.info(f'Using {backend} engine')
 
     return pipeline_class(model_path,
@@ -93,8 +91,7 @@ def pipeline(model_path: str,
 def serve(model_path: str,
           model_name: Optional[str] = None,
           backend: Literal['turbomind', 'pytorch'] = 'turbomind',
-          backend_config: Optional[Union[TurbomindEngineConfig,
-                                         PytorchEngineConfig]] = None,
+          backend_config: Optional[Union[TurbomindEngineConfig, PytorchEngineConfig]] = None,
           chat_template_config: Optional[ChatTemplateConfig] = None,
           server_name: str = '0.0.0.0',
           server_port: int = 23333,
@@ -152,8 +149,7 @@ def serve(model_path: str,
     if type(backend_config) is not PytorchEngineConfig:
         # set auto backend mode
         backend_config = autoget_backend_config(model_path, backend_config)
-    backend = 'pytorch' if type(
-        backend_config) is PytorchEngineConfig else 'turbomind'
+    backend = 'pytorch' if type(backend_config) is PytorchEngineConfig else 'turbomind'
 
     task = Process(target=serve,
                    args=(model_path, ),
@@ -174,18 +170,15 @@ def serve(model_path: str,
         time.sleep(1)
         try:
             client.available_models
-            print(
-                f'Launched the api_server in process {task.pid}, user can '
-                f'kill the server by:\nimport os,signal\nos.kill({task.pid}, '
-                'signal.SIGKILL)')
+            print(f'Launched the api_server in process {task.pid}, user can '
+                  f'kill the server by:\nimport os,signal\nos.kill({task.pid}, '
+                  'signal.SIGKILL)')
             return client
         except:  # noqa
             pass
 
 
-def client(api_server_url: str = 'http://0.0.0.0:23333',
-           api_key: Optional[str] = None,
-           **kwargs):
+def client(api_server_url: str = 'http://0.0.0.0:23333', api_key: Optional[str] = None, **kwargs):
     """
     Args:
         api_server_url (str): communicating address 'http://<ip>:<port>' of

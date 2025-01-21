@@ -14,20 +14,17 @@ def reverse_permute(x: torch.Tensor, size_per_head: int = 128):
     if x.shape[-1] > 1:
         dim = x.shape[-1]
         n_heads = dim // size_per_head
-        return x.view(-1, n_heads, dim // n_heads // 2,
-                      2).transpose(2, 3).reshape(-1, dim)
+        return x.view(-1, n_heads, dim // n_heads // 2, 2).transpose(2, 3).reshape(-1, dim)
     else:  # scales, zeros
         dim = x.shape[0]
         n_heads = dim // size_per_head
-        return x.view(n_heads, dim // n_heads // 2, 2,
-                      1).transpose(1, 2).reshape(dim, 1)
+        return x.view(n_heads, dim // n_heads // 2, 2, 1).transpose(1, 2).reshape(dim, 1)
 
 
 class MetaLlamaReader(BaseReader):
     """MetaLlamaReader."""
 
-    def __init__(self, model_path: str, start_layer_id: int,
-                 end_layer_id: int):
+    def __init__(self, model_path: str, start_layer_id: int, end_layer_id: int):
         super().__init__()
         self._start_layer_id = start_layer_id
         self._end_layer_id = end_layer_id
@@ -47,9 +44,7 @@ class MetaLlamaReader(BaseReader):
 
         def get_param(_name, _size):
             if _name not in model_params:
-                model_params[_name] = torch.zeros(_size,
-                                                  dtype=torch.float16,
-                                                  device='cpu')
+                model_params[_name] = torch.zeros(_size, dtype=torch.float16, device='cpu')
             return model_params[_name]
 
         from tqdm import tqdm
@@ -62,9 +57,7 @@ class MetaLlamaReader(BaseReader):
                 if key in ['w1', 'w3', 'wq', 'wk', 'wv', 'output']:
                     size = param_data.size(0)
                     if ext == 'weight':
-                        param = get_param(
-                            param_name,
-                            [size * n_ckpt, param_data.size(1)])
+                        param = get_param(param_name, [size * n_ckpt, param_data.size(1)])
                         param.data[size * i:size * (i + 1), :] = param_data
                     else:  # bias
                         param = get_param(param_name, [size * n_ckpt])
@@ -73,8 +66,7 @@ class MetaLlamaReader(BaseReader):
                 elif key in ['w2', 'wo', 'tok_embeddings']:
                     size = param_data.size(-1)
                     if ext == 'weight':
-                        param = get_param(param_name,
-                                          [param_data.size(0), size * n_ckpt])
+                        param = get_param(param_name, [param_data.size(0), size * n_ckpt])
                         param.data[:, size * i:size * (i + 1)] = param_data
                     else:  # bias
                         param = get_param(param_name, [size])
@@ -192,8 +184,7 @@ class MetaLlamaModel(BaseInputModel):
             if hasattr(self, 'meta_reader'):
                 yield self.meta_reader
             else:
-                self.meta_reader = MetaLlamaReader(self.model_path, 0,
-                                                   end_layer_id)
+                self.meta_reader = MetaLlamaReader(self.model_path, 0, end_layer_id)
                 yield self.meta_reader
         except GeneratorExit:
             pass
@@ -218,7 +209,4 @@ class MetaLlamaModel(BaseInputModel):
             head_num = model_arg.get('n_heads', 32)
             kv_head_num = model_arg.get('n_kv_heads', head_num)
 
-        return dict(num_layer=num_layer,
-                    norm_eps=norm_eps,
-                    head_num=head_num,
-                    kv_head_num=kv_head_num)
+        return dict(num_layer=num_layer, norm_eps=norm_eps, head_num=head_num, kv_head_num=kv_head_num)

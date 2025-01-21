@@ -12,42 +12,38 @@ from .w8a8_triton_kernels import per_token_quant_int8
 
 def get_cuda_autotune_config():
     return [
-        triton.Config(
-            {
-                'BLOCK_SIZE_M': 128,
-                'BLOCK_SIZE_N': 128,
-                'BLOCK_SIZE_K': 32,
-                'GROUP_SIZE_M': 1,
-            },
-            num_stages=4,
-            num_warps=4),
-        triton.Config(
-            {
-                'BLOCK_SIZE_M': 64,
-                'BLOCK_SIZE_N': 256,
-                'BLOCK_SIZE_K': 32,
-                'GROUP_SIZE_M': 1,
-            },
-            num_stages=4,
-            num_warps=4),
-        triton.Config(
-            {
-                'BLOCK_SIZE_M': 64,
-                'BLOCK_SIZE_N': 128,
-                'BLOCK_SIZE_K': 64,
-                'GROUP_SIZE_M': 1,
-            },
-            num_stages=4,
-            num_warps=4),
-        triton.Config(
-            {
-                'BLOCK_SIZE_M': 128,
-                'BLOCK_SIZE_N': 128,
-                'BLOCK_SIZE_K': 128,
-                'GROUP_SIZE_M': 1,
-            },
-            num_stages=3,
-            num_warps=8),
+        triton.Config({
+            'BLOCK_SIZE_M': 128,
+            'BLOCK_SIZE_N': 128,
+            'BLOCK_SIZE_K': 32,
+            'GROUP_SIZE_M': 1,
+        },
+                      num_stages=4,
+                      num_warps=4),
+        triton.Config({
+            'BLOCK_SIZE_M': 64,
+            'BLOCK_SIZE_N': 256,
+            'BLOCK_SIZE_K': 32,
+            'GROUP_SIZE_M': 1,
+        },
+                      num_stages=4,
+                      num_warps=4),
+        triton.Config({
+            'BLOCK_SIZE_M': 64,
+            'BLOCK_SIZE_N': 128,
+            'BLOCK_SIZE_K': 64,
+            'GROUP_SIZE_M': 1,
+        },
+                      num_stages=4,
+                      num_warps=4),
+        triton.Config({
+            'BLOCK_SIZE_M': 128,
+            'BLOCK_SIZE_N': 128,
+            'BLOCK_SIZE_K': 128,
+            'GROUP_SIZE_M': 1,
+        },
+                      num_stages=3,
+                      num_warps=8),
     ]
 
 
@@ -129,31 +125,20 @@ def fused_moe_w8a8_kernel(
     a_ptrs = A + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     as_ptrs = A_scale + offs_am
     offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
-    offs_bn = tl.max_contiguous(tl.multiple_of(offs_bn, BLOCK_SIZE_N),
-                                BLOCK_SIZE_N)
+    offs_bn = tl.max_contiguous(tl.multiple_of(offs_bn, BLOCK_SIZE_N), BLOCK_SIZE_N)
 
     # deepseek has 160 experts, exp index would overflow int32
     exp_id = exp_id.to(tl.int64)
     exp_off = stride_be * exp_id
-    b_ptrs = B + exp_off + (offs_k[:, None] * stride_bk +
-                            offs_bn[None, :] * stride_bn)
+    b_ptrs = B + exp_off + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
     bs_ptrs = B_scale + exp_id * stride_bse + offs_bn
 
-    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N),
-                           dtype=ACCUMULATOR_DTYPE)
+    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=ACCUMULATOR_DTYPE)
 
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
-        a = tl.load(a_ptrs,
-                    mask=mask_sid[:, None] &
-                    (offs_k[None, :] < K - k * BLOCK_SIZE_K),
-                    other=0.0)
-        b = tl.load(b_ptrs,
-                    mask=offs_k[:, None] < K - k * BLOCK_SIZE_K,
-                    other=0.0)
-        accumulator = tl.dot(a,
-                             b,
-                             acc=accumulator,
-                             out_dtype=ACCUMULATOR_DTYPE)
+        a = tl.load(a_ptrs, mask=mask_sid[:, None] & (offs_k[None, :] < K - k * BLOCK_SIZE_K), other=0.0)
+        b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
+        accumulator = tl.dot(a, b, acc=accumulator, out_dtype=ACCUMULATOR_DTYPE)
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
 
@@ -206,8 +191,7 @@ def fused_moe_w8a8_kernel_launcher(
     accumulator_dtype = tl.float32 if A.is_floating_point() else tl.int32
 
     def _grid_fn(META):
-        grid = (triton.cdiv(M_NP2, META['BLOCK_SIZE_M']) *
-                triton.cdiv(N, META['BLOCK_SIZE_N']), E)
+        grid = (triton.cdiv(M_NP2, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), E)
         return grid
 
     A = A.flatten(0, -2)
@@ -271,10 +255,7 @@ def fused_moe_w8a8(input: torch.Tensor,
     topk_weights = _renormalize(topk_weights, renormalize)
     sorted_idx, exp_start, exp_end = _get_sorted_idx(topk_ids, num_experts)
 
-    intermediate_cache1 = _make_intermediate((M, topk, N),
-                                             dtype=out_dtype,
-                                             device=device,
-                                             zeros=not full_exp)
+    intermediate_cache1 = _make_intermediate((M, topk, N), dtype=out_dtype, device=device, zeros=not full_exp)
     # gate and up
     fused_moe_w8a8_kernel_launcher(
         input,
@@ -300,14 +281,9 @@ def fused_moe_w8a8(input: torch.Tensor,
     gate_cache = silu_and_mul(intermediate_cache1)
     del intermediate_cache1
     gate_cache = gate_cache.unflatten(0, unflat_size)
-    gate_cache, gate_scale = per_token_quant_int8(gate_cache,
-                                                  1e-7,
-                                                  quant_dtype=quant_dtype)
+    gate_cache, gate_scale = per_token_quant_int8(gate_cache, 1e-7, quant_dtype=quant_dtype)
 
-    intermediate_cache2 = _make_intermediate((M, topk, w2.shape[1]),
-                                             dtype=out_dtype,
-                                             device=device,
-                                             zeros=not full_exp)
+    intermediate_cache2 = _make_intermediate((M, topk, w2.shape[1]), dtype=out_dtype, device=device, zeros=not full_exp)
     # down
     fused_moe_w8a8_kernel_launcher(
         gate_cache,

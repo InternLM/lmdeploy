@@ -32,8 +32,7 @@ class BaseLogitsProcessor:
         """Initialize the FSM states."""
         self.fsm_state: DefaultDict[int, int] = defaultdict(int)
 
-    def __call__(self, input_ids: List[int],
-                 scores: torch.Tensor) -> torch.Tensor:
+    def __call__(self, input_ids: List[int], scores: torch.Tensor) -> torch.Tensor:
         """Use the FSM to bias the logits before sampling the next token."""
 
         seq_id = hash(tuple(input_ids))
@@ -43,8 +42,7 @@ class BaseLogitsProcessor:
         else:
             last_token = input_ids[-1]
             last_seq_id = hash(tuple(input_ids[:-1]))
-            self.fsm_state[seq_id] = self.fsm.get_next_state(
-                state=self.fsm_state[last_seq_id], token_id=last_token)
+            self.fsm_state[seq_id] = self.fsm.get_next_state(state=self.fsm_state[last_seq_id], token_id=last_token)
 
         instruction = self.fsm.get_next_instruction(self.fsm_state[seq_id])
 
@@ -54,12 +52,9 @@ class BaseLogitsProcessor:
             # TODO: support fast forward tokens
             allowed_tokens = [instruction.tokens[0]]
         else:
-            raise TypeError(
-                f'Unsupported instruction type {type(instruction)}')
+            raise TypeError(f'Unsupported instruction type {type(instruction)}')
 
-        mask = torch.full((scores.shape[-1], ),
-                          -math.inf,
-                          device=scores.device)
+        mask = torch.full((scores.shape[-1], ), -math.inf, device=scores.device)
         mask[allowed_tokens] = 0
         scores.add_(mask)
 
@@ -68,16 +63,14 @@ class BaseLogitsProcessor:
     def adapt_tokenizer(self, tokenizer):
         """Adapt tokenizer to use to compile the FSM.
 
-        The API of Outlines tokenizers is slightly different to that of
-        `transformers`. In addition we need to handle the missing spaces to
-        Llama's tokenizer to be able to compile FSMs for this model.
+        The API of Outlines tokenizers is slightly different to that of `transformers`. In addition we need to handle
+        the missing spaces to Llama's tokenizer to be able to compile FSMs for this model.
         """
         from outlines.integrations.utils import adapt_tokenizer
         tokenizer = adapt_tokenizer(tokenizer)
         # vocab size greater than logits shape because of '[UNUSED_TOKEN_...]'
         if hasattr(tokenizer, '_tokenizer'):
-            tokenizer.vocabulary = tokenizer._tokenizer.get_vocab(
-                with_added_tokens=False)
+            tokenizer.vocabulary = tokenizer._tokenizer.get_vocab(with_added_tokens=False)
         return tokenizer
 
 
@@ -151,9 +144,7 @@ pair   : UNESCAPED_STRING ":" value
 
 
 @lru_cache(maxsize=32)
-def _get_guided_logits_processor(guide: str,
-                                 tokenizer: PreTrainedTokenizerBase,
-                                 type: str):
+def _get_guided_logits_processor(guide: str, tokenizer: PreTrainedTokenizerBase, type: str):
     try:
         if type == 'json_object':
             return CFGLogitsProcessor(guide, tokenizer)

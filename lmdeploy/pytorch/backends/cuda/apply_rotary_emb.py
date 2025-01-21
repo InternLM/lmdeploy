@@ -10,12 +10,7 @@ from ..apply_rotary_emb import ApplyRotaryEmbBuilder, ApplyRotaryEmbImpl
 class TritonApplyRotaryEmbImpl(ApplyRotaryEmbImpl):
     """Apply rotary embedding implementation."""
 
-    def forward(self,
-                query: Tensor,
-                key: Tensor,
-                cos: Tensor,
-                sin: Tensor,
-                inplace: bool = True):
+    def forward(self, query: Tensor, key: Tensor, cos: Tensor, sin: Tensor, inplace: bool = True):
         """forward."""
         if inplace:
             q_embed = query

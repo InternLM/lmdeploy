@@ -39,8 +39,7 @@ def apply_rotary_pos_emb_qk_kernel(
 
     pos_offset = seq_block_id * BLOCK + tl.arange(0, BLOCK)
     pos_mask = pos_offset < seq_len
-    pos_offset = tl.max_contiguous(tl.multiple_of(pos_offset % seq_len, BLOCK),
-                                   BLOCK)
+    pos_offset = tl.max_contiguous(tl.multiple_of(pos_offset % seq_len, BLOCK), BLOCK)
 
     feat_size = half_size * 2
     feat_offset_l = tl.arange(0, BLOCK_N)

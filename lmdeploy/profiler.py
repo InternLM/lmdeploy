@@ -102,23 +102,16 @@ class Profiler:
 
         self.rps = self.success / self.elapsed_time
 
-    def summarize(self,
-                  title: str,
-                  hyperparams: List = None,
-                  header=40,
-                  digits=10):
+    def summarize(self, title: str, hyperparams: List = None, header=40, digits=10):
 
         width = header + digits * (1 + len(self.percentages))
 
         def tab_row(name, *items):
 
             def fmt(x):
-                return '{:>{d}.3f}'.format(x, d=digits) if isinstance(
-                    x, float) else '{:>{d}}'.format(x, d=digits)
+                return '{:>{d}.3f}'.format(x, d=digits) if isinstance(x, float) else '{:>{d}}'.format(x, d=digits)
 
-            print('{:<{p}}{}'.format(name,
-                                     ''.join([fmt(x) for x in items]),
-                                     p=header))
+            print('{:<{p}}{}'.format(name, ''.join([fmt(x) for x in items]), p=header))
 
         print('\n{s:{c}^{n}}'.format(s=f' {title} ', n=width, c='='))
         tab_row('Benchmark duration', self.elapsed_time)
@@ -136,13 +129,10 @@ class Profiler:
         tab_row('', 'mean', *(f'P{q}' for q in self.percentages))
         tab_row('End-to-end Latency', self.e2e_mean, *self.e2e_stat)
         if self.stream_output:
-            tab_row('Time to First Token (TTFT)', self.ttft_mean,
-                    *self.ttft_stat)
-        tab_row('Time per Output Token (TPOT)', self.tpot_mean,
-                *self.tpot_stat)
+            tab_row('Time to First Token (TTFT)', self.ttft_mean, *self.ttft_stat)
+        tab_row('Time per Output Token (TPOT)', self.tpot_mean, *self.tpot_stat)
         if self.stream_output:
-            tab_row('Inter-token Latency (ITL)', self.itls_mean,
-                    *self.itls_stat)
+            tab_row('Inter-token Latency (ITL)', self.itls_mean, *self.itls_stat)
             tab_row('Tokens per Tick', self.tpts_mean, *self.tpts_stat)
         print('=' * width)
 

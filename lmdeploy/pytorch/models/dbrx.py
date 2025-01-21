@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
 from typing import Any, Iterable, List, Optional, Tuple
 
 import torch
@@ -6,8 +7,7 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, LayerNorm,
-                                 RopeType, build_rotary_embedding)
+from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, LayerNorm, RopeType, build_rotary_embedding
 from lmdeploy.pytorch.nn.linear import build_qkv_proj, build_rowwise_linear
 from lmdeploy.pytorch.nn.moe import SoftmaxTopK, build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
@@ -18,10 +18,7 @@ from .utils.cudagraph import CudaGraphMixin
 class DbrxAttention(nn.Module):
     """Rewrite module of DbrxAttention."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         attn_config = config.attn_config
         quantization_config = getattr(config, 'quantization_config', None)
@@ -73,8 +70,7 @@ class DbrxAttention(nn.Module):
         qkv_states = self.Wqkv(hidden_states)
         # (-1, heads, head_dim)
         qkv_states = qkv_states.flatten(0, -2)
-        query_states, key_states, value_states = self.Wqkv.split_qkv(
-            qkv_states)
+        query_states, key_states, value_states = self.Wqkv.split_qkv(qkv_states)
 
         # apply rotary embedding
         cos, sin = rotary_pos_emb
@@ -94,10 +90,8 @@ class DbrxAttention(nn.Module):
             past_key_value[0],
             past_key_value[1],
             attn_metadata,
-            k_scales_zeros=None
-            if len(past_key_value) == 2 else past_key_value[2],
-            v_scales_zeros=None
-            if len(past_key_value) == 2 else past_key_value[3],
+            k_scales_zeros=None if len(past_key_value) == 2 else past_key_value[2],
+            v_scales_zeros=None if len(past_key_value) == 2 else past_key_value[3],
             inplace=True,
         )
         attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
@@ -138,12 +132,8 @@ class DbrxRouter(nn.Module):
         weights = self.layer(hidden_states)
         top_weights, top_experts = self.softmax_topk(weights)
 
-        top_weights_scale = (torch.norm(top_weights,
-                                        p=self.moe_normalize_expert_weights,
-                                        dim=-1,
-                                        keepdim=True)
-                             if self.moe_normalize_expert_weights is not None
-                             else 1.0)
+        top_weights_scale = (torch.norm(top_weights, p=self.moe_normalize_expert_weights, dim=-1, keepdim=True)
+                             if self.moe_normalize_expert_weights is not None else 1.0)
         top_weights = top_weights / top_weights_scale
 
         return top_weights, top_experts
@@ -176,8 +166,7 @@ class DbrxExperts(nn.Module):
             all_reduce=True,
         )
 
-    def forward(self, hidden_states: torch.Tensor, top_weights: torch.Tensor,
-                top_experts: torch.Tensor):
+    def forward(self, hidden_states: torch.Tensor, top_weights: torch.Tensor, top_experts: torch.Tensor):
         """forward."""
         batch_size = hidden_states.size(0)
         hidden_states = hidden_states.flatten(0, 1)
@@ -194,18 +183,14 @@ class DbrxExperts(nn.Module):
 class DbrxFFN(nn.Module):
     """mlp."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         ffn_config = config.ffn_config
         self.router = DbrxRouter(
             hidden_size=config.d_model,
             moe_num_experts=ffn_config.moe_num_experts,
             moe_top_k=ffn_config.moe_top_k,
-            moe_normalize_expert_weights=ffn_config.
-            moe_normalize_expert_weights,
+            moe_normalize_expert_weights=ffn_config.moe_normalize_expert_weights,
             dtype=dtype,
             device=device,
         )
@@ -269,8 +254,7 @@ class DbrxNormAttentionNorm(nn.Module):
             residual_states = hidden_states
             hidden_states = self.norm_1(hidden_states)
         else:
-            hidden_states, residual_states = self.norm_1(
-                hidden_states, residual_states)
+            hidden_states, residual_states = self.norm_1(hidden_states, residual_states)
 
         hidden_states = self.attn(
             hidden_states,
@@ -279,8 +263,7 @@ class DbrxNormAttentionNorm(nn.Module):
             attn_metadata,
         )
 
-        hidden_states, residual_states = self.norm_2(hidden_states,
-                                                     residual_states)
+        hidden_states, residual_states = self.norm_2(hidden_states, residual_states)
         return hidden_states, residual_states
 
 
@@ -296,10 +279,7 @@ class DbrxBlock(nn.Module):
         self.layer_idx = layer_idx
 
         # build attention layer
-        self.norm_attn_norm = DbrxNormAttentionNorm(config,
-                                                    layer_idx,
-                                                    dtype=dtype,
-                                                    device=device)
+        self.norm_attn_norm = DbrxNormAttentionNorm(config, layer_idx, dtype=dtype, device=device)
 
         # build MLP
         self.ffn = DbrxFFN(config, dtype=dtype, device=device)
@@ -330,31 +310,19 @@ class DbrxBlock(nn.Module):
 class DbrxModel(nn.Module):
     """model."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
 
-        self.wte = nn.Embedding(config.vocab_size,
-                                config.d_model,
-                                self.padding_idx,
-                                dtype=dtype,
-                                device=device)
+        self.wte = nn.Embedding(config.vocab_size, config.d_model, self.padding_idx, dtype=dtype, device=device)
 
         # build all decode layers
-        self.blocks = nn.ModuleList([
-            DbrxBlock(config, layer_idx, dtype=dtype, device=device)
-            for layer_idx in range(config.n_layers)
-        ])
+        self.blocks = nn.ModuleList(
+            [DbrxBlock(config, layer_idx, dtype=dtype, device=device) for layer_idx in range(config.n_layers)])
 
         # build norm
-        self.norm_f = LayerNorm(config.d_model,
-                                bias=False,
-                                dtype=dtype,
-                                device=device)
+        self.norm_f = LayerNorm(config.d_model, bias=False, dtype=dtype, device=device)
 
         # build rotary embedding
         emb_type = RopeType.LinearScaling
@@ -488,9 +456,7 @@ class DbrxForCausalLM(nn.Module, CudaGraphMixin):
         if vision_embeddings is not None and len(vision_embeddings) > 0:
             if inputs_embeds is None:
                 inputs_embeds = self.get_input_embeddings()(input_ids)
-            inputs_embeds[:,
-                          vision_embedding_indexing, :] = vision_embeddings.to(
-                              inputs_embeds)
+            inputs_embeds[:, vision_embedding_indexing, :] = vision_embeddings.to(inputs_embeds)
 
         # inputs of forward
         return dict(
@@ -513,8 +479,7 @@ class DbrxForCausalLM(nn.Module, CudaGraphMixin):
         for name, loaded_weight in weights:
             if 'rotary_emb.inv_freq' in name:
                 continue
-            if ('rotary_emb.cos_cached' in name
-                    or 'rotary_emb.sin_cached' in name):
+            if ('rotary_emb.cos_cached' in name or 'rotary_emb.sin_cached' in name):
                 continue
             if self.config.tie_word_embeddings and 'lm_head.weight' in name:
                 continue
@@ -526,28 +491,19 @@ class DbrxForCausalLM(nn.Module, CudaGraphMixin):
                     param = params_dict[name]
                     for exp_id in range(num_experts):
                         weight = loaded_weight[exp_id]
-                        load_weight(param,
-                                    weight,
-                                    expert_id=exp_id,
-                                    shard_id='gate')
+                        load_weight(param, weight, expert_id=exp_id, shard_id='gate')
                 elif '.v1' in name:
                     name = name.replace('.v1', '.gate_up.weight')
                     param = params_dict[name]
                     for exp_id in range(num_experts):
                         weight = loaded_weight[exp_id]
-                        load_weight(param,
-                                    weight,
-                                    expert_id=exp_id,
-                                    shard_id='up')
+                        load_weight(param, weight, expert_id=exp_id, shard_id='up')
                 elif '.w2' in name:
                     name = name.replace('.w2', '.down.weight')
                     param = params_dict[name]
                     for exp_id in range(num_experts):
                         weight = loaded_weight[exp_id].t()
-                        load_weight(param,
-                                    weight,
-                                    expert_id=exp_id,
-                                    shard_id='down')
+                        load_weight(param, weight, expert_id=exp_id, shard_id='down')
             elif '.Wqkv' in name:
                 param = params_dict[name]
                 q, k, v = param.weight_spliter(loaded_weight)

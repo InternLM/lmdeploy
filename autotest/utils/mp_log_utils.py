@@ -4,11 +4,7 @@ import allure
 from pytest_assume.plugin import assume
 
 
-def write_log(config,
-              result,
-              msg,
-              is_new: bool = True,
-              case_path_tag: str = 'default'):
+def write_log(config, result, msg, is_new: bool = True, case_path_tag: str = 'default'):
     try:
         log_path = os.path.join(config.get('log_path'), case_path_tag)
 

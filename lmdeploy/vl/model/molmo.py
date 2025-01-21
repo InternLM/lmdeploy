@@ -29,8 +29,7 @@ class MolmoVisionModel(VisonModel):
         load the whole VLM model when `self.with_llm==True`"""
         from accelerate import init_empty_weights, load_checkpoint_and_dispatch
         with init_empty_weights():
-            model = AutoModelForCausalLM.from_config(self.hf_config,
-                                                     trust_remote_code=True)
+            model = AutoModelForCausalLM.from_config(self.hf_config, trust_remote_code=True)
 
             self.vl_model = model
             if not self.with_llm:
@@ -40,15 +39,12 @@ class MolmoVisionModel(VisonModel):
             self.token_embedding = model.model.transformer.wte
 
         with disable_logging():
-            load_checkpoint_and_dispatch(
-                model=model,
-                checkpoint=self.model_path,
-                device_map='auto' if not self.with_llm else {'': 'cpu'},
-                max_memory=self.max_memory,
-                no_split_module_classes=[
-                    'ResidualAttentionBlock', 'Embedding'
-                ],
-                dtype=torch.half)
+            load_checkpoint_and_dispatch(model=model,
+                                         checkpoint=self.model_path,
+                                         device_map='auto' if not self.with_llm else {'': 'cpu'},
+                                         max_memory=self.max_memory,
+                                         no_split_module_classes=['ResidualAttentionBlock', 'Embedding'],
+                                         dtype=torch.half)
 
         # We need eval mode to freeze the weights in model, thus,
         # avoid randomness in inference.
@@ -59,15 +55,10 @@ class MolmoVisionModel(VisonModel):
         for i, message in enumerate(messages):
             if not isinstance(message['content'], List):
                 continue
-            images = [
-                x['image'] for x in message['content'] if x['type'] == 'image'
-            ]
-            content = [
-                x['text'] for x in message['content'] if x['type'] == 'text'
-            ]
+            images = [x['image'] for x in message['content'] if x['type'] == 'image']
+            content = [x['text'] for x in message['content'] if x['type'] == 'text']
             prompt = f' User: {content[0]}'
-            tokens = self.processor.tokenizer.encode(prompt,
-                                                     add_special_tokens=False)
+            tokens = self.processor.tokenizer.encode(prompt, add_special_tokens=False)
             # preprocess images. The output is a dict, which is
             # {
             #     'input_ids': torch.Tensor,
@@ -84,9 +75,7 @@ class MolmoVisionModel(VisonModel):
         return messages
 
     @torch.no_grad()
-    def forward(self,
-                messages: List[Dict],
-                max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
         """extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
@@ -102,10 +91,7 @@ class MolmoVisionModel(VisonModel):
                 continue
             inputs = message['preprocess']
             # get input_ids of embedding
-            inputs = {
-                k: v.to(self.model.device).unsqueeze(0)
-                for k, v in inputs.items()
-            }
+            inputs = {k: v.to(self.model.device).unsqueeze(0) for k, v in inputs.items()}
             input_ids = inputs['input_ids']
             # (batch_size, num_image, num_patch, d_model)
             images = inputs['images']
@@ -119,20 +105,16 @@ class MolmoVisionModel(VisonModel):
             images = images.to(self.model.dtype)
             image_masks = image_masks.to(self.model.dtype)
             logger.info(f'vision forward shape: {images.shape}')
-            image_features, _ = self.model.model.vision_backbone(
-                images, image_masks)
+            image_features, _ = self.model.model.vision_backbone(images, image_masks)
             num_image, num_patch = image_features.shape[1:3]
             assert image_input_idx.shape == (batch_size, num_image, num_patch)
 
             # insert the image feature into the embedding.
-            image_features = image_features.view(batch_size,
-                                                 num_image * num_patch, -1)
-            image_input_idx = image_input_idx.view(batch_size,
-                                                   num_image * num_patch)
+            image_features = image_features.view(batch_size, num_image * num_patch, -1)
+            image_input_idx = image_input_idx.view(batch_size, num_image * num_patch)
             valid = image_input_idx >= 0
             batch_idx = torch.arange(batch_size, device=embeddings.device)
-            batch_idx = torch.tile(batch_idx[:, None],
-                                   [1, image_features.shape[1]])
+            batch_idx = torch.tile(batch_idx[:, None], [1, image_features.shape[1]])
             image_features = image_features.to(embeddings.device)
             # Since we remove bos_id from input_ids during `preprocess`,
             # the index `image_input_idx[valid]` should be shift to left
@@ -140,9 +122,7 @@ class MolmoVisionModel(VisonModel):
             index = image_input_idx[valid] - 1
             embeddings[batch_idx[valid], index] += image_features[valid]
             assert embeddings.shape[:2] == (batch_size, seq_len)
-            messages[i].update(
-                dict(forward=dict(input_ids=input_ids.flatten(),
-                                  embeddings=embeddings)))
+            messages[i].update(dict(forward=dict(input_ids=input_ids.flatten(), embeddings=embeddings)))
         return messages
 
     @staticmethod
@@ -154,8 +134,7 @@ class MolmoVisionModel(VisonModel):
             if isinstance(content, List):
                 n_images = len([1 for x in content if x['type'] == 'image'])
                 content = [x['text'] for x in content if x['type'] == 'text']
-                prompt.append(' User: ' + (IMAGE_TOKEN + '\n') * n_images +
-                              content[0])
+                prompt.append(' User: ' + (IMAGE_TOKEN + '\n') * n_images + content[0])
             else:
                 if role == 'user':
                     prompt.append(f' User: {content}')
@@ -175,8 +154,7 @@ class MolmoVisionModel(VisonModel):
         # Prepend BOS
         # qwen2 and olmo do not have a BOS, and instead use EOS as a generic
         # separator token.
-        bos = (self.processor.tokenizer.bos_token_id
-               or self.processor.tokenizer.eos_token_id)
+        bos = (self.processor.tokenizer.bos_token_id or self.processor.tokenizer.eos_token_id)
         results.append(([bos], None))
 
         for i, message in enumerate(messages):
@@ -199,8 +177,7 @@ class MolmoVisionModel(VisonModel):
                 assert role == 'user', f'the role of last message is expected to be user, but got {role}'  # noqa
                 prompt += ' Assistant:'
             if prompt:
-                input_ids = self.processor.tokenizer.encode(
-                    prompt, add_special_tokens=False)
+                input_ids = self.processor.tokenizer.encode(prompt, add_special_tokens=False)
                 results.append((input_ids, None))
 
         # concat input_ids from results, calculate the range in the input_ids

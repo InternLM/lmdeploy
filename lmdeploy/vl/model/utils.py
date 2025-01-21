@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
 import inspect
 import os
 import sys
@@ -8,8 +9,7 @@ from typing import Callable, Dict, Iterator, List, MutableSequence, Union
 import torch
 import torch.nn as nn
 from safetensors.torch import load_file
-from transformers.utils import (SAFE_WEIGHTS_INDEX_NAME, SAFE_WEIGHTS_NAME,
-                                WEIGHTS_INDEX_NAME, WEIGHTS_NAME,
+from transformers.utils import (SAFE_WEIGHTS_INDEX_NAME, SAFE_WEIGHTS_NAME, WEIGHTS_INDEX_NAME, WEIGHTS_NAME,
                                 is_safetensors_available)
 from transformers.utils.hub import get_checkpoint_shard_files
 
@@ -22,8 +22,7 @@ def load_weight_ckpt(ckpt: str) -> Dict[str, torch.Tensor]:
         return torch.load(ckpt)
 
 
-def get_used_weight_files(folder: str,
-                          state_dict: Dict[str, torch.Tensor]) -> List[str]:
+def get_used_weight_files(folder: str, state_dict: Dict[str, torch.Tensor]) -> List[str]:
     """get used checkpoint which contains keys in state_dict."""
     _index_file = os.path.join(folder, WEIGHTS_INDEX_NAME)
     _safe_index_file = os.path.join(folder, SAFE_WEIGHTS_INDEX_NAME)
@@ -31,8 +30,8 @@ def get_used_weight_files(folder: str,
         index_file = _index_file
     elif os.path.exists(_safe_index_file):
         index_file = _safe_index_file
-    elif is_safetensors_available() and os.path.isfile(
-            os.path.join(folder, SAFE_WEIGHTS_NAME)):  # Single safetensor file
+    elif is_safetensors_available() and os.path.isfile(os.path.join(folder,
+                                                                    SAFE_WEIGHTS_NAME)):  # Single safetensor file
         return [SAFE_WEIGHTS_NAME]
     elif os.path.isfile(os.path.join(folder, WEIGHTS_NAME)):
         return [WEIGHTS_NAME]
@@ -105,9 +104,7 @@ def hack_import_with(src: List[str], dst: str = 'torch'):
         sys.modules.pop(item, None)
 
 
-def _set_func(origin_func_path: Union[str, None],
-              rewrite_func: Callable,
-              origin_func: Callable = None):
+def _set_func(origin_func_path: Union[str, None], rewrite_func: Callable, origin_func: Callable = None):
     """Replace old function with the new function.
 
     Args:
@@ -153,8 +150,7 @@ def _set_func(origin_func_path: Union[str, None],
 
 
 @contextmanager
-def rewrite_ctx(origin_func_path: List[Union[str, Callable]],
-                rewrite_func: List[Callable]):
+def rewrite_ctx(origin_func_path: List[Union[str, Callable]], rewrite_func: List[Callable]):
     """rewrite context."""
     assert len(origin_func_path) == len(rewrite_func)
     origin_func_list = []
@@ -165,18 +161,14 @@ def rewrite_ctx(origin_func_path: List[Union[str, Callable]],
             origin_func = _set_func(func_path, dst_func)
         origin_func_list.append(origin_func)
     yield
-    for (func_path, dst_func, origin_func) in zip(origin_func_path,
-                                                  rewrite_func,
-                                                  origin_func_list):
+    for (func_path, dst_func, origin_func) in zip(origin_func_path, rewrite_func, origin_func_list):
         if isinstance(func_path, Callable):
             _set_func(None, origin_func, dst_func)
         else:
             _set_func(func_path, origin_func, dst_func)
 
 
-def add_device_hook(module: torch.nn.Module,
-                    device: torch.device,
-                    fn: Callable = None):
+def add_device_hook(module: torch.nn.Module, device: torch.device, fn: Callable = None):
     """Add device hook."""
     from accelerate.hooks import ModelHook, add_hook_to_module
 
@@ -193,6 +185,4 @@ def add_device_hook(module: torch.nn.Module,
                 output = output.to(device=self.device)
             return output
 
-    add_hook_to_module(module=module,
-                       hook=ToDevice(device=device),
-                       append=True)
+    add_hook_to_module(module=module, hook=ToDevice(device=device), append=True)
