@@ -323,7 +323,7 @@ class SubCliServe:
                        proxy_url=args.proxy_url,
                        max_log_len=args.max_log_len,
                        disable_fastapi_docs=args.disable_fastapi_docs,
-                       concurrency_pressure=args.max_concurrent_requests)
+                       max_concurrent_requests=args.max_concurrent_requests)
 
     @staticmethod
     def api_client(args):
