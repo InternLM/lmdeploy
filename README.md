@@ -153,6 +153,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
 <td>
 <ul>
   <li>LLaVA(1.5,1.6) (7B-34B)</li>
+  <li>LLaVA-OneVision (0.5B, 7B, 72B)</li>
   <li>InternLM-XComposer2 (7B, 4khd-7B)</li>
   <li>InternLM-XComposer2.5 (7B)</li>
   <li>Qwen-VL (7B)</li>
