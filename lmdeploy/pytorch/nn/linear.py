@@ -125,6 +125,7 @@ class LoRA(nn.Module):
 
         if self.is_tp and not self.colwise:
             world_size, rank = get_world_rank()
+            loaded_weight = loaded_weight.to(param_r.device)
             loaded_weight = loaded_weight.chunk(world_size, dim=1)[rank]
 
         param_r.copy_(loaded_weight)
@@ -226,6 +227,7 @@ class BlockedF8Linear(nn.Module):
                                   world_size: int):
         """weight loader for rowwise linear."""
         if loaded_weight.dim() == 2:
+            loaded_weight = loaded_weight.to(param.device)
             weight = loaded_weight.chunk(world_size, 1)[rank]
             return default_weight_loader(param, weight)
         else:
@@ -887,6 +889,7 @@ class W8A8Linear(nn.Module):
         if loaded_weight.dim() == 2 and param.dtype in (torch.int8,
                                                         torch.float8_e4m3fn,
                                                         torch.float8_e5m2):
+            loaded_weight = loaded_weight.to(param.device)
             weight = loaded_weight.chunk(world_size, 1)[rank]
             return default_weight_loader(param, weight)
         elif loaded_weight.dim() == 2 and loaded_weight.size(1) == 1:
@@ -1188,6 +1191,7 @@ class BaseLinear(nn.Module):
                                   world_size: int):
         """weight loader for rowwise linear."""
         if loaded_weight.dim() == 2:
+            loaded_weight = loaded_weight.to(param.device)
             weight = _chunk_align(loaded_weight, world_size, 1,
                                   self.tp_align_size)[rank]
             return default_weight_loader(param, weight)

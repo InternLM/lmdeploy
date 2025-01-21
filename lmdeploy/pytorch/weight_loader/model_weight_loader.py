@@ -3,7 +3,8 @@ import json
 import os.path as osp
 
 import torch
-from transformers.modeling_utils import load_state_dict
+from safetensors.torch import safe_open
+from tqdm.auto import tqdm
 from transformers.utils import (SAFE_WEIGHTS_INDEX_NAME, SAFE_WEIGHTS_NAME,
                                 WEIGHTS_INDEX_NAME, WEIGHTS_NAME)
 
@@ -90,6 +91,28 @@ def _get_weight_path(model_path: str, weight_type: str):
     return weight_path, weight_name
 
 
+def _get_safetensors_weights_iterator(file: str, prefix: str):
+    """get safeternsors weights iterator."""
+    with safe_open(file, framework='pt') as f:
+        for name in f.keys():
+            param = f.get_tensor(name)
+            if prefix is not None:
+                name = f'{prefix}{name}'
+            yield name, param
+
+
+def _get_pt_weights_iterator(file: str, prefix: str):
+    """get pt weights iterator."""
+    state = torch.load(file, weights_only=True, map_location='cpu')
+    if prefix is None:
+        yield from state.items()
+    else:
+        for k, v in state.items():
+            yield f'{prefix}{k}', v
+    del state
+    torch.cuda.empty_cache()
+
+
 class ModelWeightLoader:
     """model weight loader for sharded weights."""
 
@@ -115,13 +138,14 @@ class ModelWeightLoader:
             path, _ = _get_weight_path(model_path, weight_type)
             return (path, )
 
-    def _load_shard(self, path: str):
-        """load shards."""
-        state_dict = load_state_dict(path)
-        if self._prefix is not None:
-            state_dict = dict(
-                (f'{self._prefix}{k}', v) for k, v in state_dict.items())
-        return state_dict
+    def _get_weights_iterator(self, path: str):
+        """get weights iterator."""
+        if self._weight_type == 'safetensors':
+            weights_iterator = _get_safetensors_weights_iterator(
+                path, self._prefix)
+        else:
+            weights_iterator = _get_pt_weights_iterator(path, self._prefix)
+        return weights_iterator
 
     def load_model_weights(
         self,
@@ -131,19 +155,15 @@ class ModelWeightLoader:
         """load model weights implementation."""
         assert hasattr(model, 'load_weights')
         paths = self._shard_paths
-        world_size, rank = get_world_rank()
-        for path in paths:
+        _, rank = get_world_rank()
+        disable_tqdm = rank != 0
 
-            # log
-            file_name = osp.split(path)[1]
-            msg = f'loading weights - "{file_name}"'
-            if world_size > 1:
-                msg = f'rank[{rank}] {msg}'
-            logger.info(msg)
-
-            # process
-            state_dict = self._load_shard(path)
-            model.load_weights(state_dict.items())
+        paths = sorted(paths)
+        for path in tqdm(paths,
+                         desc='Loading weights from safetensors',
+                         disable=disable_tqdm):
+            weights_iterator = self._get_weights_iterator(path)
+            model.load_weights(weights_iterator)
         if device is not None:
             device = model.to(device)
 
