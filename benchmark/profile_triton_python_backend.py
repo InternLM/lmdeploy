@@ -28,8 +28,7 @@ def sample_requests(
     # Filter out the conversations with less than 2 turns.
     dataset = [data for data in dataset if len(data['conversations']) >= 2]
     # Only keep the first two turns of each conversation.
-    dataset = [(data['conversations'][0]['value'],
-                data['conversations'][1]['value']) for data in dataset]
+    dataset = [(data['conversations'][0]['value'], data['conversations'][1]['value']) for data in dataset]
 
     # pre-sample to avoid go through all the dataset
     dataset = random.sample(dataset, max(int(num_requests * 1.2), 1000))
@@ -86,16 +85,13 @@ class Engine:
         self.log_level = log_level
         self.pbar = None
 
-    def _inference(self, req_queue: Queue, res_queue: Queue, session_id: int,
-                   stream_output: bool):
+    def _inference(self, req_queue: Queue, res_queue: Queue, session_id: int, stream_output: bool):
 
         stats = []
-        for prompt, input_seqlen, output_seqlen in iter(
-                req_queue.get, [None, None, None]):
+        for prompt, input_seqlen, output_seqlen in iter(req_queue.get, [None, None, None]):
             res_que = Queue()
             t = threading.Thread(target=self._call_triton_server,
-                                 args=(prompt, self.server_addr, session_id,
-                                       output_seqlen, stream_output, res_que))
+                                 args=(prompt, self.server_addr, session_id, output_seqlen, stream_output, res_que))
             t.start()
             timestamps = self._process_result(res_que)
             t.join()
@@ -105,10 +101,7 @@ class Engine:
             token_latency = np.round(timestamps[-1] - timestamps[0], 3)
 
             total_tokens = input_seqlen + output_seqlen
-            stats.append([
-                first_token_latency, output_seqlen, output_seqlen,
-                total_tokens, token_latency
-            ])
+            stats.append([first_token_latency, output_seqlen, output_seqlen, total_tokens, token_latency])
             self.pbar.update(1)
         res_queue.put((session_id, stats))
 
@@ -126,26 +119,18 @@ class Engine:
             else:
                 return timestamps
 
-    def _call_triton_server(self, prompts, tritonserver_addr, session_id,
-                            request_output_len, stream_output, res_que):
+    def _call_triton_server(self, prompts, tritonserver_addr, session_id, request_output_len, stream_output, res_que):
 
         with grpcclient.InferenceServerClient(tritonserver_addr) as client:
             inputs = [
-                prepare_tensor('prompt',
-                               np.array([prompts.encode()], dtype=np.object_)),
-                prepare_tensor('max_tokens',
-                               np.array([request_output_len], dtype=np.int32)),
-                prepare_tensor('temperature',
-                               np.array([self.temperature], dtype=np.float_)),
-                prepare_tensor('top_p', np.array([self.top_p],
-                                                 dtype=np.float_)),
-                prepare_tensor('top_k', np.array([self.top_k],
-                                                 dtype=np.int32)),
+                prepare_tensor('prompt', np.array([prompts.encode()], dtype=np.object_)),
+                prepare_tensor('max_tokens', np.array([request_output_len], dtype=np.int32)),
+                prepare_tensor('temperature', np.array([self.temperature], dtype=np.float_)),
+                prepare_tensor('top_p', np.array([self.top_p], dtype=np.float_)),
+                prepare_tensor('top_k', np.array([self.top_k], dtype=np.int32)),
                 prepare_tensor('ignore_eos', np.array([True], dtype=np.bool_)),
-                prepare_tensor('stream',
-                               np.array([stream_output], dtype=np.bool_)),
-                prepare_tensor('skip_special_tokens',
-                               np.array([False], dtype=np.bool_)),
+                prepare_tensor('stream', np.array([stream_output], dtype=np.bool_)),
+                prepare_tensor('skip_special_tokens', np.array([False], dtype=np.bool_)),
             ]
 
             # async_stream
@@ -158,10 +143,7 @@ class Engine:
         res_que.put(None)
         return
 
-    def process_request(self,
-                        requests,
-                        concurrency: int = 1,
-                        stream_output: bool = True):
+    def process_request(self, requests, concurrency: int = 1, stream_output: bool = True):
         res_queue = Queue()
         req_queue = Queue()
         threads = []
@@ -178,8 +160,7 @@ class Engine:
 
         # start threads
         for i in range(concurrency):
-            t = Thread(target=self._inference,
-                       args=(req_queue, res_queue, i, stream_output))
+            t = Thread(target=self._inference, args=(req_queue, res_queue, i, stream_output))
             t.start()
             threads.append(t)
 
@@ -221,30 +202,27 @@ class Engine:
                   f'{first_token_latency_min:.3f}s, '
                   f'{first_token_latency_max:.3f}s, '
                   f'{first_token_latency_ave:.3f}s\n')
-        print(
-            f'number of prompt tokens: {prompt_tokens:.0f}\n'
-            f'number of completion tokens: {completion_tokens:.0f}\n'
-            f'token throughput (completion token): {completion_token_throughput:.3f} token/s\n'  # noqa
-            f'token throughput (prompt + completion token): {total_token_throughput:.3f} token/s\n'  # noqa
-            f'RPS (request per second): {rps:.3f} req/s\n'
-            f'RPM (request per minute): {rpm:.3f} req/min\n'
-            f'{"-" * 50}\n')
+        print(f'number of prompt tokens: {prompt_tokens:.0f}\n'
+              f'number of completion tokens: {completion_tokens:.0f}\n'
+              f'token throughput (completion token): {completion_token_throughput:.3f} token/s\n'  # noqa
+              f'token throughput (prompt + completion token): {total_token_throughput:.3f} token/s\n'  # noqa
+              f'RPS (request per second): {rps:.3f} req/s\n'
+              f'RPM (request per minute): {rpm:.3f} req/min\n'
+              f'{"-" * 50}\n')
 
         if self.csv:
             with open(self.csv, 'w') as csvfile:
                 writer = csv.writer(csvfile)
                 writer.writerow([
-                    'batch', 'num_prompts', 'RPS', 'RPM', 'FTL(ave)(s)',
-                    'FTL(min)(s)', 'FTL(max)(s)', 'throughput(out tok/s)',
-                    'throughput(total tok/s)'
+                    'batch', 'num_prompts', 'RPS', 'RPM', 'FTL(ave)(s)', 'FTL(min)(s)', 'FTL(max)(s)',
+                    'throughput(out tok/s)', 'throughput(total tok/s)'
                 ])
                 writer.writerow([
                     concurrency,
                     len(requests), f'{rps:.3f}', f'{rpm:.3f}',
                     f'{first_token_latency_ave:.3f}' if stream_output else '-',
                     f'{first_token_latency_min:.3f}' if stream_output else '-',
-                    f'{first_token_latency_max:.3f}' if stream_output else '-',
-                    f'{completion_token_throughput:.3f}',
+                    f'{first_token_latency_max:.3f}' if stream_output else '-', f'{completion_token_throughput:.3f}',
                     f'{total_token_throughput:.3f}'
                 ])
 

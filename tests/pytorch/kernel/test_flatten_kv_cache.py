@@ -49,8 +49,7 @@ class TestFlattenKVCache:
         yield torch.tensor(kv_lens).cuda()
 
     @pytest.fixture
-    def k_caches(self, batch_size, max_num_blocks, block_size, num_heads,
-                 head_dim, out_dtype):
+    def k_caches(self, batch_size, max_num_blocks, block_size, num_heads, head_dim, out_dtype):
         shape = (batch_size * max_num_blocks, block_size, num_heads, head_dim)
         yield torch.rand(shape, dtype=out_dtype, device='cuda')
 
@@ -68,8 +67,7 @@ class TestFlattenKVCache:
         yield ret.cuda()
 
     @pytest.fixture
-    def gt(self, k_caches, v_caches, kv_lens, block_offsets, block_size,
-           num_heads, out_size, head_dim):
+    def gt(self, k_caches, v_caches, kv_lens, block_offsets, block_size, num_heads, out_size, head_dim):
         k_states = k_caches.new_empty(num_heads, out_size, head_dim)
         v_states = v_caches.new_empty(num_heads, out_size, head_dim)
         start_loc = 0
@@ -88,16 +86,10 @@ class TestFlattenKVCache:
 
         yield k_states, v_states
 
-    def test_flatten_kv_cache(self, k_caches, v_caches, kv_seqlens,
-                              block_offsets, out_size, gt):
-        from lmdeploy.pytorch.kernels.cuda.flatten_kv_cache import \
-            flatten_kv_cache
+    def test_flatten_kv_cache(self, k_caches, v_caches, kv_seqlens, block_offsets, out_size, gt):
+        from lmdeploy.pytorch.kernels.cuda.flatten_kv_cache import flatten_kv_cache
 
-        k_states, v_states = flatten_kv_cache(k_caches,
-                                              v_caches,
-                                              kv_seqlens,
-                                              block_offsets,
-                                              out_size=out_size)
+        k_states, v_states = flatten_kv_cache(k_caches, v_caches, kv_seqlens, block_offsets, out_size=out_size)
         torch.testing.assert_close(k_states, gt[0])
         torch.testing.assert_close(v_states, gt[1])
 
@@ -141,11 +133,9 @@ class TestFlattenKVCacheQuant8(TestFlattenKVCache):
     def v_quant(self, v_caches, nbits):
         yield quant(v_caches, nbits)
 
-    def test_flatten_kv_cache(self, k_quant, v_quant, kv_seqlens,
-                              block_offsets, out_size, out_dtype, nbits, gt,
-                              atol, rtol):
-        from lmdeploy.pytorch.kernels.cuda.flatten_kv_cache import \
-            flatten_kv_cache
+    def test_flatten_kv_cache(self, k_quant, v_quant, kv_seqlens, block_offsets, out_size, out_dtype, nbits, gt, atol,
+                              rtol):
+        from lmdeploy.pytorch.kernels.cuda.flatten_kv_cache import flatten_kv_cache
 
         k_caches, k_sz = k_quant
         v_caches, v_sz = v_quant

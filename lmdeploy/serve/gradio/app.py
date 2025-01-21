@@ -11,8 +11,7 @@ def run(model_path_or_server: str,
         server_port: int = 6006,
         batch_size: int = 32,
         backend: Literal['turbomind', 'pytorch'] = 'turbomind',
-        backend_config: Optional[Union[PytorchEngineConfig,
-                                       TurbomindEngineConfig]] = None,
+        backend_config: Optional[Union[PytorchEngineConfig, TurbomindEngineConfig]] = None,
         chat_template_config: Optional[ChatTemplateConfig] = None,
         model_name: str = None,
         share: bool = False,
@@ -40,11 +39,7 @@ def run(model_path_or_server: str,
     """
     if ':' in model_path_or_server:
         from lmdeploy.serve.gradio.api_server_backend import run_api_server
-        run_api_server(model_path_or_server,
-                       server_name,
-                       server_port,
-                       batch_size,
-                       share=share)
+        run_api_server(model_path_or_server, server_name, server_port, batch_size, share=share)
     else:
         pipeline_type, _ = get_task(model_path_or_server)
         if pipeline_type == 'vlm':

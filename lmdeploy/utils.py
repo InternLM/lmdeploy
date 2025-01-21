@@ -38,8 +38,7 @@ class ColorFormatter(logging.Formatter):
             # windows does not support ASNI color
             return super().format(record)
         levelname = record.levelname
-        level_color = self._LEVELNAME_COLOR_MAP.get(levelname,
-                                                    self._RESET_COLOR)
+        level_color = self._LEVELNAME_COLOR_MAP.get(levelname, self._RESET_COLOR)
         levelname = f'{level_color}{levelname}{self._RESET_COLOR}'
         record.levelname = levelname
         return super().format(record)
@@ -172,8 +171,7 @@ def _stop_words(stop_words: List[Union[int, str]], tokenizer: object):
             stop_indexes += tokenizer.indexes_containing_token(stop_word)
         elif isinstance(stop_word, int):
             stop_indexes.append(stop_word)
-    assert isinstance(stop_indexes, List) and all(
-        isinstance(elem, int) for elem in stop_indexes), 'invalid stop_words'
+    assert isinstance(stop_indexes, List) and all(isinstance(elem, int) for elem in stop_indexes), 'invalid stop_words'
     # each id in stop_indexes represents a stop word
     # refer to https://github.com/fauxpilot/fauxpilot/discussions/165 for
     # detailed explanation about fastertransformer's stop_indexes
@@ -182,10 +180,7 @@ def _stop_words(stop_words: List[Union[int, str]], tokenizer: object):
     return stop_words
 
 
-def get_model(pretrained_model_name_or_path: str,
-              download_dir: str = None,
-              revision: str = None,
-              token: str = None):
+def get_model(pretrained_model_name_or_path: str, download_dir: str = None, revision: str = None, token: str = None):
     """Get model from huggingface, modelscope or openmind_hub."""
     import os
     if os.getenv('LMDEPLOY_USE_MODELSCOPE', 'False').lower() == 'true':
@@ -203,9 +198,7 @@ def get_model(pretrained_model_name_or_path: str,
     if token is not None:
         download_kwargs['token'] = token
 
-    model_path = snapshot_download(pretrained_model_name_or_path,
-                                   ignore_patterns=['*.pth'],
-                                   **download_kwargs)
+    model_path = snapshot_download(pretrained_model_name_or_path, ignore_patterns=['*.pth'], **download_kwargs)
     return model_path
 
 
@@ -254,8 +247,7 @@ def logging_timer(op_name: str, logger: Logger, level: int = logging.DEBUG):
 
 # modified from https://github.com/vllm-project/vllm/blob/0650e5935b0f6af35fb2acf71769982c47b804d7/vllm/config.py#L1082-L1150  # noqa
 def _get_and_verify_max_len(
-    hf_tm_config: Union[PretrainedConfig,
-                        TypeVar('TurbomindModelConfig')],
+    hf_tm_config: Union[PretrainedConfig, TypeVar('TurbomindModelConfig')],
     max_model_len: Optional[int],
 ) -> int:
     """Get and verify the model's maximum length."""
@@ -300,11 +292,10 @@ def _get_and_verify_max_len(
             return max_model_len
 
         default_max_len = 2048
-        logger.warning(
-            "The model's config.json does not contain any of the following "
-            'keys to determine the original maximum length of the model: '
-            f"{possible_keys}. Assuming the model's maximum length is "
-            f'{default_max_len}.')
+        logger.warning("The model's config.json does not contain any of the following "
+                       'keys to determine the original maximum length of the model: '
+                       f"{possible_keys}. Assuming the model's maximum length is "
+                       f'{default_max_len}.')
         derived_max_model_len = default_max_len
 
     if max_model_len is None:
@@ -317,11 +308,10 @@ def _get_and_verify_max_len(
         if model_max_length is not None and max_model_len <= model_max_length:
             pass
         else:
-            logger.warning(
-                f'User-specified max_model_len ({max_model_len}) is greater '
-                'than the derived max_model_len '
-                f'({max_len_key}={derived_max_model_len} or model_max_length='
-                f"{model_max_length} in model's config.json).")
+            logger.warning(f'User-specified max_model_len ({max_model_len}) is greater '
+                           'than the derived max_model_len '
+                           f'({max_len_key}={derived_max_model_len} or model_max_length='
+                           f"{model_max_length} in model's config.json).")
     return int(max_model_len)
 
 
@@ -332,14 +322,9 @@ def get_max_batch_size(device_type: str):
     Args:
         device_type (str): the type of device
     """
-    assert device_type in ['cuda', 'ascend', 'maca']
+    assert device_type in ['cuda', 'ascend', 'maca', 'camb']
     if device_type == 'cuda':
-        max_batch_size_map = {
-            'a100': 256,
-            'a800': 256,
-            'h100': 512,
-            'h800': 512
-        }
+        max_batch_size_map = {'a100': 256, 'a800': 256, 'h100': 512, 'h800': 512}
         import torch
         device_name = torch.cuda.get_device_name(0).lower()
         for name, size in max_batch_size_map.items():
@@ -351,6 +336,8 @@ def get_max_batch_size(device_type: str):
     elif device_type == 'ascend':
         return 16
     elif device_type == 'maca':
+        return 128
+    elif device_type == 'camb':
         return 128
 
 
@@ -386,6 +373,8 @@ def is_bf16_supported(device_type: str = 'cuda'):
         # else:
         #     return False
     elif device_type == 'maca':
+        return True
+    elif device_type == 'camb':
         return True
     else:
         return False

@@ -5,8 +5,5 @@ import dlinfer.ops as ext_ops
 from torch import Tensor
 
 
-def linear(x: Tensor,
-           weight: Tensor,
-           bias: Optional[Tensor] = None,
-           all_reduce: bool = False):
+def linear(x: Tensor, weight: Tensor, bias: Optional[Tensor] = None, all_reduce: bool = False):
     return ext_ops.linear(x, weight, bias=bias, all_reduce=all_reduce)

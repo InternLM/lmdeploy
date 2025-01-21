@@ -64,15 +64,13 @@ def _flatten_kv_cache(
     mask_dk = tl.arange(0, BLOCK_DK) < HEAD_DIM_K
     mask_dv = tl.arange(0, BLOCK_DV) < HEAD_DIM_V
 
-    kc_ptrs = (kc_ptr + b_off * stride_kcb + offs_bs[:, None] * stride_kcs +
-               head_id * stride_kch + offs_dk[None, :] * stride_kcd)
-    vc_ptrs = (vc_ptr + b_off * stride_vcb + offs_bs[:, None] * stride_vcs +
-               head_id * stride_vch + offs_dv[None, :] * stride_vcd)
-    ko_ptrs = (ko_ptr + head_id * stride_koh +
-               (start_loc + offs_obs[:, None]) * stride_kos +
+    kc_ptrs = (kc_ptr + b_off * stride_kcb + offs_bs[:, None] * stride_kcs + head_id * stride_kch +
+               offs_dk[None, :] * stride_kcd)
+    vc_ptrs = (vc_ptr + b_off * stride_vcb + offs_bs[:, None] * stride_vcs + head_id * stride_vch +
+               offs_dv[None, :] * stride_vcd)
+    ko_ptrs = (ko_ptr + head_id * stride_koh + (start_loc + offs_obs[:, None]) * stride_kos +
                offs_dk[None, :] * stride_kod)
-    vo_ptrs = (vo_ptr + head_id * stride_voh +
-               (start_loc + offs_obs[:, None]) * stride_vos +
+    vo_ptrs = (vo_ptr + head_id * stride_voh + (start_loc + offs_obs[:, None]) * stride_vos +
                offs_dv[None, :] * stride_vod)
 
     kc = tl.load(kc_ptrs)
@@ -164,19 +162,15 @@ def _flatten_kv_cache_quant(
     mask_dok = offs_dok < HEAD_DIM_K
     mask_dov = offs_dov < HEAD_DIM_V
 
-    kc_ptrs = (kc_ptr + b_off * stride_kcb + offs_bs[:, None] * stride_kcs +
-               head_id * stride_kch + offs_dk[None, :] * stride_kcd)
-    vc_ptrs = (vc_ptr + b_off * stride_vcb + offs_bs[:, None] * stride_vcs +
-               head_id * stride_vch + offs_dv[None, :] * stride_vcd)
-    ksz_ptrs = (ksz_ptr + b_off * stride_kszb + offs_bs * stride_kszs +
-                head_id * stride_kszh)
-    vsz_ptrs = (vsz_ptr + b_off * stride_vszb + offs_bs * stride_vszs +
-                head_id * stride_vszh)
-    ko_ptrs = (ko_ptr + head_id * stride_koh +
-               (start_loc + offs_obs[:, None]) * stride_kos +
+    kc_ptrs = (kc_ptr + b_off * stride_kcb + offs_bs[:, None] * stride_kcs + head_id * stride_kch +
+               offs_dk[None, :] * stride_kcd)
+    vc_ptrs = (vc_ptr + b_off * stride_vcb + offs_bs[:, None] * stride_vcs + head_id * stride_vch +
+               offs_dv[None, :] * stride_vcd)
+    ksz_ptrs = (ksz_ptr + b_off * stride_kszb + offs_bs * stride_kszs + head_id * stride_kszh)
+    vsz_ptrs = (vsz_ptr + b_off * stride_vszb + offs_bs * stride_vszs + head_id * stride_vszh)
+    ko_ptrs = (ko_ptr + head_id * stride_koh + (start_loc + offs_obs[:, None]) * stride_kos +
                offs_dok[None, :] * stride_kod)
-    vo_ptrs = (vo_ptr + head_id * stride_voh +
-               (start_loc + offs_obs[:, None]) * stride_vos +
+    vo_ptrs = (vo_ptr + head_id * stride_voh + (start_loc + offs_obs[:, None]) * stride_vos +
                offs_dov[None, :] * stride_vod)
 
     kc = tl.load(kc_ptrs)
@@ -236,14 +230,8 @@ def flatten_kv_cache(k_caches: Tensor,
     BLOCK_DV = triton.next_power_of_2(v_head_dim)
     BLOCK_BS = k_caches.size(s_dim)
 
-    k_states = k_caches.new_empty(num_heads,
-                                  out_size,
-                                  k_head_dim,
-                                  dtype=out_dtype)
-    v_states = v_caches.new_empty(num_heads,
-                                  out_size,
-                                  v_head_dim,
-                                  dtype=out_dtype)
+    k_states = k_caches.new_empty(num_heads, out_size, k_head_dim, dtype=out_dtype)
+    v_states = v_caches.new_empty(num_heads, out_size, v_head_dim, dtype=out_dtype)
 
     grid = (num_blocks, batch_size, num_heads)
     if quant_policy == 0:

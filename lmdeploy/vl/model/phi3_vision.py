@@ -14,12 +14,20 @@ class Phi3VisionModel(LlavaHfVisionModel):
     _arch = 'Phi3VForCausalLM'
 
     def build_preprocessor(self):
-        processor = AutoProcessor.from_pretrained(self.model_path,
-                                                  trust_remote_code=True)
+        processor = AutoProcessor.from_pretrained(self.model_path, trust_remote_code=True)
         if hasattr(processor, 'tokenizer'):
             del processor.tokenizer
             processor.tokenizer = None
         self.processor = processor
+
+    def build_model(self):
+        if self.with_llm:
+            from transformers import AutoModelForCausalLM
+            self.vl_model = AutoModelForCausalLM.from_pretrained(self.model_path,
+                                                                 device_map='cpu',
+                                                                 trust_remote_code=True)
+        else:
+            raise NotImplementedError('turbomind has not supported phi3v yet')
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """refers to `super.preprocess() for spec."""
@@ -31,10 +39,7 @@ class Phi3VisionModel(LlavaHfVisionModel):
             h = result['image_sizes'][0][0].item() // 336
             w = result['image_sizes'][0][1].item() // 336
             image_tokens = int((h * w + 1) * 144 + 1 + (h + 1) * 12)
-            result.update(
-                dict(image_size=image.size,
-                     image_tokens=image_tokens,
-                     image_token_id=0))
+            result.update(dict(image_size=image.size, image_tokens=image_tokens, image_token_id=0))
             outputs.append(result)
         messages.append(dict(role='preprocess', content=outputs))
         return messages

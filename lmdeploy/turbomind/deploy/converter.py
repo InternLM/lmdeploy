@@ -6,7 +6,7 @@ import shutil
 import fire
 import torch
 
-from lmdeploy.archs import get_model_arch
+from lmdeploy.archs import get_model_arch, search_nested_config
 from lmdeploy.messages import TurbomindEngineConfig
 from lmdeploy.model import MODELS, best_match_model
 from lmdeploy.utils import get_logger, get_model
@@ -54,20 +54,17 @@ def create_workspace(_path: str):
     return weight_path, tokenizer_path
 
 
-def copy_tokenizer(model_path: str, tokenizer_path: str,
-                   tm_tokenizer_path: str):
+def copy_tokenizer(model_path: str, tokenizer_path: str, tm_tokenizer_path: str):
     """Copy tokenizer."""
 
     if tokenizer_path is not None:
         assert osp.exists(tokenizer_path), f'{tokenizer_path} does not exists.'
 
-        shutil.copy(tokenizer_path,
-                    osp.join(tm_tokenizer_path, osp.basename(tokenizer_path)))
+        shutil.copy(tokenizer_path, osp.join(tm_tokenizer_path, osp.basename(tokenizer_path)))
     else:
         from transformers import AutoTokenizer
         try:
-            _ = AutoTokenizer.from_pretrained(model_path,
-                                              trust_remote_code=True)
+            _ = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
         except Exception as e:
             assert 0, f'{e}'
 
@@ -84,9 +81,7 @@ def copy_tokenizer(model_path: str, tokenizer_path: str,
             shutil.copy(json_path, osp.join(tm_tokenizer_path, _file))
 
 
-def get_output_model_registered_name_and_config(model_path: str,
-                                                model_format: str, dtype: str,
-                                                group_size: int):
+def get_output_model_registered_name_and_config(model_path: str, model_format: str, dtype: str, group_size: int):
     """Get the registered name of the turbomind model and its configuration
     according to the input model path, format and user-input config. The name
     will be used to access the OUTPUT_MODELS registry.
@@ -113,10 +108,7 @@ def get_output_model_registered_name_and_config(model_path: str,
             group_size = 128 if group_size == 0 else group_size
         else:
             torch_dtype = getattr(model_config, 'torch_dtype', 'float16')
-            TORCH_DTYPE_MAP = {
-                torch.bfloat16: 'bfloat16',
-                torch.float16: 'float16'
-            }
+            TORCH_DTYPE_MAP = {torch.bfloat16: 'bfloat16', torch.float16: 'float16'}
             weight_type = TORCH_DTYPE_MAP.get(torch_dtype, 'float16')
 
             # Qwen-1 didn't set torch_dtype. It used bf16 as default
@@ -124,21 +116,19 @@ def get_output_model_registered_name_and_config(model_path: str,
                 weight_type = 'bfloat16'
 
     if dtype == 'auto':
-        weight_type = weight_type if weight_type in [
-            'float16', 'bfloat16', 'int4'
-        ] else 'float16'
+        weight_type = weight_type if weight_type in ['float16', 'bfloat16', 'int4'] else 'float16'
     elif dtype in ['float16', 'bfloat16']:
         if weight_type == 'int4':
-            logger.warn(f'The model {model_path} is a quantized model, so the '
-                        f'specified data type {dtype} is ignored')
+            logger.warning(f'The model {model_path} is a quantized model, so the '
+                           f'specified data type {dtype} is ignored')
         else:
             weight_type = dtype
     else:
         assert 0, f'unsupported specified data type {dtype}'
 
     if weight_type == 'bfloat16' and not is_bf16_supported():
-        logger.warn('data type fallback to float16 since '
-                    'torch.cuda.is_bf16_supported is False')
+        logger.warning('data type fallback to float16 since '
+                       'torch.cuda.is_bf16_supported is False')
         weight_type = 'float16'
     config.model_config.model_arch = model_arch
     config.model_config.weight_type = weight_type
@@ -156,39 +146,16 @@ def pack_model_repository(workspace_path: str):
         workspace_path: the path of workspace
     """
     os.symlink(src=osp.join('..', '..', 'tokenizer'),
-               dst=osp.join(workspace_path, 'triton_models', 'preprocessing',
-                            '1', 'tokenizer'))
+               dst=osp.join(workspace_path, 'triton_models', 'preprocessing', '1', 'tokenizer'))
     os.symlink(src=osp.join('..', '..', 'tokenizer'),
-               dst=osp.join(workspace_path, 'triton_models', 'postprocessing',
-                            '1', 'tokenizer'))
+               dst=osp.join(workspace_path, 'triton_models', 'postprocessing', '1', 'tokenizer'))
     os.symlink(src=osp.join('..', '..', 'weights'),
-               dst=osp.join(workspace_path, 'triton_models', 'interactive',
-                            '1', 'weights'))
+               dst=osp.join(workspace_path, 'triton_models', 'interactive', '1', 'weights'))
     model_repo_dir = osp.join(workspace_path, 'model_repository')
     os.makedirs(model_repo_dir, exist_ok=True)
-    os.symlink(src=osp.join('..', 'triton_models', 'interactive'),
-               dst=osp.join(model_repo_dir, 'turbomind'))
-    os.symlink(src=osp.join('..', 'triton_models', 'preprocessing'),
-               dst=osp.join(model_repo_dir, 'preprocessing'))
-    os.symlink(src=osp.join('..', 'triton_models', 'postprocessing'),
-               dst=osp.join(model_repo_dir, 'postprocessing'))
-
-
-def find_quantization_config(nested, target_key):
-    if isinstance(nested, dict):
-        for key, value in nested.items():
-            if key == target_key:
-                return value
-            if isinstance(value, (dict, list)):
-                result = find_quantization_config(value, target_key)
-                if result is not None:
-                    return result
-    elif isinstance(nested, list):
-        for item in nested:
-            result = find_quantization_config(item, target_key)
-            if result is not None:
-                return result
-    return None
+    os.symlink(src=osp.join('..', 'triton_models', 'interactive'), dst=osp.join(model_repo_dir, 'turbomind'))
+    os.symlink(src=osp.join('..', 'triton_models', 'preprocessing'), dst=osp.join(model_repo_dir, 'preprocessing'))
+    os.symlink(src=osp.join('..', 'triton_models', 'postprocessing'), dst=osp.join(model_repo_dir, 'postprocessing'))
 
 
 def get_tm_model(model_path,
@@ -213,8 +180,7 @@ def get_tm_model(model_path,
             If it is None, the turbomind model won't be saved
     """
     _, cfg = get_model_arch(model_path)
-    quant_config = find_quantization_config(cfg.to_dict(),
-                                            'quantization_config')
+    quant_config = search_nested_config(cfg.to_dict(), 'quantization_config')
     if quant_config:
         quant_method = quant_config.get('quant_method')
         _group_size = int(quant_config.get('group_size', 0))
@@ -250,8 +216,7 @@ def get_tm_model(model_path,
             f'but group_size is {group_size}. Currently, only 128 ' \
             'is supported'
 
-    input_model_name = get_input_model_registered_name(
-        model_path, engine_config.model_format)
+    input_model_name = get_input_model_registered_name(model_path, engine_config.model_format)
     input_policy = get_input_policy(engine_config.model_format)
     input_model = INPUT_MODELS.get(input_model_name)(model_path=model_path,
                                                      tokenizer_path=model_path,
@@ -268,11 +233,10 @@ def get_tm_model(model_path,
     tm_cfg.model_config.model_name = model_name
     tm_cfg.model_config.tp = engine_config.tp
 
-    output_model = OUTPUT_MODELS.get(output_model_name)(
-        input_model=input_model,
-        cfg=tm_cfg,
-        model_cls=Transformer,
-        out_dir=out_dir)
+    output_model = OUTPUT_MODELS.get(output_model_name)(input_model=input_model,
+                                                        cfg=tm_cfg,
+                                                        model_cls=Transformer,
+                                                        out_dir=out_dir)
 
     return output_model
 
@@ -318,19 +282,17 @@ def main(model_name: str,
         kwargs (dict): other params for convert
     """
     if model_name:
-        logger.warning(
-            'The argument `<model_name>` is deprecated and unused now. '
-            'It will be removed on 2024.12.31. It was originally used to '
-            'specify the name of the built-in chat template, but now it '
-            'is substituted with a clearer parameter `--chat-template`')
+        logger.warning('The argument `<model_name>` is deprecated and unused now. '
+                       'It will be removed on 2024.12.31. It was originally used to '
+                       'specify the name of the built-in chat template, but now it '
+                       'is substituted with a clearer parameter `--chat-template`')
     if chat_template is None:
         chat_template = best_match_model(model_path)
     assert chat_template in MODELS.module_dict.keys(), \
         f"chat template '{chat_template}' is not a built-in template. " \
         f'The built-ins are: {MODELS.module_dict.keys()}'
-    assert is_supported(model_path), (
-        f'turbomind does not support {model_path}. '
-        'Plz try pytorch engine instead.')
+    assert is_supported(model_path), (f'turbomind does not support {model_path}. '
+                                      'Plz try pytorch engine instead.')
 
     assert ((tp & (tp - 1) == 0) and tp != 0), 'tp should be 2^n'
 
@@ -349,11 +311,8 @@ def main(model_name: str,
 
     tm_weight_path, tm_tokenizer_path = create_workspace(dst_path)
     copy_tokenizer(model_path, tokenizer_path, tm_tokenizer_path)
-    engine_config = TurbomindEngineConfig(tp=tp,
-                                          model_format=model_format,
-                                          dtype=dtype)
-    tm_model = get_tm_model(model_path, model_name, chat_template,
-                            engine_config, group_size, tm_weight_path)
+    engine_config = TurbomindEngineConfig(tp=tp, model_format=model_format, dtype=dtype)
+    tm_model = get_tm_model(model_path, model_name, chat_template, engine_config, group_size, tm_weight_path)
     tm_model.export()
 
 

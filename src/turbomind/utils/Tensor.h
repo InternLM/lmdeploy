@@ -530,4 +530,29 @@ public:
     void             saveNpy(const std::string& base_folder);
 };
 
+struct ManagedTensor {
+    Tensor                tensor;
+    std::shared_ptr<void> data_holder;
+
+    Tensor* operator->() noexcept
+    {
+        return &tensor;
+    }
+
+    const Tensor* operator->() const noexcept
+    {
+        return &tensor;
+    }
+
+    Tensor& operator*() noexcept
+    {
+        return tensor;
+    }
+
+    const Tensor& operator*() const noexcept
+    {
+        return tensor;
+    }
+};
+
 }  // namespace turbomind

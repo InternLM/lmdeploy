@@ -13,8 +13,7 @@ from transformers import AutoConfig, AutoModelForCausalLM
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
-from lmdeploy.vl.model.utils import (add_device_hook, disable_logging,
-                                     rewrite_ctx)
+from lmdeploy.vl.model.utils import add_device_hook, disable_logging, rewrite_ctx
 
 logger = get_logger('lmdeploy')
 
@@ -25,9 +24,8 @@ def check_xcomposer_install():
         # xcomposer2d5
         import decord  # noqa: F401
     except ImportError:
-        raise ImportError(
-            "No module named 'decord'. Please install decord by `pip install decord`"  # noqa
-        )
+        raise ImportError("No module named 'decord'. Please install decord by `pip install decord`"  # noqa
+                          )
 
 
 class ModelType(enum.Enum):
@@ -72,16 +70,11 @@ def init_empty_vit(model_path):
 
     model_type, _ = get_xcomposer_type(model_path)
     if model_type == ModelType.XCOMPOSER2D5:
-        from transformers.dynamic_module_utils import \
-            get_class_from_dynamic_module
+        from transformers.dynamic_module_utils import get_class_from_dynamic_module
         from transformers.utils import TRANSFORMERS_DYNAMIC_MODULE_NAME
-        _ = get_class_from_dynamic_module(
-            'modeling_internlm_xcomposer2.get_font', model_path)
+        _ = get_class_from_dynamic_module('modeling_internlm_xcomposer2.get_font', model_path)
         folder = model_path.rstrip(os.sep).split(os.sep)[-1]
-        module_path = '.'.join([
-            TRANSFORMERS_DYNAMIC_MODULE_NAME, folder,
-            'modeling_internlm_xcomposer2'
-        ])
+        module_path = '.'.join([TRANSFORMERS_DYNAMIC_MODULE_NAME, folder, 'modeling_internlm_xcomposer2'])
         origin_get_font_func = getattr(sys.modules[module_path], 'get_font')
         origin_func_path.append(origin_get_font_func)
         rewrite_func.append(lambda: None)
@@ -121,26 +114,20 @@ class Xcomposer2VisionModel(VisonModel):
         import torchvision.transforms as transforms
         from torchvision.transforms.functional import InterpolationMode
 
-        if self.model_type in [
-                ModelType.XCOMPOSER2D5, ModelType.XCOMPOSER2_4KHD
-        ]:
+        if self.model_type in [ModelType.XCOMPOSER2D5, ModelType.XCOMPOSER2_4KHD]:
             self.HD_transform = self.module
             self.vis_processor = transforms.Compose([
                 transforms.ToTensor(),
-                transforms.Normalize((0.48145466, 0.4578275, 0.40821073),
-                                     (0.26862954, 0.26130258, 0.27577711)),
+                transforms.Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711)),
             ])
-            self.preprocess_func = (self._preprocess_2d5 if self.model_type
-                                    == ModelType.XCOMPOSER2D5 else
-                                    self._preprocess_4khd_7b)
+            self.preprocess_func = (self._preprocess_2d5
+                                    if self.model_type == ModelType.XCOMPOSER2D5 else self._preprocess_4khd_7b)
         else:
             self.vis_processor = transforms.Compose([
-                transforms.Resize(
-                    (self.hf_config.img_size, self.hf_config.img_size),
-                    interpolation=InterpolationMode.BICUBIC),
+                transforms.Resize((self.hf_config.img_size, self.hf_config.img_size),
+                                  interpolation=InterpolationMode.BICUBIC),
                 transforms.ToTensor(),
-                transforms.Normalize((0.48145466, 0.4578275, 0.40821073),
-                                     (0.26862954, 0.26130258, 0.27577711)),
+                transforms.Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711)),
             ])
             self.preprocess_func = self._preprocess_7b
 
@@ -152,46 +139,42 @@ class Xcomposer2VisionModel(VisonModel):
                 init_empty_vit(self.model_path):
             warnings.simplefilter('ignore')
             config = self.hf_config
-            model = AutoModelForCausalLM.from_config(config,
-                                                     trust_remote_code=True)
+            model = AutoModelForCausalLM.from_config(config, trust_remote_code=True)
             model.vit.load_model()
             model.vit.resize_pos()
-            model.vit.vision_tower.vision_model.post_layernorm.to_empty(
-                device='cpu').half()
+            if hasattr(self.hf_config, 'img_size'):
+                model.vit.vision_tower.vision_model.embeddings.image_size = \
+                    self.hf_config.img_size
+            model.vit.vision_tower.vision_model.post_layernorm.to_empty(device='cpu').half()
             self.vl_model = model
             if not self.with_llm:
                 del model.model
                 del model.output
 
         from accelerate.utils import get_balanced_memory, infer_auto_device_map
-        max_memory = get_balanced_memory(
-            model,
-            max_memory=self.max_memory,
-            dtype=torch.half,
-            no_split_module_classes=['CLIPEncoderLayer'])
-        device_map = infer_auto_device_map(
-            model,
-            no_split_module_classes=['CLIPEncoderLayer'],
-            max_memory=max_memory,
-            dtype=torch.half)
+        max_memory = get_balanced_memory(model,
+                                         max_memory=self.max_memory,
+                                         dtype=torch.half,
+                                         no_split_module_classes=['CLIPEncoderLayer'])
+        device_map = infer_auto_device_map(model,
+                                           no_split_module_classes=['CLIPEncoderLayer'],
+                                           max_memory=max_memory,
+                                           dtype=torch.half)
         # make all tensor on same device for postprocess
         if 'plora_glb_GN' in device_map:
             device_map['plora_sub_GN'] = device_map['plora_glb_GN']
 
         from accelerate import load_checkpoint_and_dispatch
         with disable_logging():
-            load_checkpoint_and_dispatch(
-                model=model,
-                checkpoint=self.model_path,
-                device_map=device_map if not self.with_llm else {'': 'cpu'},
-                no_split_module_classes=['CLIPEncoderLayer'],
-                dtype=torch.half)
+            load_checkpoint_and_dispatch(model=model,
+                                         checkpoint=self.model_path,
+                                         device_map=device_map if not self.with_llm else {'': 'cpu'},
+                                         no_split_module_classes=['CLIPEncoderLayer'],
+                                         dtype=torch.half)
 
         if 'plora_glb_GN' in device_map:
-            add_device_hook(
-                model.vit.vision_tower.vision_model.encoder.layers[-1],
-                device_map['plora_glb_GN'], lambda x:
-                (x[0].to(device=device_map['plora_glb_GN']), ))
+            add_device_hook(model.vit.vision_tower.vision_model.encoder.layers[-1], device_map['plora_glb_GN'],
+                            lambda x: (x[0].to(device=device_map['plora_glb_GN']), ))
 
         self.model = model.eval()
 
@@ -225,17 +208,12 @@ class Xcomposer2VisionModel(VisonModel):
             image = image.convert('RGB')
             pixel_values, n_token = self.preprocess_func(image, params)
             outputs.append(
-                dict(pixel_values=pixel_values,
-                     image_size=image.size,
-                     image_tokens=n_token,
-                     image_token_id=0))
+                dict(pixel_values=pixel_values, image_size=image.size, image_tokens=n_token, image_token_id=0))
         messages.append(dict(role='preprocess', content=outputs))
         return messages
 
     @torch.no_grad()
-    def forward(self,
-                messages: List[Dict],
-                max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
         """extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
@@ -250,22 +228,14 @@ class Xcomposer2VisionModel(VisonModel):
         inputs = inputs[0]
         outputs = []
         for idx in range(0, len(inputs), max_batch_size):
-            if self.model_type in [
-                    ModelType.XCOMPOSER2D5, ModelType.XCOMPOSER2_4KHD
-            ]:
-                pixel_values = [
-                    x['pixel_values'] for x in inputs[idx:idx + max_batch_size]
-                ]
-                embeds, split = self.model.vit(pixel_values,
-                                               self.model.plora_glb_GN,
-                                               self.model.plora_sub_GN)
+            if self.model_type in [ModelType.XCOMPOSER2D5, ModelType.XCOMPOSER2_4KHD]:
+                pixel_values = [x['pixel_values'] for x in inputs[idx:idx + max_batch_size]]
+                embeds, split = self.model.vit(pixel_values, self.model.plora_glb_GN, self.model.plora_sub_GN)
                 embeds = self.model.vision_proj(embeds)
                 embeds = torch.split(embeds, split, dim=1)
                 embeds = [x.squeeze() for x in embeds]
             else:
-                pixel_values = [
-                    x['pixel_values'] for x in inputs[idx:idx + max_batch_size]
-                ]
+                pixel_values = [x['pixel_values'] for x in inputs[idx:idx + max_batch_size]]
                 pixel_values = torch.cat(pixel_values, dim=0)
                 logger.info(f'vision forward shape: {pixel_values.shape}')
                 embeds = self.model.vit(pixel_values)
@@ -287,25 +257,17 @@ class Xcomposer2VisionModel(VisonModel):
                 continue
             elif message['role'] in ['images', 'preprocess', 'forward']:
                 continue
-            n_images = len(
-                [1 for x in message['content'] if x['type'] == 'image'])
-            content = [
-                item['text'] for item in message['content']
-                if item['type'] == 'text'
-            ]
+            n_images = len([1 for x in message['content'] if x['type'] == 'image'])
+            content = [item['text'] for item in message['content'] if item['type'] == 'text']
             prompt = ' '.join([IMAGE_TOKEN] * n_images) + content[0]
             prompt_messages.append(dict(role='user', content=prompt))
         prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
         return prompt, IMAGE_TOKEN
 
     def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template,
-                                                 sequence_start)
-        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
-                                   sequence_start)
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
+        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
 
     def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template,
-                                                 sequence_start)
-        return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
-                                     sequence_start)
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
+        return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)

@@ -25,6 +25,9 @@ class DlinferOpsBackend(DefaultOpsBackend):
         if layer_type == OpType.PagedAttention:
             from .attention import DlinferAttentionBuilder
             return DlinferAttentionBuilder
+        elif layer_type == OpType.FlashAttention:
+            from .flash_attention import DlinferFlashAttentionBuilder
+            return DlinferFlashAttentionBuilder
         elif layer_type == OpType.ApplyRotaryEmb:
             from .apply_rotary_emb import DlinferApplyRotaryEmbBuilder
             return DlinferApplyRotaryEmbBuilder
@@ -50,8 +53,7 @@ class DlinferOpsBackend(DefaultOpsBackend):
             from .rotary_embedding import DlinferRotaryEmbeddingBuilder
             return DlinferRotaryEmbeddingBuilder
         else:
-            logger.debug(
-                f'Op {layer_type} fallback to default implementation.')
+            logger.debug(f'Op {layer_type} fallback to default implementation.')
             return super().get_layer_impl_builder(layer_type)
 
     @staticmethod

@@ -9,7 +9,7 @@ class DeepseekV2ModelConfigBuilder(AutoModelConfigBuilder):
     @classmethod
     def condition(cls, hf_config):
         """config."""
-        return hf_config.model_type == 'deepseek_v2'
+        return hf_config.model_type in ['deepseek_v3', 'deepseek_v2']
 
     @classmethod
     def build(cls, hf_config, model_path: str = None, **kwargs):
@@ -22,8 +22,7 @@ class DeepseekV2ModelConfigBuilder(AutoModelConfigBuilder):
         num_key_value_heads = 1
         tp = kwargs.get('tp', 1)
         # update num_kv_heads for tp mode
-        num_key_value_heads = cls.update_num_kv_heads(hf_config, tp,
-                                                      num_key_value_heads)
+        num_key_value_heads = cls.update_num_kv_heads(hf_config, tp, num_key_value_heads)
 
         return ModelConfig(hidden_size=hf_config.hidden_size,
                            num_layers=hf_config.num_hidden_layers,

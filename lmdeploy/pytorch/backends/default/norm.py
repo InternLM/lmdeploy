@@ -11,10 +11,7 @@ class DefaultRMSNormImpl(RMSNormImpl):
         self.hidden_size = hidden_size
         self.eps = eps
 
-    def forward(self,
-                x: torch.Tensor,
-                weight: torch.Tensor,
-                residual: torch.Tensor = None):
+    def forward(self, x: torch.Tensor, weight: torch.Tensor, residual: torch.Tensor = None):
         """forward."""
         input_dtype = x.dtype
         if residual is not None:
@@ -56,11 +53,7 @@ class DefaultLayerNormImpl(LayerNormImpl):
         if residual is not None:
             x = x + residual
             residual = x
-        x = torch.nn.functional.layer_norm(x,
-                                           self.normalized_shape,
-                                           weight=weight,
-                                           bias=bias,
-                                           eps=self.eps)
+        x = torch.nn.functional.layer_norm(x, self.normalized_shape, weight=weight, bias=bias, eps=self.eps)
         if residual is None:
             return x
         return x, residual

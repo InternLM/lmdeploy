@@ -7,12 +7,7 @@ from .base import BaseChecker
 class ModelChecker(BaseChecker):
     """check model is available."""
 
-    def __init__(self,
-                 model_path: str,
-                 trust_remote_code: bool,
-                 dtype: str,
-                 device_type: str,
-                 logger=None) -> None:
+    def __init__(self, model_path: str, trust_remote_code: bool, dtype: str, device_type: str, logger=None) -> None:
         super().__init__(logger=logger)
         self.model_path = model_path
         self.trust_remote_code = trust_remote_code
@@ -25,13 +20,11 @@ class ModelChecker(BaseChecker):
         trust_remote_code = self.trust_remote_code
         try:
             from transformers import AutoConfig
-            config = AutoConfig.from_pretrained(
-                model_path, trust_remote_code=trust_remote_code)
+            config = AutoConfig.from_pretrained(model_path, trust_remote_code=trust_remote_code)
         except Exception as e:
-            message = (
-                f'Load model config with transformers=={trans_version}'
-                ' failed. '
-                'Please make sure model can be loaded with transformers API.')
+            message = (f'Load model config with transformers=={trans_version}'
+                       ' failed. '
+                       'Please make sure model can be loaded with transformers API.')
             self.log_and_exit(e, 'transformers', message=message)
         return config
 
@@ -42,8 +35,7 @@ class ModelChecker(BaseChecker):
             model_trans_version = getattr(config, 'transformers_version', None)
             if model_trans_version is not None:
                 model_trans_version = version.parse(model_trans_version)
-                assert trans_version >= model_trans_version, (
-                    'Version mismatch.')
+                assert trans_version >= model_trans_version, ('Version mismatch.')
         except Exception as e:
             message = (f'model `{model_path}` requires '
                        f'transformers version {model_trans_version} '
@@ -61,43 +53,13 @@ class ModelChecker(BaseChecker):
 
             from lmdeploy.pytorch.config import ModelConfig
             from lmdeploy.utils import is_bf16_supported
-            model_config = ModelConfig.from_hf_config(config,
-                                                      model_path=model_path,
-                                                      dtype=dtype)
+            model_config = ModelConfig.from_hf_config(config, model_path=model_path, dtype=dtype)
             if model_config.dtype == torch.bfloat16:
                 if not is_bf16_supported(device_type):
                     logger.warning('Device does not support bfloat16.')
         except Exception as e:
-            message = (f'Checking failed with error {e}',
-                       'Please send issue to LMDeploy with error logs.')
+            message = (f'Checking failed with error {e}', 'Please send issue to LMDeploy with error logs.')
             self.log_and_exit(e, 'Model', message=message)
-
-    def check_awq(self, config):
-        """check awq."""
-        logger = self.get_logger()
-        device_type = self.device_type
-        if device_type != 'cuda':
-            return
-
-        quantization_config = getattr(config, 'quantization_config', dict())
-        quant_method = quantization_config.get('quant_method', None)
-        if quant_method != 'awq':
-            return
-        try:
-            import awq  # noqa
-        except Exception as e:
-            self.log_and_exit(e, 'autoawq', logger)
-
-        try:
-            import awq_ext  # noqa
-        except Exception as e:
-            logger.debug('Exception:', exc_info=1)
-            self.log_and_exit(
-                e,
-                'awq_ext',
-                message='Failed to import `awq_ext`. '
-                'Try reinstall it from source: '
-                'https://github.com/casper-hansen/AutoAWQ_kernels')
 
     def check(self):
         """check."""
@@ -112,6 +74,3 @@ class ModelChecker(BaseChecker):
 
         # dtype check
         self.check_dtype(config)
-
-        # awq
-        self.check_awq(config)

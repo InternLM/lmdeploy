@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
 from dataclasses import dataclass
 from typing import Dict, Optional, Sequence
 
@@ -16,6 +17,7 @@ class DlinferAttentionMetadata(AttentionMetadata):
     max_q_seq_len: int = 1
     max_kv_seq_len: int = 1
     quant_meta: Dict = None
+    cu_seq_lens_kv: Optional[Tensor] = None
 
 
 class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
@@ -48,8 +50,8 @@ class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
             **kwargs,
         )
 
-        from lmdeploy.pytorch.kernels.dlinfer import (fill_kv_cache,
-                                                      paged_attention_fwd)
+        from lmdeploy.pytorch.kernels.dlinfer import fill_kv_cache, paged_attention_fwd
+
         self.fill_kv_cache = fill_kv_cache
         self.paged_attention_fwd = paged_attention_fwd
 
@@ -79,21 +81,17 @@ class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
         max_q_seq_len = attn_metadata.max_q_seq_len
         max_kv_seq_len = attn_metadata.max_kv_seq_len
         quant_bits = attn_metadata.quant_policy
+        cu_seq_lens_kv = attn_metadata.cu_seq_lens_kv
+
         if attn_metadata.quant_meta is not None:
-            k_scales_zeros = [
-                next(attn_metadata.quant_meta['k_scales']),
-                next(attn_metadata.quant_meta['k_zeros'])
-            ] if 'k_scales' in attn_metadata.quant_meta else []
-            v_scales_zeros = [
-                next(attn_metadata.quant_meta['v_scales']),
-                next(attn_metadata.quant_meta['v_zeros'])
-            ] if 'v_scales' in attn_metadata.quant_meta else []
-            kv_scales = next(
-                attn_metadata.quant_meta['kv_scales']
-            ) if 'kv_scales' in attn_metadata.quant_meta else None
-            kv_zeros = next(
-                attn_metadata.quant_meta['kv_zeros']
-            ) if 'kv_zeros' in attn_metadata.quant_meta else None
+            k_scales_zeros = [next(attn_metadata.quant_meta['k_scales']),
+                              next(attn_metadata.quant_meta['k_zeros'])
+                              ] if 'k_scales' in attn_metadata.quant_meta else []
+            v_scales_zeros = [next(attn_metadata.quant_meta['v_scales']),
+                              next(attn_metadata.quant_meta['v_zeros'])
+                              ] if 'v_scales' in attn_metadata.quant_meta else []
+            kv_scales = next(attn_metadata.quant_meta['kv_scales']) if 'kv_scales' in attn_metadata.quant_meta else None
+            kv_zeros = next(attn_metadata.quant_meta['kv_zeros']) if 'kv_zeros' in attn_metadata.quant_meta else None
         else:
             k_scales_zeros = []
             v_scales_zeros = []
@@ -128,6 +126,7 @@ class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
             q_start_loc=q_start_loc,
             q_seqlens=q_seqlens,
             kv_seqlens=kv_seqlens,
+            cu_seq_lens_kv=cu_seq_lens_kv,
             max_q_seq_len=max_q_seq_len,
             max_kv_seq_len=max_kv_seq_len,
             is_decoding=is_decoding,

@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
+import asyncio
 import copy
 import json
 import os
@@ -18,15 +20,12 @@ from fastapi import BackgroundTasks, Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
+from requests.exceptions import RequestException
 
-from lmdeploy.serve.openai.api_server import (check_api_key,
-                                              create_error_response)
-from lmdeploy.serve.openai.protocol import (  # noqa: E501
-    ChatCompletionRequest, CompletionRequest, ModelCard, ModelList,
-    ModelPermission)
-from lmdeploy.serve.proxy.constants import (API_TIMEOUT_LEN,
-                                            LATENCY_DEEQUE_LEN, ErrorCodes,
-                                            Strategy, err_msg)
+from lmdeploy.serve.openai.api_server import check_api_key, create_error_response
+from lmdeploy.serve.openai.protocol import ModelCard  # noqa: E501
+from lmdeploy.serve.openai.protocol import ChatCompletionRequest, CompletionRequest, ModelList, ModelPermission
+from lmdeploy.serve.proxy.constants import API_READ_TIMEOUT, LATENCY_DEQUE_LEN, ErrorCodes, Strategy, err_msg
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -36,8 +35,7 @@ class Status(BaseModel):
     """Status protocol consists of models' information."""
     models: Optional[List[str]] = Field(default=[], examples=[[]])
     unfinished: int = 0
-    latency: Deque = Field(default=deque(maxlen=LATENCY_DEEQUE_LEN),
-                           examples=[[]])
+    latency: Deque = Field(default=deque(maxlen=LATENCY_DEQUE_LEN), examples=[[]])
     speed: Optional[int] = Field(default=None, examples=[None])
 
 
@@ -47,8 +45,7 @@ class Node(BaseModel):
     status: Optional[Status] = None
 
 
-CONTROLLER_HEART_BEAT_EXPIRATION = int(
-    os.getenv('LMDEPLOY_CONTROLLER_HEART_BEAT_EXPIRATION', 90))
+CONTROLLER_HEART_BEAT_EXPIRATION = int(os.getenv('LMDEPLOY_CONTROLLER_HEART_BEAT_EXPIRATION', 90))
 
 
 def heart_beat_controller(proxy_controller):
@@ -73,25 +70,22 @@ class NodeManager:
                 to.
     """
 
-    def __init__(self,
-                 config_path: Optional[str] = None,
-                 strategy: str = 'min_expected_latency') -> None:
+    def __init__(self, config_path: Optional[str] = None, strategy: str = 'min_expected_latency') -> None:
         self.nodes = dict()
         self.strategy = Strategy.from_str(strategy)
         self.latencies = dict()
-        self.config_path = osp.join(osp.dirname(osp.realpath(__file__)),
-                                    'proxy_config.yml')
+        self.config_path = osp.join(osp.dirname(osp.realpath(__file__)), 'proxy_config.yml')
         if config_path is not None:
             self.config_path = config_path
         if osp.exists(self.config_path):
             with open(self.config_path, 'r') as config_file:
                 self.nodes = yaml.safe_load(config_file)['nodes']
                 for url, status in self.nodes.items():
+                    latency = deque(status.get('latency', []), maxlen=LATENCY_DEQUE_LEN)
+                    status['latency'] = latency
                     status = Status(**status)
                     self.nodes[url] = status
-        self.heart_beat_thread = threading.Thread(target=heart_beat_controller,
-                                                  args=(self, ),
-                                                  daemon=True)
+        self.heart_beat_thread = threading.Thread(target=heart_beat_controller, args=(self, ), daemon=True)
         self.heart_beat_thread.start()
 
     def update_config_file(self):
@@ -99,7 +93,7 @@ class NodeManager:
         nodes = copy.deepcopy(self.nodes)
         for url, status in nodes.items():
             nodes[url] = status.model_dump()
-            nodes[url]['latency'] = list(status.latency)
+            nodes[url]['latency'] = list(status.latency)[-LATENCY_DEQUE_LEN:]
         with open(self.config_path, 'w') as config_file:  # update cfg yml
             yaml.dump(dict(nodes=nodes), config_file)
 
@@ -149,7 +143,8 @@ class NodeManager:
                 to_be_deleted.append(node_url)
         for node_url in to_be_deleted:
             self.remove(node_url)
-            logger.info(f'Removed node_url: {node_url}')
+            logger.info(f'Removed node_url: {node_url} '
+                        'due to heart beat expiration')
 
     @property
     def model_list(self):
@@ -189,8 +184,7 @@ class NodeManager:
             # some nodes does not contain speed
             # we can set them the average speed value
             average_speed = sum(speeds) / len(speeds) if len(speeds) else 1
-            all_the_speeds = speeds + [average_speed
-                                       ] * len(urls_without_speeds)
+            all_the_speeds = speeds + [average_speed] * len(urls_without_speeds)
             return all_matched_urls, all_the_speeds
 
         if self.strategy == Strategy.RANDOM:
@@ -199,8 +193,7 @@ class NodeManager:
                 return None
             speed_sum = sum(all_the_speeds)
             weights = [speed / speed_sum for speed in all_the_speeds]
-            index = random.choices(range(len(all_matched_urls)),
-                                   weights=weights)[0]
+            index = random.choices(range(len(all_matched_urls)), weights=weights)[0]
             url = all_matched_urls[index]
             return url
         elif self.strategy == Strategy.MIN_EXPECTED_LATENCY:
@@ -213,8 +206,7 @@ class NodeManager:
             all_indexes = [i for i in range(len(all_the_speeds))]
             random.shuffle(all_indexes)
             for index in all_indexes:
-                latency = self.nodes[
-                    all_matched_urls[index]].unfinished / all_the_speeds[index]
+                latency = self.nodes[all_matched_urls[index]].unfinished / all_the_speeds[index]
                 if min_latency > latency:
                     min_latency = latency
                     min_index = index
@@ -225,8 +217,7 @@ class NodeManager:
             for node_url, node_status in self.nodes.items():
                 if model_name in node_status.models:
                     if len(node_status.latency):
-                        latencies.append(np.mean(np.array(
-                            node_status.latency)))
+                        latencies.append(np.mean(np.array(node_status.latency)))
                     else:
                         latencies.append(float('inf'))
                     all_matched_urls.append(node_url)
@@ -241,8 +232,7 @@ class NodeManager:
         """Check if a request is valid."""
         if model_name in self.model_list:
             return
-        ret = create_error_response(
-            HTTPStatus.NOT_FOUND, f'The model `{model_name}` does not exist.')
+        ret = create_error_response(HTTPStatus.NOT_FOUND, f'The model `{model_name}` does not exist.')
         return ret
 
     def handle_unavailable_model(self, model_name):
@@ -251,7 +241,7 @@ class NodeManager:
         Args:
             model_name (str): the model in the request.
         """
-        logger.info(f'no model name: {model_name}')
+        logger.warning(f'no model name: {model_name}')
         ret = {
             'error_code': ErrorCodes.MODEL_NOT_FOUND,
             'text': err_msg[ErrorCodes.MODEL_NOT_FOUND],
@@ -260,51 +250,51 @@ class NodeManager:
 
     def handle_api_timeout(self, node_url):
         """Handle the api time out."""
-        logger.info(f'api timeout: {node_url}')
+        logger.warning(f'api timeout: {node_url}')
         ret = {
-            'error_code': ErrorCodes.API_TIMEOUT,
+            'error_code': ErrorCodes.API_TIMEOUT.value,
             'text': err_msg[ErrorCodes.API_TIMEOUT],
         }
         return json.dumps(ret).encode() + b'\n'
 
-    def stream_generate(self, request: Dict, node_url: str, node_path: str):
+    def stream_generate(self, request: Dict, node_url: str, endpoint: str):
         """Return a generator to handle the input request.
 
         Args:
             request (Dict): the input request.
             node_url (str): the node url.
-            node_path (str): the node path. Such as `/v1/chat/completions`.
+            endpoint (str): the endpoint. Such as `/v1/chat/completions`.
         """
         try:
             response = requests.post(
-                node_url + node_path,
+                node_url + endpoint,
                 json=request,
-                stream=request['stream'],
-                timeout=API_TIMEOUT_LEN,
+                stream=True,
+                timeout=(5, API_READ_TIMEOUT),
             )
-            for chunk in response.iter_lines(decode_unicode=False,
-                                             delimiter=b'\n'):
+            for chunk in response.iter_lines(decode_unicode=False, delimiter=b'\n'):
                 if chunk:
                     yield chunk + b'\n\n'
-        except requests.exceptions.RequestException as e:  # noqa
+        except (Exception, GeneratorExit, RequestException) as e:  # noqa
+            logger.error(f'catched an exception: {e}')
+            # exception happened, reduce unfinished num
             yield self.handle_api_timeout(node_url)
 
-    async def generate(self, request: Dict, node_url: str, node_path: str):
+    async def generate(self, request: Dict, node_url: str, endpoint: str):
         """Return a the response of the input request.
 
         Args:
             request (Dict): the input request.
             node_url (str): the node url.
-            node_path (str): the node path. Such as `/v1/chat/completions`.
+            endpoint (str): the endpoint. Such as `/v1/chat/completions`.
         """
         try:
             import httpx
             async with httpx.AsyncClient() as client:
-                response = await client.post(node_url + node_path,
-                                             json=request,
-                                             timeout=API_TIMEOUT_LEN)
+                response = await client.post(node_url + endpoint, json=request, timeout=API_READ_TIMEOUT)
                 return response.text
-        except requests.exceptions.RequestException as e:  # noqa
+        except (Exception, GeneratorExit, RequestException, asyncio.CancelledError) as e:  # noqa
+            logger.error(f'catched an exception: {e}')
             return self.handle_api_timeout(node_url)
 
     def pre_call(self, node_url):
@@ -354,10 +344,7 @@ def available_models():
     """Show available models."""
     model_cards = []
     for model_name in node_manager.model_list:
-        model_cards.append(
-            ModelCard(id=model_name,
-                      root=model_name,
-                      permission=[ModelPermission()]))
+        model_cards.append(ModelCard(id=model_name, root=model_name, permission=[ModelPermission()]))
     return ModelList(data=model_cards)
 
 
@@ -381,7 +368,11 @@ def add_node(node: Node, raw_request: Request = None):
         RPM or other metric. All the values of nodes should be the same metric.
     """
     try:
-        node_manager.add(node.url, node.status)
+        res = node_manager.add(node.url, node.status)
+        if res is not None:
+            logger.error(f'add node {node.url} failed, {res}')
+            return res
+        logger.info(f'add node {node.url} successfully')
         return 'Added successfully'
     except:  # noqa
         return 'Failed to add, please check the input url.'
@@ -392,14 +383,15 @@ def remove_node(node_url: str):
     """Show available models."""
     try:
         node_manager.remove(node_url)
+        logger.info(f'delete node {node_url} successfully')
         return 'Deleted successfully'
     except:  # noqa
+        logger.error(f'delete node {node_url} failed.')
         return 'Failed to delete, please check the input url.'
 
 
 @app.post('/v1/chat/completions', dependencies=[Depends(check_api_key)])
-async def chat_completions_v1(request: ChatCompletionRequest,
-                              raw_request: Request = None):
+async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Request = None):
     """Completion API similar to OpenAI's API.
 
     Refer to  `https://platform.openai.com/docs/api-reference/chat/create`
@@ -407,28 +399,50 @@ async def chat_completions_v1(request: ChatCompletionRequest,
 
     The request should be a JSON object with the following fields:
     - model: model name. Available from /v1/models.
-    - messages: string prompt or chat history in OpenAI format. A example
-        for chat history is `[{"role": "user", "content":"knock knock"}]`.
+    - messages: string prompt or chat history in OpenAI format. Chat history
+        example: `[{"role": "user", "content": "hi"}]`.
     - temperature (float): to modulate the next token probability
     - top_p (float): If set to float < 1, only the smallest set of most
         probable tokens with probabilities that add up to top_p or higher
         are kept for generation.
     - n (int): How many chat completion choices to generate for each input
-        message. Only support one here.
+        message. **Only support one here**.
     - stream: whether to stream the results or not. Default to false.
-    - max_tokens (int): output token nums
+    - max_tokens (int | None): output token nums. Default to None.
     - repetition_penalty (float): The parameter for repetition penalty.
         1.0 means no penalty
     - stop (str | List[str] | None): To stop generating further
         tokens. Only accept stop words that's encoded to one token idex.
+    - response_format (Dict | None): Only pytorch backend support formatting
+        response. Examples: `{"type": "json_schema", "json_schema": {"name":
+        "test","schema": {"properties": {"name": {"type": "string"}},
+        "required": ["name"], "type": "object"}}}`
+        or `{"type": "regex_schema", "regex_schema": "call me [A-Za-z]{1,10}"}`
+    - logit_bias (Dict): Bias to logits. Only supported in pytorch engine.
+    - tools (List): A list of tools the model may call. Currently, only
+        internlm2 functions are supported as a tool. Use this to specify a
+        list of functions for which the model can generate JSON inputs.
+    - tool_choice (str | object): Controls which (if any) tool is called by
+        the model. `none` means the model will not call any tool and instead
+        generates a message. Specifying a particular tool via {"type":
+        "function", "function": {"name": "my_function"}} forces the model to
+        call that tool. `auto` or `required` will put all the tools information
+        to the model.
 
     Additional arguments supported by LMDeploy:
+    - top_k (int): The number of the highest probability vocabulary
+        tokens to keep for top-k-filtering
     - ignore_eos (bool): indicator for ignoring eos
-    - session_id (int): if not specified, will set random value
+    - skip_special_tokens (bool): Whether or not to remove special tokens
+        in the decoding. Default to be True.
+    - min_new_tokens (int): To generate at least numbers of tokens.
+    - min_p (float): Minimum token probability, which will be scaled by the
+        probability of the most likely token. It must be a value between
+        0 and 1. Typical values are in the 0.01-0.2 range, comparably
+        selective as setting `top_p` in the 0.99-0.8 range (use the
+        opposite of normal `top_p` values)
 
     Currently we do not support the following features:
-    - function_call (Users should implement this by themselves)
-    - logit_bias (not supported yet)
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
@@ -439,23 +453,21 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     if not node_url:
         return node_manager.handle_unavailable_model(request.model)
 
+    logger.info(f'A request is dispatched to {node_url}')
     request_dict = request.model_dump()
     start = node_manager.pre_call(node_url)
     if request.stream is True:
-        response = node_manager.stream_generate(request_dict, node_url,
-                                                '/v1/chat/completions')
+        response = node_manager.stream_generate(request_dict, node_url, '/v1/chat/completions')
         background_task = node_manager.create_background_tasks(node_url, start)
         return StreamingResponse(response, background=background_task)
     else:
-        response = await node_manager.generate(request_dict, node_url,
-                                               '/v1/chat/completions')
+        response = await node_manager.generate(request_dict, node_url, '/v1/chat/completions')
         node_manager.post_call(node_url, start)
         return JSONResponse(json.loads(response))
 
 
 @app.post('/v1/completions', dependencies=[Depends(check_api_key)])
-async def completions_v1(request: CompletionRequest,
-                         raw_request: Request = None):
+async def completions_v1(request: CompletionRequest, raw_request: Request = None):
     """Completion API similar to OpenAI's API.
 
     Go to `https://platform.openai.com/docs/api-reference/completions/create`
@@ -465,13 +477,13 @@ async def completions_v1(request: CompletionRequest,
     - model (str): model name. Available from /v1/models.
     - prompt (str): the input prompt.
     - suffix (str): The suffix that comes after a completion of inserted text.
-    - max_tokens (int): output token nums
+    - max_tokens (int): output token nums. Default to 16.
     - temperature (float): to modulate the next token probability
     - top_p (float): If set to float < 1, only the smallest set of most
         probable tokens with probabilities that add up to top_p or higher
         are kept for generation.
     - n (int): How many chat completion choices to generate for each input
-        message. Only support one here.
+        message. **Only support one here**.
     - stream: whether to stream the results or not. Default to false.
     - repetition_penalty (float): The parameter for repetition penalty.
         1.0 means no penalty
@@ -481,7 +493,8 @@ async def completions_v1(request: CompletionRequest,
 
     Additional arguments supported by LMDeploy:
     - ignore_eos (bool): indicator for ignoring eos
-    - session_id (int): if not specified, will set random value
+    - skip_special_tokens (bool): Whether or not to remove special tokens
+        in the decoding. Default to be True.
     - top_k (int): The number of the highest probability vocabulary
         tokens to keep for top-k-filtering
 
@@ -497,26 +510,25 @@ async def completions_v1(request: CompletionRequest,
     if not node_url:
         return node_manager.handle_unavailable_model(request.model)
 
+    logger.info(f'A request is dispatched to {node_url}')
     request_dict = request.model_dump()
     start = node_manager.pre_call(node_url)
     if request.stream is True:
-        response = node_manager.stream_generate(request_dict, node_url,
-                                                '/v1/completions')
+        response = node_manager.stream_generate(request_dict, node_url, '/v1/completions')
         background_task = node_manager.create_background_tasks(node_url, start)
         return StreamingResponse(response, background=background_task)
     else:
-        response = await node_manager.generate(request_dict, node_url,
-                                               '/v1/completions')
+        response = await node_manager.generate(request_dict, node_url, '/v1/completions')
         node_manager.post_call(node_url, start)
         return JSONResponse(json.loads(response))
 
 
 def proxy(server_name: str = '0.0.0.0',
           server_port: int = 8000,
-          strategy: Literal['random', 'min_expected_latency',
-                            'min_observed_latency'] = 'min_expected_latency',
+          strategy: Literal['random', 'min_expected_latency', 'min_observed_latency'] = 'min_expected_latency',
           api_keys: Optional[Union[List[str], str]] = None,
           ssl: bool = False,
+          log_level: str = 'INFO',
           **kwargs):
     """To launch the proxy server.
 
@@ -540,6 +552,7 @@ def proxy(server_name: str = '0.0.0.0',
     if ssl:
         ssl_keyfile = os.environ['SSL_KEYFILE']
         ssl_certfile = os.environ['SSL_CERTFILE']
+    logger.setLevel(log_level)
     uvicorn.run(app=app,
                 host=server_name,
                 port=server_port,

@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import asyncio
 import os
 import random
 
@@ -26,6 +27,26 @@ def input_prompt(model_name):
         print('\ndouble enter to end input >>> ', end='')
         sentinel = ''  # ends when this string is seen
     return '\n'.join(iter(input, sentinel))
+
+
+async def async_infer(generator, session_id, input_ids, gen_config, sequence_start, step, stream_output, tokenizer,
+                      state):
+    token_ids = input_ids.copy()
+    prev_len = 0
+    async for output in generator.async_stream_infer(session_id=session_id,
+                                                     input_ids=input_ids,
+                                                     gen_config=gen_config,
+                                                     sequence_start=sequence_start,
+                                                     sequence_end=False,
+                                                     step=step,
+                                                     stream_output=stream_output):
+        tokens = output.num_token
+        if tokens > prev_len:
+            token_ids += output.token_ids[prev_len - tokens:]
+            response, state = tokenizer.detokenize_incrementally(token_ids, state=state)
+            prev_len = tokens
+            print(response, end='', flush=True)
+    return tokens
 
 
 def main(model_path: str,
@@ -99,22 +120,20 @@ def main(model_path: str,
     session_len = _get_and_verify_max_len(model_config, session_len)
 
     # engine
-    engine_cfg = TurbomindEngineConfig(
-        max_batch_size=1,
-        model_format=model_format,
-        session_len=session_len,
-        cache_max_entry_count=cache_max_entry_count,
-        cache_block_seq_len=cache_block_seq_len,
-        enable_prefix_caching=enable_prefix_caching,
-        quant_policy=quant_policy,
-        rope_scaling_factor=rope_scaling_factor,
-        dtype=dtype,
-        tp=tp)
+    engine_cfg = TurbomindEngineConfig(max_batch_size=1,
+                                       model_format=model_format,
+                                       session_len=session_len,
+                                       cache_max_entry_count=cache_max_entry_count,
+                                       cache_block_seq_len=cache_block_seq_len,
+                                       enable_prefix_caching=enable_prefix_caching,
+                                       quant_policy=quant_policy,
+                                       rope_scaling_factor=rope_scaling_factor,
+                                       dtype=dtype,
+                                       tp=tp)
     print('engine_cfg:\n', engine_cfg, sep='', flush=True)
 
     from lmdeploy import turbomind as tm
-    tm_model = tm.TurboMind.from_pretrained(model_path,
-                                            engine_config=engine_cfg)
+    tm_model = tm.TurboMind.from_pretrained(model_path, engine_config=engine_cfg)
     generator = tm_model.create_instance()
 
     # generateion config
@@ -130,6 +149,9 @@ def main(model_path: str,
                                   repetition_penalty=repetition_penalty,
                                   stop_token_ids=stop_words)
 
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
     nth_round = 1
     step = 0
     seed = random.getrandbits(64)
@@ -138,7 +160,7 @@ def main(model_path: str,
         if prompt == 'exit':
             exit(0)
         elif prompt == 'end':
-            generator.end(session_id)
+            loop.run_until_complete(generator.async_end(session_id))
             nth_round = 1
             step = 0
             seed = random.getrandbits(64)
@@ -149,34 +171,21 @@ def main(model_path: str,
 
             if model.capability == 'chat':
                 sequence_start = (nth_round == 1)
-                sequence_end = False
             else:
                 sequence_start = True
-                sequence_end = True
                 step = 0
 
-            if step + len(
-                    input_ids) + request_output_len >= tm_model.session_len:
+            if step + len(input_ids) + request_output_len >= tm_model.session_len:
                 print('WARNING: exceed session max length.'
                       ' Please end the session.')
                 continue
 
             print(f'{prompt}', end='', flush=True)
             state = DetokenizeState(len(input_ids))
-            for outputs in generator.stream_infer(
-                    session_id=session_id,
-                    input_ids=[input_ids],
-                    gen_config=gen_config,
-                    sequence_start=sequence_start,
-                    sequence_end=sequence_end,
-                    step=step,
-                    stream_output=stream_output):
 
-                res, tokens = input_ids + outputs.token_ids, outputs.num_token
-                # decode res
-                response, state = tokenizer.detokenize_incrementally(
-                    res, state=state)
-                print(response, end='', flush=True)
+            coro = async_infer(generator, session_id, input_ids, gen_config, sequence_start, step, stream_output,
+                               tokenizer, state)
+            tokens = loop.run_until_complete(coro)
 
             # update step
             step += len(input_ids) + tokens

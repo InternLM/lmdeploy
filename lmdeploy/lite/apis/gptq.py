@@ -51,28 +51,21 @@ def auto_gptq(model: str,
     from auto_gptq.modeling._const import SUPPORTED_MODELS
 
     from ..modeling.internlm2_gptq import InternLM2GPTQForCausalLM
+    from ..modeling.internlm3_gptq import InternLM3GPTQForCausalLM
     SUPPORTED_MODELS.append('internlm2')
     GPTQ_CAUSAL_LM_MODEL_MAP.update(dict(internlm2=InternLM2GPTQForCausalLM))
+    SUPPORTED_MODELS.append('internlm3')
+    GPTQ_CAUSAL_LM_MODEL_MAP.update(dict(internlm3=InternLM3GPTQForCausalLM))
 
     pretrained_model_dir = model
     quantized_model_dir = work_dir
 
-    tokenizer = AutoTokenizer.from_pretrained(pretrained_model_dir,
-                                              trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(pretrained_model_dir, trust_remote_code=True)
     print('Loading calibrate dataset ...')
-    calib_loader, _ = get_calib_loaders(calib_dataset,
-                                        tokenizer,
-                                        nsamples=calib_samples,
-                                        seqlen=calib_seqlen)
-    all_data = [
-        data if isinstance(data, torch.Tensor) else data[0]
-        for data in calib_loader
-    ]
+    calib_loader, _ = get_calib_loaders(calib_dataset, tokenizer, nsamples=calib_samples, seqlen=calib_seqlen)
+    all_data = [data if isinstance(data, torch.Tensor) else data[0] for data in calib_loader]
     attention_mask = [1] * calib_seqlen
-    examples = [
-        dict(input_ids=data.flatten().tolist(), attention_mask=attention_mask)
-        for data in all_data
-    ]
+    examples = [dict(input_ids=data.flatten().tolist(), attention_mask=attention_mask) for data in all_data]
 
     quantize_config = BaseQuantizeConfig(
         bits=w_bits,  # quantize model to 4-bit
@@ -83,9 +76,7 @@ def auto_gptq(model: str,
 
     # load un-quantized model, by default,
     # the model will always be loaded into CPU memory
-    hf_config = AutoConfig.from_pretrained(pretrained_model_dir,
-                                           revision=revision,
-                                           trust_remote_code=True)
+    hf_config = AutoConfig.from_pretrained(pretrained_model_dir, revision=revision, trust_remote_code=True)
     torch_dtype = getattr(hf_config, 'torch_dtype', torch.float16)
     if dtype == 'float16':
         torch_dtype = torch.float16
@@ -95,7 +86,7 @@ def auto_gptq(model: str,
                                                 quantize_config,
                                                 revision=revision,
                                                 torch_dtype=torch_dtype,
-                                                trust_remote_code=True)
+                                                trust_remote_code=True).cuda()
 
     # quantize model, the examples should be list of dict whose keys
     # can only be "input_ids" and "attention_mask"

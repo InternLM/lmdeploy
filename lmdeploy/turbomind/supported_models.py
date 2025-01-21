@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from lmdeploy.archs import get_model_arch
+from lmdeploy.archs import get_model_arch, search_nested_config
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -13,6 +13,8 @@ SUPPORTED_ARCHS = dict(
     InternLMForCausalLM='llama',
     # internlm2
     InternLM2ForCausalLM='internlm2',
+    # internlm3
+    InternLM3ForCausalLM='llama',
     # llama, llama2, alpaca, vicuna, codellama, ultracm, yi,
     # deepseek-coder, deepseek-llm
     LlamaForCausalLM='llama',
@@ -80,7 +82,12 @@ def is_supported(model_path: str):
     if os.path.exists(triton_model_path):
         support_by_turbomind = True
     else:
+
         arch, cfg = get_model_arch(model_path)
+        quant_method = search_nested_config(cfg.to_dict(), 'quant_method')
+        if quant_method and quant_method in ['smooth_quant']:
+            # tm hasn't support quantized models by applying smoothquant
+            return False
 
         if arch in SUPPORTED_ARCHS.keys():
             support_by_turbomind = True
@@ -100,13 +107,11 @@ def is_supported(model_path: str):
                     support_by_turbomind = False
             elif arch == 'InternVLChatModel':
                 llm_arch = cfg.llm_config.architectures[0]
-                support_by_turbomind = (llm_arch in SUPPORTED_ARCHS and
-                                        _is_head_dim_supported(cfg.llm_config))
+                support_by_turbomind = (llm_arch in SUPPORTED_ARCHS and _is_head_dim_supported(cfg.llm_config))
             elif arch == 'LlavaForConditionalGeneration':
                 llm_arch = cfg.text_config.architectures[0]
                 if llm_arch in ['Qwen2ForCausalLM', 'LlamaForCausalLM']:
-                    support_by_turbomind = _is_head_dim_supported(
-                        cfg.text_config)
+                    support_by_turbomind = _is_head_dim_supported(cfg.text_config)
             elif arch == 'MolmoForCausalLM':
                 kv_heads = cfg.num_key_value_heads
                 # TM hasn't supported allenai/Molmo-7B-O-0924 yet
