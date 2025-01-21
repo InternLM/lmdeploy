@@ -45,10 +45,7 @@ class APIClient:
             api key will be used.
     """
 
-    def __init__(self,
-                 api_server_url: str,
-                 api_key: Optional[str] = None,
-                 **kwargs):
+    def __init__(self, api_server_url: str, api_key: Optional[str] = None, **kwargs):
         self.api_server_url = api_server_url
         self.chat_intractive_v1_url = f'{api_server_url}/v1/chat/interactive'
         self.chat_completions_v1_url = f'{api_server_url}/v1/chat/completions'
@@ -66,8 +63,7 @@ class APIClient:
         """Show available models."""
         if self._available_models is not None:
             return self._available_models
-        self._available_models = get_model_list(self.models_v1_url,
-                                                headers=self.headers)
+        self._available_models = get_model_list(self.models_v1_url, headers=self.headers)
         return self._available_models
 
     def encode(self,
@@ -85,9 +81,7 @@ class APIClient:
         """
         response = requests.post(self.encode_v1_url,
                                  headers=self.headers,
-                                 json=dict(input=input,
-                                           do_preprocess=do_preprocess,
-                                           add_bos=add_bos),
+                                 json=dict(input=input, do_preprocess=do_preprocess, add_bos=add_bos),
                                  stream=False)
         if hasattr(response, 'text'):
             output = json_loads(response.text)
@@ -139,18 +133,9 @@ class APIClient:
         Yields:
             json objects in openai formats
         """
-        pload = {
-            k: v
-            for k, v in locals().copy().items()
-            if k[:2] != '__' and k not in ['self']
-        }
-        response = requests.post(self.chat_completions_v1_url,
-                                 headers=self.headers,
-                                 json=pload,
-                                 stream=stream)
-        for chunk in response.iter_lines(chunk_size=8192,
-                                         decode_unicode=False,
-                                         delimiter=b'\n'):
+        pload = {k: v for k, v in locals().copy().items() if k[:2] != '__' and k not in ['self']}
+        response = requests.post(self.chat_completions_v1_url, headers=self.headers, json=pload, stream=stream)
+        for chunk in response.iter_lines(chunk_size=8192, decode_unicode=False, delimiter=b'\n'):
             if chunk:
                 if stream:
                     decoded = chunk.decode('utf-8')
@@ -221,18 +206,9 @@ class APIClient:
             json objects consist of text, tokens, input_tokens,
                 history_tokens, finish_reason
         """
-        pload = {
-            k: v
-            for k, v in locals().copy().items()
-            if k[:2] != '__' and k not in ['self']
-        }
-        response = requests.post(self.chat_intractive_v1_url,
-                                 headers=self.headers,
-                                 json=pload,
-                                 stream=stream)
-        for chunk in response.iter_lines(chunk_size=8192,
-                                         decode_unicode=False,
-                                         delimiter=b'\n'):
+        pload = {k: v for k, v in locals().copy().items() if k[:2] != '__' and k not in ['self']}
+        response = requests.post(self.chat_intractive_v1_url, headers=self.headers, json=pload, stream=stream)
+        for chunk in response.iter_lines(chunk_size=8192, decode_unicode=False, delimiter=b'\n'):
             if chunk:
                 decoded = chunk.decode('utf-8')
                 output = json_loads(decoded)
@@ -287,18 +263,9 @@ class APIClient:
         Yields:
             json objects in openai formats
         """
-        pload = {
-            k: v
-            for k, v in locals().copy().items()
-            if k[:2] != '__' and k not in ['self']
-        }
-        response = requests.post(self.completions_v1_url,
-                                 headers=self.headers,
-                                 json=pload,
-                                 stream=stream)
-        for chunk in response.iter_lines(chunk_size=8192,
-                                         decode_unicode=False,
-                                         delimiter=b'\n'):
+        pload = {k: v for k, v in locals().copy().items() if k[:2] != '__' and k not in ['self']}
+        response = requests.post(self.completions_v1_url, headers=self.headers, json=pload, stream=stream)
+        for chunk in response.iter_lines(chunk_size=8192, decode_unicode=False, delimiter=b'\n'):
             if chunk:
                 if stream:
                     decoded = chunk.decode('utf-8')
@@ -350,18 +317,17 @@ class APIClient:
             text, tokens, finish_reason
         """
         assert session_id != -1, 'please set a value other than -1'
-        for outputs in self.chat_interactive_v1(
-                prompt,
-                session_id=session_id,
-                image_url=image_url,
-                request_output_len=request_output_len,
-                interactive_mode=True,
-                stream=stream,
-                top_k=top_k,
-                top_p=top_p,
-                temperature=temperature,
-                repetition_penalty=repetition_penalty,
-                ignore_eos=ignore_eos):
+        for outputs in self.chat_interactive_v1(prompt,
+                                                session_id=session_id,
+                                                image_url=image_url,
+                                                request_output_len=request_output_len,
+                                                interactive_mode=True,
+                                                stream=stream,
+                                                top_k=top_k,
+                                                top_p=top_p,
+                                                temperature=temperature,
+                                                repetition_penalty=repetition_penalty,
+                                                ignore_eos=ignore_eos):
             if outputs['finish_reason'] == 'length' and outputs['tokens'] == 0:
                 print('WARNING: exceed session max length.'
                       ' Please end the session.')
@@ -389,18 +355,17 @@ def input_prompt():
     return '\n'.join(iter(input, sentinel))
 
 
-def get_streaming_response(
-        prompt: str,
-        api_url: str,
-        session_id: int,
-        request_output_len: int = 512,
-        stream: bool = True,
-        interactive_mode: bool = False,
-        ignore_eos: bool = False,
-        cancel: bool = False,
-        top_p: float = 0.8,
-        temperature: float = 0.7,
-        api_key: Optional[str] = None) -> Iterable[List[str]]:
+def get_streaming_response(prompt: str,
+                           api_url: str,
+                           session_id: int,
+                           request_output_len: int = 512,
+                           stream: bool = True,
+                           interactive_mode: bool = False,
+                           ignore_eos: bool = False,
+                           cancel: bool = False,
+                           top_p: float = 0.8,
+                           temperature: float = 0.7,
+                           api_key: Optional[str] = None) -> Iterable[List[str]]:
     headers = {'User-Agent': 'Test Client'}
     if api_key is not None:
         headers['Authorization'] = f'Bearer {api_key}'
@@ -415,13 +380,8 @@ def get_streaming_response(
         'top_p': top_p,
         'temperature': temperature
     }
-    response = requests.post(api_url,
-                             headers=headers,
-                             json=pload,
-                             stream=stream)
-    for chunk in response.iter_lines(chunk_size=8192,
-                                     decode_unicode=False,
-                                     delimiter=b'\n'):
+    response = requests.post(api_url, headers=headers, json=pload, stream=stream)
+    for chunk in response.iter_lines(chunk_size=8192, decode_unicode=False, delimiter=b'\n'):
         if chunk:
             data = json_loads(chunk.decode('utf-8'))
             output = data.pop('text', '')
@@ -430,9 +390,7 @@ def get_streaming_response(
             yield output, tokens, finish_reason
 
 
-def main(api_server_url: str = 'http://0.0.0.0:23333',
-         session_id: int = 0,
-         api_key: Optional[str] = None):
+def main(api_server_url: str = 'http://0.0.0.0:23333', session_id: int = 0, api_key: Optional[str] = None):
     """Main function to chat in terminal."""
     if not api_server_url.startswith('http://'):
         print(f'[WARNING] api_server_url of the api_server should '
@@ -446,11 +404,10 @@ def main(api_server_url: str = 'http://0.0.0.0:23333',
             if prompt == 'exit':
                 exit(0)
         else:
-            for text, tokens, finish_reason in api_client.chat(
-                    prompt,
-                    session_id=session_id,
-                    request_output_len=512,
-                    stream=True):
+            for text, tokens, finish_reason in api_client.chat(prompt,
+                                                               session_id=session_id,
+                                                               request_output_len=512,
+                                                               stream=True):
                 if finish_reason == 'length':
                     continue
                 print(text, end='')

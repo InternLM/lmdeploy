@@ -5,38 +5,24 @@ from opencompass.models import TurboMindModelwithChatTemplate
 
 with read_base():
     # choose a list of datasets
-    from opencompass.configs.datasets.bbh.bbh_gen_5b92b0 import \
-        bbh_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.ceval.ceval_gen_2daf24 import \
-        ceval_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.cmmlu.cmmlu_gen_c13365 import \
-        cmmlu_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.crowspairs.crowspairs_gen_381af0 import \
-        crowspairs_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.bbh.bbh_gen_5b92b0 import bbh_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.ceval.ceval_gen_2daf24 import ceval_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.cmmlu.cmmlu_gen_c13365 import cmmlu_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.crowspairs.crowspairs_gen_381af0 import crowspairs_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.GaokaoBench.GaokaoBench_no_subjective_gen_4c31db import \
         GaokaoBench_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.gpqa.gpqa_gen_4baadb import \
-        gpqa_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.gsm8k.gsm8k_gen_1d7fe4 import \
-        gsm8k_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.gpqa.gpqa_gen_4baadb import gpqa_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.gsm8k.gsm8k_gen_1d7fe4 import gsm8k_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.hellaswag.hellaswag_10shot_gen_e42710 import \
         hellaswag_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.humaneval.humaneval_gen_8e312c import \
-        humaneval_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.IFEval.IFEval_gen_3321a3 import \
-        ifeval_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.math.math_0shot_gen_393424 import \
-        math_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.mbpp.sanitized_mbpp_gen_a0fc46 import \
-        sanitized_mbpp_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.mmlu.mmlu_gen_4d595a import \
-        mmlu_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.nq.nq_open_1shot_gen_01cf41 import \
-        nq_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.race.race_gen_69ee4f import \
-        race_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.TheoremQA.TheoremQA_5shot_gen_6f0af8 import \
-        TheoremQA_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.humaneval.humaneval_gen_8e312c import humaneval_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.IFEval.IFEval_gen_3321a3 import ifeval_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.math.math_0shot_gen_393424 import math_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.mbpp.sanitized_mbpp_gen_a0fc46 import sanitized_mbpp_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.mmlu.mmlu_gen_4d595a import mmlu_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.nq.nq_open_1shot_gen_01cf41 import nq_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.race.race_gen_69ee4f import race_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.TheoremQA.TheoremQA_5shot_gen_6f0af8 import TheoremQA_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.triviaqa.triviaqa_wiki_1shot_gen_eaf81e import \
         triviaqa_datasets  # noqa: F401, E501
     from opencompass.configs.datasets.winogrande.winogrande_5shot_gen_b36770 import \
@@ -44,8 +30,7 @@ with read_base():
     # read models
     from opencompass.configs.models.baichuan.hf_baichuan2_7b_chat import \
         models as hf_baichuan2_chat_7b  # noqa: F401, E501
-    from opencompass.configs.models.gemma.hf_gemma2_9b_it import \
-        models as hf_gemma2_9b_it  # noqa: F401, E501
+    from opencompass.configs.models.gemma.hf_gemma2_9b_it import models as hf_gemma2_9b_it  # noqa: F401, E501
     from opencompass.configs.models.hf_internlm.hf_internlm2_5_7b_chat import \
         models as hf_internlm2_5_7b_chat  # noqa: F401, E501
     from opencompass.configs.models.hf_internlm.hf_internlm2_5_20b_chat import \
@@ -64,8 +49,7 @@ with read_base():
         models as lmdeploy_internlm2_chat_20b  # noqa: F401, E501
     from opencompass.configs.models.hf_internlm.lmdeploy_internlm_chat_7b import \
         models as lmdeploy_internlm_chat_7b  # noqa: F401, E501
-    from opencompass.configs.models.hf_llama.hf_llama2_7b_chat import \
-        models as hf_llama2_chat_7b  # noqa: F401, E501
+    from opencompass.configs.models.hf_llama.hf_llama2_7b_chat import models as hf_llama2_chat_7b  # noqa: F401, E501
     from opencompass.configs.models.hf_llama.hf_llama3_1_8b_instruct import \
         models as hf_llama3_1_8b_instruct  # noqa: F401, E501
     from opencompass.configs.models.hf_llama.hf_llama3_8b_instruct import \
@@ -82,14 +66,11 @@ with read_base():
         models as hf_mixtral_chat_8x7b  # noqa: F401, E501
     from opencompass.configs.models.qwen2_5.lmdeploy_qwen2_5_7b_instruct import \
         models as lmdeploy_qwen2_5_7b_instruct  # noqa: F401, E501
-    from opencompass.configs.models.qwen.hf_qwen1_5_7b_chat import \
-        models as hf_qwen1_5_chat_7b  # noqa: F401, E501
+    from opencompass.configs.models.qwen.hf_qwen1_5_7b_chat import models as hf_qwen1_5_chat_7b  # noqa: F401, E501
     from opencompass.configs.models.qwen.hf_qwen1_5_moe_a2_7b_chat import \
         models as hf_qwen1_5_moe_a2_7b_chat  # noqa: F401, E501
-    from opencompass.configs.models.qwen.hf_qwen2_7b_instruct import \
-        models as hf_qwen2_7b_instruct  # noqa: F401, E501
-    from opencompass.configs.models.qwen.hf_qwen_7b_chat import \
-        models as hf_qwen_chat_7b  # noqa: F401, E501
+    from opencompass.configs.models.qwen.hf_qwen2_7b_instruct import models as hf_qwen2_7b_instruct  # noqa: F401, E501
+    from opencompass.configs.models.qwen.hf_qwen_7b_chat import models as hf_qwen_chat_7b  # noqa: F401, E501
     from opencompass.configs.models.qwen.lmdeploy_qwen1_5_7b_chat import \
         models as lmdeploy_qwen1_5_7b_chat  # noqa: F401, E501
     from opencompass.configs.models.qwen.lmdeploy_qwen2_7b_instruct import \
@@ -97,26 +78,17 @@ with read_base():
     from opencompass.configs.models.qwen.lmdeploy_qwen_7b_chat import \
         models as lmdeploy_qwen_7b_chat  # noqa: F401, E501
     # Summary Groups
-    from opencompass.configs.summarizers.groups.bbh import \
-        bbh_summary_groups  # noqa: F401, E501
-    from opencompass.configs.summarizers.groups.cmmlu import \
-        cmmlu_summary_groups  # noqa: F401, E501
-    from opencompass.configs.summarizers.groups.ds1000 import \
-        ds1000_summary_groups  # noqa: F401, E501
-    from opencompass.configs.summarizers.groups.GaokaoBench import \
-        GaokaoBench_summary_groups  # noqa: F401, E501
-    from opencompass.configs.summarizers.groups.humanevalx import \
-        humanevalx_summary_groups  # noqa: F401, E501
+    from opencompass.configs.summarizers.groups.bbh import bbh_summary_groups  # noqa: F401, E501
+    from opencompass.configs.summarizers.groups.cmmlu import cmmlu_summary_groups  # noqa: F401, E501
+    from opencompass.configs.summarizers.groups.ds1000 import ds1000_summary_groups  # noqa: F401, E501
+    from opencompass.configs.summarizers.groups.GaokaoBench import GaokaoBench_summary_groups  # noqa: F401, E501
+    from opencompass.configs.summarizers.groups.humanevalx import humanevalx_summary_groups  # noqa: F401, E501
     from opencompass.configs.summarizers.groups.mathbench_v1_2024 import \
         mathbench_2024_summary_groups  # noqa: F401, E501
-    from opencompass.configs.summarizers.groups.mmlu import \
-        mmlu_summary_groups  # noqa: F401, E501
-    from opencompass.configs.summarizers.groups.mmlu_pro import \
-        mmlu_pro_summary_groups  # noqa: F401, E501
-    from opencompass.configs.summarizers.groups.scicode import \
-        scicode_summary_groups  # noqa: F401, E501
-    from opencompass.configs.summarizers.groups.teval import \
-        teval_summary_groups  # noqa: F401, E501
+    from opencompass.configs.summarizers.groups.mmlu import mmlu_summary_groups  # noqa: F401, E501
+    from opencompass.configs.summarizers.groups.mmlu_pro import mmlu_pro_summary_groups  # noqa: F401, E501
+    from opencompass.configs.summarizers.groups.scicode import scicode_summary_groups  # noqa: F401, E501
+    from opencompass.configs.summarizers.groups.teval import teval_summary_groups  # noqa: F401, E501
 
 llama2_meta_template = dict(round=[
     dict(role='HUMAN', begin='[INST] ', end=' [/INST]'),
@@ -142,15 +114,12 @@ turbomind_internlm2_5_7b_chat_kvint8 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
 pytorch_internlm2_5_7b_chat = deepcopy(*lmdeploy_internlm2_5_7b_chat)
 pytorch_internlm2_5_7b_chat_w8a8 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
 turbomind_internlm2_5_7b_chat_batch1 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
-turbomind_internlm2_5_7b_chat_batch1_4bits = deepcopy(
-    *lmdeploy_internlm2_5_7b_chat)
+turbomind_internlm2_5_7b_chat_batch1_4bits = deepcopy(*lmdeploy_internlm2_5_7b_chat)
 
 turbomind_internlm3_8b_instruct = deepcopy(*lmdeploy_internlm2_5_7b_chat)
 turbomind_internlm3_8b_instruct_4bits = deepcopy(*lmdeploy_internlm2_5_7b_chat)
-turbomind_internlm3_8b_instruct_kvint4 = deepcopy(
-    *lmdeploy_internlm2_5_7b_chat)
-turbomind_internlm3_8b_instruct_kvint8 = deepcopy(
-    *lmdeploy_internlm2_5_7b_chat)
+turbomind_internlm3_8b_instruct_kvint4 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
+turbomind_internlm3_8b_instruct_kvint8 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
 pytorch_internlm3_8b_instruct = deepcopy(*lmdeploy_internlm2_5_7b_chat)
 pytorch_internlm3_8b_instruct_w8a8 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
 for model in [v for k, v in locals().items() if 'internlm3_8b_instruct' in k]:
@@ -160,10 +129,8 @@ for model in [v for k, v in locals().items() if 'internlm3_8b_instruct' in k]:
 # ===== Configs for internlm/internlm2_5_20b_chat =====
 turbomind_internlm2_5_20b_chat = deepcopy(*lmdeploy_internlm2_5_20b_chat)
 turbomind_internlm2_5_20b_chat_4bits = deepcopy(*lmdeploy_internlm2_5_20b_chat)
-turbomind_internlm2_5_20b_chat_kvint4 = deepcopy(
-    *lmdeploy_internlm2_5_20b_chat)
-turbomind_internlm2_5_20b_chat_kvint8 = deepcopy(
-    *lmdeploy_internlm2_5_20b_chat)
+turbomind_internlm2_5_20b_chat_kvint4 = deepcopy(*lmdeploy_internlm2_5_20b_chat)
+turbomind_internlm2_5_20b_chat_kvint8 = deepcopy(*lmdeploy_internlm2_5_20b_chat)
 pytorch_internlm2_5_20b_chat = deepcopy(*lmdeploy_internlm2_5_20b_chat)
 
 # ===== Configs for internlm/internlm2_chat_20b =====
@@ -196,13 +163,10 @@ pytorch_llama3_8b_instruct = deepcopy(*lmdeploy_llama3_8b_instruct)
 
 # ===== Configs for meta-llama/Meta-Llama-3.1-8B-Instruct =====
 turbomind_llama3_1_8b_instruct = deepcopy(*lmdeploy_llama3_1_8b_instruct)
-turbomind_llama3_1_8b_instruct[
-    'path'] = 'meta-llama/Meta-Llama-3-1-8B-Instruct'
+turbomind_llama3_1_8b_instruct['path'] = 'meta-llama/Meta-Llama-3-1-8B-Instruct'
 turbomind_llama3_1_8b_instruct_4bits = deepcopy(turbomind_llama3_1_8b_instruct)
-turbomind_llama3_1_8b_instruct_kvint4 = deepcopy(
-    turbomind_llama3_1_8b_instruct)
-turbomind_llama3_1_8b_instruct_kvint8 = deepcopy(
-    turbomind_llama3_1_8b_instruct)
+turbomind_llama3_1_8b_instruct_kvint4 = deepcopy(turbomind_llama3_1_8b_instruct)
+turbomind_llama3_1_8b_instruct_kvint8 = deepcopy(turbomind_llama3_1_8b_instruct)
 pytorch_llama3_1_8b_instruct = deepcopy(turbomind_llama3_1_8b_instruct)
 pytorch_llama3_1_8b_instruct_w8a8 = deepcopy(turbomind_llama3_1_8b_instruct)
 
@@ -263,11 +227,8 @@ for model in [v for k, v in locals().items() if '_batch1' in k]:
     model['batch_size'] = 1
 
 basic_pytorch_chat_tp1 = dict(type=TurboMindModelwithChatTemplate,
-                              engine_config=dict(session_len=MAX_SESSION_LEN,
-                                                 max_batch_size=512,
-                                                 tp=1),
-                              gen_config=dict(do_sample=False,
-                                              max_new_tokens=MAX_NEW_TOKENS),
+                              engine_config=dict(session_len=MAX_SESSION_LEN, max_batch_size=512, tp=1),
+                              gen_config=dict(do_sample=False, max_new_tokens=MAX_NEW_TOKENS),
                               max_out_len=MAX_NEW_TOKENS,
                               max_seq_len=MAX_SESSION_LEN,
                               batch_size=1000,
@@ -380,6 +341,5 @@ summarizer = dict(
         'ds1000_Pytorch',
         'ds1000_Matplotlib',
     ],
-    summary_groups=sum(
-        [v for k, v in locals().items() if k.endswith('_summary_groups')], []),
+    summary_groups=sum([v for k, v in locals().items() if k.endswith('_summary_groups')], []),
 )

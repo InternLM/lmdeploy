@@ -21,8 +21,7 @@ def _make_bias(q_seqlens, history_lens, neg_val, causal):
         seq_ranges = torch.stack(seq_ranges, dim=0).cuda()
         kv_ranges = [torch.arange(max_kv_len) for _ in kv_seqlens]
         kv_ranges = torch.stack(kv_ranges, 0).cuda()
-        mask = (kv_ranges[:, None, :] - seq_ranges[:, :, None] >
-                history_lens[:, None, None])
+        mask = (kv_ranges[:, None, :] - seq_ranges[:, :, None] > history_lens[:, None, None])
         return mask.float() * neg_val
     else:
         q_mask = torch.arange(max_seq_len)[None].cuda() < q_seqlens[:, None]
@@ -135,33 +134,17 @@ class TestFlashAttention:
         torch.manual_seed(123)
         batch_size = len(q_seqlens)
         max_seq_len = q_seqlens.max().item()
-        inputs = torch.rand(batch_size,
-                            max_seq_len,
-                            num_heads_q,
-                            head_dim_k,
-                            dtype=dtype,
-                            device='cuda')
+        inputs = torch.rand(batch_size, max_seq_len, num_heads_q, head_dim_k, dtype=dtype, device='cuda')
         yield inputs
 
     @pytest.fixture
-    def batched_kv(self, q_seqlens, history_lens, num_heads_k, head_dim_k,
-                   head_dim_v, dtype):
+    def batched_kv(self, q_seqlens, history_lens, num_heads_k, head_dim_k, head_dim_v, dtype):
         torch.manual_seed(123)
         batch_size = len(q_seqlens)
         kv_seqlens = q_seqlens + history_lens
         max_seq_len = kv_seqlens.max().item()
-        k = torch.rand(batch_size,
-                       max_seq_len,
-                       num_heads_k,
-                       head_dim_k,
-                       dtype=dtype,
-                       device='cuda')
-        v = torch.rand(batch_size,
-                       max_seq_len,
-                       num_heads_k,
-                       head_dim_v,
-                       dtype=dtype,
-                       device='cuda')
+        k = torch.rand(batch_size, max_seq_len, num_heads_k, head_dim_k, dtype=dtype, device='cuda')
+        v = torch.rand(batch_size, max_seq_len, num_heads_k, head_dim_v, dtype=dtype, device='cuda')
         yield k, v
 
     @pytest.fixture
@@ -194,14 +177,10 @@ class TestFlashAttention:
     @pytest.mark.parametrize('num_heads_q', [8, 2], indirect=True)
     @pytest.mark.parametrize('num_heads_k', [2], indirect=True)
     @pytest.mark.parametrize('causal', [True, False], indirect=True)
-    @pytest.mark.parametrize(['q_seqlens', 'history_lens'],
-                             [([30, 50, 70, 90], [50, 40, 30, 20])],
-                             indirect=True)
-    def test_flash_attention(self, conti_q, conti_kv, q_start_loc, q_seqlens,
-                             kv_start_loc, kv_seqlens, head_dim_v, causal,
-                             conti_gt):
-        from lmdeploy.pytorch.kernels.cuda.flashattention import \
-            flash_attention_fwd
+    @pytest.mark.parametrize(['q_seqlens', 'history_lens'], [([30, 50, 70, 90], [50, 40, 30, 20])], indirect=True)
+    def test_flash_attention(self, conti_q, conti_kv, q_start_loc, q_seqlens, kv_start_loc, kv_seqlens, head_dim_v,
+                             causal, conti_gt):
+        from lmdeploy.pytorch.kernels.cuda.flashattention import flash_attention_fwd
         max_seq_len = q_seqlens.max().item()
 
         conti_k, conti_v = conti_kv
@@ -234,18 +213,14 @@ class TestFlashAttention:
 
     @pytest.mark.parametrize('head_dim_k', [16], indirect=True)
     @pytest.mark.parametrize('head_dim_v', [16], indirect=True)
-    @pytest.mark.parametrize(['num_heads_q', 'num_heads_k'], [(4, 2)],
-                             indirect=True)
+    @pytest.mark.parametrize(['num_heads_q', 'num_heads_k'], [(4, 2)], indirect=True)
     @pytest.mark.parametrize(['q_seqlens', 'history_lens'], [
         ([30, 50, 70, 90], [50, 40, 30, 90]),
-    ],
-                             indirect=True)
+    ], indirect=True)
     @pytest.mark.parametrize('win_size', (32, ), indirect=True)
-    def test_window_attention(self, conti_q, conti_kv, q_start_loc, q_seqlens,
-                              kv_start_loc, kv_seqlens, head_dim_v, win_size,
-                              window_gt):
-        from lmdeploy.pytorch.kernels.cuda.flashattention import \
-            flash_attention_fwd
+    def test_window_attention(self, conti_q, conti_kv, q_start_loc, q_seqlens, kv_start_loc, kv_seqlens, head_dim_v,
+                              win_size, window_gt):
+        from lmdeploy.pytorch.kernels.cuda.flashattention import flash_attention_fwd
         max_seq_len = q_seqlens.max().item()
 
         conti_k, conti_v = conti_kv

@@ -100,10 +100,7 @@ def make_step_context(
         block_offsets_1d = torch.arange(0, num_blocks)
         block_end_loc = num_blocks_per_seq.cumsum(0)
         block_start_loc = block_end_loc - num_blocks_per_seq
-        block_offsets = [
-            block_offsets_1d[sloc:eloc]
-            for sloc, eloc in zip(block_start_loc, block_end_loc)
-        ]
+        block_offsets = [block_offsets_1d[sloc:eloc] for sloc, eloc in zip(block_start_loc, block_end_loc)]
         num_blocks_offs = torch.tensor([len(boff) for boff in block_offsets])
         block_offsets = pad_sequence(block_offsets, batch_first=True)
 
@@ -178,8 +175,7 @@ class ModuleIOExtractor:
             target_output = output
             raise ExtractorFound()
 
-        handle = self._target_module.register_forward_hook(__forward_hook,
-                                                           with_kwargs=True)
+        handle = self._target_module.register_forward_hook(__forward_hook, with_kwargs=True)
 
         try:
             self._model(*args, **kwargs)

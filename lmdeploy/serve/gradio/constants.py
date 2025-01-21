@@ -19,10 +19,9 @@ CSS = """
 }
 """
 
-THEME = gr.themes.Soft(
-    primary_hue=gr.themes.colors.blue,
-    secondary_hue=gr.themes.colors.sky,
-    font=[gr.themes.GoogleFont('Inconsolata'), 'Arial', 'sans-serif'])
+THEME = gr.themes.Soft(primary_hue=gr.themes.colors.blue,
+                       secondary_hue=gr.themes.colors.sky,
+                       font=[gr.themes.GoogleFont('Inconsolata'), 'Arial', 'sans-serif'])
 
 enable_btn = gr.update(interactive=True)
 disable_btn = gr.update(interactive=False)

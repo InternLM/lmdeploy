@@ -52,10 +52,9 @@ class CambOpsBackend(DlinferOpsBackend):
 
         def get_total_slots():
             if cls.total_slots is None:
-                cls.total_slots = torch.arange(
-                    block_num * block_size,
-                    dtype=torch.int32,
-                    device=step_context.block_offsets.device)
+                cls.total_slots = torch.arange(block_num * block_size,
+                                               dtype=torch.int32,
+                                               device=step_context.block_offsets.device)
                 cls.total_slots = cls.total_slots.view(block_num, block_size)
             return cls.total_slots
 
@@ -70,8 +69,7 @@ class CambOpsBackend(DlinferOpsBackend):
         max_q_seq_len = torch.max(q_seqlens).cpu().item()
         max_kv_seq_len = torch.max(kv_seqlens).cpu().item()
 
-        cu_seqlens = torch.cat(
-            (q_start_loc, q_seqlens.sum().unsqueeze(0))).int()
+        cu_seqlens = torch.cat((q_start_loc, q_seqlens.sum().unsqueeze(0))).int()
         cu_seq_lens_kv = None
 
         q_seqlens_list = step_context.q_seqlens.tolist()
@@ -90,9 +88,7 @@ class CambOpsBackend(DlinferOpsBackend):
                 kv_start_indices.append(slots)
             kv_start_indices = torch.cat(kv_start_indices)
             if not is_unpaged_prefill:
-                cu_seq_lens_kv = torch.cat(
-                    (torch.tensor([0], device=kv_seqlens.device),
-                     kv_seqlens.cumsum(0))).int()
+                cu_seq_lens_kv = torch.cat((torch.tensor([0], device=kv_seqlens.device), kv_seqlens.cumsum(0))).int()
         else:
             # collect kv_start_indices without using a for-loop,
             # (fill kv-cache for just ONE token during the decoding phase)
@@ -122,11 +118,8 @@ class CambOpsBackend(DlinferOpsBackend):
         return step_context
 
     @staticmethod
-    def build_graph_runner(model: torch.nn.Module, model_config: ModelConfig,
-                           cache_config: CacheConfig,
-                           backend_config: BackendConfig,
-                           device: torch.device):
+    def build_graph_runner(model: torch.nn.Module, model_config: ModelConfig, cache_config: CacheConfig,
+                           backend_config: BackendConfig, device: torch.device):
         """build graph runner."""
         from lmdeploy.pytorch.backends.cuda.graph_runner import CUDAGraphRunner
-        return CUDAGraphRunner(model, model_config, cache_config,
-                               backend_config, device)
+        return CUDAGraphRunner(model, model_config, cache_config, backend_config, device)

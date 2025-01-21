@@ -38,8 +38,7 @@ def collect_target_modules(model: nn.Module,
     return name2mod
 
 
-def collect_target_weights(model: nn.Module, target: Union[str, type],
-                           skip_names: List[str]) -> Dict[str, nn.Module]:
+def collect_target_weights(model: nn.Module, target: Union[str, type], skip_names: List[str]) -> Dict[str, nn.Module]:
     """Collects weights of the specific target modules from the model.
 
     Args:
@@ -57,15 +56,12 @@ def collect_target_weights(model: nn.Module, target: Union[str, type],
     named_modules = collect_target_modules(model, target, skip_names)
     mod2weight = {}
     for _, mod in named_modules.items():
-        assert hasattr(
-            mod, 'weight'), "The module does not have a 'weight' attribute"
+        assert hasattr(mod, 'weight'), "The module does not have a 'weight' attribute"
         mod2weight[mod] = mod.weight
     return mod2weight
 
 
-def bimap_name_mod(
-    name2mod_mappings: List[Dict[str, nn.Module]]
-) -> Tuple[Dict[str, nn.Module], Dict[nn.Module, str]]:
+def bimap_name_mod(name2mod_mappings: List[Dict[str, nn.Module]]) -> Tuple[Dict[str, nn.Module], Dict[nn.Module, str]]:
     """Generates bidirectional maps from module names to module instances and
     vice versa.
 

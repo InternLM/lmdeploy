@@ -89,9 +89,7 @@ class VisonModel(ABC):
         """  # noqa
         raise NotImplementedError()
 
-    def forward(self,
-                messages: List[Dict],
-                max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
         """extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
@@ -149,17 +147,14 @@ class VisonModel(ABC):
             content = message['content']
             if not isinstance(content, List):
                 continue
-            images.extend([
-                (x['image'],
-                 {k: v
-                  for k, v in x.items() if k not in {'type', 'image'}})
-                for x in content if x['type'] == 'image'
-            ])
+            images.extend([(x['image'], {
+                k: v
+                for k, v in x.items() if k not in {'type', 'image'}
+            }) for x in content if x['type'] == 'image'])
         return images
 
     @staticmethod
-    def to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
-                       sequence_start):
+    def to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start):
         """auxiliary function to pack the preprocessing results in a format
         compatible with what is required by pytorch engine.
 
@@ -178,9 +173,8 @@ class VisonModel(ABC):
 
         # split prompt into segments and validate data
         segs = prompt.split(IMAGE_TOKEN)
-        assert len(segs) == len(preps) + 1, (
-            f'the number of {IMAGE_TOKEN} is not equal '
-            f'to input images, {len(segs) - 1} vs {len(preps)}')
+        assert len(segs) == len(preps) + 1, (f'the number of {IMAGE_TOKEN} is not equal '
+                                             f'to input images, {len(segs) - 1} vs {len(preps)}')
 
         # calculate the image token offset for each image
         input_ids = []
@@ -190,15 +184,13 @@ class VisonModel(ABC):
                 image_tokens = preps[i - 1]['image_tokens']
                 image_token_id = preps[i - 1]['image_token_id']
                 input_ids.extend([image_token_id] * image_tokens)
-            token_ids = tokenizer.encode(seg,
-                                         add_bos=((i == 0) and sequence_start))
+            token_ids = tokenizer.encode(seg, add_bos=((i == 0) and sequence_start))
             input_ids.extend(token_ids)
 
         return dict(prompt=prompt, input_ids=input_ids, multimodal=preps)
 
     @staticmethod
-    def to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
-                         sequence_start):
+    def to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start):
         """auxiliary function to pack the forwarding results in a format
         compatible with what is required by turbomind engine.
 
@@ -217,9 +209,8 @@ class VisonModel(ABC):
 
         # split prompt into segments and validate data
         segs = prompt.split(IMAGE_TOKEN)
-        assert len(segs) == len(features) + 1, (
-            f'the number of {IMAGE_TOKEN} is not equal '
-            f'to input images, {len(segs) - 1} vs {len(features)}')
+        assert len(segs) == len(features) + 1, (f'the number of {IMAGE_TOKEN} is not equal '
+                                                f'to input images, {len(segs) - 1} vs {len(features)}')
 
         # tokenizer prompt, and get input_embeddings and input_embedding_ranges
         input_ids = []
@@ -232,14 +223,10 @@ class VisonModel(ABC):
                 begins.append(len(input_ids))
                 ends.append(begins[-1] + image_dim)
                 input_ids.extend([IMAGE_DUMMY_TOKEN_INDEX] * image_dim)
-            seg_ids = tokenizer.encode(seg,
-                                       add_bos=((i == 0) and sequence_start))
+            seg_ids = tokenizer.encode(seg, add_bos=((i == 0) and sequence_start))
             input_ids.extend(seg_ids)
         ranges = np.stack([begins, ends], axis=1).tolist()
-        return dict(prompt=prompt,
-                    input_ids=input_ids,
-                    input_embeddings=features,
-                    input_embedding_ranges=ranges)
+        return dict(prompt=prompt, input_ids=input_ids, input_embeddings=features, input_embedding_ranges=ranges)
 
     @classmethod
     def match(cls, config: AutoConfig):

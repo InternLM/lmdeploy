@@ -13,5 +13,4 @@ def fused_moe(
     renormalize: bool,
 ):
     """dlinfer fused moe."""
-    return ext_ops.fused_moe(hidden_states, gate_up_weights, down_weights,
-                             topk_weights, topk_ids, topk, renormalize)
+    return ext_ops.fused_moe(hidden_states, gate_up_weights, down_weights, topk_weights, topk_ids, topk, renormalize)

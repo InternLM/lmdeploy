@@ -73,7 +73,6 @@ class EngineChecker(BaseChecker):
             )
 
         if engine_config.max_batch_size <= 0:
-            self.log_and_exit(
-                mod_name='Engine',
-                message='max_batch_size should be'
-                f' greater than 0, but got {engine_config.max_batch_size}')
+            self.log_and_exit(mod_name='Engine',
+                              message='max_batch_size should be'
+                              f' greater than 0, but got {engine_config.max_batch_size}')

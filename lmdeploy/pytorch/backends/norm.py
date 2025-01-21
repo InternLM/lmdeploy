@@ -8,10 +8,7 @@ class RMSNormImpl(ABC):
     """RMS norm implementation api."""
 
     @abstractmethod
-    def forward(self,
-                x: torch.Tensor,
-                weight: torch.Tensor,
-                residual: torch.Tensor = None):
+    def forward(self, x: torch.Tensor, weight: torch.Tensor, residual: torch.Tensor = None):
         """forward."""
         raise NotImplementedError
 
@@ -30,11 +27,7 @@ class LayerNormImpl(ABC):
     """Layer norm implementation api."""
 
     @abstractmethod
-    def forward(self,
-                x: torch.Tensor,
-                weight: torch.Tensor,
-                bias: torch.Tensor = None,
-                residual: torch.Tensor = None):
+    def forward(self, x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor = None, residual: torch.Tensor = None):
         """forward."""
         raise NotImplementedError
 

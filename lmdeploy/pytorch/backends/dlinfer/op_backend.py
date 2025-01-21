@@ -53,8 +53,7 @@ class DlinferOpsBackend(DefaultOpsBackend):
             from .rotary_embedding import DlinferRotaryEmbeddingBuilder
             return DlinferRotaryEmbeddingBuilder
         else:
-            logger.debug(
-                f'Op {layer_type} fallback to default implementation.')
+            logger.debug(f'Op {layer_type} fallback to default implementation.')
             return super().get_layer_impl_builder(layer_type)
 
     @staticmethod

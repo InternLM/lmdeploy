@@ -3,11 +3,7 @@ import torch
 
 
 def _make_A(M, K, group_size, out_dtype):
-    quant_A = torch.rand(M,
-                         K // group_size,
-                         group_size,
-                         dtype=torch.float32,
-                         device='cuda')
+    quant_A = torch.rand(M, K // group_size, group_size, dtype=torch.float32, device='cuda')
     # -1 ~ 1
     quant_A = quant_A * 2 - 1
     # scaling abs max to fmax
@@ -50,12 +46,7 @@ def _make_B(K, N, group_size, out_dtype):
     quant_B *= scaling
     quant_B = quant_B.to(out_dtype).to(torch.float32)
 
-    scale = torch.rand(K_aligned // group_size,
-                       1,
-                       N_aligned // group_size,
-                       1,
-                       dtype=torch.float32,
-                       device='cuda')
+    scale = torch.rand(K_aligned // group_size, 1, N_aligned // group_size, 1, dtype=torch.float32, device='cuda')
     scale /= fmax
 
     B = quant_B * scale
@@ -66,8 +57,7 @@ def _make_B(K, N, group_size, out_dtype):
     return B, quant_B, scale
 
 
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9,
-                    reason='require device with cc>=9.0')
+@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason='require device with cc>=9.0')
 class TestQuantFP8:
 
     @pytest.fixture
@@ -117,8 +107,7 @@ class TestQuantFP8:
         assert diff_count / diff.numel() < 1e-4
 
 
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9,
-                    reason='require device with cc>=9.0')
+@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason='require device with cc>=9.0')
 class TestGemmFP8:
 
     @pytest.fixture
@@ -183,11 +172,6 @@ class TestGemmFP8:
         yield A @ B
 
     def test_gemm_fp8(self, quant_A, scale_A, quant_B, scale_B, out_dtype, gt):
-        from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import \
-            blocked_gemm_fp8
-        C = blocked_gemm_fp8(quant_A,
-                             scale_A,
-                             quant_B,
-                             scale_B,
-                             out_dtype=out_dtype)
+        from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import blocked_gemm_fp8
+        C = blocked_gemm_fp8(quant_A, scale_A, quant_B, scale_B, out_dtype=out_dtype)
         torch.testing.assert_close(C, gt, atol=0.5, rtol=1e-4)
