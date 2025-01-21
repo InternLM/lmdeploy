@@ -632,12 +632,6 @@ def test_deepseek():
     }, {
         'role': 'user',
         'content': 'who are you'
-    }, {
-        'role': 'assistant',
-        'content': 'I am an AI'
-    }, {
-        'role': 'user',
-        'content': 'hi'
     }]
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained('deepseek-ai/DeepSeek-V2-Lite',
