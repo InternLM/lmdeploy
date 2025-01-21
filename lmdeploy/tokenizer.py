@@ -35,7 +35,7 @@ class DetokenizeState:
         return (self.ids_offset, self.prev_tokens, self.prefix_offset, self.read_offset)
 
 
-class Tokenizer:
+class HuggingFaceTokenizer:
     """A wrapper of transformers' AutoTokenizer.
 
     Args:
@@ -336,7 +336,7 @@ class Tokenizer:
         return self.model(s, add_special_tokens=add_special_tokens)
 
 
-class ChatGLM4Tokenizer(Tokenizer):
+class ChatGLM4Tokenizer(HuggingFaceTokenizer):
     """tokenizer of GLM4."""
 
     def __init__(self, model_path):
@@ -358,7 +358,7 @@ class ChatGLM4Tokenizer(Tokenizer):
         return super(ChatGLM4Tokenizer, self).encode(s, add_bos, add_special_tokens=False, **kwargs)
 
 
-class ChatGLMTokenizer(Tokenizer):
+class ChatGLMTokenizer(HuggingFaceTokenizer):
     """tokenizer of GLM2."""
 
     def __init__(self, model_path):
@@ -372,3 +372,122 @@ class ChatGLMTokenizer(Tokenizer):
 
         # fix for transformers>4.45.0
         self.model._pad = __pad
+
+
+class Tokenizer:
+    """Tokenize prompts or de-tokenize tokens into texts.
+
+    Args:
+        model_path (str): the path of the tokenizer model
+    """
+
+    def __init__(self, model_path: str):
+        from transformers.models.auto.tokenization_auto import get_tokenizer_config
+        tokenizer_config = get_tokenizer_config(model_path, trust_remote_code=True)
+        config_tokenizer_class = tokenizer_config.get('tokenizer_class')
+        if config_tokenizer_class == 'ChatGLM4Tokenizer':
+            self.model = ChatGLM4Tokenizer(model_path)
+        elif config_tokenizer_class == 'ChatGLMTokenizer':
+            self.model = ChatGLMTokenizer(model_path)
+        else:
+            self.model = HuggingFaceTokenizer(model_path)
+
+    @property
+    def vocab_size(self):
+        """vocabulary size."""
+        return self.model.vocab_size
+
+    @property
+    def bos_token_id(self):
+        """begin of the sentence token id."""
+        return self.model.bos_token_id
+
+    @property
+    def eos_token_id(self):
+        """end of the sentence token id."""
+        return self.model.eos_token_id
+
+    def encode(self, s: str, add_bos: bool = True, add_special_tokens: bool = True, **kwargs):
+        """Tokenize a prompt.
+
+        Args:
+            s (str): a prompt
+            add_bos (bool): Whether to add `bos` token id when encoding
+                the prompt
+            add_special_tokens (bool): Whether or not to add special tokens
+                when encoding the prompt
+        Returns:
+            list[int]: token ids
+        """
+        encoded = self.model.encode(s, add_bos, add_special_tokens, **kwargs)
+        if encoded[:2] == [self.bos_token_id] * 2:
+            get_logger('lmdeploy').warn(f'Detected duplicate bos token {self.bos_token_id} in prompt, '
+                                        'this will likely reduce response quality, one of them will be'
+                                        'removed')
+            encoded = encoded[1:]
+        return encoded
+
+    def decode(
+        self,
+        t: Sequence[int],
+        offset: Optional[int] = None,
+        skip_special_tokens: bool = True,
+    ):
+        """De-tokenize.
+
+        Args:
+            t (List[int]): a list of token ids
+            offset (int): for incrementally decoding. Default to None, which
+                means not applied.
+            skip_special_tokens (bool): Whether or not to remove special
+                tokens in the decoding.
+        Returns:
+            str: text of decoding tokens
+        """
+        return self.model.decode(t, offset, skip_special_tokens)
+
+    def detokenize_incrementally(self,
+                                 all_input_ids: Sequence[int],
+                                 state: DetokenizeState,
+                                 skip_special_tokens: bool = True,
+                                 spaces_between_special_tokens: bool = True):
+        """Incrementally detokenize the input indexes.
+
+        Args:
+            all_input_ids (List[int]): a list of token ids. Expected to be
+                different sections of a long sequence.
+            state (DetokenizeState): an instance of DetokenizeState. Consists
+                of incrementally decoding states.
+            skip_special_tokens (bool): Whether or not to remove special tokens
+                in the decoding. Default to be True.
+            spaces_between_special_tokens (bool): Whether or not to add spaces
+                between special tokens. Default to be True.
+        Returns:
+            str: decoding output string of the current round.
+            state (DetokenizeState): an instance of DetokenizeState. Consists
+                of incrementally decoding states.
+        """
+        return self.model.detokenize_incrementally(all_input_ids,
+                                                   state=state,
+                                                   skip_special_tokens=skip_special_tokens,
+                                                   spaces_between_special_tokens=spaces_between_special_tokens)
+
+    def __call__(self, s: Union[str, Sequence[str]]):
+        """Tokenize prompts.
+
+        Args:
+            s (str): prompts
+        Returns:
+            list[int]: token ids
+        """
+        return self.model(s)
+
+    def indexes_containing_token(self, token):
+        """Return all the possible indexes, whose decoding output may contain
+        the input token."""
+        encoded = self.encode(token, add_bos=False)
+        if len(encoded) > 1:
+            self.logger.warning(f'The token {token}, its length of indexes {encoded} is over '
+                                'than 1. Currently, it can not be used as stop words')
+            return []
+        return self.model.indexes_containing_token(token)
