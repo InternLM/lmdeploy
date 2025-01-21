@@ -64,8 +64,11 @@ def run_chat(model_path: str,
         trust_remote_code (bool): trust remote code.
     """
     from lmdeploy.pytorch.engine import Engine
-    tm_model = Engine.from_pretrained(model_path, engine_config=engine_config, trust_remote_code=trust_remote_code)
-    tokenizer = tm_model.tokenizer
+    tokenizer = Tokenizer(model_path)
+    tm_model = Engine.from_pretrained(model_path,
+                                      tokenizer=tokenizer,
+                                      engine_config=engine_config,
+                                      trust_remote_code=trust_remote_code)
     generator = tm_model.create_instance()
     adapter_name = None
     if engine_config.adapters is not None:
