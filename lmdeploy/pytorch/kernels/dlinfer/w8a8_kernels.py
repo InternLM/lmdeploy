@@ -31,16 +31,3 @@ def smooth_quant_matmul(
     `bias`. The output is returned in the specified `output_dtype`.
     """
     return ext_ops.smooth_quant_matmul(a, a_scale, b, b_scale, out_dtype, bias, all_reduce)
-
-
-def rms_norm_w8a8(
-    hidden_states: Tensor,
-    weight: Tensor,
-    epsilon: float,
-    residual: Tensor = None,
-):
-    """rms norm kernel."""
-    if residual is None:
-        return ext_ops.rms_norm_w8a8(hidden_states, weight, epsilon)
-    else:
-        return ext_ops.add_rms_norm_w8a8(hidden_states, residual, weight, epsilon)
