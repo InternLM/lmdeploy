@@ -3,7 +3,6 @@ import asyncio
 import copy
 import os
 from dataclasses import dataclass
-from datetime import timedelta
 from typing import Any, Dict, List
 
 import numpy as np
@@ -11,7 +10,6 @@ import torch
 import torch.distributed
 import torch.distributed.elastic
 from torch import distributed as dist
-from torch import multiprocessing as mp
 
 from lmdeploy.messages import PytorchEngineConfig, ResponseType
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model, logging_timer
@@ -23,6 +21,7 @@ from ..distributed import DistContext, get_dist_manager
 from ..messages import MessageStatus, SchedulerSequence
 from ..model_inputs import ModelInputs, VisionModelInputs
 from ..paging import Scheduler
+from .dist_proc_manager import DIST_TIMEOUT, DistProcManager, broadcast_inputs
 from .engine_checker import EngineChecker
 from .logits_process import FusedLogitsProcessor, SamplingInputs
 from .model_agent import build_model_agent
@@ -53,21 +52,6 @@ def _tensorlize_block_offsets(block_offsets):
     block_offsets = [torch.from_numpy(off) for off in block_offsets]
     block_offsets = pad_sequence(block_offsets, batch_first=True)
     return block_offsets
-
-
-def _check_finish(scheduler: Scheduler, current_iter: int):
-    """dynamic prefill interval."""
-    if not scheduler.has_waiting():
-        return False
-    scheduler_config = scheduler.scheduler_config
-    max_prefill_interval = scheduler_config.prefill_interval
-    max_batches = scheduler_config.max_batches
-    num_batches = len(scheduler.running)
-    ratio = num_batches / max_batches
-    min_iter = max_prefill_interval * ratio
-    if current_iter >= min_iter:
-        return True
-    return False
 
 
 def _build_scheduler_config(engine_config: PytorchEngineConfig):
@@ -103,165 +87,6 @@ def _build_backend_config(engine_config: PytorchEngineConfig):
     return backend_config
 
 
-def _init_environ(rank: int, world_size: int, nproc_per_node: int):
-    """init environ."""
-    os.environ['RANK'] = str(rank)
-    os.environ['LOCAL_RANK'] = str(rank % nproc_per_node)
-    os.environ['WORLD_SIZE'] = str(world_size)
-
-
-DIST_TIMEOUT = timedelta(days=35600)
-
-
-class DistProcManager:
-
-    def __init__(self, model_path: str, engine_config: PytorchEngineConfig, trust_remote_code: bool = True):
-
-        # distribute args
-        node_rank = engine_config.node_rank
-        nproc_per_node = engine_config.nproc_per_node
-        nnodes = engine_config.nnodes
-        tp = engine_config.tp
-        dp = 1
-        world_size = DistContext.get_world_size(tp, dp)
-        if nproc_per_node is None:
-            nproc_per_node = world_size // nnodes
-            engine_config.nproc_per_node = nproc_per_node
-        assert (nnodes * nproc_per_node == world_size), ('nnodes * nproc_per_node != world_size')
-
-        # get global ranks, rank0 in main process
-        global_rank0 = node_rank * nproc_per_node
-        global_ranks = [global_rank0 + idx for idx in range(1, nproc_per_node)]
-
-        # fields
-        self.model_path = model_path
-        self.engine_config = engine_config
-        self.trust_remote_code = trust_remote_code
-        self.global_rank0 = global_rank0
-        self.world_size = world_size
-        self.global_ranks = global_ranks
-
-        # generate mp pool
-        self.mp_ctx = mp.get_context('spawn')
-        self.procs: List[mp.Process] = []
-        self.watchdog = None
-
-    @staticmethod
-    def _find_available_port() -> bool:
-        """find available port."""
-        import socket
-        port = 29500
-        while True:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                if s.connect_ex(('localhost', port)) != 0:
-                    return port
-                port += 1
-
-    @staticmethod
-    def setup_master_addr():
-        """setup master addr."""
-        port = DistProcManager._find_available_port()
-        os.environ.setdefault('MASTER_ADDR', '127.0.0.1')
-        os.environ.setdefault('MASTER_PORT', str(port))
-        addr = os.environ['MASTER_ADDR']
-        port = os.environ['MASTER_PORT']
-        logger.info(f'MASTER_ADDR={addr}, MASTER_PORT={port}')
-
-    @staticmethod
-    def init_process_group(rank: int, world_size: int, nproc_per_node: int):
-        """init process group."""
-        dist.init_process_group(backend='gloo', rank=rank, world_size=world_size, timeout=DIST_TIMEOUT)
-        assert dist.is_initialized()
-        _init_environ(rank, world_size, nproc_per_node)
-
-    @staticmethod
-    def _dist_process(rank: int,
-                      world_size: int,
-                      model_path: str,
-                      engine_config: PytorchEngineConfig,
-                      trust_remote_code: bool = True):
-        """distributed."""
-        # rank == 0 should never enter this proc.
-        assert rank != 0
-        DistProcManager.init_process_group(
-            rank,
-            world_size=world_size,
-            nproc_per_node=engine_config.nproc_per_node,
-        )
-        # engine would call `dist_run_forever()`
-        # and blocked in initialize.
-        Engine.from_pretrained(
-            model_path,
-            engine_config=engine_config,
-            trust_remote_code=trust_remote_code,
-        )
-
-    def start(self):
-        """start process."""
-        from threading import Thread
-        logger.debug('Starting dist processes.')
-        DistProcManager.setup_master_addr()
-        engine_config = self.engine_config
-
-        for rank in self.global_ranks:
-            proc = self.mp_ctx.Process(target=self._dist_process,
-                                       kwargs=dict(rank=rank,
-                                                   world_size=self.world_size,
-                                                   model_path=self.model_path,
-                                                   engine_config=engine_config,
-                                                   trust_remote_code=self.trust_remote_code),
-                                       name=f'ProcRank{rank}',
-                                       daemon=True)
-            proc.start()
-            self.procs.append(proc)
-
-        DistProcManager.init_process_group(self.global_rank0,
-                                           world_size=self.world_size,
-                                           nproc_per_node=engine_config.nproc_per_node)
-
-        self.watchdog = Thread(target=self._mp_watchdog, args=(1, ), daemon=True)
-        self.watchdog.start()
-
-    def terminate_all_procs(self):
-        """terminate all process."""
-        log_procs = []
-        for idx, p in enumerate(self.procs):
-            if p.is_alive():
-                p.terminate()
-            else:
-                exitcode = p.exitcode
-                if exitcode > 0:
-                    # terminated exitcode < 0
-                    log_procs.append((idx, exitcode))
-                p.close()
-        for idx, exitcode in log_procs:
-            logger.error(f'TP process[{idx}] failed with exitcode={exitcode}.')
-        return log_procs
-
-    def _check_context_alive(self):
-        """check context alive."""
-        procs = self.procs
-        failed_procs = list(idx for idx, p in enumerate(procs) if not p.is_alive())
-        if len(failed_procs) == 0:
-            return
-
-        log_procs = self.terminate_all_procs()
-        # TODO: not safe exit.
-        exit_code = 1 if len(log_procs) > 0 else 0
-        os._exit(exit_code)
-
-    def _mp_watchdog(self, timeout: int = 1):
-        """watch dog of mp context.
-
-        Args:
-            timeout: timeout
-        """
-        import time
-        while True:
-            self._check_context_alive()
-            time.sleep(timeout)
-
-
 def _braodcast_obj(obj, rank, group):
     """broadcast object."""
     objs = [None]
@@ -269,36 +94,6 @@ def _braodcast_obj(obj, rank, group):
         objs = [obj]
     dist.broadcast_object_list(objs, group=group)
     return objs[0]
-
-
-def _broadcast_inputs(rank: int, inputs: Any, group: dist.group):
-    """get input tensor parallel."""
-
-    dist.barrier(group)
-
-    # broadcast meta info
-    if rank != 0:
-        inputs = [None, None, None]
-    else:
-        if inputs[0] is not None:
-            device_inputs = inputs[0]
-            meta_inputs = device_inputs.to_device('meta')
-            inputs[0] = meta_inputs
-
-    dist.broadcast_object_list(inputs, group=group)
-
-    if inputs[0] is None:
-        return [None, None, None]
-
-    # device cast
-    if rank == 0:
-        device_inputs.broadcast()
-    else:
-        device_inputs = inputs[0].broadcast()
-
-    inputs[0] = device_inputs
-
-    return inputs
 
 
 class Engine:
@@ -914,18 +709,9 @@ class Engine:
         ret['logits'] = logits
         return ret
 
-    async def _make_infer_outputs(self, next_token_ids: torch.LongTensor, logits: torch.Tensor, stopped: torch.Tensor,
-                                  model_metas: List[Dict[str, Any]], event: torch.cuda.Event):
+    async def _make_infer_outputs(self, next_token_ids: torch.LongTensor, running: SeqList, logits: torch.Tensor,
+                                  stopped: torch.Tensor, model_metas: List[Dict[str, Any]], event: torch.cuda.Event):
         """make infer output."""
-
-        def __get_q_start_loc():
-            inputs = self._inputs
-            seq_length = inputs.seq_length
-            batch_size = len(seq_length)
-            if inputs.is_decoding:
-                return torch.arange(0, batch_size)
-            else:
-                return seq_length.cumsum(0) - seq_length
 
         while not event.query():
             await asyncio.sleep(0.001)
@@ -933,14 +719,12 @@ class Engine:
             next_token_ids = next_token_ids.cpu()
             stopped = stopped.cpu()
 
-        running = self._running
+        seq_length = [seq.num_token_ids for seq in running]
         is_run = [seq.status == MessageStatus.RUNNING for seq in running]
         stopped = stopped.tolist()
         self.update_running(running, next_token_ids, stopped, model_metas)
 
         # generate output
-        next_token_ids = next_token_ids.tolist()
-        q_start_loc = __get_q_start_loc()
         outputs: Dict[int, InferOutput] = dict()
         for idx, msg in enumerate(running):
             if not is_run[idx]:
@@ -950,23 +734,19 @@ class Engine:
             if not finish and len(token_ids) == 0:
                 continue
             session_id = msg.session_id
-            resp = msg.resp
             out = InferOutput(
                 session_id=session_id,
-                resp=resp,
+                resp=msg.resp,
                 finish=finish,
                 token_ids=token_ids,
             )
             outputs[session_id] = out
 
             if msg.return_logits:
-                inputs = self._inputs
-                start = q_start_loc[idx]
-                seqlen = inputs.seq_length[idx]
-                outputs[session_id].logits = logits[start:start + seqlen]
+                outputs[session_id].logits = logits.split(seq_length)[idx]
         return outputs
 
-    async def _async_step_background(self, inputs: ModelInputs, swap_in_map: Dict, swap_out_map: Dict,
+    async def _async_step_background(self, running: SeqList, inputs: ModelInputs, swap_in_map: Dict, swap_out_map: Dict,
                                      all_ids: torch.Tensor, guided_input_ids: torch.Tensor,
                                      sampling_inputs: SamplingInputs, num_appendable_ids: torch.LongTensor,
                                      num_ignore_eos: torch.LongTensor, loop_count: int, return_logits: bool,
@@ -1005,8 +785,8 @@ class Engine:
             # broadcast inputs
             if dist_ctx.tp > 1:
                 tp_cpu_group = dist_ctx.tp_cpu_group
-                (inputs, swap_in_map, swap_out_map) = _broadcast_inputs(0, [inputs, swap_in_map, swap_out_map],
-                                                                        tp_cpu_group)
+                (inputs, swap_in_map, swap_out_map) = broadcast_inputs(0, [inputs, swap_in_map, swap_out_map],
+                                                                       tp_cpu_group)
 
             # inference
             output = await self._async_model_forward(inputs,
@@ -1028,10 +808,10 @@ class Engine:
             # send output
             model_metas = output.get('model_metas')
             finish = (idx == loop_count - 1)
-            finish = finish or _check_finish(self.scheduler, idx)
             event = torch.cuda.Event()
             event.record()
             output = dict(next_token_ids=next_token_ids,
+                          running=running,
                           logits=logits,
                           stopped=stopped,
                           model_metas=model_metas,
@@ -1056,12 +836,16 @@ class Engine:
         else:
             has_runable_event.clear()
 
+    async def _await_forward_event(self, forward_event: asyncio.Event):
+        """await forward event."""
+        if self.scheduler.has_unfinished():
+            await forward_event.wait()
+
     @torch.inference_mode()
     async def _async_loop_preprocess_message(self, forward_event: asyncio.Event, has_runable_event: asyncio.Event):
         """preprocess msg."""
         while True:
-            if self.scheduler.has_unfinished():
-                await forward_event.wait()
+            await self._await_forward_event(forward_event)
             await self.req_manager.step()
             self._set_has_runable_event(has_runable_event)
 
@@ -1135,11 +919,9 @@ class Engine:
             num_ignore_eos = __get_num_ignore_eos(running)
             return_logits = __need_logits(running)
 
-            self._running = running
-            self._inputs = inputs
-
             forward_event.clear()
             await self._async_step_background(
+                running=running,
                 inputs=inputs,
                 swap_in_map=swap_in_map,
                 swap_out_map=swap_out_map,
@@ -1154,7 +936,7 @@ class Engine:
             )
             forward_event.set()
 
-    async def _async_send_responses(self, que: asyncio.Queue, forward_event: asyncio.Event):
+    async def _async_loop_send_responses(self, que: asyncio.Queue, forward_event: asyncio.Event):
         """send responses."""
 
         def __send_resp(out: InferOutput):
@@ -1169,61 +951,17 @@ class Engine:
 
         while True:
             resps = await que.get()
-            if self.scheduler.has_unfinished():
-                await forward_event.wait()
+            await self._await_forward_event(forward_event)
             __send_resps(resps)
 
-    @staticmethod
-    def _add_loop_tasks_done_callback(tasks: List[asyncio.Task]):
-        """add loop tasks done callback."""
-
-        def __task_callback(task: asyncio.Task) -> None:
-            """raise exception on finish."""
-            task_name = task.get_name()
-            try:
-                task.result()
-            except asyncio.CancelledError:
-                logger.debug(f'Task <{task_name}> cancelled.')
-                return
-            except Exception:
-                logger.exception(f'Task <{task_name}> failed')
-                for task in tasks:
-                    if not task.cancelled():
-                        task.cancel()
-
-        for task in tasks:
-            task.add_done_callback(__task_callback)
-
     @torch.inference_mode()
-    async def _async_loop(self):
+    async def _async_loop_main(self, in_que: asyncio.Queue, out_que: asyncio.Queue, resp_que: asyncio.Queue,
+                               has_runable_event: asyncio.Event):
         """Main loop of the engine.
 
         Each engine instance would communicate with the engine by queue.
         """
-        event_loop = asyncio.get_event_loop()
         prefill_interval = self.scheduler_config.prefill_interval
-
-        # forward task
-        in_que = asyncio.Queue()
-        out_que = asyncio.Queue()
-        forward_event = asyncio.Event()
-        forward_event.set()
-        loop_background = event_loop.create_task(self._async_loop_background(in_que, out_que, forward_event),
-                                                 name='MainLoopBackground')
-
-        # preprocess task
-        has_runable_event = asyncio.Event()
-        loop_msg_proc = event_loop.create_task(self._async_loop_preprocess_message(forward_event, has_runable_event),
-                                               name='MainLoopPreprocessMessage')
-
-        # response task
-        resp_que = asyncio.Queue()
-        loop_send_resp = event_loop.create_task(self._async_send_responses(resp_que, forward_event),
-                                                name='MainLoopResponse')
-
-        loop_main = asyncio.current_task()
-        loop_tasks: List[asyncio.Task] = [loop_main, loop_background, loop_msg_proc, loop_send_resp]
-        self._add_loop_tasks_done_callback(loop_tasks)
 
         def __do_prefill():
             # decoding if no waiting
@@ -1262,6 +1000,27 @@ class Engine:
             await has_runable_event.wait()
             await __step()
 
+    @staticmethod
+    def _add_loop_tasks_done_callback(tasks: List[asyncio.Task]):
+        """add loop tasks done callback."""
+
+        def __task_callback(task: asyncio.Task) -> None:
+            """raise exception on finish."""
+            task_name = task.get_name()
+            try:
+                task.result()
+            except asyncio.CancelledError:
+                logger.debug(f'Task <{task_name}> cancelled.')
+                return
+            except Exception:
+                logger.exception(f'Task <{task_name}> failed')
+                for task in tasks:
+                    if not task.cancelled():
+                        task.cancel()
+
+        for task in tasks:
+            task.add_done_callback(__task_callback)
+
     def _finally_rank0(self):
         """finall process for rank0."""
         if self.dist_proc_mgr is not None:
@@ -1270,7 +1029,7 @@ class Engine:
         else:
             # broadcast exit signal.
             try:
-                _broadcast_inputs(0, [None, None, None], group=self.dist_ctx.world_cpu_group)
+                broadcast_inputs(0, [None, None, None], group=self.dist_ctx.world_cpu_group)
             except Exception:
                 logger.warning('Can not broadcast exit signal.')
 
@@ -1291,7 +1050,37 @@ class Engine:
         dist_mgr = get_dist_manager()
         with dist_mgr.context(self.dist_ctx), device_manager.context(self.device_ctx), torch.cuda.stream(self.stream):
             try:
-                await self._async_loop()
+                event_loop = asyncio.get_event_loop()
+
+                # forward task
+                in_que = asyncio.Queue()
+                out_que = asyncio.Queue()
+                forward_event = asyncio.Event()
+                forward_event.set()
+                loop_background = event_loop.create_task(self._async_loop_background(in_que, out_que, forward_event),
+                                                         name='MainLoopForward')
+
+                # preprocess task
+                has_runable_event = asyncio.Event()
+                loop_msg_proc = event_loop.create_task(self._async_loop_preprocess_message(
+                    forward_event, has_runable_event),
+                                                       name='MainLoopPreprocessMessage')
+
+                # response task
+                resp_que = asyncio.Queue()
+                loop_send_resp = event_loop.create_task(self._async_loop_send_responses(resp_que, forward_event),
+                                                        name='MainLoopResponse')
+
+                # binding done callback
+                loop_main = asyncio.current_task()
+                loop_tasks: List[asyncio.Task] = [loop_main, loop_background, loop_msg_proc, loop_send_resp]
+                self._add_loop_tasks_done_callback(loop_tasks)
+
+                # main loop
+                await self._async_loop_main(in_que=in_que,
+                                            out_que=out_que,
+                                            resp_que=resp_que,
+                                            has_runable_event=has_runable_event)
             finally:
                 self._loop_finally()
 
@@ -1304,8 +1093,7 @@ class Engine:
         logger.info(f'rank[{rank}]: Start dist loop.')
         while True:
             # share inputs
-            inputs, swap_in_map, swap_out_map = _broadcast_inputs(rank, None, tp_cpu_group)
-
+            inputs, swap_in_map, swap_out_map = broadcast_inputs(rank, None, tp_cpu_group)
             if inputs is None:
                 return
 
