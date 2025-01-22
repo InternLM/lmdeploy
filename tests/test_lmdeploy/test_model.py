@@ -779,7 +779,13 @@ def test_phi3(model_path_and_name):
 
 
 @pytest.mark.parametrize('model_path_or_name', [
+    'deepseek-ai/DeepSeek-R1-Distill-Llama-8B',
     'deepseek-ai/DeepSeek-R1-Distill-Llama-70B',
+    'deepseek-ai/DeepSeek-R1',
+    'deepseek-ai/DeepSeek-R1-Zero',
+    'deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B',
+    'deepseek-ai/DeepSeek-R1-Distill-Qwen-7B',
+    'deepseek-ai/DeepSeek-R1-Distill-Qwen-14B',
     'deepseek-ai/DeepSeek-R1-Distill-Qwen-32B',
 ])
 def test_deepseek_r1(model_path_or_name):
