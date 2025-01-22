@@ -104,11 +104,8 @@ class MacaOpsBackend(DlinferOpsBackend):
         return step_context
 
     @staticmethod
-    def build_graph_runner(model: torch.nn.Module, model_config: ModelConfig,
-                           cache_config: CacheConfig,
-                           backend_config: BackendConfig,
-                           device: torch.device):
+    def build_graph_runner(model: torch.nn.Module, model_config: ModelConfig, cache_config: CacheConfig,
+                           backend_config: BackendConfig, device: torch.device):
         """build graph runner."""
-        from .graph_runner import MACAGraphRunner
-        return MACAGraphRunner(model, model_config, cache_config,
-                               backend_config, device)
+        from lmdeploy.pytorch.backends.cuda.graph_runner import CUDAGraphRunner
+        return CUDAGraphRunner(model, model_config, cache_config, backend_config, device)
