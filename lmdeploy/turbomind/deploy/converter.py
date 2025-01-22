@@ -19,7 +19,7 @@ from .policy import get_input_policy
 from .source_model.base import INPUT_MODELS
 from .target_model.base import OUTPUT_MODELS
 
-SUPPORTED_FORMATS = ['meta_llama', 'hf', 'awq', 'gptq', None]
+SUPPORTED_FORMATS = ['hf', 'awq', 'gptq', None]
 logger = get_logger('lmdeploy')
 
 
@@ -30,7 +30,7 @@ def get_input_model_registered_name(model_path: str, model_format: str):
     Args:
         model_path (str): the path of the input model
         model_format (str): the format of the model, which can be one of
-            ['meta_llama',  'hf', 'awq']
+            ['hf', 'awq', 'gptq']
     """
     arch = get_model_arch(model_path)[0]
     register_name = SUPPORTED_ARCHS[arch]
@@ -87,7 +87,7 @@ def get_output_model_registered_name_and_config(model_path: str, model_format: s
     Args:
         model_path (str): the path of the input model
         model_format (str): the format of the model, which can be one of
-            ['meta_llama',  'hf', 'awq', 'gptq']
+            ['hf', 'awq', 'gptq']
         dtype (str): the data type of the model's weights and activations
         group_size (int): the size of group used by awq model
     """
@@ -96,22 +96,19 @@ def get_output_model_registered_name_and_config(model_path: str, model_format: s
 
     config = TurbomindModelConfig.from_dict()
 
-    if model_format == 'meta_llama':
-        session_len = 2048
-    else:  # hf, awq, None
-        model_arch, model_config = get_model_arch(model_path)
-        session_len = _get_and_verify_max_len(model_config, None)
-        if model_format in ['awq', 'gptq']:
-            weight_type = 'int4'
-            group_size = 128 if group_size == 0 else group_size
-        else:
-            torch_dtype = getattr(model_config, 'torch_dtype', 'float16')
-            TORCH_DTYPE_MAP = {torch.bfloat16: 'bfloat16', torch.float16: 'float16'}
-            weight_type = TORCH_DTYPE_MAP.get(torch_dtype, 'float16')
+    model_arch, model_config = get_model_arch(model_path)
+    session_len = _get_and_verify_max_len(model_config, None)
+    if model_format in ['awq', 'gptq']:
+        weight_type = 'int4'
+        group_size = 128 if group_size == 0 else group_size
+    else:
+        torch_dtype = getattr(model_config, 'torch_dtype', 'float16')
+        TORCH_DTYPE_MAP = {torch.bfloat16: 'bfloat16', torch.float16: 'float16'}
+        weight_type = TORCH_DTYPE_MAP.get(torch_dtype, 'float16')
 
-            # Qwen-1 didn't set torch_dtype. It used bf16 as default
-            if model_arch == 'QWenLMHeadModel':
-                weight_type = 'bfloat16'
+        # Qwen-1 didn't set torch_dtype. It used bf16 as default
+        if model_arch == 'QWenLMHeadModel':
+            weight_type = 'bfloat16'
 
     if dtype == 'auto':
         weight_type = weight_type if weight_type in ['float16', 'bfloat16', 'int4'] else 'float16'
@@ -258,10 +255,9 @@ def main(model_name: str,
             `v1/model`
         model_path (str): the directory path of the model
         model_format (str): the format of the model, should choose from
-            ['meta_llama', 'hf', 'awq', 'gptq']. 'meta_llama' stands for META's
-            llama format, 'hf' means huggingface model, and 'awq', `gptq`
-            means models quantized by `autoawq` and `autogptq` respectively.
-            The default value is hf
+            ['hf', 'awq', 'gptq']. 'hf' means huggingface model, and 'awq',
+            `gptq` means models quantized by `autoawq` and `autogptq`
+            respectively. The default value is hf
         dtype (str): data type for model weights and activations. It can be
             one of the following values, ['auto', 'float16', 'bfloat16']
             The `auto` option will use FP16 precision for FP32 and FP16
