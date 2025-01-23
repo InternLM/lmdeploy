@@ -118,15 +118,14 @@ class Engine:
             engine_config.max_batch_size = get_max_batch_size(engine_config.device_type)
 
         # process distributed
-        (rank, local_rank, world_size, dist_proc_mgr) = self._init_dist(
+        (rank, local_rank, world_size, local_world_size, dist_proc_mgr) = self._init_dist(
             model_path,
             engine_config=engine_config,
             trust_remote_code=trust_remote_code,
         )
         tp = engine_config.tp
         dp = 1
-        nproc_per_node = engine_config.nproc_per_node
-        dist_ctx = DistContext.build(rank, tp, dp, nproc_per_node=nproc_per_node)
+        dist_ctx = DistContext.build(rank, tp, dp, nproc_per_node=local_world_size)
 
         self.tp = tp
 
@@ -274,18 +273,20 @@ class Engine:
             mgr.start()
             rank = mgr.global_rank0
             world_size = mgr.world_size
+            local_world_size = world_size
             local_rank = 0
         else:
             mgr = None
             rank = int(os.environ.get('RANK', '0'))
             local_rank = int(os.environ.get('LOCAL_RANK', '0'))
             world_size = int(os.environ.get('WORLD_SIZE', '1'))
+            local_world_size = int(os.environ.get('LOCAL_WORLD_SIZE', str(world_size)))
             if engine_config.tp > 1 and not dist.is_initialized():
                 dist.init_process_group(backend='gloo', timeout=DIST_TIMEOUT, rank=rank, world_size=world_size)
 
         if local_rank != 0:
             torch.cuda.set_device(local_rank)
-        return rank, local_rank, world_size, mgr
+        return rank, local_rank, world_size, local_world_size, mgr
 
     def _build_adapter_manager(self, adapters):
         return AdapterManager(adapters)

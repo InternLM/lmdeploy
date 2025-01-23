@@ -49,6 +49,7 @@ def init_dist_environ(rank: int, world_size: int, nproc_per_node: int):
     os.environ['RANK'] = str(rank)
     os.environ['LOCAL_RANK'] = str(rank % nproc_per_node)
     os.environ['WORLD_SIZE'] = str(world_size)
+    os.environ['LOCAL_WORLD_SIZE'] = str(nproc_per_node)
 
 
 DIST_TIMEOUT = timedelta(days=35600)
