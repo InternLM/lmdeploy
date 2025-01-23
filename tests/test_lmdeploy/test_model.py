@@ -585,6 +585,28 @@ def test_codellama_others():
     assert model is None
 
 
+def test_deepseek():
+    model = MODELS.get('deepseek')()
+    messages = [{
+        'role': 'system',
+        'content': 'you are a helpful assistant'
+    }, {
+        'role': 'user',
+        'content': 'who are you'
+    }, {
+        'role': 'assistant',
+        'content': 'I am an AI'
+    }, {
+        'role': 'user',
+        'content': 'hi'
+    }]
+    from transformers import AutoTokenizer
+    tokenizer = AutoTokenizer.from_pretrained('deepseek-ai/DeepSeek-V2-Lite', trust_remote_code=True)
+    ref = tokenizer.apply_chat_template(messages, tokenize=False)
+    res = '<｜begin▁of▁sentence｜>' + model.messages2prompt(messages)
+    assert res.startswith(ref)
+
+
 def test_deepseek_coder():
     model = MODELS.get('deepseek-coder')()
     messages = [{
