@@ -985,7 +985,7 @@ class Engine:
             await self._async_loop()
 
     def close(self):
-        logger.warning('Pytorch backend currently does not support releasing resources')
+        self.model_agent.close()
 
     def create_instance(self, cuda_stream_id=0):
         """Create a pytorch engine instance.

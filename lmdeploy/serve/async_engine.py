@@ -300,6 +300,7 @@ class AsyncEngine(LogitsMixin):
         self.free_insts = None
         self.instances.clear()
         self.engine.close()
+        torch._C._cuda_clearCublasWorkspaces()
         torch.cuda.empty_cache()
 
     def _get_free_insts(self):
