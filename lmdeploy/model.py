@@ -320,7 +320,7 @@ class Vicuna(BaseChatTemplate):
 
     def messages2prompt(self, messages, sequence_start=True, **kwargs):
         if isinstance(messages, str):
-            return super().messages2prompt(messages, sequence_start, **kwargs)
+            return self.get_prompt(messages, sequence_start)
         return super().messages2prompt(messages, sequence_start, **kwargs)[:-1]
 
     @classmethod
@@ -1339,7 +1339,7 @@ class Deepseek(BaseChatTemplate):
 
     def messages2prompt(self, messages, sequence_start=True, **kwargs):
         if isinstance(messages, str):
-            return super().messages2prompt(messages, sequence_start, **kwargs)
+            return self.get_prompt(messages, sequence_start)
         return super().messages2prompt(messages, sequence_start, **kwargs)[:-1]
 
     @classmethod
@@ -1367,7 +1367,7 @@ class InternVLZH(BaseChatTemplate):
 
     def messages2prompt(self, messages, sequence_start=True, **kwargs):
         if isinstance(messages, str):
-            return super().messages2prompt(messages, sequence_start, **kwargs)
+            return self.get_prompt(messages, sequence_start)
         return super().messages2prompt(messages, sequence_start, **kwargs)[:-1]
 
     @classmethod
@@ -1409,7 +1409,7 @@ class DeepseekVL(BaseChatTemplate):
 
     def messages2prompt(self, messages, sequence_start=True, **kwargs):
         if isinstance(messages, str):
-            return super().messages2prompt(messages, sequence_start, **kwargs)
+            return self.get_prompt(messages, sequence_start)
         return super().messages2prompt(messages, sequence_start, **kwargs)[:-1]
 
     @classmethod
