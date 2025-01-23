@@ -3,6 +3,7 @@ import asyncio
 import os
 import random
 
+from lmdeploy import Tokenizer
 from lmdeploy.archs import get_model_arch
 from lmdeploy.messages import GenerationConfig, TurbomindEngineConfig
 from lmdeploy.model import ChatTemplateConfig
@@ -131,13 +132,12 @@ def main(model_path: str,
                                        dtype=dtype,
                                        tp=tp)
     print('engine_cfg:\n', engine_cfg, sep='', flush=True)
-
+    tokenizer = Tokenizer(model_path)
     from lmdeploy import turbomind as tm
-    tm_model = tm.TurboMind.from_pretrained(model_path, engine_config=engine_cfg)
+    tm_model = tm.TurboMind.from_pretrained(model_path, tokenizer=tokenizer, engine_config=engine_cfg)
     generator = tm_model.create_instance()
 
     # generateion config
-    tokenizer = tm_model.tokenizer
     stop_words = _stop_words(model.stop_words, tokenizer)
     if stop_words is not None:
         stop_words = stop_words[0][0].tolist()
