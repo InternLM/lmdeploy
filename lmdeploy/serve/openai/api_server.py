@@ -273,6 +273,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     - n (int): How many chat completion choices to generate for each input
         message. **Only support one here**.
     - stream: whether to stream the results or not. Default to false.
+    - stream_options: Options for streaming response. Only set this when you
+        set stream: true.
     - max_tokens (int | None): output token nums. Default to None.
     - repetition_penalty (float): The parameter for repetition penalty.
         1.0 means no penalty
@@ -523,6 +525,8 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     - n (int): How many chat completion choices to generate for each input
         message. **Only support one here**.
     - stream: whether to stream the results or not. Default to false.
+    - stream_options: Options for streaming response. Only set this when you
+        set stream: true.
     - repetition_penalty (float): The parameter for repetition penalty.
         1.0 means no penalty
     - user (str): A unique identifier representing your end-user.
