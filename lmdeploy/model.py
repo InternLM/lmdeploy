@@ -234,6 +234,34 @@ class BaseChatTemplate(BaseModel):
         return ret
 
 
+@MODELS.register_module(name=['deepseek-r1'])
+class Deepseek(BaseChatTemplate):
+
+    def __init__(self, user='<｜User｜>', assistant='<｜Assistant｜>', eoa='<｜end▁of▁sentence｜>', **kwargs):
+        super().__init__(user=user, assistant=assistant, eoa=eoa, **kwargs)
+
+    def get_prompt(self, prompt, sequence_start=True):
+        if sequence_start:
+            return '<｜begin▁of▁sentence｜>' + super().get_prompt(prompt, sequence_start)
+        return super().get_prompt(prompt, sequence_start)
+
+    def messages2prompt(self, messages, sequence_start=True, **kwargs):
+        if sequence_start and not isinstance(messages, str):
+            return '<｜begin▁of▁sentence｜>' + super().messages2prompt(messages, sequence_start, **kwargs)
+        return super().messages2prompt(messages, sequence_start, **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'deepseek-r1' in path or 'deepseek-v3' in path:
+            return 'deepseek-r1'
+
+
 @MODELS.register_module(name='cogvlm')
 class CogVLM(BaseChatTemplate):
     """Chat template of CogVLM model."""
