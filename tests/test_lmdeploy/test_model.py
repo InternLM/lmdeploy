@@ -787,6 +787,7 @@ def test_phi3(model_path_and_name):
     'deepseek-ai/DeepSeek-R1-Distill-Qwen-7B',
     'deepseek-ai/DeepSeek-R1-Distill-Qwen-14B',
     'deepseek-ai/DeepSeek-R1-Distill-Qwen-32B',
+    'deepseek-ai/DeepSeek-V3',
 ])
 def test_deepseek_r1(model_path_or_name):
     from transformers import AutoTokenizer

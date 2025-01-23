@@ -258,7 +258,7 @@ class Deepseek(BaseChatTemplate):
             model_path (str): the model path used for matching.
         """
         path = model_path.lower()
-        if 'deepseek-r1' in path:
+        if 'deepseek-r1' in path or 'deepseek-v3' in path:
             return 'deepseek-r1'
 
 
