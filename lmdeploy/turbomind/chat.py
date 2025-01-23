@@ -138,7 +138,6 @@ def main(model_path: str,
     generator = tm_model.create_instance()
 
     # generateion config
-    tokenizer = tm_model.tokenizer
     stop_words = _stop_words(model.stop_words, tokenizer)
     if stop_words is not None:
         stop_words = stop_words[0][0].tolist()
