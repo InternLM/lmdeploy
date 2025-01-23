@@ -116,6 +116,14 @@ class SubCliServe:
                             default=['*'],
                             help='A list of allowed http headers for cors')
         parser.add_argument('--proxy-url', type=str, default=None, help='The proxy url for api server.')
+        parser.add_argument('--max-concurrent-requests',
+                            type=int,
+                            default=None,
+                            help='This refers to the number of concurrent requests that '
+                            'the server can handle. The server is designed to process the '
+                            'engine’s tasks once the maximum number of concurrent requests is '
+                            'reached, regardless of any additional requests sent by clients '
+                            'concurrently during that time. Default to None.')
         # common args
         ArgumentHelper.backend(parser)
         ArgumentHelper.log_level(parser)
@@ -314,7 +322,8 @@ class SubCliServe:
                        ssl=args.ssl,
                        proxy_url=args.proxy_url,
                        max_log_len=args.max_log_len,
-                       disable_fastapi_docs=args.disable_fastapi_docs)
+                       disable_fastapi_docs=args.disable_fastapi_docs,
+                       max_concurrent_requests=args.max_concurrent_requests)
 
     @staticmethod
     def api_client(args):
