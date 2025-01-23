@@ -32,7 +32,7 @@ struct ModelParam {
     WeightType       weight_type;
     int              group_size;
     int              start_id;
-    std::vector<int> end_id;
+    std::vector<int> end_ids;
     MLAParam         mla;
     int              tune_layer_num;
 

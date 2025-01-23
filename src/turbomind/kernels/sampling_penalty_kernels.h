@@ -81,7 +81,7 @@ template<typename T>
 void invokeMinLengthPenalty(T*           logits,
                             const int*   min_lengths,
                             const int*   end_ids,
-                            const int    end_ids_len,
+                            const int    end_ids_size,
                             const int*   sequnece_lengths,
                             const int    batch_size,
                             const int    vocab_size_padded,

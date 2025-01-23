@@ -115,16 +115,16 @@ class BaseOutputModel(ABC):
             from transformers import GenerationConfig
             cfg = GenerationConfig.from_pretrained(self.input_model.model_path)
             if isinstance(cfg.eos_token_id, int):
-                eos_id = [cfg.eos_token_id]
+                eos_ids = [cfg.eos_token_id]
             elif isinstance(cfg.eos_token_id, list):
-                eos_id = cfg.eos_token_id
+                eos_ids = cfg.eos_token_id
             elif cfg.eos_token_id is None:
-                eos_id = [eos_id]
+                eos_ids = [eos_id]
         except OSError:
             if isinstance(eos_id, int):
-                eos_id = [eos_id]
+                eos_ids = [eos_id]
         final_cfg = config_to_dict(self.model_config)
-        final_cfg.update(dict(start_id=bos_id, end_id=eos_id))
+        final_cfg.update(dict(start_id=bos_id, end_ids=eos_ids))
         final_cfg.update(self.input_model_info)
         if 'embedding_size' not in self.input_model_info.keys():
             final_cfg.update(

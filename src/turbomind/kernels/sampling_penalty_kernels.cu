@@ -582,7 +582,7 @@ __global__ void batchApplyMinLengthPenalty(T*         logits,
                                            const int  batch_size,
                                            const int* min_lengths,
                                            const int* __restrict__ end_ids,
-                                           const int  end_ids_len,
+                                           const int  end_ids_size,
                                            const int* sequence_lengths,
                                            const int  vocab_size_padded)
 {
@@ -602,7 +602,7 @@ template<typename T>
 void invokeMinLengthPenalty(T*           logits,
                             const int*   min_lengths,
                             const int*   end_ids,
-                            const int    end_ids_len,
+                            const int    end_ids_size,
                             const int*   sequnece_lengths,
                             const int    batch_size,
                             const int    vocab_size_padded,
@@ -610,15 +610,15 @@ void invokeMinLengthPenalty(T*           logits,
 
 {
     const dim3 block(std::min(batch_size, 1024));
-    const dim3 grid((batch_size + block.x - 1) / block.x, end_ids_len);
+    const dim3 grid((batch_size + block.x - 1) / block.x, end_ids_size);
     batchApplyMinLengthPenalty<<<grid, block, 0, stream>>>(
-        logits, batch_size, min_lengths, end_ids, end_ids_len, sequnece_lengths, vocab_size_padded);
+        logits, batch_size, min_lengths, end_ids, end_ids_size, sequnece_lengths, vocab_size_padded);
 }
 
 template void invokeMinLengthPenalty(float*       logits,
                                      const int*   min_lengths,
                                      const int*   end_ids,
-                                     const int    end_ids_len,
+                                     const int    end_ids_size,
                                      const int*   sequnece_lengths,
                                      const int    batch_size,
                                      const int    vocab_size_padded,
@@ -627,7 +627,7 @@ template void invokeMinLengthPenalty(float*       logits,
 template void invokeMinLengthPenalty(half*        logits,
                                      const int*   min_lengths,
                                      const int*   end_ids,
-                                     const int    end_ids_len,
+                                     const int    end_ids_size,
                                      const int*   sequnece_lengths,
                                      const int    batch_size,
                                      const int    vocab_size_padded,

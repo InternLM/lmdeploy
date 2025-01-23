@@ -162,14 +162,14 @@ void LogitsProcessorLayer<T>::forward(TensorMap* output_tensors, TensorMap* inpu
             return min_lengths[i] > context_length_[i] + num_generated_tokens;
         });
         if (invoke_min_length_penalty) {
-            FT_CHECK_WITH_INFO(input_tensors->isExist("end_id"), "Need end_id to apply min length penlaty");
-            const Tensor end_id = input_tensors->at("end_id");
-            FT_CHECK(end_id.shape.size() == 1);
-            const size_t end_id_len = end_id.shape[0];
+            FT_CHECK_WITH_INFO(input_tensors->isExist("end_ids"), "Need end_ids to apply min length penlaty");
+            const Tensor end_ids = input_tensors->at("end_ids");
+            FT_CHECK(end_ids.shape.size() == 1);
+            const size_t end_ids_size = end_ids.shape[0];
             invokeMinLengthPenalty(logits,
                                    min_lengths_buf_,
-                                   input_tensors->getPtr<const int>("end_id"),
-                                   end_id_len,
+                                   input_tensors->getPtr<const int>("end_ids"),
+                                   end_ids_size,
                                    output_tensors->getPtr<const int>("sequence_length"),
                                    batch_size,
                                    args_.vocab_size_padded,

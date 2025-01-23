@@ -777,8 +777,8 @@ void LlamaBatch<T>::AllocatePersistantBuffer(size_t max_batch_size, int cache_bl
     d_curand_state_ =
         (curandState_t*)allocator_->reMalloc(d_curand_state_, sizeof(curandState_t) * max_batch_size, true, false);
 
-    d_end_ids_buf_ = (int*)allocator_->reMalloc(d_end_ids_buf_, sizeof(int) * model_->end_id_.size(), false);
-    h_end_ids_buf_ = (int*)allocator_->reMalloc(h_end_ids_buf_, sizeof(int) * model_->end_id_.size(), false, true);
+    d_end_ids_buf_ = (int*)allocator_->reMalloc(d_end_ids_buf_, sizeof(int) * model_->end_ids_.size(), false);
+    h_end_ids_buf_ = (int*)allocator_->reMalloc(h_end_ids_buf_, sizeof(int) * model_->end_ids_.size(), false, true);
 
     sampling_params_ = {
         {"stop_words_list", (std::byte*)h_stop_words_, (std::byte*)d_stop_words_},
@@ -1151,10 +1151,10 @@ void LlamaBatch<T>::InitializeSampling(const GenerationState& g)
     }
 
     // init for eos
-    size_t eos_size = model_->end_id_.size();
-    std::copy_n(model_->end_id_.begin(), eos_size, h_end_ids_buf_);
-    Copy(h_end_ids_buf_, eos_size, d_end_ids_buf_);
-    inputs.insert({"end_id", {MEMORY_GPU, TYPE_INT32, {(size_t)eos_size}, d_end_ids_buf_}});
+    size_t end_ids_size = model_->end_ids_.size();
+    std::copy_n(model_->end_ids_.begin(), end_ids_size, h_end_ids_buf_);
+    Copy(h_end_ids_buf_, end_ids_size, d_end_ids_buf_);
+    inputs.insert({"end_ids", {MEMORY_GPU, TYPE_INT32, {(size_t)end_ids_size}, d_end_ids_buf_}});
 
     inputs_ = std::move(inputs);
 
@@ -1564,7 +1564,7 @@ void LlamaBatch<T>::InternalThreadEntry()
     check_cuda_error(cudaSetDevice(device_id_));
 
     // Initialize `AnomalyHandler`
-    AnomalyHandler::instance().Init(rank_, model_->vocab_size_padded_, model_->end_id_[0], max_batch_size_, stream_);
+    AnomalyHandler::instance().Init(rank_, model_->vocab_size_padded_, model_->end_ids_[0], max_batch_size_, stream_);
 
     // auto& request_queue = shared_state_->request_queue;
     auto& infer_reqs = shared_state_->infer_reqs;
