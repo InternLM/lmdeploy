@@ -4,8 +4,10 @@ import os
 import re
 from pathlib import Path
 from typing import Dict, Tuple
+from functools import lru_cache
 
 import torch
+import torch_npu
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.utils import get_logger
@@ -13,6 +15,24 @@ from lmdeploy.utils import get_logger
 from ..op_backend import DlinferOpsBackend
 
 logger = get_logger('lmdeploy')
+
+
+class SocVersion:
+    Ascend310P: str = "Ascend310P"
+    Ascend910B: str = "Ascend910B"
+
+    @classmethod
+    @lru_cache(maxsize=1)
+    def device_name(cls) -> str:
+        return torch_npu.npu.get_device_name()[:10]
+
+    @classmethod
+    def is_Ascend310P(cls) -> bool:
+        return cls.device_name() == cls.Ascend310P
+
+    @classmethod
+    def is_Ascend910B(cls) -> bool:
+        return cls.device_name() == cls.Ascend910B
 
 
 class AscendKVQuantMeta:
@@ -177,6 +197,8 @@ class AscendOpsBackend(DlinferOpsBackend):
             if not step_context.is_decoding:
                 if is_unpaged_prefill:
                     attention_mask = [mask.half() for mask in attention_mask]
+                    if SocVersion.is_Ascend310P():
+                        attention_mask = [torch.cat([mask.unsqueeze(0) for mask in attention_mask])]
                 else:
                     attention_mask = [
                         torch.cat([mask.half() * cls.half_negative_inf for mask in attention_mask]).unsqueeze(1)
