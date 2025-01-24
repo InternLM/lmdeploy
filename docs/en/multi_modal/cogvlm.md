@@ -6,17 +6,6 @@ CogVLM is a powerful open-source visual language model (VLM). LMDeploy supports 
 
 ## Quick Start
 
-### Install
-
-Install torch, torchvision and xformers for CogVLM by referring to [Pytorch](https://pytorch.org/get-started) and [installing-xformers](https://github.com/facebookresearch/xformers?tab=readme-ov-file#installing-xformers)
-
-```shell
-# cuda 11.8
-pip install torch==2.2.2 torchvision==0.17.2 xformers==0.0.26 --index-url https://download.pytorch.org/whl/cu118
-# cuda 12.1
-pip install torch==2.2.2 torchvision==0.17.2 xformers==0.0.26 --index-url https://download.pytorch.org/whl/cu121
-```
-
 Install LMDeploy by following the [installation guide](../get_started/installation.md)
 
 ### Prepare
