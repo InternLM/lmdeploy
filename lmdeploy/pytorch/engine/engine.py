@@ -1030,7 +1030,7 @@ class Engine:
         else:
             # broadcast exit signal.
             try:
-                broadcast_inputs(0, [None, None, None], group=self.dist_ctx.world_cpu_group)
+                broadcast_inputs(0, [None, None, None], group=self.dist_ctx.tp_cpu_group)
             except Exception:
                 logger.warning('Can not broadcast exit signal.')
 
