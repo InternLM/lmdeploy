@@ -134,8 +134,7 @@ jobs:
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-*.whl
-          python3 -m pip install -e /root/packages/AutoAWQ_kernels
-          python3 -m pip install /root/packages/autoawq-*.whl --no-deps
+          python3 -m pip install sentence_transformers --no-deps
           python3 -m pip install -r /root/models/offline_pkg/requirements.txt
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
