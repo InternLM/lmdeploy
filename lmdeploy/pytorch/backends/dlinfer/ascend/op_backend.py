@@ -2,9 +2,9 @@
 import itertools
 import os
 import re
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Tuple
-from functools import lru_cache
 
 import torch
 import torch_npu
@@ -18,8 +18,8 @@ logger = get_logger('lmdeploy')
 
 
 class SocVersion:
-    Ascend310P: str = "Ascend310P"
-    Ascend910B: str = "Ascend910B"
+    Ascend310P: str = 'Ascend310P'
+    Ascend910B: str = 'Ascend910B'
 
     @classmethod
     @lru_cache(maxsize=1)
