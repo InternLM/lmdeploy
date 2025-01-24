@@ -47,7 +47,6 @@ class ModelConfig:
     inter_size: List[int] = None
     norm_eps: float = None
     attn_bias: int = 0
-    start_id: int = None
     end_ids: List[int] = None
     size_per_head: int = 128
     group_size: int = 64

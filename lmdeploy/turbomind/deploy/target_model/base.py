@@ -124,7 +124,7 @@ class BaseOutputModel(ABC):
             if isinstance(eos_id, int):
                 eos_ids = [eos_id]
         final_cfg = config_to_dict(self.model_config)
-        final_cfg.update(dict(start_id=bos_id, end_ids=eos_ids))
+        final_cfg.update(dict(end_ids=eos_ids))
         final_cfg.update(self.input_model_info)
         if 'embedding_size' not in self.input_model_info.keys():
             final_cfg.update(

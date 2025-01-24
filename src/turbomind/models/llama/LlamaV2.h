@@ -112,7 +112,6 @@ private:
     const size_t           vocab_size_;
     const size_t           vocab_size_padded_;
     const float            rmsnorm_eps_;
-    const int              start_id_;
     const std::vector<int> end_ids_;
     const NcclParam        tensor_para_;
     const size_t           local_head_num_;
