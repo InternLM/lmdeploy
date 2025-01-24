@@ -700,6 +700,7 @@ class TPModelAgent(AutoModelAgent):
         if dist.is_initialized():
             if hasattr(self, '_cpu_group') and self._cpu_group is not None:
                 dist.destroy_process_group(self._cpu_group)
+                del self._cpu_group
             dist.destroy_process_group()
 
 
