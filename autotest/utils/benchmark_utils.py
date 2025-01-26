@@ -191,7 +191,7 @@ def restful_test(config, run_id, run_config, worker_id: str = '', is_smoke: bool
     if not health_check(http_url):
         return False, 'server not start'
 
-    command = f'python3 benchmark/profile_restful_api.py --port {port} --backend lmdeploy --dataset-path {dataset_path} --request-rate-range 2,30,2 --multi '  # noqa: F401, E501, E231
+    command = f'python3 benchmark/profile_restful_api.py --port {port} --host localhost --backend lmdeploy --dataset-path {dataset_path} --request-rate-range 2,30,2 --multi '  # noqa: F401, E501, E231
 
     if is_smoke:
         command += ' --num-prompts 200'
