@@ -76,7 +76,7 @@ jobs:
       fail-fast: false
       matrix:
         benchmark_type: ${{fromJSON(github.event.inputs.benchmark_type)}}
-    timeout-minutes: 480
+    timeout-minutes: 48000
     container:
       image: openmmlab/lmdeploy:latest-cu11
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
