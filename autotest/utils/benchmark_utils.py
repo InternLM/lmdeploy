@@ -84,9 +84,9 @@ def throughput_test(config, run_id, run_config, cuda_prefix: str = None, worker_
     command = get_command_with_extra(command, cuda_prefix)
 
     if is_smoke:
-        run_config = '--num-prompts 300'
+        run_config = '--num-prompts 500'
     else:
-        run_config = '--num-prompts 3000'
+        run_config = '--num-prompts 5000'
     if backend == 'pytorch':
         command += ' --backend pytorch'
         if not is_bf16_supported():
@@ -196,7 +196,7 @@ def restful_test(config, run_id, run_config, worker_id: str = '', is_smoke: bool
     if is_smoke:
         command += ' --num-prompts 200'
     else:
-        command += ' --num-prompts 50'
+        command += ' --num-prompts 5000'
 
     csv_path = f'{benchmark_path}/restful_batch_1th.csv'
     cmd = ' '.join([command, '--output-file', csv_path])
