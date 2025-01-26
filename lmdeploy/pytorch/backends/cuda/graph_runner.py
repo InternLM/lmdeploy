@@ -171,3 +171,7 @@ class CUDAGraphRunner(GraphRunner):
             inputs_embeds=inputs_embeds,
             context=context,
         )
+
+    def reset(self):
+        """remove all graphs to prevent hanging on exit."""
+        self._runner_map.clear()

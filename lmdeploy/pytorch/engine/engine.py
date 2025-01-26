@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-
 import asyncio
 import copy
 import os
@@ -8,6 +7,9 @@ from typing import Any, Dict, List
 
 import numpy as np
 import torch
+import torch.distributed
+import torch.distributed.elastic
+from torch import distributed as dist
 
 from lmdeploy.messages import PytorchEngineConfig, ResponseType
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model, logging_timer
@@ -15,9 +17,11 @@ from lmdeploy.utils import get_logger, get_max_batch_size, get_model, logging_ti
 from ..adapter.adapter import AdapterManager
 from ..config import BackendConfig, CacheConfig, SchedulerConfig
 from ..devices import DeviceContext, get_device_manager
+from ..distributed import DistContext, get_dist_manager
 from ..messages import MessageStatus, SchedulerSequence
 from ..model_inputs import ModelInputs, VisionModelInputs
 from ..paging import Scheduler
+from .dist_proc_manager import DIST_TIMEOUT, DistProcManager, broadcast_inputs
 from .engine_checker import EngineChecker
 from .logits_process import FusedLogitsProcessor, SamplingInputs
 from .model_agent import build_model_agent
@@ -48,21 +52,6 @@ def _tensorlize_block_offsets(block_offsets):
     block_offsets = [torch.from_numpy(off) for off in block_offsets]
     block_offsets = pad_sequence(block_offsets, batch_first=True)
     return block_offsets
-
-
-def _check_finish(scheduler: Scheduler, current_iter: int):
-    """dynamic prefill interval."""
-    if not scheduler.has_waiting():
-        return False
-    scheduler_config = scheduler.scheduler_config
-    max_prefill_interval = scheduler_config.prefill_interval
-    max_batches = scheduler_config.max_batches
-    num_batches = len(scheduler.running)
-    ratio = num_batches / max_batches
-    min_iter = max_prefill_interval * ratio
-    if current_iter >= min_iter:
-        return True
-    return False
 
 
 def _build_scheduler_config(engine_config: PytorchEngineConfig):
@@ -98,6 +87,15 @@ def _build_backend_config(engine_config: PytorchEngineConfig):
     return backend_config
 
 
+def _braodcast_obj(obj, rank, group):
+    """broadcast object."""
+    objs = [None]
+    if rank == 0:
+        objs = [obj]
+    dist.broadcast_object_list(objs, group=group)
+    return objs[0]
+
+
 class Engine:
     """The inference engine of lmdeploy pytorch.
 
@@ -111,6 +109,7 @@ class Engine:
                  model_path: str,
                  engine_config: PytorchEngineConfig = None,
                  trust_remote_code: bool = True) -> None:
+        # make sure engine exits
         if engine_config is None:
             engine_config = PytorchEngineConfig()
         else:
@@ -118,30 +117,49 @@ class Engine:
         if engine_config.max_batch_size is None:
             engine_config.max_batch_size = get_max_batch_size(engine_config.device_type)
 
+        # process distributed
+        (rank, local_rank, world_size, local_world_size, dist_proc_mgr) = self._init_dist(
+            model_path,
+            engine_config=engine_config,
+            trust_remote_code=trust_remote_code,
+        )
+        tp = engine_config.tp
+        dp = 1
+        dist_ctx = DistContext.build(rank, tp, dp, nproc_per_node=local_world_size)
+
+        self.tp = tp
+
+        # download models and adapters
+        if not os.path.exists(model_path):
+            if local_rank == 0:
+                model_path = get_model(model_path, engine_config.download_dir, engine_config.revision)
+            if world_size > 1:
+                with get_dist_manager().context(dist_ctx):
+                    model_path = _braodcast_obj(model_path, local_rank, dist_ctx.local_cpu_group)
+
+        adapters = engine_config.adapters
+        if adapters is not None and len(adapters) > 0:
+            if local_rank == 0:
+                adapters = self._download_adapters(adapters, engine_config)
+            if world_size > 1:
+                with get_dist_manager().context(dist_ctx):
+                    adapters = _braodcast_obj(adapters, local_rank, dist_ctx.local_cpu_group)
+
+        # check environment
         checker = EngineChecker(model_path=model_path,
                                 engine_config=engine_config,
                                 trust_remote_code=trust_remote_code,
                                 logger=logger)
         checker.handle()
 
-        adapters = engine_config.adapters
-        self.engine_config = engine_config
-        self.tp = engine_config.tp
-
-        self.device_context = DeviceContext(device_type=engine_config.device_type)
-
-        if not os.path.exists(model_path):
-            model_path = get_model(model_path, engine_config.download_dir, engine_config.revision)
-        self.model_path = model_path
-
-        if adapters is not None and len(adapters) > 0:
-            adapters = self._download_adapters(adapters, engine_config)
-
+        # build configs
         scheduler_config = _build_scheduler_config(engine_config)
         cache_config = _build_cache_config(engine_config)
         backend_config = _build_backend_config(engine_config)
 
-        with get_device_manager().context(self.device_context):
+        # build model agent
+        self.device_ctx = DeviceContext(device_type=engine_config.device_type)
+        with get_dist_manager().context(dist_ctx), get_device_manager().context(self.device_ctx):
             self.model_agent = build_model_agent(model_path,
                                                  cache_config=cache_config,
                                                  backend_config=backend_config,
@@ -157,6 +175,16 @@ class Engine:
         self.adapter_manager = self._build_adapter_manager(adapters)
         self.scheduler = Scheduler(scheduler_config, cache_config)
 
+        # dist args
+        self.rank = rank
+        self.local_rank = local_rank
+        self.world_size = world_size
+        self.dist_proc_mgr = dist_proc_mgr
+        self.dist_ctx = dist_ctx
+
+        # engine args
+        self.model_path = model_path
+        self.engine_config = engine_config
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
         self.backend_config = backend_config
@@ -164,6 +192,9 @@ class Engine:
         self.max_session_len = self._get_max_session_len()
 
         self.req_manager = self._bind_request_manager()
+
+        if rank != 0:
+            self.dist_run_forever()
 
         # create main thread
         self._start_loop()
@@ -218,6 +249,44 @@ class Engine:
             new_adapters[name] = new_path
 
         return new_adapters
+
+    @staticmethod
+    def _is_launched_by_torchrun():
+        # check env variable
+        # TODO: Find a better check
+        if ('RANK' in os.environ and 'LOCAL_RANK' in os.environ and 'WORLD_SIZE' in os.environ):
+            return True
+        return False
+
+    def _init_dist(
+        self,
+        model_path: str,
+        engine_config: PytorchEngineConfig = None,
+        trust_remote_code: bool = True,
+    ):
+        """init distribute."""
+        # process distributed
+        if engine_config.tp > 1 and not self._is_launched_by_torchrun():
+            mgr = DistProcManager(model_path=model_path,
+                                  engine_config=engine_config,
+                                  trust_remote_code=trust_remote_code)
+            mgr.start()
+            rank = mgr.global_rank0
+            world_size = mgr.world_size
+            local_world_size = world_size
+            local_rank = 0
+        else:
+            mgr = None
+            rank = int(os.environ.get('RANK', '0'))
+            local_rank = int(os.environ.get('LOCAL_RANK', '0'))
+            world_size = int(os.environ.get('WORLD_SIZE', '1'))
+            local_world_size = int(os.environ.get('LOCAL_WORLD_SIZE', str(world_size)))
+            if engine_config.tp > 1 and not dist.is_initialized():
+                dist.init_process_group(backend='gloo', timeout=DIST_TIMEOUT, rank=rank, world_size=world_size)
+
+        if local_rank != 0:
+            torch.cuda.set_device(local_rank)
+        return rank, local_rank, world_size, local_world_size, mgr
 
     def _build_adapter_manager(self, adapters):
         return AdapterManager(adapters)
@@ -641,18 +710,9 @@ class Engine:
         ret['logits'] = logits
         return ret
 
-    async def _make_infer_outputs(self, next_token_ids: torch.LongTensor, logits: torch.Tensor, stopped: torch.Tensor,
-                                  model_metas: List[Dict[str, Any]], event: torch.cuda.Event):
+    async def _make_infer_outputs(self, next_token_ids: torch.LongTensor, running: SeqList, logits: torch.Tensor,
+                                  stopped: torch.Tensor, model_metas: List[Dict[str, Any]], event: torch.cuda.Event):
         """make infer output."""
-
-        def __get_q_start_loc():
-            inputs = self._inputs
-            seq_length = inputs.seq_length
-            batch_size = len(seq_length)
-            if inputs.is_decoding:
-                return torch.arange(0, batch_size)
-            else:
-                return seq_length.cumsum(0) - seq_length
 
         while not event.query():
             await asyncio.sleep(0.001)
@@ -660,14 +720,12 @@ class Engine:
             next_token_ids = next_token_ids.cpu()
             stopped = stopped.cpu()
 
-        running = self._running
+        seq_length = [seq.num_token_ids for seq in running]
         is_run = [seq.status == MessageStatus.RUNNING for seq in running]
         stopped = stopped.tolist()
         self.update_running(running, next_token_ids, stopped, model_metas)
 
         # generate output
-        next_token_ids = next_token_ids.tolist()
-        q_start_loc = __get_q_start_loc()
         outputs: Dict[int, InferOutput] = dict()
         for idx, msg in enumerate(running):
             if not is_run[idx]:
@@ -677,23 +735,19 @@ class Engine:
             if not finish and len(token_ids) == 0:
                 continue
             session_id = msg.session_id
-            resp = msg.resp
             out = InferOutput(
                 session_id=session_id,
-                resp=resp,
+                resp=msg.resp,
                 finish=finish,
                 token_ids=token_ids,
             )
             outputs[session_id] = out
 
             if msg.return_logits:
-                inputs = self._inputs
-                start = q_start_loc[idx]
-                seqlen = inputs.seq_length[idx]
-                outputs[session_id].logits = logits[start:start + seqlen]
+                outputs[session_id].logits = logits.split(seq_length)[idx]
         return outputs
 
-    async def _async_step_background(self, inputs: ModelInputs, swap_in_map: Dict, swap_out_map: Dict,
+    async def _async_step_background(self, running: SeqList, inputs: ModelInputs, swap_in_map: Dict, swap_out_map: Dict,
                                      all_ids: torch.Tensor, guided_input_ids: torch.Tensor,
                                      sampling_inputs: SamplingInputs, num_appendable_ids: torch.LongTensor,
                                      num_ignore_eos: torch.LongTensor, loop_count: int, return_logits: bool,
@@ -724,7 +778,17 @@ class Engine:
         num_appendable_ids = num_appendable_ids.cuda()
         num_ignore_eos = num_ignore_eos.cuda()
 
+        # dist tools
+        dist_ctx = get_dist_manager().current_context()
+
         for idx in range(loop_count):
+
+            # broadcast inputs
+            if dist_ctx.tp > 1:
+                tp_cpu_group = dist_ctx.tp_cpu_group
+                (inputs, swap_in_map, swap_out_map) = broadcast_inputs(0, [inputs, swap_in_map, swap_out_map],
+                                                                       tp_cpu_group)
+
             # inference
             output = await self._async_model_forward(inputs,
                                                      swap_in_map=swap_in_map,
@@ -745,10 +809,10 @@ class Engine:
             # send output
             model_metas = output.get('model_metas')
             finish = (idx == loop_count - 1)
-            finish = finish or _check_finish(self.scheduler, idx)
             event = torch.cuda.Event()
             event.record()
             output = dict(next_token_ids=next_token_ids,
+                          running=running,
                           logits=logits,
                           stopped=stopped,
                           model_metas=model_metas,
@@ -773,12 +837,16 @@ class Engine:
         else:
             has_runable_event.clear()
 
+    async def _await_forward_event(self, forward_event: asyncio.Event):
+        """await forward event."""
+        if self.scheduler.has_unfinished():
+            await forward_event.wait()
+
     @torch.inference_mode()
     async def _async_loop_preprocess_message(self, forward_event: asyncio.Event, has_runable_event: asyncio.Event):
         """preprocess msg."""
         while True:
-            if self.scheduler.has_unfinished():
-                await forward_event.wait()
+            await self._await_forward_event(forward_event)
             await self.req_manager.step()
             self._set_has_runable_event(has_runable_event)
 
@@ -852,11 +920,9 @@ class Engine:
             num_ignore_eos = __get_num_ignore_eos(running)
             return_logits = __need_logits(running)
 
-            self._running = running
-            self._inputs = inputs
-
             forward_event.clear()
             await self._async_step_background(
+                running=running,
                 inputs=inputs,
                 swap_in_map=swap_in_map,
                 swap_out_map=swap_out_map,
@@ -871,7 +937,7 @@ class Engine:
             )
             forward_event.set()
 
-    async def _async_send_responses(self, que: asyncio.Queue, forward_event: asyncio.Event):
+    async def _async_loop_send_responses(self, que: asyncio.Queue, forward_event: asyncio.Event):
         """send responses."""
 
         def __send_resp(out: InferOutput):
@@ -886,61 +952,17 @@ class Engine:
 
         while True:
             resps = await que.get()
-            if self.scheduler.has_unfinished():
-                await forward_event.wait()
+            await self._await_forward_event(forward_event)
             __send_resps(resps)
 
-    @staticmethod
-    def _add_loop_tasks_done_callback(tasks: List[asyncio.Task]):
-        """add loop tasks done callback."""
-
-        def __task_callback(task: asyncio.Task) -> None:
-            """raise exception on finish."""
-            task_name = task.get_name()
-            try:
-                task.result()
-            except asyncio.CancelledError:
-                logger.debug(f'Task <{task_name}> cancelled.')
-                return
-            except Exception:
-                logger.exception(f'Task <{task_name}> failed')
-                for task in tasks:
-                    if not task.cancelled():
-                        task.cancel()
-
-        for task in tasks:
-            task.add_done_callback(__task_callback)
-
     @torch.inference_mode()
-    async def _async_loop(self):
+    async def _async_loop_main(self, in_que: asyncio.Queue, out_que: asyncio.Queue, resp_que: asyncio.Queue,
+                               has_runable_event: asyncio.Event):
         """Main loop of the engine.
 
         Each engine instance would communicate with the engine by queue.
         """
-        event_loop = asyncio.get_event_loop()
         prefill_interval = self.scheduler_config.prefill_interval
-
-        # forward task
-        in_que = asyncio.Queue()
-        out_que = asyncio.Queue()
-        forward_event = asyncio.Event()
-        forward_event.set()
-        loop_background = event_loop.create_task(self._async_loop_background(in_que, out_que, forward_event),
-                                                 name='MainLoopBackground')
-
-        # preprocess task
-        has_runable_event = asyncio.Event()
-        loop_msg_proc = event_loop.create_task(self._async_loop_preprocess_message(forward_event, has_runable_event),
-                                               name='MainLoopPreprocessMessage')
-
-        # response task
-        resp_que = asyncio.Queue()
-        loop_send_resp = event_loop.create_task(self._async_send_responses(resp_que, forward_event),
-                                                name='MainLoopResponse')
-
-        loop_main = asyncio.current_task()
-        loop_tasks: List[asyncio.Task] = [loop_main, loop_background, loop_msg_proc, loop_send_resp]
-        self._add_loop_tasks_done_callback(loop_tasks)
 
         def __do_prefill():
             # decoding if no waiting
@@ -979,10 +1001,129 @@ class Engine:
             await has_runable_event.wait()
             await __step()
 
+    @staticmethod
+    def _add_loop_tasks_done_callback(tasks: List[asyncio.Task]):
+        """add loop tasks done callback."""
+
+        def __task_callback(task: asyncio.Task) -> None:
+            """raise exception on finish."""
+            task_name = task.get_name()
+            try:
+                task.result()
+            except asyncio.CancelledError:
+                logger.debug(f'Task <{task_name}> cancelled.')
+                return
+            except Exception:
+                logger.exception(f'Task <{task_name}> failed')
+                for task in tasks:
+                    if not task.cancelled():
+                        task.cancel()
+
+        for task in tasks:
+            task.add_done_callback(__task_callback)
+
+    def _finally_rank0(self):
+        """finall process for rank0."""
+        if self.dist_proc_mgr is not None:
+            # if process is create by rank0, kill them all
+            self.dist_proc_mgr.terminate_all_procs()
+        else:
+            # broadcast exit signal.
+            try:
+                broadcast_inputs(0, [None, None, None], group=self.dist_ctx.tp_cpu_group)
+            except Exception:
+                logger.warning('Can not broadcast exit signal.')
+
+    def _loop_finally(self):
+        """finally process for dist."""
+        self.model_agent.reset_graph_runner()
+        if not dist.is_initialized():
+            return
+        if self.rank == 0:
+            # send empty info to stop other ranks.
+            self._finally_rank0()
+        logger.debug(f'rank[{self.rank}]: destroy process group.')
+        # WARNING: destroy process group might block the watchdog.
+        # dist.destroy_process_group()
+
     async def async_loop(self):
         device_manager = get_device_manager()
-        with device_manager.context(self.device_context), torch.cuda.stream(self.stream):
-            await self._async_loop()
+        dist_mgr = get_dist_manager()
+        with dist_mgr.context(self.dist_ctx), device_manager.context(self.device_ctx), torch.cuda.stream(self.stream):
+            try:
+                event_loop = asyncio.get_event_loop()
+
+                # forward task
+                in_que = asyncio.Queue()
+                out_que = asyncio.Queue()
+                forward_event = asyncio.Event()
+                forward_event.set()
+                loop_background = event_loop.create_task(self._async_loop_background(in_que, out_que, forward_event),
+                                                         name='MainLoopForward')
+
+                # preprocess task
+                has_runable_event = asyncio.Event()
+                loop_msg_proc = event_loop.create_task(self._async_loop_preprocess_message(
+                    forward_event, has_runable_event),
+                                                       name='MainLoopPreprocessMessage')
+
+                # response task
+                resp_que = asyncio.Queue()
+                loop_send_resp = event_loop.create_task(self._async_loop_send_responses(resp_que, forward_event),
+                                                        name='MainLoopResponse')
+
+                # binding done callback
+                loop_main = asyncio.current_task()
+                loop_tasks: List[asyncio.Task] = [loop_main, loop_background, loop_msg_proc, loop_send_resp]
+                self._add_loop_tasks_done_callback(loop_tasks)
+
+                # main loop
+                await self._async_loop_main(in_que=in_que,
+                                            out_que=out_que,
+                                            resp_que=resp_que,
+                                            has_runable_event=has_runable_event)
+            finally:
+                self._loop_finally()
+
+    @torch.inference_mode()
+    async def _dist_run_forever(self):
+        """implement dist run forever."""
+        dist_ctx = get_dist_manager().current_context()
+        tp_cpu_group = dist_ctx.tp_cpu_group
+        rank = dist_ctx.rank
+        logger.info(f'rank[{rank}]: Start dist loop.')
+        while True:
+            # share inputs
+            inputs, swap_in_map, swap_out_map = broadcast_inputs(rank, None, tp_cpu_group)
+            if inputs is None:
+                return
+
+            # forward
+            await self._async_model_forward(inputs, swap_in_map, swap_out_map, return_logits=False)
+
+    def dist_run_forever(self):
+        """distributed run forever."""
+        device_mgr = get_device_manager()
+        dist_mgr = get_dist_manager()
+        rank = self.dist_ctx.rank
+        exit_code = 0
+        try:
+            with dist_mgr.context(self.dist_ctx), device_mgr.context(self.device_ctx), torch.cuda.stream(self.stream):
+                event_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(event_loop)
+                event_loop.run_until_complete(self._dist_run_forever())
+        except RuntimeError as e:
+            if 'Connection closed by peer' in e.args[0]:
+                logger.info(f'rank[{rank}] closed by peer.')
+            else:
+                exit_code = 1
+                logger.exception(f'rank[{rank}] failed.')
+        except Exception:
+            exit_code = 1
+            logger.exception(f'rank[{rank}] failed.')
+        finally:
+            self._loop_finally()
+            exit(exit_code)
 
     def create_instance(self, cuda_stream_id=0):
         """Create a pytorch engine instance.
