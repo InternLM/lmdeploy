@@ -18,6 +18,7 @@ from typing import Any, AsyncIterator, Dict, Iterator, List, Literal, Optional, 
 
 import tqdm
 
+from lmdeploy import Tokenizer
 from lmdeploy.logger import RequestLogger
 from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, Response, ResponseType, TurbomindEngineConfig
 from lmdeploy.model import MODELS, ChatTemplateConfig, best_match_model
@@ -267,6 +268,7 @@ class AsyncEngine(LogitsMixin):
 
         logger.info(f'updated chat_template_onfig={chat_template_config}')
 
+        self.tokenizer = Tokenizer(model_path)
         # build backend engine
         if backend == 'turbomind':
             self._build_turbomind(model_path=model_path, backend_config=backend_config, **kwargs)
@@ -284,7 +286,6 @@ class AsyncEngine(LogitsMixin):
             self.stop_words = self.stop_words[0][0].tolist()
         self.backend = backend
         self.instance_num = self.backend_config.max_batch_size
-        self.tokenizer = self.engine.tokenizer
         self.id2step = {}
         self.id2inst = {}
         self.free_insts: asyncio.Queue = None
@@ -311,7 +312,10 @@ class AsyncEngine(LogitsMixin):
                          **kwargs):
         """Innter build method for turbomind backend."""
         from lmdeploy import turbomind as tm
-        self.engine = tm.TurboMind.from_pretrained(model_path, engine_config=backend_config, **kwargs)
+        self.engine = tm.TurboMind.from_pretrained(model_path,
+                                                   tokenizer=self.tokenizer,
+                                                   engine_config=backend_config,
+                                                   **kwargs)
         self.backend_config = self.engine.engine_config
         self.hf_tm_cfg = self.engine.config
 
@@ -321,7 +325,7 @@ class AsyncEngine(LogitsMixin):
                        **kwargs):
         """Innter build method for pytorch backend."""
         from lmdeploy.pytorch.engine import Engine
-        self.engine = Engine(model_path=model_path, engine_config=backend_config)
+        self.engine = Engine(model_path=model_path, tokenizer=self.tokenizer, engine_config=backend_config)
         self.backend_config = self.engine.engine_config
         self.hf_tm_cfg = getattr(self.engine.model_config, 'hf_config', None)
 

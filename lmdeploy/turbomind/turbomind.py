@@ -20,7 +20,6 @@ from torch.nn.utils.rnn import pad_sequence
 
 import lmdeploy
 from lmdeploy.messages import EngineOutput, GenerationConfig, ResponseType, TurbomindEngineConfig
-from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model
 
 from .deploy.config import TurbomindModelConfig
@@ -82,6 +81,7 @@ class TurboMind:
 
     def __init__(self,
                  model_path: str,
+                 tokenizer: object,
                  model_name: str = None,
                  chat_template_name: str = None,
                  engine_config: TurbomindEngineConfig = None,
@@ -100,14 +100,12 @@ class TurboMind:
 
         self.gpu_count = _engine_config.tp
 
+        self.tokenizer = tokenizer
         if model_source == ModelSource.WORKSPACE:
-            tokenizer_model_path = osp.join(model_path, 'triton_models', 'tokenizer')
-            self.tokenizer = Tokenizer(tokenizer_model_path)
             self.model_comm = self._from_workspace(model_path=model_path, engine_config=_engine_config)
         else:
             if not osp.exists(model_path):
                 model_path = get_model(model_path, _engine_config.download_dir, _engine_config.revision)
-            self.tokenizer = Tokenizer(model_path)
             self.model_comm = self._from_hf(model_source=model_source,
                                             model_path=model_path,
                                             engine_config=_engine_config)
@@ -256,6 +254,7 @@ class TurboMind:
     @classmethod
     def from_pretrained(cls,
                         pretrained_model_name_or_path: str,
+                        tokenizer: object,
                         model_name: str = None,
                         chat_template_name: str = None,
                         engine_config: TurbomindEngineConfig = None,
@@ -282,6 +281,7 @@ class TurboMind:
         model_source = get_model_source(pretrained_model_name_or_path)
         logger.info(f'model_source: {model_source}')
         return cls(model_path=pretrained_model_name_or_path,
+                   tokenizer=tokenizer,
                    model_name=model_name,
                    chat_template_name=chat_template_name,
                    engine_config=engine_config,
