@@ -288,6 +288,13 @@ class TurboMind:
                    model_source=model_source,
                    **kwargs)
 
+    def close(self):
+        if self.nccl_params is not None:
+            self.model_comm.destroy_nccl_params(self.nccl_params)
+            self.nccl_params = None
+        if self.model_comm is not None:
+            self.model_comm = None
+
     def create_instance(self, cuda_stream_id=0):
         """Create a turbomind instance.
 

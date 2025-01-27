@@ -982,6 +982,9 @@ class Engine:
         with device_manager.context(self.device_context), torch.cuda.stream(self.stream):
             await self._async_loop()
 
+    def close(self):
+        self.model_agent.close()
+
     def create_instance(self, cuda_stream_id=0):
         """Create a pytorch engine instance.
 
