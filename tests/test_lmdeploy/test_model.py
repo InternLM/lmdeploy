@@ -776,3 +776,39 @@ def test_phi3(model_path_and_name):
     ref = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     res = model.messages2prompt(messages)
     assert res.startswith(ref)
+
+
+@pytest.mark.parametrize('model_path_or_name', [
+    'deepseek-ai/DeepSeek-R1-Distill-Llama-8B',
+    'deepseek-ai/DeepSeek-R1-Distill-Llama-70B',
+    'deepseek-ai/DeepSeek-R1',
+    'deepseek-ai/DeepSeek-R1-Zero',
+    'deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B',
+    'deepseek-ai/DeepSeek-R1-Distill-Qwen-7B',
+    'deepseek-ai/DeepSeek-R1-Distill-Qwen-14B',
+    'deepseek-ai/DeepSeek-R1-Distill-Qwen-32B',
+    'deepseek-ai/DeepSeek-V3',
+])
+def test_deepseek_r1(model_path_or_name):
+    from transformers import AutoTokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained(model_path_or_name, trust_remote_code=True)
+    deduced_name = best_match_model(model_path_or_name)
+    chat_template = MODELS.get(deduced_name)()
+
+    messages = [{
+        'role': 'system',
+        'content': 'you are a helpful assistant'
+    }, {
+        'role': 'user',
+        'content': 'who are you'
+    }, {
+        'role': 'assistant',
+        'content': 'I am an AI'
+    }, {
+        'role': 'user',
+        'content': 'AGI is?'
+    }]
+    ref = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    lm_res = chat_template.messages2prompt(messages)
+    assert ref == lm_res
