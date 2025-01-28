@@ -589,7 +589,7 @@ class TPModelAgent(AutoModelAgent):
             daemon=True,
         )
 
-        t_watchdog = threading.Thread(target=self._mp_watchdog, args=[self.mp_context, 1.0], daemon=True)
+        t_watchdog = threading.Thread(target=self._mp_watchdog, args=[self.mp_context, 1.0])
         t_watchdog.start()
 
         rank = 0
