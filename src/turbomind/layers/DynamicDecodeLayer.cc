@@ -47,7 +47,6 @@ void DynamicDecodeLayer<T>::initialize()
 template<typename T>
 DynamicDecodeLayer<T>::DynamicDecodeLayer(size_t           vocab_size,
                                           size_t           vocab_size_padded,
-                                          int              end_id,
                                           cudaStream_t     stream,
                                           cublasMMWrapper* cublas_wrapper,
                                           IAllocator*      allocator,
