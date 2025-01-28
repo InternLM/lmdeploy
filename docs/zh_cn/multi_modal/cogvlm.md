@@ -6,17 +6,6 @@ CogVLM 是一个强大的开源视觉语言模型（VLM）. LMDeploy 已在PyTor
 
 ## 快速开始
 
-### 安装
-
-安装 torch, torchvision 以及 CogVLM 依赖 xformers，可参考[Pytorch](https://pytorch.org/get-started)和[xformers](https://github.com/facebookresearch/xformers?tab=readme-ov-file#installing-xformers)
-
-```shell
-# cuda 11.8
-pip install torch==2.2.2 torchvision==0.17.2 xformers==0.0.26 --index-url https://download.pytorch.org/whl/cu118
-# cuda 12.1
-pip install torch==2.2.2 torchvision==0.17.2 xformers==0.0.26 --index-url https://download.pytorch.org/whl/cu121
-```
-
 请参考[安装文档](../get_started/installation.md)安装 LMDeploy
 
 ### 准备
