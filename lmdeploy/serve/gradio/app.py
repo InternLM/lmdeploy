@@ -37,7 +37,7 @@ def run(model_path_or_server: str,
         max_log_len (int): Max number of prompt characters or prompt tokens
             being printed in log. Default: Unlimited
     """
-    if ':' in model_path_or_server:
+    if '://' in model_path_or_server:
         from lmdeploy.serve.gradio.api_server_backend import run_api_server
         run_api_server(model_path_or_server, server_name, server_port, batch_size, share=share)
     else:
