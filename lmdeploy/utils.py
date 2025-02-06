@@ -336,7 +336,7 @@ def get_max_batch_size(device_type: str):
     elif device_type == 'ascend':
         return 16
     elif device_type == 'maca':
-        return 128
+        return 256
     elif device_type == 'camb':
         return 128
 

@@ -149,11 +149,10 @@ class TurbomindEngineConfig:
             The `auto` option will use FP16 precision for FP32 and FP16
             models, and BF16 precision for BF16 models.
         model_format (str): the layout of the deployed model. It can be one
-            of the following values [hf, meta_llama, awq, gptq],`hf` meaning
-            huggingface model(.bin, .safetensors), `meta_llama` being
-            meta llama's format(.pth), `awq` and `gptq` meaning the quantized
-            model by AWQ and GPTQ, respectively. If it is not specified,
-            i.e. None, it will be extracted from the input model
+            of the following values [hf, awq, gptq],`hf` meaning
+            huggingface model(.bin, .safetensors), `awq` and `gptq` meaning
+            the quantized model by AWQ and GPTQ, respectively. If it is not
+            specified, i.e. None, it will be extracted from the input model
         tp (int): the number of GPU cards used in tensor parallelism,
             default to 1
         session_len (int): the max session length of a sequence, default to

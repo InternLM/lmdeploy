@@ -93,6 +93,7 @@ class Xcomposer2VisionModel(VisonModel):
                  max_memory: Dict[int, int] = None,
                  hf_config: AutoConfig = None,
                  backend: str = ''):
+        model_path = model_path.rstrip(os.sep)
         super().__init__(model_path, with_llm, max_memory, hf_config, backend)
         check_xcomposer_install()
         self.model_type, self.module = get_xcomposer_type(self.model_path)
@@ -184,6 +185,7 @@ class Xcomposer2VisionModel(VisonModel):
         image = self.HD_transform(image, hd_num=hd_num)
         pixel_values = self.vis_processor(image).unsqueeze(0).half()
         w, h = image.size
+        w, h = w // 560, h // 560
         n_token_per_image = int((h * w + 1) * 400 + 1 + (h + 1) * 20)
         return pixel_values, n_token_per_image
 
@@ -197,6 +199,7 @@ class Xcomposer2VisionModel(VisonModel):
         image = self.HD_transform(image, hd_num=25)
         pixel_values = self.vis_processor(image).unsqueeze(0).half()
         w, h = image.size
+        w, h = w // 336, h // 336
         n_token_per_image = int((h * w + 1) * 144 + 1 + (h + 1) * 12)
         return pixel_values, n_token_per_image
 
@@ -247,10 +250,11 @@ class Xcomposer2VisionModel(VisonModel):
         return messages
 
     @staticmethod
-    def proc_messages(messages, chat_template, sequence_start):
+    def proc_messages(messages, chat_template, sequence_start, model_type):
         """apply chat template to get the prompt."""
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
+        prefix_image_token = ''
         for message in messages:
             if isinstance(message['content'], str):
                 prompt_messages.append(message)
@@ -259,15 +263,24 @@ class Xcomposer2VisionModel(VisonModel):
                 continue
             n_images = len([1 for x in message['content'] if x['type'] == 'image'])
             content = [item['text'] for item in message['content'] if item['type'] == 'text']
-            prompt = ' '.join([IMAGE_TOKEN] * n_images) + content[0]
+            if IMAGE_TOKEN not in content[0]:
+                if model_type == ModelType.XCOMPOSER2D5:
+                    if n_images == 1:
+                        prefix_image_token, prompt = IMAGE_TOKEN, content[0]
+                    else:
+                        prompt = ''.join([f'Image{i+1} {IMAGE_TOKEN}; ' for i in range(n_images)]) + content[0]
+                else:
+                    prompt = ''.join([IMAGE_TOKEN] * n_images) + content[0]
+            else:
+                prompt = content[0]
             prompt_messages.append(dict(role='user', content=prompt))
-        prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
+        prompt = prefix_image_token + chat_template.messages2prompt(prompt_messages, sequence_start)
         return prompt, IMAGE_TOKEN
 
     def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start, self.model_type)
         return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
 
     def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start, self.model_type)
         return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
