@@ -58,7 +58,11 @@ DIST_TIMEOUT = timedelta(days=35600)
 class DistProcManager:
     """distributed process manager."""
 
-    def __init__(self, model_path: str, engine_config: PytorchEngineConfig, trust_remote_code: bool = True):
+    def __init__(self,
+                 model_path: str,
+                 tokenizer: object,
+                 engine_config: PytorchEngineConfig,
+                 trust_remote_code: bool = True):
 
         # distribute args
         node_rank = engine_config.node_rank
@@ -78,6 +82,7 @@ class DistProcManager:
 
         # fields
         self.model_path = model_path
+        self.tokenizer = tokenizer
         self.engine_config = engine_config
         self.trust_remote_code = trust_remote_code
         self.global_rank0 = global_rank0
@@ -121,6 +126,7 @@ class DistProcManager:
     def _dist_process(rank: int,
                       world_size: int,
                       model_path: str,
+                      tokenizer: object,
                       engine_config: PytorchEngineConfig,
                       trust_remote_code: bool = True):
         """distributed."""
@@ -137,6 +143,7 @@ class DistProcManager:
         # and blocked in initialize.
         Engine.from_pretrained(
             model_path,
+            tokenizer=tokenizer,
             engine_config=engine_config,
             trust_remote_code=trust_remote_code,
         )
@@ -153,6 +160,7 @@ class DistProcManager:
                                        kwargs=dict(rank=rank,
                                                    world_size=self.world_size,
                                                    model_path=self.model_path,
+                                                   tokenizer=self.tokenizer,
                                                    engine_config=engine_config,
                                                    trust_remote_code=self.trust_remote_code),
                                        name=f'ProcRank{rank}',

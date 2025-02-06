@@ -122,6 +122,7 @@ class Engine:
         # process distributed
         (rank, local_rank, world_size, local_world_size, dist_proc_mgr) = self._init_dist(
             model_path,
+            tokenizer=tokenizer,
             engine_config=engine_config,
             trust_remote_code=trust_remote_code,
         )
@@ -259,6 +260,7 @@ class Engine:
     def _init_dist(
         self,
         model_path: str,
+        tokenizer: object,
         engine_config: PytorchEngineConfig = None,
         trust_remote_code: bool = True,
     ):
@@ -266,6 +268,7 @@ class Engine:
         # process distributed
         if engine_config.tp > 1 and not self._is_launched_by_torchrun():
             mgr = DistProcManager(model_path=model_path,
+                                  tokenizer=tokenizer,
                                   engine_config=engine_config,
                                   trust_remote_code=trust_remote_code)
             mgr.start()
