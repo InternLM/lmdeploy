@@ -121,9 +121,9 @@ class ArgumentHelper:
         return parser.add_argument('--model-format',
                                    type=str,
                                    default=default,
-                                   choices=['hf', 'llama', 'awq', 'gptq'],
-                                   help='The format of input model. `hf` means `hf_llama`, `llama` '
-                                   'means `meta_llama`, `awq` represents the quantized model by AWQ,'
+                                   choices=['hf', 'awq', 'gptq'],
+                                   help='The format of input model. `hf` means `hf_llama`, '
+                                   '`awq` represents the quantized model by AWQ,'
                                    ' and `gptq` refers to the quantized model by GPTQ')
 
     @staticmethod
