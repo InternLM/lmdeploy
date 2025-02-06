@@ -1,5 +1,7 @@
-from lmdeploy.vl.utils import (encode_image_base64, load_image,
-                               load_image_from_base64)
+# yapf: disable
+from lmdeploy.vl.utils import encode_image_base64, load_image, load_image_from_base64
+
+# yapf: enable
 
 
 def test_encode_image_base64():

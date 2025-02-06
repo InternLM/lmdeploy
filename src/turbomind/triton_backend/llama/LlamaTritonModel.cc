@@ -347,6 +347,8 @@ LlamaTritonModel<T>::createSharedModelInstance(int                              
     FT_CHECK(tensor_para.world_size_ == tensor_para_size_);
     FT_CHECK(pipeline_para.world_size_ == pipeline_para_size_);
 
+    shared_state_->barrier->wait();
+
     auto model = std::make_unique<LlamaV2<T>>(model_param_,  //
                                               attn_param_,
                                               moe_param_,
@@ -355,6 +357,8 @@ LlamaTritonModel<T>::createSharedModelInstance(int                              
                                               *ctx,
                                               engine_param_.max_batch_size,
                                               weights_[device_id]);
+
+    shared_state_->barrier->wait();
 
     auto engine = std::make_unique<Engine<T>>(engine_param_,  //
                                               std::move(model),

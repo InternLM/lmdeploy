@@ -9,9 +9,8 @@ def check_transformers():
     try:
         from transformers import MllamaForConditionalGeneration  # noqa: F401
     except ImportError:
-        raise ImportError(
-            'please install latest transformers by '
-            'pip install git+https://github.com/huggingface/transformers.git')
+        raise ImportError('please install latest transformers by '
+                          'pip install git+https://github.com/huggingface/transformers.git')
 
 
 @VISION_MODELS.register_module()
@@ -31,11 +30,8 @@ class MllamaVLModel(VisonModel):
         outputs = []
         for image, params in images:
             image = image.convert('RGB')
-            results = self.processor.image_processor(images=image,
-                                                     return_tensors='pt')
-            results.update(image_size=image.size,
-                           image_tokens=1,
-                           image_token_id=self.image_token_id)
+            results = self.processor.image_processor(images=image, return_tensors='pt')
+            results.update(image_size=image.size, image_tokens=1, image_token_id=self.image_token_id)
             outputs.append(results)
         messages.append(dict(role='preprocess', content=outputs))
         return messages
@@ -44,8 +40,7 @@ class MllamaVLModel(VisonModel):
         check_transformers()
         if self.with_llm:
             from transformers import MllamaForConditionalGeneration
-            model = MllamaForConditionalGeneration.from_pretrained(
-                self.model_path, device_map='cpu')
+            model = MllamaForConditionalGeneration.from_pretrained(self.model_path, device_map='cpu')
             self.vl_model = model
         else:
             raise NotImplementedError('turbomind has not supported mllama yet')
@@ -61,19 +56,13 @@ class MllamaVLModel(VisonModel):
                 continue
             elif message['role'] in ['images', 'preprocess', 'forward']:
                 continue
-            n_images = len(
-                [1 for x in message['content'] if x['type'] == 'image'])
-            content = [
-                item['text'] for item in message['content']
-                if item['type'] == 'text'
-            ]
+            n_images = len([1 for x in message['content'] if x['type'] == 'image'])
+            content = [item['text'] for item in message['content'] if item['type'] == 'text']
             prompt = (IMAGE_TOKEN) * n_images + content[0]
             prompt_messages.append(dict(role='user', content=prompt))
         prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
         return prompt, IMAGE_TOKEN
 
     def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template,
-                                                 sequence_start)
-        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
-                                   sequence_start)
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
+        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)

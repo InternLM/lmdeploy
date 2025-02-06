@@ -10,33 +10,30 @@ from .triton_utils import get_kernel_meta
 
 def get_cuda_autotune_config():
     return [
-        triton.Config(
-            {
-                'BLOCK_SIZE_M': 128,
-                'BLOCK_SIZE_N': 128,
-                'BLOCK_SIZE_K': 32,
-                'GROUP_SIZE_M': 1,
-            },
-            num_stages=4,
-            num_warps=4),
-        triton.Config(
-            {
-                'BLOCK_SIZE_M': 64,
-                'BLOCK_SIZE_N': 256,
-                'BLOCK_SIZE_K': 32,
-                'GROUP_SIZE_M': 1,
-            },
-            num_stages=4,
-            num_warps=4),
-        triton.Config(
-            {
-                'BLOCK_SIZE_M': 64,
-                'BLOCK_SIZE_N': 128,
-                'BLOCK_SIZE_K': 64,
-                'GROUP_SIZE_M': 1,
-            },
-            num_stages=4,
-            num_warps=4),
+        triton.Config({
+            'BLOCK_SIZE_M': 128,
+            'BLOCK_SIZE_N': 128,
+            'BLOCK_SIZE_K': 32,
+            'GROUP_SIZE_M': 1,
+        },
+                      num_stages=4,
+                      num_warps=4),
+        triton.Config({
+            'BLOCK_SIZE_M': 64,
+            'BLOCK_SIZE_N': 256,
+            'BLOCK_SIZE_K': 32,
+            'GROUP_SIZE_M': 1,
+        },
+                      num_stages=4,
+                      num_warps=4),
+        triton.Config({
+            'BLOCK_SIZE_M': 64,
+            'BLOCK_SIZE_N': 128,
+            'BLOCK_SIZE_K': 64,
+            'GROUP_SIZE_M': 1,
+        },
+                      num_stages=4,
+                      num_warps=4),
     ]
 
 
@@ -113,24 +110,17 @@ def fused_moe_kernel(
         offs_am = offs_sid
     a_ptrs = A + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
-    offs_bn = tl.max_contiguous(tl.multiple_of(offs_bn, BLOCK_SIZE_N),
-                                BLOCK_SIZE_N)
+    offs_bn = tl.max_contiguous(tl.multiple_of(offs_bn, BLOCK_SIZE_N), BLOCK_SIZE_N)
 
     # deepseek has 160 experts, exp index would overflow int32
     exp_off = stride_be * exp_id.to(tl.int64)
-    b_ptrs = B + exp_off + (offs_k[:, None] * stride_bk +
-                            offs_bn[None, :] * stride_bn)
+    b_ptrs = B + exp_off + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
 
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
-        a = tl.load(a_ptrs,
-                    mask=mask_sid[:, None] &
-                    (offs_k[None, :] < K - k * BLOCK_SIZE_K),
-                    other=0.0)
-        b = tl.load(b_ptrs,
-                    mask=offs_k[:, None] < K - k * BLOCK_SIZE_K,
-                    other=0.0)
+        a = tl.load(a_ptrs, mask=mask_sid[:, None] & (offs_k[None, :] < K - k * BLOCK_SIZE_K), other=0.0)
+        b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
         accumulator = tl.dot(a, b, acc=accumulator)
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
@@ -173,8 +163,7 @@ def fused_moe_kernel_launcher(
     E, N, K = B.shape
 
     def _grid_fn(META):
-        grid = (triton.cdiv(M_NP2, META['BLOCK_SIZE_M']) *
-                triton.cdiv(N, META['BLOCK_SIZE_N']), E)
+        grid = (triton.cdiv(M_NP2, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), E)
         return grid
 
     A = A.flatten(0, -2)
@@ -210,8 +199,7 @@ def fused_moe_kernel_launcher(
 
 
 @triton.jit
-def _start_end_kernel(TopkIdx, SortedIdx, ExpStart, ExpEnd,
-                      len_sorted_idx: int, num_experts: tl.constexpr,
+def _start_end_kernel(TopkIdx, SortedIdx, ExpStart, ExpEnd, len_sorted_idx: int, num_experts: tl.constexpr,
                       BLOCK: tl.constexpr):
     """start end kernel."""
     exp_id = tl.program_id(0)
@@ -238,8 +226,7 @@ def _start_end_kernel(TopkIdx, SortedIdx, ExpStart, ExpEnd,
     tl.store(ExpEnd + exp_id, exp_end)
 
 
-def get_start_end(topk_idx: torch.Tensor, sorted_idx: torch.Tensor,
-                  num_experts: int):
+def get_start_end(topk_idx: torch.Tensor, sorted_idx: torch.Tensor, num_experts: int):
     """get start and end.
 
     same process as:
@@ -274,8 +261,7 @@ def _get_sorted_idx(topk_ids: torch.Tensor, num_experts: int):
     flatten_topk_ids = topk_ids.flatten()
     sorted_idx = flatten_topk_ids.argsort()
 
-    exp_start, exp_end = get_start_end(flatten_topk_ids, sorted_idx,
-                                       num_experts)
+    exp_start, exp_end = get_start_end(flatten_topk_ids, sorted_idx, num_experts)
     return sorted_idx, exp_start, exp_end
 
 
@@ -287,8 +273,7 @@ def _renormalize(topk_weights: torch.Tensor, renormalize: bool):
     return topk_weights
 
 
-def _make_intermediate(shape: tuple, dtype: torch.dtype, device: torch.device,
-                       zeros: bool):
+def _make_intermediate(shape: tuple, dtype: torch.dtype, device: torch.device, zeros: bool):
     """make intermediate."""
     if zeros:
         return torch.zeros(shape, dtype=dtype, device=device)

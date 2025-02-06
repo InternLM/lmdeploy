@@ -1,11 +1,12 @@
+# yapf: disable
 import pytest
 import torch
 
 from lmdeploy.pytorch.messages import SchedulerSession
-from lmdeploy.pytorch.paging.block_manager import (DefaultBlockManager,
-                                                   WindowBlockManager)
-from lmdeploy.pytorch.paging.block_manager.base_block_manager import \
-    LogicalAllocator  # noqa: E501
+from lmdeploy.pytorch.paging.block_manager import DefaultBlockManager, WindowBlockManager
+from lmdeploy.pytorch.paging.block_manager.base_block_manager import LogicalAllocator
+
+# yapf: enable
 
 
 class TestAllocator:
@@ -37,8 +38,7 @@ class TestAllocator:
         blocks = allocator.allocate(block_size, 'gpu')
         assert len(blocks) == block_size
         assert allocator.get_num_free_blocks() == num_blocks - block_size
-        assert gpu_allocator.get_num_free_blocks(
-        ) == num_gpu_blocks - block_size
+        assert gpu_allocator.get_num_free_blocks() == num_gpu_blocks - block_size
 
         # test free
         allocator.add_ref_count(blocks, 1)
@@ -109,8 +109,7 @@ class TestDefaultBlockManager:
         assert block_mgr.get_num_free_gpu_blocks() == num_gpu_blocks
 
         # alloc over limit
-        token_ids = torch.zeros((num_gpu_blocks * block_size + 1, ),
-                                dtype=torch.int64)
+        token_ids = torch.zeros((num_gpu_blocks * block_size + 1, ), dtype=torch.int64)
         msg = sess.add_sequence(token_ids)
         assert not block_mgr.can_allocate(msg)
 
@@ -240,13 +239,11 @@ class TestWindowBlockManager:
         assert block_mgr.get_num_free_gpu_blocks() == num_gpu_blocks
 
         # alloc over limit
-        token_ids = torch.zeros((num_gpu_blocks * block_size + 1, ),
-                                dtype=torch.int64)
+        token_ids = torch.zeros((num_gpu_blocks * block_size + 1, ), dtype=torch.int64)
         msg = sess.add_sequence(token_ids)
         assert not block_mgr.can_allocate(msg)
 
-    def test_win_alloc(self, block_mgr, block_size, num_gpu_blocks,
-                       window_size):
+    def test_win_alloc(self, block_mgr, block_size, num_gpu_blocks, window_size):
         sess = SchedulerSession(0, block_size)
 
         # 2 win block

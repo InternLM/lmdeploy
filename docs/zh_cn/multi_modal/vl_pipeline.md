@@ -4,7 +4,7 @@ LMDeploy 把视觉-语言模型（VLM）复杂的推理过程，抽象为简单�
 
 在[这个列表中](../supported_models/supported_models.md)，你可以查阅每个推理引擎支持的 VLM 模型。我们诚挚邀请社区在 LMDeploy 中添加更多 VLM 模型。
 
-本文将以 [liuhaotian/llava-v1.6-vicuna-7b](https://huggingface.co/liuhaotian/llava-v1.6-vicuna-7b) 模型为例，展示 VLM pipeline 的用法。你将了解它的最基础用法，以及如何通过调整引擎参数和生成条件来逐步解锁更多高级特性，如张量并行，上下文窗口大小调整，随机采样，以及对话模板的定制。
+本文将以 [OpenGVLab/InternVL2_5-8B](https://huggingface.co/OpenGVLab/InternVL2_5-8B) 模型为例，展示 VLM pipeline 的用法。你将了解它的最基础用法，以及如何通过调整引擎参数和生成条件来逐步解锁更多高级特性，如张量并行，上下文窗口大小调整，随机采样，以及对话模板的定制。
 
 此外，我们还提供针对多图、批量提示词等场景的实际推理示例。
 
@@ -16,7 +16,7 @@ LMDeploy 把视觉-语言模型（VLM）复杂的推理过程，抽象为简单�
 from lmdeploy import pipeline
 from lmdeploy.vl import load_image
 
-pipe = pipeline('liuhaotian/llava-v1.6-vicuna-7b')
+pipe = pipeline('OpenGVLab/InternVL2_5-8B')
 
 image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
 response = pipe(('describe this image', image))
@@ -30,7 +30,7 @@ print(response)
 ```python
 from lmdeploy import pipeline
 
-pipe = pipeline('liuhaotian/llava-v1.6-vicuna-7b')
+pipe = pipeline('OpenGVLab/InternVL2_5-8B')
 
 prompts = [
     {
@@ -53,7 +53,7 @@ print(response)
 from lmdeploy import pipeline, TurbomindEngineConfig
 from lmdeploy.vl import load_image
 
-pipe = pipeline('liuhaotian/llava-v1.6-vicuna-7b',
+pipe = pipeline('OpenGVLab/InternVL2_5-8B',
                 backend_config=TurbomindEngineConfig(tp=2))
 
 image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
@@ -69,7 +69,7 @@ print(response)
 from lmdeploy import pipeline, TurbomindEngineConfig
 from lmdeploy.vl import load_image
 
-pipe = pipeline('liuhaotian/llava-v1.6-vicuna-7b',
+pipe = pipeline('OpenGVLab/InternVL2_5-8B',
                 backend_config=TurbomindEngineConfig(session_len=8192))
 
 image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
@@ -85,7 +85,7 @@ print(response)
 from lmdeploy import pipeline, GenerationConfig, TurbomindEngineConfig
 from lmdeploy.vl import load_image
 
-pipe = pipeline('liuhaotian/llava-v1.6-vicuna-7b',
+pipe = pipeline('OpenGVLab/InternVL2_5-8B',
                 backend_config=TurbomindEngineConfig(tp=2, session_len=8192))
 gen_config = GenerationConfig(top_k=40, top_p=0.8, temperature=0.6)
 image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
@@ -139,22 +139,19 @@ response = pipe(('describe this image', image))
 print(response)
 ```
 
-### 计算 logits
-
-LMDeploy 支持用户自定义输入，用户可以调用`prepare_inputs`，了解多模态的输入是如何组织的。
+### 获取生成 token 的 logits
 
 ```python
-from lmdeploy import pipeline, TurbomindEngineConfig
+from lmdeploy import pipeline, GenerationConfig
 from lmdeploy.vl import load_image
-pipe = pipeline('internlm/internlm-xcomposer2-7b', backend_config=TurbomindEngineConfig(cache_max_entry_count=0.5))
+pipe = pipeline('OpenGVLab/InternVL2_5-8B')
 
-# logits
 image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
-inputs = pipe.prepare_inputs(('describe this image', image))
-input_ids = inputs['input_ids']
-embeddings = inputs['input_embeddings']
-embedding_ranges = inputs['input_embedding_ranges']
-logits = pipe.get_logits(input_ids, embeddings, embedding_ranges)
+
+response = pipe(('describe this image', image),
+                gen_config=GenerationConfig(output_logits='generation'))
+logits = response.logits
+print(logits)
 ```
 
 ## 多图推理
@@ -165,7 +162,7 @@ logits = pipe.get_logits(input_ids, embeddings, embedding_ranges)
 from lmdeploy import pipeline, TurbomindEngineConfig
 from lmdeploy.vl import load_image
 
-pipe = pipeline('liuhaotian/llava-v1.6-vicuna-7b',
+pipe = pipeline('OpenGVLab/InternVL2_5-8B',
                 backend_config=TurbomindEngineConfig(session_len=8192))
 
 image_urls=[
@@ -186,7 +183,7 @@ print(response)
 from lmdeploy import pipeline, TurbomindEngineConfig
 from lmdeploy.vl import load_image
 
-pipe = pipeline('liuhaotian/llava-v1.6-vicuna-7b',
+pipe = pipeline('OpenGVLab/InternVL2_5-8B',
                 backend_config=TurbomindEngineConfig(session_len=8192))
 
 image_urls=[
@@ -206,7 +203,7 @@ pipeline 进行多轮对话有两种方式，一种是按照 openai 的格式来
 from lmdeploy import pipeline, TurbomindEngineConfig, GenerationConfig
 from lmdeploy.vl import load_image
 
-pipe = pipeline('liuhaotian/llava-v1.6-vicuna-7b',
+pipe = pipeline('OpenGVLab/InternVL2_5-8B',
                 backend_config=TurbomindEngineConfig(session_len=8192))
 
 image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/demo/resources/human-pose.jpg')

@@ -10,8 +10,7 @@ from typing import List, Tuple, Union
 from tqdm import tqdm
 
 from lmdeploy.cli.utils import ArgumentHelper, DefaultsAndTypesHelpFormatter
-from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
-                               TurbomindEngineConfig)
+from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig
 from lmdeploy.profiler import Profiler, Session
 from lmdeploy.pytorch.engine import EngineInstance
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
@@ -32,8 +31,7 @@ def sample_requests(
     # Filter out the conversations with less than 2 turns.
     dataset = [data for data in dataset if len(data['conversations']) >= 2]
     # Only keep the first two turns of each conversation.
-    dataset = [(data['conversations'][0]['value'],
-                data['conversations'][1]['value']) for data in dataset]
+    dataset = [(data['conversations'][0]['value'], data['conversations'][1]['value']) for data in dataset]
 
     # pre-sample to avoid go through all the dataset
     dataset = random.sample(dataset, max(int(num_requests * 1.2), 1000))
@@ -67,30 +65,23 @@ def sample_requests(
 
 class Engine:
 
-    def __init__(self, model_path: str,
-                 engine_config: Union[PytorchEngineConfig,
-                                      TurbomindEngineConfig]):
+    def __init__(self, model_path: str, engine_config: Union[PytorchEngineConfig, TurbomindEngineConfig]):
+        self.tokenizer = Tokenizer(model_path)
         if isinstance(engine_config, TurbomindEngineConfig):
             from lmdeploy.turbomind import TurboMind
-            tm_model = TurboMind.from_pretrained(model_path,
-                                                 engine_config=engine_config)
+            tm_model = TurboMind.from_pretrained(model_path, tokenizer=self.tokenizer, engine_config=engine_config)
         elif isinstance(engine_config, PytorchEngineConfig):
             from lmdeploy.pytorch.engine import Engine as PytorchEngine
-            tm_model = PytorchEngine(model_path, engine_config=engine_config)
+            tm_model = PytorchEngine(model_path, tokenizer=self.tokenizer, engine_config=engine_config)
 
         self.tm_model = tm_model
-        self.tokenizer = tm_model.tokenizer
-
         self.pbar = None
 
-    async def _inference(self, req_queue: Queue, session_id: int,
-                         temperature: float, top_p: float, top_k: int,
-                         stream_output: bool, skip_tokenize: bool,
-                         skip_detokenize: bool):
+    async def _inference(self, req_queue: Queue, session_id: int, temperature: float, top_p: float, top_k: int,
+                         stream_output: bool, skip_tokenize: bool, skip_detokenize: bool):
         model_inst = self.tm_model.create_instance()
         sess: Session = None
-        for prompt, _, output_seqlen, cancel_after, sess in iter(
-                req_queue.get_nowait, None):
+        for prompt, _, output_seqlen, cancel_after, sess in iter(req_queue.get_nowait, None):
 
             sess.tick(0)
 
@@ -104,25 +95,23 @@ class Engine:
             prev_len = 0
             token_ids = input_ids.copy()
 
-            generator = model_inst.async_stream_infer(
-                session_id,
-                input_ids=input_ids,
-                gen_config=GenerationConfig(max_new_tokens=output_seqlen,
-                                            temperature=temperature,
-                                            top_p=top_p,
-                                            top_k=top_k,
-                                            ignore_eos=True),
-                sequence_start=True,
-                sequence_end=True,
-                stream_output=stream_output)
+            generator = model_inst.async_stream_infer(session_id,
+                                                      input_ids=input_ids,
+                                                      gen_config=GenerationConfig(max_new_tokens=output_seqlen,
+                                                                                  temperature=temperature,
+                                                                                  top_p=top_p,
+                                                                                  top_k=top_k,
+                                                                                  ignore_eos=True),
+                                                      sequence_start=True,
+                                                      sequence_end=True,
+                                                      stream_output=stream_output)
             try:
                 async for outputs in generator:
                     n_token = outputs.num_token
                     if n_token > prev_len:
                         token_ids += outputs.token_ids[prev_len - n_token:]
                         if not skip_detokenize:
-                            _, state = self.tokenizer.detokenize_incrementally(
-                                token_ids, state)
+                            _, state = self.tokenizer.detokenize_incrementally(token_ids, state)
                         sess.tick(n_token)
                         prev_len = n_token
                         if n_token > cancel_after:
@@ -137,8 +126,7 @@ class Engine:
 
             self.pbar.update(1)
 
-    def process_request(self, requests, profiler: Profiler, concurrency,
-                        temperature, top_p, top_k, stream_output,
+    def process_request(self, requests, profiler: Profiler, concurrency, temperature, top_p, top_k, stream_output,
                         skip_tokenize, skip_detokenize, cancel_rate):
         req_queue = Queue()
 
@@ -159,8 +147,7 @@ class Engine:
         # start threads
         tasks = []
         for i in range(concurrency):
-            task = self._inference(req_queue, i, temperature, top_p, top_k,
-                                   stream_output, skip_tokenize,
+            task = self._inference(req_queue, i, temperature, top_p, top_k, stream_output, skip_tokenize,
                                    skip_detokenize)
             tasks.append(task)
 
@@ -182,48 +169,27 @@ class Engine:
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description='Benchmark the request throughput of lmdeploy '
-        'in localhost',
-        formatter_class=DefaultsAndTypesHelpFormatter)
+    parser = argparse.ArgumentParser(description='Benchmark the request throughput of lmdeploy '
+                                     'in localhost',
+                                     formatter_class=DefaultsAndTypesHelpFormatter)
     parser.add_argument('dataset', type=str, help='the path dataset')
     parser.add_argument('model_path',
                         type=str,
                         help='the path of the model in localhost or '
                         'the repo_id of the model in huggingface.co')
-    parser.add_argument(
-        '-c',
-        '--concurrency',
-        type=int,
-        help='Number of working threads to process the sampled prompts',
-        default=256)
-    parser.add_argument('-n',
-                        '--num-prompts',
+    parser.add_argument('-c',
+                        '--concurrency',
                         type=int,
-                        help='Number of prompts to process',
-                        default=5000)
-    parser.add_argument('--no-stream-output',
-                        action='store_true',
-                        help='Use stream output')
-    parser.add_argument('--skip-tokenize',
-                        action='store_true',
-                        help='Pre-tokenize input prompts before starting')
-    parser.add_argument('--skip-detokenize',
-                        action='store_true',
-                        help='Skip detokenizing output tokens')
-    parser.add_argument('--cancel-rate',
-                        type=float,
-                        help='Possibility of a request being canceled',
-                        default=0)
+                        help='Number of working threads to process the sampled prompts',
+                        default=256)
+    parser.add_argument('-n', '--num-prompts', type=int, help='Number of prompts to process', default=5000)
+    parser.add_argument('--no-stream-output', action='store_true', help='Use stream output')
+    parser.add_argument('--skip-tokenize', action='store_true', help='Pre-tokenize input prompts before starting')
+    parser.add_argument('--skip-detokenize', action='store_true', help='Skip detokenizing output tokens')
+    parser.add_argument('--cancel-rate', type=float, help='Possibility of a request being canceled', default=0)
     parser.add_argument('--use-uvloop', action='store_true')
-    parser.add_argument('--csv',
-                        type=str,
-                        help='Where to save the result.',
-                        default='./profile_throughput.csv')
-    parser.add_argument('--seed',
-                        type=int,
-                        default=0,
-                        help='Seed used in sampling prompts from dataset')
+    parser.add_argument('--csv', type=str, help='Where to save the result.', default='./profile_throughput.csv')
+    parser.add_argument('--seed', type=int, default=0, help='Seed used in sampling prompts from dataset')
     # other args
     ArgumentHelper.top_p(parser)
     ArgumentHelper.temperature(parser)
@@ -296,36 +262,30 @@ def main():
 
     engine = Engine(args.model_path, engine_config)
 
-    requests = sample_requests(args.dataset, args.num_prompts,
-                               engine.tokenizer)
+    requests = sample_requests(args.dataset, args.num_prompts, engine.tokenizer)
 
     stream_output = not args.no_stream_output
 
     profiler = Profiler(stream_output, [50, 75, 95, 99])
 
-    engine.process_request(
-        requests,
-        profiler,
-        temperature=args.temperature,
-        top_p=args.top_p,
-        top_k=args.top_k,
-        concurrency=args.concurrency
-        if args.concurrency < args.num_prompts else args.num_prompts,
-        stream_output=not args.no_stream_output,
-        skip_tokenize=args.skip_tokenize,
-        skip_detokenize=args.skip_detokenize,
-        cancel_rate=args.cancel_rate)
+    engine.process_request(requests,
+                           profiler,
+                           temperature=args.temperature,
+                           top_p=args.top_p,
+                           top_k=args.top_k,
+                           concurrency=args.concurrency if args.concurrency < args.num_prompts else args.num_prompts,
+                           stream_output=not args.no_stream_output,
+                           skip_tokenize=args.skip_tokenize,
+                           skip_detokenize=args.skip_detokenize,
+                           cancel_rate=args.cancel_rate)
 
-    hyperparams = [('Concurrency', args.concurrency),
-                   ('Cancel rate', args.cancel_rate),
-                   ('Stream output', str(stream_output).lower()),
-                   ('Skip tokenize', str(args.skip_tokenize).lower()),
+    hyperparams = [('Concurrency', args.concurrency), ('Cancel rate', args.cancel_rate),
+                   ('Stream output', str(stream_output).lower()), ('Skip tokenize', str(args.skip_tokenize).lower()),
                    ('Skip detokenize', str(args.skip_detokenize).lower())]
     profiler.compute_metrics()
     profiler.summarize(title='Profile Throughput', hyperparams=hyperparams)
     if args.csv:
-        profiler.save_csv(args.csv, (('batch', args.concurrency),
-                                     ('num_prompts', args.num_prompts)))
+        profiler.save_csv(args.csv, (('batch', args.concurrency), ('num_prompts', args.num_prompts)))
 
 
 if __name__ == '__main__':

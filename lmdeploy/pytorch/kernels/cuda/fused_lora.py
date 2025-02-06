@@ -7,22 +7,16 @@ import triton.language as tl
 def get_autotune_config():
     """get autotune config."""
     return [
-        triton.Config(
-            {
-                'BLOCK_SIZE_M': 32,
-                'BLOCK_SIZE_N': 128,
-                'BLOCK_SIZE_K': 128
-            },
-            num_stages=4,
-            num_warps=4),
-        triton.Config(
-            {
-                'BLOCK_SIZE_M': 16,
-                'BLOCK_SIZE_N': 256,
-                'BLOCK_SIZE_K': 128
-            },
-            num_stages=4,
-            num_warps=4),
+        triton.Config({
+            'BLOCK_SIZE_M': 32,
+            'BLOCK_SIZE_N': 128,
+            'BLOCK_SIZE_K': 128
+        }, num_stages=4, num_warps=4),
+        triton.Config({
+            'BLOCK_SIZE_M': 16,
+            'BLOCK_SIZE_N': 256,
+            'BLOCK_SIZE_K': 128
+        }, num_stages=4, num_warps=4),
     ]
 
 
@@ -109,25 +103,18 @@ def _fused_lora_kernel(
                 c_ptrs += stride_cn * BLOCK_SIZE_N
     else:
 
-        offs_am = (seq_start +
-                   (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M)
+        offs_am = (seq_start + (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M)
         offs_r = rank_start + tl.arange(0, BLOCK_SIZE_R) % rank
         offs_k = tl.arange(0, BLOCK_SIZE_K)
-        a_ptrs = a_ptr + (offs_am[:, None] * stride_am +
-                          offs_k[None, :] * stride_ak)
-        la_ptrs = lora_a_ptr + (offs_k[:, None] * stride_lak +
-                                offs_r[None, :] * stride_lar)
+        a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
+        la_ptrs = lora_a_ptr + (offs_k[:, None] * stride_lak + offs_r[None, :] * stride_lar)
 
         accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_R), dtype=tl.float32)
         for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
             # Load the next block of A and B
             # If it is out of bounds, set it to 0.
-            a = tl.load(a_ptrs,
-                        mask=offs_k[None, :] < K - k * BLOCK_SIZE_K,
-                        other=0.0)
-            la = tl.load(la_ptrs,
-                         mask=offs_k[:, None] < K - k * BLOCK_SIZE_K,
-                         other=0.0)
+            a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
+            la = tl.load(la_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
             # We accumulate along the K dimension.
             accumulator = tl.dot(a, la, acc=accumulator)
             # Advance the ptrs to the next K block.
@@ -137,10 +124,8 @@ def _fused_lora_kernel(
 
         scaling = tl.load(scaling_ptr + adapter_id).to(ar.dtype)
         ar *= scaling
-        ar = tl.where(
-            tl.arange(0, BLOCK_SIZE_R)[None, :] < rank, ar, tl.zeros_like(ar))
-        lb_ptrs = lora_b_ptr + (offs_r[:, None] * stride_lbr +
-                                offs_n[None, :] * stride_lbn)
+        ar = tl.where(tl.arange(0, BLOCK_SIZE_R)[None, :] < rank, ar, tl.zeros_like(ar))
+        lb_ptrs = lora_b_ptr + (offs_r[:, None] * stride_lbr + offs_n[None, :] * stride_lbn)
 
         for n in range(0, tl.cdiv(N, BLOCK_SIZE_N)):
             lb = tl.load(lb_ptrs, mask=offs_n[None, :] < N - n * BLOCK_SIZE_N)

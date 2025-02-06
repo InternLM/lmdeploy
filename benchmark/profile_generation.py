@@ -8,23 +8,21 @@ from dataclasses import dataclass
 from typing import List, Union
 
 import numpy as np
-from pynvml import (NVMLError, nvmlDeviceGetCount, nvmlDeviceGetHandleByIndex,
-                    nvmlDeviceGetMemoryInfo, nvmlDeviceGetName,
-                    nvmlDeviceGetPowerState, nvmlDeviceGetTemperature,
-                    nvmlInit, nvmlShutdown, nvmlSystemGetDriverVersion)
+from pynvml import (NVMLError, nvmlDeviceGetCount, nvmlDeviceGetHandleByIndex, nvmlDeviceGetMemoryInfo,
+                    nvmlDeviceGetName, nvmlDeviceGetPowerState, nvmlDeviceGetTemperature, nvmlInit, nvmlShutdown,
+                    nvmlSystemGetDriverVersion)
 from tqdm import tqdm
 
 from lmdeploy.cli.utils import ArgumentHelper, DefaultsAndTypesHelpFormatter
-from lmdeploy.messages import (GenerationConfig, PytorchEngineConfig,
-                               TurbomindEngineConfig)
+from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig
+from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 
 get_logger('lmdeploy').setLevel('ERROR')
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
 
-async def infer(model, session_id: int, input_ids: List,
-                gen_config: GenerationConfig, test_round: int,
+async def infer(model, session_id: int, input_ids: List, gen_config: GenerationConfig, test_round: int,
                 que: asyncio.Queue):
     if session_id == 1:
         pbar = tqdm(total=test_round)
@@ -72,8 +70,8 @@ async def infer(model, session_id: int, input_ids: List,
     await que.put((session_id, stats))
 
 
-def warmup(model, concurrency: int, input_ids: List[int], warmup_round: int,
-           gen_config: GenerationConfig, event_loop: asyncio.BaseEventLoop):
+def warmup(model, concurrency: int, input_ids: List[int], warmup_round: int, gen_config: GenerationConfig,
+           event_loop: asyncio.BaseEventLoop):
     if not warmup_round:
         return
 
@@ -111,22 +109,20 @@ def warmup(model, concurrency: int, input_ids: List[int], warmup_round: int,
 
 
 def profile_throughput(model_path: str, concurrency: int, input_seqlen: int,
-                       engine_config: Union[PytorchEngineConfig,
-                                            TurbomindEngineConfig],
-                       gen_config: GenerationConfig, test_round: int,
-                       warmup_round: int):
+                       engine_config: Union[PytorchEngineConfig, TurbomindEngineConfig], gen_config: GenerationConfig,
+                       test_round: int, warmup_round: int):
     output_seqlen = gen_config.max_new_tokens
     print(f'profiling ... concurrency: {concurrency}, '
           f'n_prompt_token: {input_seqlen}, '
           f'n_completion_token: {output_seqlen}, '
           f'test_round: {test_round}, warmup_round: {warmup_round}')
+    tokenizer = Tokenizer(model_path)
     if isinstance(engine_config, TurbomindEngineConfig):
         from lmdeploy.turbomind import TurboMind
-        tm_model = TurboMind.from_pretrained(model_path,
-                                             engine_config=engine_config)
+        tm_model = TurboMind.from_pretrained(model_path, tokenizer=tokenizer, engine_config=engine_config)
     elif isinstance(engine_config, PytorchEngineConfig):
         from lmdeploy.pytorch.engine import Engine
-        tm_model = Engine(model_path, engine_config)
+        tm_model = Engine(model_path, tokenizer=tokenizer, engine_config=engine_config)
 
     event_loop = asyncio.new_event_loop()
     asyncio.set_event_loop(event_loop)
@@ -134,8 +130,7 @@ def profile_throughput(model_path: str, concurrency: int, input_seqlen: int,
     # make up a dummy `input_ids` with the length of `input_seqlen` exactly
     assert input_seqlen > 0, 'input_seqlen should > 0'
     input_ids = np.random.randint(low=0, high=101, size=input_seqlen).tolist()
-    warmup(tm_model, concurrency, input_ids, warmup_round, gen_config,
-           event_loop)
+    warmup(tm_model, concurrency, input_ids, warmup_round, gen_config, event_loop)
 
     que = asyncio.Queue()
     _start = time.perf_counter()
@@ -161,25 +156,18 @@ def profile_throughput(model_path: str, concurrency: int, input_seqlen: int,
     # The shape is [concurrency*test_round, output_seqlen]
     token_latency_stats = np.stack(token_latency_stats, axis=0)
 
-    first_token_latency_min = np.round(
-        np.min(token_latency_stats[:, 0], axis=0), 3)
-    first_token_latency_max = np.round(
-        np.max(token_latency_stats[:, 0], axis=0), 3)
-    first_token_latency_ave = np.round(
-        np.mean(token_latency_stats[:, 0], axis=0), 3)
-    token_latency_max = np.round(np.max(np.sum(token_latency_stats, axis=1)),
-                                 3)
-    token_latency_min = np.round(np.min(np.sum(token_latency_stats, axis=1)),
-                                 3)
-    token_latency_ave = np.round(np.mean(np.sum(token_latency_stats, axis=1)),
-                                 3)
+    first_token_latency_min = np.round(np.min(token_latency_stats[:, 0], axis=0), 3)
+    first_token_latency_max = np.round(np.max(token_latency_stats[:, 0], axis=0), 3)
+    first_token_latency_ave = np.round(np.mean(token_latency_stats[:, 0], axis=0), 3)
+    token_latency_max = np.round(np.max(np.sum(token_latency_stats, axis=1)), 3)
+    token_latency_min = np.round(np.min(np.sum(token_latency_stats, axis=1)), 3)
+    token_latency_ave = np.round(np.mean(np.sum(token_latency_stats, axis=1)), 3)
     if output_seqlen > 1:
         # sort token_latency without the first token's latency
         sorted_token_latency = np.sort(token_latency_stats[:, 1:].flatten())
         percentiles = [
-            np.round(
-                sorted_token_latency[int(percent * len(sorted_token_latency))],
-                3) for percent in [0.5, 0.75, 0.95, 0.99]
+            np.round(sorted_token_latency[int(percent * len(sorted_token_latency))], 3)
+            for percent in [0.5, 0.75, 0.95, 0.99]
         ]
     else:
         percentiles = [
@@ -187,9 +175,7 @@ def profile_throughput(model_path: str, concurrency: int, input_seqlen: int,
         ] * 4
 
     out_token_throughput = np.round(token_latency_stats.size / elapsed_time, 2)
-    total_token_throughput = np.round(
-        concurrency * test_round * (input_seqlen + output_seqlen) /
-        elapsed_time, 2)
+    total_token_throughput = np.round(concurrency * test_round * (input_seqlen + output_seqlen) / elapsed_time, 2)
     print(f'\n{"-" * 50}\ntotal time: {elapsed_time:.2f}s\n'
           f'concurrency: {concurrency}, test_round: {test_round}\n'
           f'input_tokens: {input_seqlen}, output_tokens: {output_seqlen}\n'
@@ -219,12 +205,7 @@ class MemoryMonitor:
     @staticmethod
     def nvidia_info():
         # pip install nvidia-ml-py
-        nvidia_dict = {
-            'state': True,
-            'nvidia_version': '',
-            'nvidia_count': 0,
-            'gpus': []
-        }
+        nvidia_dict = {'state': True, 'nvidia_version': '', 'nvidia_count': 0, 'gpus': []}
         try:
             nvmlInit()
             nvidia_dict['nvidia_version'] = nvmlSystemGetDriverVersion()
@@ -297,10 +278,9 @@ class ProfileResult:
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description='Profile the token generation performance with'
-        ' pytorch or turbomind engine',
-        formatter_class=DefaultsAndTypesHelpFormatter)
+    parser = argparse.ArgumentParser(description='Profile the token generation performance with'
+                                     ' pytorch or turbomind engine',
+                                     formatter_class=DefaultsAndTypesHelpFormatter)
     parser.add_argument('model_path',
                         type=str,
                         help='the path of the model in localhost or '
@@ -325,20 +305,9 @@ def parse_args():
                         help='how many tokens to be generated. One-to-one '
                         'correspondence with prompt-tokens',
                         default=[128, 128, 2048, 128, 2048])
-    parser.add_argument('--csv',
-                        type=str,
-                        help='Where to save the result.',
-                        default='profile_generation.csv')
-    parser.add_argument('-tr',
-                        '--test-round',
-                        type=int,
-                        help='number of test rounds',
-                        default=3)
-    parser.add_argument('-w',
-                        '--warmup-round',
-                        type=int,
-                        help='number of warmup rounds',
-                        default=1)
+    parser.add_argument('--csv', type=str, help='Where to save the result.', default='profile_generation.csv')
+    parser.add_argument('-tr', '--test-round', type=int, help='number of test rounds', default=3)
+    parser.add_argument('-w', '--warmup-round', type=int, help='number of warmup rounds', default=1)
 
     # other args
     ArgumentHelper.top_p(parser)
@@ -384,9 +353,7 @@ def _process_map(target, iterable):
 
     pipe = Pipe(False)
     spawn_context = get_context('spawn')
-    proc = spawn_context.Process(target=__proc_cb,
-                                 args=iterable,
-                                 kwargs=dict(ret_pipe=pipe, target=target))
+    proc = spawn_context.Process(target=__proc_cb, args=iterable, kwargs=dict(ret_pipe=pipe, target=target))
     proc.start()
     proc.join()
 
@@ -407,14 +374,12 @@ def main():
 
     MemoryMonitor.init()
     for batch in args.concurrency:
-        for prompt_tokens, completion_tokens in zip(args.prompt_tokens,
-                                                    args.completion_tokens):
+        for prompt_tokens, completion_tokens in zip(args.prompt_tokens, args.completion_tokens):
             MemoryMonitor.start()
             from functools import partial
 
             # make sure session_len >= prompt_tokens + completion_tokens
-            session_len = max(args.session_len,
-                              prompt_tokens + completion_tokens)
+            session_len = max(args.session_len, prompt_tokens + completion_tokens)
             if args.backend == 'turbomind':
                 engine_config = TurbomindEngineConfig(
                     cache_max_entry_count=args.cache_max_entry_count,
@@ -485,12 +450,10 @@ def main():
             ])
             for re in results:
                 writer.writerow([
-                    re.batch, re.prompt_tokens, re.completion_tokens,
-                    f'{re.total_throughput:.2f}',
-                    f'{re.output_throughput:.2f}', f'{re.mem_per_gpu:.2f}',
-                    re.first_token_latency[2], re.first_token_latency[0],
-                    re.first_token_latency[1], re.percentiles[0],
-                    re.percentiles[1], re.percentiles[2], re.percentiles[3]
+                    re.batch, re.prompt_tokens, re.completion_tokens, f'{re.total_throughput:.2f}',
+                    f'{re.output_throughput:.2f}', f'{re.mem_per_gpu:.2f}', re.first_token_latency[2],
+                    re.first_token_latency[0], re.first_token_latency[1], re.percentiles[0], re.percentiles[1],
+                    re.percentiles[2], re.percentiles[3]
                 ])
 
 

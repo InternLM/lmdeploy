@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import torch
@@ -8,12 +9,10 @@ from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_outputs import BaseModelOutputWithPooling
 from transformers.models.llava.configuration_llava import LlavaConfig
 
-from lmdeploy.pytorch.engine.input_process import (BaseModelInputProcessor,
-                                                   PreprocessInputResult)
+from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
-from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_qkv_proj,
-                                        build_rowwise_linear)
+from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_qkv_proj, build_rowwise_linear
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .patch import build_model_from_hf_config
@@ -23,10 +22,7 @@ from .utils.model import DeployModelMixin
 
 class LlavaMultiModalProjector(nn.Module):
 
-    def __init__(self,
-                 config: LlavaConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: LlavaConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         from transformers.activations import ACT2FN
 
@@ -52,18 +48,14 @@ class LlavaMultiModalProjector(nn.Module):
 class CLIPVisionEmbeddings(nn.Module):
     """clip vision embedding."""
 
-    def __init__(self,
-                 config,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.config = config
         self.embed_dim = config.hidden_size
         self.image_size = config.image_size
         self.patch_size = config.patch_size
 
-        self.class_embedding = nn.Parameter(
-            torch.empty(self.embed_dim, dtype=dtype, device=device))
+        self.class_embedding = nn.Parameter(torch.empty(self.embed_dim, dtype=dtype, device=device))
 
         self.patch_embedding = nn.Conv2d(
             in_channels=config.num_channels,
@@ -84,12 +76,10 @@ class CLIPVisionEmbeddings(nn.Module):
             device=device,
         )
         self.register_buffer('position_ids',
-                             torch.arange(self.num_positions,
-                                          device=device).expand((1, -1)),
+                             torch.arange(self.num_positions, device=device).expand((1, -1)),
                              persistent=False)
 
-    def interpolate_pos_encoding(self, embeddings: torch.Tensor, height: int,
-                                 width: int) -> torch.Tensor:
+    def interpolate_pos_encoding(self, embeddings: torch.Tensor, height: int, width: int) -> torch.Tensor:
         """This method allows to interpolate the pre-trained position
         encodings, to be able to use the model on higher resolution images.
 
@@ -102,8 +92,7 @@ class CLIPVisionEmbeddings(nn.Module):
 
         # always interpolate when tracing
         # to ensure the exported model works for dynamic input shapes
-        if not torch.jit.is_tracing(
-        ) and num_patches == num_positions and height == width:
+        if not torch.jit.is_tracing() and num_patches == num_positions and height == width:
             return self.position_embedding(self.position_ids)
 
         from transformers.utils import torch_int
@@ -117,8 +106,7 @@ class CLIPVisionEmbeddings(nn.Module):
         new_width = width // self.patch_size
 
         sqrt_num_positions = torch_int(num_positions**0.5)
-        patch_pos_embed = patch_pos_embed.reshape(1, sqrt_num_positions,
-                                                  sqrt_num_positions, dim)
+        patch_pos_embed = patch_pos_embed.reshape(1, sqrt_num_positions, sqrt_num_positions, dim)
         patch_pos_embed = patch_pos_embed.permute(0, 3, 1, 2)
 
         patch_pos_embed = nn.functional.interpolate(
@@ -132,38 +120,28 @@ class CLIPVisionEmbeddings(nn.Module):
 
         return torch.cat((class_pos_embed, patch_pos_embed), dim=1)
 
-    def forward(self,
-                pixel_values: torch.FloatTensor,
-                interpolate_pos_encoding=False) -> torch.Tensor:
+    def forward(self, pixel_values: torch.FloatTensor, interpolate_pos_encoding=False) -> torch.Tensor:
         batch_size, _, height, width = pixel_values.shape
-        if not interpolate_pos_encoding and (height != self.image_size
-                                             or width != self.image_size):
-            raise ValueError(
-                f"Input image size ({height}*{width}) doesn't match model"
-                f' ({self.image_size}*{self.image_size}).')
+        if not interpolate_pos_encoding and (height != self.image_size or width != self.image_size):
+            raise ValueError(f"Input image size ({height}*{width}) doesn't match model"
+                             f' ({self.image_size}*{self.image_size}).')
         target_dtype = self.patch_embedding.weight.dtype
-        patch_embeds = self.patch_embedding(pixel_values.to(
-            dtype=target_dtype))  # shape = [*, width, grid, grid]
+        patch_embeds = self.patch_embedding(pixel_values.to(dtype=target_dtype))  # shape = [*, width, grid, grid]
         patch_embeds = patch_embeds.flatten(2).transpose(1, 2)
 
         class_embeds = self.class_embedding.expand(batch_size, 1, -1)
         embeddings = torch.cat([class_embeds, patch_embeds], dim=1)
         if interpolate_pos_encoding:
-            embeddings = embeddings + self.interpolate_pos_encoding(
-                embeddings, height, width)
+            embeddings = embeddings + self.interpolate_pos_encoding(embeddings, height, width)
         else:
-            embeddings = embeddings + self.position_embedding(
-                self.position_ids)
+            embeddings = embeddings + self.position_embedding(self.position_ids)
         return embeddings
 
 
 class CLIPAttention(nn.Module):
     """clip attention."""
 
-    def __init__(self,
-                 config,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.config = config
         quantization_config = getattr(config, 'quantization_config', None)
@@ -215,11 +193,7 @@ class CLIPAttention(nn.Module):
         else:
             attn_mask = attention_mask
 
-        attn_output = F.scaled_dot_product_attention(q,
-                                                     k,
-                                                     v,
-                                                     attn_mask=attn_mask,
-                                                     scale=self.scale)
+        attn_output = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, scale=self.scale)
 
         # o proj
         attn_output = attn_output.transpose(1, 2)
@@ -231,10 +205,7 @@ class CLIPAttention(nn.Module):
 class CLIPMLP(nn.Module):
     """clip mlp."""
 
-    def __init__(self,
-                 config,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.config = config
         quantization_config = getattr(config, 'quantization_config', None)
@@ -271,22 +242,13 @@ class CLIPMLP(nn.Module):
 class CLIPEncoderLayer(nn.Module):
     """clip encoder layer."""
 
-    def __init__(self,
-                 config,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.embed_dim = config.hidden_size
         self.self_attn = CLIPAttention(config, dtype=dtype, device=device)
-        self.layer_norm1 = nn.LayerNorm(self.embed_dim,
-                                        eps=config.layer_norm_eps,
-                                        dtype=dtype,
-                                        device=device)
+        self.layer_norm1 = nn.LayerNorm(self.embed_dim, eps=config.layer_norm_eps, dtype=dtype, device=device)
         self.mlp = CLIPMLP(config, dtype=dtype, device=device)
-        self.layer_norm2 = nn.LayerNorm(self.embed_dim,
-                                        eps=config.layer_norm_eps,
-                                        dtype=dtype,
-                                        device=device)
+        self.layer_norm2 = nn.LayerNorm(self.embed_dim, eps=config.layer_norm_eps, dtype=dtype, device=device)
 
     def forward(
         self,
@@ -316,16 +278,11 @@ class CLIPEncoderLayer(nn.Module):
 class CLIPEncoder(nn.Module):
     """clip encoder."""
 
-    def __init__(self,
-                 config,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.config = config
-        self.layers = nn.ModuleList([
-            CLIPEncoderLayer(config, dtype=dtype, device=device)
-            for _ in range(config.num_hidden_layers)
-        ])
+        self.layers = nn.ModuleList(
+            [CLIPEncoderLayer(config, dtype=dtype, device=device) for _ in range(config.num_hidden_layers)])
 
     def forward(
         self,
@@ -352,26 +309,15 @@ class CLIPEncoder(nn.Module):
 class CLIPVisionTransformer(nn.Module):
     """clip vision transformer."""
 
-    def __init__(self,
-                 config,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.config = config
         embed_dim = config.hidden_size
 
-        self.embeddings = CLIPVisionEmbeddings(config,
-                                               dtype=dtype,
-                                               device=device)
-        self.pre_layrnorm = nn.LayerNorm(embed_dim,
-                                         eps=config.layer_norm_eps,
-                                         dtype=dtype,
-                                         device=device)
+        self.embeddings = CLIPVisionEmbeddings(config, dtype=dtype, device=device)
+        self.pre_layrnorm = nn.LayerNorm(embed_dim, eps=config.layer_norm_eps, dtype=dtype, device=device)
         self.encoder = CLIPEncoder(config, dtype=dtype, device=device)
-        self.post_layernorm = nn.LayerNorm(embed_dim,
-                                           eps=config.layer_norm_eps,
-                                           dtype=dtype,
-                                           device=device)
+        self.post_layernorm = nn.LayerNorm(embed_dim, eps=config.layer_norm_eps, dtype=dtype, device=device)
 
     def forward(
         self,
@@ -380,13 +326,10 @@ class CLIPVisionTransformer(nn.Module):
         vision_feature_layer: int = -1,
     ) -> BaseModelOutputWithPooling:
         """forward."""
-        hidden_states = self.embeddings(
-            pixel_values, interpolate_pos_encoding=interpolate_pos_encoding)
+        hidden_states = self.embeddings(pixel_values, interpolate_pos_encoding=interpolate_pos_encoding)
         hidden_states = self.pre_layrnorm(hidden_states)
 
-        encoder_outputs = self.encoder(
-            inputs_embeds=hidden_states,
-            vision_feature_layer=vision_feature_layer)
+        encoder_outputs = self.encoder(inputs_embeds=hidden_states, vision_feature_layer=vision_feature_layer)
 
         last_hidden_state = encoder_outputs
         pooled_output = last_hidden_state[:, 0, :]
@@ -403,14 +346,9 @@ class CLIPVisionTransformer(nn.Module):
 class CLIPVisionModel(nn.Module):
     """clip vision model."""
 
-    def __init__(self,
-                 config,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
-        self.vision_model = CLIPVisionTransformer(config,
-                                                  dtype=dtype,
-                                                  device=device)
+        self.vision_model = CLIPVisionTransformer(config, dtype=dtype, device=device)
 
     def forward(self,
                 pixel_values: torch.FloatTensor,
@@ -418,15 +356,12 @@ class CLIPVisionModel(nn.Module):
                 vision_feature_layer: int = -1,
                 **kwargs):
         """forward."""
-        return self.vision_model(
-            pixel_values,
-            interpolate_pos_encoding=interpolate_pos_encoding,
-            vision_feature_layer=vision_feature_layer)
+        return self.vision_model(pixel_values,
+                                 interpolate_pos_encoding=interpolate_pos_encoding,
+                                 vision_feature_layer=vision_feature_layer)
 
 
-def build_vision_model(vision_config,
-                       dtype: torch.dtype = None,
-                       device: torch.device = None):
+def build_vision_model(vision_config, dtype: torch.dtype = None, device: torch.device = None):
     """build vision model."""
     model_type = vision_config.model_type
 
@@ -436,8 +371,7 @@ def build_vision_model(vision_config,
         raise NotImplementedError(f'<{model_type}> is not implemented.')
 
 
-class LlavaForConditionalGeneration(nn.Module, CudaGraphMixin,
-                                    DeployModelMixin):
+class LlavaForConditionalGeneration(nn.Module, CudaGraphMixin, DeployModelMixin):
 
     def __init__(self,
                  config: PretrainedConfig,
@@ -449,17 +383,11 @@ class LlavaForConditionalGeneration(nn.Module, CudaGraphMixin,
         self.ctx_mgr = ctx_mgr
         text_config = config.text_config
 
-        self.vision_tower = build_vision_model(config.vision_config,
-                                               dtype=dtype,
-                                               device=device)
+        self.vision_tower = build_vision_model(config.vision_config, dtype=dtype, device=device)
 
-        self.language_model = build_model_from_hf_config(text_config,
-                                                         dtype=dtype,
-                                                         device=device)
+        self.language_model = build_model_from_hf_config(text_config, dtype=dtype, device=device)
 
-        self.multi_modal_projector = LlavaMultiModalProjector(config,
-                                                              dtype=dtype,
-                                                              device=device)
+        self.multi_modal_projector = LlavaMultiModalProjector(config, dtype=dtype, device=device)
 
         self.input_processor = LLavaInputProcessor(config, dtype)
 
@@ -468,16 +396,14 @@ class LlavaForConditionalGeneration(nn.Module, CudaGraphMixin,
                            vision_feature_layer: int = -1,
                            vision_feature_select_strategy: str = 'default'):
         """get image features."""
-        selected_image_feature = self.vision_tower(
-            pixel_values, vision_feature_layer=vision_feature_layer)[0]
+        selected_image_feature = self.vision_tower(pixel_values, vision_feature_layer=vision_feature_layer)[0]
         if vision_feature_select_strategy == 'default':
             selected_image_feature = selected_image_feature[:, 1:]
         elif vision_feature_select_strategy == 'full':
             selected_image_feature = selected_image_feature
         else:
-            raise ValueError(
-                f'Unexpected select feature strategy: {vision_feature_select_strategy}'  # noqa: E501
-            )
+            raise ValueError(f'Unexpected select feature strategy: {vision_feature_select_strategy}'  # noqa: E501
+                             )
         image_features = self.multi_modal_projector(selected_image_feature)
         image_features = image_features.flatten(0, 1)[None]
 
@@ -499,15 +425,12 @@ class LlavaForConditionalGeneration(nn.Module, CudaGraphMixin,
             if pixel_values is not None:
                 vision_feature_layer = self.config.vision_feature_layer
                 select_strategy = self.config.vision_feature_select_strategy
-                image_features = self.get_image_features(
-                    pixel_values,
-                    vision_feature_layer=vision_feature_layer,
-                    vision_feature_select_strategy=select_strategy)
-            inputs_embeds = self.language_model.get_input_embeddings()(
-                input_ids)
+                image_features = self.get_image_features(pixel_values,
+                                                         vision_feature_layer=vision_feature_layer,
+                                                         vision_feature_select_strategy=select_strategy)
+            inputs_embeds = self.language_model.get_input_embeddings()(input_ids)
             if pixel_values is not None:
-                inputs_embeds.masked_scatter_(image_mask[..., None],
-                                              image_features)
+                inputs_embeds.masked_scatter_(image_mask[..., None], image_features)
 
         return self.language_model.forward(input_ids=input_ids,
                                            inputs_embeds=inputs_embeds,
@@ -538,14 +461,9 @@ class LlavaForConditionalGeneration(nn.Module, CudaGraphMixin,
         pixel_values = None
         image_mask = None
         if context.input_multimodals is not None:
-            pixel_values = [
-                input_mm.get('image', [])
-                for input_mm in context.input_multimodals
-            ]
+            pixel_values = [input_mm.get('image', []) for input_mm in context.input_multimodals]
             # flatten batch
-            pixel_values = [
-                data for im_data in pixel_values for data in im_data
-            ]
+            pixel_values = [data for im_data in pixel_values for data in im_data]
             if len(pixel_values) > 0:
                 image_token_id = pixel_values[0].meta['image_token_id']
                 image_mask = input_ids == image_token_id
@@ -561,9 +479,7 @@ class LlavaForConditionalGeneration(nn.Module, CudaGraphMixin,
         if vision_embeddings is not None and len(vision_embeddings) > 0:
             if inputs_embeds is None:
                 inputs_embeds = self.get_input_embeddings()(input_ids)
-            inputs_embeds[:,
-                          vision_embedding_indexing, :] = vision_embeddings.to(
-                              inputs_embeds)
+            inputs_embeds[:, vision_embedding_indexing, :] = vision_embeddings.to(inputs_embeds)
 
         return dict(
             input_ids=input_ids,
@@ -587,9 +503,13 @@ class LlavaForConditionalGeneration(nn.Module, CudaGraphMixin,
 
         # vis model
         lang_prefix = 'language_model.'
+        prefix_length = len(lang_prefix)
+        new_weights = dict()
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:
             if name.startswith(lang_prefix):
+                new_key = name[prefix_length:]
+                new_weights[new_key] = loaded_weight
                 continue
 
             for (param_name, weight_name, shard_id) in stacked_params_mapping:
@@ -602,15 +522,6 @@ class LlavaForConditionalGeneration(nn.Module, CudaGraphMixin,
             else:
                 param = params_dict[name]
                 load_weight(param, loaded_weight)
-
-        # language model
-        prefix_length = len(lang_prefix)
-        new_weights = dict()
-        for key, val in weights:
-            if not key.startswith(lang_prefix):
-                continue
-            new_key = key[prefix_length:]
-            new_weights[new_key] = val
 
         self.language_model.load_weights(new_weights.items())
 
@@ -643,11 +554,10 @@ class LLavaInputProcessor(BaseModelInputProcessor):
             if isinstance(num_pad, torch.Tensor):
                 num_pad = num_pad.item()
 
-            mm_data = MultiModalTensor(
-                data=pixel_values,
-                start=offset,
-                end=offset + num_pad,
-                meta=dict(image_token_id=image_token_id))
+            mm_data = MultiModalTensor(data=pixel_values,
+                                       start=offset,
+                                       end=offset + num_pad,
+                                       meta=dict(image_token_id=image_token_id))
             input_imgs.append(mm_data)
 
         result = PreprocessInputResult(
@@ -721,14 +631,8 @@ class LlavaNextForConditionalGeneration(LlavaForConditionalGeneration):
                  ctx_mgr: StepContextManager,
                  dtype: torch.dtype = None,
                  device: torch.device = None):
-        super().__init__(config=config,
-                         ctx_mgr=ctx_mgr,
-                         dtype=dtype,
-                         device=device)
-        self.image_newline = nn.Parameter(
-            torch.empty(config.text_config.hidden_size,
-                        dtype=dtype,
-                        device=device))
+        super().__init__(config=config, ctx_mgr=ctx_mgr, dtype=dtype, device=device)
+        self.image_newline = nn.Parameter(torch.empty(config.text_config.hidden_size, dtype=dtype, device=device))
         self.input_processor = LLavaNextInputProcessor(config, dtype)
 
     def get_image_features(
@@ -749,10 +653,7 @@ class LlavaNextForConditionalGeneration(LlavaForConditionalGeneration):
         if pixel_values.dim() == 5:
             # stacked if input is
             # (batch_size, num_patches, num_channels, height, width)
-            _pixel_values_list = [
-                pix_val[:num_patch]
-                for pix_val, num_patch in zip(pixel_values, image_num_patches)
-            ]
+            _pixel_values_list = [pix_val[:num_patch] for pix_val, num_patch in zip(pixel_values, image_num_patches)]
             pixel_values = torch.cat(_pixel_values_list, dim=0)
         elif pixel_values.dim() != 4:
             # otherwise has to be stacked from list of
@@ -760,8 +661,7 @@ class LlavaNextForConditionalGeneration(LlavaForConditionalGeneration):
             raise ValueError(f'pixel_values of shape {pixel_values.shape}, '
                              'expect to be of 4 or 5 dimensions')
 
-        selected_image_feature = self.vision_tower(
-            pixel_values, vision_feature_layer=vision_feature_layer)[0]
+        selected_image_feature = self.vision_tower(pixel_values, vision_feature_layer=vision_feature_layer)[0]
         if vision_feature_select_strategy == 'default':
             selected_image_feature = selected_image_feature[:, 1:]
         elif vision_feature_select_strategy == 'full':
@@ -770,11 +670,7 @@ class LlavaNextForConditionalGeneration(LlavaForConditionalGeneration):
         image_features = torch.split(image_features, image_num_patches, dim=0)
         return image_features
 
-    def pack_image_features(self,
-                            image_features,
-                            image_sizes,
-                            vision_feature_select_strategy,
-                            image_newline=None):
+    def pack_image_features(self, image_features, image_sizes, vision_feature_select_strategy, image_newline=None):
 
         new_image_features = []
         feature_lens = []
@@ -782,8 +678,7 @@ class LlavaNextForConditionalGeneration(LlavaForConditionalGeneration):
             if image_feature.shape[0] > 1:
                 base_image_feature = image_feature[0]
                 image_feature = image_feature[1:]
-                height = width = (self.config.vision_config.image_size //
-                                  self.config.vision_config.patch_size)
+                height = width = (self.config.vision_config.image_size // self.config.vision_config.patch_size)
 
                 if vision_feature_select_strategy == 'default':
                     expected_num_patches = height * width
@@ -793,39 +688,29 @@ class LlavaNextForConditionalGeneration(LlavaForConditionalGeneration):
                     raise ValueError('The number of patches is '
                                      'not consistent with the image size.')
 
-                (num_patch_height,
-                 num_patch_width) = get_anyres_image_grid_shape(
-                     image_sizes[image_idx],
-                     self.config.image_grid_pinpoints,
-                     self.config.vision_config.image_size,
-                 )
-                image_feature = image_feature.view(num_patch_height,
-                                                   num_patch_width, height,
-                                                   width, -1)
-                image_feature = image_feature.permute(4, 0, 2, 1,
-                                                      3).contiguous()
+                (num_patch_height, num_patch_width) = get_anyres_image_grid_shape(
+                    image_sizes[image_idx],
+                    self.config.image_grid_pinpoints,
+                    self.config.vision_config.image_size,
+                )
+                image_feature = image_feature.view(num_patch_height, num_patch_width, height, width, -1)
+                image_feature = image_feature.permute(4, 0, 2, 1, 3).contiguous()
                 image_feature = image_feature.flatten(1, 2).flatten(2, 3)
-                image_feature = unpad_image(image_feature,
-                                            image_sizes[image_idx])
+                image_feature = unpad_image(image_feature, image_sizes[image_idx])
                 if image_newline is not None:
                     image_feature = torch.cat(
                         (
                             image_feature,
-                            image_newline[:, None, None].expand(
-                                *image_feature.shape[:-1], 1).to(
-                                    image_feature.dtype),
+                            image_newline[:, None, None].expand(*image_feature.shape[:-1], 1).to(image_feature.dtype),
                         ),
                         dim=-1,
                     )
                 image_feature = image_feature.flatten(1, 2).transpose(0, 1)
-                image_feature = torch.cat((base_image_feature, image_feature),
-                                          dim=0)
+                image_feature = torch.cat((base_image_feature, image_feature), dim=0)
             else:
                 image_feature = image_feature[0]
                 if image_newline is not None:
-                    image_feature = torch.cat(
-                        (image_feature, image_newline[None].to(image_feature)),
-                        dim=0)
+                    image_feature = torch.cat((image_feature, image_newline[None].to(image_feature)), dim=0)
             new_image_features.append(image_feature)
             feature_lens.append(image_feature.size(0))
         image_features = torch.cat(new_image_features, dim=0)
@@ -849,11 +734,10 @@ class LlavaNextForConditionalGeneration(LlavaForConditionalGeneration):
                 vision_feature_layer = self.config.vision_feature_layer
                 select_strategy = self.config.vision_feature_select_strategy
                 image_sizes = image_sizes.tolist()
-                image_features = self.get_image_features(
-                    pixel_values,
-                    image_sizes,
-                    vision_feature_layer=vision_feature_layer,
-                    vision_feature_select_strategy=select_strategy)
+                image_features = self.get_image_features(pixel_values,
+                                                         image_sizes,
+                                                         vision_feature_layer=vision_feature_layer,
+                                                         vision_feature_select_strategy=select_strategy)
                 image_features = self.pack_image_features(
                     image_features,
                     image_sizes,
@@ -861,11 +745,9 @@ class LlavaNextForConditionalGeneration(LlavaForConditionalGeneration):
                     image_newline=self.image_newline,
                 )
                 image_features = image_features[None]
-            inputs_embeds = self.language_model.get_input_embeddings()(
-                input_ids)
+            inputs_embeds = self.language_model.get_input_embeddings()(input_ids)
             if pixel_values is not None:
-                inputs_embeds.masked_scatter_(image_mask[..., None],
-                                              image_features)
+                inputs_embeds.masked_scatter_(image_mask[..., None], image_features)
 
         return self.language_model.forward(input_ids=input_ids,
                                            inputs_embeds=inputs_embeds,
@@ -893,19 +775,14 @@ class LlavaNextForConditionalGeneration(LlavaForConditionalGeneration):
         image_sizes = None
         image_mask = None
         if context.input_multimodals is not None:
-            img_mms = [
-                input_mm.get('image', [])
-                for input_mm in context.input_multimodals
-            ]
+            img_mms = [input_mm.get('image', []) for input_mm in context.input_multimodals]
             # flatten batch
             img_mms = [data for im_data in img_mms for data in im_data]
             if len(img_mms) > 0:
                 image_token_id = img_mms[0].meta['image_token_id']
                 image_mask = input_ids == image_token_id
-                pixel_values = torch.cat(
-                    [data.data.flatten(0, 1) for data in img_mms])
-                image_sizes = torch.cat(
-                    [data.meta['image_sizes'] for data in img_mms])
+                pixel_values = torch.cat([data.data.flatten(0, 1) for data in img_mms])
+                image_sizes = torch.cat([data.meta['image_sizes'] for data in img_mms])
             else:
                 pixel_values = None
                 image_sizes = None
@@ -917,9 +794,7 @@ class LlavaNextForConditionalGeneration(LlavaForConditionalGeneration):
         if vision_embeddings is not None and len(vision_embeddings) > 0:
             if inputs_embeds is None:
                 inputs_embeds = self.get_input_embeddings()(input_ids)
-            inputs_embeds[:,
-                          vision_embedding_indexing, :] = vision_embeddings.to(
-                              inputs_embeds)
+            inputs_embeds[:, vision_embedding_indexing, :] = vision_embeddings.to(inputs_embeds)
 
         return dict(
             input_ids=input_ids,
@@ -961,9 +836,7 @@ class LLavaNextInputProcessor(BaseModelInputProcessor):
             mm_data = MultiModalTensor(data=pixel_values,
                                        start=offset,
                                        end=offset + num_pad,
-                                       meta=dict(
-                                           image_sizes=image_sizes,
-                                           image_token_id=image_token_id))
+                                       meta=dict(image_sizes=image_sizes, image_token_id=image_token_id))
             input_imgs.append(mm_data)
 
         result = PreprocessInputResult(

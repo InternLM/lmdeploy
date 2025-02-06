@@ -7,9 +7,7 @@ import torch
 from torch import nn
 
 
-def get_ranks_and_scalings(target_name: str,
-                           cfgs: Iterable,
-                           device: torch.device = None):
+def get_ranks_and_scalings(target_name: str, cfgs: Iterable, device: torch.device = None):
     """get ranks and scalings."""
     ranks = []
     scalings = []
@@ -83,9 +81,7 @@ def _get_key_map(reverse_map: Dict[str, str]):
     return key_map
 
 
-def load_lora_weights(model: nn.Module, weights: Iterable[Tuple[str,
-                                                                torch.Tensor]],
-                      adapter_id: int):
+def load_lora_weights(model: nn.Module, weights: Iterable[Tuple[str, torch.Tensor]], adapter_id: int):
     """load lora weights."""
     from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
     prefix_len = len('base_model.model.')

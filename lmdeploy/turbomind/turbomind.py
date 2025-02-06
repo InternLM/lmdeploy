@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
 import asyncio
 import copy
 import json
@@ -10,7 +11,7 @@ from dataclasses import asdict
 from functools import partial
 from itertools import repeat
 from queue import Queue
-from typing import Dict, Iterable, List
+from typing import Dict, List
 
 import numpy as np
 import torch
@@ -18,9 +19,7 @@ import yaml
 from torch.nn.utils.rnn import pad_sequence
 
 import lmdeploy
-from lmdeploy.messages import (EngineOutput, GenerationConfig, ResponseType,
-                               TurbomindEngineConfig)
-from lmdeploy.tokenizer import Tokenizer
+from lmdeploy.messages import EngineOutput, GenerationConfig, ResponseType, TurbomindEngineConfig
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model
 
 from .deploy.config import TurbomindModelConfig
@@ -82,6 +81,7 @@ class TurboMind:
 
     def __init__(self,
                  model_path: str,
+                 tokenizer: object,
                  model_name: str = None,
                  chat_template_name: str = None,
                  engine_config: TurbomindEngineConfig = None,
@@ -100,33 +100,22 @@ class TurboMind:
 
         self.gpu_count = _engine_config.tp
 
+        self.tokenizer = tokenizer
         if model_source == ModelSource.WORKSPACE:
-            tokenizer_model_path = osp.join(model_path, 'triton_models',
-                                            'tokenizer')
-            self.tokenizer = Tokenizer(tokenizer_model_path)
-            self.model_comm = self._from_workspace(
-                model_path=model_path, engine_config=_engine_config)
+            self.model_comm = self._from_workspace(model_path=model_path, engine_config=_engine_config)
         else:
             if not osp.exists(model_path):
-                model_path = get_model(model_path, _engine_config.download_dir,
-                                       _engine_config.revision)
-            self.tokenizer = Tokenizer(model_path)
+                model_path = get_model(model_path, _engine_config.download_dir, _engine_config.revision)
             self.model_comm = self._from_hf(model_source=model_source,
                                             model_path=model_path,
                                             engine_config=_engine_config)
 
         with ThreadPoolExecutor(max_workers=self.gpu_count) as e:
-            ranks = [
-                self.node_id * self.gpu_count + device_id
-                for device_id in range(self.gpu_count)
-            ]
-            for _ in e.map(self.model_comm.process_weight,
-                           range(self.gpu_count), ranks):
+            ranks = [self.node_id * self.gpu_count + device_id for device_id in range(self.gpu_count)]
+            for _ in e.map(self.model_comm.process_weight, range(self.gpu_count), ranks):
                 pass
             # implicit synchronization
-            for _ in e.map(self.model_comm.create_engine,
-                           range(self.gpu_count), ranks,
-                           repeat(self.nccl_params)):
+            for _ in e.map(self.model_comm.create_engine, range(self.gpu_count), ranks, repeat(self.nccl_params)):
                 pass
 
         self.session_len = self.config.session_len
@@ -192,9 +181,8 @@ class TurboMind:
                 and engine_config.num_tokens_per_iter == 0:
             self.engine_config.num_tokens_per_iter = \
                 engine_config.max_prefill_token_num
-            self.engine_config.max_prefill_iters = (
-                self.config.session_len + engine_config.max_prefill_token_num -
-                1) // engine_config.max_prefill_token_num
+            self.engine_config.max_prefill_iters = (self.config.session_len + engine_config.max_prefill_token_num -
+                                                    1) // engine_config.max_prefill_token_num
 
         # pack `self.config` and `self.engine_config` into a dict
         self.config_dict = self.config.to_dict()
@@ -202,27 +190,23 @@ class TurboMind:
         logger.info(f'turbomind model config:\n\n'
                     f'{json.dumps(self.config_dict, indent=2)}')
 
-    def _from_hf(self, model_source: ModelSource, model_path: str,
-                 engine_config: TurbomindEngineConfig):
+    def _from_hf(self, model_source: ModelSource, model_path: str, engine_config: TurbomindEngineConfig):
         """Load model which is in hf format."""
         assert model_source == ModelSource.HF_MODEL, \
             f'{model_source} is not supported'
-        assert is_supported(model_path), (
-            f'turbomind does not support {model_path}. '
-            'Plz try pytorch engine instead.')
+        assert is_supported(model_path), (f'turbomind does not support {model_path}. '
+                                          'Plz try pytorch engine instead.')
 
         # convert transformers model into turbomind model
         from .deploy.converter import get_tm_model
-        tm_model = get_tm_model(model_path, self.model_name,
-                                self.chat_template_name, engine_config)
+        tm_model = get_tm_model(model_path, self.model_name, self.chat_template_name, engine_config)
 
         self._postprocess_config(tm_model.tm_config, engine_config)
 
-        model_comm = _tm.AbstractTransformerModel.create_llama_model(
-            model_dir='',
-            config=yaml.safe_dump(self.config_dict),
-            tensor_para_size=self.gpu_count,
-            data_type=self.config.model_config.weight_type)
+        model_comm = _tm.AbstractTransformerModel.create_llama_model(model_dir='',
+                                                                     config=yaml.safe_dump(self.config_dict),
+                                                                     tensor_para_size=self.gpu_count,
+                                                                     data_type=self.config.model_config.weight_type)
 
         # create empty weight
         self._create_weight(model_comm)
@@ -235,17 +219,13 @@ class TurboMind:
         # there should be no left turbomind params.
         if len(tm_params) > 0:
             uninitialized = list(tm_params.keys())
-            logger.warning(
-                'the model may not be loaded successfully '
-                f'with {len(tm_params)} uninitialized params:\n{uninitialized}'
-            )
+            logger.warning('the model may not be loaded successfully '
+                           f'with {len(tm_params)} uninitialized params:\n{uninitialized}')
         return model_comm
 
-    def _from_workspace(self, model_path: str,
-                        engine_config: TurbomindEngineConfig):
+    def _from_workspace(self, model_path: str, engine_config: TurbomindEngineConfig):
         """Load model which is converted by `lmdeploy convert`"""
-        config_path = osp.join(model_path, 'triton_models', 'weights',
-                               'config.yaml')
+        config_path = osp.join(model_path, 'triton_models', 'weights', 'config.yaml')
         # load TurbomindModelConfig from config file
         with open(config_path, 'r') as f:
             _cfg = yaml.safe_load(f)
@@ -253,21 +233,19 @@ class TurboMind:
 
         # always use tp in converted model (config.yaml)
         if cfg.tensor_para_size != engine_config.tp:
-            logger.warning(
-                'tp in engine_config is different from in config.yaml'
-                f'({config_path}), {engine_config.tp} vs '
-                f'{cfg.tensor_para_size}, using tp={cfg.tensor_para_size}')
+            logger.warning('tp in engine_config is different from in config.yaml'
+                           f'({config_path}), {engine_config.tp} vs '
+                           f'{cfg.tensor_para_size}, using tp={cfg.tensor_para_size}')
         self.gpu_count = cfg.tensor_para_size
         engine_config.tp = self.gpu_count
 
         self._postprocess_config(cfg, engine_config)
 
         weight_dir = osp.join(model_path, 'triton_models', 'weights')
-        model_comm = _tm.AbstractTransformerModel.create_llama_model(
-            model_dir=weight_dir,
-            config=yaml.safe_dump(self.config_dict),
-            tensor_para_size=self.gpu_count,
-            data_type=self.config.weight_type)
+        model_comm = _tm.AbstractTransformerModel.create_llama_model(model_dir=weight_dir,
+                                                                     config=yaml.safe_dump(self.config_dict),
+                                                                     tensor_para_size=self.gpu_count,
+                                                                     data_type=self.config.weight_type)
 
         # create weight and load params
         self._create_weight(model_comm)
@@ -276,6 +254,7 @@ class TurboMind:
     @classmethod
     def from_pretrained(cls,
                         pretrained_model_name_or_path: str,
+                        tokenizer: object,
                         model_name: str = None,
                         chat_template_name: str = None,
                         engine_config: TurbomindEngineConfig = None,
@@ -302,6 +281,7 @@ class TurboMind:
         model_source = get_model_source(pretrained_model_name_or_path)
         logger.info(f'model_source: {model_source}')
         return cls(model_path=pretrained_model_name_or_path,
+                   tokenizer=tokenizer,
                    model_name=model_name,
                    chat_template_name=chat_template_name,
                    engine_config=engine_config,
@@ -330,7 +310,6 @@ def _get_logits(outputs, offset: int):
 
 def _get_last_hidden_state(outputs, offset: int):
     last_hidden_state = outputs['last_hidden_state']
-    print(f'last_hidden_state.shape = {last_hidden_state.shape}')
 
     def _func(out: EngineOutput, step: int):
         out.last_hidden_state = last_hidden_state[:step - offset - 1, :]
@@ -348,9 +327,7 @@ def _get_logprobs_impl(logprob_vals: torch.Tensor,
     offset = len(out_logprobs)
     if length == offset:
         return out_logprobs
-    for (pos, idx, val, n) in zip(range(offset,
-                                        length), logprob_idxs[offset:length],
-                                  logprob_vals[offset:length],
+    for (pos, idx, val, n) in zip(range(offset, length), logprob_idxs[offset:length], logprob_vals[offset:length],
                                   logprob_nums[offset:length]):
         topn = min(n.item(), logprobs)
         tok_res = {idx[i].item(): val[i].item() for i in range(topn)}
@@ -376,8 +353,7 @@ def _get_logprobs(outputs, output_logprobs: int):
     logprobs = []
 
     def _func(out: EngineOutput, step: int):
-        _get_logprobs_impl(logprob_vals, logprob_idxs, logprob_nums,
-                           out.token_ids, output_logprobs, logprobs)
+        _get_logprobs_impl(logprob_vals, logprob_idxs, logprob_nums, out.token_ids, output_logprobs, logprobs)
         out.logprobs = logprobs
 
     return _func
@@ -414,10 +390,7 @@ class TurboMindInstance:
         cuda_stream_id(int): identity of a cuda stream
     """
 
-    def __init__(self,
-                 tm_model: TurboMind,
-                 config: TurbomindModelConfig,
-                 cuda_stream_id: int = 0):
+    def __init__(self, tm_model: TurboMind, config: TurbomindModelConfig, cuda_stream_id: int = 0):
         self.tm_model = tm_model
         self.cuda_stream_id = cuda_stream_id
 
@@ -439,8 +412,7 @@ class TurboMindInstance:
         model_inst = self.tm_model.model_comm.create_model_instance(device_id)
         return model_inst
 
-    def _get_extra_output_processors(self, outputs: Dict[str, torch.Tensor],
-                                     gen_config: GenerationConfig,
+    def _get_extra_output_processors(self, outputs: Dict[str, torch.Tensor], gen_config: GenerationConfig,
                                      input_len: int):
 
         def _get_offset(type):
@@ -457,9 +429,7 @@ class TurboMindInstance:
             fs.append(_get_logprobs(outputs, gen_config.logprobs))
         return fs
 
-    def prepare_embeddings(self,
-                           input_embeddings=None,
-                           input_embedding_ranges=None):
+    def prepare_embeddings(self, input_embeddings=None, input_embedding_ranges=None):
         """Convert embeddings."""
         if input_embeddings is None:
             return None, None
@@ -486,25 +456,20 @@ class TurboMindInstance:
             if item and isinstance(item[0], np.ndarray):
                 item = [torch.from_numpy(x).squeeze() for x in item]
             # convert to lookup table type
-            _MAP = dict(float=torch.float,
-                        bfloat16=torch.bfloat16,
-                        float16=torch.float16)
+            _MAP = dict(float=torch.float, bfloat16=torch.bfloat16, float16=torch.float16)
             dtype = _MAP.get(self.tm_model.config.weight_type, torch.float16)
             item = [x.to(dtype=dtype) for x in item]
             item = item or [torch.zeros(0, hidden_dim, dtype=dtype)]
             input_embeddings[i] = item
         input_embeddings = [torch.cat(x) for x in input_embeddings]
         input_embeddings = pad_sequence(input_embeddings, batch_first=True)
-        input_embeddings = input_embeddings.reshape(input_embeddings.shape[0],
-                                                    -1).view(torch.int8)
+        input_embeddings = input_embeddings.reshape(input_embeddings.shape[0], -1).view(torch.int8)
         # construct input_embedding_ranges
         for i in range(len(input_embedding_ranges)):
             item = input_embedding_ranges[i] or []
             item = torch.IntTensor(item).reshape(-1, 2)
             input_embedding_ranges[i] = item
-        input_embedding_ranges = pad_sequence(input_embedding_ranges,
-                                              batch_first=True,
-                                              padding_value=-1)
+        input_embedding_ranges = pad_sequence(input_embedding_ranges, batch_first=True, padding_value=-1)
 
         return input_embeddings, input_embedding_ranges
 
@@ -521,8 +486,7 @@ class TurboMindInstance:
 
         inputs = dict(input_ids=input_ids, )
 
-        input_embeddings, input_embedding_ranges = self.prepare_embeddings(
-            input_embeddings, input_embedding_ranges)
+        input_embeddings, input_embedding_ranges = self.prepare_embeddings(input_embeddings, input_embedding_ranges)
         if input_embeddings is not None:
             inputs['input_embeddings'] = input_embeddings
             inputs['input_embedding_ranges'] = input_embedding_ranges
@@ -594,29 +558,23 @@ class TurboMindInstance:
         logger.info(f'[async_stream_infer] session {session_id} start')
         gen_cfg = self._get_generation_config(gen_config)
 
-        inputs, input_len = self.prepare_inputs(
-            input_ids=input_ids,
-            input_embeddings=input_embeddings,
-            input_embedding_ranges=input_embedding_ranges,
-            gen_config=gen_config)
+        inputs, input_len = self.prepare_inputs(input_ids=input_ids,
+                                                input_embeddings=input_embeddings,
+                                                input_embedding_ranges=input_embedding_ranges,
+                                                gen_config=gen_config)
 
-        session = _tm.SessionParam(id=session_id,
-                                   step=step,
-                                   start=sequence_start,
-                                   end=sequence_end)
+        session = _tm.SessionParam(id=session_id, step=step, start=sequence_start, end=sequence_end)
 
         inputs = _np_dict_to_tm_dict(inputs)
 
         sem = StreamingSemaphore()
         signal_cb = partial(self.async_signal_cb, sem)
 
-        outputs, shared_state = self.model_inst.forward(
-            inputs, session, gen_cfg, stream_output, signal_cb)
+        outputs, shared_state = self.model_inst.forward(inputs, session, gen_cfg, stream_output, signal_cb)
 
         outputs = _tm_dict_to_torch_dict(outputs)
 
-        extra_fs = self._get_extra_output_processors(outputs, gen_config,
-                                                     input_len)
+        extra_fs = self._get_extra_output_processors(outputs, gen_config, input_len)
 
         output_ids_buf = outputs['output_ids']
 
@@ -673,9 +631,7 @@ class TurboMindInstance:
             logger.info(f'[async_stream_infer] session {session_id} done')
 
     def _get_error_output(self):
-        return EngineOutput(status=ResponseType.INTERNAL_ENGINE_ERROR,
-                            token_ids=[],
-                            num_token=0)
+        return EngineOutput(status=ResponseType.INTERNAL_ENGINE_ERROR, token_ids=[], num_token=0)
 
     def _get_generation_config(self, cfg: GenerationConfig):
         c = _tm.GenerationConfig()
@@ -689,97 +645,16 @@ class TurboMindInstance:
             c.min_new_tokens = cfg.min_new_tokens
         output_type = dict(all=1, generation=2)
         if cfg.output_last_hidden_state:
-            c.output_last_hidden_state = output_type[
-                cfg.output_last_hidden_state]
+            c.output_last_hidden_state = output_type[cfg.output_last_hidden_state]
         if cfg.output_logits:
             c.output_logits = output_type[cfg.output_logits]
         if cfg.logprobs:
             if cfg.logprobs > MAX_LOGPROBS:
                 cfg.logprobs = MAX_LOGPROBS
-                logger.warning(
-                    f'logprobs shoudd be in range [1, {MAX_LOGPROBS}]'
-                    f'update logprobs={cfg.logprobs}')
+                logger.warning(f'logprobs shoudd be in range [1, {MAX_LOGPROBS}]'
+                               f'update logprobs={cfg.logprobs}')
             c.output_logprobs = cfg.logprobs
         if cfg.random_seed is not None:
             c.random_seed = cfg.random_seed
         # print (c)
         return c
-
-    def decode(self,
-               input_ids,
-               steps: List[int] = None,
-               input_embeddings=None,
-               input_embedding_ranges=None,
-               sequence_start: bool = True,
-               sequence_end: bool = True):
-        """Perform context decode on input tokens.
-
-        Args:
-            input_ids (numpy.ndarray): the batch of input token ids
-            steps (List[int]): the offset of the k/v cache
-            input_embeddings (List[List[Union[torch.Tensor, np.ndarray]]]):
-                embeddings features
-            input_embedding_ranges: (List[List[Tuple[int, int]]]):
-                the begin/end offsets of input_embeddings to input_ids
-            sequence_start (bool): indicator for starting a sequence
-            sequence_end (bool): indicator for ending a sequence
-        """
-
-        if len(input_ids) == 0:
-            input_ids = [[]]
-        if isinstance(input_ids[0], int):
-            input_ids = [input_ids]
-        if steps is None:
-            steps = [0] * len(input_ids)
-        assert isinstance(steps, List) and len(steps) == len(input_ids)
-
-        # append an extra token since input_len-1 tokens will be
-        # decoded by context decoder
-        input_ids = [x[:] for x in input_ids]
-        for inputs in input_ids:
-            inputs.append(0)
-
-        batch_size = len(input_ids)
-
-        def _broadcast_np(data, dtype, shape=(batch_size, )):
-            if isinstance(data, Iterable):
-                assert len(data) == batch_size
-                return data
-
-            return np.full(shape, data, dtype=dtype)
-
-        input_ids = [torch.IntTensor(ids) for ids in input_ids]
-        input_lengths = torch.IntTensor([len(ids) for ids in input_ids])
-        input_ids = pad_sequence(input_ids,
-                                 batch_first=True,
-                                 padding_value=self.eos_id)
-        steps = torch.IntTensor([step for step in steps])
-
-        inputs = dict(input_ids=input_ids,
-                      input_lengths=input_lengths,
-                      request_output_len=_broadcast_np(0, dtype=np.uint32),
-                      is_return_logits=_broadcast_np(1, np.uint32),
-                      START=_broadcast_np((1 if sequence_start else 0),
-                                          np.int32),
-                      END=_broadcast_np((1 if sequence_end else 0), np.int32),
-                      step=steps)
-
-        input_embeddings, input_embedding_ranges = self.prepare_embeddings(
-            input_embeddings, input_embedding_ranges)
-        if input_embeddings is not None:
-            inputs['input_embeddings'] = input_embeddings
-            inputs['input_embedding_ranges'] = input_embedding_ranges
-
-        tm_inputs = _np_dict_to_tm_dict(inputs)
-
-        # start forward thread
-        self._forward_thread(tm_inputs)
-
-        res, tm_outputs = self.que.get()
-        if res < 0:
-            return None
-
-        outputs = _tm_dict_to_torch_dict(tm_outputs)
-        logits = outputs['logits']
-
-        return logits[:, :-1, :]

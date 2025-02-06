@@ -22,25 +22,18 @@ def command_line_test(config,
     if type == 'api_client':
         cmd = 'lmdeploy serve api_client ' + extra
     else:
-        cmd = get_command_with_extra('lmdeploy chat ' + dst_path +
-                                     '/workspace_' + model_case,
+        cmd = get_command_with_extra('lmdeploy chat ' + dst_path + '/workspace_' + model_case,
                                      config,
                                      model_case,
                                      cuda_prefix=cuda_prefix)
         if type == 'turbomind':
-            if ('w4' in model_case
-                    or ('4bits' in model_case or 'awq' in model_case.lower())):
+            if ('w4' in model_case or ('4bits' in model_case or 'awq' in model_case.lower())):
                 cmd += ' --model-format awq'
             elif 'gptq' in model_case.lower():
                 cmd += ' --model-format gptq'
         if case == 'base_testcase':
             cmd += ' --chat-template ' + TEMPLATE
-    return command_test(config, [cmd],
-                        model_case,
-                        case,
-                        case_info,
-                        type == 'turbomind',
-                        worker_id=worker_id)
+    return command_test(config, [cmd], model_case, case, case_info, type == 'turbomind', worker_id=worker_id)
 
 
 def hf_command_line_test(config,
@@ -56,10 +49,8 @@ def hf_command_line_test(config,
     else:
         model_path = model_case
 
-    cmd = get_command_with_extra(' '.join([
-        'lmdeploy chat', model_path, '--backend', type, extra,
-        '--session-len 4096'
-    ]),
+    cmd = get_command_with_extra(' '.join(['lmdeploy chat', model_path, '--backend', type, extra,
+                                           '--session-len 4096']),
                                  config,
                                  model_case,
                                  need_tp=True,
@@ -69,36 +60,25 @@ def hf_command_line_test(config,
         if not is_bf16_supported():
             cmd += ' --dtype float16'
     if type == 'turbomind':
-        if ('w4' in model_case
-                or ('4bits' in model_case or 'awq' in model_case.lower())):
+        if ('w4' in model_case or ('4bits' in model_case or 'awq' in model_case.lower())):
             cmd += ' --model-format awq'
         elif 'gptq' in model_case.lower():
             cmd += ' --model-format gptq'
 
     if case == 'base_testcase':
         cmd += ' --chat-template ' + TEMPLATE
-    return command_test(config, [cmd], model_case,
-                        '_'.join(['hf', type, case]), case_info, True)
+    return command_test(config, [cmd], model_case, '_'.join(['hf', type, case]), case_info, True)
 
 
-def command_test(config,
-                 cmd,
-                 model,
-                 case,
-                 case_info,
-                 need_extract_output,
-                 worker_id: str = ''):
+def command_test(config, cmd, model, case, case_info, need_extract_output, worker_id: str = ''):
     try:
         log_path = config.get('log_path')
         model_name = get_model_name(model)
 
         if '/' in model:
-            chat_log = os.path.join(
-                log_path, 'chat_' + model.split('/')[1] + worker_id + '_' +
-                case + '.log')
+            chat_log = os.path.join(log_path, 'chat_' + model.split('/')[1] + worker_id + '_' + case + '.log')
         else:
-            chat_log = os.path.join(
-                log_path, 'chat_' + model + worker_id + '_' + case + '.log')
+            chat_log = os.path.join(log_path, 'chat_' + model + worker_id + '_' + case + '.log')
 
         file = open(chat_log, 'w')
 
@@ -119,13 +99,7 @@ def command_test(config,
 
         msg = ''
 
-        with Popen(cmd,
-                   stdin=PIPE,
-                   stdout=PIPE,
-                   stderr=PIPE,
-                   shell=True,
-                   text=True,
-                   encoding='utf-8') as proc:
+        with Popen(cmd, stdin=PIPE, stdout=PIPE, stderr=PIPE, shell=True, text=True, encoding='utf-8') as proc:
             file.writelines('prompt:' + prompt + '\n')
 
             outputs, errors = proc.communicate(input=prompt)
@@ -145,14 +119,10 @@ def command_test(config,
                     output = extract_output(outputDialogs[index], model)
                 else:
                     output = outputDialogs[index]
-                case_result, reason = assert_result(output,
-                                                    prompt_detail.values(),
-                                                    model_name)
-                file.writelines('prompt:' + list(prompt_detail.keys())[0] +
-                                '\n')
+                case_result, reason = assert_result(output, prompt_detail.values(), model_name)
+                file.writelines('prompt:' + list(prompt_detail.keys())[0] + '\n')
                 file.writelines('output:' + output + '\n')
-                file.writelines('result:' + str(case_result) + ',reason:' +
-                                reason + '\n')
+                file.writelines('result:' + str(case_result) + ',reason:' + reason + '\n')
                 index += 1
                 if not case_result:
                     msg = reason

@@ -13,8 +13,7 @@ class Xcomposer2Reader(InternLM2Reader):
 
     def _attn(self, i, kind):
         if 'Plora_A' in kind:
-            qkv = self.params[
-                f'model.layers.{i}.attention.wqkv.Plora_A.weight']
+            qkv = self.params[f'model.layers.{i}.attention.wqkv.Plora_A.weight']
             o = self.params[f'model.layers.{i}.attention.wo.Plora_A.weight']
             return qkv, o
         return super()._attn(i, kind)
@@ -28,10 +27,7 @@ class Xcomposer2Model(InternLM2Model):
 
     def _lora_cfg_7b(self):
         """lora config for internlm-xcomposer2-7b."""
-        return dict(lora_r=256,
-                    lora_scale=1.0,
-                    lora_policy='plora',
-                    lora_max_wo_r=256)
+        return dict(lora_r=256, lora_scale=1.0, lora_policy='plora', lora_max_wo_r=256)
 
     def _lora_cfg_4khd_7b(self, model_info: dict):
         """lora config for internlm-xcomposer2-4khd-7b."""

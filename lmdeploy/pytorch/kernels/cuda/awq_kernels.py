@@ -8,9 +8,7 @@ def get_cuda_autotune_config():
         triton.Config({
             'BLOCK_SIZE_N': 64,
             'GROUP_SIZE_M': 8,
-        },
-                      num_stages=3,
-                      num_warps=4),
+        }, num_stages=3, num_warps=4),
     ]
 
 
@@ -36,11 +34,7 @@ def _dequant_s4_to_f16x2(weight, shift: tl.constexpr, is_top: tl.constexpr):
         mov.b32 {$0, $1}, tmp;
     }""",
                                          '=h,=h,r,n,n,n,r,r',
-                                         args=[
-                                             weight, TOP_MASK,
-                                             I4s_TO_F16s_MAGIC_NUM, immLut,
-                                             ONE_SIXTEENTH, NEG_64
-                                         ],
+                                         args=[weight, TOP_MASK, I4s_TO_F16s_MAGIC_NUM, immLut, ONE_SIXTEENTH, NEG_64],
                                          dtype=(tl.float16, tl.float16),
                                          is_pure=True,
                                          pack=1)
@@ -52,11 +46,7 @@ def _dequant_s4_to_f16x2(weight, shift: tl.constexpr, is_top: tl.constexpr):
         mov.b32 {$0, $1}, tmp;
     }""",
                                          '=h,=h,r,n,n,n,r',
-                                         args=[
-                                             weight, BOTTOM_MASK,
-                                             I4s_TO_F16s_MAGIC_NUM, immLut,
-                                             FP16_TOP_MAGIC_NUM
-                                         ],
+                                         args=[weight, BOTTOM_MASK, I4s_TO_F16s_MAGIC_NUM, immLut, FP16_TOP_MAGIC_NUM],
                                          dtype=(tl.float16, tl.float16),
                                          is_pure=True,
                                          pack=1)
@@ -144,10 +134,8 @@ def awq_linear_kernel(
     BLOCK_SIZE_QN: tl.constexpr = BLOCK_SIZE_N // 8
     offs_wn = pid_n * BLOCK_SIZE_QN + tl.arange(0, BLOCK_SIZE_QN)
     offs_k = tl.arange(0, BLOCK_SIZE_K)
-    a_ptrs = a_ptr + (offs_am[:, None] * stride_am +
-                      offs_k[None, :] * stride_ak)
-    qw_ptrs = qw_ptr + (offs_k[:, None] * stride_wk +
-                        offs_wn[None, :] * stride_wn)
+    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
+    qw_ptrs = qw_ptr + (offs_k[:, None] * stride_wk + offs_wn[None, :] * stride_wn)
     s_ptrs = s_ptr + offs_bn * stride_sn
     qz_ptrs = qz_ptr + offs_wn * stride_zn
 
@@ -204,8 +192,7 @@ def awq_linear_kernel(
     # Write back the block of the output matrix C with masks.
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
     offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
-    c_ptrs = c_ptr + stride_cm * offs_cm[:,
-                                         None] + stride_cn * offs_cn[None, :]
+    c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
 
     if SPLIT_K > 1:
@@ -225,8 +212,7 @@ def awq_linear(x, qweight, scales, qzeros):
     def grid(META):
         """grid."""
         return (
-            triton.cdiv(M, META['BLOCK_SIZE_M']) *
-            triton.cdiv(N, META['BLOCK_SIZE_N']),
+            triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
             SPLIT_K,
         )
 

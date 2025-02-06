@@ -1,12 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import torch
 from torch import nn
 from transformers import CLIPVisionConfig, CLIPVisionModel, PretrainedConfig
 
-from lmdeploy.pytorch.engine.input_process import (BaseModelInputProcessor,
-                                                   PreprocessInputResult)
+from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
 from lmdeploy.pytorch.nn.linear import build_rowwise_linear
@@ -42,118 +42,73 @@ class Phi3ImageEmbedding(nn.Module):
                  **kwargs):
         super().__init__()
         self.config = config
-        hidden_size = config.n_embd if hasattr(
-            config, 'n_embd') else config.hidden_size
+        hidden_size = config.n_embd if hasattr(config, 'n_embd') else config.hidden_size
 
         self.wte = wte
 
-        if (isinstance(config.img_processor, dict) and
-                config.img_processor.get('name', None) == 'clip_vision_model'):
-            assert 'model_name' in config.img_processor, (
-                'model_name must be provided for CLIPVisionModel')
-            assert 'image_dim_out' in config.img_processor, (
-                'image_dim_out must be provided for CLIPVisionModel')
-            assert 'num_img_tokens' in config.img_processor, (
-                'num_img_tokens must be provided for CLIPVisionModel')
-            assert config.img_processor[
-                'model_name'] == 'openai/clip-vit-large-patch14-336'
+        if (isinstance(config.img_processor, dict) and config.img_processor.get('name', None) == 'clip_vision_model'):
+            assert 'model_name' in config.img_processor, ('model_name must be provided for CLIPVisionModel')
+            assert 'image_dim_out' in config.img_processor, ('image_dim_out must be provided for CLIPVisionModel')
+            assert 'num_img_tokens' in config.img_processor, ('num_img_tokens must be provided for CLIPVisionModel')
+            assert config.img_processor['model_name'] == 'openai/clip-vit-large-patch14-336'
             clip_config = CLIP_VIT_LARGE_PATCH14_336_CONFIG
-            self.img_processor = CLIPVisionModel(clip_config).to(device).to(
-                dtype)
+            self.img_processor = CLIPVisionModel(clip_config).to(device).to(dtype)
             image_dim_out = config.img_processor['image_dim_out']
             self.num_img_tokens = config.img_processor['num_img_tokens']
         else:
-            raise NotImplementedError(
-                f'img_processor = {config.img_processor}, not implemented')
+            raise NotImplementedError(f'img_processor = {config.img_processor}, not implemented')
 
         self.image_dim_out = image_dim_out
         self.img_sizes = None
 
         self.use_hd_transform = kwargs.get('use_hd_transform', False)
-        self.with_learnable_separator = kwargs.get('with_learnable_separator',
-                                                   False)
+        self.with_learnable_separator = kwargs.get('with_learnable_separator', False)
         self.hd_transform_order = kwargs.get('hd_transform_order', 'glb_sub')
         # with_hd_transform and with_learnable_separator should have same value
         assert (self.use_hd_transform == self.with_learnable_separator), (
             'use_hd_transform and with_learnable_separator '
             'should have same value')
         if self.with_learnable_separator:
-            assert self.use_hd_transform, (
-                'learnable separator is only for hd transform')
+            assert self.use_hd_transform, ('learnable separator is only for hd transform')
             # 1024 * 4, merge spatial to channel dimension
-            self.glb_GN = nn.Parameter(
-                torch.empty([1, 1, self.image_dim_out * 4],
-                            dtype=dtype,
-                            device=device))
-            self.sub_GN = nn.Parameter(
-                torch.empty([1, 1, 1, self.image_dim_out * 4],
-                            dtype=dtype,
-                            device=device))
+            self.glb_GN = nn.Parameter(torch.empty([1, 1, self.image_dim_out * 4], dtype=dtype, device=device))
+            self.sub_GN = nn.Parameter(torch.empty([1, 1, 1, self.image_dim_out * 4], dtype=dtype, device=device))
 
         projection_cls = kwargs.get('projection_cls', 'linear')
         if projection_cls == 'linear':
-            self.img_projection = nn.Linear(image_dim_out,
-                                            hidden_size,
-                                            dtype=dtype,
-                                            device=device)
+            self.img_projection = nn.Linear(image_dim_out, hidden_size, dtype=dtype, device=device)
         elif projection_cls == 'mlp' and self.use_hd_transform:
             dim_projection = hidden_size
             depth = 2
-            layers = [
-                nn.Linear(image_dim_out * 4,
-                          dim_projection,
-                          dtype=dtype,
-                          device=device)
-            ]
+            layers = [nn.Linear(image_dim_out * 4, dim_projection, dtype=dtype, device=device)]
             for _ in range(1, depth):
-                layers.extend([
-                    nn.GELU(),
-                    nn.Linear(dim_projection,
-                              dim_projection,
-                              dtype=dtype,
-                              device=device)
-                ])
+                layers.extend([nn.GELU(), nn.Linear(dim_projection, dim_projection, dtype=dtype, device=device)])
             self.img_projection = nn.Sequential(*layers)
         elif projection_cls == 'mlp':
             dim_projection = hidden_size
             depth = 2
-            layers = [
-                nn.Linear(image_dim_out,
-                          dim_projection,
-                          dtype=dtype,
-                          device=device)
-            ]
+            layers = [nn.Linear(image_dim_out, dim_projection, dtype=dtype, device=device)]
             for _ in range(1, depth):
-                layers.extend([
-                    nn.GELU(),
-                    nn.Linear(dim_projection,
-                              dim_projection,
-                              dtype=dtype,
-                              device=device)
-                ])
+                layers.extend([nn.GELU(), nn.Linear(dim_projection, dim_projection, dtype=dtype, device=device)])
             self.img_projection = nn.Sequential(*layers)
         else:
-            raise NotImplementedError(
-                f'projection_cls = {projection_cls}, not implemented')
+            raise NotImplementedError(f'projection_cls = {projection_cls}, not implemented')
 
         self.vocab_size = config.vocab_size
         self.img_features = None
 
         if isinstance(config.img_processor, dict):
             self.layer_idx = config.img_processor.get('layer_idx', -2)
-            self.type_feature = config.img_processor.get(
-                'type_feature', 'patch')
+            self.type_feature = config.img_processor.get('type_feature', 'patch')
         else:
             self.layer_idx = -2
             self.type_feature = 'patch'
 
-    def get_img_features(self,
-                         img_embeds: torch.FloatTensor) -> torch.FloatTensor:
+    def get_img_features(self, img_embeds: torch.FloatTensor) -> torch.FloatTensor:
         LAYER_IDX = self.layer_idx
         TYPE_FEATURE = self.type_feature
 
-        img_processor_output = self.img_processor(img_embeds,
-                                                  output_hidden_states=True)
+        img_processor_output = self.img_processor(img_embeds, output_hidden_states=True)
         img_feature = img_processor_output.hidden_states[LAYER_IDX]
 
         if TYPE_FEATURE == 'patch':
@@ -189,14 +144,12 @@ class Phi3ImageEmbedding(nn.Module):
             bs = img_embeds.shape[0]
             # Nx(HW)xC
             img_features = self.get_img_features(img_embeds.flatten(0, 1))
-            base_feat_height = base_feat_width = int(
-                img_features.shape[1]**0.5)
+            base_feat_height = base_feat_width = int(img_features.shape[1]**0.5)
 
             assert base_feat_height == 24 and base_feat_width == 24, f'base_feat_height: {base_feat_height}, base_feat_width: {base_feat_width}, expect 24x24 features for hd transform'  # noqa E501
 
             # bs x max_num_crops x (24x24) x C
-            img_features = img_features.view(
-                bs, -1, base_feat_height * base_feat_width, self.image_dim_out)
+            img_features = img_features.view(bs, -1, base_feat_height * base_feat_width, self.image_dim_out)
             C = self.image_dim_out
             H = base_feat_height
 
@@ -215,15 +168,12 @@ class Phi3ImageEmbedding(nn.Module):
                 global_img_feature = img_features[_bs, :1]
 
                 # 1 x 12 x 12 x 4096
-                glb_img = global_img_feature.reshape(
-                    1, H // 2, 2, H // 2, 2,
-                    C).permute(0, 1, 3, 2, 4,
-                               5).reshape(1, H // 2, H // 2, 4 * C)
+                glb_img = global_img_feature.reshape(1, H // 2, 2, H // 2, 2,
+                                                     C).permute(0, 1, 3, 2, 4, 5).reshape(1, H // 2, H // 2, 4 * C)
                 temp_glb_GN = self.sub_GN.repeat(1, H // 2, 1, 1)
 
                 # 1 x 156 x 4096
-                glb_img = torch.cat([glb_img, temp_glb_GN],
-                                    dim=2).reshape(1, -1, 4 * C)
+                glb_img = torch.cat([glb_img, temp_glb_GN], dim=2).reshape(1, -1, 4 * C)
 
                 # (max_num_crops-1) x (12x12) x C
                 sub_img = img_features[_bs, 1:]
@@ -234,26 +184,20 @@ class Phi3ImageEmbedding(nn.Module):
                 # (num_crops, 12, 2, 12, 2, 1024)
                 # ->(num_crops, 12, 12, 2, 2, 1024)
                 # -> (num_crops, 12*12, 4*1024)
-                sub_img = (sub_img.reshape(B_, H // 2, 2, H // 2, 2,
-                                           C).permute(0, 1, 3, 2, 4, 5))
-                sub_img = sub_img.reshape(1, h, w, 12, 12, -1).permute(
-                    0, 1, 3, 2, 4, 5).reshape(1, h * 12, w * 12, 4 * C)
+                sub_img = (sub_img.reshape(B_, H // 2, 2, H // 2, 2, C).permute(0, 1, 3, 2, 4, 5))
+                sub_img = sub_img.reshape(1, h, w, 12, 12, -1).permute(0, 1, 3, 2, 4,
+                                                                       5).reshape(1, h * 12, w * 12, 4 * C)
                 temp_sub_GN = self.sub_GN.repeat(1, h * 12, 1, 1)
-                sub_img = torch.cat([sub_img, temp_sub_GN],
-                                    dim=2).reshape(1, -1, 4 * C)
+                sub_img = torch.cat([sub_img, temp_sub_GN], dim=2).reshape(1, -1, 4 * C)
                 # (1, num_img_tokens, 1024*4)
 
                 # glb + sub
                 if self.hd_transform_order == 'glb_sub':
-                    output_imgs.append(
-                        torch.cat([glb_img, self.glb_GN, sub_img], dim=1))
+                    output_imgs.append(torch.cat([glb_img, self.glb_GN, sub_img], dim=1))
                 elif self.hd_transform_order == 'sub_glb':
-                    output_imgs.append(
-                        torch.cat([sub_img, self.glb_GN, glb_img], dim=1))
+                    output_imgs.append(torch.cat([sub_img, self.glb_GN, glb_img], dim=1))
                 else:
-                    raise NotImplementedError(
-                        f'hd_transform_order = {self.hd_transform_order}'
-                    )  # noqa E501
+                    raise NotImplementedError(f'hd_transform_order = {self.hd_transform_order}')  # noqa E501
 
                 temp_len = int((h * w + 1) * 144 + 1 + (h + 1) * 12)
                 assert temp_len == output_imgs[-1].shape[
@@ -262,21 +206,16 @@ class Phi3ImageEmbedding(nn.Module):
 
             img_set_tensor = []
             for _output_img in output_imgs:
-                img_feature_proj = self.img_projection(
-                    _output_img.to(target_device).to(target_dtype))
+                img_feature_proj = self.img_projection(_output_img.to(target_device).to(target_dtype))
                 img_feature_proj = img_feature_proj.flatten(0, 1)
                 img_set_tensor.append(img_feature_proj)
             img_set_tensor = torch.cat(img_set_tensor)[None]
         elif img_embeds.ndim == 4:
-            tt = (self.get_img_features(img_embeds).to(target_device).to(
-                target_dtype).reshape(-1, self.image_dim_out))
-            img_set_tensor = self.img_projection(
-                tt)  # adapted visual features.
+            tt = (self.get_img_features(img_embeds).to(target_device).to(target_dtype).reshape(-1, self.image_dim_out))
+            img_set_tensor = self.img_projection(tt)  # adapted visual features.
         elif img_embeds.ndim == 3:
-            tt = (img_embeds.to(target_device).to(target_dtype).view(
-                -1, self.image_dim_out))
-            img_set_tensor = self.img_projection(
-                tt)  # adapted visual features.
+            tt = (img_embeds.to(target_device).to(target_dtype).view(-1, self.image_dim_out))
+            img_set_tensor = self.img_projection(tt)  # adapted visual features.
         else:
             raise NotImplementedError
 
@@ -290,25 +229,18 @@ class Phi3ImageEmbedding(nn.Module):
 class Phi3VModel(Phi3Model):
     """phi3v model."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__(config=config, dtype=dtype, device=device)
 
         self.vision_embed_tokens = None
         if isinstance(config.embd_layer, dict):
             # vision embedding layer
-            embedding_config = {
-                'embedding_cls': config.embd_layer['embedding_cls'],
-                **config.embd_layer
-            }
-            self.vision_embed_tokens = Phi3ImageEmbedding(
-                config,
-                wte=self.embed_tokens,
-                dtype=dtype,
-                device=device,
-                **embedding_config)
+            embedding_config = {'embedding_cls': config.embd_layer['embedding_cls'], **config.embd_layer}
+            self.vision_embed_tokens = Phi3ImageEmbedding(config,
+                                                          wte=self.embed_tokens,
+                                                          dtype=dtype,
+                                                          device=device,
+                                                          **embedding_config)
 
     def forward(
         self,
@@ -393,24 +325,19 @@ class Phi3VForCausalLM(Phi3ForCausalLM, DeployModelMixin):
         context: StepContext = None,
     ):
         """prepare input."""
-        output = super().prepare_inputs_for_generation(
-            past_key_values=past_key_values,
-            inputs_embeds=inputs_embeds,
-            context=context)
+        output = super().prepare_inputs_for_generation(past_key_values=past_key_values,
+                                                       inputs_embeds=inputs_embeds,
+                                                       context=context)
 
         # vision inputs
         pixel_values = None
         if context.input_multimodals is not None:
-            input_mms = [
-                input_mm.get('image', [])
-                for input_mm in context.input_multimodals
-            ]
+            input_mms = [input_mm.get('image', []) for input_mm in context.input_multimodals]
             # flatten batch
             input_mms = [data for im_data in input_mms for data in im_data]
             if len(input_mms) > 0:
                 pixel_values = torch.cat([data.data for data in input_mms])
-                image_sizes = torch.cat(
-                    [data.meta['image_sizes'] for data in input_mms])
+                image_sizes = torch.cat([data.meta['image_sizes'] for data in input_mms])
                 image_token_id = input_mms[0].meta['image_token_id']
                 image_mask = output['input_ids'] == image_token_id
                 output['pixel_values'] = pixel_values
@@ -464,9 +391,7 @@ class Phi3VInputProcessor(BaseModelInputProcessor):
             mm_data = MultiModalTensor(data=pixel_values,
                                        start=offset,
                                        end=offset + num_pad,
-                                       meta=dict(
-                                           image_sizes=image_sizes,
-                                           image_token_id=image_token_id))
+                                       meta=dict(image_sizes=image_sizes, image_token_id=image_token_id))
             input_imgs.append(mm_data)
 
         result = PreprocessInputResult(

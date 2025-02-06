@@ -8,10 +8,7 @@ import torch
 class LinearBlockedF8Impl(ABC):
     """linear BlockedF8 implementation api."""
 
-    def update_weights(self,
-                       weight: torch.Tensor,
-                       scale: torch.Tensor,
-                       bias: Optional[torch.Tensor] = None):
+    def update_weights(self, weight: torch.Tensor, scale: torch.Tensor, bias: Optional[torch.Tensor] = None):
         """update weights."""
         return weight, scale, bias
 
@@ -31,9 +28,6 @@ class LinearBlockedF8Builder(ABC):
 
     @staticmethod
     @abstractmethod
-    def build(in_features: int,
-              out_features: int,
-              bias: bool = True,
-              dtype: torch.dtype = None):
+    def build(in_features: int, out_features: int, bias: bool = True, dtype: torch.dtype = None):
         """build."""
         raise NotImplementedError
