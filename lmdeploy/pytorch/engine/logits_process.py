@@ -5,7 +5,6 @@ from dataclasses import asdict, dataclass
 from typing import Dict, List, Optional, Tuple
 
 import torch
-from transformers.generation.logits_process import LogitsWarper
 
 from lmdeploy.messages import LogitsProcessor
 from lmdeploy.tokenizer import Tokenizer
@@ -273,7 +272,7 @@ def _apply_custom_logits_processors(batched_logits_processors, all_ids, logits):
     return logits
 
 
-class FusedLogitsProcessor(LogitsWarper):
+class FusedLogitsProcessor:
     """Custom logits processor."""
 
     def __init__(self,
