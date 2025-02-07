@@ -809,7 +809,6 @@ class Engine:
 
             # send output
             model_metas = output.get('model_metas')
-            finish = (idx == loop_count - 1)
             event = torch.cuda.Event()
             event.record()
             output = dict(next_token_ids=next_token_ids,
@@ -818,18 +817,16 @@ class Engine:
                           stopped=stopped,
                           model_metas=model_metas,
                           event=event)
-            output_que.put_nowait((finish, output))
+            output_que.put_nowait(output)
 
             inputs.model_metas = model_metas
 
-            if finish:
-                break
-
             # update for next loop
-            if is_decoding:
+            if is_decoding and idx < loop_count - 1:
                 swap_in_map = dict()
                 swap_out_map = dict()
                 __update_inputs(next_token_ids)
+        output_que.put_nowait(None)
 
     def _set_has_runable_event(self, has_runable_event: asyncio.Event):
         """set has runable event."""
@@ -991,12 +988,12 @@ class Engine:
                 schedule_output = self.scheduler.schedule(is_prefill=prefill, prealloc_size=prefill_interval)
 
             in_que.put_nowait((prefill, schedule_output))
-            finish = False
-            while not finish:
-                finish, out = await out_que.get()
+            out = await out_que.get()
+            while out is not None:
                 step_outputs = await self._make_infer_outputs(**out)
                 self._set_has_runable_event(has_runable_event)
                 resp_que.put_nowait(step_outputs)
+                out = await out_que.get()
 
         while True:
             await has_runable_event.wait()
