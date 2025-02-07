@@ -281,7 +281,7 @@ class AsyncEngine(LogitsMixin):
 
         # parameters for member functions
         self.session_len = _get_and_verify_max_len(self.hf_tm_cfg, self.backend_config.session_len)
-        self.stop_words = _stop_words(self.chat_template.stop_words, self.engine.tokenizer)
+        self.stop_words = _stop_words(self.chat_template.stop_words, self.tokenizer)
         if self.stop_words is not None:
             self.stop_words = self.stop_words[0][0].tolist()
         self.backend = backend
