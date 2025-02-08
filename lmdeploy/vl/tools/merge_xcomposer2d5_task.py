@@ -5,8 +5,7 @@ import shutil
 import fire
 import torch
 from tqdm import tqdm
-
-from lmdeploy.vl.model.builder import vl_model_with_tokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
 def main(src_path: str, dst_path: str, task: str):
@@ -25,7 +24,8 @@ def main(src_path: str, dst_path: str, task: str):
     keys = to_merged[task]
 
     # load model
-    model, _, tokenizer = vl_model_with_tokenizer(src_path)
+    model = AutoModelForCausalLM.from_pretrained(src_path, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(src_path, trust_remote_code=True)
 
     # merge lora weight to base model
     @torch.inference_mode
@@ -57,7 +57,7 @@ def main(src_path: str, dst_path: str, task: str):
             _merge(module, lora_weights)
 
     # save model
-    model.save_pretrained(dst_path)
+    model.save_pretrained(dst_path, torch_dtype=torch.half)
     tokenizer.save_pretrained(dst_path)
 
 

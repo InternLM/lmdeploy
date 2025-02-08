@@ -66,16 +66,15 @@ def sample_requests(
 class Engine:
 
     def __init__(self, model_path: str, engine_config: Union[PytorchEngineConfig, TurbomindEngineConfig]):
+        self.tokenizer = Tokenizer(model_path)
         if isinstance(engine_config, TurbomindEngineConfig):
             from lmdeploy.turbomind import TurboMind
-            tm_model = TurboMind.from_pretrained(model_path, engine_config=engine_config)
+            tm_model = TurboMind.from_pretrained(model_path, tokenizer=self.tokenizer, engine_config=engine_config)
         elif isinstance(engine_config, PytorchEngineConfig):
             from lmdeploy.pytorch.engine import Engine as PytorchEngine
-            tm_model = PytorchEngine(model_path, engine_config=engine_config)
+            tm_model = PytorchEngine(model_path, tokenizer=self.tokenizer, engine_config=engine_config)
 
         self.tm_model = tm_model
-        self.tokenizer = tm_model.tokenizer
-
         self.pbar = None
 
     async def _inference(self, req_queue: Queue, session_id: int, temperature: float, top_p: float, top_k: int,
