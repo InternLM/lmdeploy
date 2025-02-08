@@ -43,8 +43,7 @@ def find_kv_cache_idx(module: nn.Module) -> int:
     return signatures.index(KV_CACHE_SIGNATURE)
 
 
-def find_modules_by_return_value(model: nn.Module,
-                                 value: str) -> List[nn.Module]:
+def find_modules_by_return_value(model: nn.Module, value: str) -> List[nn.Module]:
     """Finds modules in model that return given value.
 
     Args:
@@ -92,10 +91,7 @@ def offload_kv_cache(model: nn.Module, device: str = 'cuda') -> None:
 
     original_forwards = {mod: mod.forward for mod in modules}
     input_idxs = {mod: find_kv_cache_idx(mod) for mod in modules}
-    output_idxs = {
-        mod: extract_return_values(mod).index(KV_CACHE_SIGNATURE)
-        for mod in modules
-    }
+    output_idxs = {mod: extract_return_values(mod).index(KV_CACHE_SIGNATURE) for mod in modules}
 
     def wrap_forward(module, *args, **kwargs):
 
@@ -104,8 +100,7 @@ def offload_kv_cache(model: nn.Module, device: str = 'cuda') -> None:
             # kv cache in kwargs
             if KV_CACHE_SIGNATURE in kwargs:
                 if kwargs[KV_CACHE_SIGNATURE]:
-                    kwargs[KV_CACHE_SIGNATURE] = kwargs[KV_CACHE_SIGNATURE].to(
-                        device)
+                    kwargs[KV_CACHE_SIGNATURE] = kwargs[KV_CACHE_SIGNATURE].to(device)
             else:
                 raise ValueError(f'No kv cache input found at index {idx}')
         else:
@@ -200,9 +195,7 @@ def offload_weights(model: nn.Module, device: str = 'cuda') -> None:
 
 
 @contextmanager
-def memory_efficient_inference(model: nn.Module,
-                               offload: bool = True,
-                               device: str = 'cuda') -> None:
+def memory_efficient_inference(model: nn.Module, offload: bool = True, device: str = 'cuda') -> None:
     """Memory efficient inference context manager.
 
     Moves model to device for inference, with option to offload
@@ -220,9 +213,8 @@ def memory_efficient_inference(model: nn.Module,
     if offload:
         warnings.warn('Using offload mode - modules defined in OFFLOAD_MOD '
                       'will be moved to GPU during forward pass only.')
-        warnings.warn(
-            'Using offload mode will incur performance penalty due to '
-            'frequent CPU-GPU data transfers.')
+        warnings.warn('Using offload mode will incur performance penalty due to '
+                      'frequent CPU-GPU data transfers.')
         with torch.inference_mode():
             with offload_kv_cache(model, device):
                 with offload_weights(model, device):

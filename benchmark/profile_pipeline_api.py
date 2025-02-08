@@ -8,8 +8,7 @@ from typing import List, Tuple
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
-from lmdeploy import (GenerationConfig, PytorchEngineConfig,
-                      TurbomindEngineConfig, pipeline)
+from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
 from lmdeploy.cli.utils import ArgumentHelper, DefaultsAndTypesHelpFormatter
 from lmdeploy.profiler import Profiler, Session
 from lmdeploy.utils import get_logger
@@ -17,16 +16,14 @@ from lmdeploy.utils import get_logger
 logger = get_logger('lmdeploy')
 
 
-def sample_requests(dataset_path: str, num_requests: int,
-                    tokenizer) -> List[Tuple[str, int, int]]:
+def sample_requests(dataset_path: str, num_requests: int, tokenizer) -> List[Tuple[str, int, int]]:
     # Load the dataset.
     with open(dataset_path) as f:
         dataset = json.load(f)
     # Filter out the conversations with less than 2 turns.
     dataset = [data for data in dataset if len(data['conversations']) >= 2]
     # Only keep the first two turns of each conversation.
-    dataset = [(data['conversations'][0]['value'],
-                data['conversations'][1]['value']) for data in dataset]
+    dataset = [(data['conversations'][0]['value'], data['conversations'][1]['value']) for data in dataset]
 
     # pre-sample to avoid go through all the dataset
     dataset = random.sample(dataset, max(int(num_requests * 1.2), 1000))
@@ -61,16 +58,12 @@ def sample_requests(dataset_path: str, num_requests: int,
 class Engine:
 
     def __init__(self, model_path: str, engine_config, csv: str):
-        self.pipe = pipeline(model_path,
-                             backend_config=engine_config,
-                             log_level='ERROR')
-        self.tokenizer = AutoTokenizer.from_pretrained(model_path,
-                                                       trust_remote_code=True)
+        self.pipe = pipeline(model_path, backend_config=engine_config, log_level='ERROR')
+        self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
 
         self.csv = csv
 
-    def process_request(self, requests, profiler: Profiler, temperature, top_p,
-                        top_k, stream_output):
+    def process_request(self, requests, profiler: Profiler, temperature, top_p, top_k, stream_output):
 
         prompts = [prompt for prompt, _, _ in requests]
         gen_configs = [
@@ -79,8 +72,7 @@ class Engine:
                              top_k=top_k,
                              ignore_eos=True,
                              do_sample=False,
-                             max_new_tokens=output_len)
-            for _, _, output_len in requests
+                             max_new_tokens=output_len) for _, _, output_len in requests
         ]
 
         sess: List[Session] = []
@@ -100,9 +92,7 @@ class Engine:
 
         if stream_output:
             pbar = tqdm(total=len(requests))
-            for output in self.pipe.stream_infer(prompts,
-                                                 gen_configs,
-                                                 do_preprocess=False):
+            for output in self.pipe.stream_infer(prompts, gen_configs, do_preprocess=False):
                 index = output.index
                 n_token = output.generate_token_len
                 finish_reason = output.finish_reason
@@ -112,10 +102,7 @@ class Engine:
                     pbar.update(1)
             pbar.close()
         else:
-            for output in self.pipe(prompts,
-                                    gen_configs,
-                                    do_preprocess=False,
-                                    use_tqdm=True):
+            for output in self.pipe(prompts, gen_configs, do_preprocess=False, use_tqdm=True):
                 index = output.index
                 n_token = output.generate_token_len
                 finish_reason = output.finish_reason
@@ -127,46 +114,31 @@ class Engine:
         # report first failure
         for i, s in enumerate(sess):
             if s.status != Session.SUCCESS or s.ns[-1] < s.req_output_len:
-                logger.error(
-                    f'Request {i} failed with {s.ns[-1]}/{s.req_output_len} tokens generated'  # noqa: E501
-                )
+                logger.error(f'Request {i} failed with {s.ns[-1]}/{s.req_output_len} tokens generated'  # noqa: E501
+                             )
                 logger.error(f'Prompt: {prompts[i]}')
                 logger.warning('Got failed requests, metrics may be invalid')
                 break
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description='Benchmark the request throughput of lmdeploy '
-        'in localhost',
-        formatter_class=DefaultsAndTypesHelpFormatter)
+    parser = argparse.ArgumentParser(description='Benchmark the request throughput of lmdeploy '
+                                     'in localhost',
+                                     formatter_class=DefaultsAndTypesHelpFormatter)
     parser.add_argument('dataset', type=str, help='the path dataset')
     parser.add_argument('model_path',
                         type=str,
                         help='the path of the model in localhost or '
                         'the repo_id of the model in huggingface.co')
-    parser.add_argument(
-        '-c',
-        '--concurrency',
-        type=int,
-        help='Number of working threads to process the sampled prompts',
-        default=256)
-    parser.add_argument('-n',
-                        '--num-prompts',
+    parser.add_argument('-c',
+                        '--concurrency',
                         type=int,
-                        help='Number of prompts to process',
-                        default=5000)
-    parser.add_argument('--csv',
-                        type=str,
-                        help='Where to save the result.',
-                        default='./profile_pipeline_api.csv')
-    parser.add_argument('--seed',
-                        type=int,
-                        default=0,
-                        help='Seed used in sampling prompts from dataset')
-    parser.add_argument('--stream-output',
-                        action='store_true',
-                        help='Trust remote code for loading hf models')
+                        help='Number of working threads to process the sampled prompts',
+                        default=256)
+    parser.add_argument('-n', '--num-prompts', type=int, help='Number of prompts to process', default=5000)
+    parser.add_argument('--csv', type=str, help='Where to save the result.', default='./profile_pipeline_api.csv')
+    parser.add_argument('--seed', type=int, default=0, help='Seed used in sampling prompts from dataset')
+    parser.add_argument('--stream-output', action='store_true', help='Trust remote code for loading hf models')
     # other args
     ArgumentHelper.top_p(parser)
     ArgumentHelper.temperature(parser)
@@ -231,8 +203,7 @@ def main():
 
     engine = Engine(args.model_path, engine_config, csv=args.csv)
 
-    requests = sample_requests(args.dataset, args.num_prompts,
-                               engine.tokenizer)
+    requests = sample_requests(args.dataset, args.num_prompts, engine.tokenizer)
 
     profiler = Profiler(args.stream_output, [50, 75, 95, 99])
 
@@ -243,15 +214,13 @@ def main():
                            top_k=args.top_k,
                            stream_output=args.stream_output)
 
-    hyperparams = [('Concurrency', args.concurrency),
-                   ('Stream output', str(args.stream_output).lower())]
+    hyperparams = [('Concurrency', args.concurrency), ('Stream output', str(args.stream_output).lower())]
 
     profiler.compute_metrics()
     profiler.summarize(title='Profile Pipeline API', hyperparams=hyperparams)
 
     if args.csv:
-        profiler.save_csv(args.csv, (('batch', args.concurrency),
-                                     ('num_prompts', args.num_prompts)))
+        profiler.save_csv(args.csv, (('batch', args.concurrency), ('num_prompts', args.num_prompts)))
 
 
 if __name__ == '__main__':

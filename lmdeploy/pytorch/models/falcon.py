@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
 from typing import Any, Iterable, List, Optional, Tuple
 
 import torch
@@ -6,10 +7,8 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RopeType,
-                                 build_rotary_embedding)
-from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_qkv_proj,
-                                        build_rowwise_linear)
+from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RopeType, build_rotary_embedding
+from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_qkv_proj, build_rowwise_linear
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
@@ -18,34 +17,27 @@ from .utils.cudagraph import CudaGraphMixin
 class FalconAttention(torch.nn.Module):
     """Parallel self-attention layer abstract class.
 
-    Self-attention layer takes input with size [s, b, h] and returns output of
-    the same size.
+    Self-attention layer takes input with size [s, b, h] and returns output of the same size.
     """
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
 
         self.hidden_size = config.hidden_size
         self.num_attention_heads = config.num_attention_heads
-        self.num_kv_heads = getattr(config, 'num_kv_heads',
-                                    config.num_attention_heads)
-        num_replicate_kv_heads = getattr(config,
-                                         'num_replicate_key_value_heads', 1)
+        self.num_kv_heads = getattr(config, 'num_kv_heads', config.num_attention_heads)
+        num_replicate_kv_heads = getattr(config, 'num_replicate_key_value_heads', 1)
         self.head_size = (self.hidden_size // config.num_attention_heads)
-        self.query_key_value = build_qkv_proj(
-            config.hidden_size,
-            num_q_heads=self.num_attention_heads,
-            num_kv_heads=self.num_kv_heads,
-            head_size=self.head_size,
-            bias=config.bias,
-            quant_config=quantization_config,
-            dtype=dtype,
-            device=device,
-            num_replicate_kv_heads=num_replicate_kv_heads)
+        self.query_key_value = build_qkv_proj(config.hidden_size,
+                                              num_q_heads=self.num_attention_heads,
+                                              num_kv_heads=self.num_kv_heads,
+                                              head_size=self.head_size,
+                                              bias=config.bias,
+                                              quant_config=quantization_config,
+                                              dtype=dtype,
+                                              device=device,
+                                              num_replicate_kv_heads=num_replicate_kv_heads)
 
         # apply rotary
         self.apply_rotary_pos_emb = ApplyRotaryEmb()
@@ -79,8 +71,7 @@ class FalconAttention(torch.nn.Module):
         qkv_states = self.query_key_value(hidden_states)
         # (-1, heads, head_dim)
         qkv_states = qkv_states.flatten(0, -2)
-        (query_states, key_states,
-         value_states) = self.query_key_value.split_qkv(qkv_states)
+        (query_states, key_states, value_states) = self.query_key_value.split_qkv(qkv_states)
 
         # apply rotary embedding
         if self.rotary:
@@ -101,10 +92,8 @@ class FalconAttention(torch.nn.Module):
             past_key_value[0],
             past_key_value[1],
             attn_metadata,
-            k_scales_zeros=None
-            if len(past_key_value) == 2 else past_key_value[2],
-            v_scales_zeros=None
-            if len(past_key_value) == 2 else past_key_value[3],
+            k_scales_zeros=None if len(past_key_value) == 2 else past_key_value[2],
+            v_scales_zeros=None if len(past_key_value) == 2 else past_key_value[3],
             inplace=True,
         )
         attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
@@ -117,16 +106,12 @@ class FalconAttention(torch.nn.Module):
 class FalconMLP(nn.Module):
     """Falcon mlp."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
 
         self.add_bias = config.bias
-        ffn_hidden_size = getattr(config, 'ffn_hidden_size',
-                                  config.hidden_size * 4)
+        ffn_hidden_size = getattr(config, 'ffn_hidden_size', config.hidden_size * 4)
         # gate up
         self.dense_h_to_4h = build_colwise_linear(
             config.hidden_size,
@@ -142,14 +127,13 @@ class FalconMLP(nn.Module):
         self.act_fn = nn.GELU()
 
         # down
-        self.dense_4h_to_h = build_rowwise_linear(
-            ffn_hidden_size,
-            config.hidden_size,
-            bias=self.add_bias,
-            quant_config=quantization_config,
-            dtype=dtype,
-            device=device,
-            is_tp=True)
+        self.dense_4h_to_h = build_rowwise_linear(ffn_hidden_size,
+                                                  config.hidden_size,
+                                                  bias=self.add_bias,
+                                                  quant_config=quantization_config,
+                                                  dtype=dtype,
+                                                  device=device,
+                                                  is_tp=True)
 
     def forward(self, x):
         """forward."""
@@ -172,47 +156,33 @@ class FalconDecoderLayer(nn.Module):
         hidden_size = config.hidden_size
 
         # build attention layer
-        self.self_attention = FalconAttention(config,
-                                              dtype=dtype,
-                                              device=device)
+        self.self_attention = FalconAttention(config, dtype=dtype, device=device)
 
         # build MLP
         self.mlp = FalconMLP(config, dtype=dtype, device=device)
 
         if not hasattr(config, 'num_ln_in_parallel_attn'):
             config.num_ln_in_parallel_attn = None
-        if (config.num_ln_in_parallel_attn is None
-                and config.new_decoder_architecture):
+        if (config.num_ln_in_parallel_attn is None and config.new_decoder_architecture):
             config.num_ln_in_parallel_attn = 2
 
         if not config.parallel_attn:
-            self.post_attention_layernorm = nn.LayerNorm(
-                hidden_size,
-                eps=config.layer_norm_epsilon,
-                dtype=dtype,
-                device=device)
-            self.input_layernorm = nn.LayerNorm(hidden_size,
-                                                eps=config.layer_norm_epsilon,
-                                                dtype=dtype,
-                                                device=device)
+            self.post_attention_layernorm = nn.LayerNorm(hidden_size,
+                                                         eps=config.layer_norm_epsilon,
+                                                         dtype=dtype,
+                                                         device=device)
+            self.input_layernorm = nn.LayerNorm(hidden_size, eps=config.layer_norm_epsilon, dtype=dtype, device=device)
         else:
             if config.num_ln_in_parallel_attn == 2:
                 # The layer norm before self-attention
-                self.ln_attn = nn.LayerNorm(hidden_size,
-                                            eps=config.layer_norm_epsilon,
-                                            dtype=dtype,
-                                            device=device)
+                self.ln_attn = nn.LayerNorm(hidden_size, eps=config.layer_norm_epsilon, dtype=dtype, device=device)
                 # The layer norm before the MLP
-                self.ln_mlp = nn.LayerNorm(hidden_size,
-                                           eps=config.layer_norm_epsilon,
-                                           dtype=dtype,
-                                           device=device)
+                self.ln_mlp = nn.LayerNorm(hidden_size, eps=config.layer_norm_epsilon, dtype=dtype, device=device)
             else:
-                self.input_layernorm = nn.LayerNorm(
-                    hidden_size,
-                    eps=config.layer_norm_epsilon,
-                    dtype=dtype,
-                    device=device)
+                self.input_layernorm = nn.LayerNorm(hidden_size,
+                                                    eps=config.layer_norm_epsilon,
+                                                    dtype=dtype,
+                                                    device=device)
 
     def forward(
         self,
@@ -223,8 +193,7 @@ class FalconDecoderLayer(nn.Module):
     ):
 
         residual = hidden_states
-        if (self.config.new_decoder_architecture
-                and self.config.num_ln_in_parallel_attn == 2):
+        if (self.config.new_decoder_architecture and self.config.num_ln_in_parallel_attn == 2):
             attention_layernorm_out = self.ln_attn(hidden_states)
             mlp_layernorm_out = self.ln_mlp(hidden_states)
         else:
@@ -263,17 +232,11 @@ class FalconDecoderLayer(nn.Module):
 class FalconModel(nn.Module):
     """falcon model."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.embed_dim = config.hidden_size
 
-        self.word_embeddings = nn.Embedding(config.vocab_size,
-                                            self.embed_dim,
-                                            dtype=dtype,
-                                            device=device)
+        self.word_embeddings = nn.Embedding(config.vocab_size, self.embed_dim, dtype=dtype, device=device)
 
         # build all decode layers
         self.h = nn.ModuleList([
@@ -281,10 +244,7 @@ class FalconModel(nn.Module):
             for layer_idx in range(config.num_hidden_layers)
         ])
 
-        self.ln_f = nn.LayerNorm(self.embed_dim,
-                                 eps=config.layer_norm_epsilon,
-                                 dtype=dtype,
-                                 device=device)
+        self.ln_f = nn.LayerNorm(self.embed_dim, eps=config.layer_norm_epsilon, dtype=dtype, device=device)
 
         scaling_factor = 1.0
         if not hasattr(config, 'rope_scaling'):
@@ -417,9 +377,7 @@ class FalconForCausalLM(nn.Module, CudaGraphMixin):
         if vision_embeddings is not None and len(vision_embeddings) > 0:
             if inputs_embeds is None:
                 inputs_embeds = self.get_input_embeddings()(input_ids)
-            inputs_embeds[:,
-                          vision_embedding_indexing, :] = vision_embeddings.to(
-                              inputs_embeds)
+            inputs_embeds[:, vision_embedding_indexing, :] = vision_embeddings.to(inputs_embeds)
 
         # inputs of forward
         return dict(
@@ -438,11 +396,9 @@ class FalconForCausalLM(nn.Module, CudaGraphMixin):
         for name, loaded_weight in weights:
             if 'rotary_pos_emb.inv_freq' in name:
                 continue
-            if ('rotary_pos_emb.cos_cached' in name
-                    or 'rotary_pos_emb.sin_cached' in name):
+            if ('rotary_pos_emb.cos_cached' in name or 'rotary_pos_emb.sin_cached' in name):
                 continue
-            if (self.config.tie_word_embeddings
-                    and 'output_layer.weight' in name):
+            if (self.config.tie_word_embeddings and 'output_layer.weight' in name):
                 continue
             if '.query_key_value' in name:
                 param = params_dict[name]

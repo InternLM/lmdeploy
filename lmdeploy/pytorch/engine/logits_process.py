@@ -5,7 +5,6 @@ from dataclasses import asdict, dataclass
 from typing import Dict, List, Optional, Tuple
 
 import torch
-from transformers.generation.logits_process import LogitsWarper
 
 from lmdeploy.messages import LogitsProcessor
 from lmdeploy.tokenizer import Tokenizer
@@ -31,21 +30,16 @@ def _process_bad_words_(scores: torch.Tensor,
     return scores
 
 
-def _process_repetition_penalty_(scores: torch.Tensor,
-                                 input_ids: torch.LongTensor,
-                                 penalty: torch.Tensor):
+def _process_repetition_penalty_(scores: torch.Tensor, input_ids: torch.LongTensor, penalty: torch.Tensor):
     """process repetition penalty."""
     score = torch.gather(scores, 1, input_ids)
     penalty = penalty.to(score.dtype)
-    score = torch.where(score < 0, score * penalty[:, None],
-                        score / penalty[:, None])
+    score = torch.where(score < 0, score * penalty[:, None], score / penalty[:, None])
     scores.scatter_(1, input_ids, score)
     return scores
 
 
-def _filter_topk_sorted_(scores: torch.Tensor,
-                         topk: torch.LongTensor,
-                         filter_value: float = -float('inf')):
+def _filter_topk_sorted_(scores: torch.Tensor, topk: torch.LongTensor, filter_value: float = -float('inf')):
     """filter topk on sorted scores."""
     filter_value = -float('inf')
     num_tokens = scores.size(1)
@@ -55,9 +49,7 @@ def _filter_topk_sorted_(scores: torch.Tensor,
     return scores
 
 
-def _filter_topp_sorted_(scores: torch.Tensor,
-                         topp: torch.Tensor,
-                         filter_value: float = -float('inf')):
+def _filter_topp_sorted_(scores: torch.Tensor, topp: torch.Tensor, filter_value: float = -float('inf')):
     """filter topp on sorted scores."""
     softmax_scores = scores.softmax(-1)
     cum_scores = softmax_scores.cumsum(1) - softmax_scores
@@ -67,9 +59,7 @@ def _filter_topp_sorted_(scores: torch.Tensor,
     return scores
 
 
-def _filter_minp_sorted_(scores: torch.Tensor,
-                         minp: torch.Tensor,
-                         filter_value: float = -float('inf')):
+def _filter_minp_sorted_(scores: torch.Tensor, minp: torch.Tensor, filter_value: float = -float('inf')):
     """filter minp on sorted scores."""
     softmax_scores = scores.softmax(-1)
     top_probs, _ = softmax_scores.max(dim=-1, keepdim=True)
@@ -88,8 +78,7 @@ def _multinomial_sampling(scores: torch.Tensor,
     return multinomial_sampling(scores, seeds, offsets, indices)
 
 
-def _guided_sampling(response_formats: Tuple[Dict], scores: torch.Tensor,
-                     guided_input_ids: Optional[torch.Tensor],
+def _guided_sampling(response_formats: Tuple[Dict], scores: torch.Tensor, guided_input_ids: Optional[torch.Tensor],
                      tokenizer: object):
     if guided_input_ids is None:
         return scores
@@ -101,23 +90,20 @@ def _guided_sampling(response_formats: Tuple[Dict], scores: torch.Tensor,
                 if isinstance(schema, Dict):
                     for key in ['json_schema', 'schema']:
                         if key in schema:
-                            schema = json.dumps(schema[key],
-                                                ensure_ascii=False)
+                            schema = json.dumps(schema[key], ensure_ascii=False)
                 elif schema is None:
                     from .guided_process import JSON_GRAMMAR
                     schema = JSON_GRAMMAR
                 elif isinstance(schema, str):
-                    raise ValueError(
-                        f'Cannot parse schema {schema}. The schema must be '
-                        'either a dictionary or a string that contains the'
-                        ' JSON Schema specification')
+                    raise ValueError(f'Cannot parse schema {schema}. The schema must be '
+                                     'either a dictionary or a string that contains the'
+                                     ' JSON Schema specification')
             elif _format['type'] == 'regex_schema':
                 schema = _format.get('regex_schema', '')
             else:
                 raise ValueError(f"unsupported format type: {_format['type']}")
             from .guided_process import _get_guided_logits_processor
-            processor = _get_guided_logits_processor(schema, tokenizer,
-                                                     _format['type'])
+            processor = _get_guided_logits_processor(schema, tokenizer, _format['type'])
             if processor:
                 scores[i] = processor(guided_input_ids[i].tolist(), scores[i])
     return scores
@@ -173,8 +159,7 @@ class SamplingInputs:
 
                 bw = param.bad_words
                 sw = param.stop_words
-                if (not param.ignore_eos
-                        and seq.num_new_tokens < param.min_new_tokens):
+                if (not param.ignore_eos and seq.num_new_tokens < param.min_new_tokens):
                     bw = bw + sw
                 bad_words[idx] = bw
                 stop_words[idx] = sw
@@ -278,8 +263,7 @@ class SamplingInputs:
         return SamplingInputs(**out_dict)
 
 
-def _apply_custom_logits_processors(batched_logits_processors, all_ids,
-                                    logits):
+def _apply_custom_logits_processors(batched_logits_processors, all_ids, logits):
     """Apply custom logits processors."""
     for seq_id, processors in enumerate(batched_logits_processors):
         if processors is not None:
@@ -288,7 +272,7 @@ def _apply_custom_logits_processors(batched_logits_processors, all_ids,
     return logits
 
 
-class FusedLogitsProcessor(LogitsWarper):
+class FusedLogitsProcessor:
     """Custom logits processor."""
 
     def __init__(self,
@@ -305,8 +289,7 @@ class FusedLogitsProcessor(LogitsWarper):
         if not stream.query():
             await asyncio.sleep(0)
 
-    async def __call__(self, all_ids: torch.LongTensor,
-                       guided_input_ids: torch.LongTensor,
+    async def __call__(self, all_ids: torch.LongTensor, guided_input_ids: torch.LongTensor,
                        scores: torch.FloatTensor) -> torch.FloatTensor:
         r"""
         Args:
@@ -328,13 +311,11 @@ class FusedLogitsProcessor(LogitsWarper):
         custom_logits_processors = self.sampling_inputs.logits_processors
         if any(custom_logits_processors):
             await self._wait_stream_once()
-            scores = _apply_custom_logits_processors(custom_logits_processors,
-                                                     all_ids, scores)
+            scores = _apply_custom_logits_processors(custom_logits_processors, all_ids, scores)
 
         repetition_penalty = sampling_inputs.repetition_penalty
         if repetition_penalty is not None:
-            scores = _process_repetition_penalty_(scores, all_ids,
-                                                  repetition_penalty)
+            scores = _process_repetition_penalty_(scores, all_ids, repetition_penalty)
 
         temperature = sampling_inputs.temperature
         if temperature is not None:
@@ -353,8 +334,7 @@ class FusedLogitsProcessor(LogitsWarper):
 
         if guided_input_ids is not None:
             await self._wait_stream_once()
-            scores = _guided_sampling(sampling_inputs.response_formats, scores,
-                                      guided_input_ids, self.tokenizer)
+            scores = _guided_sampling(sampling_inputs.response_formats, scores, guided_input_ids, self.tokenizer)
         return scores
 
     @torch.inference_mode()
@@ -369,8 +349,7 @@ class FusedLogitsProcessor(LogitsWarper):
             if max_topk <= 0:
                 max_topk = scores.size(1)
                 if top_k is not None:
-                    top_k = torch.where(top_k <= 0, top_k.new_tensor(max_topk),
-                                        top_k)
+                    top_k = torch.where(top_k <= 0, top_k.new_tensor(max_topk), top_k)
 
             if top_k is not None:
                 scores = _filter_topk_sorted_(scores, top_k)
@@ -387,8 +366,7 @@ class FusedLogitsProcessor(LogitsWarper):
 
             seeds = sampling_inputs.random_seeds
             offsets = sampling_inputs.random_offsets
-            return _multinomial_sampling(softmax_scores, seeds, offsets,
-                                         indices)
+            return _multinomial_sampling(softmax_scores, seeds, offsets, indices)
 
         if sampling_inputs.max_top_k == 1:
             return logits.argmax(-1)

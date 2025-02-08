@@ -14,15 +14,11 @@ def get_cuda_autotune_config():
         triton.Config({
             'BLOCK_SIZE_M': 128,
             'BLOCK_SIZE_N': 64,
-        },
-                      num_stages=4,
-                      num_warps=4),
+        }, num_stages=4, num_warps=4),
         triton.Config({
             'BLOCK_SIZE_M': 64,
             'BLOCK_SIZE_N': 128,
-        },
-                      num_stages=4,
-                      num_warps=4),
+        }, num_stages=4, num_warps=4),
     ]
 
 
@@ -109,14 +105,12 @@ def fused_moe_blocked_f8_kernel(
         offs_am = offs_sid
     a_ptrs = A + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
-    offs_bn = tl.max_contiguous(tl.multiple_of(offs_bn, BLOCK_SIZE_N),
-                                BLOCK_SIZE_N)
+    offs_bn = tl.max_contiguous(tl.multiple_of(offs_bn, BLOCK_SIZE_N), BLOCK_SIZE_N)
 
     # deepseek has 160 experts, exp index would overflow int32
     exp_id = exp_id.to(tl.int64)
     exp_off = stride_be * exp_id
-    b_ptrs = B + exp_off + (offs_k[:, None] * stride_bk +
-                            offs_bn[None, :] * stride_bn)
+    b_ptrs = B + exp_off + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
 
     offs_bsn = pid_n * BLOCK_SIZE_N // group_bn
     as_ptrs = A_scale + (offs_am % M) * stride_asm
@@ -130,21 +124,12 @@ def fused_moe_blocked_f8_kernel(
         k_start = (k + 1) * BLOCK_SIZE_K
         offs_ksa = k_start // group_ak
         offs_ksb = k_start // group_bk
-        a_scale = tl.load(as_ptrs + offs_ksa * stride_ask,
-                          mask=k_start < K,
-                          other=1.0)
-        b_scale = tl.load(bs_ptrs + offs_ksb * stride_bsk,
-                          mask=k_start < K,
-                          other=1.0)
+        a_scale = tl.load(as_ptrs + offs_ksa * stride_ask, mask=k_start < K, other=1.0)
+        b_scale = tl.load(bs_ptrs + offs_ksb * stride_bsk, mask=k_start < K, other=1.0)
 
         # load ab
-        a = tl.load(a_ptrs,
-                    mask=mask_sid[:, None] &
-                    (offs_k[None, :] < K - k * BLOCK_SIZE_K),
-                    other=0.0)
-        b = tl.load(b_ptrs,
-                    mask=offs_k[:, None] < K - k * BLOCK_SIZE_K,
-                    other=0.0)
+        a = tl.load(a_ptrs, mask=mask_sid[:, None] & (offs_k[None, :] < K - k * BLOCK_SIZE_K), other=0.0)
+        b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
 
         # mma
         accumulator = tl.dot(a, b, acc=accumulator * acc_ratio[:, None])
@@ -212,8 +197,7 @@ def fused_moe_blocked_fp8_kernel_launcher(
     group_bn = N // B_scale.size(1)
 
     def _grid_fn(META):
-        grid = (triton.cdiv(M_NP2, META['BLOCK_SIZE_M']) *
-                triton.cdiv(N, META['BLOCK_SIZE_N']), E)
+        grid = (triton.cdiv(M_NP2, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), E)
         return grid
 
     A = A.flatten(0, -2)
@@ -285,10 +269,7 @@ def fused_moe_blocked_fp8(input: torch.Tensor,
     topk_weights = _renormalize(topk_weights, renormalize)
     sorted_idx, exp_start, exp_end = _get_sorted_idx(topk_ids, num_experts)
 
-    intermediate_cache1 = _make_intermediate((M, topk, N),
-                                             dtype=out_dtype,
-                                             device=device,
-                                             zeros=not full_exp)
+    intermediate_cache1 = _make_intermediate((M, topk, N), dtype=out_dtype, device=device, zeros=not full_exp)
     # gate and up
     fused_moe_blocked_fp8_kernel_launcher(
         input,
@@ -312,14 +293,9 @@ def fused_moe_blocked_fp8(input: torch.Tensor,
     intermediate_cache1 = intermediate_cache1.flatten(0, -2)
     gate_cache = silu_and_mul(intermediate_cache1)
     del intermediate_cache1
-    gate_cache, gate_scale = quant_fp8(gate_cache,
-                                       group_size,
-                                       dtype=input.dtype)
+    gate_cache, gate_scale = quant_fp8(gate_cache, group_size, dtype=input.dtype)
 
-    intermediate_cache2 = _make_intermediate((M, topk, w2.shape[1]),
-                                             dtype=out_dtype,
-                                             device=device,
-                                             zeros=not full_exp)
+    intermediate_cache2 = _make_intermediate((M, topk, w2.shape[1]), dtype=out_dtype, device=device, zeros=not full_exp)
     # down
     fused_moe_blocked_fp8_kernel_launcher(
         gate_cache,

@@ -7,7 +7,6 @@ from .internlm2 import InternLM2Model  # noqa: F401
 from .internvl import InternVLModel  # noqa: F401
 from .llama import LlamaModel  # noqa: F401
 from .llava import LlavaModel  # noqa: F401
-from .meta_llama import MetaLlamaModel  # noqa: F401
 from .minicpmv import MiniCPMVModel  # noqa: F401
 from .mixtral import MixtralModel  # noqa: F401
 from .molmo import MolmoModel  # noqa: F401

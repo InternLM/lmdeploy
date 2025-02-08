@@ -9,10 +9,7 @@ class LlavaHfModelConfigBuilder(AutoModelConfigBuilder):
     @classmethod
     def condition(cls, hf_config):
         """config."""
-        return hf_config.architectures[0] in [
-            'LlavaForConditionalGeneration',
-            'LlavaNextForConditionalGeneration'
-        ]
+        return hf_config.architectures[0] in ['LlavaForConditionalGeneration', 'LlavaNextForConditionalGeneration']
 
     @classmethod
     def build(cls, hf_config, model_path: str = None, **kwargs):

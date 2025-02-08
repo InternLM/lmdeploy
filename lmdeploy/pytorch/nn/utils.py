@@ -7,10 +7,7 @@ def div_up(a: int, b: int):
     return (a + b - 1) // b
 
 
-def get_distribute_size(feature_size: int,
-                        world_size: int,
-                        rank: int,
-                        align: int = 1):
+def get_distribute_size(feature_size: int, world_size: int, rank: int, align: int = 1):
     """update feature size."""
     assert feature_size % align == 0
     aligned_size = feature_size // align

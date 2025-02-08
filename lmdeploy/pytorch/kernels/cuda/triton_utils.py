@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
 import functools
 import inspect
 from typing import Callable, Dict, Sequence, Union, cast, overload
@@ -84,10 +85,9 @@ class JitFunction220Wrapper:
 
     def _make_launcher(self, jit_func: triton.JITFunction):
         """make input builder."""
+
         from triton.common.backend import get_backend, get_cuda_version_key
-        from triton.compiler import (CompiledKernel,
-                                     get_arch_default_num_stages,
-                                     get_arch_default_num_warps)
+        from triton.compiler import CompiledKernel, get_arch_default_num_stages, get_arch_default_num_warps
 
         def _make_spec_key_str(key):
             anno = self.type_hint[key]
@@ -122,9 +122,8 @@ class JitFunction220Wrapper:
         arg_key = tuple(p.name for p in params)
         arg_key_str = ', '.join(arg_key)
         grid_args = ','.join([f'{arg}={arg}' for arg in arg_key])
-        args_signature = ', '.join(
-            p.name if p.default ==
-            inspect._empty else f'{p.name} == {p.default}' for p in params)
+        args_signature = ', '.join(p.name if p.default == inspect._empty else f'{p.name} == {p.default}'
+                                   for p in params)
 
         # constexpr key
         constexpr_key = tuple(p.name for p in params if p.is_constexpr)
@@ -151,8 +150,7 @@ class JitFunction220Wrapper:
             device=None,
             device_type=None,
         )
-        cuda_opt_signature = ', '.join(f'{k} = {v}'
-                                       for k, v in cuda_opt_fields.items())
+        cuda_opt_signature = ', '.join(f'{k} = {v}' for k, v in cuda_opt_fields.items())
         cuda_opt_args = ', '.join(f'{k}={k}' for k in cuda_opt_fields)
         src = f"""
 def _{fn.__name__}_launcher({args_signature}, grid=None, {cuda_opt_signature}, warmup=False, **kwargs):
@@ -335,9 +333,8 @@ class JitFunction230Wrapper:
         arg_key = tuple(p.name for p in params)
         arg_key_str = ', '.join(arg_key)
         grid_args = ','.join([f'{arg}={arg}' for arg in arg_key])
-        args_signature = ', '.join(
-            p.name if p.default ==
-            inspect._empty else f'{p.name} == {p.default}' for p in params)
+        args_signature = ', '.join(p.name if p.default == inspect._empty else f'{p.name} == {p.default}'
+                                   for p in params)
 
         # constexpr key
         constexpr_key = tuple(p.name for p in params if p.is_constexpr)
@@ -353,11 +350,9 @@ class JitFunction230Wrapper:
         spec_key_str = ', '.join(_make_spec_key_str(key) for key in spec_key)
 
         # cuda opt key/default
-        cuda_opt_fields = dict(
-            (f.name, f.default) for f in fields(CUDAOptions))
+        cuda_opt_fields = dict((f.name, f.default) for f in fields(CUDAOptions))
         cuda_opt_fields['debug'] = jit_func.debug
-        cuda_opt_signature = ', '.join(f'{k} = {v}'
-                                       for k, v in cuda_opt_fields.items())
+        cuda_opt_signature = ', '.join(f'{k} = {v}' for k, v in cuda_opt_fields.items())
         cuda_opt_args = ', '.join(f'{k}={k}' for k in cuda_opt_fields)
 
         triton_version = version.parse(triton.__version__)

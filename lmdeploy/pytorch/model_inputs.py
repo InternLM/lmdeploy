@@ -88,18 +88,14 @@ class VisionModelInputs:
 
         return VisionModelInputs(**out_dict)
 
-    def get_inputs(self, history_lengths: torch.Tensor,
-                   seq_lengths: torch.Tensor):
+    def get_inputs(self, history_lengths: torch.Tensor, seq_lengths: torch.Tensor):
         """get vision embedding inputs."""
         input_embeddings = None
         input_embedding_indexing = None
-        if self.input_embeddings is not None and len(
-                self.input_embeddings) > 0:
+        if self.input_embeddings is not None and len(self.input_embeddings) > 0:
             input_embedding_li = []
-            for (his_len, seq_len, embeddings,
-                 emb_ranges) in zip(history_lengths, seq_lengths,
-                                    self.input_embeddings,
-                                    self.input_embedding_ranges):
+            for (his_len, seq_len, embeddings, emb_ranges) in zip(history_lengths, seq_lengths, self.input_embeddings,
+                                                                  self.input_embedding_ranges):
                 for emb, (emb_start, emb_end) in zip(embeddings, emb_ranges):
                     start = max(emb_start, his_len) - emb_start
                     end = min(emb_end, his_len + seq_len) - emb_start
@@ -111,15 +107,10 @@ class VisionModelInputs:
                 device = input_embeddings.device
                 starts = history_lengths - self.history_lengths
                 ends = starts + seq_lengths
-                input_embedding_indexing = torch.cat([
-                    indexing[s:e] for indexing, s, e in zip(
-                        self.input_embedding_indexing, starts, ends)
-                ],
-                                                     dim=0)
-                index_ranges = torch.arange(input_embedding_indexing.numel(),
-                                            device=device)
-                input_embedding_indexing = index_ranges[
-                    input_embedding_indexing]
+                input_embedding_indexing = torch.cat(
+                    [indexing[s:e] for indexing, s, e in zip(self.input_embedding_indexing, starts, ends)], dim=0)
+                index_ranges = torch.arange(input_embedding_indexing.numel(), device=device)
+                input_embedding_indexing = index_ranges[input_embedding_indexing]
         return input_embeddings, input_embedding_indexing
 
 
@@ -149,8 +140,7 @@ class ModelInputs:
 
     def split(self, split_size: int):
         """split inputs."""
-        assert len(
-            self.seq_length) == 1, ('Can not perform split on batched input.')
+        assert len(self.seq_length) == 1, ('Can not perform split on batched input.')
 
         input_ids = self.input_ids
         if input_ids.numel() < split_size:
@@ -182,8 +172,7 @@ class ModelInputs:
                 mm_start = flatten_mms[0][1].start
                 mm_end = flatten_mms[0][1].end
                 if mm_start > self.history_lengths + start:
-                    end = min(mm_start - self.history_lengths,
-                              start + split_size)
+                    end = min(mm_start - self.history_lengths, start + split_size)
                 else:
                     input_mms = dict()
                     key, mm = flatten_mms.pop(0)
@@ -207,8 +196,7 @@ class ModelInputs:
                                     cross_length += encoder_len
                         else:
                             break
-                    vision_inputs = VisionModelInputs(
-                        input_multimodals=[input_mms], )
+                    vision_inputs = VisionModelInputs(input_multimodals=[input_mms], )
             else:
                 end = min(max_seq_len, start + split_size)
 
@@ -269,8 +257,7 @@ class ModelInputs:
 class StepContext:
     """context of Model.
 
-    patched model might need extra information to perform inference. This
-    dataclass provide these infos and tools.
+    patched model might need extra information to perform inference. This dataclass provide these infos and tools.
     """
     input_ids: torch.LongTensor
     model_config: ModelConfig
@@ -323,8 +310,7 @@ class StepContext:
 
         # for vlm
         input_embeddings, input_embedding_indexing = None, None
-        if (inputs.vision_inputs is not None
-                and inputs.vision_inputs.input_embeddings is not None):
+        if (inputs.vision_inputs is not None and inputs.vision_inputs.input_embeddings is not None):
             input_embeddings, input_embedding_indexing = \
                 inputs.vision_inputs.get_inputs(history_seqlens, q_seqlens)
 
@@ -344,8 +330,7 @@ class StepContext:
         cross_seqlens = inputs.cross_length
         cross_kv_seqlens = None
         if inputs.cross_length is not None:
-            cross_kv_seqlens = (inputs.cross_length +
-                                inputs.history_cross_length)
+            cross_kv_seqlens = (inputs.cross_length + inputs.history_cross_length)
 
         # position ids 1d
         position_ids = cls.get_position_ids_1d(position_ids, q_seqlens)[None]
@@ -380,16 +365,13 @@ class StepContext:
         return ret
 
     @classmethod
-    def get_position_ids_1d(cls, position_ids: torch.LongTensor,
-                            seq_length: torch.LongTensor):
+    def get_position_ids_1d(cls, position_ids: torch.LongTensor, seq_length: torch.LongTensor):
         """get 1d position_ids."""
         if position_ids.size(0) == 1 or position_ids.size(1) == 1:
             position_ids_1d = position_ids.flatten()
         else:
             device = position_ids.device
-            position_ids_1d = [
-                ids[:l] for ids, l in zip(position_ids.cpu(), seq_length.cpu())
-            ]
+            position_ids_1d = [ids[:l] for ids, l in zip(position_ids.cpu(), seq_length.cpu())]
             position_ids_1d = torch.cat(position_ids_1d).to(device)
         return position_ids_1d
 

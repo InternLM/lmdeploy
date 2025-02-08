@@ -13,8 +13,7 @@ class DefaultsAndTypesHelpFormatter(argparse.HelpFormatter):
         if '%(default)' not in action.help:
             if action.default is not argparse.SUPPRESS:
                 defaulting_nargs = [argparse.OPTIONAL, argparse.ZERO_OR_MORE]
-                if (action.option_strings or action.nargs
-                        in defaulting_nargs) and 'default' not in help.lower():
+                if (action.option_strings or action.nargs in defaulting_nargs) and 'default' not in help.lower():
                     help += '. Default: %(default)s'
                 if action.type:
                     help += '. Type: %(type)s'
@@ -24,10 +23,7 @@ class DefaultsAndTypesHelpFormatter(argparse.HelpFormatter):
 def convert_args(args):
     """Convert args to dict format."""
     special_names = ['run', 'command']
-    kwargs = {
-        k[0]: k[1]
-        for k in args._get_kwargs() if k[0] not in special_names
-    }
+    kwargs = {k[0]: k[1] for k in args._get_kwargs() if k[0] not in special_names}
     return kwargs
 
 
@@ -92,85 +88,75 @@ class ArgumentHelper:
     def model_name(parser):
         """Add argument model_name to parser."""
 
-        return parser.add_argument(
-            '--model-name',
-            type=str,
-            default=None,
-            help='The name of the served model. It can be accessed '
-            'by the RESTful API `/v1/models`. If it is not specified, '
-            '`model_path` will be adopted')
+        return parser.add_argument('--model-name',
+                                   type=str,
+                                   default=None,
+                                   help='The name of the served model. It can be accessed '
+                                   'by the RESTful API `/v1/models`. If it is not specified, '
+                                   '`model_path` will be adopted')
 
     @staticmethod
     def dtype(parser, default: str = 'auto'):
-        return parser.add_argument(
-            '--dtype',
-            type=str,
-            default=default,
-            choices=['auto', 'float16', 'bfloat16'],
-            help='data type for model weights and activations. '
-            'The "auto" option will use FP16 precision '
-            'for FP32 and FP16 models, and BF16 precision '
-            'for BF16 models. This option will be ignored if '
-            'the model is a quantized model')
+        return parser.add_argument('--dtype',
+                                   type=str,
+                                   default=default,
+                                   choices=['auto', 'float16', 'bfloat16'],
+                                   help='data type for model weights and activations. '
+                                   'The "auto" option will use FP16 precision '
+                                   'for FP32 and FP16 models, and BF16 precision '
+                                   'for BF16 models. This option will be ignored if '
+                                   'the model is a quantized model')
 
     @staticmethod
     def quant_dtype(parser, default: str = 'int8'):
-        return parser.add_argument(
-            '--quant-dtype',
-            type=str,
-            default=default,
-            choices=['int8', 'float8_e4m3fn', 'float8_e5m2', 'fp8'],
-            help='data type for the quantized model weights and activations.'
-            'Note "fp8" is the short version of "float8_e4m3fn"')
+        return parser.add_argument('--quant-dtype',
+                                   type=str,
+                                   default=default,
+                                   choices=['int8', 'float8_e4m3fn', 'float8_e5m2', 'fp8'],
+                                   help='data type for the quantized model weights and activations.'
+                                   'Note "fp8" is the short version of "float8_e4m3fn"')
 
     @staticmethod
     def model_format(parser, default: str = None):
-        return parser.add_argument(
-            '--model-format',
-            type=str,
-            default=default,
-            choices=['hf', 'llama', 'awq', 'gptq'],
-            help='The format of input model. `hf` means `hf_llama`, `llama` '
-            'means `meta_llama`, `awq` represents the quantized model by AWQ,'
-            ' and `gptq` refers to the quantized model by GPTQ')
+        return parser.add_argument('--model-format',
+                                   type=str,
+                                   default=default,
+                                   choices=['hf', 'awq', 'gptq'],
+                                   help='The format of input model. `hf` means `hf_llama`, '
+                                   '`awq` represents the quantized model by AWQ,'
+                                   ' and `gptq` refers to the quantized model by GPTQ')
 
     @staticmethod
     def revision(parser, default: str = None):
-        return parser.add_argument(
-            '--revision',
-            type=str,
-            default=default,
-            help='The specific model version to use. '
-            'It can be a branch name, a tag name, or a commit id. '
-            'If unspecified, will use the default version.')
+        return parser.add_argument('--revision',
+                                   type=str,
+                                   default=default,
+                                   help='The specific model version to use. '
+                                   'It can be a branch name, a tag name, or a commit id. '
+                                   'If unspecified, will use the default version.')
 
     @staticmethod
     def download_dir(parser, default: str = None):
-        return parser.add_argument(
-            '--download-dir',
-            type=str,
-            default=default,
-            help='Directory to download and load the weights, '
-            'default to the default cache directory of huggingface.')
+        return parser.add_argument('--download-dir',
+                                   type=str,
+                                   default=default,
+                                   help='Directory to download and load the weights, '
+                                   'default to the default cache directory of huggingface.')
 
     @staticmethod
     def tp(parser):
         """Add argument tp to parser."""
 
-        return parser.add_argument(
-            '--tp',
-            type=int,
-            default=1,
-            help='GPU number used in tensor parallelism. Should be 2^n')
+        return parser.add_argument('--tp',
+                                   type=int,
+                                   default=1,
+                                   help='GPU number used in tensor parallelism. Should be 2^n')
 
     @staticmethod
     def session_id(parser):
         """Add argument session_id to parser."""
 
-        return parser.add_argument('--session-id',
-                                   type=int,
-                                   default=1,
-                                   help='The identical id of a session')
+        return parser.add_argument('--session-id', type=int, default=1, help='The identical id of a session')
 
     @staticmethod
     def session_len(parser, default: int = None):
@@ -183,84 +169,69 @@ class ArgumentHelper:
     def max_batch_size(parser):
         """Add argument max_batch_size to parser."""
 
-        return parser.add_argument(
-            '--max-batch-size',
-            type=int,
-            default=None,
-            help='Maximum batch size. If not specified, the engine will '
-            'automatically set it according to the device')
+        return parser.add_argument('--max-batch-size',
+                                   type=int,
+                                   default=None,
+                                   help='Maximum batch size. If not specified, the engine will '
+                                   'automatically set it according to the device')
 
     @staticmethod
     def quant_policy(parser, default: int = 0):
         """Add argument quant_policy to parser."""
 
-        return parser.add_argument(
-            '--quant-policy',
-            type=int,
-            default=0,
-            choices=[0, 4, 8],
-            help='Quantize kv or not. 0: no quant; 4: 4bit kv; 8: 8bit kv')
+        return parser.add_argument('--quant-policy',
+                                   type=int,
+                                   default=0,
+                                   choices=[0, 4, 8],
+                                   help='Quantize kv or not. 0: no quant; 4: 4bit kv; 8: 8bit kv')
 
     @staticmethod
     def rope_scaling_factor(parser):
         """Add argument rope_scaling_factor to parser."""
 
-        return parser.add_argument('--rope-scaling-factor',
-                                   type=float,
-                                   default=0.0,
-                                   help='Rope scaling factor')
+        return parser.add_argument('--rope-scaling-factor', type=float, default=0.0, help='Rope scaling factor')
 
     @staticmethod
     def use_logn_attn(parser):
         """Add argument use_logn_attn to parser."""
 
-        return parser.add_argument(
-            '--use-logn-attn',
-            action='store_true',
-            default=False,
-            help='Whether to use logn attention scaling')
+        return parser.add_argument('--use-logn-attn',
+                                   action='store_true',
+                                   default=False,
+                                   help='Whether to use logn attention scaling')
 
     @staticmethod
     def block_size(parser):
         """Add argument block_size to parser."""
 
-        return parser.add_argument('--block-size',
-                                   type=int,
-                                   default=64,
-                                   help='The block size for paging cache')
+        return parser.add_argument('--block-size', type=int, default=64, help='The block size for paging cache')
 
     @staticmethod
     def top_p(parser):
         """Add argument top_p to parser."""
 
-        return parser.add_argument(
-            '--top-p',
-            type=float,
-            default=0.8,
-            help='An alternative to sampling with temperature,'
-            ' called nucleus sampling, where the model '
-            'considers the results of the tokens with '
-            'top_p probability mass')
+        return parser.add_argument('--top-p',
+                                   type=float,
+                                   default=0.8,
+                                   help='An alternative to sampling with temperature,'
+                                   ' called nucleus sampling, where the model '
+                                   'considers the results of the tokens with '
+                                   'top_p probability mass')
 
     @staticmethod
     def top_k(parser):
         """Add argument top_k to parser."""
 
-        return parser.add_argument(
-            '--top-k',
-            type=int,
-            default=1,
-            help='An alternative to sampling with temperature, '
-            'where the model considers the top_k tokens '
-            'with the highest probability')
+        return parser.add_argument('--top-k',
+                                   type=int,
+                                   default=1,
+                                   help='An alternative to sampling with temperature, '
+                                   'where the model considers the top_k tokens '
+                                   'with the highest probability')
 
     @staticmethod
     def temperature(parser, default: float = 0.8):
-        return parser.add_argument('-temp',
-                                   '--temperature',
-                                   type=float,
-                                   default=default,
-                                   help='Sampling temperature')
+        return parser.add_argument('-temp', '--temperature', type=float, default=default, help='Sampling temperature')
 
     @staticmethod
     def repetition_penalty(parser):
@@ -317,38 +288,28 @@ class ArgumentHelper:
     def stream_output(parser):
         """Add argument stream_output to parser."""
 
-        return parser.add_argument(
-            '--stream-output',
-            action='store_true',
-            help='Indicator for streaming output or not')
+        return parser.add_argument('--stream-output', action='store_true', help='Indicator for streaming output or not')
 
     @staticmethod
     def calib_dataset(parser):
         """Add argument calib_dataset to parser."""
 
-        return parser.add_argument('--calib-dataset',
-                                   type=str,
-                                   default='ptb',
-                                   help='The calibration dataset name')
+        return parser.add_argument('--calib-dataset', type=str, default='ptb', help='The calibration dataset name')
 
     @staticmethod
     def calib_samples(parser):
         """Add argument calib_samples to parser."""
 
-        return parser.add_argument(
-            '--calib-samples',
-            type=int,
-            default=128,
-            help='The number of samples for calibration')
+        return parser.add_argument('--calib-samples',
+                                   type=int,
+                                   default=128,
+                                   help='The number of samples for calibration')
 
     @staticmethod
     def calib_seqlen(parser):
         """Add argument calib_seqlen to parser."""
 
-        return parser.add_argument('--calib-seqlen',
-                                   type=int,
-                                   default=2048,
-                                   help='The sequence length for calibration')
+        return parser.add_argument('--calib-seqlen', type=int, default=2048, help='The sequence length for calibration')
 
     @staticmethod
     def calib_batchsize(parser):
@@ -375,9 +336,7 @@ class ArgumentHelper:
         )
 
     @staticmethod
-    def device(parser,
-               default: str = 'cuda',
-               choices: List[str] = ['cuda', 'ascend', 'maca', 'camb']):
+    def device(parser, default: str = 'cuda', choices: List[str] = ['cuda', 'ascend', 'maca', 'camb']):
         """Add argument device to parser."""
 
         return parser.add_argument('--device',
@@ -403,51 +362,47 @@ class ArgumentHelper:
     def cache_max_entry_count(parser):
         """Add argument cache_max_entry_count to parser."""
 
-        return parser.add_argument(
-            '--cache-max-entry-count',
-            type=float,
-            default=0.8,
-            help='The percentage of free gpu memory occupied by the k/v '
-            'cache, excluding weights ')
+        return parser.add_argument('--cache-max-entry-count',
+                                   type=float,
+                                   default=0.8,
+                                   help='The percentage of free gpu memory occupied by the k/v '
+                                   'cache, excluding weights ')
 
     @staticmethod
     def adapters(parser):
         """Add argument adapters to parser."""
 
-        return parser.add_argument(
-            '--adapters',
-            nargs='*',
-            type=str,
-            default=None,
-            help='Used to set path(s) of lora adapter(s). One can input '
-            'key-value pairs in xxx=yyy format for multiple lora '
-            'adapters. If only have one adapter, one can only input '
-            'the path of the adapter.')
+        return parser.add_argument('--adapters',
+                                   nargs='*',
+                                   type=str,
+                                   default=None,
+                                   help='Used to set path(s) of lora adapter(s). One can input '
+                                   'key-value pairs in xxx=yyy format for multiple lora '
+                                   'adapters. If only have one adapter, one can only input '
+                                   'the path of the adapter.')
 
     @staticmethod
     def work_dir(parser):
         """Add argument work_dir to parser."""
 
-        return parser.add_argument(
-            '--work-dir',
-            type=str,
-            default='./work_dir',
-            help='The working directory to save results')
+        return parser.add_argument('--work-dir',
+                                   type=str,
+                                   default='./work_dir',
+                                   help='The working directory to save results')
 
     @staticmethod
     def cache_block_seq_len(parser):
         """Add argument cache_block_seq_len to parser."""
 
-        return parser.add_argument(
-            '--cache-block-seq-len',
-            type=int,
-            default=64,
-            help='The length of the token sequence in a k/v block. '
-            'For Turbomind Engine, if the GPU compute capability '
-            'is >= 8.0, it should be a multiple of 32, otherwise '
-            'it should be a multiple of 64. For Pytorch Engine, '
-            'if Lora Adapter is specified, this parameter will '
-            'be ignored')
+        return parser.add_argument('--cache-block-seq-len',
+                                   type=int,
+                                   default=64,
+                                   help='The length of the token sequence in a k/v block. '
+                                   'For Turbomind Engine, if the GPU compute capability '
+                                   'is >= 8.0, it should be a multiple of 32, otherwise '
+                                   'it should be a multiple of 64. For Pytorch Engine, '
+                                   'if Lora Adapter is specified, this parameter will '
+                                   'be ignored')
 
     @staticmethod
     def enable_prefix_caching(parser):
@@ -460,43 +415,36 @@ class ArgumentHelper:
 
     @staticmethod
     def num_tokens_per_iter(parser):
-        return parser.add_argument(
-            '--num-tokens-per-iter',
-            type=int,
-            default=0,
-            help='the number of tokens processed in a forward pass')
+        return parser.add_argument('--num-tokens-per-iter',
+                                   type=int,
+                                   default=0,
+                                   help='the number of tokens processed in a forward pass')
 
     @staticmethod
     def max_prefill_iters(parser):
-        return parser.add_argument(
-            '--max-prefill-iters',
-            type=int,
-            default=1,
-            help='the max number of forward passes in prefill stage')
+        return parser.add_argument('--max-prefill-iters',
+                                   type=int,
+                                   default=1,
+                                   help='the max number of forward passes in prefill stage')
 
     @staticmethod
     def max_prefill_token_num(parser):
-        return parser.add_argument(
-            '--max-prefill-token-num',
-            type=int,
-            default=8192,
-            help='the max number of tokens per iteration during prefill')
+        return parser.add_argument('--max-prefill-token-num',
+                                   type=int,
+                                   default=8192,
+                                   help='the max number of tokens per iteration during prefill')
 
     @staticmethod
     def vision_max_batch_size(parser):
-        return parser.add_argument('--vision-max-batch-size',
-                                   type=int,
-                                   default=1,
-                                   help='the vision model batch size')
+        return parser.add_argument('--vision-max-batch-size', type=int, default=1, help='the vision model batch size')
 
     @staticmethod
     def max_log_len(parser):
-        return parser.add_argument(
-            '--max-log-len',
-            type=int,
-            default=None,
-            help='Max number of prompt characters or prompt tokens being'
-            'printed in log. Default: Unlimited')
+        return parser.add_argument('--max-log-len',
+                                   type=int,
+                                   default=None,
+                                   help='Max number of prompt characters or prompt tokens being'
+                                   'printed in log. Default: Unlimited')
 
     @staticmethod
     def disable_fastapi_docs(parser):

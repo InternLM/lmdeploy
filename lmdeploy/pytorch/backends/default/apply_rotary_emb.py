@@ -19,12 +19,7 @@ def rotate_half(x):
 class DefaultApplyRotaryEmbImpl(ApplyRotaryEmbImpl):
     """Apply rotary embedding implementation."""
 
-    def forward(self,
-                query: Tensor,
-                key: Tensor,
-                cos: Tensor,
-                sin: Tensor,
-                inplace: bool = True):
+    def forward(self, query: Tensor, key: Tensor, cos: Tensor, sin: Tensor, inplace: bool = True):
         """forward."""
         unsqueeze_dim = -2
         cos = cos.unsqueeze(unsqueeze_dim)
