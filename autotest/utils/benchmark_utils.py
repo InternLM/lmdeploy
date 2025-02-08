@@ -116,7 +116,7 @@ def throughput_test(config, run_id, run_config, cuda_prefix: str = None, worker_
     return returncode == 0, stderr
 
 
-def restful_test_new(config, run_id, run_config, worker_id: str = '', is_smoke: bool = False):
+def restful_test(config, run_id, run_config, worker_id: str = '', is_smoke: bool = False):
     model = run_config['model']
     backend = run_config['backend']
     if backend == 'turbomind':
@@ -165,7 +165,7 @@ def restful_test_new(config, run_id, run_config, worker_id: str = '', is_smoke: 
     return benchmark_res.returncode == 0, benchmark_res.stderr
 
 
-def restful_test(config, run_id, run_config, worker_id: str = '', is_smoke: bool = False):
+def restful_test_new(config, run_id, run_config, worker_id: str = '', is_smoke: bool = False):
     model = run_config['model']
     backend = run_config['backend']
     if backend == 'turbomind':

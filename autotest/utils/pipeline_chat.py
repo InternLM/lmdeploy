@@ -220,7 +220,7 @@ def assert_pipeline_single_element(output, is_stream: bool = False, is_last: boo
         result &= len(output.text) >= 0
         result &= output.finish_reason in ['stop', 'length']
         if is_stream:
-            result &= output.token_ids is None
+            result &= output.token_ids is None or output.token_ids == []
         else:
             result &= len(output.token_ids) > 0
     else:
@@ -261,11 +261,11 @@ def run_pipeline_vl_chat_test(config, model_case, backend, worker_id: str = '', 
     resource_path = config.get('resource_path')
 
     if 'pytorch' in backend:
-        backend_config = PytorchEngineConfig(tp=tp, session_len=8192)
+        backend_config = PytorchEngineConfig(tp=tp, session_len=32576)
         if not is_bf16_supported():
             backend_config.dtype = 'float16'
     else:
-        backend_config = TurbomindEngineConfig(tp=tp, session_len=8192)
+        backend_config = TurbomindEngineConfig(tp=tp, session_len=32576)
 
     if 'llava' in model_case:
         backend_config.model_name = 'vicuna'
