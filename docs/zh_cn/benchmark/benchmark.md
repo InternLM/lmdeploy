@@ -32,7 +32,7 @@ python3 benchmark/profile_throughput.py ShareGPT_V3_unfiltered_cleaned_split.jso
 启动模型服务（可以参考[这里](../llm/api_server.md)）。接着，使用下面的命令:
 
 ```shell
-python3 profile_restful_api.py --backend lmdeploy  --dataset-path ShareGPT_V3_unfiltered_cleaned_split.json
+python3 benchmark/profile_restful_api.py --backend lmdeploy  --dataset-path ShareGPT_V3_unfiltered_cleaned_split.json
 ```
 
-关于 `profile_restful_api.py`的帮助信息，可以通过`python3 profile_restful_api.py -h`查阅
+关于 `profile_restful_api.py`的帮助信息，可以通过`python3 benchmark/profile_restful_api.py -h`查阅
