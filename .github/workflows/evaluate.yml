@@ -133,7 +133,7 @@ jobs:
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/flash_attn-*.whl
+          python3 -m pip install /root/packages/flash_attn-*.whl --no-deps
           python3 -m pip install sentence_transformers==2.2.2 --no-deps
           python3 -m pip install -r /root/models/offline_pkg/requirements.txt
       - name: Install lmdeploy
