@@ -446,6 +446,9 @@ def _start_tp_process(proc_id: int,
             args = args or tuple()
             kwargs = kwargs or dict()
             func(rank, *args, **kwargs)
+    except threading.BrokenBarrierError:
+        logger.warning(f'Rank[{rank}] exit.')
+        # dist.destroy_process_group() may hang if using cudagraph
     except Exception as e:
         from traceback import print_exc
         logger.error(f'Rank[{rank}] failed.')
@@ -687,21 +690,23 @@ class TPModelAgent(AutoModelAgent):
 
     def close(self):
         """release model."""
-        self.patched_model = None
-        self.cache_engine = None
-        self.t_watchdog.stop_event.set()
-        self.t_watchdog.join()
-        if hasattr(self, 'mp_context'):
+        if hasattr(self, 'mp_context') and self.mp_context is not None:
+            self.patched_model = None
+            self.cache_engine = None
+            self.t_watchdog.stop_event.set()
+            self.t_watchdog.join()
+            self.mp_bar.abort()
             procs = self.mp_context.processes
             for p in procs:
                 if p.is_alive():
-                    p.kill()
+                    p.join()
+                    p.close()
             self.mp_context = None
-        if dist.is_initialized():
-            if hasattr(self, '_cpu_group') and self._cpu_group is not None:
-                dist.destroy_process_group(self._cpu_group)
-                del self._cpu_group
-            dist.destroy_process_group()
+            if dist.is_initialized():
+                if hasattr(self, '_cpu_group') and self._cpu_group is not None:
+                    dist.destroy_process_group(self._cpu_group)
+                    del self._cpu_group
+                dist.destroy_process_group()
 
 
 def _exit_handler(agent: TPModelAgent):
