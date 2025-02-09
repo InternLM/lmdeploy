@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.security.http import HTTPAuthorizationCredentials, HTTPBearer
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from lmdeploy.archs import get_task
 from lmdeploy.messages import GenerationConfig, LogitsProcessor, PytorchEngineConfig, TurbomindEngineConfig
@@ -273,6 +274,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     - n (int): How many chat completion choices to generate for each input
         message. **Only support one here**.
     - stream: whether to stream the results or not. Default to false.
+    - stream_options: Options for streaming response. Only set this when you
+        set stream: true.
     - max_tokens (int | None): output token nums. Default to None.
     - repetition_penalty (float): The parameter for repetition penalty.
         1.0 means no penalty
@@ -523,6 +526,8 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     - n (int): How many chat completion choices to generate for each input
         message. **Only support one here**.
     - stream: whether to stream the results or not. Default to false.
+    - stream_options: Options for streaming response. Only set this when you
+        set stream: true.
     - repetition_penalty (float): The parameter for repetition penalty.
         1.0 means no penalty
     - user (str): A unique identifier representing your end-user.
@@ -798,11 +803,10 @@ async def chat_interactive_v1(request: GenerateRequest, raw_request: Request = N
     if isinstance(request.stop, str):
         request.stop = [request.stop]
 
-    end_session = sequence_end and not sequence_start \
-        and request.prompt == '' and request.request_output_len == 0
+    end_session = sequence_end and request.prompt == '' and request.request_output_len == 0
     if end_session:
         await async_engine.end_session(request.session_id)
-        return JSONResponse(dict(text='', tokens=0, input_tokens=0, history_tokens=0, finish_reason=None))
+        return JSONResponse(dict(text='', tokens=0, input_tokens=0, history_tokens=0, finish_reason='stop'))
 
     random_seed = request.seed if request.seed else None
 
@@ -905,6 +909,18 @@ async def startup_event():
         print(f'Service registration failed: {e}')
 
 
+class ConcurrencyLimitMiddleware(BaseHTTPMiddleware):
+
+    def __init__(self, app: FastAPI, max_concurrent_requests: int):
+        super().__init__(app)
+        self.semaphore = asyncio.Semaphore(max_concurrent_requests)
+
+    async def dispatch(self, request: Request, call_next):
+        async with self.semaphore:
+            response = await call_next(request)
+            return response
+
+
 def serve(model_path: str,
           model_name: Optional[str] = None,
           backend: Literal['turbomind', 'pytorch'] = 'turbomind',
@@ -922,6 +938,7 @@ def serve(model_path: str,
           proxy_url: Optional[str] = None,
           max_log_len: int = None,
           disable_fastapi_docs: bool = False,
+          max_concurrent_requests: Optional[int] = None,
           **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -966,6 +983,11 @@ def serve(model_path: str,
         proxy_url (str): The proxy url to register the api_server.
         max_log_len (int): Max number of prompt characters or prompt tokens
             being printed in log. Default: Unlimited
+        max_concurrent_requests: This refers to the number of concurrent
+            requests that the server can handle. The server is designed to
+            process the engine’s tasks once the maximum number of concurrent
+            requests is reached, regardless of any additional requests sent by
+            clients concurrently during that time. Default to None.
     """
     if os.getenv('TM_LOG_LEVEL') is None:
         os.environ['TM_LOG_LEVEL'] = log_level
@@ -990,6 +1012,10 @@ def serve(model_path: str,
             allow_methods=allow_methods,
             allow_headers=allow_headers,
         )
+    # Set the maximum number of concurrent requests
+    if max_concurrent_requests is not None:
+        app.add_middleware(ConcurrencyLimitMiddleware, max_concurrent_requests=max_concurrent_requests)
+
     if api_keys is not None:
         if isinstance(api_keys, str):
             api_keys = api_keys.split(',')

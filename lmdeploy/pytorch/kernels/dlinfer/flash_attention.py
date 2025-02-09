@@ -29,7 +29,7 @@ def flash_attention_fwd(
         max_q_seqlen,
         num_q_heads,
         num_kv_heads,
-        attn_mask=None,
+        attn_mask=[],
         softmax_scale=sm_scale,
         attn_output=attn_output,
     )

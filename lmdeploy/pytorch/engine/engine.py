@@ -103,12 +103,14 @@ class Engine:
 
     Args:
         model_path (str): The hugging face model path.
+        tokenizer (lmdeploy.Tokenizer): an instance of lmdeploy.Tokenizer
         engine_config (PytorchEngineConfig): The config of the Engine.
         trust_remote_code (bool): Trust remote code.
     """
 
     def __init__(self,
                  model_path: str,
+                 tokenizer: object,
                  engine_config: PytorchEngineConfig = None,
                  trust_remote_code: bool = True) -> None:
         if engine_config is None:
@@ -124,6 +126,7 @@ class Engine:
                                 logger=logger)
         checker.handle()
 
+        self.tokenizer = tokenizer
         adapters = engine_config.adapters
         self.engine_config = engine_config
         self.tp = engine_config.tp
@@ -172,6 +175,7 @@ class Engine:
     @classmethod
     def from_pretrained(cls,
                         pretrained_model_name_or_path: str,
+                        tokenizer: object,
                         engine_config: PytorchEngineConfig = None,
                         trust_remote_code: bool = True,
                         **kwargs):
@@ -188,22 +192,16 @@ class Engine:
                       on huggingface.co, such as "InternLM/internlm-chat-7b",
                       "Qwen/Qwen-7B-Chat ", "baichuan-inc/Baichuan2-7B-Chat"
                       and so on.
+            tokenizer (lmdeploy.Tokenizer): an instance of lmdeploy.Tokenizer
             engine_config (PytorchEngineConfig): Pytorch engine config.
             trust_remote_code (bool): Trust remote code
         """
         if len(kwargs) > 0:
             logger.debug(f'Get unexpected kwargs: {kwargs}')
         return cls(model_path=pretrained_model_name_or_path,
+                   tokenizer=tokenizer,
                    engine_config=engine_config,
                    trust_remote_code=trust_remote_code)
-
-    @property
-    def tokenizer(self):
-        """create tokenizer."""
-        from lmdeploy.tokenizer import Tokenizer
-        if not hasattr(self, '_tokenizer'):
-            self._tokenizer = Tokenizer(self.model_path)
-        return self._tokenizer
 
     def _download_adapters(self, adapters: Dict[str, str], engine_config: PytorchEngineConfig):
         """download adapters."""
