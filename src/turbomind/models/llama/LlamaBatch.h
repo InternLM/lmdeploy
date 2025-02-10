@@ -23,6 +23,7 @@ struct SharedState {
     std::vector<std::shared_ptr<Request>> infer_reqs;
     std::vector<std::shared_ptr<Request>> kill_reqs;
     std::shared_ptr<Barrier>              barrier;
+    std::shared_ptr<std::mutex>           mutex;
     bool                                  abort;
     std::atomic<size_t>                   free_size{std::numeric_limits<size_t>::max()};
 };
@@ -127,16 +128,14 @@ public:
         return session_len_;
     }
 
-    void tune();
+    void tune() noexcept;
 
 private:
     void BroadcastCancelFlags();
 
     void ProcessCancelRequests(std::vector<Signal>& signals);
 
-    void InternalThreadEntry();
-
-    void OutputThreadEntry();
+    void InternalThreadEntry() noexcept;
 
     void CopyState(const std::vector<std::tuple<BatchState*, BatchState*, int, int>>& desc);
 

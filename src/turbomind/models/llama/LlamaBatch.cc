@@ -1557,7 +1557,7 @@ auto LlamaBatch<T>::Interrupt(int index, bool force_stop, bool force_end) -> Sig
 }
 
 template<typename T>
-void LlamaBatch<T>::InternalThreadEntry()
+void LlamaBatch<T>::InternalThreadEntry() noexcept
 {
     // TM_LOG_INFO("[InternalThreadEntry] %d", (int)rank_);
     check_cuda_error(cudaSetDevice(device_id_));
@@ -1587,6 +1587,9 @@ void LlamaBatch<T>::InternalThreadEntry()
 
         NvtxScope scope("mainloop");
 
+        if (rank_ == 0 && shared_state_->mutex) {
+            shared_state_->mutex->lock();
+        }
         // 1. Wait while rank-0 is dequeueing
         // 2. Broadcast `ec` from rank-0
         shared_state_->barrier->wait();
@@ -1635,6 +1638,15 @@ void LlamaBatch<T>::InternalThreadEntry()
 
             if (rank_ == 0) {
                 gateway_->notify(std::move(signals));
+            }
+        }
+
+        if (shared_state_->mutex) {
+            check_cuda_error(cudaStreamSynchronize(stream_));
+            shared_state_->barrier->wait();
+            if (rank_ == 0) {
+                // release the lock to external modules such as VL encoder
+                shared_state_->mutex->unlock();
             }
         }
     }
@@ -1871,15 +1883,13 @@ struct TuningContext {
     {
         linear_.set_measure(false);
         isTuning() = false;
-        // This will catch async errors during tuning
-        check_cuda_error(cudaStreamSynchronize(stream_));
     }
 };
 
 }  // namespace
 
 template<class T>
-void LlamaBatch<T>::tune()
+void LlamaBatch<T>::tune() noexcept
 {
     auto& linear = *context_->linear;
     if (auto str = std::getenv("TM_GEMM_IMPORT")) {
