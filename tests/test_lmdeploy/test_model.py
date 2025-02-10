@@ -833,4 +833,6 @@ def test_deepseek_r1(model_path_or_name):
     }]
     ref = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     lm_res = chat_template.messages2prompt(messages)
+    if model_path_or_name != 'deepseek-ai/DeepSeek-V3':
+        lm_res += '<think>\n'
     assert ref == lm_res
