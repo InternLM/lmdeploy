@@ -303,6 +303,7 @@ longtext_model:
     - meta-llama/Meta-Llama-3-1-70B-Instruct
     - internlm/internlm2_5-7b-chat-1m
     - internlm/internlm2-chat-20b
+    - internlm/internlm3-8b-instruct
 
 benchmark_model:
     - meta-llama/Llama-2-7b-chat-hf

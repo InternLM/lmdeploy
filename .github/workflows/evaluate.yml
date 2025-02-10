@@ -25,14 +25,14 @@ on:
         default: '[*mmlu_datasets, *gsm8k_datasets, *ifeval_datasets]'
       base_models:
         required: true
-        description: 'Tested TurboMind models list. eg. [turbomind_internlm2_5_7b, turbomind_qwen2_7b]'
+        description: 'Tested TurboMind models list. eg. [turbomind_internlm2_5_7b, turbomind_internlm2_5_7b_4bits, turbomind_internlm2_5_7b_batch1, turbomind_internlm2_5_7b_batch1_4bits, turbomind_qwen2_7b, turbomind_qwen2_5_7b, turbomind_qwen2_5_14b]'
         type: string
-        default: '[turbomind_internlm2_5_7b, turbomind_internlm2_5_7b_4bits, turbomind_internlm2_5_7b_batch1, turbomind_internlm2_5_7b_batch1_4bits, turbomind_qwen2_7b, turbomind_qwen2_5_7b, turbomind_qwen2_5_14b]'
+        default: '[turbomind_internlm2_5_7b, turbomind_internlm2_5_7b_4bits, turbomind_qwen2_7b, turbomind_qwen2_5_7b, turbomind_qwen2_5_14b]'
       baes_datasets:
         required: true
         description: 'Tested datasets list. eg. [*mmlu_datasets, *gsm8k_datasets]'
         type: string
-        default: '[*mmlu_datasets, *gsm8k_datasets, *gpqa_datasets, *winogrande_datasets]'
+        default: '[*race_datasets, *gsm8k_datasets, *gpqa_datasets, *winogrande_datasets]'
       oc_repo_org:
         required: false
         description: 'Tested repository organization name. Default is open-compass/opencompass'
