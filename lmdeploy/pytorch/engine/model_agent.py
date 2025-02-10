@@ -9,7 +9,7 @@ from lmdeploy.utils import get_logger, logging_timer
 
 from ..backends import get_backend
 from ..config import BackendConfig, CacheConfig, ModelConfig
-from ..distributed import get_dist_manager, get_world_rank
+from ..distributed import get_dist_manager
 from ..model_inputs import ModelInputs
 from ..models.patch import add_adapters, build_patched_model, update_custom_module_map
 from ..utils import get_gpu_memory
@@ -24,84 +24,6 @@ logger = get_logger('lmdeploy')
 def msg_with_rank(rank: int, msg: str):
     """return message with rank."""
     return f'rank[{rank}] - {msg}'
-
-
-def _update_cache_config(model_config: ModelConfig,
-                         cache_config: CacheConfig,
-                         gpu_id: int = 0,
-                         host_mem_size: int = 1 * (1 << 30),
-                         world_size: int = 1):
-    """Update the gpu mem and cpu mem according to model info.
-
-    Args:
-        model_config (ModelConfig): The config of the model.
-        cache_config (CacheConfig): The config of the cache info.
-        gpu_id (int): The GPU id to use.
-    """
-
-    def __get_runtime_size(num_free_gpu_mem: int, cache_block_size: int, vocal_size: int):
-        """find best prefill num."""
-        cache_max_entry_count = cache_config.cache_max_entry_count
-        max_prefill_token_num = cache_config.max_prefill_token_num
-        runtime_cache_size = 0
-        while max_prefill_token_num > 0:
-            # lm_head output(2) + to float(4) + estimated misc(1) = 7
-            runtime_cache_size = int(max_prefill_token_num * vocal_size * 7)
-            num_available = (num_free_gpu_mem - runtime_cache_size) * cache_max_entry_count
-            if int(num_available) // cache_block_size >= 16:
-                break
-            max_prefill_token_num = max_prefill_token_num // 2
-        return runtime_cache_size, max_prefill_token_num
-
-    def __get_free_gpu_mem_size(cache_block_size: int):
-        """get free gpu memory size."""
-        torch.cuda.empty_cache()
-        gpu_mem_physical_free, _ = get_gpu_memory(gpu_id)
-        logger.debug(f'device<{gpu_id}> free gpu memory:'
-                     f' {gpu_mem_physical_free>>20} mb')
-        vocal_size = model_config.vocab_size
-
-        runtime_cache_size, max_prefill_token_num = __get_runtime_size(gpu_mem_physical_free, cache_block_size,
-                                                                       vocal_size)
-        if cache_config.max_prefill_token_num != max_prefill_token_num:
-            if max_prefill_token_num <= 0:
-                raise RuntimeError('No enough gpu memory for runtime.')
-            cache_config.max_prefill_token_num = max_prefill_token_num
-            logger.warning(f'device<{gpu_id}> No enough memory. '
-                           'update max_prefill_token_num='
-                           f'{max_prefill_token_num}')
-        gpu_mem_physical_free -= runtime_cache_size
-        logger.debug('estimated max runtime memory:'
-                     f' {runtime_cache_size>>20} mb')
-        return gpu_mem_physical_free * cache_config.cache_max_entry_count
-
-    def __adjust_block_size():
-        """adjust block_size."""
-        # TODO: support kernel with both large head dim and large block size.
-        if model_config.k_head_dim >= 512 and cache_config.block_size > 32:
-            cache_config.block_size = 32
-            _, rank = get_world_rank()
-            if rank == 0:
-                logger.warning(f'Update `block_size={cache_config.block_size}`'
-                               f' for large `head_dim={model_config.k_head_dim}`.')
-
-    __adjust_block_size()
-
-    cache_block_size = CacheEngine.get_cache_block_size(cache_config.block_size, model_config, world_size,
-                                                        cache_config.quant_policy)
-    gpu_mem = __get_free_gpu_mem_size(cache_block_size)
-    cpu_mem = host_mem_size
-    if cache_config.num_cpu_blocks == 0:
-        cache_config.num_cpu_blocks = int(cpu_mem / cache_block_size)
-        if cache_config.num_cpu_blocks <= 0:
-            raise RuntimeError('No enough host memory for kv cache.')
-    if cache_config.num_gpu_blocks == 0:
-        cache_config.num_gpu_blocks = int(gpu_mem / cache_block_size)
-        if cache_config.num_gpu_blocks <= 0:
-            raise RuntimeError('No enough gpu memory for kv cache.')
-    cache_config.window_size = model_config.sliding_window
-
-    logger.debug('block num: {}'.format(cache_config.num_gpu_blocks))
 
 
 def _broadcast_config(cache_config: CacheConfig):
@@ -205,6 +127,13 @@ class AutoModelAgent:
         self.cache_config = cache_config
         self.tokenizer = tokenizer
 
+        self._in_que = None
+        self._out_que = None
+        self._background_task = None
+
+        self.stream = torch.cuda.Stream()
+        self.out_stream = torch.cuda.Stream()
+
     async def async_forward(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
         """model forward.
 
@@ -222,6 +151,36 @@ class AutoModelAgent:
     def get_input_processor(self):
         """get input processor."""
         raise NotImplementedError('Not implemented.')
+
+    def build_model(self):
+        """build model."""
+        raise NotImplementedError('Not implemented.')
+
+    def build_graph_runner(self):
+        """build graph runner."""
+        raise NotImplementedError('Not Implemented.')
+
+    def build_cache_engine(self):
+        """build cache engine."""
+        raise NotImplementedError('Not Implemented.')
+
+    def set_cache_config(self, cache_config: CacheConfig):
+        """set all cache config."""
+        self.cache_config = cache_config
+
+    def set_model_config(self, model_config: ModelConfig):
+        """set model config."""
+        self.model_config = model_config
+
+    def get_free_mem(self):
+        """gather available memory."""
+        torch.cuda.empty_cache()
+        gpu_mem_physical_free, _ = get_gpu_memory()
+        return gpu_mem_physical_free
+
+    def release(self):
+        """release."""
+        raise NotImplementedError('Not Implemented.')
 
     async def _async_model_forward(self, inputs: ModelInputs, swap_in_map: Dict, swap_out_map: Dict,
                                    return_logits: bool):
@@ -393,7 +352,7 @@ class AutoModelAgent:
             event = torch.cuda.Event()
             event.record()
             output = dict(next_token_ids=next_token_ids,
-                          logits=logits,
+                          logits=logits if return_logits else None,
                           stopped=stopped,
                           model_metas=model_metas,
                           event=event)
@@ -405,6 +364,54 @@ class AutoModelAgent:
                 swap_out_map = dict()
                 inputs.model_metas = model_metas
                 __update_inputs(next_token_ids)
+
+    @torch.inference_mode()
+    async def _async_loop_background(self, forward_event: asyncio.Event = None):
+        """async loop background."""
+        with torch.cuda.stream(self.stream):
+            while True:
+                forward_inputs = await self._in_que.get()
+
+                if forward_event is not None:
+                    forward_event.clear()
+                await self._async_step_background(
+                    **forward_inputs,
+                    output_que=self._out_que,
+                )
+                if forward_event is not None:
+                    forward_event.set()
+
+    def start(self, forward_event: asyncio.Event = None):
+        """start event loop."""
+        event_loop = asyncio.get_event_loop()
+        self._in_que = asyncio.Queue()
+        self._out_que = asyncio.Queue()
+        self._background_task = event_loop.create_task(self._async_loop_background(forward_event))
+
+    def stop(self):
+        """stop task."""
+        if self._background_task is not None:
+            if not self._background_task.cancelled():
+                self._background_task.cancel()
+
+    def set_forward_inputs(self, inputs):
+        """set forward inputs."""
+        assert self._in_que is not None, ('Please start backendground task before forward.')
+        self._in_que.put_nowait(inputs)
+
+    async def get_output_async(self):
+        """async get output."""
+        assert self._out_que is not None, ('Please start backendground task before forward.')
+        out = await self._out_que.get()
+        event = out.pop('event')
+        while not event.query():
+            await asyncio.sleep(0.001)
+        with torch.cuda.stream(self.out_stream):
+            out['next_token_ids'] = out['next_token_ids'].cpu()
+            out['stopped'] = out['stopped'].cpu()
+            if out['logits'] is not None:
+                out['logits'] = out['logits'].cpu()
+        return out
 
 
 class BaseModelAgent(AutoModelAgent):
@@ -432,35 +439,38 @@ class BaseModelAgent(AutoModelAgent):
         dist_ctx = get_dist_manager().current_context()
         rank = dist_ctx.rank
 
-        self.patched_model = self._build_model(model_path, adapters, device=device, rank=rank)
+        self.model_path = model_path
+        self.adapters = adapters
+        self.device = device
+        self.rank = rank
 
         local_rank = dist_ctx.local_rank
         tp = dist_ctx.tp
         world_size = dist_ctx.world_size
-        _update_cache_config(model_config, cache_config, gpu_id=local_rank, world_size=tp)
-        if world_size > 1:
-            # broadcast cache config
-            _broadcast_config(cache_config)
+        self.tp = tp
+        self.world_size = world_size
+        self.local_rank = local_rank
 
-        backend = get_backend()
-        self.patched_model = backend.build_graph_runner(self.patched_model,
-                                                        model_config=model_config,
-                                                        cache_config=cache_config,
-                                                        backend_config=backend_config,
-                                                        device=device)
+        self.patched_model = None
+        self.cache_engine = None
 
-        self.cache_engine = CacheEngine(cache_config, model_config, local_rank, world_size=tp)
+        # self.build_model()
 
-        self.stream = torch.cuda.Stream()
+        # _update_cache_config(model_config, cache_config, gpu_id=local_rank, world_size=tp)
+        # if world_size > 1:
+        #     # broadcast cache config
+        #     _broadcast_config(cache_config)
 
-    def _build_model(
-        self,
-        model_path: str,
-        adapters: Dict[str, str] = None,
-        device: torch.device = 'cuda',
-        rank: int = 0,
-    ):
+        # self.build_graph_runner()
+
+        # self.build_cache_engine()
+
+    def build_model(self):
         """build patched model."""
+        model_path = self.model_path
+        adapters = self.adapters
+        device = self.device
+        rank = self.rank
         custom_module_map = self.model_config.custom_module_map
         if custom_module_map is not None:
             update_custom_module_map(custom_module_map)
@@ -471,7 +481,20 @@ class BaseModelAgent(AutoModelAgent):
         if adapters is not None:
             logger.info(msg_with_rank(rank, 'loading adapters.'))
             add_adapters(patched_model, adapters, dtype=self.model_config.dtype, device=device)
-        return patched_model
+        self.patched_model = patched_model
+
+    def build_graph_runner(self):
+        """build graph runner."""
+        backend = get_backend()
+        self.patched_model = backend.build_graph_runner(self.patched_model,
+                                                        model_config=self.model_config,
+                                                        cache_config=self.cache_config,
+                                                        backend_config=self.backend_config,
+                                                        device=self.device)
+
+    def build_cache_engine(self):
+        """build cache engine."""
+        self.cache_engine = CacheEngine(self.cache_config, self.model_config, self.local_rank, world_size=self.tp)
 
     def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
         cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
@@ -508,16 +531,23 @@ class BaseModelAgent(AutoModelAgent):
         """reset graph runner to prevent tp hanging."""
         self.patched_model.reset()
 
+    def release(self):
+        """release."""
+        import gc
+        if self.patched_model is not None:
+            self.reset_graph_runner()
+        self.patched_model = None
+        self.cache_engine = None
+        gc.collect()
+        torch.cuda.empty_cache()
+
 
 def build_model_agent(model_path: str,
+                      model_config: ModelConfig,
                       cache_config: CacheConfig,
                       backend_config: BackendConfig,
                       tokenizer: Any,
-                      trust_remote_code: bool,
-                      adapters: Dict[str, str] = None,
-                      tp: int = 1,
-                      dtype: str = 'auto',
-                      custom_module_map: str = None):
+                      adapters: Dict[str, str] = None):
     """create model agent.
 
     Args:
@@ -530,9 +560,6 @@ def build_model_agent(model_path: str,
         dtype (str): the data type of model weights and activations
         custom_module_map (str): customized nn module map
     """
-    model_config = ModelConfig.from_pretrained(model_path, trust_remote_code=trust_remote_code, dtype=dtype, tp=tp)
-    model_config.custom_module_map = custom_module_map
-
     model_agent = BaseModelAgent(model_path,
                                  model_config=model_config,
                                  cache_config=cache_config,

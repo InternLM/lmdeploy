@@ -15,7 +15,7 @@ from lmdeploy.messages import PytorchEngineConfig, ResponseType
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model, logging_timer
 
 from ..adapter.adapter import AdapterManager
-from ..config import BackendConfig, CacheConfig, SchedulerConfig
+from ..config import BackendConfig, CacheConfig, ModelConfig, SchedulerConfig
 from ..devices import DeviceContext, get_device_manager
 from ..distributed import DistContext, get_dist_manager
 from ..messages import MessageStatus, SchedulerSequence
@@ -23,8 +23,8 @@ from ..model_inputs import ModelInputs, VisionModelInputs
 from ..paging import Scheduler
 from .dist_proc_manager import DIST_TIMEOUT, DistProcManager, broadcast_inputs
 from .engine_checker import EngineChecker
+from .executor import build_executor
 from .logits_process import SamplingInputs
-from .model_agent import build_model_agent
 from .request import Request, RequestManager, RequestType, Response
 
 logger = get_logger('lmdeploy')
@@ -160,6 +160,7 @@ class Engine:
         scheduler_config = _build_scheduler_config(engine_config)
         cache_config = _build_cache_config(engine_config)
         backend_config = _build_backend_config(engine_config)
+        model_config = ModelConfig.from_pretrained(model_path, trust_remote_code=True, dtype=engine_config.dtype, tp=tp)
 
         # build model agent
         self.device_ctx = DeviceContext(device_type=engine_config.device_type)
@@ -167,19 +168,17 @@ class Engine:
             raw_tokenizer = None
             if tokenizer is not None:
                 raw_tokenizer = tokenizer.model.model
-            self.model_agent = build_model_agent(model_path,
-                                                 cache_config=cache_config,
-                                                 backend_config=backend_config,
-                                                 tokenizer=raw_tokenizer,
-                                                 trust_remote_code=trust_remote_code,
-                                                 adapters=adapters,
-                                                 tp=self.tp,
-                                                 dtype=engine_config.dtype,
-                                                 custom_module_map=engine_config.custom_module_map)
+            self.executor = build_executor(model_path,
+                                           model_config=model_config,
+                                           cache_config=cache_config,
+                                           backend_config=backend_config,
+                                           tokenizer=raw_tokenizer,
+                                           adapters=adapters)
+            self.executor.init()
 
-        self.input_processor = self.model_agent.get_input_processor()
+        self.input_processor = self.executor.get_input_processor()
 
-        cache_config = self.model_agent.cache_config
+        cache_config = self.executor.cache_config
         self.adapter_manager = self._build_adapter_manager(adapters)
         self.scheduler = Scheduler(scheduler_config, cache_config)
 
@@ -196,7 +195,6 @@ class Engine:
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
         self.backend_config = backend_config
-        self.stream = self.model_agent.stream
         self.max_session_len = self._get_max_session_len()
 
         self.req_manager = self._bind_request_manager()
@@ -206,7 +204,6 @@ class Engine:
 
         # create main thread
         self._start_loop()
-        self._output_stream = torch.cuda.Stream()
 
     @classmethod
     def from_pretrained(cls,
@@ -454,7 +451,7 @@ class Engine:
     @property
     def model_config(self):
         """model config."""
-        return self.model_agent.model_config
+        return self.executor.model_config
 
     @property
     def gpu_count(self):
@@ -596,15 +593,9 @@ class Engine:
             if stop:
                 msg.status = MessageStatus.STOPPED
 
-    async def _make_infer_outputs(self, next_token_ids: torch.LongTensor, running: SeqList, logits: torch.Tensor,
-                                  stopped: torch.Tensor, model_metas: List[Dict[str, Any]], event: torch.cuda.Event):
+    def _make_infer_outputs(self, next_token_ids: torch.LongTensor, running: SeqList, logits: torch.Tensor,
+                            stopped: torch.Tensor, model_metas: List[Dict[str, Any]]):
         """make infer output."""
-
-        while not event.query():
-            await asyncio.sleep(0.001)
-        with torch.cuda.stream(self._output_stream):
-            next_token_ids = next_token_ids.cpu()
-            stopped = stopped.cpu()
 
         seq_length = [seq.num_token_ids for seq in running]
         is_run = [seq.status == MessageStatus.RUNNING for seq in running]
@@ -788,8 +779,7 @@ class Engine:
             __send_resps(resps)
 
     @torch.inference_mode()
-    async def _async_loop_main(self, in_que: asyncio.Queue, out_que: asyncio.Queue, resp_que: asyncio.Queue,
-                               has_runable_event: asyncio.Event):
+    async def _async_loop_main(self, resp_que: asyncio.Queue, has_runable_event: asyncio.Event):
         """Main loop of the engine.
 
         Each engine instance would communicate with the engine by queue.
@@ -801,10 +791,10 @@ class Engine:
             forward_inputs = self._make_forward_inputs()
             num_loops = forward_inputs['loop_count']
             running = forward_inputs.pop('running')
-            in_que.put_nowait(forward_inputs)
+            await self.executor.forward_async(forward_inputs)
             for _ in range(num_loops):
-                out = await out_que.get()
-                step_outputs = await self._make_infer_outputs(**out, running=running)
+                out = await self.executor.get_output_async()
+                step_outputs = self._make_infer_outputs(**out, running=running)
                 self._set_has_runable_event(has_runable_event)
                 resp_que.put_nowait(step_outputs)
 
@@ -843,7 +833,9 @@ class Engine:
 
     def _loop_finally(self):
         """finally process for dist."""
-        self.model_agent.reset_graph_runner()
+        self.executor.stop()
+        self.executor.release()
+        # self.model_agent.reset_graph_runner()
         if not dist.is_initialized():
             return
         if self.rank == 0:
@@ -856,17 +848,17 @@ class Engine:
     async def async_loop(self):
         device_manager = get_device_manager()
         dist_mgr = get_dist_manager()
-        with dist_mgr.context(self.dist_ctx), device_manager.context(self.device_ctx), torch.cuda.stream(self.stream):
+        with dist_mgr.context(self.dist_ctx), device_manager.context(self.device_ctx):
             try:
                 event_loop = asyncio.get_event_loop()
 
                 # forward task
-                in_que = asyncio.Queue()
-                out_que = asyncio.Queue()
                 forward_event = asyncio.Event()
                 forward_event.set()
-                loop_background = event_loop.create_task(self._async_loop_background(in_que, out_que, forward_event),
-                                                         name='MainLoopForward')
+
+                self.executor.start(forward_event)
+                # loop_background = event_loop.create_task(self._async_loop_background(in_que, out_que, forward_event),
+                #                                          name='MainLoopForward')
 
                 # preprocess task
                 has_runable_event = asyncio.Event()
@@ -881,14 +873,11 @@ class Engine:
 
                 # binding done callback
                 loop_main = asyncio.current_task()
-                loop_tasks: List[asyncio.Task] = [loop_main, loop_background, loop_msg_proc, loop_send_resp]
+                loop_tasks: List[asyncio.Task] = [loop_main, loop_msg_proc, loop_send_resp]
                 self._add_loop_tasks_done_callback(loop_tasks)
 
                 # main loop
-                await self._async_loop_main(in_que=in_que,
-                                            out_que=out_que,
-                                            resp_que=resp_que,
-                                            has_runable_event=has_runable_event)
+                await self._async_loop_main(resp_que=resp_que, has_runable_event=has_runable_event)
             finally:
                 self._loop_finally()
 
@@ -915,7 +904,7 @@ class Engine:
         rank = self.dist_ctx.rank
         exit_code = 0
         try:
-            with dist_mgr.context(self.dist_ctx), device_mgr.context(self.device_ctx), torch.cuda.stream(self.stream):
+            with dist_mgr.context(self.dist_ctx), device_mgr.context(self.device_ctx):
                 event_loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(event_loop)
                 event_loop.run_until_complete(self._dist_run_forever())
