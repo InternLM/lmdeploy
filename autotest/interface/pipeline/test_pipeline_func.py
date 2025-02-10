@@ -799,7 +799,7 @@ def test_backend_config_input_validation(config, model, backend, worker_id):
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
     with pytest.raises(AssertionError):
-        gen_config = GenerationConfig(top_p=0)
+        gen_config = GenerationConfig(top_p=-0.01)
         pipe('Shanghai is', gen_config=gen_config)
 
     with pytest.raises(AssertionError):
@@ -876,7 +876,7 @@ def test_backend_config_validate_pytorch(config, model, backend, worker_id):
         backend_config = backend(tp=0)
         init_pipeline(model_path, backend_config=backend_config)
 
-    with pytest.raises(AssertionError):
+    with pytest.raises(SystemExit):
         backend_config = backend(max_batch_size=0)
         init_pipeline(model_path, backend_config=backend_config)
 
