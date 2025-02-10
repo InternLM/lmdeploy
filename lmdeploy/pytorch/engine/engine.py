@@ -23,7 +23,7 @@ from ..model_inputs import ModelInputs, VisionModelInputs
 from ..paging import Scheduler
 from .dist_proc_manager import DIST_TIMEOUT, DistProcManager, broadcast_inputs
 from .engine_checker import EngineChecker
-from .logits_process import FusedLogitsProcessor, SamplingInputs
+from .logits_process import SamplingInputs
 from .model_agent import build_model_agent
 from .request import Request, RequestManager, RequestType, Response
 
@@ -164,9 +164,13 @@ class Engine:
         # build model agent
         self.device_ctx = DeviceContext(device_type=engine_config.device_type)
         with get_dist_manager().context(dist_ctx), get_device_manager().context(self.device_ctx):
+            raw_tokenizer = None
+            if tokenizer is not None:
+                raw_tokenizer = tokenizer.model.model
             self.model_agent = build_model_agent(model_path,
                                                  cache_config=cache_config,
                                                  backend_config=backend_config,
+                                                 tokenizer=raw_tokenizer,
                                                  trust_remote_code=trust_remote_code,
                                                  adapters=adapters,
                                                  tp=self.tp,
@@ -573,39 +577,6 @@ class Engine:
             model_metas=model_metas,
         )
 
-    def _batch_stopping_criteria(self, token_ids: torch.Tensor, stop_words: torch.Tensor,
-                                 num_appendable_ids: torch.Tensor):
-        """batched stopping criteria."""
-        num_appendable_ids = num_appendable_ids - 1
-        # one more step to cache last token(stop word)
-        stopped = num_appendable_ids < 0
-        if stop_words is not None:
-            sw_stopped = (token_ids[:, None] == stop_words).any(1)
-            one_ids = torch.clamp_max(num_appendable_ids, 0)
-            num_appendable_ids = torch.where(sw_stopped, one_ids, num_appendable_ids)
-        return stopped, num_appendable_ids
-
-    @logging_timer('SamplingLogits', logger)
-    async def async_sampling_logits(self, logits: torch.Tensor, all_ids: torch.Tensor, guided_input_ids: torch.Tensor,
-                                    sampling_inputs: SamplingInputs, inputs: ModelInputs, ignore_eos: torch.Tensor):
-        """sampling logits."""
-
-        def __get_last_logits():
-            """get last logits."""
-            seq_length = inputs.seq_length
-            if len(seq_length) == logits.size(0):
-                return logits
-
-            last_idx = seq_length.cumsum(-1) - 1
-            return logits[last_idx, :]
-
-        split_logits = __get_last_logits()
-        logits_processor = FusedLogitsProcessor(sampling_inputs, ignore_eos, self.tokenizer.model.model)
-        logits = await logits_processor(all_ids, guided_input_ids, split_logits)
-        next_token_ids = logits_processor.sampling(logits)
-
-        return next_token_ids
-
     @logging_timer('UpdateRunning', logger)
     def update_running(self, running: SeqList, next_token_ids: torch.Tensor, stopped: torch.Tensor,
                        model_metas: List[Dict[str, Any]]):
@@ -624,92 +595,6 @@ class Engine:
             msg.update_token_ids(update_token, model_meta=model_meta)
             if stop:
                 msg.status = MessageStatus.STOPPED
-
-    @logging_timer('ModelForward', logger)
-    async def _async_model_forward(self, inputs: ModelInputs, swap_in_map: Dict, swap_out_map: Dict,
-                                   return_logits: bool):
-        """model forward."""
-        max_prefill_token_num = self.cache_config.max_prefill_token_num
-        swap_done = False
-
-        class _OutputGather:
-            """output gather."""
-
-            def __init__(self, max_seq_len):
-                self._max_seq_len = max_seq_len
-                self._start = 0
-                self._output = None
-
-            def gather(self, output):
-                """gather."""
-                tmp_output = output['hidden_states']
-
-                if not return_logits:
-                    self._output = tmp_output
-                    return
-
-                out_logits = self._output
-                start = self._start
-                seq_len = tmp_output.size(-2)
-                if out_logits is None:
-                    out_logits = tmp_output.new_empty(1, self._max_seq_len, tmp_output.size(-1), device='cpu')
-                out_logits[:, start:start + seq_len].copy_(tmp_output, non_blocking=True)
-                self._start = start + seq_len
-                self._output = out_logits
-
-            def get_output(self):
-                """get tmp_output."""
-                if not return_logits:
-                    return self._output[:, -1:]
-                torch.cuda.synchronize()
-                return self._output
-
-        async def __forward(inputs):
-            """forward."""
-            nonlocal swap_done, swap_in_map, swap_out_map
-            if swap_done:
-                return await self.model_agent.async_forward(inputs, swap_in_map=dict(), swap_out_map=dict())
-            else:
-                swap_done = True
-                return await self.model_agent.async_forward(inputs, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
-
-        async def __long_context_single_forward(inputs):
-            """one large sequence."""
-            seq_len = inputs.seq_length
-            max_seq_len = inputs.seq_length[0]
-            batch_size = seq_len.size(0)
-            assert batch_size == 1
-
-            new_inputs = inputs.split(max_prefill_token_num)
-
-            model_metas = new_inputs[0].model_metas
-            output_gather = _OutputGather(max_seq_len)
-            for inp in new_inputs:
-                inp.model_metas = model_metas
-                tmp_out = await __forward(inp)
-                model_metas = tmp_out.get('model_metas')
-                output_gather.gather(tmp_out)
-                tmp_out.pop('hidden_states', None)
-            tmp_out['hidden_states'] = output_gather.get_output()
-            return tmp_out
-
-        if inputs.input_ids.numel() <= max_prefill_token_num:
-            ret = await __forward(inputs)
-            if not return_logits and not inputs.is_decoding:
-                last_token_loc = inputs.seq_length.cumsum(0) - 1
-                ret['hidden_states'] = ret['hidden_states'][:, last_token_loc]
-        else:
-            ret = await __long_context_single_forward(inputs)
-            if not return_logits and not inputs.is_decoding:
-                last_token_loc = [-1]
-                ret['hidden_states'] = ret['hidden_states'][:, last_token_loc]
-            else:
-                ret['hidden_states'] = ret['hidden_states'].to('cuda')
-
-        hidden_states = ret.pop('hidden_states')
-        logits = self.model_agent.get_logits(hidden_states)
-        ret['logits'] = logits
-        return ret
 
     async def _make_infer_outputs(self, next_token_ids: torch.LongTensor, running: SeqList, logits: torch.Tensor,
                                   stopped: torch.Tensor, model_metas: List[Dict[str, Any]], event: torch.cuda.Event):
@@ -748,109 +633,9 @@ class Engine:
                 outputs[session_id].logits = logits.split(seq_length)[idx]
         return outputs
 
-    async def _async_step_background(self, running: SeqList, inputs: ModelInputs, swap_in_map: Dict, swap_out_map: Dict,
-                                     all_ids: torch.Tensor, guided_input_ids: torch.Tensor,
-                                     sampling_inputs: SamplingInputs, num_appendable_ids: torch.LongTensor,
-                                     num_ignore_eos: torch.LongTensor, loop_count: int, return_logits: bool,
-                                     output_que: asyncio.Queue):
-        """asyc forward task."""
-
-        def __update_inputs(next_token_ids):
-            """update inputs."""
-            nonlocal all_ids, guided_input_ids
-            inputs.update(next_token_ids)
-            if all_ids is not None:
-                all_ids = torch.cat([all_ids, next_token_ids[:, None].to(all_ids.device)], 1)
-            if guided_input_ids is not None:
-                guided_input_ids = torch.cat([guided_input_ids, next_token_ids[:, None].to(guided_input_ids.device)], 1)
-            if sampling_inputs.random_offsets is not None:
-                sampling_inputs.random_offsets += 1
-
-        logger.debug('<ForwardTask>: '
-                     f'batch_size={inputs.seq_length.size(0)} '
-                     f'num_tokens={inputs.input_ids.size(-1)}')
-        inputs = inputs.to_device('cuda')
-        is_decoding = inputs.is_decoding
-        if all_ids is not None:
-            all_ids = all_ids.cuda()
-        if guided_input_ids is not None:
-            guided_input_ids = guided_input_ids.cuda()
-        sampling_inputs = sampling_inputs.to_device('cuda')
-        num_appendable_ids = num_appendable_ids.cuda()
-        num_ignore_eos = num_ignore_eos.cuda()
-
-        # dist tools
-        dist_ctx = get_dist_manager().current_context()
-
-        for idx in range(loop_count):
-
-            # broadcast inputs
-            if dist_ctx.tp > 1:
-                tp_cpu_group = dist_ctx.tp_cpu_group
-                (inputs, swap_in_map, swap_out_map) = broadcast_inputs(0, [inputs, swap_in_map, swap_out_map],
-                                                                       tp_cpu_group)
-
-            # inference
-            output = await self._async_model_forward(inputs,
-                                                     swap_in_map=swap_in_map,
-                                                     swap_out_map=swap_out_map,
-                                                     return_logits=return_logits)
-            logits = output['logits']
-            logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
-
-            # sampling
-            next_token_ids = await self.async_sampling_logits(logits, all_ids, guided_input_ids, sampling_inputs,
-                                                              inputs, num_ignore_eos > 0)
-            num_ignore_eos = num_ignore_eos - 1
-
-            # stopping criteria
-            stopped, num_appendable_ids = self._batch_stopping_criteria(next_token_ids, sampling_inputs.stop_words,
-                                                                        num_appendable_ids)
-
-            # send output
-            model_metas = output.get('model_metas')
-            event = torch.cuda.Event()
-            event.record()
-            output = dict(next_token_ids=next_token_ids,
-                          running=running,
-                          logits=logits,
-                          stopped=stopped,
-                          model_metas=model_metas,
-                          event=event)
-            output_que.put_nowait(output)
-
-            inputs.model_metas = model_metas
-
-            # update for next loop
-            if is_decoding and idx < loop_count - 1:
-                swap_in_map = dict()
-                swap_out_map = dict()
-                __update_inputs(next_token_ids)
-        output_que.put_nowait(None)
-
-    def _set_has_runable_event(self, has_runable_event: asyncio.Event):
-        """set has runable event."""
-        if self.scheduler.has_unfinished():
-            has_runable_event.set()
-        else:
-            has_runable_event.clear()
-
-    async def _await_forward_event(self, forward_event: asyncio.Event):
-        """await forward event."""
-        if self.scheduler.has_unfinished():
-            await forward_event.wait()
-
-    @torch.inference_mode()
-    async def _async_loop_preprocess_message(self, forward_event: asyncio.Event, has_runable_event: asyncio.Event):
-        """preprocess msg."""
-        while True:
-            await self._await_forward_event(forward_event)
-            await self.req_manager.step()
-            self._set_has_runable_event(has_runable_event)
-
-    @torch.inference_mode()
-    async def _async_loop_background(self, in_que: asyncio.Queue, out_que: asyncio.Queue, forward_event: asyncio.Event):
-        """async loop background."""
+    def _make_forward_inputs(self):
+        """make forward inputs."""
+        prefill_interval = self.scheduler_config.prefill_interval
 
         def __gather_all_ids(seqs: SeqList, sampling_inputs: SamplingInputs):
             """gather history."""
@@ -900,37 +685,86 @@ class Engine:
             """need logits."""
             return any(seq.return_logits for seq in seqs)
 
-        while True:
-            is_prefill, scheduler_output = await in_que.get()
-            running = scheduler_output.running
-            swap_in_map = scheduler_output.swap_in_map
-            swap_out_map = scheduler_output.swap_out_map
-            prefill_interval = self.scheduler_config.prefill_interval
-            loop_count = 1 if is_prefill else (prefill_interval - 1)
-            assert len(running) > 0
+        def __do_prefill():
+            # decoding if no waiting
+            if not self.scheduler.has_waiting():
+                return False
+            num_running = self.scheduler.num_running()
+            num_waiting = self.scheduler.num_waiting()
+            max_batches = self.scheduler_config.max_batches
+            # prefill if too much waiting
+            if num_waiting >= 4:
+                return True
+            # prefill if no enough running
+            if num_running < max_batches * 0.5:
+                return True
+            # decoding
+            return False
 
-            # create inputs
-            inputs = self.create_model_inputs(running, is_prefill)
-            sampling_inputs = SamplingInputs.from_sampling_params(running)
-            all_ids = __gather_all_ids(running, sampling_inputs)
-            guided_input_ids = __gather_guided_input_ids(running, sampling_inputs)
-            num_appendable_ids = __get_num_appendable_ids(running)
-            num_ignore_eos = __get_num_ignore_eos(running)
-            return_logits = __need_logits(running)
+        prefill = __do_prefill()
+        scheduler_output = self.scheduler.schedule(is_prefill=prefill, prealloc_size=prefill_interval)
+        # schedule decoding if no valid prefill reqs.
+        if prefill and len(scheduler_output.running) == 0:
+            prefill = False
+            scheduler_output = self.scheduler.schedule(is_prefill=prefill, prealloc_size=prefill_interval)
+
+        running = scheduler_output.running
+        swap_in_map = scheduler_output.swap_in_map
+        swap_out_map = scheduler_output.swap_out_map
+        assert len(running) > 0
+
+        # create inputs
+        inputs = self.create_model_inputs(running, prefill)
+        sampling_inputs = SamplingInputs.from_sampling_params(running)
+        all_ids = __gather_all_ids(running, sampling_inputs)
+        guided_input_ids = __gather_guided_input_ids(running, sampling_inputs)
+        num_appendable_ids = __get_num_appendable_ids(running)
+        num_ignore_eos = __get_num_ignore_eos(running)
+        return_logits = __need_logits(running)
+
+        num_loops = 1 if prefill else prefill_interval
+
+        return dict(running=running,
+                    inputs=inputs,
+                    swap_in_map=swap_in_map,
+                    swap_out_map=swap_out_map,
+                    all_ids=all_ids,
+                    guided_input_ids=guided_input_ids,
+                    sampling_inputs=sampling_inputs,
+                    num_appendable_ids=num_appendable_ids,
+                    num_ignore_eos=num_ignore_eos,
+                    loop_count=num_loops,
+                    return_logits=return_logits)
+
+    def _set_has_runable_event(self, has_runable_event: asyncio.Event):
+        """set has runable event."""
+        if self.scheduler.has_unfinished():
+            has_runable_event.set()
+        else:
+            has_runable_event.clear()
+
+    async def _await_forward_event(self, forward_event: asyncio.Event):
+        """await forward event."""
+        if self.scheduler.has_unfinished():
+            await forward_event.wait()
+
+    @torch.inference_mode()
+    async def _async_loop_preprocess_message(self, forward_event: asyncio.Event, has_runable_event: asyncio.Event):
+        """preprocess msg."""
+        while True:
+            await self._await_forward_event(forward_event)
+            await self.req_manager.step()
+            self._set_has_runable_event(has_runable_event)
+
+    @torch.inference_mode()
+    async def _async_loop_background(self, in_que: asyncio.Queue, out_que: asyncio.Queue, forward_event: asyncio.Event):
+        """async loop background."""
+        while True:
+            forward_inputs = await in_que.get()
 
             forward_event.clear()
-            await self._async_step_background(
-                running=running,
-                inputs=inputs,
-                swap_in_map=swap_in_map,
-                swap_out_map=swap_out_map,
-                all_ids=all_ids,
-                guided_input_ids=guided_input_ids,
-                sampling_inputs=sampling_inputs,
-                num_appendable_ids=num_appendable_ids,
-                num_ignore_eos=num_ignore_eos,
-                loop_count=loop_count,
-                return_logits=return_logits,
+            await self.model_agent._async_step_background(
+                **forward_inputs,
                 output_que=out_que,
             )
             forward_event.set()
@@ -960,44 +794,19 @@ class Engine:
 
         Each engine instance would communicate with the engine by queue.
         """
-        prefill_interval = self.scheduler_config.prefill_interval
-
-        def __do_prefill():
-            # decoding if no waiting
-            if not self.scheduler.has_waiting():
-                return False
-            num_running = self.scheduler.num_running()
-            num_waiting = self.scheduler.num_waiting()
-            max_batches = self.scheduler_config.max_batches
-            # prefill if too much waiting
-            if num_waiting >= 4:
-                return True
-            # prefill if no enough running
-            if num_running < max_batches * 0.5:
-                return True
-            # decoding
-            return False
-
-        async def __step():
-            """step decoding."""
-            prefill = __do_prefill()
-            schedule_output = self.scheduler.schedule(is_prefill=prefill, prealloc_size=prefill_interval)
-            # schedule decoding if no valid prefill reqs.
-            if prefill and len(schedule_output.running) == 0:
-                prefill = False
-                schedule_output = self.scheduler.schedule(is_prefill=prefill, prealloc_size=prefill_interval)
-
-            in_que.put_nowait((prefill, schedule_output))
-            out = await out_que.get()
-            while out is not None:
-                step_outputs = await self._make_infer_outputs(**out)
-                self._set_has_runable_event(has_runable_event)
-                resp_que.put_nowait(step_outputs)
-                out = await out_que.get()
 
         while True:
             await has_runable_event.wait()
-            await __step()
+
+            forward_inputs = self._make_forward_inputs()
+            num_loops = forward_inputs['loop_count']
+            running = forward_inputs.pop('running')
+            in_que.put_nowait(forward_inputs)
+            for _ in range(num_loops):
+                out = await out_que.get()
+                step_outputs = await self._make_infer_outputs(**out, running=running)
+                self._set_has_runable_event(has_runable_event)
+                resp_que.put_nowait(step_outputs)
 
     @staticmethod
     def _add_loop_tasks_done_callback(tasks: List[asyncio.Task]):
@@ -1097,7 +906,7 @@ class Engine:
                 return
 
             # forward
-            await self._async_model_forward(inputs, swap_in_map, swap_out_map, return_logits=False)
+            await self.model_agent._async_model_forward(inputs, swap_in_map, swap_out_map, return_logits=False)
 
     def dist_run_forever(self):
         """distributed run forever."""
