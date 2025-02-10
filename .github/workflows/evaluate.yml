@@ -134,7 +134,7 @@ jobs:
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-*.whl
-          python3 -m pip install sentence_transformers --no-deps
+          python3 -m pip install sentence_transformers==2.2.2 --no-deps
           python3 -m pip install -r /root/models/offline_pkg/requirements.txt
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
@@ -151,7 +151,8 @@ jobs:
           git clone https://github.com/${{ github.event.inputs.oc_repo_org}}.git
           cd opencompass
           git checkout ${{ github.event.inputs.oc_repo_ref}}
-          python3 -m pip install -e . --no-deps
+          cp /root/models/offline_pkg/requirements-oc.txt requirements/runtime.txt
+          python3 -m pip install -e .
           echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
       - name: Check env
         run: |
