@@ -91,7 +91,6 @@ private:
                        const float*    logits,
                        const uint32_t* seq_limit_len,
                        const int*      context_length,
-                       const int*      end_ids,
                        int             step,
                        int             ite,
                        size_t          max_context_len,
@@ -105,17 +104,16 @@ private:
     const AttentionParam attn_param_;
     const LoraParam      lora_param_;
 
-    const size_t           head_num_;
-    const size_t           size_per_head_;
-    const size_t           hidden_units_;
-    const size_t           layer_num_;
-    const size_t           vocab_size_;
-    const size_t           vocab_size_padded_;
-    const float            rmsnorm_eps_;
-    const std::vector<int> end_ids_;
-    const NcclParam        tensor_para_;
-    const size_t           local_head_num_;
-    const size_t           local_kv_head_num_;
+    const size_t    head_num_;
+    const size_t    size_per_head_;
+    const size_t    hidden_units_;
+    const size_t    layer_num_;
+    const size_t    vocab_size_;
+    const size_t    vocab_size_padded_;
+    const float     rmsnorm_eps_;
+    const NcclParam tensor_para_;
+    const size_t    local_head_num_;
+    const size_t    local_kv_head_num_;
 
     const std::shared_ptr<LlamaWeight<T>> weights_{};
 

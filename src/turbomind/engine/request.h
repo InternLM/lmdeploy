@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <ostream>
 
@@ -15,6 +16,8 @@ namespace turbomind {
 struct GenerationConfig {
     int max_new_tokens = 0;
     int min_new_tokens = 0;
+
+    std::vector<int> eos_ids;  // only support single token id
 
     int   top_k       = 1;
     float top_p       = 0.f;
@@ -37,11 +40,24 @@ struct GenerationConfig {
     int output_logits            = 0;
 };
 
+template<typename T>
+inline std::ostream& operator<<(std::ostream& os, const std::vector<T>& vec)
+{
+    os << "[";
+    std::copy(vec.begin(), vec.end(), std::ostream_iterator<T>(os, ", "));
+    if (!vec.empty()) {
+        os.seekp(-2, std::ios_base::end);
+    }
+    os << "]";
+    return os;
+}
+
 inline std::ostream& operator<<(std::ostream& os, const GenerationConfig& c)
 {
     os << "GenerationConfig { ";
     os << "max_new_tokens=" << c.max_new_tokens;
     os << ", min_new_tokens=" << c.min_new_tokens;
+    os << ", eos_ids=" << c.eos_ids;
     os << ", top_p=" << c.top_p;
     os << ", top_k=" << c.top_k;
     os << ", min_p=" << c.min_p;

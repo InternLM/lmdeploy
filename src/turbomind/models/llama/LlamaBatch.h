@@ -301,6 +301,7 @@ private:
 
     // hard limits for persistent buffers
     static constexpr int kMaxStopBadWordsLen = 32;
+    static constexpr int kMaxEndIdsSize      = 32;
 
     bool is_allocate_persistant_buffer_ = false;
     bool is_allocate_buffer_            = false;

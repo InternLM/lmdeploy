@@ -220,7 +220,6 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t                                 ten
     model_param_.vocab_size         = model_reader["vocab_size"].as<int>();
     model_param_.embedding_size     = model_reader["embedding_size"].as<int>();
     model_param_.norm_eps           = model_reader["norm_eps"].as<float>();
-    model_param_.end_ids            = model_reader["end_ids"].as<std::vector<int>>();
     model_param_.tune_layer_num     = model_reader["tune_layer_num"].as<int>(1);
     model_param_.mla.q_lora_rank    = model_reader["q_lora_rank"].as<int>();
     model_param_.mla.kv_lora_rank   = model_reader["kv_lora_rank"].as<int>();

@@ -80,11 +80,11 @@ void invokeBatchApplyTemperaturePenalty_v2(float*       logits,
 template<typename T>
 void invokeMinLengthPenalty(T*           logits,
                             const int*   min_lengths,
+                            const int*   sequnece_lengths,
+                            const int    vocab_size_padded,
+                            const int    batch_size,
                             const int*   end_ids,
                             const int    end_ids_size,
-                            const int*   sequnece_lengths,
-                            const int    batch_size,
-                            const int    vocab_size_padded,
                             cudaStream_t stream);
 
 }  // namespace turbomind

@@ -119,7 +119,6 @@ class TurboMind:
                 pass
 
         self.session_len = self.config.session_len
-        self.eos_ids = self.config.model_config.end_ids
 
     def _create_weight(self, model_comm):
         """Allocate weight buffer, load params if from_workspace."""
@@ -397,7 +396,6 @@ class TurboMindInstance:
         self.node_id = tm_model.node_id
         self.gpu_count = tm_model.gpu_count
 
-        self.eos_ids = tm_model.eos_ids
         self.session_len = tm_model.session_len
 
         self.nccl_params = tm_model.nccl_params
@@ -496,12 +494,8 @@ class TurboMindInstance:
             bad_words.extend(gen_config.bad_token_ids)
         if gen_config.ignore_eos:
             stop_words = None
-            bad_words.extend(self.eos_ids)
         else:
             stop_words = gen_config.stop_token_ids or []
-            for eos_id in self.eos_ids:
-                if eos_id not in stop_words:
-                    stop_words.append(eos_id)
         stop_words = _construct_stop_or_bad_words(stop_words)
         bad_words = _construct_stop_or_bad_words(bad_words)
 
@@ -641,6 +635,8 @@ class TurboMindInstance:
         c.top_p = cfg.top_p
         c.min_p = cfg.min_p
         c.temperature = cfg.temperature
+        if cfg.stop_token_ids:
+            c.eos_ids = cfg.stop_token_ids
         c.repetition_penalty = cfg.repetition_penalty
         if cfg.min_new_tokens:
             c.min_new_tokens = cfg.min_new_tokens
