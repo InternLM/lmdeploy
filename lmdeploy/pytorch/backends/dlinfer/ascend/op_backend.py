@@ -173,12 +173,29 @@ class AscendOpsBackend(DlinferOpsBackend):
             # prepare some params of unpaged_prefill attention stage.
             q_start_loc_cpu, kv_seqlens_cpu = None, None
             q_seqlens_cpu = step_context.q_seqlens.cpu()
-            single_attention_mask = torch.logical_not(
-                torch.tril(
-                    torch.ones(max_q_seq_len, max_kv_seq_len, dtype=torch.bool).cuda(),
-                    diagonal=max_kv_seq_len - max_q_seq_len,
-                ))
-            attention_mask.append(single_attention_mask)
+            if SocVersion.is_Ascend910B():
+                single_attention_mask = torch.logical_not(
+                    torch.tril(
+                        torch.ones(max_q_seq_len, max_kv_seq_len, dtype=torch.bool).cuda(),
+                        diagonal=max_kv_seq_len - max_q_seq_len,
+                    ))
+                attention_mask.append(single_attention_mask)
+            elif SocVersion.is_Ascend310P():
+                if not cls.enable_graph:
+                    for i in range(q_seqlens_cpu.size(0)):
+                        single_attention_mask = torch.zeros(q_seqlens_cpu[i],
+                                                            q_seqlens_cpu[i]).fill_(-float('inf')).cuda()
+                        single_attention_mask = torch.triu(single_attention_mask, diagonal=1)
+                        attention_mask.append(single_attention_mask)
+                else:
+                    single_attention_mask = torch.logical_not(
+                        torch.tril(
+                            torch.ones(1, max_q_seq_len, max_kv_seq_len, dtype=torch.bool).cuda(),
+                            diagonal=max_kv_seq_len - max_q_seq_len,
+                        ))
+                    attention_mask.append(single_attention_mask)
+            else:
+                raise ValueError(f"dlinfer doesn't support {SocVersion.device_name()} device currently.")
         else:
             # prepare some params of paged_prefill attention stage.
             q_start_loc_cpu, q_seqlens_cpu = None, None
@@ -196,9 +213,8 @@ class AscendOpsBackend(DlinferOpsBackend):
             kv_seqlens = step_context.kv_seqlens.to(torch.int32)
             if not step_context.is_decoding:
                 if is_unpaged_prefill:
-                    attention_mask = [mask.half() for mask in attention_mask]
-                    if SocVersion.is_Ascend310P():
-                        attention_mask = [torch.cat([mask.unsqueeze(0) for mask in attention_mask])]
+                    if SocVersion.is_Ascend910B():
+                        attention_mask = [mask.half() for mask in attention_mask]
                 else:
                     attention_mask = [
                         torch.cat([mask.half() * cls.half_negative_inf for mask in attention_mask]).unsqueeze(1)
