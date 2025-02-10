@@ -401,8 +401,7 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
             pixel_values = [data for im_data in pixel_values for data in im_data]
             if len(pixel_values) > 0:
                 image_token_id = pixel_values[0].meta['image_token_id']
-                image_mask = input_ids == -1
-                input_ids.masked_fill_(image_mask, image_token_id)
+                image_mask = input_ids == image_token_id
                 pixel_values = torch.cat([data.data for data in pixel_values])
             else:
                 pixel_values = None
@@ -511,7 +510,6 @@ class InternVLInputProcessor(BaseModelInputProcessor):
             return input_ids, input_multimodals
 
         input_imgs = []
-        image_token_id = None
         for input_mm in input_multimodals:
             pixel_values = input_mm['pixel_values'].to(self.dtype)
             offset = input_mm['offset']
@@ -525,13 +523,6 @@ class InternVLInputProcessor(BaseModelInputProcessor):
                                        end=offset + num_pad,
                                        meta=dict(image_token_id=image_token_id))
             input_imgs.append(mm_data)
-
-        if image_token_id is not None:
-            import numpy as np
-
-            # replace pad token to -1
-            input_ids = np.array(input_ids)
-            input_ids[input_ids == image_token_id] = -1
 
         result = PreprocessInputResult(
             input_ids=input_ids,
