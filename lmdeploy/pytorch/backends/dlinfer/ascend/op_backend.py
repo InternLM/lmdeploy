@@ -213,8 +213,7 @@ class AscendOpsBackend(DlinferOpsBackend):
             kv_seqlens = step_context.kv_seqlens.to(torch.int32)
             if not step_context.is_decoding:
                 if is_unpaged_prefill:
-                    if SocVersion.is_Ascend910B():
-                        attention_mask = [mask.half() for mask in attention_mask]
+                    attention_mask = [mask.half() for mask in attention_mask]
                 else:
                     attention_mask = [
                         torch.cat([mask.half() * cls.half_negative_inf for mask in attention_mask]).unsqueeze(1)
