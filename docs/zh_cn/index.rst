@@ -88,9 +88,7 @@ LMDeploy 工具箱提供以下核心功能：
    :maxdepth: 1
    :caption: 测试基准
 
-   benchmark/profile_generation.md
-   benchmark/profile_throughput.md
-   benchmark/profile_api_server.md
+   benchmark/benchmark.md
    benchmark/evaluate_with_opencompass.md
 
 .. toctree::
