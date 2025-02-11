@@ -88,8 +88,8 @@ public:
         throw std::runtime_error("not implemented");
     }
 
-    virtual void AllreduceResidualBiasRMSnorm(void*        residual,
-                                              void*        hidden,
+    virtual void AllreduceResidualBiasRMSnorm(void*        hidden,
+                                              void*        residual,
                                               const void*  bias,
                                               const void*  weights,
                                               float        eps,
@@ -99,6 +99,13 @@ public:
                                               cudaStream_t stream)
     {
         throw std::runtime_error("not implemented");
+    }
+
+    template<class T>
+    void AllreduceResidualBiasRMSnorm(
+        T* hidden, T* residual, const T* bias, const T* weights, float eps, int dim, int token_num, cudaStream_t stream)
+    {
+        AllreduceResidualBiasRMSnorm(hidden, residual, bias, weights, eps, dim, token_num, getTensorType<T>(), stream);
     }
 
 protected:

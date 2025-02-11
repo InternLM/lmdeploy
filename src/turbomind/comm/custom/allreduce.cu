@@ -5,9 +5,9 @@
 
 #include "src/turbomind/comm/common.h"
 
-#include "src/turbomind/comm/custom/device_semaphore.h"
 #include "src/turbomind/comm/custom/allgather.h"
 #include "src/turbomind/comm/custom/custom_comm.h"
+#include "src/turbomind/comm/custom/device_semaphore.h"
 #include "src/turbomind/comm/custom/reduce_scatter.h"
 
 #include "src/turbomind/kernels/core/common.h"
@@ -31,7 +31,6 @@ __global__ void __launch_bounds__(1024, 1) local_allreduce_kernel(T*            
     local_allgather(channels, device_syncer, rank, world_size, sizeof(T) * (count / world_size));
 }
 
-
 // __launch_bounds__(1024, 1)
 
 template<int vec_size, class T>
@@ -52,10 +51,10 @@ __global__ void local_allreduce_kernel_v2(T*                                    
     DeviceSemaphore sem;
 
     const int lane_id = threadIdx.x % WARP_SIZE;
-    if (lane_id < n_peer) {
+    if (threadIdx.x < n_peer) {
         sem.Load(&semaphores[blockIdx.x * n_peer + lane_id]);
     }
-    __syncwarp();
+    // __syncwarp();
 
     // if (blockIdx.x == 0 && threadIdx.x < n_peer) {
     //     channels[threadIdx.x].signal();
@@ -64,14 +63,14 @@ __global__ void local_allreduce_kernel_v2(T*                                    
     // barrier->sync(block_num);
 
     if (threadIdx.x < n_peer) {
-        // asm volatile("fence.acq_rel.sys;" ::: "memory");
-        // sem.relaxedSignal();
-        // sem.wait();
-
         // It seems that fence is not needed on NVLink devices
         sem.Signal(cuda::memory_order_relaxed);
         sem.Wait(cuda::memory_order_relaxed);
+
+        // sem.Signal(cuda::memory_order_release);
+        // sem.Wait(cuda::memory_order_acquire);
     }
+
     __syncthreads();
 
     count /= vec_size * world_size;
@@ -107,6 +106,9 @@ __global__ void local_allreduce_kernel_v2(T*                                    
         // It seems that fence is not needed on NVLink devices
         sem.Signal(cuda::memory_order_relaxed);
         sem.Wait(cuda::memory_order_relaxed);
+
+        // sem.Signal(cuda::memory_order_release);
+        // sem.Wait(cuda::memory_order_acquire);
     }
 
     __syncthreads();
@@ -191,6 +193,7 @@ __global__ void __launch_bounds__(1024, 1) local_allreduce_kernel_0(T*          
     }
 }
 
+// reduce-scatter + allgather using LL16Packet
 template<int ctas_per_peer, class T>
 __global__ void __launch_bounds__(1024, 1) local_allreduce_kernel_1(T*                     dst,
                                                                     const T*               src,
@@ -301,16 +304,6 @@ void CustomComm::AllReduceSum(const void* sendbuff, void* recvbuff, size_t count
         else {
             constexpr int threads = 1024;
             constexpr int blocks  = 32;
-            // local_allreduce_kernel<vec_size.value><<<blocks, threads, 0, stream>>>((T*)data,  //
-            //                                                                        d_data_chns,
-            //                                                                        device_syncer,
-            //                                                                        rank,
-            //                                                                        world_size,
-            //                                                                        count);
-            // int smem_size = 64 << 10;
-            // cudaFuncSetAttribute(local_allreduce_kernel_v2<vec_size.value, 8, T>,
-            //                      cudaFuncAttributeMaxDynamicSharedMemorySize,
-            //                      smem_size);
             local_allreduce_kernel_v2<vec_size.value><<<blocks, threads, 0, stream>>>((T*)data,  //
                                                                                       (Array<T*, 8>&)peer_data,
                                                                                       device_syncer_,

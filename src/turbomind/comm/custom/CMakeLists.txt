@@ -16,7 +16,7 @@ FetchContent_MakeAvailable(repo-mscclpp)
 
 
 add_library(custom_comm STATIC custom_comm.cu allreduce.cu allgather.cu fused_rms_norm.cu)
-target_link_libraries(custom_comm PRIVATE mscclpp_static)
+target_link_libraries(custom_comm PRIVATE mscclpp_static rms_norm)
 
 set_property(TARGET custom_comm PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET custom_comm PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)

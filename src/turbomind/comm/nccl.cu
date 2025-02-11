@@ -1,10 +1,21 @@
 
+#include <cstdint>
 #include <memory>
 
 #include <nccl.h>
 #include <stdexcept>
 
 #include "src/turbomind/comm/comm.h"
+#include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/string_utils.h"
+
+#include "src/turbomind/kernels/norm/rms_norm.h"
+
+#define NCCLCHECK(e)                                                                                                   \
+    if (auto ec = e; ec != ncclSuccess) {                                                                              \
+        auto msg = fmtstr("NCCL error %s:%d '%s'", __FILE__, __LINE__, ncclGetErrorString(ec));                        \
+        throw std::runtime_error(msg.c_str());                                                                         \
+    }
 
 namespace turbomind {
 
@@ -35,34 +46,78 @@ public:
 
     void AllReduceSum(const void* sendbuff, void* recvbuff, size_t count, DataType type, cudaStream_t stream) override
     {
-        ncclGroupStart();
-        ncclAllReduce(sendbuff, recvbuff, count, getNcclDataType(type), ncclSum, comm_, stream);
-        ncclGroupEnd();
-
-        // ncclGroupStart();
-        // {
-        //     const size_t recvcount = count / world_size();
-        //     auto         sendbuff  = data;
-        //     auto         recvbuff  = (char*)sendbuff + 2 * rank() * recvcount;
-        //     ncclReduceScatter(sendbuff, recvbuff, recvcount, getNcclDataType(type), ncclSum, comm_, stream);
-        //     ncclAllGather(recvbuff, sendbuff, recvcount, getNcclDataType(type), comm_, stream);
-        // }
-        // ncclGroupEnd();
+        NCCLCHECK(ncclGroupStart());
+        NCCLCHECK(ncclAllReduce(sendbuff, recvbuff, count, getNcclDataType(type), ncclSum, comm_, stream));
+        NCCLCHECK(ncclGroupEnd());
     }
 
     void AllGather(const void* sendbuff, void* recvbuff, size_t sendcount, DataType type, cudaStream_t stream) override
     {
-        ncclGroupStart();
-        ncclAllGather(sendbuff, recvbuff, sendcount, getNcclDataType(type), comm_, stream);
-        ncclGroupEnd();
+        NCCLCHECK(ncclGroupStart());
+        NCCLCHECK(ncclAllGather(sendbuff, recvbuff, sendcount, getNcclDataType(type), comm_, stream));
+        NCCLCHECK(ncclGroupEnd());
     }
 
     void
     ReduceScatter(const void* sendbuff, void* recvbuff, size_t recvcount, DataType type, cudaStream_t stream) override
     {
-        ncclGroupStart();
-        ncclReduceScatter(sendbuff, recvbuff, recvcount, getNcclDataType(type), ncclSum, comm_, stream);
-        ncclGroupEnd();
+        NCCLCHECK(ncclGroupStart());
+        NCCLCHECK(ncclReduceScatter(sendbuff, recvbuff, recvcount, getNcclDataType(type), ncclSum, comm_, stream));
+        NCCLCHECK(ncclGroupEnd());
+    }
+
+    void RegisterBuffer(void* ptr, size_t size) override
+    {
+        // void* handle{};
+        // ncclCommRegister(comm_, ptr, size, &handle);
+    }
+
+    void AllreduceResidualBiasRMSnorm(void*        hidden,
+                                      void*        residual,
+                                      const void*  bias,
+                                      const void*  weights,
+                                      float        eps,
+                                      int          dim,
+                                      int          token_num,
+                                      DataType     dtype,
+                                      cudaStream_t stream) override
+    {
+        auto rms_norm_impl = [&](auto t, int64_t first, int64_t count) {
+            using T = decltype(t);
+            invokeBiasResidualRMSNorm((T*)residual + first * dim,
+                                      (T*)hidden + first * dim,
+                                      (const T*)weights,
+                                      (const T*)bias,
+                                      dim,
+                                      count,
+                                      eps,
+                                      stream);
+        };
+
+        auto rms_norm = [&](int64_t first, int64_t count) {
+            switch (dtype) {
+                case DataType::TYPE_FP16:
+                    return rms_norm_impl(half{}, first, count);
+                case DataType::TYPE_BF16:
+                    return rms_norm_impl(nv_bfloat16{}, first, count);
+                default:
+                    throw std::runtime_error("not implemented.");
+            }
+        };
+
+        if (1) {
+            AllReduceSum(hidden, hidden, token_num * dim, dtype, stream);
+            rms_norm(0, token_num);
+        }
+        else {  // Only useful for large input size
+            const int    slice     = (token_num + world_size_ - 1) / world_size_;
+            const size_t recvcount = slice * dim;
+            auto         sendbuff  = hidden;
+            auto         recvbuff  = (char*)hidden + 2 * rank() * recvcount;  // 2 for half / bfloat16
+            ReduceScatter(sendbuff, recvbuff, recvcount, dtype, stream);
+            rms_norm(rank_ * slice, slice);
+            AllGather(recvbuff, sendbuff, recvcount, dtype, stream);
+        }
     }
 
 private:
@@ -72,7 +127,7 @@ private:
 std::vector<std::unique_ptr<Comm>> CreateNcclComm(const std::vector<int>& devices)
 {
     ncclUniqueId uid{};
-    ncclGetUniqueId(&uid);
+    NCCLCHECK(ncclGetUniqueId(&uid));
 
     std::vector<std::unique_ptr<Comm>> ret(devices.size());
 
@@ -81,14 +136,14 @@ std::vector<std::unique_ptr<Comm>> CreateNcclComm(const std::vector<int>& device
     cudaGetDevice(&old_device);
 
     // initialize the communicator clique
-    ncclGroupStart();
+    NCCLCHECK(ncclGroupStart());
     for (int i = 0; i < (int)ret.size(); ++i) {
         cudaSetDevice(devices[i]);
         ncclComm_t comm{};
-        ncclCommInitRank(&comm, ret.size(), uid, i);
+        NCCLCHECK(ncclCommInitRank(&comm, ret.size(), uid, i));
         ret[i] = std::unique_ptr<Comm>{new NcclComm{comm, (int)ret.size(), i}};
     }
-    ncclGroupEnd();
+    NCCLCHECK(ncclGroupEnd());
 
     cudaSetDevice(old_device);
 
