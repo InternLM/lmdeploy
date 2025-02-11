@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+# Inspired by vLLM: https://github.com/vllm-project/vllm
 import asyncio
 from typing import Any, Dict
 
@@ -20,7 +21,8 @@ class ExecutorBase:
                  tokenizer: Any,
                  dp: int,
                  tp: int,
-                 adapters: Dict[str, str] = None):
+                 adapters: Dict[str, str] = None,
+                 device_type: str = 'cuda'):
         """initialize Executor."""
         cache_config.window_size = model_config.sliding_window
         self.model_config = model_config
@@ -29,6 +31,7 @@ class ExecutorBase:
         self.tokenizer = tokenizer
         self.dp = dp
         self.tp = tp
+        self.device_type = device_type
 
     def download_models(self):
         """download model."""

@@ -17,7 +17,7 @@ from lmdeploy.utils import get_logger, get_max_batch_size, get_model, logging_ti
 from ..adapter.adapter import AdapterManager
 from ..config import BackendConfig, CacheConfig, ModelConfig, SchedulerConfig
 from ..devices import DeviceContext, get_device_manager
-from ..distributed import DistContext, get_dist_manager
+from ..distributed import get_dist_manager
 from ..messages import MessageStatus, SchedulerSequence
 from ..model_inputs import ModelInputs, VisionModelInputs
 from ..paging import Scheduler
@@ -119,35 +119,34 @@ class Engine:
         if engine_config.max_batch_size is None:
             engine_config.max_batch_size = get_max_batch_size(engine_config.device_type)
 
-        # process distributed
-        (rank, local_rank, world_size, local_world_size, dist_proc_mgr) = self._init_dist(
-            model_path,
-            tokenizer=tokenizer,
-            engine_config=engine_config,
-            trust_remote_code=trust_remote_code,
-        )
+        # # process distributed
+        # (rank, local_rank, world_size, local_world_size, dist_proc_mgr) = self._init_dist(
+        #     model_path,
+        #     tokenizer=tokenizer,
+        #     engine_config=engine_config,
+        #     trust_remote_code=trust_remote_code,
+        # )
         tp = engine_config.tp
-        dp = 1
-        dist_ctx = DistContext.build(rank, tp, dp, nproc_per_node=local_world_size)
+        # dist_ctx = DistContext.build(rank, tp, dp, nproc_per_node=local_world_size)
 
         self.tokenizer = tokenizer
         self.tp = tp
 
-        # download models and adapters
-        if not os.path.exists(model_path):
-            if local_rank == 0:
-                model_path = get_model(model_path, engine_config.download_dir, engine_config.revision)
-            if world_size > 1:
-                with get_dist_manager().context(dist_ctx):
-                    model_path = _braodcast_obj(model_path, local_rank, dist_ctx.local_cpu_group)
+        # # download models and adapters
+        # if not os.path.exists(model_path):
+        #     if local_rank == 0:
+        #         model_path = get_model(model_path, engine_config.download_dir, engine_config.revision)
+        #     if world_size > 1:
+        #         with get_dist_manager().context(dist_ctx):
+        #             model_path = _braodcast_obj(model_path, local_rank, dist_ctx.local_cpu_group)
 
         adapters = engine_config.adapters
-        if adapters is not None and len(adapters) > 0:
-            if local_rank == 0:
-                adapters = self._download_adapters(adapters, engine_config)
-            if world_size > 1:
-                with get_dist_manager().context(dist_ctx):
-                    adapters = _braodcast_obj(adapters, local_rank, dist_ctx.local_cpu_group)
+        # if adapters is not None and len(adapters) > 0:
+        #     if local_rank == 0:
+        #         adapters = self._download_adapters(adapters, engine_config)
+        #     if world_size > 1:
+        #         with get_dist_manager().context(dist_ctx):
+        #             adapters = _braodcast_obj(adapters, local_rank, dist_ctx.local_cpu_group)
 
         # check environment
         checker = EngineChecker(model_path=model_path,
@@ -164,17 +163,17 @@ class Engine:
 
         # build model agent
         self.device_ctx = DeviceContext(device_type=engine_config.device_type)
-        with get_dist_manager().context(dist_ctx), get_device_manager().context(self.device_ctx):
-            raw_tokenizer = None
-            if tokenizer is not None:
-                raw_tokenizer = tokenizer.model.model
-            self.executor = build_executor(model_path,
-                                           model_config=model_config,
-                                           cache_config=cache_config,
-                                           backend_config=backend_config,
-                                           tokenizer=raw_tokenizer,
-                                           adapters=adapters)
-            self.executor.init()
+        raw_tokenizer = None
+        if tokenizer is not None:
+            raw_tokenizer = tokenizer.model.model
+        self.executor = build_executor(model_path,
+                                       model_config=model_config,
+                                       cache_config=cache_config,
+                                       backend_config=backend_config,
+                                       tokenizer=raw_tokenizer,
+                                       adapters=adapters,
+                                       device_type=engine_config.device_type)
+        self.executor.init()
 
         self.input_processor = self.executor.get_input_processor()
 
@@ -182,12 +181,12 @@ class Engine:
         self.adapter_manager = self._build_adapter_manager(adapters)
         self.scheduler = Scheduler(scheduler_config, cache_config)
 
-        # dist args
-        self.rank = rank
-        self.local_rank = local_rank
-        self.world_size = world_size
-        self.dist_proc_mgr = dist_proc_mgr
-        self.dist_ctx = dist_ctx
+        # # dist args
+        # self.rank = rank
+        # self.local_rank = local_rank
+        # self.world_size = world_size
+        # self.dist_proc_mgr = dist_proc_mgr
+        # self.dist_ctx = dist_ctx
 
         # engine args
         self.model_path = model_path
@@ -199,8 +198,8 @@ class Engine:
 
         self.req_manager = self._bind_request_manager()
 
-        if rank != 0:
-            self.dist_run_forever()
+        # if rank != 0:
+        #     self.dist_run_forever()
 
         # create main thread
         self._start_loop()
@@ -846,9 +845,8 @@ class Engine:
         # dist.destroy_process_group()
 
     async def async_loop(self):
-        device_manager = get_device_manager()
         dist_mgr = get_dist_manager()
-        with dist_mgr.context(self.dist_ctx), device_manager.context(self.device_ctx):
+        with dist_mgr.context(self.dist_ctx):
             try:
                 event_loop = asyncio.get_event_loop()
 

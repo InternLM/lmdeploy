@@ -9,7 +9,8 @@ from lmdeploy.utils import get_logger, logging_timer
 
 from ..backends import get_backend
 from ..config import BackendConfig, CacheConfig, ModelConfig
-from ..distributed import get_dist_manager
+from ..devices import DeviceContext, get_device_manager
+from ..distributed import DistContext, get_dist_manager
 from ..model_inputs import ModelInputs
 from ..models.patch import add_adapters, build_patched_model, update_custom_module_map
 from ..utils import get_gpu_memory
@@ -164,6 +165,10 @@ class AutoModelAgent:
         """build cache engine."""
         raise NotImplementedError('Not Implemented.')
 
+    def release(self):
+        """release."""
+        raise NotImplementedError('Not Implemented.')
+
     def set_cache_config(self, cache_config: CacheConfig):
         """set all cache config."""
         self.cache_config = cache_config
@@ -177,10 +182,6 @@ class AutoModelAgent:
         torch.cuda.empty_cache()
         gpu_mem_physical_free, _ = get_gpu_memory()
         return gpu_mem_physical_free
-
-    def release(self):
-        """release."""
-        raise NotImplementedError('Not Implemented.')
 
     async def _async_model_forward(self, inputs: ModelInputs, swap_in_map: Dict, swap_out_map: Dict,
                                    return_logits: bool):
@@ -366,9 +367,21 @@ class AutoModelAgent:
                 __update_inputs(next_token_ids)
 
     @torch.inference_mode()
-    async def _async_loop_background(self, forward_event: asyncio.Event = None):
+    async def _async_loop_background(self,
+                                     forward_event: asyncio.Event = None,
+                                     device_ctx: DeviceContext = None,
+                                     dist_ctx: DistContext = None):
         """async loop background."""
-        with torch.cuda.stream(self.stream):
+        device_mgr = get_device_manager()
+        dist_mgr = get_dist_manager()
+        if device_ctx is None:
+            device_ctx = device_mgr.current_context()
+        if dist_ctx is None:
+            dist_ctx = dist_mgr.current_context()
+
+        with dist_mgr.context(dist_ctx), device_mgr.context(device_ctx), torch.cuda.stream(self.stream):
+            print(device_ctx)
+            exit()
             while True:
                 forward_inputs = await self._in_que.get()
 
@@ -381,12 +394,15 @@ class AutoModelAgent:
                 if forward_event is not None:
                     forward_event.set()
 
-    def start(self, forward_event: asyncio.Event = None):
+    def start(self,
+              forward_event: asyncio.Event = None,
+              device_ctx: DeviceContext = None,
+              dist_ctx: DistContext = None):
         """start event loop."""
         event_loop = asyncio.get_event_loop()
         self._in_que = asyncio.Queue()
         self._out_que = asyncio.Queue()
-        self._background_task = event_loop.create_task(self._async_loop_background(forward_event))
+        self._background_task = event_loop.create_task(self._async_loop_background(forward_event, device_ctx, dist_ctx))
 
     def stop(self):
         """stop task."""

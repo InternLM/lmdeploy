@@ -3,6 +3,7 @@ import asyncio
 from typing import Any, Dict
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
+from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.engine.model_agent import build_model_agent
 from lmdeploy.utils import get_logger
 
@@ -20,7 +21,8 @@ class UniExecutor(ExecutorBase):
                  cache_config: CacheConfig,
                  backend_config: BackendConfig,
                  tokenizer: Any,
-                 adapters: Dict[str, str] = None):
+                 adapters: Dict[str, str] = None,
+                 device_type: str = 'cuda'):
         """initialize Executor."""
         super().__init__(model_path=model_path,
                          model_config=model_config,
@@ -29,7 +31,10 @@ class UniExecutor(ExecutorBase):
                          tokenizer=tokenizer,
                          dp=1,
                          tp=1,
-                         adapters=adapters)
+                         adapters=adapters,
+                         device_type=device_type)
+
+        self.device_ctx = DeviceContext(device_type=device_type)
 
         self.model_agent = build_model_agent(model_path=model_path,
                                              model_config=model_config,
@@ -68,7 +73,7 @@ class UniExecutor(ExecutorBase):
 
     def start(self, forward_event: asyncio.Event):
         """start engine loop."""
-        self.model_agent.start(forward_event)
+        self.model_agent.start(forward_event, self.device_ctx)
 
     def stop(self):
         """stop engine loop."""
@@ -89,3 +94,8 @@ class UniExecutor(ExecutorBase):
     def get_input_processor(self):
         """get input processor."""
         return self.model_agent.get_input_processor()
+
+    def init(self):
+        """init."""
+        with get_device_manager().context(self.device_ctx):
+            super().init()
