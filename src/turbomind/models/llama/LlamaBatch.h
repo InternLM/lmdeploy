@@ -309,8 +309,6 @@ private:
     TensorMap inputs_;
     TensorMap outputs_;
 
-    std::vector<std::tuple<std::string, std::byte*, std::byte*>> sampling_params_;
-
     std::thread internal_thread_;
 
     int* h_output_ids_{};

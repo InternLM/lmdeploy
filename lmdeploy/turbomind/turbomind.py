@@ -39,8 +39,8 @@ MAX_LOGPROBS = 1024
 def _construct_stop_or_bad_words(words: List[int] = None):
     if words is None or len(words) == 0:
         return None
-    offsets = range(1, len(words) + 1)
-    combined = np.array([[words, offsets]]).astype(np.int32)
+    offsets = list(range(1, len(words) + 1))
+    combined = [words, offsets]
     return combined
 
 
@@ -489,21 +489,6 @@ class TurboMindInstance:
             inputs['input_embeddings'] = input_embeddings
             inputs['input_embedding_ranges'] = input_embedding_ranges
 
-        bad_words = []
-        if gen_config.bad_token_ids is not None:
-            bad_words.extend(gen_config.bad_token_ids)
-        if gen_config.ignore_eos:
-            stop_words = None
-        else:
-            stop_words = gen_config.stop_token_ids or []
-        stop_words = _construct_stop_or_bad_words(stop_words)
-        bad_words = _construct_stop_or_bad_words(bad_words)
-
-        if stop_words is not None:
-            inputs['stop_words_list'] = stop_words
-        if bad_words is not None:
-            inputs['bad_words_list'] = bad_words
-
         return inputs, input_len
 
     async def async_cancel(self, session_id: int = None):
@@ -637,6 +622,10 @@ class TurboMindInstance:
         c.temperature = cfg.temperature
         if cfg.stop_token_ids:
             c.eos_ids = cfg.stop_token_ids
+        if cfg.bad_token_ids:
+            c.bad_ids = _construct_stop_or_bad_words(cfg.bad_token_ids)
+        if not cfg.ignore_eos and cfg.stop_token_ids:
+            c.stop_ids = _construct_stop_or_bad_words(cfg.stop_token_ids)
         c.repetition_penalty = cfg.repetition_penalty
         if cfg.min_new_tokens:
             c.min_new_tokens = cfg.min_new_tokens

@@ -781,11 +781,6 @@ void LlamaBatch<T>::AllocatePersistantBuffer(size_t max_batch_size, int cache_bl
     h_end_ids_buf_ =
         (int*)allocator_->reMalloc(h_end_ids_buf_, sizeof(int) * max_batch_size * kMaxEndIdsSize, false, true);
 
-    sampling_params_ = {
-        {"stop_words_list", (std::byte*)h_stop_words_, (std::byte*)d_stop_words_},
-        {"bad_words_list", (std::byte*)h_bad_words_, (std::byte*)d_bad_words_},
-    };
-
     for (auto& s : states_) {
         s.output_ids = (int*)allocator_->reMalloc(s.output_ids, sizeof(int) * max_batch_size * session_len_, true);
         s.curand_state =
@@ -1079,71 +1074,60 @@ void LlamaBatch<T>::InitializeSampling(const GenerationState& g)
     member_to_tensor(&G::repetition_penalty, "repetition_penalty", h_repetition_penalty_, 1.f);
     member_to_tensor(&G::min_new_tokens, "min_length", h_min_length_, 0);
 
-    for (const auto& [name, h_ptr, d_ptr] : sampling_params_) {
-        // find an exemplar that matches the param name
-        const Tensor* ptr{};
+    auto init_stop_bad_words = [&](auto getter, auto key, auto h_buf, auto d_buf) {
+        int                                     max_length = 0;
+        std::vector<std::pair<const int*, int>> copy_tokens(batch_size);
+        std::vector<std::pair<const int*, int>> copy_offsets(batch_size);
         for (int i = 0; i < batch_size; ++i) {
-            if (state_->requests[i]->inputs.isExist(name)) {
-                ptr = &state_->requests[i]->inputs.at(name);
-                break;
+            const auto& pr        = std::invoke(getter, state_->requests[i]->gen_cfg);
+            const auto& token_ids = pr.first;
+            const auto& offsets   = pr.second;
+            if (offsets.size() == 0 || token_ids.size() == 0) {
+                continue;
             }
-        }
-        // fill the batch of the param
-        if (ptr) {
-            const auto& ref   = *ptr;
-            auto        shape = ref.shape;
-            FT_CHECK(shape[0] == 1);
-            shape[0]                = batch_size;
-            const int size_in_bytes = ref.sizeBytes();
-
-            int max_list_length = 0;
-            if (name == "bad_words_list" || name == "stop_words_list") {
-                for (int i = 0; i < batch_size; ++i) {
-                    if (state_->requests[i]->inputs.isExist(name)) {
-                        Tensor& src = state_->requests[i]->inputs.at(name);
-                        FT_CHECK(src.shape.size() == 3 && src.shape[1] == 2 && src.shape[2] <= kMaxStopBadWordsLen);
-                        max_list_length = std::max(max_list_length, (int)src.shape[2]);
-                    }
-                }
-                std::fill_n((int*)h_ptr, batch_size * 2 * max_list_length, -1);
-                shape[2] = max_list_length;
+            FT_CHECK(offsets.back() == token_ids.size());
+            if (offsets.back() <= kMaxStopBadWordsLen) {
+                copy_tokens[i]  = std::make_pair(token_ids.data(), (int)token_ids.size());
+                copy_offsets[i] = std::make_pair(offsets.data(), (int)offsets.size());
+                max_length      = std::max(max_length, (int)token_ids.size());
             }
             else {
-                memset(h_ptr, 0, size_in_bytes * batch_size);
-            }
-            for (int i = 0; i < batch_size; ++i) {
-                FT_CHECK(state_->requests[i] != nullptr);
-                if (state_->requests[i]->inputs.isExist(name)) {
-                    Tensor& src = state_->requests[i]->inputs.at(name);
-                    if (name == "bad_words_list" || name == "stop_words_list") {
-                        int list_length = src.shape[2];
-                        std::copy_n(src.getPtr<std::byte>(),
-                                    sizeof(int) * list_length,
-                                    h_ptr + i * sizeof(int) * 2 * max_list_length);
-                        std::copy_n(src.getPtr<std::byte>() + sizeof(int) * list_length,
-                                    sizeof(int) * list_length,
-                                    h_ptr + i * sizeof(int) * 2 * max_list_length + sizeof(int) * max_list_length);
-                    }
-                    else {
-                        FT_CHECK(ref.shape == src.shape);
-                        std::copy_n(src.getPtr<std::byte>(), size_in_bytes, h_ptr + size_in_bytes * i);
-                    }
+                auto trunc_offset_size =
+                    std::upper_bound(offsets.begin(),
+                                     offsets.begin() + std::min(kMaxStopBadWordsLen, (int)offsets.size()),
+                                     kMaxStopBadWordsLen)
+                    - offsets.begin();
+                TM_LOG_WARNING("[InitializeSampling] [%ld] %s length (%d) exceeds %d, truncated to %d",
+                               state_->requests[i]->id,
+                               key,
+                               offsets.back(),
+                               kMaxStopBadWordsLen,
+                               trunc_offset_size);
+                if (trunc_offset_size > 0) {
+                    int trunc_token_size = offsets[trunc_token_size - 1];
+                    copy_tokens[i]       = std::make_pair(token_ids.data(), trunc_token_size);
+                    copy_offsets[i]      = std::make_pair(offsets.data(), trunc_offset_size);
+                    max_length           = std::max(max_length, trunc_token_size);
                 }
-            }
-            if (d_ptr) {
-                if (name == "bad_words_list" || name == "stop_words_list") {
-                    Copy(h_ptr, batch_size * sizeof(int) * 2 * max_list_length, d_ptr);
-                }
-                else {
-                    Copy(h_ptr, batch_size * size_in_bytes, d_ptr);
-                }
-            }
-            inputs.insert({name, {d_ptr ? MEMORY_GPU : MEMORY_CPU, ref.type, shape, d_ptr ? d_ptr : h_ptr}});
-            if (debug_ && rank_ == 0) {
-                TM_LOG_INFO("[initializeSampling] %s", format({name, inputs.at(name)}).c_str());
             }
         }
-    }
+        if (!max_length) {
+            return;
+        }
+        std::fill_n(h_buf, batch_size * 2 * max_length, -1);
+        for (int i = 0; i < batch_size; ++i) {
+            if (copy_tokens[i].first != nullptr) {
+                std::copy_n(copy_tokens[i].first, copy_tokens[i].second, h_buf + i * 2 * max_length);
+            }
+            if (copy_offsets[i].first != nullptr) {
+                std::copy_n(copy_offsets[i].first, copy_offsets[i].second, h_buf + i * 2 * max_length + max_length);
+            }
+        }
+        Copy(h_buf, batch_size * 2 * max_length, d_buf);
+        inputs.insert(key, {MEMORY_GPU, TYPE_INT32, {(size_t)batch_size, (size_t)2, (size_t)max_length}, d_buf});
+    };
+    init_stop_bad_words(&G::stop_ids, "stop_words_list", h_stop_words_, d_stop_words_);
+    init_stop_bad_words(&G::bad_ids, "bad_words_list", h_bad_words_, d_bad_words_);
 
     // MinLengthPenalty
     if (inputs.isExist("min_length")) {
@@ -1167,9 +1151,10 @@ void LlamaBatch<T>::InitializeSampling(const GenerationState& g)
                     continue;
                 }
                 if (eos_ids.size() > kMaxEndIdsSize) {
-                    TM_LOG_WARNING("the eos_id length %d of seq %d exceed %d",
+                    TM_LOG_WARNING("[InitializeSampling] [%ld] eos length (%d) exceeds %d, truncated to %d",
+                                   (long)state_->requests[i]->id,
                                    (int)eos_ids.size(),
-                                   state_->requests[i]->id,
+                                   kMaxEndIdsSize,
                                    kMaxEndIdsSize);
                 }
                 std::copy_n(eos_ids.begin(), std::min((int)eos_ids.size(), kMaxEndIdsSize), h_end_ids);
