@@ -574,7 +574,7 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/open-compass/opencompass.git
           cd opencompass
-          cp /root/models/offline_pkg/requirements-oc.txt requirements/runtime.txt
+          cp /nvme/qa_test_models/offline_pkg/requirements-oc.txt requirements/runtime.txt
           python3 -m pip install -e .
           echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
       - name: Check env
