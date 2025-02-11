@@ -3,14 +3,16 @@
 import asyncio
 import multiprocessing as mp
 import multiprocessing.shared_memory as shared_memory
+import os
 import pickle
 import struct
 from contextlib import contextmanager
+from datetime import timedelta
 from multiprocessing.context import SpawnContext
 from typing import Any, Dict, List, Tuple
 
-import cloudpickle
 import torch
+import torch.distributed as dist
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
@@ -68,7 +70,7 @@ class SharedBuffer:
 
     def pack_data(self, data):
         """pack data."""
-        dumped_data = cloudpickle.dumps(data, protocol=pickle.HIGHEST_PROTOCOL)
+        dumped_data = pickle.dumps(data, protocol=pickle.HIGHEST_PROTOCOL)
         data_size = len(dumped_data)
 
         num_packs = get_num_packages(data_size)
@@ -116,7 +118,7 @@ class SharedBuffer:
                     continue
                 dumped_data += buf[HEAD_SIZE:HEAD_SIZE + pac_size]
 
-        data = cloudpickle.loads(dumped_data)
+        data = pickle.loads(dumped_data)
         return data
 
     def receive(self):
@@ -139,6 +141,27 @@ class SharedBuffer:
 class MPExecutor(ExecutorBase):
     """Single node multi device Executor powered by multiprocess."""
 
+    @staticmethod
+    def _find_available_port() -> bool:
+        """find available port."""
+        import socket
+        port = 29500
+        while True:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                if s.connect_ex(('localhost', port)) != 0:
+                    return port
+                port += 1
+
+    @classmethod
+    def setup_master_addr(cls):
+        """setup master addr."""
+        port = cls._find_available_port()
+        os.environ.setdefault('MASTER_ADDR', '127.0.0.1')
+        os.environ.setdefault('MASTER_PORT', str(port))
+        addr = os.environ['MASTER_ADDR']
+        port = os.environ['MASTER_PORT']
+        logger.info(f'MASTER_ADDR={addr}, MASTER_PORT={port}')
+
     def __init__(self,
                  model_path: str,
                  model_config: ModelConfig,
@@ -159,6 +182,7 @@ class MPExecutor(ExecutorBase):
                          tp=tp,
                          adapters=adapters,
                          device_type=device_type)
+        self.setup_master_addr()
 
         self.world_size = tp * dp
         mp_ctx = mp.get_context('spawn')
@@ -177,6 +201,8 @@ class MPExecutor(ExecutorBase):
             proc.start(proc_id=proc_id,
                        comm_notifier=self.comm_notifier,
                        comm_buf_name=self.comm_buf_name,
+                       ret_notifier=ret_notifier,
+                       ret_buf_name=ret_buf.name(),
                        model_path=model_path,
                        model_config=model_config,
                        cache_config=cache_config,
@@ -197,6 +223,10 @@ class MPExecutor(ExecutorBase):
                        call_async: bool = False,
                        return_mask: int = 0):
         """collective rpc."""
+        if args is None:
+            args = list()
+        if kwargs is None:
+            kwargs = dict()
         self.comm_buf.send_all(
             dict(
                 method=method,
@@ -220,6 +250,10 @@ class MPExecutor(ExecutorBase):
                                    call_async: bool = False,
                                    return_mask: int = 0):
         """collective rpc."""
+        if args is None:
+            args = list()
+        if kwargs is None:
+            kwargs = dict()
         await self.comm_buf.send_all_async(
             dict(
                 method=method,
@@ -266,7 +300,9 @@ class MPExecutor(ExecutorBase):
 
     def start(self, forward_event: asyncio.Event):
         """start engine loop."""
+        forward_event.clear()
         self.collective_rpc('start')
+        forward_event.set()
 
     async def forward_async(self, inputs):
         """start forward."""
@@ -274,7 +310,7 @@ class MPExecutor(ExecutorBase):
 
     async def get_output_async(self):
         """get output async."""
-        return await self.collective_rpc_async('get_output_async', return_mask=1)
+        return (await self.collective_rpc_async('get_output_async', call_async=True, return_mask=1))[0]
 
     def get_input_processor(self):
         """get input processor."""
@@ -291,6 +327,14 @@ class MPExecutor(ExecutorBase):
         self.comm_buf.close()
         for ret_buf in self.ret_bufs:
             ret_buf.close()
+
+
+def init_dist_environ(rank: int, world_size: int, nproc_per_node: int):
+    """init environ."""
+    os.environ['RANK'] = str(rank)
+    os.environ['LOCAL_RANK'] = str(rank % nproc_per_node)
+    os.environ['WORLD_SIZE'] = str(world_size)
+    os.environ['LOCAL_WORLD_SIZE'] = str(nproc_per_node)
 
 
 class ExecutorProc:
@@ -315,6 +359,14 @@ class ExecutorProc:
             return
         self._proc.close()
 
+    @staticmethod
+    def init_process_group(rank: int, world_size: int, nproc_per_node: int):
+        """init process group."""
+        DIST_TIMEOUT = timedelta(days=35600)
+        dist.init_process_group(backend='gloo', rank=rank, world_size=world_size, timeout=DIST_TIMEOUT)
+        assert dist.is_initialized()
+        init_dist_environ(rank, world_size, nproc_per_node)
+
     def _main_loop(
         self,
         proc_id: int,
@@ -334,6 +386,9 @@ class ExecutorProc:
     ):
         """main loop."""
 
+        world_size = tp * dp
+        self.init_process_group(proc_id, world_size, 1)
+
         dist_ctx = DistContext.build(proc_id, tp, dp)
         device_ctx = DeviceContext(device_type=device_type)
 
@@ -347,8 +402,6 @@ class ExecutorProc:
                                             cache_config=cache_config,
                                             backend_config=backend_config,
                                             tokenizer=tokenizer,
-                                            dp=dp,
-                                            tp=tp,
                                             adapters=adapters)
 
             comm_buf = SharedBuffer(proc_id, notifier=comm_notifier, name=comm_buf_name)
@@ -360,7 +413,6 @@ class ExecutorProc:
                 event_loop.run_until_complete(
                     self._main_loop_impl(proc_id, comm_buf=comm_buf, ret_buf=ret_buf, model_agent=model_agent))
             finally:
-                model_agent.close()
                 comm_buf.close()
 
     async def _main_loop_impl(self, proc_id: int, comm_buf: SharedBuffer, ret_buf: SharedBuffer,

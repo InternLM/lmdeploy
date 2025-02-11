@@ -16,7 +16,6 @@ from ..models.patch import add_adapters, build_patched_model, update_custom_modu
 from ..utils import get_gpu_memory
 from ..weight_loader.model_weight_loader import load_model_weights
 from .cache_engine import CacheEngine
-from .dist_proc_manager import broadcast_inputs
 from .logits_process import FusedLogitsProcessor, SamplingInputs
 
 logger = get_logger('lmdeploy')
@@ -118,6 +117,21 @@ def _batch_stopping_criteria(token_ids: torch.Tensor, stop_words: torch.Tensor, 
 
 
 SwapMap = Dict[int, int]
+
+
+def _on_finish_callback(task: asyncio.Task) -> None:
+    """raise exception on finish."""
+    task_name = task.get_name()
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        logger.debug(f'Task <{task_name}> cancelled.')
+        return
+    except Exception:
+        logger.exception(f'Task <{task_name}> failed')
+    finally:
+        if not task.cancelled():
+            task.cancel()
 
 
 class AutoModelAgent:
@@ -322,15 +336,10 @@ class AutoModelAgent:
 
         # dist tools
         dist_ctx = get_dist_manager().current_context()
+        rank = dist_ctx.rank
+        tp = dist_ctx.tp
 
         for idx in range(loop_count):
-
-            # broadcast inputs
-            if dist_ctx.tp > 1:
-                tp_cpu_group = dist_ctx.tp_cpu_group
-                (inputs, swap_in_map, swap_out_map) = broadcast_inputs(0, [inputs, swap_in_map, swap_out_map],
-                                                                       tp_cpu_group)
-
             # inference
             output = await self._async_model_forward(inputs,
                                                      swap_in_map=swap_in_map,
@@ -339,10 +348,17 @@ class AutoModelAgent:
             logits = output['logits']
             logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
 
-            # sampling
-            next_token_ids = await self.async_sampling_logits(logits, all_ids, guided_input_ids, sampling_inputs,
-                                                              inputs, num_ignore_eos > 0)
-            num_ignore_eos = num_ignore_eos - 1
+            if rank % tp == 0:
+                # sampling
+                next_token_ids = await self.async_sampling_logits(logits, all_ids, guided_input_ids, sampling_inputs,
+                                                                  inputs, num_ignore_eos > 0)
+                num_ignore_eos = num_ignore_eos - 1
+            else:
+                next_token_ids = torch.empty_like(num_ignore_eos)
+
+            if tp > 1 and is_decoding and idx < loop_count - 1:
+                tp_gpu_group = dist_ctx.tp_gpu_group
+                dist.broadcast(next_token_ids, src=rank // tp * tp, group=tp_gpu_group)
 
             # stopping criteria
             stopped, num_appendable_ids = _batch_stopping_criteria(next_token_ids, sampling_inputs.stop_words,
@@ -380,8 +396,6 @@ class AutoModelAgent:
             dist_ctx = dist_mgr.current_context()
 
         with dist_mgr.context(dist_ctx), device_mgr.context(device_ctx), torch.cuda.stream(self.stream):
-            print(device_ctx)
-            exit()
             while True:
                 forward_inputs = await self._in_que.get()
 
@@ -402,7 +416,9 @@ class AutoModelAgent:
         event_loop = asyncio.get_event_loop()
         self._in_que = asyncio.Queue()
         self._out_que = asyncio.Queue()
-        self._background_task = event_loop.create_task(self._async_loop_background(forward_event, device_ctx, dist_ctx))
+        self._background_task = event_loop.create_task(self._async_loop_background(forward_event, device_ctx, dist_ctx),
+                                                       name='ModelAgentLoop')
+        self._background_task.add_done_callback(_on_finish_callback)
 
     def stop(self):
         """stop task."""

@@ -16,12 +16,10 @@ from lmdeploy.utils import get_logger, get_max_batch_size, get_model, logging_ti
 
 from ..adapter.adapter import AdapterManager
 from ..config import BackendConfig, CacheConfig, ModelConfig, SchedulerConfig
-from ..devices import DeviceContext, get_device_manager
-from ..distributed import get_dist_manager
 from ..messages import MessageStatus, SchedulerSequence
 from ..model_inputs import ModelInputs, VisionModelInputs
 from ..paging import Scheduler
-from .dist_proc_manager import DIST_TIMEOUT, DistProcManager, broadcast_inputs
+from .dist_proc_manager import DIST_TIMEOUT, DistProcManager
 from .engine_checker import EngineChecker
 from .executor import build_executor
 from .logits_process import SamplingInputs
@@ -119,15 +117,8 @@ class Engine:
         if engine_config.max_batch_size is None:
             engine_config.max_batch_size = get_max_batch_size(engine_config.device_type)
 
-        # # process distributed
-        # (rank, local_rank, world_size, local_world_size, dist_proc_mgr) = self._init_dist(
-        #     model_path,
-        #     tokenizer=tokenizer,
-        #     engine_config=engine_config,
-        #     trust_remote_code=trust_remote_code,
-        # )
         tp = engine_config.tp
-        # dist_ctx = DistContext.build(rank, tp, dp, nproc_per_node=local_world_size)
+        dp = 1
 
         self.tokenizer = tokenizer
         self.tp = tp
@@ -162,7 +153,6 @@ class Engine:
         model_config = ModelConfig.from_pretrained(model_path, trust_remote_code=True, dtype=engine_config.dtype, tp=tp)
 
         # build model agent
-        self.device_ctx = DeviceContext(device_type=engine_config.device_type)
         raw_tokenizer = None
         if tokenizer is not None:
             raw_tokenizer = tokenizer.model.model
@@ -172,21 +162,15 @@ class Engine:
                                        backend_config=backend_config,
                                        tokenizer=raw_tokenizer,
                                        adapters=adapters,
+                                       tp=tp,
+                                       dp=dp,
                                        device_type=engine_config.device_type)
         self.executor.init()
 
         self.input_processor = self.executor.get_input_processor()
-
         cache_config = self.executor.cache_config
         self.adapter_manager = self._build_adapter_manager(adapters)
         self.scheduler = Scheduler(scheduler_config, cache_config)
-
-        # # dist args
-        # self.rank = rank
-        # self.local_rank = local_rank
-        # self.world_size = world_size
-        # self.dist_proc_mgr = dist_proc_mgr
-        # self.dist_ctx = dist_ctx
 
         # engine args
         self.model_path = model_path
@@ -197,9 +181,6 @@ class Engine:
         self.max_session_len = self._get_max_session_len()
 
         self.req_manager = self._bind_request_manager()
-
-        # if rank != 0:
-        #     self.dist_run_forever()
 
         # create main thread
         self._start_loop()
@@ -818,106 +799,41 @@ class Engine:
         for task in tasks:
             task.add_done_callback(__task_callback)
 
-    def _finally_rank0(self):
-        """finall process for rank0."""
-        if self.dist_proc_mgr is not None:
-            # if process is create by rank0, kill them all
-            self.dist_proc_mgr.terminate_all_procs()
-        else:
-            # broadcast exit signal.
-            try:
-                broadcast_inputs(0, [None, None, None], group=self.dist_ctx.tp_cpu_group)
-            except Exception:
-                logger.warning('Can not broadcast exit signal.')
-
     def _loop_finally(self):
         """finally process for dist."""
         self.executor.stop()
         self.executor.release()
-        # self.model_agent.reset_graph_runner()
-        if not dist.is_initialized():
-            return
-        if self.rank == 0:
-            # send empty info to stop other ranks.
-            self._finally_rank0()
-        logger.debug(f'rank[{self.rank}]: destroy process group.')
-        # WARNING: destroy process group might block the watchdog.
-        # dist.destroy_process_group()
 
     async def async_loop(self):
-        dist_mgr = get_dist_manager()
-        with dist_mgr.context(self.dist_ctx):
-            try:
-                event_loop = asyncio.get_event_loop()
-
-                # forward task
-                forward_event = asyncio.Event()
-                forward_event.set()
-
-                self.executor.start(forward_event)
-                # loop_background = event_loop.create_task(self._async_loop_background(in_que, out_que, forward_event),
-                #                                          name='MainLoopForward')
-
-                # preprocess task
-                has_runable_event = asyncio.Event()
-                loop_msg_proc = event_loop.create_task(self._async_loop_preprocess_message(
-                    forward_event, has_runable_event),
-                                                       name='MainLoopPreprocessMessage')
-
-                # response task
-                resp_que = asyncio.Queue()
-                loop_send_resp = event_loop.create_task(self._async_loop_send_responses(resp_que, forward_event),
-                                                        name='MainLoopResponse')
-
-                # binding done callback
-                loop_main = asyncio.current_task()
-                loop_tasks: List[asyncio.Task] = [loop_main, loop_msg_proc, loop_send_resp]
-                self._add_loop_tasks_done_callback(loop_tasks)
-
-                # main loop
-                await self._async_loop_main(resp_que=resp_que, has_runable_event=has_runable_event)
-            finally:
-                self._loop_finally()
-
-    @torch.inference_mode()
-    async def _dist_run_forever(self):
-        """implement dist run forever."""
-        dist_ctx = get_dist_manager().current_context()
-        tp_cpu_group = dist_ctx.tp_cpu_group
-        rank = dist_ctx.rank
-        logger.info(f'rank[{rank}]: Start dist loop.')
-        while True:
-            # share inputs
-            inputs, swap_in_map, swap_out_map = broadcast_inputs(rank, None, tp_cpu_group)
-            if inputs is None:
-                return
-
-            # forward
-            await self.model_agent._async_model_forward(inputs, swap_in_map, swap_out_map, return_logits=False)
-
-    def dist_run_forever(self):
-        """distributed run forever."""
-        device_mgr = get_device_manager()
-        dist_mgr = get_dist_manager()
-        rank = self.dist_ctx.rank
-        exit_code = 0
         try:
-            with dist_mgr.context(self.dist_ctx), device_mgr.context(self.device_ctx):
-                event_loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(event_loop)
-                event_loop.run_until_complete(self._dist_run_forever())
-        except RuntimeError as e:
-            if 'Connection closed by peer' in e.args[0]:
-                logger.info(f'rank[{rank}] closed by peer.')
-            else:
-                exit_code = 1
-                logger.exception(f'rank[{rank}] failed.')
-        except Exception:
-            exit_code = 1
-            logger.exception(f'rank[{rank}] failed.')
+            event_loop = asyncio.get_event_loop()
+
+            # forward task
+            forward_event = asyncio.Event()
+            forward_event.set()
+
+            self.executor.start(forward_event)
+
+            # preprocess task
+            has_runable_event = asyncio.Event()
+            loop_msg_proc = event_loop.create_task(self._async_loop_preprocess_message(
+                forward_event, has_runable_event),
+                                                   name='MainLoopPreprocessMessage')
+
+            # response task
+            resp_que = asyncio.Queue()
+            loop_send_resp = event_loop.create_task(self._async_loop_send_responses(resp_que, forward_event),
+                                                    name='MainLoopResponse')
+
+            # binding done callback
+            loop_main = asyncio.current_task()
+            loop_tasks: List[asyncio.Task] = [loop_main, loop_msg_proc, loop_send_resp]
+            self._add_loop_tasks_done_callback(loop_tasks)
+
+            # main loop
+            await self._async_loop_main(resp_que=resp_que, has_runable_event=has_runable_event)
         finally:
             self._loop_finally()
-            exit(exit_code)
 
     def create_instance(self, cuda_stream_id=0):
         """Create a pytorch engine instance.
