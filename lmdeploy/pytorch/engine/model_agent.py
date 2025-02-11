@@ -353,16 +353,17 @@ class AutoModelAgent:
                 next_token_ids = await self.async_sampling_logits(logits, all_ids, guided_input_ids, sampling_inputs,
                                                                   inputs, num_ignore_eos > 0)
                 num_ignore_eos = num_ignore_eos - 1
+
+                # stopping criteria
+                stopped, num_appendable_ids = _batch_stopping_criteria(next_token_ids, sampling_inputs.stop_words,
+                                                                       num_appendable_ids)
             else:
                 next_token_ids = torch.empty_like(num_ignore_eos)
+                stopped = torch.empty_like(next_token_ids)
 
             if tp > 1 and is_decoding and idx < loop_count - 1:
                 tp_gpu_group = dist_ctx.tp_gpu_group
                 dist.broadcast(next_token_ids, src=rank // tp * tp, group=tp_gpu_group)
-
-            # stopping criteria
-            stopped, num_appendable_ids = _batch_stopping_criteria(next_token_ids, sampling_inputs.stop_words,
-                                                                   num_appendable_ids)
 
             # send output
             model_metas = output.get('model_metas')
@@ -485,17 +486,6 @@ class BaseModelAgent(AutoModelAgent):
 
         self.patched_model = None
         self.cache_engine = None
-
-        # self.build_model()
-
-        # _update_cache_config(model_config, cache_config, gpu_id=local_rank, world_size=tp)
-        # if world_size > 1:
-        #     # broadcast cache config
-        #     _broadcast_config(cache_config)
-
-        # self.build_graph_runner()
-
-        # self.build_cache_engine()
 
     def build_model(self):
         """build patched model."""

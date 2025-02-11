@@ -118,6 +118,8 @@ class SharedBuffer:
                     continue
                 dumped_data += buf[HEAD_SIZE:HEAD_SIZE + pac_size]
 
+        if not is_receiver:
+            return None
         data = pickle.loads(dumped_data)
         return data
 
@@ -314,10 +316,11 @@ class MPExecutor(ExecutorBase):
 
     def get_input_processor(self):
         """get input processor."""
-        self.collective_rpc('get_input_processor', return_mask=1)
+        return self.collective_rpc('get_input_processor', return_mask=1)[0]
 
     def stop(self):
         """stop engine loop."""
+        self.collective_rpc('stop')
 
     def release(self):
         """release."""
@@ -421,6 +424,8 @@ class ExecutorProc:
         proc_mask = 1 << proc_id
         while True:
             command = await comm_buf.receive_async()
+            if command is None:
+                continue
             method = command['method']
             args = command.get('args', list())
             kwargs = command.get('kwargs', dict())
