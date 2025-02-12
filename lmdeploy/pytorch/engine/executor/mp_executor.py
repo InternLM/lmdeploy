@@ -27,7 +27,7 @@ logger = get_logger('lmdeploy')
 # 1m shared memory
 SHARED_BLOCK_SIZE = 1 << 20
 # num shared block
-NUM_SHARED_BLOCK = 8
+NUM_SHARED_BLOCK = 16
 # data size
 HEAD_SIZE = 8
 # block real size
@@ -42,26 +42,44 @@ def get_num_packages(data_size):
 class Notifier:
 
     def __init__(self, num_receiver: int, mp_ctx: SpawnContext):
-        self.event = mp_ctx.Event()
+        self.events = [mp_ctx.Event() for _ in range(NUM_SHARED_BLOCK)]
         self.bar = mp_ctx.Barrier(num_receiver + 1)
+        self._event_id = 0
+
+    def _update_event_id(self):
+        self._event_id = (self._event_id + 1) % NUM_SHARED_BLOCK
 
     def set(self):
-        self.bar.wait()
+        self.events[self._event_id].set()
+        if self._event_id == NUM_SHARED_BLOCK - 1:
+            self.bar.wait()
+            [event.clear() for event in self.events]
+        self._update_event_id()
 
     async def set_async(self):
         event_loop = asyncio.get_event_loop()
-        await event_loop.run_in_executor(None, self.bar.wait)
+        self.events[self._event_id].set()
+        if self._event_id == NUM_SHARED_BLOCK - 1:
+            await event_loop.run_in_executor(None, self.bar.wait)
+            [event.clear() for event in self.events]
+        self._update_event_id()
 
     @contextmanager
     def wait(self):
-        self.bar.wait()
+        self.events[self._event_id].wait()
         yield
+        if self._event_id == NUM_SHARED_BLOCK - 1:
+            self.bar.wait()
+        self._update_event_id()
 
     @asynccontextmanager
     async def wait_async(self):
         event_loop = asyncio.get_event_loop()
-        await event_loop.run_in_executor(None, self.bar.wait)
+        await event_loop.run_in_executor(None, self.events[self._event_id].wait)
         yield
+        if self._event_id == NUM_SHARED_BLOCK - 1:
+            self.bar.wait()
+        self._update_event_id()
 
 
 class SharedBuffer:
@@ -331,13 +349,11 @@ class MPExecutor(ExecutorBase):
 
     def start(self, forward_event: asyncio.Event):
         """start engine loop."""
-        forward_event.clear()
         self.collective_rpc('start')
-        forward_event.set()
 
     async def forward_async(self, inputs):
         """start forward."""
-        await self.collective_rpc_async('set_forward_inputs', args=(inputs, ))
+        self.collective_rpc('set_forward_inputs', args=(inputs, ))
 
     async def get_output_async(self):
         """get output async."""

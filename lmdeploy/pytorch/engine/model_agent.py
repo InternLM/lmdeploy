@@ -359,7 +359,7 @@ class AutoModelAgent:
                                                                        num_appendable_ids)
             else:
                 next_token_ids = torch.empty_like(num_ignore_eos)
-                stopped = torch.empty_like(next_token_ids, dtype=torch.bool)
+                stopped = None
 
             if tp > 1 and idx < loop_count - 1:
                 tp_gpu_group = dist_ctx.tp_gpu_group
