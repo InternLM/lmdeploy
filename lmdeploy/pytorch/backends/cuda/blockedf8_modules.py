@@ -1,10 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-
 from typing import Optional
 
 import torch
-import torch.distributed as dist
 
+import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import blocked_gemm_fp8, quant_fp8
 
 from ..blockedf8_modules import LinearBlockedF8Builder, LinearBlockedF8Impl
