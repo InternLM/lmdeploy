@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -19,9 +20,8 @@ struct GenerationConfig {
 
     std::vector<int> eos_ids;  // only support single token id
 
-    using VI = std::vector<int>;
-    std::pair<VI, VI> stop_ids;  // <token_id, offset>
-    std::pair<VI, VI> bad_ids;
+    std::array<std::vector<int>, 2> stop_ids;  // (token_id, offset)
+    std::array<std::vector<int>, 2> bad_ids;
 
     int   top_k       = 1;
     float top_p       = 0.f;
@@ -62,8 +62,8 @@ inline std::ostream& operator<<(std::ostream& os, const GenerationConfig& c)
     os << "max_new_tokens=" << c.max_new_tokens;
     os << ", min_new_tokens=" << c.min_new_tokens;
     os << ", eos_ids=" << c.eos_ids;
-    os << ", stop_ids=[" << c.stop_ids.first << ", " << c.stop_ids.second << "]";
-    os << ", bad_ids=[" << c.bad_ids.first << ", " << c.bad_ids.second << "]";
+    os << ", stop_ids=[" << c.stop_ids[0] << ", " << c.stop_ids[1] << "]";
+    os << ", bad_ids=[" << c.bad_ids[0] << ", " << c.bad_ids[1] << "]";
     os << ", top_p=" << c.top_p;
     os << ", top_k=" << c.top_k;
     os << ", min_p=" << c.min_p;

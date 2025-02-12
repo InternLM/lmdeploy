@@ -1079,9 +1079,7 @@ void LlamaBatch<T>::InitializeSampling(const GenerationState& g)
         std::vector<std::pair<const int*, int>> copy_tokens(batch_size);
         std::vector<std::pair<const int*, int>> copy_offsets(batch_size);
         for (int i = 0; i < batch_size; ++i) {
-            const auto& pr        = std::invoke(getter, state_->requests[i]->gen_cfg);
-            const auto& token_ids = pr.first;
-            const auto& offsets   = pr.second;
+            const auto& [token_ids, offsets] = std::invoke(getter, state_->requests[i]->gen_cfg);
             if (offsets.size() == 0 || token_ids.size() == 0) {
                 continue;
             }
