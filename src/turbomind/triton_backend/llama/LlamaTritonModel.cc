@@ -164,9 +164,9 @@ LlamaTritonModel<T>::~LlamaTritonModel()
     for (int device_id = 0; device_id < (int)engines_.size(); ++device_id) {
         // Set device id before destructing CUDA resources
         check_cuda_error(cudaSetDevice(device_id));
-        weights_[device_id].reset();
-        // allocator should be released after weight if recreate model
         engines_[device_id].reset();
+        weights_[device_id].reset();
+        trim_default_mempool(device_id);
     }
 }
 
