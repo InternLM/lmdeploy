@@ -34,7 +34,7 @@ def quantization(config,
     if 'llama-3' in origin_model_name.lower():
         quantization_cmd += ' --search-scale'
 
-    if not is_bf16_supported():
+    if not is_bf16_supported() or quantization_type == 'gptq':
         quantization_cmd += ' --batch-size 8'
     else:
         quantization_cmd += ' --batch-size 32'
