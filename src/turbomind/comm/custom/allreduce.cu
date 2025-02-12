@@ -3,14 +3,12 @@
 #include <atomic>
 #include <stdexcept>
 
-#include "src/turbomind/comm/common.h"
-
-#include "src/turbomind/comm/custom/allgather.h"
 #include "src/turbomind/comm/custom/custom_comm.h"
-#include "src/turbomind/comm/custom/device_semaphore.h"
-#include "src/turbomind/comm/custom/reduce_scatter.h"
 
-#include "src/turbomind/kernels/core/common.h"
+#include "src/turbomind/comm/custom/device_semaphore.h"
+
+#include "src/turbomind/kernels/core/array_ops.h"
+#include "src/turbomind/kernels/core/meta.h"
 #include "src/turbomind/utils/Tensor.h"
 
 #include "mscclpp/concurrency_device.hpp"
@@ -18,77 +16,57 @@
 
 namespace turbomind {
 
-template<int vec_size, class T>
-__global__ void __launch_bounds__(1024, 1) local_allreduce_kernel(T*                     data,
-                                                                  SmChannels             channels,  // registered
-                                                                  mscclpp::DeviceSyncer* device_syncer,
-                                                                  int                    rank,
-                                                                  int                    world_size,
-                                                                  size_t                 count)
-{
-    local_reduce_scatter<vec_size>(data, channels, device_syncer, rank, world_size, count / world_size);
-    device_syncer->sync(gridDim.x);
-    local_allgather(channels, device_syncer, rank, world_size, sizeof(T) * (count / world_size));
-}
+// template<int vec_size, class T>
+// __global__ void __launch_bounds__(1024, 1) local_allreduce_kernel(T*                     data,
+//                                                                   SmChannels             channels,  // registered
+//                                                                   mscclpp::DeviceSyncer* device_syncer,
+//                                                                   int                    rank,
+//                                                                   int                    world_size,
+//                                                                   size_t                 count)
+// {
+//     local_reduce_scatter<vec_size>(data, channels, device_syncer, rank, world_size, count / world_size);
+//     device_syncer->sync(gridDim.x);
+//     local_allgather(channels, device_syncer, rank, world_size, sizeof(T) * (count / world_size));
+// }
 
 // __launch_bounds__(1024, 1)
 
-template<int vec_size, class T>
-__global__ void local_allreduce_kernel_v2(T*                                             buf,
-                                          Array<T*, 8>                                   chns,
-                                          mscclpp::DeviceSyncer*                         barrier,
-                                          mscclpp::SmDevice2DeviceSemaphoreDeviceHandle* semaphores,
-                                          int                                            rank,
-                                          int                                            world_size,
-                                          size_t                                         count)
+template<class T, int vec_size, class Relaxed>
+__global__ void AllreduceKernel_Simple(T*                                             buf,
+                                       Array<T*, kMaxNearPeers>                       chns,
+                                       mscclpp::SmDevice2DeviceSemaphoreDeviceHandle* semaphores,
+                                       int                                            rank,
+                                       int                                            peers,
+                                       int                                            slice,
+                                       int                                            count,
+                                       constant<vec_size>,
+                                       Relaxed relaxed)
 {
     const int block_num  = gridDim.x;
     const int thread_num = blockDim.x * block_num;
     const int thread_idx = threadIdx.x + blockIdx.x * blockDim.x;
 
-    const int n_peer = world_size - 1;
-
     DeviceSemaphore sem;
 
-    const int lane_id = threadIdx.x % WARP_SIZE;
-    if (threadIdx.x < n_peer) {
-        sem.Load(&semaphores[blockIdx.x * n_peer + lane_id]);
-    }
-    // __syncwarp();
-
-    // if (blockIdx.x == 0 && threadIdx.x < n_peer) {
-    //     channels[threadIdx.x].signal();
-    //     channels[threadIdx.x].wait();
-    // }
-    // barrier->sync(block_num);
-
-    if (threadIdx.x < n_peer) {
-        // It seems that fence is not needed on NVLink devices
-        sem.Signal(cuda::memory_order_relaxed);
-        sem.Wait(cuda::memory_order_relaxed);
-
-        // sem.Signal(cuda::memory_order_release);
-        // sem.Wait(cuda::memory_order_acquire);
+    if (threadIdx.x < peers) {
+        sem.Load(&semaphores[blockIdx.x * peers + threadIdx.x]);
+        sem.SignalAndWait(relaxed);
     }
 
     __syncthreads();
-
-    count /= vec_size * world_size;
-
-    const int offset = rank * (int)count;
 
     using Vec = Array<T, vec_size>;
 
     using namespace ops;
 
-    const int first = offset;
-    const int last  = offset + (int)count;
+    const int first = rank * slice;
+    const int last  = min(count, first + slice);
 
-    for (int p = 0; p < n_peer; ++p) {
-        const int peer = p + rank < n_peer ? p + rank : p + rank - n_peer;
-        auto      chn  = cvta_generic_to_global(chns[peer]);
-        Vec       acc, tmp;
+    for (int i = 0; i < peers; ++i) {
+        const int p   = i + rank < peers ? i + rank : i + rank - peers;
+        auto      chn = cvta_generic_to_global(chns[p]);
         for (int idx = first + thread_idx; idx < last; idx += thread_num) {
+            Vec acc, tmp;
             Load(tmp, chn + idx * vec_size);
             Load(acc, buf + idx * vec_size);
             acc = acc + tmp;
@@ -98,165 +76,155 @@ __global__ void local_allreduce_kernel_v2(T*                                    
 
     __syncthreads();
 
-    if (threadIdx.x < n_peer) {
-        // asm volatile("fence.acq_rel.sys;" ::: "memory");
-        // sem.relaxedSignal();
-        // sem.wait();
-
-        // It seems that fence is not needed on NVLink devices
-        sem.Signal(cuda::memory_order_relaxed);
-        sem.Wait(cuda::memory_order_relaxed);
-
-        // sem.Signal(cuda::memory_order_release);
-        // sem.Wait(cuda::memory_order_acquire);
+    if (threadIdx.x < peers) {
+        sem.SignalAndWait(relaxed);
     }
 
     __syncthreads();
 
-    // barrier->sync(block_num);
-    // if (blockIdx.x == 0 && threadIdx.x < n_peer) {
-    //     channels[threadIdx.x].signal();
-    //     channels[threadIdx.x].wait();
-    // }
-    // barrier->sync(block_num);
-
-    for (int p = 0; p < n_peer; ++p) {
-        const int peer      = p + rank < n_peer ? p + rank : p + rank - n_peer;
-        const int peer_rank = peer < rank ? peer : peer + 1;
-        const int first     = (int)count * peer_rank;
-        const int last      = first + (int)count;
-        auto      chn       = cvta_generic_to_global(chns[peer]);
-        for (size_t idx = first + thread_idx; idx < last; idx += thread_num) {
+    for (int i = 0; i < peers; ++i) {
+        const int p      = i + rank < peers ? i + rank : i + rank - peers;
+        const int p_rank = p < rank ? p : p + 1;
+        const int first  = p_rank * slice;
+        const int last   = min(count, first + slice);
+        auto      chn    = cvta_generic_to_global(chns[p]);
+        for (int idx = first + thread_idx; idx < last; idx += thread_num) {
             Vec vec;
             Load(vec, chn + idx * vec_size);
             Store(buf + idx * vec_size, vec);
         }
     }
 
-    if (threadIdx.x < n_peer) {
-        sem.Save(&semaphores[blockIdx.x * n_peer + lane_id]);
+    __syncthreads();
+
+    if (threadIdx.x < peers) {
+        sem.SignalAndWait(true);
+        sem.Save(&semaphores[blockIdx.x * peers + threadIdx.x]);
     }
 }
 
-template<int ctas_per_peer, class T>
-__global__ void __launch_bounds__(1024, 1) local_allreduce_kernel_0(T*                     dst,
-                                                                    const T*               src,
-                                                                    void*                  packet_buff,
-                                                                    SmChannels             packet_chns,  //
-                                                                    mscclpp::DeviceSyncer* barrier,
-                                                                    int                    rank,
-                                                                    int                    world_size,
-                                                                    int                    count,
-                                                                    uint32_t               flag)
-{
-    constexpr int vec_size = sizeof(uint2) / sizeof(T);
+// template<int ctas_per_peer, class T>
+// __global__ void __launch_bounds__(1024, 1) local_allreduce_kernel_0(T*                     dst,
+//                                                                     const T*               src,
+//                                                                     void*                  packet_buff,
+//                                                                     SmChannels             packet_chns,  //
+//                                                                     mscclpp::DeviceSyncer* barrier,
+//                                                                     int                    rank,
+//                                                                     int                    world_size,
+//                                                                     int                    count,
+//                                                                     uint32_t               flag)
+// {
+//     constexpr int vec_size = sizeof(uint2) / sizeof(T);
 
-    const int n_peer = world_size - 1;
-    const int n_pkt  = count / vec_size;
+//     const int n_peer = world_size - 1;
+//     const int n_pkt  = count / vec_size;
 
-    using Vec = Array<T, vec_size>;
+//     using Vec = Array<T, vec_size>;
 
-    {
-        const int pi = blockIdx.x / ctas_per_peer;
-        const int bi = blockIdx.x % ctas_per_peer;
+//     {
+//         const int pi = blockIdx.x / ctas_per_peer;
+//         const int bi = blockIdx.x % ctas_per_peer;
 
-        const int offset = (pi < rank ? rank - 1 : rank) * n_pkt;
+//         const int offset = (pi < rank ? rank - 1 : rank) * n_pkt;
 
-        // cta sends the assigned packets
-        for (int idx = threadIdx.x + bi * blockDim.x; idx < n_pkt; idx += ctas_per_peer * blockDim.x) {
-            mscclpp::LLPacket packet{*((const uint2*)src + idx), flag};
-            packet_chns[pi].write(offset + idx, packet);
-        }
-    }
+//         // cta sends the assigned packets
+//         for (int idx = threadIdx.x + bi * blockDim.x; idx < n_pkt; idx += ctas_per_peer * blockDim.x) {
+//             mscclpp::LLPacket packet{*((const uint2*)src + idx), flag};
+//             packet_chns[pi].write(offset + idx, packet);
+//         }
+//     }
 
-    if (src == dst) {
-        // device wide sync is required as recved from all peers does not imply sending is done
-        // there will be data race on `src` unless we do it out-of-place
-        barrier->sync(gridDim.x);
-    }
+//     if (src == dst) {
+//         // device wide sync is required as recved from all peers does not imply sending is done
+//         // there will be data race on `src` unless we do it out-of-place
+//         barrier->sync(gridDim.x);
+//     }
 
-    {
-        mscclpp::LLPacket* incoming = reinterpret_cast<mscclpp::LLPacket*>(packet_buff);
+//     {
+//         mscclpp::LLPacket* incoming = reinterpret_cast<mscclpp::LLPacket*>(packet_buff);
 
-        using namespace ops;
+//         using namespace ops;
 
-        // all blocks recv packets and reduce
-        for (int idx = threadIdx.x + blockIdx.x * blockDim.x; idx < n_pkt; idx += blockDim.x * gridDim.x) {
-            Vec vec;
-            Load(vec, src + idx * vec_size);
-            for (int p = 0; p < n_peer; ++p) {
-                uint2 data = incoming[p * n_pkt + idx].read(flag);
-                vec        = vec + reinterpret_cast<Vec&>(data);
-            }
-            Store(dst + idx * vec_size, vec);
-        }
-    }
-}
+//         // all blocks recv packets and reduce
+//         for (int idx = threadIdx.x + blockIdx.x * blockDim.x; idx < n_pkt; idx += blockDim.x * gridDim.x) {
+//             Vec vec;
+//             Load(vec, src + idx * vec_size);
+//             for (int p = 0; p < n_peer; ++p) {
+//                 uint2 data = incoming[p * n_pkt + idx].read(flag);
+//                 vec        = vec + reinterpret_cast<Vec&>(data);
+//             }
+//             Store(dst + idx * vec_size, vec);
+//         }
+//     }
+// }
+
+using mscclpp::LLPacket;
 
 // reduce-scatter + allgather using LL16Packet
-template<int ctas_per_peer, class T>
-__global__ void __launch_bounds__(1024, 1) local_allreduce_kernel_1(T*                     dst,
-                                                                    const T*               src,
-                                                                    void*                  packet_buff,
-                                                                    SmChannels             packet_chns,  //
-                                                                    mscclpp::DeviceSyncer* barrier,
-                                                                    int                    rank,
-                                                                    int                    world_size,
-                                                                    int                    count,
-                                                                    uint32_t               flag)
+template<class T, class CtasPerPeer>
+__global__ void __launch_bounds__(1024, 1) AllreduceKernel_LL(T*                              dst,
+                                                              const T*                        src,
+                                                              LLPacket*                       incoming,
+                                                              Array<LLPacket*, kMaxNearPeers> outgoing,
+                                                              int                             rank,
+                                                              int                             peers,
+                                                              int                             slice,  // padded slice
+                                                              int                             count,  // actual count
+                                                              uint32_t                        flag,
+                                                              CtasPerPeer                     ctas_per_peer)
 {
 
     constexpr int vec_size = sizeof(uint2) / sizeof(T);
 
-    const int n_peer = world_size - 1;
-    const int n_pkt  = count / vec_size / world_size;
-
     using Vec = Array<T, vec_size>;
 
-    const int _p = blockIdx.x / ctas_per_peer;
+    const int p = [&] {
+        const int i = blockIdx.x / ctas_per_peer;
+        return i + rank < peers ? i + rank : i + rank - peers;
+    }();
 
-    const int pi = _p + rank < n_peer ? _p + rank : _p + rank - n_peer;
     const int bi = blockIdx.x % ctas_per_peer;
 
-    const int peer_rank = pi < rank ? pi : pi + 1;
+    const int p_rank = p < rank ? p : p + 1;
 
     {  // send slice of `src` to peers  (src -> packet0)
-        const int peer_offset = (pi < rank ? rank - 1 : rank) * n_pkt;
-        auto      chn         = packet_chns[pi];
-        for (int idx = threadIdx.x + bi * blockDim.x; idx < n_pkt; idx += ctas_per_peer * blockDim.x) {
-            mscclpp::LLPacket packet{*((const uint2*)src + peer_rank * n_pkt + idx), flag};
-            chn.write(peer_offset + idx, packet);
+        const int p_offset = (p < rank ? rank - 1 : rank) * slice;
+        auto      chn      = outgoing[p] + p_offset;
+        for (int idx = threadIdx.x + bi * blockDim.x; idx < slice; idx += ctas_per_peer * blockDim.x) {
+            chn[idx].write(*((const uint2*)src + p_rank * slice + idx), flag);
         }
     }
 
     // device-wide barrier not required as what we are sending is not what we are going to modify
 
     {  // recv data | reduce | send results (src -> packet0 -> packet1)
-        mscclpp::LLPacket* incoming = reinterpret_cast<mscclpp::LLPacket*>(packet_buff);
+        __shared__ LLPacket* out[kMaxNearPeers];
+        for (int i = 0; i < peers; ++i) {
+            const int p = i + rank < peers ? i + rank : i + rank - peers;
+            out[i]      = outgoing[p] + (peers + rank) * slice;
+        }
         using namespace ops;
-        for (int idx = threadIdx.x + blockIdx.x * blockDim.x; idx < n_pkt; idx += blockDim.x * gridDim.x) {
+        for (int idx = threadIdx.x + blockIdx.x * blockDim.x; idx < slice; idx += blockDim.x * gridDim.x) {
             Vec vec;
-            Load(vec, src + (rank * n_pkt + idx) * vec_size);
-            for (int p = 0; p < n_peer; ++p) {
-                uint2 data = incoming[p * n_pkt + idx].read(flag);
-                vec        = vec + reinterpret_cast<Vec&>(data);
+            Load(vec, src + (rank * slice + idx) * vec_size);
+            for (int p = 0; p < peers; ++p) {
+                uint2 data = incoming[p * slice + idx].read(flag);
+                vec        = vec + (Vec&)data;
             }
-            Store(dst + (rank * n_pkt + idx) * vec_size, vec);
-            mscclpp::LLPacket packet{(uint2&)vec, flag};
-            for (int p = 0; p < n_peer; ++p) {
-                const int peer = p + rank < n_peer ? p + rank : p + rank - n_peer;
-                packet_chns[peer].write(idx + (n_peer + rank) * n_pkt, packet);
+            Store(dst + (rank * slice + idx) * vec_size, vec);
+            for (int i = 0; i < peers; ++i) {
+                out[i][idx].write((uint2&)vec, flag);
             }
         }
     }
 
     {  // recv results (packet1 -> dst)
-        mscclpp::LLPacket* incoming = reinterpret_cast<mscclpp::LLPacket*>(packet_buff);
-        incoming += (n_peer + peer_rank) * n_pkt;
+        incoming += (peers + p_rank) * slice;
+        dst += p_rank * slice * vec_size;
         // ! note that `dst` MUST have same partition as we are sending `src`
-        for (int idx = threadIdx.x + bi * blockDim.x; idx < n_pkt; idx += ctas_per_peer * blockDim.x) {
+        for (int idx = threadIdx.x + bi * blockDim.x; idx < slice; idx += ctas_per_peer * blockDim.x) {
             uint2 data = incoming[idx].read(flag);
-            Store(dst + (peer_rank * n_pkt + idx) * vec_size, (Vec&)data);
+            Store(dst + idx * vec_size, (Vec&)data);
         }
     }
 }
@@ -264,59 +232,54 @@ __global__ void __launch_bounds__(1024, 1) local_allreduce_kernel_1(T*          
 void CustomComm::AllReduceSum(const void* sendbuff, void* recvbuff, size_t count, DataType type, cudaStream_t stream)
 {
     FT_CHECK(sendbuff == recvbuff);
-    auto& data_chns = registered_channels_.at(recvbuff);
-
-    SmChannels d_data_chns{};
-    for (size_t i = 0; i < data_chns.size(); ++i) {
-        d_data_chns[i] = mscclpp::deviceHandle(data_chns[i]);
-    }
-
-    SmChannels d_packet_chns{};
-    for (size_t i = 0; i < packet_chns_.size(); ++i) {
-        d_packet_chns[i] = mscclpp::deviceHandle(packet_chns_[i]);
-    }
-
-    auto&           peer_mems = registered_memories_.at(recvbuff);
-    Array<void*, 8> peer_data{};
-    for (size_t i = 0; i < peer_mems.size(); ++i) {
-        peer_data[i] = peer_mems[i].data();
-    }
 
     void* data = recvbuff;
 
-    auto invoke = [&](auto t, auto vec_size) {
+    auto invoke = [&](auto t) {
         using T = decltype(t);
         if (sizeof(T) * count <= 1 << 20) {
             FT_CHECK((int)packet_chns_.size() == world_size_ - 1);
-            constexpr int ctas_per_peer = 4;
+            constexpr int vec_size      = sizeof(uint2) / sizeof(T);
+            const int     slice         = (count / vec_size + world_size_ - 1) / world_size_;
+            constexpr int ctas_per_peer = 3;
             constexpr int threads       = 1024;
             const int     blocks        = (world_size_ - 1) * ctas_per_peer;
-            local_allreduce_kernel_1<ctas_per_peer><<<blocks, threads, 0, stream>>>((T*)data,  //
-                                                                                    (T*)data,
-                                                                                    packet_buff_,
-                                                                                    d_packet_chns,
-                                                                                    device_syncer_,
-                                                                                    rank_,
-                                                                                    world_size_,
-                                                                                    count,
-                                                                                    flag_++);
+            auto          incoming      = (LLPacket*)packet_buff_;
+            auto          outgoing      = get_near(incoming);
+            AllreduceKernel_LL<<<blocks, threads, 0, stream>>>((T*)data,  //
+                                                               (T*)data,
+                                                               incoming,
+                                                               outgoing,
+                                                               rank_,
+                                                               world_size_ - 1,
+                                                               slice,
+                                                               count / vec_size,
+                                                               flag_++,
+                                                               constant<ctas_per_peer>{});
         }
         else {
-            constexpr int threads = 1024;
-            constexpr int blocks  = 32;
-            local_allreduce_kernel_v2<vec_size.value><<<blocks, threads, 0, stream>>>((T*)data,  //
-                                                                                      (Array<T*, 8>&)peer_data,
-                                                                                      device_syncer_,
-                                                                                      device_semaphores_,
-                                                                                      rank_,
-                                                                                      world_size_,
-                                                                                      count);
+            constexpr int vec_size = sizeof(uint4) / sizeof(T);
+            const int     slice    = (count / vec_size + world_size_ - 1) / world_size_;
+            constexpr int threads  = 1024;
+            const int     blocks   = std::min(48, (slice + threads - 1) / threads);
+            auto          chns     = get_near((T*)data);
+            AllreduceKernel_Simple<<<blocks, threads, 0, stream>>>((T*)data,
+                                                                   chns,
+                                                                   device_semaphores_,
+                                                                   rank_,
+                                                                   world_size_ - 1,
+                                                                   slice,
+                                                                   count / vec_size,
+                                                                   constant<vec_size>{},
+                                                                   std::false_type{});
         }
     };
 
     switch (type) {
         case DataType::TYPE_FP16:
-            return invoke(half{}, std::integral_constant<int, 8>{});
+            return invoke(half{});
+        case DataType::TYPE_BF16:
+            return invoke(nv_bfloat16{});
         default:
             throw std::runtime_error("not implemented");
     }

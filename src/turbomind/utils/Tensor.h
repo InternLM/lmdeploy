@@ -99,6 +99,23 @@ DataType getTensorType()
     }
 }
 
+static inline size_t get_elem_size(DataType type)
+{
+    switch (type) {
+        case DataType::TYPE_FP16:
+        case DataType::TYPE_BF16:
+        case DataType::TYPE_INT16:
+            return 2;
+        case DataType::TYPE_FP32:
+            return 4;
+        case DataType::TYPE_UINT8:
+            return 1;
+        default:
+            throw std::runtime_error("not supported");
+    }
+}
+
+
 typedef enum memorytype_enum
 {
     MEMORY_CPU,

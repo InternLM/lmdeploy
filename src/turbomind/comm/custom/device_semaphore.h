@@ -2,7 +2,7 @@
 
 #pragma once
 
-#include "src/turbomind/comm/common.h"  // MUST come before all mscclpp
+#include "src/turbomind/comm/custom/custom_comm.h"  // MUST come before all mscclpp
 
 #include "mscclpp/semaphore_device.hpp"
 
@@ -60,9 +60,22 @@ struct DeviceSemaphore {
         }
     }
 
+    __device__ void SignalAndWait(bool relaxed)
+    {
+        if (relaxed) {
+            Signal(cuda::memory_order_relaxed);
+            Wait(cuda::memory_order_relaxed);
+        }
+        else {
+            Signal(cuda::memory_order_release);
+            Wait(cuda::memory_order_acquire);
+        }
+    }
+
     uint64_t  outbound_sempahore_id;
     uint64_t  expected_inbound_semaphore_id;
     uint64_t* inbound_semaphore_id;
     uint64_t* remote_inbound_semaphore_id;
 };
+
 }  // namespace turbomind

@@ -127,4 +127,15 @@ std::vector<std::unique_ptr<Comm>> CreateCustomComm(const std::vector<int>& devi
     return comm;
 }
 
+Array<void*, kMaxNearPeers> CustomComm::get_near_impl(void* ptr)
+{
+    auto& memories = registered_memories_.at(ptr);
+    FT_CHECK(memories.size() <= kMaxNearPeers);
+    Array<void*, kMaxNearPeers> ret{};
+    for (size_t i = 0; i < memories.size(); ++i) {
+        ret[i] = memories[i].data();
+    }
+    return ret;
+}
+
 }  // namespace turbomind

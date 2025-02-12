@@ -1,6 +1,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cuda_runtime_api.h>
 #include <numeric>
 #include <ostream>
 #include <random>
@@ -14,7 +15,7 @@
 
 using namespace turbomind;
 
-static constexpr bool is_ncu = 0;
+[[maybe_unused]] static constexpr bool is_ncu = 0;
 
 struct Context {
 
@@ -28,7 +29,7 @@ struct Context {
     template<class F>
     float exec(F func)
     {
-        cudaStreamSynchronize(stream);
+        // cudaStreamSynchronize(stream);
         cudaEventRecord(ev_start, stream);
 
         func(stream);
@@ -103,8 +104,8 @@ struct TestComm {
         std::vector<int> devices(device_num);
         std::iota(devices.begin(), devices.end(), 0);
 
-        comm_ = CreateNcclComm(devices);
-        // comm_ = CreateCustomComm(devices);
+        // comm_ = CreateNcclComm(devices);
+        comm_ = CreateCustomComm(devices);
 
         warmup_ = warmup;
         iters_  = iters;
@@ -114,7 +115,7 @@ struct TestComm {
 
         // TestAllReduce<half>(hidden_dim);
         TestAllreduceResidualBiasRMSnorm<half>(hidden_dim);
-        // TestAllGather<half>(hidden_dim / tp);
+        // TestAllGather<half>(hidden_dim / tp); // tp embedding
         // TestAllGather<float>(vocab_size / tp);
     }
 
@@ -151,7 +152,7 @@ struct TestComm {
 
             ctx.copy_n(data[rank].data(), max_count, d_rank_data);
 
-            auto verify = [&](auto count) {
+            [[maybe_unused]] auto verify = [&](auto count) {
                 std::vector<T> res(count);
                 ctx.copy_n(d_tmp, count, res.data());
                 cudaStreamSynchronize(ctx.stream);
@@ -197,9 +198,9 @@ struct TestComm {
                     if (i >= warmup_) {
                         delta += ms;
                     }
-                    verify(count);
+                    // verify(count);
                 }
-                // verify(count);
+                verify(count);
             }
 
             if (rank == 0) {
@@ -301,7 +302,7 @@ struct TestComm {
             ctx.copy_n(bias.data(), dim, d_bias);
             ctx.copy_n(weight.data(), dim, d_weight);
 
-            auto verify = [&](auto token_num) {
+            [[maybe_unused]] auto verify = [&](auto token_num) {
                 const size_t   count = (size_t)token_num * dim;
                 std::vector<T> h_data(count);
                 std::vector<T> h_res(count);
@@ -335,19 +336,14 @@ struct TestComm {
                 }
             };
 
-            // printf("[rank %d] A\n", rank);
-
             std::vector<float> deltas;
             for (const auto& n : tokens_) {
                 const size_t count = (size_t)n * dim;
                 auto&        delta = deltas.emplace_back();
                 for (int i = 0; i < warmup_ + iters_; ++i) {
-                    // printf("[rank %d] B\n", rank);
 
                     ctx.copy_n(d_rank_data, count, d_tmp_data);
                     ctx.copy_n(d_residual, count, d_tmp_res);
-
-                    // printf("[rank %d] C\n", rank);
 
                     auto ms = ctx.exec([&](auto stream) {  //
                         if (is_ncu && i == warmup_) {
@@ -416,26 +412,52 @@ struct TestComm {
         }
 
         auto func = [&](Comm& comm) {
-            const int    rank = comm.rank();
+            const int    rank       = comm.rank();
+            const int    world_size = comm.world_size();
             Context      ctx{rank};
             const size_t max_count   = max_tokens_ * dim;
             T*           d_rank_data = ctx.malloc<T>(max_count);
-            // T*           d_tmp       = ctx.malloc<T>(max_count * comm.world_size());
-            // cudaStreamSynchronize(ctx.stream);
+
             T* d_tmp{};
-            cudaMalloc(&d_tmp, sizeof(T) * max_count * comm.world_size());
-            comm.RegisterBuffer(d_tmp, sizeof(T) * max_count * comm.world_size());
+            cudaMalloc(&d_tmp, sizeof(T) * max_count * world_size);
+
+            // RegisterBuffer in NCCL impl is NOP, cudaMalloc may conflict later kernel launch
+            barrier_->arrive_and_wait();
+
+            comm.RegisterBuffer(d_tmp, sizeof(T) * max_count * world_size);
 
             ctx.copy_n(data[rank].data(), max_count, d_rank_data);
 
+            [[maybe_unused]] auto verify = [&](int64_t count) {
+                auto           total_count = count * world_size;
+                std::vector<T> res(total_count);
+                ctx.copy_n(d_tmp, total_count, res.data());
+                cudaStreamSynchronize(ctx.stream);
+                size_t diff = 0;
+                for (int r = 0; r < world_size; ++r) {
+                    for (auto i = 0; i < count; ++i) {
+                        diff += res[r * count + i] != data[r][i];
+                        if (diff == 1) {
+                            printf("%d: %f vs %f\n", (int)i, (float)res[r * count + i], (float)data[r][i]);
+                        }
+                    }
+                }
+                if (diff) {
+                    printf("[rank %d] count = %d, diff = %lu\n", rank, (int)count, diff);
+                    std::this_thread::sleep_for(std::chrono::seconds(1));
+                    std::abort();
+                }
+            };
+
             std::vector<float> deltas;
             for (const auto& n : tokens_) {
-                const size_t count = (size_t)n * dim;
+                const size_t count = (size_t)n * dim;  // dim = hidden_dim / tp
                 auto&        delta = deltas.emplace_back();
 
                 barrier_->arrive_and_wait();
 
                 for (int i = 0; i < warmup_ + iters_; ++i) {
+                    cudaMemsetAsync(d_tmp, 0, sizeof(T) * count * comm.world_size(), ctx.stream);
                     ctx.copy_n(d_rank_data, count, d_tmp + rank * count);
                     auto ms = ctx.exec([&](auto stream) {  //
                         comm.AllGather(d_tmp + rank * count, d_tmp, count, stream);
@@ -445,18 +467,7 @@ struct TestComm {
                     }
                 }
 
-                size_t diff = 0;
-                for (int r = 0; r < comm.world_size(); ++r) {
-                    std::vector<T> res(count);
-                    ctx.copy_n(d_tmp + r * count, count, res.data());
-                    cudaStreamSynchronize(ctx.stream);
-                    for (size_t i = 0; i < count; ++i) {
-                        diff += res[i] != data[r][i];
-                    }
-                }
-                if (diff) {
-                    printf("[rank %d] diff = %lu\n", comm.rank(), diff);
-                }
+                verify(count);
             }
 
             if (rank == 0) {
@@ -504,11 +515,11 @@ int main(int argc, char* argv[])
              10,
              250,
              //   {1});
-             //  {1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 24, 32, 48, 64, 96, 128});
+             //   {1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 24, 32, 48, 64, 96, 128});
              //  {128, 256, 512, 1024, 2048, 4096, 8192});
-             // {8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048, 4096, 6144, 8192});
-             {8192, 16384, 32768});
-    //  {1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048, 4096, 6144, 8192});
+             //  {8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048, 4096, 6144, 8192});
+            //   {8192, 16384, 32768});
+             {1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048, 4096, 6144, 8192});
     // );
 
     return 0;

@@ -1,6 +1,18 @@
 
 #pragma once
 
+#ifdef _CLANGD
+#define MSCCLPP_DEVICE_COMPILE 1
+#define MSCCLPP_DEVICE_CUDA 1
+
+#ifdef MSCCLPP_HOST_DEVICE_INLINE
+#undef MSCCLPP_HOST_DEVICE_INLINE
+#endif
+
+#define MSCCLPP_HOST_DEVICE_INLINE __host__ __device__ __inline__
+#define MSCCLPP_DEVICE_INLINE __device__ __inline__
+#endif
+
 #include <stdexcept>
 #include <unordered_map>
 
@@ -10,29 +22,16 @@
 #include "mscclpp/sm_channel.hpp"
 
 #include "src/turbomind/comm/comm.h"
+#include "src/turbomind/kernels/core/array.h"
 #include "src/turbomind/utils/Tensor.h"
 
 namespace turbomind {
 
-static inline size_t elem_size(DataType type)
-{
-    switch (type) {
-        case DataType::TYPE_FP16:
-        case DataType::TYPE_BF16:
-        case DataType::TYPE_INT16:
-            return 2;
-        case DataType::TYPE_FP32:
-            return 4;
-        case DataType::TYPE_UINT8:
-            return 1;
-        default:
-            throw std::runtime_error("not supported");
-    }
-}
+static constexpr int kMaxNearPeers = 7;
 
 class CustomComm: public Comm {
 public:
-    static constexpr int kScratchBuffSize = 64 << 20;
+    static constexpr int kScratchBuffSize = 16 << 20;
     static constexpr int kChannelsPerConn = 64;
 
     CustomComm(std::shared_ptr<mscclpp::Bootstrap> bootstrap);
@@ -54,6 +53,20 @@ public:
                                       int          token_num,
                                       DataType     dtype,
                                       cudaStream_t stream) override;
+
+private:
+    template<class T>
+    inline Array<T*, kMaxNearPeers> get_near(T* ptr)
+    {
+        auto                     src = get_near_impl(ptr);
+        Array<T*, kMaxNearPeers> dst;
+        for (int i = 0; i < dst.size(); ++i) {
+            dst[i] = static_cast<T*>(src[i]);
+        }
+        return dst;
+    }
+
+    Array<void*, kMaxNearPeers> get_near_impl(void* ptr);
 
 private:
     std::shared_ptr<mscclpp::Communicator>            comm_;

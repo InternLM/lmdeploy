@@ -68,6 +68,7 @@ public:
 
     void RegisterBuffer(void* ptr, size_t size) override
     {
+        // make no difference
         // void* handle{};
         // ncclCommRegister(comm_, ptr, size, &handle);
     }
@@ -82,27 +83,18 @@ public:
                                       DataType     dtype,
                                       cudaStream_t stream) override
     {
-        auto rms_norm_impl = [&](auto t, int64_t first, int64_t count) {
-            using T = decltype(t);
-            invokeBiasResidualRMSNorm((T*)residual + first * dim,
-                                      (T*)hidden + first * dim,
-                                      (const T*)weights,
-                                      (const T*)bias,
+        const auto elem_size = get_elem_size(dtype);
+
+        auto rms_norm = [&](int64_t first, int64_t count) {
+            invokeResidualBiasRMSNorm((char*)hidden + elem_size * first * dim,
+                                      (char*)residual + elem_size * first * dim,
+                                      weights,
+                                      bias,
+                                      dtype,
                                       dim,
                                       count,
                                       eps,
                                       stream);
-        };
-
-        auto rms_norm = [&](int64_t first, int64_t count) {
-            switch (dtype) {
-                case DataType::TYPE_FP16:
-                    return rms_norm_impl(half{}, first, count);
-                case DataType::TYPE_BF16:
-                    return rms_norm_impl(nv_bfloat16{}, first, count);
-                default:
-                    throw std::runtime_error("not implemented.");
-            }
         };
 
         if (1) {
@@ -113,7 +105,7 @@ public:
             const int    slice     = (token_num + world_size_ - 1) / world_size_;
             const size_t recvcount = slice * dim;
             auto         sendbuff  = hidden;
-            auto         recvbuff  = (char*)hidden + 2 * rank() * recvcount;  // 2 for half / bfloat16
+            auto         recvbuff  = (char*)hidden + elem_size * rank() * recvcount;
             ReduceScatter(sendbuff, recvbuff, recvcount, dtype, stream);
             rms_norm(rank_ * slice, slice);
             AllGather(recvbuff, sendbuff, recvcount, dtype, stream);
