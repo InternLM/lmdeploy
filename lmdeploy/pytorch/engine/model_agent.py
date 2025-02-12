@@ -437,20 +437,10 @@ class AutoModelAgent:
         assert self._in_que is not None, ('Please start backendground task before forward.')
         self._in_que.put_nowait(inputs)
 
-    async def _que_get_safe(self, que, timeout: int = 1):
-        """que.get with timeout."""
-        while True:
-            try:
-                return await asyncio.wait_for(que.get(), timeout=timeout)
-            except asyncio.TimeoutError:
-                if self._background_task.done():
-                    break
-        raise RuntimeError('Model agent loop stopped.')
-
     async def get_output_async(self):
         """async get output."""
         assert self._out_que is not None, ('Please start backendground task before forward.')
-        out = await self._que_get_safe(self._out_que)
+        out = await self._out_que.get()
         event = out.pop('event')
         while not event.query():
             await asyncio.sleep(0.001)

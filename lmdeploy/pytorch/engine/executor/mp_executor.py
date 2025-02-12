@@ -416,7 +416,6 @@ class MPExecutor(ExecutorBase):
 
     def stop(self):
         """stop engine loop."""
-        self.collective_rpc('stop')
         self.model_agent.stop()
 
     def release(self):
