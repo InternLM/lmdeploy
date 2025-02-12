@@ -39,6 +39,22 @@ def get_num_packages(data_size):
     return (data_size + SHARED_BLOCK_SIZE - 1) // SHARED_BLOCK_SIZE
 
 
+def init_dist_environ(rank: int, world_size: int, nproc_per_node: int):
+    """init environ."""
+    os.environ['RANK'] = str(rank)
+    os.environ['LOCAL_RANK'] = str(rank % nproc_per_node)
+    os.environ['WORLD_SIZE'] = str(world_size)
+    os.environ['LOCAL_WORLD_SIZE'] = str(nproc_per_node)
+
+
+def init_process_group(rank: int, world_size: int, nproc_per_node: int):
+    """init process group."""
+    DIST_TIMEOUT = timedelta(days=35600)
+    dist.init_process_group(backend='gloo', rank=rank, world_size=world_size, timeout=DIST_TIMEOUT)
+    assert dist.is_initialized()
+    init_dist_environ(rank, world_size, nproc_per_node)
+
+
 class Notifier:
 
     def __init__(self, num_receiver: int, mp_ctx: SpawnContext):
@@ -225,17 +241,19 @@ class MPExecutor(ExecutorBase):
                          tp=tp,
                          adapters=adapters,
                          device_type=device_type)
-        self.setup_master_addr()
 
+        # initialize processes.
+        self.setup_master_addr()
         self.world_size = tp * dp
         mp_ctx = mp.get_context('spawn')
-        self.comm_notifier = Notifier(self.world_size, mp_ctx)
+        self.mp_ctx = mp_ctx
+        self.comm_notifier = Notifier(self.world_size - 1, mp_ctx)
         self.comm_buf = SharedBuffer(-1, notifier=self.comm_notifier)
         self.comm_buf_name = self.comm_buf.name()
 
         self.procs: List[ExecutorProc] = []
         self.ret_bufs: List[SharedBuffer] = []
-        for proc_id in range(self.world_size):
+        for proc_id in range(1, self.world_size):
             proc = ExecutorProc(proc_id=proc_id, mp_ctx=mp_ctx)
 
             ret_notifier = Notifier(1, mp_ctx)
@@ -258,6 +276,20 @@ class MPExecutor(ExecutorBase):
             self.procs.append(proc)
 
         self.ret_all_mask = (1 << self.world_size) - 1
+
+        # initialize local
+        init_process_group(0, self.world_size, 1)
+        self.dist_ctx = DistContext.build(0, tp, dp)
+        self.device_ctx = DeviceContext(device_type=device_type)
+        device_mgr = get_device_manager()
+        dist_mgr = get_dist_manager()
+        with dist_mgr.context(self.dist_ctx), device_mgr.context(self.device_ctx):
+            self.model_agent = build_model_agent(model_path=model_path,
+                                                 model_config=model_config,
+                                                 cache_config=cache_config,
+                                                 backend_config=backend_config,
+                                                 tokenizer=tokenizer,
+                                                 adapters=adapters)
 
     def collective_rpc(self,
                        method: str,
@@ -326,46 +358,55 @@ class MPExecutor(ExecutorBase):
     def build_model(self):
         """build model."""
         self.collective_rpc('build_model')
+        self.model_agent.build_model()
 
     def gather_free_mem(self):
         """gather available memory."""
-        return self.collective_rpc('get_free_mem', return_mask=self.ret_all_mask)
+        ret = self.collective_rpc('get_free_mem', return_mask=self.ret_all_mask) + [self.model_agent.get_free_mem()]
+        return ret
 
     def set_cache_config(self, cache_config: CacheConfig):
         """set all cache config."""
         self.collective_rpc('set_cache_config', args=(cache_config, ))
+        self.model_agent.set_cache_config(cache_config)
 
     def set_model_config(self, model_config: ModelConfig):
         """set all cache config."""
         self.collective_rpc('set_model_config', args=(model_config, ))
+        self.model_agent.set_model_config(model_config)
 
     def build_graph_runner(self):
         """build graph runner."""
         self.collective_rpc('build_graph_runner')
+        self.model_agent.build_graph_runner()
 
     def build_cache_engine(self):
         """build cache engine."""
         self.collective_rpc('build_cache_engine')
+        self.model_agent.build_cache_engine()
 
     def start(self, forward_event: asyncio.Event):
         """start engine loop."""
         self.collective_rpc('start')
+        self.model_agent.start(forward_event, self.device_ctx, self.dist_ctx)
 
     async def forward_async(self, inputs):
         """start forward."""
         self.collective_rpc('set_forward_inputs', args=(inputs, ))
+        self.model_agent.set_forward_inputs(inputs)
 
     async def get_output_async(self):
         """get output async."""
-        return (await self.collective_rpc_async('get_output_async', call_async=True, receiver_mask=1, return_mask=1))[0]
+        return await self.model_agent.get_output_async()
 
     def get_input_processor(self):
         """get input processor."""
-        return self.collective_rpc('get_input_processor', receiver_mask=1, return_mask=1)[0]
+        return self.model_agent.get_input_processor()
 
     def stop(self):
         """stop engine loop."""
         self.collective_rpc('stop')
+        self.model_agent.stop()
 
     def release(self):
         """release."""
@@ -376,13 +417,14 @@ class MPExecutor(ExecutorBase):
         for ret_buf in self.ret_bufs:
             ret_buf.close()
 
+        self.model_agent.release()
 
-def init_dist_environ(rank: int, world_size: int, nproc_per_node: int):
-    """init environ."""
-    os.environ['RANK'] = str(rank)
-    os.environ['LOCAL_RANK'] = str(rank % nproc_per_node)
-    os.environ['WORLD_SIZE'] = str(world_size)
-    os.environ['LOCAL_WORLD_SIZE'] = str(nproc_per_node)
+    def init(self):
+        """init."""
+        device_mgr = get_device_manager()
+        dist_mgr = get_dist_manager()
+        with dist_mgr.context(self.dist_ctx), device_mgr.context(self.device_ctx):
+            super().init()
 
 
 class ExecutorProc:
@@ -407,14 +449,6 @@ class ExecutorProc:
             return
         self._proc.close()
 
-    @staticmethod
-    def init_process_group(rank: int, world_size: int, nproc_per_node: int):
-        """init process group."""
-        DIST_TIMEOUT = timedelta(days=35600)
-        dist.init_process_group(backend='gloo', rank=rank, world_size=world_size, timeout=DIST_TIMEOUT)
-        assert dist.is_initialized()
-        init_dist_environ(rank, world_size, nproc_per_node)
-
     def _main_loop(
         self,
         proc_id: int,
@@ -435,7 +469,7 @@ class ExecutorProc:
         """main loop."""
 
         world_size = tp * dp
-        self.init_process_group(proc_id, world_size, 1)
+        init_process_group(proc_id, world_size, 1)
 
         dist_ctx = DistContext.build(proc_id, tp, dp)
         device_ctx = DeviceContext(device_type=device_type)

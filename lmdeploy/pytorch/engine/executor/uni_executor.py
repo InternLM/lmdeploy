@@ -36,12 +36,14 @@ class UniExecutor(ExecutorBase):
 
         self.device_ctx = DeviceContext(device_type=device_type)
 
-        self.model_agent = build_model_agent(model_path=model_path,
-                                             model_config=model_config,
-                                             cache_config=cache_config,
-                                             backend_config=backend_config,
-                                             tokenizer=tokenizer,
-                                             adapters=adapters)
+        device_mgr = get_device_manager()
+        with device_mgr.context(self.device_ctx):
+            self.model_agent = build_model_agent(model_path=model_path,
+                                                 model_config=model_config,
+                                                 cache_config=cache_config,
+                                                 backend_config=backend_config,
+                                                 tokenizer=tokenizer,
+                                                 adapters=adapters)
 
     def download_models(self):
         """download model."""

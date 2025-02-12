@@ -7,9 +7,6 @@ from typing import Any, Dict, List
 
 import numpy as np
 import torch
-import torch.distributed
-import torch.distributed.elastic
-from torch import distributed as dist
 
 from lmdeploy.messages import PytorchEngineConfig, ResponseType
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model, logging_timer
@@ -19,7 +16,6 @@ from ..config import BackendConfig, CacheConfig, ModelConfig, SchedulerConfig
 from ..messages import MessageStatus, SchedulerSequence
 from ..model_inputs import ModelInputs, VisionModelInputs
 from ..paging import Scheduler
-from .dist_proc_manager import DIST_TIMEOUT, DistProcManager
 from .engine_checker import EngineChecker
 from .executor import build_executor
 from .logits_process import SamplingInputs
@@ -85,15 +81,6 @@ def _build_backend_config(engine_config: PytorchEngineConfig):
     return backend_config
 
 
-def _braodcast_obj(obj, rank, group):
-    """broadcast object."""
-    objs = [None]
-    if rank == 0:
-        objs = [obj]
-    dist.broadcast_object_list(objs, group=group)
-    return objs[0]
-
-
 class Engine:
     """The inference engine of lmdeploy pytorch.
 
@@ -122,22 +109,15 @@ class Engine:
 
         self.tokenizer = tokenizer
         self.tp = tp
+        self.dp = dp
 
-        # # download models and adapters
-        # if not os.path.exists(model_path):
-        #     if local_rank == 0:
-        #         model_path = get_model(model_path, engine_config.download_dir, engine_config.revision)
-        #     if world_size > 1:
-        #         with get_dist_manager().context(dist_ctx):
-        #             model_path = _braodcast_obj(model_path, local_rank, dist_ctx.local_cpu_group)
+        # download models and adapters
+        if not os.path.exists(model_path):
+            model_path = get_model(model_path, engine_config.download_dir, engine_config.revision)
 
         adapters = engine_config.adapters
-        # if adapters is not None and len(adapters) > 0:
-        #     if local_rank == 0:
-        #         adapters = self._download_adapters(adapters, engine_config)
-        #     if world_size > 1:
-        #         with get_dist_manager().context(dist_ctx):
-        #             adapters = _braodcast_obj(adapters, local_rank, dist_ctx.local_cpu_group)
+        if adapters is not None and len(adapters) > 0:
+            adapters = self._download_adapters(adapters, engine_config)
 
         # check environment
         checker = EngineChecker(model_path=model_path,
@@ -229,46 +209,6 @@ class Engine:
             new_adapters[name] = new_path
 
         return new_adapters
-
-    @staticmethod
-    def _is_launched_by_torchrun():
-        # check env variable
-        # TODO: Find a better check
-        if ('RANK' in os.environ and 'LOCAL_RANK' in os.environ and 'WORLD_SIZE' in os.environ):
-            return True
-        return False
-
-    def _init_dist(
-        self,
-        model_path: str,
-        tokenizer: object,
-        engine_config: PytorchEngineConfig = None,
-        trust_remote_code: bool = True,
-    ):
-        """init distribute."""
-        # process distributed
-        if engine_config.tp > 1 and not self._is_launched_by_torchrun():
-            mgr = DistProcManager(model_path=model_path,
-                                  tokenizer=tokenizer,
-                                  engine_config=engine_config,
-                                  trust_remote_code=trust_remote_code)
-            mgr.start()
-            rank = mgr.global_rank0
-            world_size = mgr.world_size
-            local_world_size = world_size
-            local_rank = 0
-        else:
-            mgr = None
-            rank = int(os.environ.get('RANK', '0'))
-            local_rank = int(os.environ.get('LOCAL_RANK', '0'))
-            world_size = int(os.environ.get('WORLD_SIZE', '1'))
-            local_world_size = int(os.environ.get('LOCAL_WORLD_SIZE', str(world_size)))
-            if engine_config.tp > 1 and not dist.is_initialized():
-                dist.init_process_group(backend='gloo', timeout=DIST_TIMEOUT, rank=rank, world_size=world_size)
-
-        if local_rank != 0:
-            torch.cuda.set_device(local_rank)
-        return rank, local_rank, world_size, local_world_size, mgr
 
     def _build_adapter_manager(self, adapters):
         return AdapterManager(adapters)
@@ -435,7 +375,7 @@ class Engine:
 
     @property
     def gpu_count(self):
-        return self.tp
+        return self.tp * self.dp
 
     @logging_timer('CreateModelInputs', logger)
     def create_model_inputs(self, messages: SeqList, is_prefill: bool):
