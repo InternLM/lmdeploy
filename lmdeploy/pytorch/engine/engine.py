@@ -732,8 +732,9 @@ class Engine:
                 return
             except Exception:
                 logger.exception(f'Task <{task_name}> failed')
+            finally:
                 for task in tasks:
-                    if not task.cancelled():
+                    if not task.done():
                         task.cancel()
 
         for task in tasks:

@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import functools
 from typing import Any, Dict
 
 import torch
@@ -117,21 +118,6 @@ def _batch_stopping_criteria(token_ids: torch.Tensor, stop_words: torch.Tensor, 
 
 
 SwapMap = Dict[int, int]
-
-
-def _on_finish_callback(task: asyncio.Task) -> None:
-    """raise exception on finish."""
-    task_name = task.get_name()
-    try:
-        task.result()
-    except asyncio.CancelledError:
-        logger.debug(f'Task <{task_name}> cancelled.')
-        return
-    except Exception:
-        logger.exception(f'Task <{task_name}> failed')
-    finally:
-        if not task.cancelled():
-            task.cancel()
 
 
 class AutoModelAgent:
@@ -410,6 +396,23 @@ class AutoModelAgent:
                 if forward_event is not None:
                     forward_event.set()
 
+    @staticmethod
+    def _on_finish_callback(task: asyncio.Task, ptask: asyncio.Task) -> None:
+        """raise exception on finish."""
+        task_name = task.get_name()
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            logger.debug(f'Task <{task_name}> cancelled.')
+            return
+        except Exception:
+            logger.exception(f'Task <{task_name}> failed')
+        finally:
+            if not task.done():
+                task.cancel()
+            if not ptask.done():
+                ptask.cancel()
+
     def start(self,
               forward_event: asyncio.Event = None,
               device_ctx: DeviceContext = None,
@@ -420,7 +423,8 @@ class AutoModelAgent:
         self._out_que = asyncio.Queue()
         self._background_task = event_loop.create_task(self._async_loop_background(forward_event, device_ctx, dist_ctx),
                                                        name='ModelAgentLoop')
-        self._background_task.add_done_callback(_on_finish_callback)
+        done_callback = functools.partial(self._on_finish_callback, ptask=asyncio.current_task())
+        self._background_task.add_done_callback(done_callback)
 
     def stop(self):
         """stop task."""
@@ -433,10 +437,20 @@ class AutoModelAgent:
         assert self._in_que is not None, ('Please start backendground task before forward.')
         self._in_que.put_nowait(inputs)
 
+    async def _que_get_safe(self, que, timeout: int = 1):
+        """que.get with timeout."""
+        while True:
+            try:
+                return await asyncio.wait_for(que.get(), timeout=timeout)
+            except asyncio.TimeoutError:
+                if self._background_task.done():
+                    break
+        raise RuntimeError('Model agent loop stopped.')
+
     async def get_output_async(self):
         """async get output."""
         assert self._out_que is not None, ('Please start backendground task before forward.')
-        out = await self._out_que.get()
+        out = await self._que_get_safe(self._out_que)
         event = out.pop('event')
         while not event.query():
             await asyncio.sleep(0.001)

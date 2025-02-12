@@ -5,6 +5,7 @@ import multiprocessing as mp
 import multiprocessing.shared_memory as shared_memory
 import os
 import pickle
+import signal
 import struct
 from contextlib import asynccontextmanager, contextmanager
 from datetime import timedelta
@@ -291,6 +292,16 @@ class MPExecutor(ExecutorBase):
                                                  tokenizer=tokenizer,
                                                  adapters=adapters)
 
+        def signal_handler(signum, frame):
+            logger.error('Received custom termination signal from sub processing, exiting...')
+            for proc in self.procs:
+                proc.close()
+            self.model_agent.stop()
+            self.model_agent.release()
+            os._exit(1)
+
+        signal.signal(signal.SIGUSR1, signal_handler)
+
     def collective_rpc(self,
                        method: str,
                        args: Tuple[Any] = None,
@@ -447,7 +458,8 @@ class ExecutorProc:
             return
         if not self._proc.is_alive():
             return
-        self._proc.close()
+        self._proc.terminate()
+        self._proc.join()
 
     def _main_loop(
         self,
@@ -494,8 +506,15 @@ class ExecutorProc:
 
                 event_loop.run_until_complete(
                     self._main_loop_impl(proc_id, comm_buf=comm_buf, ret_buf=ret_buf, model_agent=model_agent))
+            except asyncio.CancelledError:
+                logger.warning(f'Proc[{proc_id}] main loop cancelled.')
+                os.kill(os.getppid(), signal.SIGUSR1)
+            except BaseException:
+                logger.exception(f'Proc[{proc_id}] failed')
+                os.kill(os.getppid(), signal.SIGUSR1)
             finally:
                 comm_buf.close()
+                ret_buf.close()
 
     async def _main_loop_impl(self, proc_id: int, comm_buf: SharedBuffer, ret_buf: SharedBuffer,
                               model_agent: BaseModelAgent):
