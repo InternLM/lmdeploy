@@ -302,9 +302,6 @@ class AsyncEngine(LogitsMixin):
         self.instances.clear()
         self.engine.close()
         torch._C._cuda_clearCublasWorkspaces()
-        import gc
-        gc.collect()
-        torch.cuda.empty_cache()
 
     def __enter__(self):
         return self
