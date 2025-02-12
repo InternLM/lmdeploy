@@ -359,22 +359,23 @@ class AutoModelAgent:
                                                                        num_appendable_ids)
             else:
                 next_token_ids = torch.empty_like(num_ignore_eos)
-                stopped = torch.empty_like(next_token_ids)
+                stopped = torch.empty_like(next_token_ids, dtype=torch.bool)
 
-            if tp > 1 and is_decoding and idx < loop_count - 1:
+            if tp > 1 and idx < loop_count - 1:
                 tp_gpu_group = dist_ctx.tp_gpu_group
                 dist.broadcast(next_token_ids, src=rank // tp * tp, group=tp_gpu_group)
 
             # send output
             model_metas = output.get('model_metas')
-            event = torch.cuda.Event()
-            event.record()
-            output = dict(next_token_ids=next_token_ids,
-                          logits=logits if return_logits else None,
-                          stopped=stopped,
-                          model_metas=model_metas,
-                          event=event)
-            output_que.put_nowait(output)
+            if rank % tp == 0:
+                event = torch.cuda.Event()
+                event.record()
+                output = dict(next_token_ids=next_token_ids,
+                              logits=logits if return_logits else None,
+                              stopped=stopped,
+                              model_metas=model_metas,
+                              event=event)
+                output_que.put_nowait(output)
 
             # update for next loop
             if is_decoding and idx < loop_count - 1:

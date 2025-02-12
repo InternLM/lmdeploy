@@ -68,13 +68,13 @@ class SharedBuffer:
     def name(self):
         return self.shm.name
 
-    def pack_data(self, data):
+    def pack_data(self, data, receiver_mask):
         """pack data."""
         dumped_data = pickle.dumps(data, protocol=pickle.HIGHEST_PROTOCOL)
         data_size = len(dumped_data)
 
         num_packs = get_num_packages(data_size)
-        head = struct.pack('II', data_size, 0xff)
+        head = struct.pack('II', data_size, receiver_mask)
 
         for _ in range(num_packs):
             with self.acquire_buf() as buf:
@@ -84,15 +84,15 @@ class SharedBuffer:
                 dumped_data = dumped_data[pac_size:]
                 yield buf
 
-    def send_all(self, data):
+    def send(self, data, receiver_mask: int = 0xff):
         """pack data."""
-        for _ in self.pack_data(data):
+        for _ in self.pack_data(data, receiver_mask):
             self.notifier.wait()
 
-    async def send_all_async(self, data):
+    async def send_async(self, data, receiver_mask: int = 0xff):
         """async pack data."""
         event_loop = asyncio.get_event_loop()
-        for _ in self.pack_data(data):
+        for _ in self.pack_data(data, receiver_mask):
             await event_loop.run_in_executor(None, self.notifier.wait)
 
     def _receive(self):
@@ -223,20 +223,23 @@ class MPExecutor(ExecutorBase):
                        args: Tuple[Any] = None,
                        kwargs: Dict[str, Any] = None,
                        call_async: bool = False,
+                       receiver_mask: int = 0xff,
                        return_mask: int = 0):
         """collective rpc."""
         if args is None:
             args = list()
         if kwargs is None:
             kwargs = dict()
-        self.comm_buf.send_all(
+        self.comm_buf.send(
             dict(
                 method=method,
                 args=args,
                 kwargs=kwargs,
                 call_async=call_async,
                 return_mask=return_mask,
-            ))
+            ),
+            receiver_mask=receiver_mask,
+        )
 
         if return_mask:
             outputs = [None] * len(self.ret_bufs)
@@ -250,20 +253,23 @@ class MPExecutor(ExecutorBase):
                                    args: Tuple[Any] = None,
                                    kwargs: Dict[str, Any] = None,
                                    call_async: bool = False,
+                                   receiver_mask: int = 0xff,
                                    return_mask: int = 0):
         """collective rpc."""
         if args is None:
             args = list()
         if kwargs is None:
             kwargs = dict()
-        await self.comm_buf.send_all_async(
+        self.comm_buf.send(
             dict(
                 method=method,
                 args=args,
                 kwargs=kwargs,
                 call_async=call_async,
                 return_mask=return_mask,
-            ))
+            ),
+            receiver_mask=receiver_mask,
+        )
 
         if return_mask:
             outputs = [None] * len(self.ret_bufs)
@@ -312,11 +318,11 @@ class MPExecutor(ExecutorBase):
 
     async def get_output_async(self):
         """get output async."""
-        return (await self.collective_rpc_async('get_output_async', call_async=True, return_mask=1))[0]
+        return (await self.collective_rpc_async('get_output_async', call_async=True, receiver_mask=1, return_mask=1))[0]
 
     def get_input_processor(self):
         """get input processor."""
-        return self.collective_rpc('get_input_processor', return_mask=1)[0]
+        return self.collective_rpc('get_input_processor', receiver_mask=1, return_mask=1)[0]
 
     def stop(self):
         """stop engine loop."""
@@ -436,10 +442,11 @@ class ExecutorProc:
             func = getattr(model_agent, method, None)
             assert func is not None
 
+            logger.debug(f'proc[{proc_id}] call method: <{method}>.')
             if call_async:
                 ret = await func(*args, **kwargs)
             else:
                 ret = func(*args, **kwargs)
 
             if need_return:
-                await ret_buf.send_all_async(ret)
+                ret_buf.send(ret)
