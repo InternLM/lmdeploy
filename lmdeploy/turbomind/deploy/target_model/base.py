@@ -55,11 +55,9 @@ class BaseOutputModel(ABC):
         self.to_file = True if out_dir else False
         self.tm_params = {}
 
-        # get `model_info` and `tokenizer_info` at first, which
-        # will be updated to `self.model_config` and `self.attention_config`
+        # get `model_info` at first, which will be updated to `self.model_config` and `self.attention_config`
         self.input_model_info = self.input_model.model_info()
         self.input_model_info = self.single_to_list(self.input_model_info, keys=['inter_size', 'expert_num'])
-        self.input_model_tokenizer_info = self.input_model.tokenizer_info()
         self.permute_qk = self.input_model_info.get('permute_qk', True)
         self.update_model_config()
         for i, v in enumerate(self.model_config.inter_size):
@@ -97,8 +95,7 @@ class BaseOutputModel(ABC):
 
     def update_model_config(self):
         """Update `self.model_config` according to the input_model's
-        `tokenizer_info` and `model_info`"""
-        _, bos_id, eos_id = self.input_model_tokenizer_info
+        `model_info`"""
         final_cfg = config_to_dict(self.model_config)
         final_cfg.update(self.input_model_info)
         if 'embedding_size' not in self.input_model_info.keys():
