@@ -16,8 +16,8 @@ import torch
 import torch.distributed as dist
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
-from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
-from lmdeploy.pytorch.distributed import DistContext, get_dist_manager
+from lmdeploy.pytorch.devices import DeviceContext
+from lmdeploy.pytorch.distributed import DistContext
 from lmdeploy.pytorch.engine.model_agent import BaseModelAgent, build_model_agent
 from lmdeploy.utils import get_logger
 
@@ -282,15 +282,14 @@ class MPExecutor(ExecutorBase):
         init_process_group(0, self.world_size, 1)
         self.dist_ctx = DistContext.build(0, tp, dp)
         self.device_ctx = DeviceContext(device_type=device_type)
-        device_mgr = get_device_manager()
-        dist_mgr = get_dist_manager()
-        with dist_mgr.context(self.dist_ctx), device_mgr.context(self.device_ctx):
-            self.model_agent = build_model_agent(model_path=model_path,
-                                                 model_config=model_config,
-                                                 cache_config=cache_config,
-                                                 backend_config=backend_config,
-                                                 tokenizer=tokenizer,
-                                                 adapters=adapters)
+        self.model_agent = build_model_agent(model_path=model_path,
+                                             model_config=model_config,
+                                             cache_config=cache_config,
+                                             backend_config=backend_config,
+                                             tokenizer=tokenizer,
+                                             dist_ctx=self.dist_ctx,
+                                             device_ctx=self.device_ctx,
+                                             adapters=adapters)
 
         def signal_handler(signum, frame):
             logger.error('Received custom termination signal from sub processing, exiting...')
@@ -399,7 +398,7 @@ class MPExecutor(ExecutorBase):
     def start(self, forward_event: asyncio.Event):
         """start engine loop."""
         self.collective_rpc('start')
-        self.model_agent.start(forward_event, self.device_ctx, self.dist_ctx)
+        self.model_agent.start(forward_event)
 
     async def forward_async(self, inputs):
         """start forward."""
@@ -428,13 +427,6 @@ class MPExecutor(ExecutorBase):
             ret_buf.close()
 
         self.model_agent.release()
-
-    def init(self):
-        """init."""
-        device_mgr = get_device_manager()
-        dist_mgr = get_dist_manager()
-        with dist_mgr.context(self.dist_ctx), device_mgr.context(self.device_ctx):
-            super().init()
 
 
 class ExecutorProc:
@@ -485,35 +477,33 @@ class ExecutorProc:
         dist_ctx = DistContext.build(proc_id, tp, dp)
         device_ctx = DeviceContext(device_type=device_type)
 
-        dist_mgr = get_dist_manager()
-        device_mgr = get_device_manager()
-
         torch.cuda.set_device(proc_id)
-        with dist_mgr.context(dist_ctx), device_mgr.context(device_ctx):
-            model_agent = build_model_agent(model_path=model_path,
-                                            model_config=model_config,
-                                            cache_config=cache_config,
-                                            backend_config=backend_config,
-                                            tokenizer=tokenizer,
-                                            adapters=adapters)
+        model_agent = build_model_agent(model_path=model_path,
+                                        model_config=model_config,
+                                        cache_config=cache_config,
+                                        backend_config=backend_config,
+                                        tokenizer=tokenizer,
+                                        device_ctx=device_ctx,
+                                        dist_ctx=dist_ctx,
+                                        adapters=adapters)
 
-            comm_buf = SharedBuffer(proc_id, notifier=comm_notifier, name=comm_buf_name)
-            ret_buf = SharedBuffer(-1, notifier=ret_notifier, name=ret_buf_name)
-            try:
-                event_loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(event_loop)
+        comm_buf = SharedBuffer(proc_id, notifier=comm_notifier, name=comm_buf_name)
+        ret_buf = SharedBuffer(-1, notifier=ret_notifier, name=ret_buf_name)
+        try:
+            event_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(event_loop)
 
-                event_loop.run_until_complete(
-                    self._main_loop_impl(proc_id, comm_buf=comm_buf, ret_buf=ret_buf, model_agent=model_agent))
-            except asyncio.CancelledError:
-                logger.warning(f'Proc[{proc_id}] main loop cancelled.')
-                os.kill(os.getppid(), signal.SIGUSR1)
-            except BaseException:
-                logger.exception(f'Proc[{proc_id}] failed')
-                os.kill(os.getppid(), signal.SIGUSR1)
-            finally:
-                comm_buf.close()
-                ret_buf.close()
+            event_loop.run_until_complete(
+                self._main_loop_impl(proc_id, comm_buf=comm_buf, ret_buf=ret_buf, model_agent=model_agent))
+        except asyncio.CancelledError:
+            logger.warning(f'Proc[{proc_id}] main loop cancelled.')
+            os.kill(os.getppid(), signal.SIGUSR1)
+        except BaseException:
+            logger.exception(f'Proc[{proc_id}] failed')
+            os.kill(os.getppid(), signal.SIGUSR1)
+        finally:
+            comm_buf.close()
+            ret_buf.close()
 
     async def _main_loop_impl(self, proc_id: int, comm_buf: SharedBuffer, ret_buf: SharedBuffer,
                               model_agent: BaseModelAgent):

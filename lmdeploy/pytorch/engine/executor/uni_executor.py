@@ -3,7 +3,7 @@ import asyncio
 from typing import Any, Dict
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
-from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
+from lmdeploy.pytorch.devices import DeviceContext
 from lmdeploy.pytorch.engine.model_agent import build_model_agent
 from lmdeploy.utils import get_logger
 
@@ -35,15 +35,13 @@ class UniExecutor(ExecutorBase):
                          device_type=device_type)
 
         self.device_ctx = DeviceContext(device_type=device_type)
-
-        device_mgr = get_device_manager()
-        with device_mgr.context(self.device_ctx):
-            self.model_agent = build_model_agent(model_path=model_path,
-                                                 model_config=model_config,
-                                                 cache_config=cache_config,
-                                                 backend_config=backend_config,
-                                                 tokenizer=tokenizer,
-                                                 adapters=adapters)
+        self.model_agent = build_model_agent(model_path=model_path,
+                                             model_config=model_config,
+                                             cache_config=cache_config,
+                                             backend_config=backend_config,
+                                             tokenizer=tokenizer,
+                                             device_ctx=self.device_ctx,
+                                             adapters=adapters)
 
     def download_models(self):
         """download model."""
@@ -75,7 +73,7 @@ class UniExecutor(ExecutorBase):
 
     def start(self, forward_event: asyncio.Event):
         """start engine loop."""
-        self.model_agent.start(forward_event, self.device_ctx)
+        self.model_agent.start(forward_event)
 
     def stop(self):
         """stop engine loop."""
@@ -96,8 +94,3 @@ class UniExecutor(ExecutorBase):
     def get_input_processor(self):
         """get input processor."""
         return self.model_agent.get_input_processor()
-
-    def init(self):
-        """init."""
-        with get_device_manager().context(self.device_ctx):
-            super().init()

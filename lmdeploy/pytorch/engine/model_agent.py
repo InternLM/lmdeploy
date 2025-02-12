@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import functools
+from contextlib import contextmanager
 from typing import Any, Dict
 
 import torch
@@ -123,7 +124,14 @@ SwapMap = Dict[int, int]
 class AutoModelAgent:
     """Base model agent."""
 
-    def __init__(self, model_config: ModelConfig, cache_config: CacheConfig, tokenizer: Any):
+    def __init__(
+        self,
+        model_config: ModelConfig,
+        cache_config: CacheConfig,
+        tokenizer: Any,
+        dist_ctx: DistContext,
+        device_ctx: DeviceContext,
+    ):
         self.model_config = model_config
         self.cache_config = cache_config
         self.tokenizer = tokenizer
@@ -134,6 +142,16 @@ class AutoModelAgent:
 
         self.stream = torch.cuda.Stream()
         self.out_stream = torch.cuda.Stream()
+
+        self.dist_ctx = dist_ctx
+        self.device_ctx = device_ctx
+
+    @contextmanager
+    def all_context(self):
+        device_mgr = get_device_manager()
+        dist_mgr = get_dist_manager()
+        with device_mgr.context(self.device_ctx), dist_mgr.context(self.dist_ctx):
+            yield
 
     async def async_forward(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
         """model forward.
@@ -179,9 +197,10 @@ class AutoModelAgent:
 
     def get_free_mem(self):
         """gather available memory."""
-        torch.cuda.empty_cache()
-        gpu_mem_physical_free, _ = get_gpu_memory()
-        return gpu_mem_physical_free
+        with self.all_context():
+            torch.cuda.empty_cache()
+            gpu_mem_physical_free, _ = get_gpu_memory()
+            return gpu_mem_physical_free
 
     async def _async_model_forward(self, inputs: ModelInputs, swap_in_map: Dict, swap_out_map: Dict,
                                    return_logits: bool):
@@ -371,19 +390,9 @@ class AutoModelAgent:
                 __update_inputs(next_token_ids)
 
     @torch.inference_mode()
-    async def _async_loop_background(self,
-                                     forward_event: asyncio.Event = None,
-                                     device_ctx: DeviceContext = None,
-                                     dist_ctx: DistContext = None):
+    async def _async_loop_background(self, forward_event: asyncio.Event = None):
         """async loop background."""
-        device_mgr = get_device_manager()
-        dist_mgr = get_dist_manager()
-        if device_ctx is None:
-            device_ctx = device_mgr.current_context()
-        if dist_ctx is None:
-            dist_ctx = dist_mgr.current_context()
-
-        with dist_mgr.context(dist_ctx), device_mgr.context(device_ctx), torch.cuda.stream(self.stream):
+        with self.all_context(), torch.cuda.stream(self.stream):
             while True:
                 forward_inputs = await self._in_que.get()
 
@@ -421,7 +430,7 @@ class AutoModelAgent:
         event_loop = asyncio.get_event_loop()
         self._in_que = asyncio.Queue()
         self._out_que = asyncio.Queue()
-        self._background_task = event_loop.create_task(self._async_loop_background(forward_event, device_ctx, dist_ctx),
+        self._background_task = event_loop.create_task(self._async_loop_background(forward_event),
                                                        name='ModelAgentLoop')
         done_callback = functools.partial(self._on_finish_callback, ptask=asyncio.current_task())
         self._background_task.add_done_callback(done_callback)
@@ -470,11 +479,18 @@ class BaseModelAgent(AutoModelAgent):
                  cache_config: CacheConfig,
                  backend_config: BackendConfig,
                  tokenizer: Any,
+                 dist_ctx: DistContext,
+                 device_ctx: DeviceContext,
                  adapters: Dict[str, str] = None):
-        super().__init__(model_config=model_config, cache_config=cache_config, tokenizer=tokenizer)
+        super().__init__(
+            model_config=model_config,
+            cache_config=cache_config,
+            tokenizer=tokenizer,
+            dist_ctx=dist_ctx,
+            device_ctx=device_ctx,
+        )
         device = 'cuda'
         self.backend_config = backend_config
-        dist_ctx = get_dist_manager().current_context()
         rank = dist_ctx.rank
 
         self.model_path = model_path
@@ -492,7 +508,7 @@ class BaseModelAgent(AutoModelAgent):
         self.patched_model = None
         self.cache_engine = None
 
-    def build_model(self):
+    def _build_model(self):
         """build patched model."""
         model_path = self.model_path
         adapters = self.adapters
@@ -510,18 +526,25 @@ class BaseModelAgent(AutoModelAgent):
             add_adapters(patched_model, adapters, dtype=self.model_config.dtype, device=device)
         self.patched_model = patched_model
 
+    def build_model(self):
+        """build model api."""
+        with self.all_context():
+            self._build_model()
+
     def build_graph_runner(self):
         """build graph runner."""
-        backend = get_backend()
-        self.patched_model = backend.build_graph_runner(self.patched_model,
-                                                        model_config=self.model_config,
-                                                        cache_config=self.cache_config,
-                                                        backend_config=self.backend_config,
-                                                        device=self.device)
+        with self.all_context():
+            backend = get_backend()
+            self.patched_model = backend.build_graph_runner(self.patched_model,
+                                                            model_config=self.model_config,
+                                                            cache_config=self.cache_config,
+                                                            backend_config=self.backend_config,
+                                                            device=self.device)
 
     def build_cache_engine(self):
         """build cache engine."""
-        self.cache_engine = CacheEngine(self.cache_config, self.model_config, self.local_rank, world_size=self.tp)
+        with self.all_context():
+            self.cache_engine = CacheEngine(self.cache_config, self.model_config, self.local_rank, world_size=self.tp)
 
     def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
         cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
@@ -574,6 +597,8 @@ def build_model_agent(model_path: str,
                       cache_config: CacheConfig,
                       backend_config: BackendConfig,
                       tokenizer: Any,
+                      dist_ctx: DistContext = None,
+                      device_ctx: DeviceContext = None,
                       adapters: Dict[str, str] = None):
     """create model agent.
 
@@ -587,10 +612,21 @@ def build_model_agent(model_path: str,
         dtype (str): the data type of model weights and activations
         custom_module_map (str): customized nn module map
     """
-    model_agent = BaseModelAgent(model_path,
-                                 model_config=model_config,
-                                 cache_config=cache_config,
-                                 backend_config=backend_config,
-                                 tokenizer=tokenizer,
-                                 adapters=adapters)
+    if device_ctx is None:
+        device_mgr = get_device_manager()
+        device_ctx = device_mgr.current_context()
+    if dist_ctx is None:
+        dist_mgr = get_dist_manager()
+        dist_ctx = dist_mgr.current_context()
+
+    model_agent = BaseModelAgent(
+        model_path,
+        model_config=model_config,
+        cache_config=cache_config,
+        backend_config=backend_config,
+        tokenizer=tokenizer,
+        adapters=adapters,
+        dist_ctx=dist_ctx,
+        device_ctx=device_ctx,
+    )
     return model_agent
