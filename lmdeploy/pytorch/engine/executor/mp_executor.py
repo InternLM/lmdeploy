@@ -6,7 +6,7 @@ import multiprocessing.shared_memory as shared_memory
 import os
 import pickle
 import struct
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from datetime import timedelta
 from multiprocessing.context import SpawnContext
 from typing import Any, Dict, List, Tuple
@@ -25,26 +25,55 @@ from .base import ExecutorBase
 logger = get_logger('lmdeploy')
 
 # 1m shared memory
-SHARED_SIZE = 1 << 20
+SHARED_BLOCK_SIZE = 1 << 20
+# num shared block
+NUM_SHARED_BLOCK = 8
 # data size
 HEAD_SIZE = 8
+# block real size
+SHARED_BLOCK_REAL_SIZE = SHARED_BLOCK_SIZE + HEAD_SIZE
 
 
 def get_num_packages(data_size):
     """get num packages."""
-    return (data_size + SHARED_SIZE - 1) // SHARED_SIZE
+    return (data_size + SHARED_BLOCK_SIZE - 1) // SHARED_BLOCK_SIZE
+
+
+class Notifier:
+
+    def __init__(self, num_receiver: int, mp_ctx: SpawnContext):
+        self.event = mp_ctx.Event()
+        self.bar = mp_ctx.Barrier(num_receiver + 1)
+
+    def set(self):
+        self.bar.wait()
+
+    async def set_async(self):
+        event_loop = asyncio.get_event_loop()
+        await event_loop.run_in_executor(None, self.bar.wait)
+
+    @contextmanager
+    def wait(self):
+        self.bar.wait()
+        yield
+
+    @asynccontextmanager
+    async def wait_async(self):
+        event_loop = asyncio.get_event_loop()
+        await event_loop.run_in_executor(None, self.bar.wait)
+        yield
 
 
 class SharedBuffer:
     """shared buffer."""
 
-    def __init__(self, proc_id: int, notifier: Any, name: str = None):
+    def __init__(self, proc_id: int, notifier: Notifier, name: str = None):
         self.proc_id = proc_id
         self.notifier = notifier
         self.is_create = name is None
         if self.is_create:
             # double buffer
-            self.shm = shared_memory.SharedMemory(create=True, size=(SHARED_SIZE + HEAD_SIZE) * 2)
+            self.shm = shared_memory.SharedMemory(create=True, size=SHARED_BLOCK_REAL_SIZE * NUM_SHARED_BLOCK)
         else:
             self.shm = shared_memory.SharedMemory(name=name)
         self._buf_id = 0
@@ -57,13 +86,10 @@ class SharedBuffer:
     @contextmanager
     def acquire_buf(self):
         buf = self.shm.buf
-        if self._buf_id == 0:
-            out_buf = buf[:SHARED_SIZE + HEAD_SIZE]
-        else:
-            out_buf = buf[SHARED_SIZE + HEAD_SIZE:]
+        buf_start = self._buf_id * SHARED_BLOCK_REAL_SIZE
+        out_buf = buf[buf_start:buf_start + SHARED_BLOCK_REAL_SIZE]
         yield out_buf
-
-        self._buf_id = 1 - self._buf_id
+        self._buf_id = (self._buf_id + 1) % NUM_SHARED_BLOCK
 
     def name(self):
         return self.shm.name
@@ -78,7 +104,7 @@ class SharedBuffer:
 
         for _ in range(num_packs):
             with self.acquire_buf() as buf:
-                pac_size = min(len(dumped_data), SHARED_SIZE)
+                pac_size = min(len(dumped_data), SHARED_BLOCK_SIZE)
                 packed_data = head + dumped_data[:pac_size]
                 buf[:HEAD_SIZE + pac_size] = packed_data
                 dumped_data = dumped_data[pac_size:]
@@ -87,13 +113,12 @@ class SharedBuffer:
     def send(self, data, receiver_mask: int = 0xff):
         """pack data."""
         for _ in self.pack_data(data, receiver_mask):
-            self.notifier.wait()
+            self.notifier.set()
 
     async def send_async(self, data, receiver_mask: int = 0xff):
         """async pack data."""
-        event_loop = asyncio.get_event_loop()
         for _ in self.pack_data(data, receiver_mask):
-            await event_loop.run_in_executor(None, self.notifier.wait)
+            await self.notifier.set_async()
 
     def _receive(self):
         """unpack data."""
@@ -102,7 +127,7 @@ class SharedBuffer:
             data_size, receiver_mask = struct.unpack('II', head)
             is_receiver = ((receiver_mask & self.proc_mask) > 0)
 
-            pac_size = min(data_size, SHARED_SIZE)
+            pac_size = min(data_size, SHARED_BLOCK_SIZE)
             remain_size = data_size - pac_size
 
             dumped_data = b''
@@ -110,9 +135,8 @@ class SharedBuffer:
                 dumped_data += buf[HEAD_SIZE:HEAD_SIZE + pac_size]
 
         while remain_size > 0:
-            self.notifier.wait()
-            with self.acquire_buf() as buf:
-                pac_size = min(remain_size, SHARED_SIZE)
+            with self.notifier.wait(), self.acquire_buf() as buf:
+                pac_size = min(remain_size, SHARED_BLOCK_SIZE)
                 remain_size -= pac_size
                 if not is_receiver:
                     continue
@@ -125,14 +149,13 @@ class SharedBuffer:
 
     def receive(self):
         """unpack data."""
-        self.notifier.wait()
-        return self._receive()
+        with self.notifier.wait():
+            return self._receive()
 
     async def receive_async(self):
         """async receive data."""
-        event_loop = asyncio.get_event_loop()
-        await event_loop.run_in_executor(None, self.notifier.wait)
-        return self._receive()
+        async with self.notifier.wait_async():
+            return self._receive()
 
     def close(self):
         self.shm.close()
@@ -188,7 +211,7 @@ class MPExecutor(ExecutorBase):
 
         self.world_size = tp * dp
         mp_ctx = mp.get_context('spawn')
-        self.comm_notifier = mp_ctx.Barrier(1 + self.world_size)
+        self.comm_notifier = Notifier(self.world_size, mp_ctx)
         self.comm_buf = SharedBuffer(-1, notifier=self.comm_notifier)
         self.comm_buf_name = self.comm_buf.name()
 
@@ -197,7 +220,7 @@ class MPExecutor(ExecutorBase):
         for proc_id in range(self.world_size):
             proc = ExecutorProc(proc_id=proc_id, mp_ctx=mp_ctx)
 
-            ret_notifier = mp_ctx.Barrier(2)
+            ret_notifier = Notifier(1, mp_ctx)
             ret_buf = SharedBuffer(0, notifier=ret_notifier)
             self.ret_bufs.append(ret_buf)
             proc.start(proc_id=proc_id,
