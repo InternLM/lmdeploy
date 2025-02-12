@@ -1,0 +1,45 @@
+Gitlab待尝试  from prefect import flow
+from prefect.runner.storage import GitRepository
+from prefect.blocks.system import Secret
+​
+gitlab_repo = GitRepository(
+    url="https://gitlab.com/org/my-private-repo.git",
+    credentials={
+        "access_token": Secret.load("my-secret-block-with-my-gl-credentials")
+    },
+    credentials=GitLabCredentials.load("my-gitlab-credentials-block")
+​
+)
+​
+flow.from_source(   
+    source=gitlab_repo,
+    entrypoint="gl_secret_block.py:my_flow",
+).deploy(
+    name="private-gitlab-deploy",
+    work_pool_name="my_pool",
+)
+
+
+
+from prefect import flow
+from prefect.runner.storage import GitRepository
+from prefect.blocks.system import Secret
+from prefect_gitlab import GitLabCredentials
+
+if __name__ == "__main__":
+  gitlab_credentials_block = GitLabCredentials(token="8CdEbTiJ59xjDaxBaS_x")
+  gitlab_credentials_block.save(name="my-gitlab-credentials-block")
+  
+  print(GitLabCredentials.load("my-gitlab-credentials-block"))
+
+  gitlab_repo = GitRepository(
+    url="https://gitlab.pjlab.org.cn/qa/prefect_test.git",
+    credentials=GitLabCredentials.load("my-gitlab-credentials-block")
+  )
+  flow.from_source(
+      source=gitlab_repo,
+      entrypoint="example.py:my_flow_gitlab"
+  ).deploy(
+      name="my-deployment_gitlab",
+      work_pool_name="test_thread",
+  )
