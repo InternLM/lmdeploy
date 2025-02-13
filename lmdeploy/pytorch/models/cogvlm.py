@@ -497,12 +497,17 @@ class EVA2CLIPModel(nn.Module):
         self.patch_embedding = PatchEmbedding(vision_config, dtype=dtype, device=device)
         self.transformer = EVA2CLIPTransformer(vision_config, dtype=dtype, device=device)
         self.linear_proj = GLU(config, in_features=vision_config.hidden_size, dtype=dtype, device=device)
-        self.conv = nn.Conv2d(in_channels=vision_config.hidden_size,
-                              out_channels=vision_config.hidden_size,
-                              kernel_size=2,
-                              stride=2,
-                              dtype=dtype,
-                              device=device)
+        if vision_config.num_positions == 1226:
+            # cogvlm-chat-hf
+            self.conv = None
+        else:
+            # cogvlm2
+            self.conv = nn.Conv2d(in_channels=vision_config.hidden_size,
+                                  out_channels=vision_config.hidden_size,
+                                  kernel_size=2,
+                                  stride=2,
+                                  dtype=dtype,
+                                  device=device)
         self.boi = nn.Parameter(torch.empty(1, 1, config.hidden_size, dtype=dtype, device=device))
         self.eoi = nn.Parameter(torch.empty(1, 1, config.hidden_size, dtype=dtype, device=device))
 
@@ -512,13 +517,14 @@ class EVA2CLIPModel(nn.Module):
         x = self.transformer(x)
 
         x = x[:, 1:]
+        # cogvlm2
+        if self.conv is not None:
+            b, s, h = x.shape
+            grid_size = int(s**0.5)
+            x = x.view(b, grid_size, grid_size, h).permute(0, 3, 1, 2)
+            x = self.conv(x)
 
-        b, s, h = x.shape
-        grid_size = int(s**0.5)
-        x = x.view(b, grid_size, grid_size, h).permute(0, 3, 1, 2)
-        x = self.conv(x)
-
-        x = x.flatten(2).transpose(1, 2)
+            x = x.flatten(2).transpose(1, 2)
         x = self.linear_proj(x)
         boi = self.boi.expand(x.shape[0], -1, -1)
         eoi = self.eoi.expand(x.shape[0], -1, -1)
@@ -799,11 +805,7 @@ class CogVLMForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
                 else:
                     input_imgs.append(mm.get('image', []))
 
-        config = self.config
-        image_size: int = config.vision_config['image_size']
-        patch_size: int = config.vision_config['patch_size']
-        vision_token_num = ((image_size // patch_size // 2) * (image_size // patch_size // 2) + 2)
-        num_pad = vision_token_num - 3
+        num_pad = self.input_processor.vision_token_num - 3
 
         batched_num_img_tokens = []
         new_model_metas = []
@@ -869,7 +871,12 @@ class CogVLMInputProcessor(BaseModelInputProcessor):
         self.dtype = dtype
         image_size: int = config.vision_config['image_size']
         patch_size: int = config.vision_config['patch_size']
-        self.vision_token_num = ((image_size // patch_size // 2) * (image_size // patch_size // 2) + 2)
+        if config.vision_config['num_positions'] == 1226:
+            # # cogvlm-chat-hf
+            self.vision_token_num = 2 + (image_size // patch_size)**2
+        else:
+            # cogvlm2
+            self.vision_token_num = 2 + (image_size // patch_size // 2)**2
 
     def preprocess_input(self, input_ids: List[int], input_multimodals=None, **kwargs) -> PreprocessInputResult:
         """prepare multimodal input."""

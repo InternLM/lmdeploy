@@ -50,8 +50,6 @@ def init_dist_environ(rank: int, world_size: int, nproc_per_node: int):
 
 def init_process_group(rank: int, world_size: int, nproc_per_node: int):
     """init process group."""
-    if dist.is_initialized():
-        return
     DIST_TIMEOUT = timedelta(days=35600)
     dist.init_process_group(backend='gloo', rank=rank, world_size=world_size, timeout=DIST_TIMEOUT)
     assert dist.is_initialized()
@@ -421,6 +419,7 @@ class MPExecutor(ExecutorBase):
 
     def release(self):
         """release."""
+        logger.debug('release executor.')
         for proc in self.procs:
             proc.close()
 
@@ -429,6 +428,8 @@ class MPExecutor(ExecutorBase):
             ret_buf.close()
 
         self.model_agent.release()
+        if dist.is_initialized():
+            dist.destroy_process_group()
 
 
 class ExecutorProc:
@@ -452,7 +453,6 @@ class ExecutorProc:
         if not self._proc.is_alive():
             return
         self._proc.terminate()
-        self._proc.join()
 
     def _main_loop(
         self,
@@ -504,8 +504,12 @@ class ExecutorProc:
             logger.exception(f'Proc[{proc_id}] failed')
             os.kill(os.getppid(), signal.SIGUSR1)
         finally:
+            logger.debug(f'Proc[{proc_id}] terminate.')
+            model_agent.stop()
+            model_agent.release()
             comm_buf.close()
             ret_buf.close()
+            dist.destroy_process_group()
 
     async def _main_loop_impl(self, proc_id: int, comm_buf: SharedBuffer, ret_buf: SharedBuffer,
                               model_agent: BaseModelAgent):

@@ -164,6 +164,7 @@ class Engine:
 
         # create main thread
         self._start_loop()
+        self._loop_main = None
 
     @classmethod
     def from_pretrained(cls,
@@ -778,10 +779,17 @@ class Engine:
             loop_main = asyncio.current_task()
             loop_tasks: List[asyncio.Task] = [loop_main, loop_msg_proc, loop_send_resp]
             self._add_loop_tasks_done_callback(loop_tasks)
+            self._loop_main = loop_main
 
             # main loop
             await self._async_loop_main(resp_que=resp_que, has_runable_event=has_runable_event)
         finally:
+            self._loop_finally()
+
+    def close(self):
+        if self._loop_main is not None:
+            self._loop_main.cancel()
+        else:
             self._loop_finally()
 
     def create_instance(self, cuda_stream_id=0):

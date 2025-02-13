@@ -12,7 +12,8 @@ from utils.get_run_config import get_command_with_extra, get_model_name
 @pytest.mark.convert
 @pytest.mark.parametrize(
     'model',
-    get_turbomind_model_list(model_type='chat_model') + get_turbomind_model_list(model_type='base_model'))
+    get_turbomind_model_list(model_type='chat_model', is_converted=True) +
+    get_turbomind_model_list(model_type='base_model', is_converted=True))
 def test_convert(config, model, worker_id):
     convert(config, model, get_cuda_prefix_by_workerid(worker_id))
 
