@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-import time
 from dataclasses import dataclass, field
 from itertools import count
 from typing import List, Literal, Optional, Tuple, Union
@@ -9,11 +8,9 @@ import gradio as gr
 from packaging.version import Version, parse
 from PIL import Image
 
-from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, VisionConfig
+from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig
 from lmdeploy.model import ChatTemplateConfig
-from lmdeploy.pytorch.engine.request import _run_until_complete
 from lmdeploy.serve.gradio.constants import CSS, THEME, disable_btn, enable_btn
-from lmdeploy.tokenizer import DetokenizeState
 from lmdeploy.utils import get_logger
 
 BATCH_SIZE = 32
@@ -38,12 +35,10 @@ class Session:
     _count = count()
     _session_id: int = None
     _message: List[Tuple[str, str]] = field(default_factory=list)
-    _step: int = 0
 
     def __init__(self):
         self._session_id = next(self._count)
         self._message = []
-        self._step = 0
 
     @property
     def session_id(self):
@@ -53,9 +48,21 @@ class Session:
     def message(self):
         return self._message
 
-    @property
-    def step(self):
-        return self._step
+    def to_gpt4v(self):
+        output = []
+        for user, assistant in self._message:
+            if isinstance(user, str):
+                text, images = user, []
+            else:
+                text, images = user[0], user[1:]
+            content = [dict(type='text', text=text)]
+            for img in images:
+                content.append(dict(type='image_url', image_url=dict(url=img)))
+            user_input = dict(role='user', content=content)
+            output.append(user_input)
+            if assistant:
+                output.append(dict(role='assistant', content=assistant))
+        return output
 
 
 def run_local(model_path: str,
@@ -69,14 +76,12 @@ def run_local(model_path: str,
               **kwargs):
 
     from lmdeploy.serve.vl_async_engine import VLAsyncEngine
-    vision_config = VisionConfig(thread_safe=True)
     engine = VLAsyncEngine(model_path=model_path,
                            model_name=model_name,
                            backend=backend,
                            backend_config=backend_config,
                            chat_template_config=chat_template_config,
                            tp=tp,
-                           vision_config=vision_config,
                            **kwargs)
 
     def add_image(chatbot, session, file):
@@ -91,95 +96,56 @@ def run_local(model_path: str,
             history[-1][0].append(img)
         return chatbot, session
 
-    def add_text(chatbot, session, text):
-        """User query."""
-        chatbot = chatbot + [(text, None)]
+    async def chat(chatbot, session, query, max_new_tokens, top_p, top_k, temperature):
+        """Chat with AI assistant."""
+        chatbot = chatbot + [[query, None]]
         history = session._message
         if len(history) == 0 or history[-1][-1] is not None:
-            history.append([text, None])
+            history.append([query, None])
         else:
-            history[-1][0].insert(0, text)
-        return chatbot, session, disable_btn, enable_btn
+            history[-1][0].insert(0, query)
+        yield chatbot, session, disable_btn, disable_btn, disable_btn
 
-    def chat(chatbot, session, max_new_tokens, top_p, top_k, temperature):
-        """Chat with AI assistant."""
-        generator = engine.engine.create_instance()
-        history = session._message
-        sequence_start = len(history) == 1
+        prompt = session.to_gpt4v()
+        gen_cfg = GenerationConfig(max_new_tokens=max_new_tokens,
+                                   top_p=top_p,
+                                   top_k=top_k,
+                                   temperature=temperature,
+                                   stop_token_ids=engine.stop_words)
+        r = dict(messages=prompt, gen_config=gen_cfg, stream_response=True, session_id=session.session_id)
+        gen = engine.generate(**r)
+        session.gen = gen
+        async for outputs in gen:
+            response = outputs.response
+            if outputs.finish_reason == 'length' and \
+                    outputs.generate_token_len == 0:
+                gr.Warning('WARNING: exceed session max length.'
+                           ' Please restart the session by reset button.')
+            if outputs.generate_token_len < 0:
+                gr.Warning('WARNING: running on the old session.'
+                           ' Please restart the session by reset button.')
 
-        if isinstance(history[-1][0], str):
-            prompt = history[-1][0]
-        else:
-            prompt = history[-1][0][0]
-            images = history[-1][0][1:]
-            # convert prompt into GPT4V format
-            prompt = [dict(role='user', content=[dict(type='text', text=prompt)])]
-            for image in images:
-                prompt[0]['content'].append(dict(type='image_data', image_data=dict(data=image)))
-        t0 = time.perf_counter()
-        inputs = _run_until_complete(engine._get_prompt_input(prompt, True, sequence_start, ''))
-        t1 = time.perf_counter()
-        logger.info('preprocess cost %.3fs' % (t1 - t0))
+            if chatbot[-1][1] is None:
+                chatbot[-1][1] = response
+                history[-1][1] = response
+            chatbot[-1][1] += response
+            history[-1][1] += response
+            yield chatbot, session, disable_btn, enable_btn, disable_btn
+        yield chatbot, session, enable_btn, disable_btn, enable_btn
 
-        input_ids = inputs['input_ids']
-        logger.info('input_ids: ' + str(input_ids))
-        if len(input_ids) + session.step + max_new_tokens > engine.session_len:
-            gr.Warning('WARNING: exceed session max length.'
-                       ' Please restart the session by reset button.')
-            yield chatbot, session, enable_btn, disable_btn, enable_btn
-        else:
-            gen_config = GenerationConfig(max_new_tokens=max_new_tokens,
-                                          top_p=top_p,
-                                          top_k=top_k,
-                                          temperature=temperature,
-                                          stop_token_ids=engine.stop_words)
-            step = session.step
-            state = DetokenizeState(len(input_ids))
-            for outputs in generator.stream_infer(session_id=session._session_id,
-                                                  **inputs,
-                                                  sequence_start=sequence_start,
-                                                  step=step,
-                                                  gen_config=gen_config,
-                                                  stream_output=True):
-                res, tokens = input_ids + outputs.token_ids, outputs.num_token
-                response, state = engine.tokenizer.detokenize_incrementally(
-                    res,
-                    state,
-                    skip_special_tokens=gen_config.skip_special_tokens,
-                    spaces_between_special_tokens=gen_config.spaces_between_special_tokens)  # noqa
-                if chatbot[-1][1] is None:
-                    chatbot[-1][1] = ''
-                    history[-1][1] = ''
-                chatbot[-1][1] += response
-                history[-1][1] += response
-                session._step = step + len(input_ids) + tokens
-                yield chatbot, session, disable_btn, enable_btn, disable_btn
-            yield chatbot, session, enable_btn, disable_btn, enable_btn
-
-    def stop(session):
+    async def stop(session):
         """Stop the session."""
-        generator = engine.engine.create_instance()
-        for _ in generator.stream_infer(session_id=session.session_id,
-                                        input_ids=[0],
-                                        request_output_len=0,
-                                        sequence_start=False,
-                                        sequence_end=False,
-                                        stop=True):
-            pass
+        await engine.stop_session(session.session_id)
 
-    def cancel(chatbot, session):
-        """Stop the session and keey chat history."""
-        stop(session)
-        return chatbot, session, disable_btn, enable_btn, enable_btn
+    async def cancel(session):
+        """Stop the session and keep chat history."""
+        await stop(session)
 
-    def reset(session):
+    async def reset(session):
         """Reset a new session."""
-        if session is None:
-            session = Session()
-        else:
-            stop(session)
-        session._step = 0
-        session._message = []
+        if session is not None:
+            await stop(session)
+        session = Session()
         return [], session, enable_btn
 
     with gr.Blocks(css=CSS, theme=THEME) as demo:
@@ -196,21 +162,19 @@ def run_local(model_path: str,
                 reset_btn = gr.Button(value='Reset')
             with gr.Row():
                 max_new_tokens = gr.Slider(1, 2048, value=512, step=1, label='Maximum new tokens')
-                top_p = gr.Slider(0.01, 1, value=0.8, step=0.01, label='Top_p')
+                top_p = gr.Slider(0.01, 1, value=1.0, step=0.01, label='Top_p')
                 top_k = gr.Slider(1, 100, value=50, step=1, label='Top_k')
-                temperature = gr.Slider(0.01, 1.5, value=0.7, step=0.01, label='Temperature')
+                temperature = gr.Slider(0.01, 1.5, value=1.0, step=0.01, label='Temperature')
 
         addimg_btn.upload(add_image, [chatbot, session, addimg_btn], [chatbot, session], show_progress=True, queue=True)
 
-        send_event = query.submit(add_text, [chatbot, session, query], [chatbot, session]).then(
-            chat, [chatbot, session, max_new_tokens, top_p, top_k, temperature],
-            [chatbot, session, query, cancel_btn, reset_btn])
+        query.submit(chat, [chatbot, session, query, max_new_tokens, top_p, top_k, temperature],
+                     [chatbot, session, query, cancel_btn, reset_btn])
         query.submit(lambda: gr.update(value=''), None, [query])
 
-        cancel_btn.click(cancel, [chatbot, session], [chatbot, session, cancel_btn, reset_btn, query],
-                         cancels=[send_event])
+        cancel_btn.click(cancel, [session], None)
 
-        reset_btn.click(reset, [session], [chatbot, session, query], cancels=[send_event])
+        reset_btn.click(reset, [session], [chatbot, session, query])
 
         demo.load(lambda: Session(), inputs=None, outputs=[session])
 
