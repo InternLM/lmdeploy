@@ -166,6 +166,7 @@ LlamaTritonModel<T>::~LlamaTritonModel()
         check_cuda_error(cudaSetDevice(device_id));
         engines_[device_id].reset();
         weights_[device_id].reset();
+        trim_default_mempool(device_id);
     }
 }
 
