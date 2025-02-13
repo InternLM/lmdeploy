@@ -301,14 +301,13 @@ private:
 
     // hard limits for persistent buffers
     static constexpr int kMaxStopBadWordsLen = 32;
+    static constexpr int kMaxEndIdsSize      = 32;
 
     bool is_allocate_persistant_buffer_ = false;
     bool is_allocate_buffer_            = false;
 
     TensorMap inputs_;
     TensorMap outputs_;
-
-    std::vector<std::tuple<std::string, std::byte*, std::byte*>> sampling_params_;
 
     std::thread internal_thread_;
 

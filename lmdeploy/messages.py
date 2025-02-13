@@ -129,6 +129,18 @@ class GenerationConfig:
         self.stop_token_ids = list(set(stop_token_ids)) or None
         self.bad_token_ids = list(set(bad_token_ids)) or None
 
+    def update_from_hf_gen_cfg(self, generation_config, tokenizer_eos_token_id):
+        """update the stop_token_ids."""
+        stop_token_ids = self.stop_token_ids or []
+        if tokenizer_eos_token_id is not None:
+            stop_token_ids.append(tokenizer_eos_token_id)
+        eos_token_id = generation_config.get('eos_token_id')
+        if eos_token_id is not None:
+            eos_token_id = {eos_token_id} if isinstance(eos_token_id, int) else set(eos_token_id)
+            if stop_token_ids:
+                eos_token_id.update(stop_token_ids)
+            self.stop_token_ids = list(eos_token_id)
+
     def __post_init__(self):
         """Check input validation."""
         assert type(self.n) == int and self.n > 0, 'n is not a positive integer'

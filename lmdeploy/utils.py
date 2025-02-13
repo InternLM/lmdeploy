@@ -180,6 +180,15 @@ def _stop_words(stop_words: List[Union[int, str]], tokenizer: object):
     return stop_words
 
 
+def get_hf_gen_cfg(path: str):
+    from transformers import GenerationConfig
+    try:
+        cfg = GenerationConfig.from_pretrained(path, trust_remote_code=True)
+        return cfg.to_dict()
+    except OSError:
+        return {}
+
+
 def get_model(pretrained_model_name_or_path: str, download_dir: str = None, revision: str = None, token: str = None):
     """Get model from huggingface, modelscope or openmind_hub."""
     import os

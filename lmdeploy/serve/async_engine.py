@@ -25,7 +25,7 @@ from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, Response, R
 from lmdeploy.model import MODELS, ChatTemplateConfig, best_match_model
 from lmdeploy.serve.utils import LogitsMixin
 from lmdeploy.tokenizer import DetokenizeState
-from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_logger
+from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_hf_gen_cfg, get_logger
 
 logger = get_logger('lmdeploy')
 
@@ -270,6 +270,8 @@ class AsyncEngine(LogitsMixin):
         logger.info(f'updated chat_template_onfig={chat_template_config}')
 
         self.tokenizer = Tokenizer(model_path)
+        self.hf_gen_cfg = get_hf_gen_cfg(model_path)
+
         # build backend engine
         if backend == 'turbomind':
             self._build_turbomind(model_path=model_path, backend_config=backend_config, **kwargs)
@@ -634,6 +636,7 @@ class AsyncEngine(LogitsMixin):
         else:
             gen_config = deepcopy(gen_config)
         gen_config.convert_stop_bad_words_to_ids(self.tokenizer)
+        gen_config.update_from_hf_gen_cfg(self.hf_gen_cfg, self.tokenizer.eos_token_id)
         if gen_config.stop_token_ids is None:
             gen_config.stop_token_ids = self.stop_words
         if not gen_config.do_sample:

@@ -140,7 +140,6 @@ protected:
 
         dynamic_decode_layer = new DynamicDecodeLayer<T>(vocab_size,
                                                          vocab_size,
-                                                         end_id,
                                                          stream,
                                                          cublas_wrapper,
                                                          allocator,
@@ -974,7 +973,6 @@ protected:
 
         DynamicDecodeLayer<T>* dynamic_decode_layer = new DynamicDecodeLayer<T>(vocab_size,
                                                                                 vocab_size,
-                                                                                end_id,
                                                                                 stream,
                                                                                 cublas_wrapper,
                                                                                 allocator,
@@ -1064,7 +1062,6 @@ protected:
         const DataType         data_type            = getTensorType<T>();
         DynamicDecodeLayer<T>* dynamic_decode_layer = new DynamicDecodeLayer<T>(vocab_size,
                                                                                 vocab_size,
-                                                                                end_id,
                                                                                 stream,
                                                                                 cublas_wrapper,
                                                                                 allocator,

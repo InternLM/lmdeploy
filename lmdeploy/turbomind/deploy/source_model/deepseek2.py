@@ -79,12 +79,6 @@ class DeepSeek2Model(LlamaModel):
 
     Reader = DeepSeek2Reader
 
-    def tokenizer_info(self):
-        n_words = self.model_config['vocab_size']
-        bos_id = self.model_config['bos_token_id']
-        eos_id = self.model_config['eos_token_id']
-        return n_words, bos_id, eos_id
-
     def model_info(self):
         cfg = self.model_config
         info = super().model_info()
