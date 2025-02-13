@@ -50,6 +50,8 @@ def init_dist_environ(rank: int, world_size: int, nproc_per_node: int):
 
 def init_process_group(rank: int, world_size: int, nproc_per_node: int):
     """init process group."""
+    if dist.is_initialized():
+        return
     DIST_TIMEOUT = timedelta(days=35600)
     dist.init_process_group(backend='gloo', rank=rank, world_size=world_size, timeout=DIST_TIMEOUT)
     assert dist.is_initialized()
