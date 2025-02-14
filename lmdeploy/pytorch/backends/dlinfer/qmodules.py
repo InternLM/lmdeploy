@@ -5,8 +5,9 @@ from typing import Optional
 import torch
 import torch.distributed as dist
 
-from lmdeploy.pytorch.kernels.dlinfer.w8a8_kernels import (
-    linear_w8a8, per_token_quant_int8, rms_norm_w8a8)
+from lmdeploy.pytorch.kernels.dlinfer.w8a8_kernels import (dynamic_quant,
+                                                           linear_w8a8,
+                                                           rms_norm_w8a8)
 from lmdeploy.pytorch.models.q_modules import QTensor
 
 from ..qmodules import (LinearW8A8Builder, LinearW8A8Impl, RMSNormW8A8Builder,
@@ -43,7 +44,7 @@ class DlinferLinearW8A8Impl(LinearW8A8Impl):
                 all_reduce: bool = False):
         """forward."""
         if isinstance(x, torch.Tensor):
-            input_quant, input_scale = per_token_quant_int8(x)
+            input_quant, input_scale = dynamic_quant(x, self.quant_dtype)
         else:
             assert isinstance(x, QTensor)
             input_quant, input_scale = x.tensor, x.scale

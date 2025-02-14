@@ -4,13 +4,11 @@ import torch
 from torch import Tensor
 
 
-def per_token_quant_int8(x):
-    """Function to perform per-token quantization on an input tensor `x`.
-
-    It converts the tensor values into signed 8-bit integers and returns the
-    quantized tensor along with the scaling factor used for quantization.
-    """
-    input_quant, input_scale = ext_ops.per_token_quant_int8(x)
+def dynamic_quant(x: Tensor,
+                  quant_dtype: torch.dtype,
+                  quant_granularity: str = 'PER_TOKEN'):
+    input_quant, input_scale = ext_ops.dynamic_quant(x, quant_dtype,
+                                                     quant_granularity)
     return input_quant, input_scale
 
 
