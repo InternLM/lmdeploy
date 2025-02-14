@@ -144,6 +144,7 @@ class Engine:
                                        adapters=adapters,
                                        tp=tp,
                                        dp=dp,
+                                       nproc_per_node=engine_config.nproc_per_node,
                                        device_type=engine_config.device_type)
         self.executor.init()
 

@@ -7,7 +7,6 @@ import pickle
 import signal
 import struct
 from contextlib import asynccontextmanager, contextmanager
-from datetime import timedelta
 from multiprocessing.context import SpawnContext
 from typing import Any, Dict, List, Tuple
 
@@ -22,6 +21,7 @@ from lmdeploy.pytorch.engine.model_agent import BaseModelAgent, build_model_agen
 from lmdeploy.utils import get_logger
 
 from .base import ExecutorBase
+from .dist_utils import find_available_port, init_process_group, setup_master_addr
 
 logger = get_logger('lmdeploy')
 
@@ -38,22 +38,6 @@ SHARED_BLOCK_REAL_SIZE = SHARED_BLOCK_SIZE + HEAD_SIZE
 def get_num_packages(data_size):
     """get num packages."""
     return (data_size + SHARED_BLOCK_SIZE - 1) // SHARED_BLOCK_SIZE
-
-
-def init_dist_environ(rank: int, world_size: int, nproc_per_node: int):
-    """init environ."""
-    os.environ['RANK'] = str(rank)
-    os.environ['LOCAL_RANK'] = str(rank % nproc_per_node)
-    os.environ['WORLD_SIZE'] = str(world_size)
-    os.environ['LOCAL_WORLD_SIZE'] = str(nproc_per_node)
-
-
-def init_process_group(rank: int, world_size: int, nproc_per_node: int):
-    """init process group."""
-    DIST_TIMEOUT = timedelta(days=35600)
-    dist.init_process_group(backend='nccl', rank=rank, world_size=world_size, timeout=DIST_TIMEOUT)
-    assert dist.is_initialized()
-    init_dist_environ(rank, world_size, nproc_per_node)
 
 
 class Notifier:
@@ -202,26 +186,15 @@ class SharedBuffer:
 class MPExecutor(ExecutorBase):
     """Single node multi device Executor powered by multiprocess."""
 
-    @staticmethod
-    def _find_available_port() -> bool:
-        """find available port."""
-        import socket
-        port = 29500
-        while True:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                if s.connect_ex(('localhost', port)) != 0:
-                    return port
-                port += 1
-
     @classmethod
     def setup_master_addr(cls):
         """setup master addr."""
-        port = cls._find_available_port()
+        port = find_available_port()
         os.environ.setdefault('MASTER_ADDR', '127.0.0.1')
         os.environ.setdefault('MASTER_PORT', str(port))
         addr = os.environ['MASTER_ADDR']
         port = os.environ['MASTER_PORT']
-        logger.info(f'MASTER_ADDR={addr}, MASTER_PORT={port}')
+        setup_master_addr(addr, port)
 
     def __init__(self,
                  model_path: str,

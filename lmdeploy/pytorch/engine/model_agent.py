@@ -422,10 +422,7 @@ class AutoModelAgent:
             if not ptask.done():
                 ptask.cancel()
 
-    def start(self,
-              forward_event: asyncio.Event = None,
-              device_ctx: DeviceContext = None,
-              dist_ctx: DistContext = None):
+    def start(self, forward_event: asyncio.Event = None):
         """start event loop."""
         event_loop = asyncio.get_event_loop()
         self._in_que = asyncio.Queue()
