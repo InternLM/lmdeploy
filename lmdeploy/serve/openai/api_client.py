@@ -103,9 +103,14 @@ class APIClient:
                             frequency_penalty: Optional[float] = 0.0,
                             user: Optional[str] = None,
                             repetition_penalty: Optional[float] = 1.0,
-                            session_id: Optional[int] = -1,
                             ignore_eos: Optional[bool] = False,
                             skip_special_tokens: Optional[bool] = True,
+                            spaces_between_special_tokens: Optional[bool] = True,
+                            top_k: int = 40,
+                            min_new_tokens: Optional[int] = None,
+                            min_p: float = 0.0,
+                            logit_bias: Optional[Dict[str, float]] = None,
+                            stream_options: Optional[Dict] = None,
                             **kwargs):
         """Chat completion v1.
 
@@ -128,7 +133,20 @@ class APIClient:
             ignore_eos (bool): indicator for ignoring eos
             skip_special_tokens (bool): Whether or not to remove special tokens
                 in the decoding. Default to be True.
-            session_id (int): Deprecated.
+            spaces_between_special_tokens (bool): Whether or not to add spaces
+                around special tokens. The behavior of Fast tokenizers is to have
+                this to False. This is setup to True in slow tokenizers.
+            top_k (int): The number of the highest probability vocabulary
+                tokens to keep for top-k-filtering
+            min_new_tokens (int): To generate at least numbers of tokens.
+            min_p (float): Minimum token probability, which will be scaled by the
+                probability of the most likely token. It must be a value between
+                0 and 1. Typical values are in the 0.01-0.2 range, comparably
+                selective as setting `top_p` in the 0.99-0.8 range (use the
+                opposite of normal `top_p` values)
+            logit_bias (Dict): Bias to logits. Only supported in pytorch engine.
+            stream_options: Options for streaming response. Only set this when you
+                set stream: true.
 
         Yields:
             json objects in openai formats
@@ -229,9 +247,10 @@ class APIClient:
             user: Optional[str] = None,
             # additional argument of lmdeploy
             repetition_penalty: Optional[float] = 1.0,
-            session_id: Optional[int] = -1,
             ignore_eos: Optional[bool] = False,
             skip_special_tokens: Optional[bool] = True,
+            spaces_between_special_tokens: Optional[bool] = True,
+            stream_options: Optional[Dict] = None,
             **kwargs):
         """Chat completion v1.
 
@@ -258,7 +277,11 @@ class APIClient:
             ignore_eos (bool): indicator for ignoring eos
             skip_special_tokens (bool): Whether or not to remove special tokens
                 in the decoding. Default to be True.
-            session_id (int): Deprecated.
+            spaces_between_special_tokens (bool): Whether or not to add spaces
+                around special tokens. The behavior of Fast tokenizers is to have
+                this to False. This is setup to True in slow tokenizers.
+            stream_options: Options for streaming response. Only set this when you
+                set stream: true.
 
         Yields:
             json objects in openai formats

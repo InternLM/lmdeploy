@@ -180,6 +180,10 @@ class AutoModelAgent:
         """get input processor."""
         raise NotImplementedError('Not implemented.')
 
+    def close(self):
+        """release model."""
+        pass
+
 
 class BaseModelAgent(AutoModelAgent):
     """Base model agent.
@@ -264,6 +268,11 @@ class BaseModelAgent(AutoModelAgent):
     def get_input_processor(self):
         """get input processor.."""
         return self.patched_model.get_input_processor()
+
+    def close(self):
+        """release model."""
+        self.patched_model = None
+        self.cache_engine = None
 
 
 @torch.inference_mode()
@@ -437,6 +446,9 @@ def _start_tp_process(proc_id: int,
             args = args or tuple()
             kwargs = kwargs or dict()
             func(rank, *args, **kwargs)
+    except threading.BrokenBarrierError:
+        logger.warning(f'Rank[{rank}] exit.')
+        # dist.destroy_process_group() may hang if using cudagraph
     except Exception as e:
         from traceback import print_exc
         logger.error(f'Rank[{rank}] failed.')
@@ -543,7 +555,7 @@ class TPModelAgent(AutoModelAgent):
         self.cache_engine = cache_engine
         self.stream = torch.cuda.Stream()
 
-    def _mp_watchdog(self, mp_context: mp.ProcessContext, timeout: int = 1):
+    def _mp_watchdog(self, mp_context: mp.ProcessContext, timeout: int = 1, stop_event: threading.Event = None):
         """watch dog of mp context.
 
         Args:
@@ -552,6 +564,8 @@ class TPModelAgent(AutoModelAgent):
         """
         import time
         while True:
+            if stop_event is not None and stop_event.is_set():
+                break
             _check_context_alive(mp_context)
             time.sleep(timeout)
 
@@ -589,8 +603,11 @@ class TPModelAgent(AutoModelAgent):
             daemon=True,
         )
 
-        t_watchdog = threading.Thread(target=self._mp_watchdog, args=[self.mp_context, 1.0])
+        stop_event = threading.Event()
+        t_watchdog = threading.Thread(target=self._mp_watchdog, args=[self.mp_context, 1.0, stop_event])
         t_watchdog.start()
+        self.t_watchdog = t_watchdog
+        self.t_watchdog.stop_event = stop_event
 
         rank = 0
         try:
@@ -670,6 +687,26 @@ class TPModelAgent(AutoModelAgent):
     def get_input_processor(self):
         """get input processor.."""
         return self.patched_model.get_input_processor()
+
+    def close(self):
+        """release model."""
+        if hasattr(self, 'mp_context') and self.mp_context is not None:
+            self.patched_model = None
+            self.cache_engine = None
+            self.t_watchdog.stop_event.set()
+            self.t_watchdog.join()
+            self.mp_bar.abort()
+            procs = self.mp_context.processes
+            for p in procs:
+                if p.is_alive():
+                    p.join()
+                    p.close()
+            self.mp_context = None
+            if dist.is_initialized():
+                if hasattr(self, '_cpu_group') and self._cpu_group is not None:
+                    dist.destroy_process_group(self._cpu_group)
+                    del self._cpu_group
+                dist.destroy_process_group()
 
 
 def _exit_handler(agent: TPModelAgent):

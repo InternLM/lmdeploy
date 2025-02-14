@@ -35,7 +35,7 @@ def run_cmd(cmd_lines: List[str], log_path: str, cwd: str = None):
     cmd_for_run = ' '.join(cmd_lines)
     cmd_for_log = f' {sep}\n'.join(cmd_lines) + '\n'
     with open(log_path, 'w', encoding='utf-8') as file_handler:
-        file_handler.write(f'Command:\n{cmd_for_log}\n')
+        file_handler.write(f'Command: {cmd_for_log}\n')
         file_handler.flush()
         process_res = subprocess.Popen(cmd_for_run, shell=True, cwd=cwd, stdout=file_handler, stderr=file_handler)
         process_res.wait()
@@ -93,17 +93,16 @@ def evaluate(models: List[str], datasets: List[str], workspace: str, evaluate_ty
         print(f'Start evaluating {idx+1}/{num_model} {ori_model} ...')
         model = ori_model.lower()
 
-        opencompass_dir = os.path.abspath(os.environ['OPENCOMPASS_DIR'])
         lmdeploy_dir = os.path.abspath(os.environ['LMDEPLOY_DIR'])
         config_path = os.path.join(lmdeploy_dir, f'.github/scripts/eval_{evaluate_type}_config.py')
-        config_path_new = os.path.join(opencompass_dir, 'configs', 'eval_lmdeploy.py')
+        config_path_new = os.path.join(lmdeploy_dir, 'eval_lmdeploy.py')
         if os.path.exists(config_path_new):
             os.remove(config_path_new)
         shutil.copy(config_path, config_path_new)
 
         cfg = Config.fromfile(config_path_new)
         if not hasattr(cfg, model):
-            logging.error(f'Model {model} not found in configuration file')
+            logging.error(f'Model {model} not in configuration file')
             continue
 
         model_cfg = cfg[model]
@@ -116,13 +115,13 @@ def evaluate(models: List[str], datasets: List[str], workspace: str, evaluate_ty
                 f.write("    if d['reader_cfg'] is not None:\n")
                 f.write("        d['reader_cfg']['test_range'] = '[0:50]'\n")
             if model.startswith('hf'):
-                f.write(f'\nmodels = [ *{model} ]\n')
+                f.write(f'\nmodels = [*{model}]\n')
             else:
-                f.write(f'\nmodels = [ {model} ]\n')
+                f.write(f'\nmodels = [{model}]\n')
 
         work_dir = os.path.join(workspace, model)
         cmd_eval = [
-            f'python3 {opencompass_dir}/run.py {config_path_new} -w {work_dir} --reuse --max-num-workers 8 --dump-eval-details'  # noqa: E501
+            f'opencompass {config_path_new} -w {work_dir} --reuse --max-num-workers 8'  # noqa: E501
         ]
         eval_log = os.path.join(workspace, f'eval.{ori_model}.txt')
         start_time = time.time()
@@ -158,7 +157,7 @@ def evaluate(models: List[str], datasets: List[str], workspace: str, evaluate_ty
         if len(crows_pairs_json) == 1:
             with open(crows_pairs_json[0], 'r') as f:
                 acc = json.load(f)['accuracy']
-                acc = f'{float(acc):.2f}'
+                acc = f'{float(acc):.2f}'  # noqa E231
                 model_results['crows_pairs'] = acc
         logging.info(f'\n{model}\n{model_results}')
         dataset_names = list(model_results.keys())

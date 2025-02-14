@@ -16,8 +16,10 @@ from queue import Queue
 from threading import Thread
 from typing import Any, AsyncIterator, Dict, Iterator, List, Literal, Optional, Tuple, Union
 
+import torch
 import tqdm
 
+from lmdeploy import Tokenizer
 from lmdeploy.logger import RequestLogger
 from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, Response, ResponseType, TurbomindEngineConfig
 from lmdeploy.model import MODELS, ChatTemplateConfig, best_match_model
@@ -267,6 +269,7 @@ class AsyncEngine(LogitsMixin):
 
         logger.info(f'updated chat_template_onfig={chat_template_config}')
 
+        self.tokenizer = Tokenizer(model_path)
         # build backend engine
         if backend == 'turbomind':
             self._build_turbomind(model_path=model_path, backend_config=backend_config, **kwargs)
@@ -279,12 +282,11 @@ class AsyncEngine(LogitsMixin):
 
         # parameters for member functions
         self.session_len = _get_and_verify_max_len(self.hf_tm_cfg, self.backend_config.session_len)
-        self.stop_words = _stop_words(self.chat_template.stop_words, self.engine.tokenizer)
+        self.stop_words = _stop_words(self.chat_template.stop_words, self.tokenizer)
         if self.stop_words is not None:
             self.stop_words = self.stop_words[0][0].tolist()
         self.backend = backend
         self.instance_num = self.backend_config.max_batch_size
-        self.tokenizer = self.engine.tokenizer
         self.id2step = {}
         self.id2inst = {}
         self.free_insts: asyncio.Queue = None
@@ -296,6 +298,16 @@ class AsyncEngine(LogitsMixin):
 
     def close(self):
         self.internal_thread.close()
+        self.free_insts = None
+        self.instances.clear()
+        self.engine.close()
+        torch._C._cuda_clearCublasWorkspaces()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
 
     def _get_free_insts(self):
         if self.free_insts is None:
@@ -311,7 +323,10 @@ class AsyncEngine(LogitsMixin):
                          **kwargs):
         """Innter build method for turbomind backend."""
         from lmdeploy import turbomind as tm
-        self.engine = tm.TurboMind.from_pretrained(model_path, engine_config=backend_config, **kwargs)
+        self.engine = tm.TurboMind.from_pretrained(model_path,
+                                                   tokenizer=self.tokenizer,
+                                                   engine_config=backend_config,
+                                                   **kwargs)
         self.backend_config = self.engine.engine_config
         self.hf_tm_cfg = self.engine.config
 
@@ -321,7 +336,7 @@ class AsyncEngine(LogitsMixin):
                        **kwargs):
         """Innter build method for pytorch backend."""
         from lmdeploy.pytorch.engine import Engine
-        self.engine = Engine(model_path=model_path, engine_config=backend_config)
+        self.engine = Engine(model_path=model_path, tokenizer=self.tokenizer, engine_config=backend_config)
         self.backend_config = self.engine.engine_config
         self.hf_tm_cfg = getattr(self.engine.model_config, 'hf_config', None)
 

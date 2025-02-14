@@ -136,16 +136,14 @@ jobs:
     timeout-minutes: 180
     env:
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
-      MODELSCOPE_CACHE: /root/modelscope_hub
-      MODELSCOPE_MODULES_CACHE: /root/modelscope_modules
+      MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
+      MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
     container:
       image: openmmlab/lmdeploy:latest-cu12
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
-        - /nvme/github-actions/modelscope_hub:/root/modelscope_hub
-        - /nvme/github-actions/modelscope_modules:/root/modelscope_modules
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /mnt/shared:/mnt/shared
         - /mnt/187:/mnt/187
@@ -158,7 +156,6 @@ jobs:
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/xformers-*.whl --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
@@ -220,16 +217,14 @@ jobs:
             function: local_case
     env:
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
-      MODELSCOPE_CACHE: /root/modelscope_hub
-      MODELSCOPE_MODULES_CACHE: /root/modelscope_modules
+      MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
+      MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
     container:
       image: openmmlab/lmdeploy:latest-cu12
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
-        - /nvme/github-actions/modelscope_hub:/root/modelscope_hub
-        - /nvme/github-actions/modelscope_modules:/root/modelscope_modules
         - /nvme/github-actions/resources/lora:/root/lora
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /mnt/shared:/mnt/shared
@@ -243,7 +238,6 @@ jobs:
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/xformers-*.whl --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
@@ -341,7 +335,6 @@ jobs:
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/xformers-*.whl --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
@@ -431,7 +424,6 @@ jobs:
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/xformers-*.whl --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
@@ -490,7 +482,6 @@ jobs:
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/xformers-*.whl --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
@@ -550,7 +541,7 @@ jobs:
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/xformers-*.whl --no-deps
+          python3 -m pip install sentence_transformers==2.2.2 --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
@@ -560,6 +551,7 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/open-compass/opencompass.git
           cd opencompass
+          cp /nvme/qa_test_models/offline_pkg/requirements-oc.txt requirements/runtime.txt
           python3 -m pip install -e .
           echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
       - name: Check env

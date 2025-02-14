@@ -34,11 +34,8 @@ class Phi3VisionModel(LlavaHfVisionModel):
         images = self.collect_images(messages)
         outputs = []
         for image, params in images:
-            image = image.convert('RGB')
-            result = self.processor.image_processor(image, return_tensors='pt')
-            h = result['image_sizes'][0][0].item() // 336
-            w = result['image_sizes'][0][1].item() // 336
-            image_tokens = int((h * w + 1) * 144 + 1 + (h + 1) * 12)
+            result = self.processor.image_processor([image], return_tensors='pt')
+            image_tokens = result['num_img_tokens']
             result.update(dict(image_size=image.size, image_tokens=image_tokens, image_token_id=0))
             outputs.append(result)
         messages.append(dict(role='preprocess', content=outputs))
