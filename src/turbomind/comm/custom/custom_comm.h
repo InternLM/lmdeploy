@@ -31,7 +31,8 @@ static constexpr int kMaxNearPeers = 7;
 
 class CustomComm: public Comm {
 public:
-    static constexpr int kScratchBuffSize = 16 << 20;
+    static constexpr int kPacketBuffSize  = 16 << 20;
+    static constexpr int kScratchBuffSize = 64 << 20;
     static constexpr int kChannelsPerConn = 64;
 
     CustomComm(std::shared_ptr<mscclpp::Bootstrap> bootstrap);
@@ -76,15 +77,35 @@ private:
     std::unordered_map<void*, std::vector<mscclpp::SmChannel>>        registered_channels_;
     std::unordered_map<void*, std::vector<mscclpp::RegisteredMemory>> registered_memories_;
 
-    void*                           packet_buff_{};
-    std::vector<mscclpp::SmChannel> packet_chns_;
-    void*                           scratch_buff_{};
-    uint32_t                        flag_{1};
+    void*    packet_buff_{};
+    void*    scratch_buff_{};
+    uint32_t flag_{1};
 
     mscclpp::SmDevice2DeviceSemaphoreDeviceHandle* device_semaphores_;
     mscclpp::DeviceSyncer*                         device_syncer_{};
 };
 
 std::vector<std::unique_ptr<Comm>> CreateCustomComm(const std::vector<int>& devices);
+
+struct Rank {
+    int            rank;
+    int            peers;
+    __device__ int get_next_peer(int i)
+    {
+        return i + rank < peers ? i + rank : i + rank - peers;
+    }
+    __device__ int get_prev_peer(int i)
+    {
+        return get_next_peer(peers - 1 - i);
+    }
+    __device__ int get_peer_rank(int p)  // rank of `p`
+    {
+        return p < rank ? p : p + 1;
+    }
+    __device__ int inverse_peer(int p)  // peer idx of `rank` on peer `p`
+    {
+        return p < rank ? rank - 1 : rank;
+    }
+};
 
 }  // namespace turbomind

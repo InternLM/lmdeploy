@@ -56,13 +56,15 @@ void CustomComm::Initialize()
     cudaMemsetAsync(device_syncer_, 0, sizeof(mscclpp::DeviceSyncer), {});
     cudaStreamSynchronize({});
 
-    cudaMalloc(&packet_buff_, kScratchBuffSize);
-    cudaMemset(packet_buff_, 0, kScratchBuffSize);
-
-    RegisterBuffer(packet_buff_, kScratchBuffSize);
-    packet_chns_ = registered_channels_.at(packet_buff_);
+    cudaMalloc(&packet_buff_, kPacketBuffSize);
+    cudaMemset(packet_buff_, 0, kPacketBuffSize);
 
     cudaMalloc(&scratch_buff_, kScratchBuffSize);
+    cudaMemset(scratch_buff_, 0, kScratchBuffSize);
+
+    RegisterBuffer(packet_buff_, kPacketBuffSize);
+    RegisterBuffer(scratch_buff_, kScratchBuffSize);
+
 }
 
 void CustomComm::RegisterBuffer(void* ptr, size_t size)

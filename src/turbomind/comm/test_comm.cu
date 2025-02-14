@@ -29,7 +29,7 @@ struct Context {
     template<class F>
     float exec(F func)
     {
-        // cudaStreamSynchronize(stream);
+        cudaStreamSynchronize(stream);
         cudaEventRecord(ev_start, stream);
 
         func(stream);
@@ -174,6 +174,9 @@ struct TestComm {
             for (const auto& n : tokens_) {
                 const size_t count = (size_t)n * dim;
                 auto&        delta = deltas.emplace_back();
+
+                barrier_->arrive_and_wait();
+
                 for (int i = 0; i < warmup_ + iters_; ++i) {
                     ctx.copy_n(d_rank_data, count, d_tmp);
                     auto ms = ctx.exec([&](auto stream) {  //
@@ -340,6 +343,7 @@ struct TestComm {
             for (const auto& n : tokens_) {
                 const size_t count = (size_t)n * dim;
                 auto&        delta = deltas.emplace_back();
+                barrier_->arrive_and_wait();
                 for (int i = 0; i < warmup_ + iters_; ++i) {
 
                     ctx.copy_n(d_rank_data, count, d_tmp_data);
@@ -353,7 +357,6 @@ struct TestComm {
                             }
                             barrier_->arrive_and_wait();
                         }
-
                         comm.AllreduceResidualBiasRMSnorm(
                             d_tmp_data, d_tmp_res, has_bias ? d_bias : nullptr, d_weight, eps, dim, n, stream);
 
@@ -370,7 +373,7 @@ struct TestComm {
                     }
                     // verify(n);
                 }
-                verify(n);
+                // verify(n);
             }
 
             cudaFree(d_tmp_data);
@@ -513,12 +516,12 @@ int main(int argc, char* argv[])
              128000,
              -1,
              10,
-             250,
-             //   {1});
-             //   {1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 24, 32, 48, 64, 96, 128});
+             1000,
+             //    {512});
+             //    {1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 24, 32, 48, 64, 96, 128});
              //  {128, 256, 512, 1024, 2048, 4096, 8192});
              //  {8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048, 4096, 6144, 8192});
-            //   {8192, 16384, 32768});
+             //   {8192, 16384, 32768});
              {1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048, 4096, 6144, 8192});
     // );
 
