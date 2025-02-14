@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from vLLM: https://github.com/vllm-project/vllm/blob/main/vllm/v1/executor/multiproc_executor.py
 import asyncio
-import multiprocessing as mp
 import multiprocessing.shared_memory as shared_memory
 import os
 import pickle
@@ -14,6 +13,7 @@ from typing import Any, Dict, List, Tuple
 
 import torch
 import torch.distributed as dist
+import torch.multiprocessing as mp
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.pytorch.devices import DeviceContext
@@ -51,7 +51,7 @@ def init_dist_environ(rank: int, world_size: int, nproc_per_node: int):
 def init_process_group(rank: int, world_size: int, nproc_per_node: int):
     """init process group."""
     DIST_TIMEOUT = timedelta(days=35600)
-    dist.init_process_group(backend='gloo', rank=rank, world_size=world_size, timeout=DIST_TIMEOUT)
+    dist.init_process_group(backend='nccl', rank=rank, world_size=world_size, timeout=DIST_TIMEOUT)
     assert dist.is_initialized()
     init_dist_environ(rank, world_size, nproc_per_node)
 
@@ -121,6 +121,7 @@ class SharedBuffer:
     @contextmanager
     def acquire_buf(self):
         buf = self.shm.buf
+        assert buf is not None
         buf_start = self._buf_id * SHARED_BLOCK_REAL_SIZE
         out_buf = buf[buf_start:buf_start + SHARED_BLOCK_REAL_SIZE]
         yield out_buf
@@ -273,7 +274,8 @@ class MPExecutor(ExecutorBase):
                        dp=dp,
                        tp=tp,
                        adapters=adapters,
-                       device_type=device_type)
+                       device_type=device_type,
+                       log_level=logger.level)
             self.procs.append(proc)
 
         self.ret_all_mask = (1 << self.world_size) - 1
@@ -293,10 +295,8 @@ class MPExecutor(ExecutorBase):
 
         def signal_handler(signum, frame):
             logger.error('Received custom termination signal from sub processing, exiting...')
-            for proc in self.procs:
-                proc.close()
-            self.model_agent.stop()
-            self.model_agent.release()
+            self.stop()
+            self.release()
             os._exit(1)
 
         signal.signal(signal.SIGUSR1, signal_handler)
@@ -419,17 +419,19 @@ class MPExecutor(ExecutorBase):
 
     def release(self):
         """release."""
-        logger.debug('release executor.')
         for proc in self.procs:
             proc.close()
+
+        self.model_agent.release()
+        if dist.is_initialized():
+            dist.destroy_process_group()
 
         self.comm_buf.close()
         for ret_buf in self.ret_bufs:
             ret_buf.close()
 
-        self.model_agent.release()
-        if dist.is_initialized():
-            dist.destroy_process_group()
+        for proc in self.procs:
+            proc.join()
 
 
 class ExecutorProc:
@@ -442,7 +444,11 @@ class ExecutorProc:
 
     def start(self, **kwargs):
         """start proc."""
-        proc = self.mp_ctx.Process(target=self._main_loop, kwargs=kwargs, daemon=True)
+        assert self._proc is None
+        proc = self.mp_ctx.Process(target=self._main_loop,
+                                   kwargs=kwargs,
+                                   name=f'ExecutorProc-{self.proc_id}',
+                                   daemon=True)
         proc.start()
         self._proc = proc
 
@@ -453,6 +459,11 @@ class ExecutorProc:
         if not self._proc.is_alive():
             return
         self._proc.terminate()
+
+    def join(self):
+        if self._proc is None:
+            return
+        self._proc.join()
 
     def _main_loop(
         self,
@@ -470,8 +481,18 @@ class ExecutorProc:
         tp: int,
         adapters: Dict[str, str] = None,
         device_type: str = 'cuda',
+        log_level: int = 30,
     ):
         """main loop."""
+        logger.setLevel(log_level)
+        torch.cuda.set_device(proc_id)
+
+        # catch signal
+        def handle_sigterm(signum, frame):
+            logger.debug(f'Proc[{proc_id}] terminated.')
+            exit(0)
+
+        signal.signal(signal.SIGTERM, handle_sigterm)
 
         world_size = tp * dp
         init_process_group(proc_id, world_size, 1)
@@ -479,7 +500,6 @@ class ExecutorProc:
         dist_ctx = DistContext.build(proc_id, tp, dp)
         device_ctx = DeviceContext(device_type=device_type)
 
-        torch.cuda.set_device(proc_id)
         model_agent = build_model_agent(model_path=model_path,
                                         model_config=model_config,
                                         cache_config=cache_config,
@@ -488,28 +508,33 @@ class ExecutorProc:
                                         device_ctx=device_ctx,
                                         dist_ctx=dist_ctx,
                                         adapters=adapters)
-
         comm_buf = SharedBuffer(proc_id, notifier=comm_notifier, name=comm_buf_name)
         ret_buf = SharedBuffer(-1, notifier=ret_notifier, name=ret_buf_name)
+        event_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(event_loop)
+        destroy_pg = True
         try:
-            event_loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(event_loop)
-
             event_loop.run_until_complete(
                 self._main_loop_impl(proc_id, comm_buf=comm_buf, ret_buf=ret_buf, model_agent=model_agent))
         except asyncio.CancelledError:
             logger.warning(f'Proc[{proc_id}] main loop cancelled.')
+            destroy_pg = False
             os.kill(os.getppid(), signal.SIGUSR1)
+        except SystemExit:
+            # terminated by executor
+            pass
         except BaseException:
             logger.exception(f'Proc[{proc_id}] failed')
             os.kill(os.getppid(), signal.SIGUSR1)
         finally:
-            logger.debug(f'Proc[{proc_id}] terminate.')
+            logger.debug(f'Proc[{proc_id}] cleanup.')
             model_agent.stop()
             model_agent.release()
             comm_buf.close()
             ret_buf.close()
-            dist.destroy_process_group()
+            if dist.is_initialized() and destroy_pg:
+                dist.destroy_process_group()
+            os._exit(0)
 
     async def _main_loop_impl(self, proc_id: int, comm_buf: SharedBuffer, ret_buf: SharedBuffer,
                               model_agent: BaseModelAgent):

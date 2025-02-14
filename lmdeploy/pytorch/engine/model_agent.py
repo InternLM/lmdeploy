@@ -438,7 +438,7 @@ class AutoModelAgent:
     def stop(self):
         """stop task."""
         if self._background_task is not None:
-            if not self._background_task.cancelled():
+            if not self._background_task.done():
                 self._background_task.cancel()
 
     def set_forward_inputs(self, inputs):
@@ -579,16 +579,14 @@ class BaseModelAgent(AutoModelAgent):
 
     def reset_graph_runner(self):
         """reset graph runner to prevent tp hanging."""
-        self.patched_model.reset()
+        if hasattr(self.patched_model, 'reset'):
+            self.patched_model.reset()
 
     def release(self):
         """release."""
-        import gc
-        if self.patched_model is not None:
-            self.reset_graph_runner()
+        self.reset_graph_runner()
         self.patched_model = None
         self.cache_engine = None
-        gc.collect()
         torch.cuda.empty_cache()
 
 
