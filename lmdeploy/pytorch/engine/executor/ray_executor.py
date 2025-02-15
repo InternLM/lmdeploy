@@ -146,11 +146,11 @@ class RayWorkerWrapper:
         logger.setLevel(log_level)
         self.model = None
 
-    async def get_node_ip(self):
+    def get_node_ip(self):
         """get worker ip."""
         return self.node_ip
 
-    async def init_process_group(self, rank: int, master_addr: str, master_port: str):
+    def init_process_group(self, rank: int, master_addr: str, master_port: str):
         """initialize process group."""
         setup_master_addr(master_addr, master_port)
         self.rank = rank
@@ -159,7 +159,7 @@ class RayWorkerWrapper:
 
         init_process_group(rank, self.world_size, self.nproc_per_node)
 
-    async def build_model(self):
+    def build_model(self):
         """build model."""
         self.dist_ctx = DistContext.build(self.rank, self.tp, self.dp, self.nproc_per_node)
         self.device_ctx = DeviceContext(device_type=self.device_type)
@@ -174,35 +174,35 @@ class RayWorkerWrapper:
                                              adapters=self.adapters)
         self.model_agent.build_model()
 
-    async def gather_free_mem(self):
+    def gather_free_mem(self):
         """gather free mem."""
         return self.model_agent.get_free_mem()
 
-    async def set_cache_config(self, cache_config: CacheConfig):
+    def set_cache_config(self, cache_config: CacheConfig):
         """set all cache config."""
         self.model_agent.set_cache_config(cache_config)
 
-    async def set_model_config(self, model_config: ModelConfig):
+    def set_model_config(self, model_config: ModelConfig):
         """set all model config."""
         self.model_agent.set_model_config(model_config)
 
-    async def build_graph_runner(self):
+    def build_graph_runner(self):
         """build graph runner."""
         self.model_agent.build_graph_runner()
 
-    async def build_cache_engine(self):
+    def build_cache_engine(self):
         """build cache engine."""
         self.model_agent.build_cache_engine()
 
-    async def get_input_processor(self):
+    def get_input_processor(self):
         """build cache engine."""
         return self.model_agent.get_input_processor()
 
-    async def start(self):
+    def start(self):
         """start engine loop."""
         self.model_agent.start()
 
-    async def stop(self):
+    def stop(self):
         """stop engine loop."""
         self.model_agent.stop()
 
@@ -214,7 +214,7 @@ class RayWorkerWrapper:
         """get output async."""
         return await self.model_agent.get_output_async()
 
-    async def release(self):
+    def release(self):
         """stop engine loop."""
         self.model_agent.release()
 
@@ -249,6 +249,7 @@ class RayExecutor(ExecutorBase):
         device_ctx = DeviceContext(device_type)
         with get_device_manager().context(device_ctx):
             placement_group = init_ray_cluster(self.world_size)
+        self.placement_group = placement_group
         self.master_addr = _get_master_addr()
         self.master_port = find_available_port()
         setup_master_addr(self.master_addr, self.master_port)
@@ -268,6 +269,7 @@ class RayExecutor(ExecutorBase):
             nproc_per_node=nproc_per_node,
         )
         self.workers = self._init_workers_ray(placement_group, worker_kwargs)
+        self.dag = None
 
         # initialize process group
         ray.get([
@@ -282,19 +284,6 @@ class RayExecutor(ExecutorBase):
         if kwargs is None:
             kwargs = dict()
         return ray.get([getattr(worker, method).remote(*args, **kwargs) for worker in self.workers])
-
-    async def collective_rpc_async(
-        self,
-        method: str,
-        args: Tuple[Any] = None,
-        kwargs: Dict[str, Any] = None,
-    ):
-        """async collective rpc."""
-        if args is None:
-            args = list()
-        if kwargs is None:
-            kwargs = dict()
-        return await asyncio.gather(getattr(worker, method).remote(*args, **kwargs) for worker in self.workers)
 
     def build_model(self):
         """build model."""
@@ -336,13 +325,17 @@ class RayExecutor(ExecutorBase):
     def release(self):
         """release."""
         self.collective_rpc('release')
+        for worker in self.workers:
+            ray.kill(worker)
+        if self.dag is not None:
+            self.dag.teardown()
+        ray.util.remove_placement_group(self.placement_group)
 
     async def forward_async(self, inputs):
         """start forward."""
-        assert self.forward_event is not None
-        self.forward_event.clear()
-        self.collective_rpc('forward_async', (inputs, ))
-        self.forward_event.set()
+        # we don't need return of forward async
+        inputs = ray.put(inputs)
+        [worker.forward_async.remote(inputs) for worker in self.workers]
 
     async def get_output_async(self):
         """get output async."""
@@ -388,7 +381,7 @@ class RayExecutor(ExecutorBase):
         bundle_indices = bundle_indices[:self.world_size]
 
         workers = list()
-        for worker_rank, bundle_id in enumerate(bundle_indices):
+        for _, bundle_id in enumerate(bundle_indices):
             scheduling_strategy = PlacementGroupSchedulingStrategy(
                 placement_group=placement_group,
                 placement_group_capture_child_tasks=True,
