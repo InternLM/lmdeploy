@@ -248,7 +248,7 @@ class TurboMind:
             )
         return model_comm
 
-    def load_state_dict(self, state_dict):
+    def load_weights(self, state_dict):
         tm_params = self.tm_model.tm_params
         self._get_model_params(self.model_comm, tm_params)
         input_model = self.tm_model.input_model
