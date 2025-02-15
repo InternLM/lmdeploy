@@ -4,6 +4,7 @@ import copy
 import json
 import os.path as osp
 import sys
+import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from itertools import repeat
@@ -97,6 +98,8 @@ class TurboMind:
             f' greater than 0, but got {_engine_config.max_batch_size}'
 
         self.gpu_count = _engine_config.tp
+        self.gpu_list = _engine_config.devices
+        os.environ['LMDEPLOY_DEVICE_LIST'] = str(_engine_config.devices)
 
         if model_source == ModelSource.WORKSPACE:
             tokenizer_model_path = osp.join(model_path, 'triton_models',
@@ -113,17 +116,22 @@ class TurboMind:
                                             model_path=model_path,
                                             engine_config=_engine_config)
 
+
         with ThreadPoolExecutor(max_workers=self.gpu_count) as e:
             ranks = [
                 self.node_id * self.gpu_count + device_id
                 for device_id in range(self.gpu_count)
             ]
-            for _ in e.map(self.model_comm.process_weight,
-                           range(self.gpu_count), ranks):
-                pass
+            # This is for load_state_dict
+            # process_weight will optimizer the kernel by col major matrix and pack_b
+            # This will result in the failure of get_params
+            # for _ in e.map(self.model_comm.process_weight,
+            #                self.gpu_list, ranks):
+            #     pass
+
             # implicit synchronization
             for _ in e.map(self.model_comm.create_engine,
-                           range(self.gpu_count), ranks,
+                           self.gpu_list, ranks,
                            repeat(self.nccl_params)):
                 pass
 
@@ -140,30 +148,30 @@ class TurboMind:
         torch.cuda.synchronize()
 
         # create weight
-        def _create_weight_func(device_id):
-            rank = self.node_id * self.gpu_count + device_id
+        def _create_weight_func(index, device_id):
+            rank = self.node_id * self.gpu_count + index
             model_comm.create_shared_weights(device_id, rank)
 
         with ThreadPoolExecutor(max_workers=self.gpu_count) as executor:
             futures = []
-            for device_id in range(self.gpu_count):
-                futures.append(executor.submit(_create_weight_func, device_id))
+            for idx, device_id in enumerate(self.gpu_list):
+                futures.append(executor.submit(_create_weight_func, idx, device_id))
             for future in futures:
                 future.result()
 
     def _get_model_params(self, model_comm, tm_params):
         """Get turbomind model params when loading from hf."""
 
-        def _get_params(device_id, que):
-            rank = self.node_id * self.gpu_count + device_id
+        def _get_params(idx, device_id, que):
+            rank = self.node_id * self.gpu_count + idx
             out = model_comm.get_params(device_id, rank)
             que.put(out)
 
         que = Queue()
         with ThreadPoolExecutor(max_workers=self.gpu_count) as executor:
             futures = []
-            for device_id in range(self.gpu_count):
-                futures.append(executor.submit(_get_params, device_id, que))
+            for idx, device_id in enumerate(self.gpu_list):
+                futures.append(executor.submit(_get_params, idx, device_id, que))
             for future in futures:
                 future.result()
 
@@ -230,6 +238,7 @@ class TurboMind:
         self._get_model_params(model_comm, tm_params)
         logger.warning(f'get {len(tm_params)} model params')
         tm_model.export()
+        self.tm_model = tm_model
         # there should be no left turbomind params.
         if len(tm_params) > 0:
             uninitialized = list(tm_params.keys())
@@ -238,6 +247,15 @@ class TurboMind:
                 f'with {len(tm_params)} uninitialized params:\n{uninitialized}'
             )
         return model_comm
+
+    def load_state_dict(self, state_dict):
+        tm_params = self.tm_model.tm_params
+        self._get_model_params(self.model_comm, tm_params)
+        input_model = self.tm_model.input_model
+        model_path = input_model.model_path
+        input_model.model_path = state_dict
+        self.tm_model.export()
+        input_model.model_path = model_path
 
     def _from_workspace(self, model_path: str,
                         engine_config: TurbomindEngineConfig):
@@ -351,7 +369,7 @@ class TurboMindInstance:
     def _create_model_instance(self, device_id):
         rank = self.node_id * self.gpu_count + device_id
         model_inst = self.tm_model.model_comm.create_model_instance(
-            device_id, rank, self.cuda_stream_id, self.nccl_params)
+            eval(os.environ['LMDEPLOY_DEVICE_LIST'])[0], rank, self.cuda_stream_id, self.nccl_params)
         return model_inst
 
     def _forward_callback(self, result, ctx):

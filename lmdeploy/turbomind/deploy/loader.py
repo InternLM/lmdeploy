@@ -3,10 +3,10 @@ import json
 import os.path as osp
 import re
 from abc import ABC, abstractmethod
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 from functools import partial
 from glob import glob
-from typing import Iterator, Tuple
+from typing import Iterator, Tuple, Dict
 
 import torch
 from safetensors import safe_open
@@ -155,6 +155,26 @@ class PytorchLoader(BaseLoader):
 
 
 def create_loader(model_path: str, pattern: str) -> BaseLoader:
+    if isinstance(model_path, dict):
+        def generate():
+            generator = OrderedDict()
+            model_dict: Dict = model_path
+            for key, value in model_dict.items():
+                match = re.findall(pattern, key)
+                if not match:
+                    if -1 not in generator:
+                        generator[-1] = {}
+                    generator[-1][key] = value
+                else:
+                    layer = int(match[0])
+                    if layer not in generator:
+                        generator[layer] = {}
+                    generator[layer][key] = value
+            return generator
+
+        return generate()
+
+
     args = (model_path, pattern)
 
     if osp.exists(osp.join(model_path, SAFE_WEIGHT_INDEX_NAME)):

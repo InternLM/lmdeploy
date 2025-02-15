@@ -204,6 +204,7 @@ class TurbomindEngineConfig:
     max_prefill_token_num: int = 8192
     num_tokens_per_iter: int = 0
     max_prefill_iters: int = 1
+    devices: List[int] = field(default_factory=lambda: [0])
 
     def __post_init__(self):
         """Check input validation."""
@@ -278,6 +279,7 @@ class PytorchEngineConfig:
     download_dir: str = None
     revision: str = None
     quant_policy: Literal[0, 4, 8] = 0
+    devices: List[int] = field(default_factory=lambda: [0])
 
     def __post_init__(self):
         """Check input validation."""
