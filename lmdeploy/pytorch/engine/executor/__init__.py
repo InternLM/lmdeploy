@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import os
 from typing import Any, Dict
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
@@ -25,7 +26,10 @@ def build_executor(model_path: str,
     nnodes = world_size // nproc_per_node
     model_config = ModelConfig.from_pretrained(model_path, trust_remote_code=True, dtype=dtype, tp=tp)
 
-    if dp * tp == 1:
+    force_ray = os.environ.get('LMDEPLOY_FORCE_RAY', '0')
+    force_ray = int(force_ray)
+
+    if world_size == 1:
         from .uni_executor import UniExecutor
         return UniExecutor(
             model_path=model_path,
@@ -36,7 +40,7 @@ def build_executor(model_path: str,
             adapters=adapters,
             device_type=device_type,
         )
-    elif nnodes == 1:
+    elif nnodes == 1 and not force_ray:
         from .mp_executor import MPExecutor
         return MPExecutor(
             model_path=model_path,

@@ -3,6 +3,7 @@ from lmdeploy.messages import PytorchEngineConfig
 
 from ..check_env.adapter import AdapterChecker
 from ..check_env.base import BaseChecker
+from ..check_env.dist import DistChecker
 from ..check_env.model import ModelChecker
 from ..check_env.torch import TorchChecker
 from ..check_env.transformers import TransformersChecker
@@ -60,6 +61,10 @@ class EngineChecker(BaseChecker):
             for adapter in adapter_paths:
                 adapter_checker = AdapterChecker(adapter, logger=logger)
                 self.register_required_checker(adapter_checker)
+
+        # dist
+        dist_checker = DistChecker(engine_config.tp, 1, engine_config.nproc_per_node, logger=logger)
+        self.register_required_checker(dist_checker)
 
     def check(self):
         """check."""

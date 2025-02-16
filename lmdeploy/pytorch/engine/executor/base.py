@@ -138,7 +138,11 @@ class ExecutorBase:
 
     def init(self):
         """init."""
+        logger.info('Building Model.')
         self.build_model()
+        logger.info('Updating configs.')
         self.update_configs()
+        logger.info('Building GraphRunner.')
         self.build_graph_runner()
+        logger.info(f'Building CacheEngine with config:\n{self.cache_config}.')
         self.build_cache_engine()

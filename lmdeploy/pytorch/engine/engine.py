@@ -762,15 +762,18 @@ class Engine:
             forward_event = asyncio.Event()
             forward_event.set()
 
+            logger.debug('Starting executor.')
             self.executor.start(forward_event)
 
             # preprocess task
+            logger.debug('Starting async task MainLoopPreprocessMessage.')
             has_runable_event = asyncio.Event()
             loop_msg_proc = event_loop.create_task(self._async_loop_preprocess_message(
                 forward_event, has_runable_event),
                                                    name='MainLoopPreprocessMessage')
 
             # response task
+            logger.debug('Starting async task MainLoopResponse.')
             resp_que = asyncio.Queue()
             loop_send_resp = event_loop.create_task(self._async_loop_send_responses(resp_que, forward_event),
                                                     name='MainLoopResponse')
@@ -782,6 +785,7 @@ class Engine:
             self._loop_main = loop_main
 
             # main loop
+            logger.debug('Starting async task MainLoop.')
             await self._async_loop_main(resp_que=resp_que, has_runable_event=has_runable_event)
         finally:
             self._loop_finally()

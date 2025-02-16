@@ -514,12 +514,12 @@ class BaseModelAgent(AutoModelAgent):
         custom_module_map = self.model_config.custom_module_map
         if custom_module_map is not None:
             update_custom_module_map(custom_module_map)
-        logger.info(msg_with_rank(rank, 'build model.'))
+        logger.debug(msg_with_rank(rank, 'build model.'))
         patched_model = build_patched_model(self.model_config, device=device)
-        logger.info(msg_with_rank(rank, 'loading weights.'))
+        logger.debug(msg_with_rank(rank, 'loading weights.'))
         load_model_weights(patched_model, model_path, device=device)
         if adapters is not None:
-            logger.info(msg_with_rank(rank, 'loading adapters.'))
+            logger.debug(msg_with_rank(rank, 'loading adapters.'))
             add_adapters(patched_model, adapters, dtype=self.model_config.dtype, device=device)
         self.patched_model = patched_model
 
