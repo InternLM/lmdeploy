@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import json
+import os
 import os.path as osp
 import re
 from abc import ABC, abstractmethod
@@ -155,10 +156,15 @@ class PytorchLoader(BaseLoader):
 
 
 def create_loader(model_path: str, pattern: str) -> BaseLoader:
-    if isinstance(model_path, dict):
+    if not isinstance(model_path, (str, os.PathLike)):
         def generate():
             generator = OrderedDict()
-            model_dict: Dict = model_path
+            model_dict = {}
+            if not isinstance(model_path, dict):
+                for key, value in list(model_path):
+                    model_dict[key] = value
+            else:
+                model_dict = model_path
             for key, value in model_dict.items():
                 match = re.findall(pattern, key)
                 if not match:
@@ -173,7 +179,6 @@ def create_loader(model_path: str, pattern: str) -> BaseLoader:
             return generator
 
         return generate()
-
 
     args = (model_path, pattern)
 
