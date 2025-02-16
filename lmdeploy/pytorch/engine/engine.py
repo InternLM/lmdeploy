@@ -130,14 +130,12 @@ class Engine:
         scheduler_config = _build_scheduler_config(engine_config)
         cache_config = _build_cache_config(engine_config)
         backend_config = _build_backend_config(engine_config)
-        model_config = ModelConfig.from_pretrained(model_path, trust_remote_code=True, dtype=engine_config.dtype, tp=tp)
 
         # build model agent
         raw_tokenizer = None
         if tokenizer is not None:
             raw_tokenizer = tokenizer.model.model
         self.executor = build_executor(model_path,
-                                       model_config=model_config,
                                        cache_config=cache_config,
                                        backend_config=backend_config,
                                        tokenizer=raw_tokenizer,
@@ -145,7 +143,8 @@ class Engine:
                                        tp=tp,
                                        dp=dp,
                                        nproc_per_node=engine_config.nproc_per_node,
-                                       device_type=engine_config.device_type)
+                                       device_type=engine_config.device_type,
+                                       dtype=engine_config.dtype)
         self.executor.init()
 
         self.input_processor = self.executor.get_input_processor()
@@ -379,7 +378,7 @@ class Engine:
             msg.resp = req.resp
 
     @property
-    def model_config(self):
+    def model_config(self) -> ModelConfig:
         """model config."""
         return self.executor.model_config
 

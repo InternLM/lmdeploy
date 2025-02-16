@@ -71,7 +71,8 @@ def _wait_until_pg_ready(current_placement_group: 'PlacementGroup'):
 def init_ray_cluster(world_size: int, ray_address: str = None):
     """init ray cluster."""
     # modifier from vLLM
-    ray.init(address=ray_address, ignore_reinit_error=True)
+    if not ray.is_initialized():
+        ray.init(address=ray_address, ignore_reinit_error=True)
 
     device_str = get_device_str()
 
@@ -115,22 +116,22 @@ class RayWorkerWrapper:
     def __init__(
         self,
         model_path: str,
-        model_config: ModelConfig,
         cache_config: CacheConfig,
         backend_config: BackendConfig,
-        tokenizer: Any,
         dp: int,
         tp: int,
         adapters: Dict[str, str] = None,
         device_type: str = 'cuda',
+        dtype: str = 'auto',
         log_level: int = 30,
         nproc_per_node: int = None,
     ):
+        from lmdeploy.tokenizer import Tokenizer
         self.model_path = model_path
-        self.model_config = model_config
+        self.model_config = ModelConfig.from_pretrained(model_path, dtype=dtype, tp=tp)
         self.cache_config = cache_config
         self.backend_config = backend_config
-        self.tokenizer = tokenizer
+        self.tokenizer = Tokenizer(model_path).model.model
         self.adapters = adapters
         self.device_type = device_type
         self.log_level = log_level
@@ -155,7 +156,6 @@ class RayWorkerWrapper:
         setup_master_addr(master_addr, master_port)
         self.rank = rank
         self.device_id = rank % self.nproc_per_node
-        # torch.cuda.set_device(self.device_id)
 
         init_process_group(rank, self.world_size, self.nproc_per_node)
 
@@ -232,7 +232,8 @@ class RayExecutor(ExecutorBase):
                  tp: int,
                  nproc_per_node: int,
                  adapters: Dict[str, str] = None,
-                 device_type: str = 'cuda'):
+                 device_type: str = 'cuda',
+                 dtype: str = 'auto'):
         """initialize Executor."""
         super().__init__(model_path=model_path,
                          model_config=model_config,
@@ -257,14 +258,13 @@ class RayExecutor(ExecutorBase):
         # create workerwrapper actors
         worker_kwargs = dict(
             model_path=model_path,
-            model_config=model_config,
             cache_config=cache_config,
             backend_config=backend_config,
-            tokenizer=tokenizer,
             dp=dp,
             tp=tp,
             adapters=adapters,
             device_type=device_type,
+            dtype=dtype,
             log_level=30,
             nproc_per_node=nproc_per_node,
         )

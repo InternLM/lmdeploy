@@ -7,7 +7,6 @@ from .base import ExecutorBase
 
 
 def build_executor(model_path: str,
-                   model_config: ModelConfig,
                    cache_config: CacheConfig,
                    backend_config: BackendConfig,
                    tokenizer: Any,
@@ -15,7 +14,8 @@ def build_executor(model_path: str,
                    tp: int = 1,
                    nproc_per_node: int = None,
                    adapters: Dict[str, str] = None,
-                   device_type: str = 'cuda') -> ExecutorBase:
+                   device_type: str = 'cuda',
+                   dtype: str = 'auto') -> ExecutorBase:
     """build model agent executor."""
 
     world_size = dp * tp
@@ -23,6 +23,7 @@ def build_executor(model_path: str,
         nproc_per_node = world_size
 
     nnodes = world_size // nproc_per_node
+    model_config = ModelConfig.from_pretrained(model_path, trust_remote_code=True, dtype=dtype, tp=tp)
 
     if dp * tp == 1:
         from .uni_executor import UniExecutor
@@ -61,4 +62,5 @@ def build_executor(model_path: str,
             nproc_per_node=nproc_per_node,
             adapters=adapters,
             device_type=device_type,
+            dtype=dtype,
         )
