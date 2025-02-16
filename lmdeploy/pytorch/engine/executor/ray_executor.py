@@ -3,7 +3,9 @@ import asyncio
 import time
 from typing import Any, Dict, List, Tuple
 
+import numpy as np
 import ray
+import torch
 from ray.util.placement_group import PlacementGroup
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
@@ -224,7 +226,12 @@ class RayWorkerWrapper:
 
     async def get_output_async(self):
         """get output async."""
-        return await self.model_agent.get_output_async()
+        ret = await self.model_agent.get_output_async()
+        # pack to numpy
+        for k, v in ret.items():
+            if isinstance(v, torch.Tensor):
+                ret[k] = v.numpy()
+        return ret
 
     def release(self):
         """stop engine loop."""
@@ -330,6 +337,10 @@ class RayExecutor(ExecutorBase):
     async def _prefetch_outputs(self):
         while True:
             out = await self.workers[0].get_output_async.remote()
+            # pack pytorch
+            for k, v in out.items():
+                if isinstance(v, np.ndarray):
+                    out[k] = torch.from_numpy(v)
             self.remote_outs.put_nowait(out)
 
     def start(self, forward_event: asyncio.Event):
