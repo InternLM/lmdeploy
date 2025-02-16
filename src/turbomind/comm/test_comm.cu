@@ -1,5 +1,6 @@
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cuda_runtime_api.h>
 #include <numeric>
@@ -318,10 +319,15 @@ struct TestComm {
                 const size_t last       = std::min(first + slice, count);
                 size_t       res_diff   = 0;
                 for (size_t i = first; i < last; ++i) {
-                    res_diff += h_res[i] != ref_residual[i];
-                    if (res_diff == 1) {
-                        printf("%d: %f vs %f\n", (int)(i - first), (float)h_res[i], (float)ref_residual[i]);
+                    int is_diff = !(h_res[i] == ref_residual[i]);
+                    if (!res_diff && is_diff) {
+                        printf("[rank %d], %d: %f vs %f\n",
+                               rank,
+                               (int)(i - first),
+                               (float)h_res[i],
+                               (float)ref_residual[i]);
                     }
+                    res_diff += is_diff;
                 }
                 float data_diff = 0;
                 for (size_t i = 0; i < count; ++i) {
@@ -332,8 +338,12 @@ struct TestComm {
                 if (rank == 0) {
                     printf("[rank %d] count = %d, data_diff = %f\n", rank, (int)token_num, data_diff);
                 }
-                if (res_diff) {
-                    printf("[rank %d] count = %d, res_diff = %lu\n", rank, (int)token_num, res_diff);
+                if (res_diff || data_diff > 0.1f || std::isnan(data_diff)) {
+                    printf("[rank %d] count = %d, res_diff = %lu, data_diff = %f\n",
+                           rank,
+                           (int)token_num,
+                           res_diff,
+                           data_diff);
                     std::this_thread::sleep_for(std::chrono::seconds(5));
                     std::abort();
                 }
@@ -373,7 +383,7 @@ struct TestComm {
                     }
                     // verify(n);
                 }
-                // verify(n);
+                verify(n);
             }
 
             cudaFree(d_tmp_data);
@@ -516,13 +526,15 @@ int main(int argc, char* argv[])
              128000,
              -1,
              10,
-             1000,
-             //    {512});
+             10000,
+             // {512});
              //    {1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 24, 32, 48, 64, 96, 128});
              //  {128, 256, 512, 1024, 2048, 4096, 8192});
              //  {8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048, 4096, 6144, 8192});
              //   {8192, 16384, 32768});
-             {1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048, 4096, 6144, 8192});
+             //   {1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024});
+             {1,   2,   4,   6,   8,   12,   16,   24,   32,   48,   64,   96,  128,
+              192, 256, 384, 512, 768, 1024, 1536, 2048, 3072, 4096, 6144, 8192});
     // );
 
     return 0;

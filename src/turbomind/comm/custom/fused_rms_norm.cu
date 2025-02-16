@@ -19,7 +19,37 @@
 
 namespace turbomind {
 
-template<class T, int vec_size, int block_dim, bool aligned, class Relaxed>
+namespace detail {
+
+template<class Syncgroup>
+__device__ float GroupSum(const float val, int warps, Syncgroup syncgroup)
+{
+    const int warp_id = threadIdx.x / WARP_SIZE;
+    const int lane_id = threadIdx.x % WARP_SIZE;
+    float     sum     = val;
+    PRAGMA_UNROLL
+    for (int mask = WARP_SIZE / 2; mask >= 1; mask /= 2) {
+        sum += __shfl_xor_sync((uint32_t)-1, sum, mask);
+    }
+    __shared__ float smem[32];
+    // syncgroup();
+    if (lane_id == 0) {
+        smem[warp_id] = sum;
+    }
+    syncgroup();
+    for (int i = 1; i < warps; ++i) {
+        sum += smem[warp_id / warps * warps + i];
+    }
+    // sum = {};
+    // for (int i = 0; i < warps; ++i) {
+    //     sum += smem[warp_id / warps * warps + i];
+    // }
+    return sum;
+}
+
+}  // namespace detail
+
+template<class T, int vec_size, int block_dim, int groups, class Relaxed>
 __global__ void AllreduceResidualBiasRMSnorm_Simple_Pull(T*                                             buf,
                                                          T*                                             res,
                                                          const T*                                       bias,
@@ -35,13 +65,9 @@ __global__ void AllreduceResidualBiasRMSnorm_Simple_Pull(T*                     
                                                          float                                          eps,
                                                          constant<vec_size>,
                                                          constant<block_dim>,
-                                                         constant<aligned>,
+                                                         constant<groups>,
                                                          Relaxed relaxed)
 {
-    const int bi        = blockIdx.x;
-    const int di        = threadIdx.x;
-    const int block_num = gridDim.x;
-
     DeviceSemaphore sem;
 
     if (threadIdx.x < peers) {
@@ -55,16 +81,31 @@ __global__ void AllreduceResidualBiasRMSnorm_Simple_Pull(T*                     
 
     using namespace ops;
 
-    const int first = rank * slice;
-    const int last  = min(count, first + slice);
+    static_assert(block_dim % groups == 0);
+    constexpr int threads = block_dim / groups;
+
+    static_assert(threads % WARP_SIZE == 0);
+    constexpr int warps = threads / WARP_SIZE;
+
+    const int xi = threadIdx.x / threads;
+    const int di = threadIdx.x % threads;
+    const int bi = blockIdx.x * groups + xi;
+    const int bn = gridDim.x * groups;
+
+    auto syncgroup = [&] {  //
+        asm volatile("bar.sync %0, %1;" : : "r"(15 - xi), "r"(threads) : "memory");
+    };
 
     Rank r{rank, peers};
+
+    const int first = rank * slice;
+    const int last  = min(count, first + slice);
 
     for (int i = 0; i < peers - 1; ++i) {
         const int  p   = r.get_next_peer(i);
         const auto src = cvta_generic_to_global(near[p]);
         Vec        acc, tmp;
-        for (int ti = first + bi; ti < last; ti += block_num) {
+        for (int ti = first + bi; ti < last; ti += bn) {
             const int idx = (ti * vdim + di) * vec_size;
             if (di < vdim) {
                 Load(tmp, src + idx);
@@ -78,10 +119,11 @@ __global__ void AllreduceResidualBiasRMSnorm_Simple_Pull(T*                     
     {
         const int p   = r.get_next_peer(peers - 1);  // last peer
         auto      chn = cvta_generic_to_global(near[p]);
-        for (int ti = first + bi; ti < last; ti += block_num) {
+        for (int ti = first + bi; ti < last; ti += bn) {
             const int idx = (ti * vdim + di) * vec_size;
             Vec       acc, tmp;
             Vec       r_vec{};
+            float     sum{};
             if (di < vdim) {
                 Load(tmp, chn + idx);
                 Load(acc, buf + idx);
@@ -90,28 +132,25 @@ __global__ void AllreduceResidualBiasRMSnorm_Simple_Pull(T*                     
                 r_vec = r_vec + acc;
                 if (bias) {
                     Vec b_vec;
-                    Load(b_vec, bias + di * vec_size);
+                    Ldg(b_vec, bias + di * vec_size);
                     r_vec = r_vec + b_vec;
                 }
                 Store(res + idx, r_vec);
+                PRAGMA_UNROLL
+                for (int i = 0; i < vec_size; ++i) {
+                    sum += (float)r_vec[i] * (float)r_vec[i];
+                }
             }
-            float sum{};
-            PRAGMA_UNROLL
-            for (int i = 0; i < vec_size; ++i) {
-                sum += (float)r_vec[i] * (float)r_vec[i];
-            }
-            using BlockReduce = cub::BlockReduce<float, block_dim>;
-            __shared__ typename BlockReduce::TempStorage temp_storage;
-            __shared__ float                             shared_sum;
-            sum = BlockReduce{temp_storage}.Sum(sum);
+            sum = detail::GroupSum(sum, warps, syncgroup);
+            __shared__ float shared_sum[groups];
             if (di == 0) {
-                shared_sum = rsqrtf(sum * inv_dim + eps);
+                shared_sum[xi] = rsqrtf(sum * inv_dim + eps);
             }
-            __syncthreads();
-            sum = shared_sum;
+            syncgroup();
+            sum = shared_sum[xi];
             if (di < vdim) {
                 Vec w_vec;
-                Load(w_vec, weights + di * vec_size);
+                Ldg(w_vec, weights + di * vec_size);
                 PRAGMA_UNROLL
                 for (int i = 0; i < vec_size; ++i) {
                     r_vec[i] = static_cast<T>(((float)r_vec[i] * sum)) * w_vec[i];
@@ -135,7 +174,7 @@ __global__ void AllreduceResidualBiasRMSnorm_Simple_Pull(T*                     
         const int first  = slice * p_rank;
         const int last   = min(count, first + slice);
         auto      src    = cvta_generic_to_global(near[p]);
-        for (int ti = first + bi; ti < last; ti += block_num) {
+        for (int ti = first + bi; ti < last; ti += bn) {
             const int idx = (ti * vdim + di) * vec_size;
             if (di < vdim) {
                 Vec vec;
@@ -276,7 +315,7 @@ __global__ void AllreduceResidualBiasRMSnormKernel_Simple_v3(T*                 
     }
 }
 
-template<class T, int vec_size, int block_dim, bool aligned, class Peers, class Relaxed>
+template<class T, int vec_size, int block_dim, int groups, class Peers, class Relaxed>
 __global__ void AllreduceResidualBiasRMSnorm_Simple_Push(T*                                             buf,
                                                          T*                                             res,
                                                          const T*                                       bias,
@@ -294,16 +333,27 @@ __global__ void AllreduceResidualBiasRMSnorm_Simple_Push(T*                     
                                                          float                                          eps,
                                                          constant<vec_size>,
                                                          constant<block_dim>,
-                                                         constant<aligned>,
+                                                         constant<groups>,
                                                          Relaxed relaxed)
 {
-    const int bi     = blockIdx.x;
-    const int di     = threadIdx.x;
-    const int blocks = gridDim.x;
-
     using Vec = Array<T, vec_size>;
 
     using namespace ops;
+
+    static_assert(block_dim % groups == 0);
+    constexpr int threads = block_dim / groups;
+
+    static_assert(threads % WARP_SIZE == 0);
+    constexpr int warps = threads / WARP_SIZE;
+
+    const int xi = threadIdx.x / threads;
+    const int di = threadIdx.x % threads;
+    const int bi = blockIdx.x * groups + xi;
+    const int bn = gridDim.x * groups;
+
+    auto syncgroup = [&] {  //
+        asm volatile("bar.sync %0, %1;" : : "r"(15 - xi), "r"(threads) : "memory");
+    };
 
     Rank r{rank, peers};
 
@@ -313,7 +363,7 @@ __global__ void AllreduceResidualBiasRMSnorm_Simple_Push(T*                     
         const int  n      = min(count, p_rank * slice + slice) - p_rank * slice;
         const auto src    = buf + p_rank * slice * vdim * vec_size;
         const auto dst    = near_scratch[p] + r.inverse_peer(p) * slice * vdim * vec_size;
-        for (int ti = bi; ti < n; ti += blocks) {
+        for (int ti = bi; ti < n; ti += bn) {
             if (di < vdim) {
                 Vec vec;
                 Load(vec, src + (ti * vdim + di) * vec_size);
@@ -335,7 +385,7 @@ __global__ void AllreduceResidualBiasRMSnorm_Simple_Push(T*                     
 
     const int n = min(count, rank * slice + slice) - rank * slice;
 
-    for (int ti = bi; ti < n; ti += blocks) {
+    for (int ti = bi; ti < n; ti += bn) {
         const int idx = ((rank * slice + ti) * vdim + di) * vec_size;  // idx into local buffers
         Vec       r_vec{};
         float     sum{};
@@ -361,15 +411,13 @@ __global__ void AllreduceResidualBiasRMSnorm_Simple_Push(T*                     
             }
         }
 
-        using BlockReduce = cub::BlockReduce<float, block_dim>;
-        __shared__ typename BlockReduce::TempStorage temp_storage;
-        __shared__ float                             shared_sum;
-        sum = BlockReduce{temp_storage}.Sum(sum);
+        sum = detail::GroupSum(sum, warps, syncgroup);
+        __shared__ float shared_sum[groups];
         if (di == 0) {
-            shared_sum = rsqrtf(sum * inv_dim + eps);
+            shared_sum[xi] = rsqrtf(sum * inv_dim + eps);
         }
-        __syncthreads();
-        sum = shared_sum;
+        syncgroup();
+        sum = shared_sum[xi];
 
         if (di < vdim) {
             Vec w_vec{};
@@ -408,68 +456,93 @@ void CustomComm::AllreduceResidualBiasRMSnorm(void*        hidden,
     const size_t elemsize = get_elem_size(dtype);
     const size_t bytesize = elemsize * token_num * dim;
 
-    auto invoke = [&](auto t) {
-        using T                = decltype(t);
-        constexpr int vec_size = sizeof(uint4) / sizeof(T);
-        const int     slice    = (token_num + world_size_ - 1) / world_size_;
-        const int     count    = token_num;
-        constexpr int threads  = 1024;
-        const int     max_ctas = 48;
-        const int     blocks   = std::min(slice, max_ctas);
+    auto invoke = [&](auto t, auto groups) {
+        using T                 = decltype(t);
+        constexpr int vec_size  = sizeof(uint4) / sizeof(T);
+        const int     slice     = (token_num + world_size_ - 1) / world_size_;
+        const int     count     = token_num;
+        constexpr int block_dim = 1024;
+        const int     max_ctas  = 48;
+        const int     blocks    = std::min((slice + groups - 1) / groups, max_ctas);
         if (bytesize <= kScratchBuffSize && bytesize <= 6 << 20) {
-            AllreduceResidualBiasRMSnorm_Simple_Push<<<blocks, threads, 0, stream>>>((T*)hidden,
-                                                                                     (T*)residual,
-                                                                                     (const T*)bias,
-                                                                                     (const T*)weights,
-                                                                                     (T*)scratch_buff_,
-                                                                                     get_near((T*)hidden),
-                                                                                     get_near((T*)scratch_buff_),
-                                                                                     device_semaphores_,
-                                                                                     rank_,
-                                                                                     world_size_ - 1,
-                                                                                     slice,
-                                                                                     count,
-                                                                                     dim / vec_size,
-                                                                                     1.f / dim,
-                                                                                     eps,
-                                                                                     constant<vec_size>{},
-                                                                                     constant<threads>{},
-                                                                                     constant<false>{},
-                                                                                     std::true_type{});
+            AllreduceResidualBiasRMSnorm_Simple_Push<<<blocks, block_dim, 0, stream>>>((T*)hidden,
+                                                                                       (T*)residual,
+                                                                                       (const T*)bias,
+                                                                                       (const T*)weights,
+                                                                                       (T*)scratch_buff_,
+                                                                                       get_near((T*)hidden),
+                                                                                       get_near((T*)scratch_buff_),
+                                                                                       device_semaphores_,
+                                                                                       rank_,
+                                                                                       world_size_ - 1,
+                                                                                       slice,
+                                                                                       count,
+                                                                                       dim / vec_size,
+                                                                                       1.f / dim,
+                                                                                       eps,
+                                                                                       constant<vec_size>{},
+                                                                                       constant<block_dim>{},
+                                                                                       groups,
+                                                                                       std::false_type{});
         }
         else {
-            AllreduceResidualBiasRMSnorm_Simple_Pull<<<blocks, threads, 0, stream>>>((T*)hidden,
-                                                                                     (T*)residual,
-                                                                                     (const T*)bias,
-                                                                                     (const T*)weights,
-                                                                                     get_near((T*)hidden),
-                                                                                     device_semaphores_,
-                                                                                     rank_,
-                                                                                     world_size_ - 1,
-                                                                                     slice,
-                                                                                     count,
-                                                                                     dim / vec_size,
-                                                                                     1.f / dim,
-                                                                                     eps,
-                                                                                     constant<vec_size>{},
-                                                                                     constant<threads>{},
-                                                                                     constant<false>{},
-                                                                                     std::true_type{});
+            AllreduceResidualBiasRMSnorm_Simple_Pull<<<blocks, block_dim, 0, stream>>>((T*)hidden,
+                                                                                       (T*)residual,
+                                                                                       (const T*)bias,
+                                                                                       (const T*)weights,
+                                                                                       get_near((T*)hidden),
+                                                                                       device_semaphores_,
+                                                                                       rank_,
+                                                                                       world_size_ - 1,
+                                                                                       slice,
+                                                                                       count,
+                                                                                       dim / vec_size,
+                                                                                       1.f / dim,
+                                                                                       eps,
+                                                                                       constant<vec_size>{},
+                                                                                       constant<block_dim>{},
+                                                                                       groups,
+                                                                                       std::false_type{});
         }
+        return true;
     };
 
-    const int vec_size = sizeof(uint4) / elemsize;
+    auto dispatch_D = [&](auto t) {
+        using T                = decltype(t);
+        constexpr int vec_size = sizeof(uint4) / sizeof(T);
+        if (dim % vec_size) {
+            return false;  // non-aligned
+        }
+        const int vdim = dim / vec_size;
+        if (0) {}
+        else if (vdim <= 256) {
+            return invoke(t, constant<4>{});
+        }
+        else if (vdim <= 512) {
+            return invoke(t, constant<2>{});
+        }
+        else if (vdim <= 1024) {
+            return invoke(t, constant<1>{});
+        }
+        return false;  // > 1024 vdim
+    };
 
-    if (dim % vec_size == 0 && bytesize > (1 << 19)) {  // 0.5 MB
+    auto dispatch = [&] {
         switch (dtype) {
             case DataType::TYPE_FP16:
-                return invoke(half{});
+                return dispatch_D(half{});
             case DataType::TYPE_BF16:
-                return invoke(nv_bfloat16{});
+                return dispatch_D(nv_bfloat16{});
             default:
-                FT_CHECK(0);
+                return false;
         }
     };
+
+    if (bytesize > (1 << 19)) {
+        if (auto success = dispatch()) {
+            return;
+        }
+    }
 
     // fallback
     AllReduceSum(hidden, hidden, token_num * dim, dtype, stream);
