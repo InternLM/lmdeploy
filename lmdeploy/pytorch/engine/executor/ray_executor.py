@@ -159,10 +159,22 @@ class RayWorkerWrapper:
 
         init_process_group(rank, self.world_size, self.nproc_per_node)
 
+    def _warmup_dist(self):
+        # None default CUDA_VISIBLE_DEVICES might leads to slow first time all_reduce
+        # WHY?
+        logger.debug('Warmup all_reduce.')
+        import torch
+
+        from lmdeploy.pytorch.distributed import all_reduce, get_dist_manager
+        with get_dist_manager().context(self.dist_ctx):
+            tmp = torch.empty((1, ), device='cuda')
+            all_reduce(tmp)
+
     def build_model(self):
         """build model."""
         self.dist_ctx = DistContext.build(self.rank, self.tp, self.dp, self.nproc_per_node)
         self.device_ctx = DeviceContext(device_type=self.device_type)
+        self._warmup_dist()
 
         self.model_agent = build_model_agent(model_path=self.model_path,
                                              model_config=self.model_config,
@@ -270,6 +282,8 @@ class RayExecutor(ExecutorBase):
         )
         self.workers = self._init_workers_ray(placement_group, worker_kwargs)
         self.dag = None
+        self._prefetch_task: asyncio.Task = None
+        self.remote_outs: asyncio.Queue = None
 
         # initialize process group
         ray.get([
@@ -313,14 +327,25 @@ class RayExecutor(ExecutorBase):
         """build cache engine."""
         return ray.get(self.workers[0].get_input_processor.remote())
 
+    async def _prefetch_outputs(self):
+        while True:
+            out = await self.workers[0].get_output_async.remote()
+            self.remote_outs.put_nowait(out)
+
     def start(self, forward_event: asyncio.Event):
         """start engine loop."""
         self.forward_event = forward_event
         self.collective_rpc('start')
 
+        self.remote_outs = asyncio.Queue()
+        event_loop = asyncio.get_event_loop()
+        self._prefetch_task = event_loop.create_task(self._prefetch_outputs())
+
     def stop(self):
         """stop engine loop."""
         self.collective_rpc('stop')
+        if self._prefetch_task is not None:
+            self._prefetch_task.cancel()
 
     def release(self):
         """release."""
@@ -335,11 +360,11 @@ class RayExecutor(ExecutorBase):
         """start forward."""
         # we don't need return of forward async
         inputs = ray.put(inputs)
-        [worker.forward_async.remote(inputs) for worker in self.workers]
+        self.collective_rpc('forward_async', (inputs, ))
 
     async def get_output_async(self):
         """get output async."""
-        return await self.workers[0].get_output_async.remote()
+        return await self.remote_outs.get()
 
     def _sort_workers(self, driver_ip: str, workers: List[RayWorkerWrapper]):
         """sort workers by ip."""
