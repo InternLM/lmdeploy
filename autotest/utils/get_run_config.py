@@ -128,3 +128,10 @@ def _simple_model_name(model):
     model_name = model_name.replace('-inner-w8a8', '')
     model_name = model_name.replace('-4bits', '')
     return model_name
+
+
+def close_pipeline(pipe):
+    pipe.close()
+    import gc
+    gc.collect()
+    torch.cuda.empty_cache()

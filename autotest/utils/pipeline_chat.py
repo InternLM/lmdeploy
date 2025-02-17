@@ -91,43 +91,6 @@ def get_response_from_output(output_text, case, prompt):
     return None
 
 
-def assert_pipeline_chat_log(config, cases_info, model_case, type, worker_id: str = ''):
-    log_path = config.get('log_path')
-
-    config_log = os.path.join(log_path,
-                              '_'.join(['pipeline', 'config', type, worker_id,
-                                        model_case.split('/')[1] + '.log']))
-
-    allure.attach.file(config_log, attachment_type=allure.attachment_type.TEXT)
-
-    for case in cases_info.keys():
-        if ('coder' in model_case or 'CodeLlama' in model_case) and 'code' not in case:
-            continue
-        msg = 'result is empty, please check again'
-        result = False
-        with allure.step('case - ' + case):
-            pipeline_chat_log = os.path.join(
-                log_path, '_'.join(['pipeline', 'chat', type, worker_id,
-                                    model_case.split('/')[1], case + '.log']))
-
-            allure.attach.file(pipeline_chat_log, attachment_type=allure.attachment_type.TEXT)
-
-            with open(pipeline_chat_log, 'r') as f:
-                lines = f.readlines()
-
-                for line in lines:
-                    if 'result:False, reason:' in line:
-                        result = False
-                        msg = line
-                        break
-                    if 'result:True, reason:' in line and not result:
-                        result = True
-                        msg = ''
-
-            with assume:
-                assert result, msg
-
-
 def save_pipeline_common_log(config, log_name, result, content, msg: str = '', write_type: str = 'w'):
     log_path = config.get('log_path')
 
