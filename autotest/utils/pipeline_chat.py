@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 from subprocess import PIPE
@@ -27,7 +28,8 @@ def run_pipeline_chat_test(config,
                            type,
                            worker_id: str = '',
                            extra: object = None,
-                           use_local_model: bool = True):
+                           use_local_model: bool = True,
+                           is_pr_test: bool = False):
     log_path = config.get('log_path')
     tp = get_tp_num(config, model_case)
     model_name = model_name = get_model_name(model_case)
@@ -37,67 +39,56 @@ def run_pipeline_chat_test(config,
     else:
         hf_path = model_case
 
-    if 'pytorch' in type:
-        backend_config = PytorchEngineConfig(tp=tp)
-        if not is_bf16_supported():
-            backend_config.dtype = 'float16'
-    else:
-        backend_config = TurbomindEngineConfig(tp=tp)
+    pipeline_chat_log = os.path.join(log_path,
+                                     '_'.join(['pipeline', 'chat', type, worker_id,
+                                               model_case.split('/')[1] + '.log']))
 
-    if 'lora' in type:
-        backend_config.adapters = extra.get('adapters')
-    if 'kvint' in type:
-        backend_config.quant_policy = extra.get('quant_policy')
+    extra = json.dumps(extra, ensure_ascii=False, indent=None) if extra is not None else None
+    extra = extra.replace(' ', '')
+    with open(pipeline_chat_log, 'w') as f:
+        cmd = f'python3 autotest/tools/pipeline/llm_case.py run_pipeline_chat_test {hf_path} autotest/prompt_case.yaml {tp} {type} {is_pr_test} {extra}'  # noqa E501
 
-    # if llava support kvint or awq, this code should refactor
-    if 'llava' in model_case:
-        backend_config.model_name = 'vicuna'
-    if 'w4' in model_case or ('4bits' in model_case or 'awq' in model_case.lower()):
-        backend_config.model_format = 'awq'
-    if 'gptq' in model_case.lower():
-        backend_config.model_format = 'gptq'
+        f.writelines('reproduce command: ' + cmd + '\n')
+        print('reproduce command: ' + cmd)
+        # quantization
+        response = subprocess.run([cmd], shell=True, capture_output=True, text=True, encoding='utf-8')
 
-    pipe = pipeline(hf_path, backend_config=backend_config)
+        if response.returncode != 0:
+            assert False, 'system error: ' + response.stderr
 
-    config_log = os.path.join(log_path,
-                              '_'.join(['pipeline', 'config', type, worker_id,
-                                        model_case.split('/')[1] + '.log']))
-    file = open(config_log, 'w')
-    log_string = '\n'.join([
-        'reproduce config info:', 'from lmdeploy import pipeline', 'from lmdeploy.messages import PytorchEngineConfig',
-        'from lmdeploy.messages import TurbomindEngineConfig', 'engine_config = ' + str(backend_config),
-        'pipe = pipeline("' + hf_path + '",  backend_config=engine_config)', 'res = pipe("Hi, pls introduce shanghai")'
-    ])
-    file.writelines(log_string)
-    print(log_string)
-    file.close
+        output_text = response.stdout
+        f.writelines(output_text)
 
-    for case in cases_info.keys():
-        if ('coder' in model_case or 'CodeLlama' in model_case) and 'code' not in case:
-            continue
-        case_info = cases_info.get(case)
-        pipeline_chat_log = os.path.join(
-            log_path, '_'.join(['pipeline', 'chat', type, worker_id,
-                                model_case.split('/')[1], case + '.log']))
+        for case in cases_info.keys():
+            if ('coder' in model_path or 'CodeLlama' in model_path) and 'code' not in case:
+                continue
+            if is_pr_test and case != 'memory_test':
+                continue
 
-        file = open(pipeline_chat_log, 'w')
+            with allure.step(case):
+                case_info = cases_info.get(case)
 
-        prompts = []
-        for prompt_detail in case_info:
-            prompt = list(prompt_detail.keys())[0]
-            prompts.append({'role': 'user', 'content': prompt})
-            file.writelines('prompt:' + prompt + '\n')
+                for prompt_detail in case_info:
+                    prompt = list(prompt_detail.keys())[0]
+                    case_result, reason = assert_result(get_response_from_output(output_text, case, prompt),
+                                                        prompt_detail.values(), model_name)
+                    if not case_result:
+                        print(output_text)
+                        print('result:' + str(case_result) + ', reason:' + reason + '\n')
+                    f.writelines('result:' + str(case_result) + ', reason:' + reason + '\n')
 
-            response = pipe([prompts], gen_config=gen_config, log_level='INFO', max_log_len=10)[0].text
+            with assume:
+                assert case_result, reason
+    allure.attach.file(pipeline_chat_log, attachment_type=allure.attachment_type.TEXT)
 
-            case_result, reason = assert_result(response, prompt_detail.values(), model_name)
-            prompts.append({'role': 'assistant', 'content': response})
-            file.writelines('output:' + response + '\n')
-            file.writelines('result:' + str(case_result) + ', reason:' + reason + '\n')
-        file.close()
 
-    del pipe
-    torch.cuda.empty_cache()
+def get_response_from_output(output_text, case, prompt):
+    output_list = output_text.split('caseresult ' + case + ': ')[1].split('\n')[0]
+    output_dict = json.loads(output_list.rstrip())
+    for output in output_dict:
+        if output.get('prompt') == prompt:
+            return output.get('response')
+    return None
 
 
 def assert_pipeline_chat_log(config, cases_info, model_case, type, worker_id: str = ''):
