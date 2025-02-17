@@ -41,15 +41,9 @@ def get_cuda_pkgs():
 
     cuda_pkgs = []
     if arg_value == '11':
-        cuda_pkgs = [
-            'nvidia-nccl-cu11', 'nvidia-cuda-runtime-cu11',
-            'nvidia-cublas-cu11', 'nvidia-curand-cu11'
-        ]
+        cuda_pkgs = ['nvidia-nccl-cu11', 'nvidia-cuda-runtime-cu11', 'nvidia-cublas-cu11', 'nvidia-curand-cu11']
     elif arg_value == '12':
-        cuda_pkgs = [
-            'nvidia-nccl-cu12', 'nvidia-cuda-runtime-cu12',
-            'nvidia-cublas-cu12', 'nvidia-curand-cu12'
-        ]
+        cuda_pkgs = ['nvidia-nccl-cu12', 'nvidia-cuda-runtime-cu12', 'nvidia-cublas-cu12', 'nvidia-curand-cu12']
     return cuda_pkgs
 
 
@@ -97,8 +91,7 @@ def parse_requirements(fname='requirements.txt', with_version=True):
                     if ';' in rest:
                         # Handle platform specific dependencies
                         # http://setuptools.readthedocs.io/en/latest/setuptools.html#declaring-platform-specific-dependencies
-                        version, platform_deps = map(str.strip,
-                                                     rest.split(';'))
+                        version, platform_deps = map(str.strip, rest.split(';'))
                         info['platform_deps'] = platform_deps
                     else:
                         version = rest  # NOQA
@@ -149,11 +142,9 @@ if __name__ == '__main__':
         include_package_data=True,
         setup_requires=parse_requirements('requirements/build.txt'),
         tests_require=parse_requirements('requirements/test.txt'),
-        install_requires=parse_requirements(
-            f'requirements/runtime_{get_target_device()}.txt'),
+        install_requires=parse_requirements(f'requirements/runtime_{get_target_device()}.txt'),
         extras_require={
-            'all':
-            parse_requirements(f'requirements_{get_target_device()}.txt'),
+            'all': parse_requirements(f'requirements_{get_target_device()}.txt'),
             'lite': parse_requirements('requirements/lite.txt'),
             'serve': parse_requirements('requirements/serve.txt')
         },

@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
 import math
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -9,11 +10,8 @@ from torch import nn
 
 from lmdeploy.pytorch.distributed import get_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, RopeType,
-                                 SiluAndMul, build_rotary_embedding)
-from lmdeploy.pytorch.nn.linear import (build_colwise_linear,
-                                        build_merged_colwise_linear,
-                                        build_rowwise_linear)
+from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
+from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_merged_colwise_linear, build_rowwise_linear
 from lmdeploy.pytorch.nn.moe import SoftmaxTopK, build_fused_moe
 from lmdeploy.pytorch.nn.rotary_embedding import YarnParameters
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
@@ -30,16 +28,11 @@ def yarn_get_mscale(scale=1, mscale=1):
 class DeepseekV2BMM(nn.Module):
     """wrapped bmm."""
 
-    def __init__(self, batch: int, in_features: int, out_features: int,
-                 dtype: torch.dtype, device: torch.device):
+    def __init__(self, batch: int, in_features: int, out_features: int, dtype: torch.dtype, device: torch.device):
         super().__init__()
         batch = self._update_batch(batch)
 
-        weight = self.create_weight(batch,
-                                    in_features,
-                                    out_features,
-                                    dtype=dtype,
-                                    device=device)
+        weight = self.create_weight(batch, in_features, out_features, dtype=dtype, device=device)
         weight = torch.nn.Parameter(weight, requires_grad=False)
         self.register_parameter('weight', weight)
         weight.weight_loader = self.weight_loader
@@ -56,12 +49,9 @@ class DeepseekV2BMM(nn.Module):
         batch = batch // world_size
         return batch
 
-    def create_weight(self, batch: int, in_features: int, out_features: int,
-                      dtype: torch.dtype, device: torch.device):
+    def create_weight(self, batch: int, in_features: int, out_features: int, dtype: torch.dtype, device: torch.device):
         """create weight."""
-        return torch.empty((batch, in_features, out_features),
-                           dtype=dtype,
-                           device=device)
+        return torch.empty((batch, in_features, out_features), dtype=dtype, device=device)
 
     def weight_loader(self, param: nn.Parameter, weight: torch.Tensor):
         """weight loader."""
@@ -77,10 +67,7 @@ class DeepseekV2BMM(nn.Module):
 class DeepseekV2Attention(nn.Module):
     """deepseekv2 attention."""
 
-    def __init__(self,
-                 config: Any,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: Any, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         self.q_lora_rank = config.q_lora_rank
@@ -91,8 +78,7 @@ class DeepseekV2Attention(nn.Module):
         self.v_head_dim = config.v_head_dim
         self.qk_nope_head_dim = config.qk_nope_head_dim
         self.q_head_dim = config.qk_nope_head_dim + config.qk_rope_head_dim
-        num_replicate_kv_heads = getattr(config,
-                                         'num_replicate_key_value_heads', 1)
+        num_replicate_kv_heads = getattr(config, 'num_replicate_key_value_heads', 1)
         num_key_value_heads = getattr(config, 'num_key_value_heads', 1)
 
         if self.q_lora_rank is None:
@@ -161,19 +147,14 @@ class DeepseekV2Attention(nn.Module):
                 mscale = yarn_get_mscale(scaling_factor, mscale_all_dim)
                 self.softmax_scale = self.softmax_scale * mscale * mscale
 
-        self.attn_fwd = Attention(
-            self.num_heads,
-            config.kv_lora_rank + self.qk_rope_head_dim,
-            scale=self.softmax_scale,
-            num_kv_heads=num_key_value_heads,
-            v_head_size=config.kv_lora_rank,
-            num_replicate_kv_heads=num_replicate_kv_heads)
+        self.attn_fwd = Attention(self.num_heads,
+                                  config.kv_lora_rank + self.qk_rope_head_dim,
+                                  scale=self.softmax_scale,
+                                  num_kv_heads=num_key_value_heads,
+                                  v_head_size=config.kv_lora_rank,
+                                  num_replicate_kv_heads=num_replicate_kv_heads)
 
-        self.vc = DeepseekV2BMM(self.num_heads,
-                                config.kv_lora_rank,
-                                self.v_head_dim,
-                                dtype=dtype,
-                                device=device)
+        self.vc = DeepseekV2BMM(self.num_heads, config.kv_lora_rank, self.v_head_dim, dtype=dtype, device=device)
         self.o_proj = build_rowwise_linear(
             self.num_heads * self.v_head_dim,
             self.hidden_size,
@@ -184,13 +165,11 @@ class DeepseekV2Attention(nn.Module):
             quant_config=quantization_config,
         )
 
-    def _q_proj(self, hidden_states, num_heads: int, nope_size: int,
-                pe_size: int):
+    def _q_proj(self, hidden_states, num_heads: int, nope_size: int, pe_size: int):
         """q proj."""
         q_len = hidden_states.size(1)
 
-        query_states = hidden_states.new_empty(q_len, num_heads,
-                                               nope_size + pe_size)
+        query_states = hidden_states.new_empty(q_len, num_heads, nope_size + pe_size)
 
         if self.q_lora_rank is None:
             q = self.q_proj(hidden_states)
@@ -198,8 +177,7 @@ class DeepseekV2Attention(nn.Module):
             q = self.q_b_proj(self.q_a_layernorm(self.q_a_proj(hidden_states)))
         q = q.view(q_len, num_heads, self.q_head_dim)
         # q_pe: (q_len, num_heads, qk_rope_head_dim)
-        q_nope, q_pe = torch.split(
-            q, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1)
+        q_nope, q_pe = torch.split(q, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1)
         # q_nope: (q_len, num_heads, kv_lora_rank)
         q_nope_out = query_states[..., :nope_size]
         self.kc(q_nope, q_nope_out)
@@ -221,10 +199,8 @@ class DeepseekV2Attention(nn.Module):
         """qkv proj."""
         nope_size = self.kv_lora_rank
         pe_size = self.qk_rope_head_dim
-        query_states, q_pe = self._q_proj(hidden_states, num_heads, nope_size,
-                                          pe_size)
-        key_states, value_states, k_pe = self._kv_proj(hidden_states,
-                                                       nope_size)
+        query_states, q_pe = self._q_proj(hidden_states, num_heads, nope_size, pe_size)
+        key_states, value_states, k_pe = self._kv_proj(hidden_states, nope_size)
 
         return query_states, key_states, value_states, q_pe, k_pe
 
@@ -242,8 +218,7 @@ class DeepseekV2Attention(nn.Module):
         q_len = hidden_states.size(1)
 
         # qkv_proj
-        query_states, key_states, value_states, q_pe, k_pe = self._qkv_proj(
-            hidden_states, num_heads=num_heads)
+        query_states, key_states, value_states, q_pe, k_pe = self._qkv_proj(hidden_states, num_heads=num_heads)
 
         cos, sin = rotary_pos_emb
         q_pe, k_pe = self.apply_rotary_pos_emb(
@@ -263,10 +238,8 @@ class DeepseekV2Attention(nn.Module):
             past_key_value[0],
             past_key_value[0][..., :nope_size],
             attn_metadata,
-            k_scales_zeros=None
-            if len(past_key_value) == 2 else past_key_value[2],
-            v_scales_zeros=None
-            if len(past_key_value) == 2 else past_key_value[3],
+            k_scales_zeros=None if len(past_key_value) == 2 else past_key_value[2],
+            v_scales_zeros=None if len(past_key_value) == 2 else past_key_value[3],
             inplace=True,
         )
         attn_bmm_out = attn_output.new_empty(q_len, num_heads, self.v_head_dim)
@@ -281,10 +254,7 @@ class DeepseekV2Attention(nn.Module):
 class MoEGate(nn.Module):
     """Deepseek Gate."""
 
-    def __init__(self,
-                 config: Any,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: Any, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.config = config
         self.top_k = config.num_experts_per_tok
@@ -302,15 +272,10 @@ class MoEGate(nn.Module):
         # topk selection algorithm
         self.norm_topk_prob = config.norm_topk_prob
         self.gating_dim = config.hidden_size
-        self.weight = nn.Parameter(
-            torch.empty((self.n_routed_experts, self.gating_dim),
-                        dtype=dtype,
-                        device=device))
+        self.weight = nn.Parameter(torch.empty((self.n_routed_experts, self.gating_dim), dtype=dtype, device=device))
         if self.topk_method == 'noaux_tc':
             self.e_score_correction_bias = nn.Parameter(
-                torch.empty((self.n_routed_experts, ),
-                            dtype=dtype,
-                            device=device))
+                torch.empty((self.n_routed_experts, ), dtype=dtype, device=device))
         self.softmax_topk = SoftmaxTopK(self.top_k)
 
     def _compute_scores(self, logits: torch.Tensor):
@@ -332,13 +297,10 @@ class MoEGate(nn.Module):
         if self.topk_method == 'greedy':
             topk_weight, topk_idx = self.softmax_topk(router_logits)
         elif self.topk_method == 'group_limited_greedy':
-            scores = self._compute_scores(router_logits)
+            scores = router_logits
             grouped_logits = scores.unflatten(-1, (self.n_group, -1))
             group_scores = (grouped_logits.max(-1).values)
-            group_idx = torch.topk(group_scores,
-                                   k=self.topk_group,
-                                   dim=-1,
-                                   sorted=False)[1]  # [n, top_k_group]
+            group_idx = torch.topk(group_scores, k=self.topk_group, dim=-1, sorted=False)[1]  # [n, top_k_group]
             group_mask = torch.zeros_like(group_scores)  # [n, n_group]
             group_mask.scatter_(1, group_idx, 1)  # [n, n_group]
             group_mask = ~group_mask.bool()[..., None]
@@ -347,27 +309,17 @@ class MoEGate(nn.Module):
             topk_weight, topk_idx = self.softmax_topk(scores)
         elif self.topk_method == 'noaux_tc':
             scores = self._compute_scores(router_logits)
-            scores_for_choice = scores.view(
-                sequence_length, -1) + self.e_score_correction_bias[None]
-            group_scores = (scores_for_choice.view(
-                sequence_length, self.n_group,
-                -1).topk(2, dim=-1)[0].sum(dim=-1))  # [n, n_group]
-            group_idx = torch.topk(group_scores,
-                                   k=self.topk_group,
-                                   dim=-1,
-                                   sorted=False)[1]  # [n, top_k_group]
+            scores_for_choice = scores.view(sequence_length, -1) + self.e_score_correction_bias[None]
+            group_scores = (scores_for_choice.view(sequence_length, self.n_group,
+                                                   -1).topk(2, dim=-1)[0].sum(dim=-1))  # [n, n_group]
+            group_idx = torch.topk(group_scores, k=self.topk_group, dim=-1, sorted=False)[1]  # [n, top_k_group]
             group_mask = torch.zeros_like(group_scores)  # [n, n_group]
             group_mask.scatter_(1, group_idx, 1)  # [n, n_group]
-            score_mask = (group_mask.unsqueeze(-1).expand(
-                sequence_length, self.n_group,
-                self.n_routed_experts // self.n_group).reshape(
-                    sequence_length, -1))  # [n, e]
-            tmp_scores = scores_for_choice.masked_fill(~score_mask.bool(),
-                                                       0.0)  # [n, e]
-            _, topk_idx = torch.topk(tmp_scores,
-                                     k=self.top_k,
-                                     dim=-1,
-                                     sorted=False)
+            score_mask = (group_mask.unsqueeze(-1).expand(sequence_length, self.n_group,
+                                                          self.n_routed_experts // self.n_group).reshape(
+                                                              sequence_length, -1))  # [n, e]
+            tmp_scores = scores_for_choice.masked_fill(~score_mask.bool(), 0.0)  # [n, e]
+            _, topk_idx = torch.topk(tmp_scores, k=self.top_k, dim=-1, sorted=False)
             topk_weight = scores.gather(1, topk_idx)
         else:
             raise RuntimeError(f'Unsupported topk_method: {self.topk_method}')
@@ -379,10 +331,7 @@ class MoEGate(nn.Module):
 class DeepseekV2MoE(nn.Module):
     """Deepseek v2 MoE."""
 
-    def __init__(self,
-                 config: Any,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: Any, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         self.hidden_dim = config.hidden_size
@@ -412,8 +361,7 @@ class DeepseekV2MoE(nn.Module):
 
         self.shared_experts = None
         if config.n_shared_experts is not None:
-            intermediate_size = (config.moe_intermediate_size *
-                                 config.n_shared_experts)
+            intermediate_size = (config.moe_intermediate_size * config.n_shared_experts)
             self.shared_experts = DeepseekV2MLP(
                 config=config,
                 intermediate_size=intermediate_size,
@@ -501,26 +449,18 @@ class DeepseekV2MLP(nn.Module):
 class DeepseekV2DecoderLayer(nn.Module):
     """Deepseekv2 decoder layer."""
 
-    def __init__(self,
-                 config: Any,
-                 layer_idx: int,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: Any, layer_idx: int, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.layer_idx = layer_idx
         quantization_config = None
 
         # build attention layer
-        self.self_attn = DeepseekV2Attention(config,
-                                             dtype=dtype,
-                                             device=device)
+        self.self_attn = DeepseekV2Attention(config, dtype=dtype, device=device)
 
         # mlp
         self.mlp = (DeepseekV2MoE(config, dtype=dtype, device=device) if
-                    (config.n_routed_experts is not None
-                     and layer_idx >= config.first_k_dense_replace
-                     and layer_idx % config.moe_layer_freq == 0) else
-                    DeepseekV2MLP(config, dtype=dtype, device=device))
+                    (config.n_routed_experts is not None and layer_idx >= config.first_k_dense_replace
+                     and layer_idx % config.moe_layer_freq == 0) else DeepseekV2MLP(config, dtype=dtype, device=device))
 
         # build input layer norm
         self.input_layernorm = RMSNorm(config.hidden_size,
@@ -530,10 +470,7 @@ class DeepseekV2DecoderLayer(nn.Module):
                                        device=device)
 
         # build attention layer norm
-        self.post_attention_layernorm = RMSNorm(config.hidden_size,
-                                                config.rms_norm_eps,
-                                                dtype=dtype,
-                                                device=device)
+        self.post_attention_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
 
     def forward(
         self,
@@ -548,8 +485,7 @@ class DeepseekV2DecoderLayer(nn.Module):
             residual = hidden_states
             hidden_states = self.input_layernorm(hidden_states)
         else:
-            hidden_states, residual = self.input_layernorm(
-                hidden_states, residual)
+            hidden_states, residual = self.input_layernorm(hidden_states, residual)
 
         # Self Attention
         hidden_states = self.self_attn(
@@ -560,8 +496,7 @@ class DeepseekV2DecoderLayer(nn.Module):
         )
 
         # Fully Connected
-        hidden_states, residual = self.post_attention_layernorm(
-            hidden_states, residual)
+        hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
         hidden_states = self.mlp(hidden_states)
 
         outputs = (hidden_states, residual)
@@ -571,10 +506,7 @@ class DeepseekV2DecoderLayer(nn.Module):
 class DeepseekV2Model(nn.Module):
     """mixtral model."""
 
-    def __init__(self,
-                 config: Any,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: Any, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.config = config
         self.padding_idx = config.pad_token_id
@@ -585,19 +517,12 @@ class DeepseekV2Model(nn.Module):
                                          dtype=dtype,
                                          device=device)
         self.layers = nn.ModuleList([
-            DeepseekV2DecoderLayer(config,
-                                   layer_idx,
-                                   dtype=dtype,
-                                   device=device)
+            DeepseekV2DecoderLayer(config, layer_idx, dtype=dtype, device=device)
             for layer_idx in range(config.num_hidden_layers)
         ])
 
         # build norm
-        self.norm = RMSNorm(config.hidden_size,
-                            config.rms_norm_eps,
-                            quant_config=None,
-                            dtype=dtype,
-                            device=device)
+        self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, quant_config=None, dtype=dtype, device=device)
 
         emb_type = RopeType.LinearScaling
         rope_dim = config.qk_rope_head_dim
@@ -612,8 +537,7 @@ class DeepseekV2Model(nn.Module):
                 emb_type = RopeType.DynamicNTKScaling
             elif scaling_type == 'yarn':
                 emb_type = RopeType.Yarn
-                rope_max_pos_emb = config.rope_scaling.get(
-                    'original_max_position_embeddings', 4096)
+                rope_max_pos_emb = config.rope_scaling.get('original_max_position_embeddings', 4096)
                 kwargs = {
                     key: config.rope_scaling[key]
                     for key in [
@@ -735,29 +659,24 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             inputs_embeds=inputs_embeds,
         )
 
-    def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor,
-                             params_dict: Dict[str, nn.Parameter],
+    def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter],
                              expert_params_mapping: List):
         """load weight experts."""
-        for (param_name, weight_name, expert_id,
-             shard_id) in expert_params_mapping:
+        for (param_name, weight_name, expert_id, shard_id) in expert_params_mapping:
             if weight_name not in name:
                 continue
             name = name.replace(weight_name, param_name)
             param = params_dict[name]
-            load_weight(param,
-                        loaded_weight,
-                        expert_id=expert_id,
-                        shard_id=shard_id)
+            load_weight(param, loaded_weight, expert_id=expert_id, shard_id=shard_id)
             break
         else:
             param = params_dict[name]
             load_weight(param, loaded_weight)
 
-    def _load_weight_attention(self, name: str, loaded_weight: torch.Tensor,
-                               params_dict: Dict[str, nn.Parameter],
+    def _load_weight_attention(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter],
                                update_pe_mapping: List):
         """load weight attention."""
+        device = next(iter(params_dict.values())).device
 
         def __update_pe(weight, head_dim: int, pe_dim_offset: int):
             # (num_heads, q_head_dim, input_dim)
@@ -777,9 +696,8 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             config = self.config
             v_head_dim = config.v_head_dim
             qk_nope_head_dim = config.qk_nope_head_dim
-            w_kc, w_vc = weight.unflatten(
-                0, (-1, qk_nope_head_dim + v_head_dim)).split(
-                    [qk_nope_head_dim, v_head_dim], dim=1)
+            w_kc, w_vc = weight.unflatten(0, (-1, qk_nope_head_dim + v_head_dim)).split([qk_nope_head_dim, v_head_dim],
+                                                                                        dim=1)
             w_vc = w_vc.transpose(1, 2).contiguous()
             kc_param_name = name.replace('.kv_b_proj', '.kc')
             param_kc = params_dict[kc_param_name]
@@ -788,8 +706,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             param_vc = params_dict[vc_param_name]
             load_weight(param_vc, w_vc)
 
-        def __dequant_weight(weight: torch.Tensor, scale: torch.Tensor,
-                             dtype: torch.dtype):
+        def __dequant_weight(weight: torch.Tensor, scale: torch.Tensor, dtype: torch.dtype):
             """dequant weight."""
             dim_w0, dim_w1 = weight.shape
             dim_s0, dim_s1 = scale.shape
@@ -813,8 +730,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                 weight_name = name.replace('.scale', '.weight')
                 scale_name = name
             self._load_buffers[name] = loaded_weight
-            if (weight_name in self._load_buffers
-                    and scale_name in self._load_buffers):
+            if (weight_name in self._load_buffers and scale_name in self._load_buffers):
                 weight = self._load_buffers.pop(weight_name)
                 scale = self._load_buffers.pop(scale_name)
                 kc_param_name = weight_name.replace('.kv_b_proj', '.kc')
@@ -828,6 +744,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             if name.endswith('.scale'):
                 weight = loaded_weight
             else:
+                loaded_weight = loaded_weight.to(device)
                 weight = __update_pe(loaded_weight, head_dim, pe_dim_offset)
             param = params_dict[name]
             load_weight(param, weight)
@@ -839,6 +756,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                 if quantization_config is not None:
                     quant_method = quantization_config.get('quant_method')
 
+                loaded_weight = loaded_weight.to(device)
                 if quant_method == 'fp8':
                     # update blocked fp8 weight
                     __load_kcvc_blocked_fp8(name, loaded_weight)
@@ -871,36 +789,27 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
         qk_nope_head_dim = config.qk_nope_head_dim
         q_head_dim = config.qk_nope_head_dim + config.qk_rope_head_dim
         kv_dim = kv_lora_rank + qk_rope_head_dim
-        update_pe_mapping = [('q_proj', q_head_dim, qk_nope_head_dim),
-                             ('q_b_proj', q_head_dim, qk_nope_head_dim),
+        update_pe_mapping = [('q_proj', q_head_dim, qk_nope_head_dim), ('q_b_proj', q_head_dim, qk_nope_head_dim),
                              ('kv_a_proj_with_mqa', kv_dim, kv_lora_rank)]
 
         num_experts = self.config.n_routed_experts
         expert_params_mapping = []
         for exp_id in range(num_experts):
-            gate_param = ('.experts.gate_up', f'.experts.{exp_id}.gate_proj',
-                          exp_id, 'gate')
-            up_param = ('.experts.gate_up', f'.experts.{exp_id}.up_proj',
-                        exp_id, 'up')
-            down_param = ('.experts.down', f'.experts.{exp_id}.down_proj',
-                          exp_id, 'down')
+            gate_param = ('.experts.gate_up', f'.experts.{exp_id}.gate_proj', exp_id, 'gate')
+            up_param = ('.experts.gate_up', f'.experts.{exp_id}.up_proj', exp_id, 'up')
+            down_param = ('.experts.down', f'.experts.{exp_id}.down_proj', exp_id, 'down')
             expert_params_mapping += [gate_param, up_param, down_param]
 
         num_hidden_layers = self.config.num_hidden_layers
 
-        num_nextn_predict_layers = getattr(self.config,
-                                           'num_nextn_predict_layers', 1)
-        nextn_keys = [
-            f'.layers.{num_hidden_layers+i}'
-            for i in range(num_nextn_predict_layers)
-        ]
+        num_nextn_predict_layers = getattr(self.config, 'num_nextn_predict_layers', 1)
+        nextn_keys = [f'.layers.{num_hidden_layers+i}' for i in range(num_nextn_predict_layers)]
 
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:
             if 'rotary_emb.inv_freq' in name:
                 continue
-            if ('rotary_emb.cos_cached' in name
-                    or 'rotary_emb.sin_cached' in name):
+            if ('rotary_emb.cos_cached' in name or 'rotary_emb.sin_cached' in name):
                 continue
             if '.layers' in name:
                 # skip nextn
@@ -911,19 +820,13 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             if name.endswith(scale_suffix):
                 name = name[:-len(scale_suffix)] + '.scale'
             if '.experts' in name:
-                self._load_weight_experts(
-                    name,
-                    loaded_weight,
-                    params_dict,
-                    expert_params_mapping=expert_params_mapping)
+                self._load_weight_experts(name, loaded_weight, params_dict, expert_params_mapping=expert_params_mapping)
             elif '.self_attn' in name:
                 # attention
-                self._load_weight_attention(name, loaded_weight, params_dict,
-                                            update_pe_mapping)
+                self._load_weight_attention(name, loaded_weight, params_dict, update_pe_mapping)
             else:
                 # other
-                for (param_name, weight_name,
-                     shard_id) in stacked_params_mapping:
+                for (param_name, weight_name, shard_id) in stacked_params_mapping:
                     if weight_name not in name:
                         continue
                     name = name.replace(weight_name, param_name)

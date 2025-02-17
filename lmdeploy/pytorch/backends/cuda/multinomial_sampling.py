@@ -1,10 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
 import torch
 
 from lmdeploy.pytorch.kernels.cuda import multinomial_sampling
 
-from ..multinomial_sampling import (MultinomialSamplingBuilder,
-                                    MultinomialSamplingImpl)
+from ..multinomial_sampling import MultinomialSamplingBuilder, MultinomialSamplingImpl
 
 
 class TritonMultinomialSamplingImpl(MultinomialSamplingImpl):

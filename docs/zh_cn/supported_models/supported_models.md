@@ -14,6 +14,7 @@
 |             InternLM             |    7B - 20B    | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |            InternLM2             |    7B - 20B    | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |           InternLM2.5            |       7B       | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
+|            InternLM3             |       8B       | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |       InternLM-XComposer2        |  7B, 4khd-7B   | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |      InternLM-XComposer2.5       |       7B       | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |               Qwen               |   1.8B - 72B   | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
@@ -63,6 +64,7 @@
 |            InternLM            |  7B - 20B   | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |           InternLM2            |  7B - 20B   | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |          InternLM2.5           |     7B      | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
+|           InternLM3            |     8B      | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |           Baichuan2            |     7B      | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  No   |
 |           Baichuan2            |     13B     | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 |            ChatGLM2            |     6B      | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |

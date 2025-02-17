@@ -25,8 +25,7 @@ class LlamaReader(BaseReader):
     attn_pattern = r'self_attn'
     ffn_pattern = r'mlp'
 
-    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
-                 model_cfg: dict, policy):
+    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool, model_cfg: dict, policy):
         super().__init__()
         self.params = unused_params
         self.params.update(new_params)
@@ -63,8 +62,7 @@ class LlamaReader(BaseReader):
         """Get q, k, v, o kind for layer i."""
         result = []
         for key in ['q', 'k', 'v', 'o']:
-            tensor = self.params.get(
-                f'{self.attn_layer_prefix}.{i}.self_attn.{key}_proj.{kind}')
+            tensor = self.params.get(f'{self.attn_layer_prefix}.{i}.self_attn.{key}_proj.{kind}')
             tensor = self.transform(tensor, kind)
             result.append(tensor)
         return (*result, )
@@ -76,8 +74,7 @@ class LlamaReader(BaseReader):
 
     def attn_norm(self, i: int):
         """Get attn norm for layer i."""
-        return self.params[
-            f'{self.attn_layer_prefix}.{i}.input_layernorm.weight']
+        return self.params[f'{self.attn_layer_prefix}.{i}.input_layernorm.weight']
 
     def _ffn(self, i: int, kind: str):
         """Get ffn kind for layer i."""
@@ -85,8 +82,7 @@ class LlamaReader(BaseReader):
             return self.filter(self.ffn_pattern)
         result = []
         for key in ['gate', 'down', 'up']:
-            tensor = self.params[
-                f'{self.attn_layer_prefix}.{i}.mlp.{key}_proj.{kind}']
+            tensor = self.params[f'{self.attn_layer_prefix}.{i}.mlp.{key}_proj.{kind}']
             tensor = self.transform(tensor, kind)
             result.append(tensor)
         return (*result, )
@@ -98,8 +94,7 @@ class LlamaReader(BaseReader):
 
     def ffn_norm(self, i: int):
         """Get ffn norm for layer i."""
-        return self.params[
-            f'{self.attn_layer_prefix}.{i}.post_attention_layernorm.weight']
+        return self.params[f'{self.attn_layer_prefix}.{i}.post_attention_layernorm.weight']
 
 
 @INPUT_MODELS.register_module(name='llama')
@@ -117,10 +112,7 @@ class LlamaModel(BaseInputModel):
     def readers(self):
         loader = create_loader(self.model_path, self.Reader.attn_layer_patten)
         for i, param in loader.items():
-            reader = self.Reader(param, {},
-                                 False,
-                                 self.model_config,
-                                 policy=self.policy)
+            reader = self.Reader(param, {}, False, self.model_config, policy=self.policy)
             yield i, reader
 
     def tokenizer_info(self):
@@ -150,8 +142,7 @@ class LlamaModel(BaseInputModel):
                 kv_head_num = model_arg['num_attention_heads']
             hidden_units = model_arg['hidden_size']
             rope_theta = float(model_arg.get('rope_theta', 10000.0))
-            max_position_embeddings = int(
-                model_arg.get('max_position_embeddings', 0))
+            max_position_embeddings = int(model_arg.get('max_position_embeddings', 0))
             rope_scaling = model_arg.get('rope_scaling', None)
             head_dim = model_arg.get('head_dim', hidden_units // attn_head_num)
             scaling_factor = 0.0
@@ -167,8 +158,7 @@ class LlamaModel(BaseInputModel):
                 llama2_scaling_type = rope_scaling.get('type', '')
                 llama3_scaling_type = rope_scaling.get('rope_type', '')
                 if llama2_scaling_type and llama3_scaling_type:
-                    raise ValueError(
-                        f'Ambiguous rope_scaling in config: {model_arg}')
+                    raise ValueError(f'Ambiguous rope_scaling in config: {model_arg}')
                 scaling_type = llama2_scaling_type if llama2_scaling_type \
                     else llama3_scaling_type
                 scaling_factor = rope_scaling.get('factor', 0.0)
@@ -176,37 +166,33 @@ class LlamaModel(BaseInputModel):
                     use_dynamic_ntk = 1
                 elif scaling_type == 'llama3':
                     low_freq_factor = rope_scaling.get('low_freq_factor', 1.0)
-                    high_freq_factor = rope_scaling.get(
-                        'high_freq_factor', 1.0)
-                    original_max_position_embeddings = model_arg[
-                        'rope_scaling'].get('original_max_position_embeddings',
-                                            0)
+                    high_freq_factor = rope_scaling.get('high_freq_factor', 1.0)
+                    original_max_position_embeddings = model_arg['rope_scaling'].get(
+                        'original_max_position_embeddings', 0)
                 elif scaling_type == 'yarn':
-                    attention_factor = rope_scaling.get(
-                        'attention_factor', None)
+                    attention_factor = rope_scaling.get('attention_factor', None)
                     if attention_factor is None:
                         attention_factor = 0.1 * math.log(scaling_factor) + 1.0
                     beta_fast = rope_scaling.get('beta_fast', 32.0)
                     beta_slow = rope_scaling.get('beta_slow', 1.0)
 
-        return dict(
-            size_per_head=head_dim,
-            rotary_embedding=head_dim,
-            num_layer=num_layer,
-            norm_eps=norm_eps,
-            head_num=attn_head_num,
-            kv_head_num=kv_head_num,
-            hidden_units=hidden_units,
-            inter_size=inter_size,
-            vocab_size=vocab_size,
-            rope_theta=rope_theta,
-            max_position_embeddings=max_position_embeddings,
-            original_max_position_embeddings=original_max_position_embeddings,
-            use_dynamic_ntk=use_dynamic_ntk,
-            rope_scaling_type=scaling_type,
-            rope_scaling_factor=scaling_factor,
-            low_freq_factor=low_freq_factor,
-            high_freq_factor=high_freq_factor,
-            attention_factor=attention_factor,
-            beta_fast=beta_fast,
-            beta_slow=beta_slow)
+        return dict(size_per_head=head_dim,
+                    rotary_embedding=head_dim,
+                    num_layer=num_layer,
+                    norm_eps=norm_eps,
+                    head_num=attn_head_num,
+                    kv_head_num=kv_head_num,
+                    hidden_units=hidden_units,
+                    inter_size=inter_size,
+                    vocab_size=vocab_size,
+                    rope_theta=rope_theta,
+                    max_position_embeddings=max_position_embeddings,
+                    original_max_position_embeddings=original_max_position_embeddings,
+                    use_dynamic_ntk=use_dynamic_ntk,
+                    rope_scaling_type=scaling_type,
+                    rope_scaling_factor=scaling_factor,
+                    low_freq_factor=low_freq_factor,
+                    high_freq_factor=high_freq_factor,
+                    attention_factor=attention_factor,
+                    beta_fast=beta_fast,
+                    beta_slow=beta_slow)

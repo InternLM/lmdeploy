@@ -23,9 +23,7 @@ class DefaultBlockManager(BaseBlockManager):
     """
 
     @classmethod
-    def num_required_blocks(cls,
-                            obj: SchedulerSequence,
-                            prealloc_size: int = 0):
+    def num_required_blocks(cls, obj: SchedulerSequence, prealloc_size: int = 0):
         """get num required blocks."""
         num_tokens = obj.num_all_tokens() + prealloc_size
 
@@ -94,8 +92,7 @@ class DefaultBlockManager(BaseBlockManager):
             swap_map = dict(zip(old_blocks, new_blocks - self.num_gpu_blocks))
 
             gpu_allocator.free(old_blocks)
-            self.allocator.update_phy_map(logical_blocks.get_real_blocks(),
-                                          new_blocks)
+            self.allocator.update_phy_map(logical_blocks.get_real_blocks(), new_blocks)
             return True, swap_map
 
         if not _can_swap():
@@ -141,8 +138,7 @@ class DefaultBlockManager(BaseBlockManager):
             swap_map = dict(zip(old_blocks - self.num_gpu_blocks, new_blocks))
 
             cpu_allocator.free(old_blocks)
-            self.allocator.update_phy_map(logical_blocks.get_real_blocks(),
-                                          new_blocks)
+            self.allocator.update_phy_map(logical_blocks.get_real_blocks(), new_blocks)
             return True, swap_map
 
         if not _can_swap():

@@ -11,8 +11,7 @@ from lmdeploy.vl.model.utils import disable_logging
 logger = get_logger('lmdeploy')
 
 
-def find_closest_aspect_ratio(aspect_ratio, target_ratios, width, height,
-                              image_size):
+def find_closest_aspect_ratio(aspect_ratio, target_ratios, width, height, image_size):
     """copy from https://huggingface.co/OpenGVLab/InternVL-Chat-V1-5."""
     best_ratio_diff = float('inf')
     best_ratio = (1, 1)
@@ -29,25 +28,18 @@ def find_closest_aspect_ratio(aspect_ratio, target_ratios, width, height,
     return best_ratio
 
 
-def dynamic_preprocess(image,
-                       min_num=1,
-                       max_num=6,
-                       image_size=448,
-                       use_thumbnail=False):
+def dynamic_preprocess(image, min_num=1, max_num=6, image_size=448, use_thumbnail=False):
     """copy from https://huggingface.co/OpenGVLab/InternVL-Chat-V1-5."""
     orig_width, orig_height = image.size
     aspect_ratio = orig_width / orig_height
 
     # calculate the existing image aspect ratio
-    target_ratios = set((i, j) for n in range(min_num, max_num + 1)
-                        for i in range(1, n + 1) for j in range(1, n + 1)
+    target_ratios = set((i, j) for n in range(min_num, max_num + 1) for i in range(1, n + 1) for j in range(1, n + 1)
                         if i * j <= max_num and i * j >= min_num)
     target_ratios = sorted(target_ratios, key=lambda x: x[0] * x[1])
 
     # find the closest aspect ratio to the target
-    target_aspect_ratio = find_closest_aspect_ratio(aspect_ratio,
-                                                    target_ratios, orig_width,
-                                                    orig_height, image_size)
+    target_aspect_ratio = find_closest_aspect_ratio(aspect_ratio, target_ratios, orig_width, orig_height, image_size)
 
     # calculate the target width and height
     target_width = image_size * target_aspect_ratio[0]
@@ -58,8 +50,7 @@ def dynamic_preprocess(image,
     resized_img = image.resize((target_width, target_height))
     processed_images = []
     for i in range(blocks):
-        box = ((i % (target_width // image_size)) * image_size,
-               (i // (target_width // image_size)) * image_size,
+        box = ((i % (target_width // image_size)) * image_size, (i // (target_width // image_size)) * image_size,
                ((i % (target_width // image_size)) + 1) * image_size,
                ((i // (target_width // image_size)) + 1) * image_size)
         # split the image
@@ -91,8 +82,7 @@ class InternVLVisionModel(VisonModel):
         dynamic_image_size = getattr(self.config, 'dynamic_image_size', False)
         image_processor = None
         try:
-            image_processor = CLIPImageProcessor.from_pretrained(
-                self.model_path)
+            image_processor = CLIPImageProcessor.from_pretrained(self.model_path)
         except OSError:
             pass
 
@@ -104,10 +94,8 @@ class InternVLVisionModel(VisonModel):
             from torchvision.transforms.functional import InterpolationMode
             input_size = self.config.vision_config.image_size
             self.transform = T.Compose([
-                T.Lambda(lambda img: img.convert('RGB')
-                         if img.mode != 'RGB' else img),
-                T.Resize((input_size, input_size),
-                         interpolation=InterpolationMode.BICUBIC),
+                T.Lambda(lambda img: img.convert('RGB') if img.mode != 'RGB' else img),
+                T.Resize((input_size, input_size), interpolation=InterpolationMode.BICUBIC),
                 T.ToTensor(),
                 T.Normalize(mean=MEAN, std=STD)
             ])
@@ -121,8 +109,7 @@ class InternVLVisionModel(VisonModel):
         force_image_size = self.hf_config.force_image_size
         patch_size = self.hf_config.vision_config.patch_size
         downsample_ratio = self.hf_config.downsample_ratio
-        self.image_tokens_per_patch = int(
-            (force_image_size // patch_size)**2 * (downsample_ratio**2))
+        self.image_tokens_per_patch = int((force_image_size // patch_size)**2 * (downsample_ratio**2))
 
     def build_model(self):
         """build the vision part of a VLM model when backend is turbomind, or
@@ -139,13 +126,12 @@ class InternVLVisionModel(VisonModel):
         model.half()
         from accelerate import load_checkpoint_and_dispatch
         with disable_logging():
-            load_checkpoint_and_dispatch(
-                model=model,
-                checkpoint=self.model_path,
-                device_map='auto' if not self.with_llm else {'': 'cpu'},
-                max_memory=self.max_memory,
-                no_split_module_classes=['InternVisionEncoderLayer'],
-                dtype=torch.half)
+            load_checkpoint_and_dispatch(model=model,
+                                         checkpoint=self.model_path,
+                                         device_map='auto' if not self.with_llm else {'': 'cpu'},
+                                         max_memory=self.max_memory,
+                                         no_split_module_classes=['InternVisionEncoderLayer'],
+                                         dtype=torch.half)
 
         # We need eval mode to freeze the weights in model, thus,
         # avoid randomness in inference.
@@ -157,12 +143,11 @@ class InternVLVisionModel(VisonModel):
         if max_num is None or not isinstance(max_num, int):
             res_key = params.get('detail', 'default')
             max_num = image_res.get(res_key, self.config.max_dynamic_patch)
-        out = dynamic_preprocess(
-            image,
-            min_num=self.config.min_dynamic_patch,
-            max_num=max_num,
-            image_size=self.config.vision_config.image_size,
-            use_thumbnail=self.config.use_thumbnail)
+        out = dynamic_preprocess(image,
+                                 min_num=self.config.min_dynamic_patch,
+                                 max_num=max_num,
+                                 image_size=self.config.vision_config.image_size,
+                                 use_thumbnail=self.config.use_thumbnail)
         pixel_values = [self.transform(x) for x in out]
         # (patch) x c x h x w
         pixel_values = torch.stack(pixel_values)
@@ -173,13 +158,10 @@ class InternVLVisionModel(VisonModel):
         assert all(x.get('pixel_values') is not None for x in inputs)
         outputs = []
         for idx in range(0, len(inputs), max_batch_size):
-            pixel_values = [
-                x['pixel_values'] for x in inputs[idx:idx + max_batch_size]
-            ]
+            pixel_values = [x['pixel_values'] for x in inputs[idx:idx + max_batch_size]]
             split = [x.shape[0] for x in pixel_values]
             pixel_values = torch.cat(pixel_values, dim=0)
-            pixel_values = pixel_values.to(self.model.device,
-                                           dtype=torch.float16)
+            pixel_values = pixel_values.to(self.model.device, dtype=torch.float16)
             logger.info(f'vision forward shape: {pixel_values.shape}')
             feats = self.model.extract_feature(pixel_values)
             feats = torch.split(feats, split, dim=0)
@@ -188,8 +170,7 @@ class InternVLVisionModel(VisonModel):
 
     def _preprocess(self, image, params=None):
         """forward for internvl-chat-v1-1, internvl-chat-v1-2."""
-        pixel_values = self.image_processor(images=image,
-                                            return_tensors='pt').pixel_values
+        pixel_values = self.image_processor(images=image, return_tensors='pt').pixel_values
         return pixel_values
 
     def _forward(self, inputs, max_batch_size):
@@ -197,12 +178,9 @@ class InternVLVisionModel(VisonModel):
         assert all(x.get('pixel_values') is not None for x in inputs)
         outputs = []
         for idx in range(0, len(inputs), max_batch_size):
-            pixel_values = [
-                x['pixel_values'] for x in inputs[idx:idx + max_batch_size]
-            ]
+            pixel_values = [x['pixel_values'] for x in inputs[idx:idx + max_batch_size]]
             pixel_values = torch.cat(pixel_values, dim=0)
-            pixel_values = pixel_values.to(self.model.device,
-                                           dtype=torch.float16)
+            pixel_values = pixel_values.to(self.model.device, dtype=torch.float16)
             logger.info(f'vision forward shape: {pixel_values.shape}')
             feats = self.model.extract_feature(pixel_values)
             feats = torch.split(feats, 1, dim=0)
@@ -216,20 +194,14 @@ class InternVLVisionModel(VisonModel):
         for image, params in images:
             image = image.convert('RGB')
             pixel_values = self.processor(image, params)
-            image_tokens = (pixel_values.shape[0] *
-                            self.image_tokens_per_patch)
+            image_tokens = (pixel_values.shape[0] * self.image_tokens_per_patch)
             outputs.append(
-                dict(pixel_values=pixel_values,
-                     image_tokens=image_tokens,
-                     image_token_id=0,
-                     image_size=image.size))
+                dict(pixel_values=pixel_values, image_tokens=image_tokens, image_token_id=0, image_size=image.size))
         messages.append(dict(role='preprocess', content=outputs))
         return messages
 
     @torch.no_grad()
-    def forward(self,
-                messages: List[Dict],
-                max_batch_size: int = 1) -> List[Dict]:
+    def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
         """extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
@@ -257,15 +229,11 @@ class InternVLVisionModel(VisonModel):
                 continue
             elif message['role'] in ['preprocess', 'forward']:
                 continue
-            n_images = len(
-                [1 for x in message['content'] if x['type'] == 'image'])
-            content = [
-                x['text'] for x in message['content'] if x['type'] == 'text'
-            ]
+            n_images = len([1 for x in message['content'] if x['type'] == 'image'])
+            content = [x['text'] for x in message['content'] if x['type'] == 'text']
             prompt = content[0]
             if IMAGE_TOKEN in prompt and f'<img>{IMAGE_TOKEN}' not in prompt:
-                prompt = prompt.replace(f'{IMAGE_TOKEN}',
-                                        f'<img>{IMAGE_TOKEN}</img>')
+                prompt = prompt.replace(f'{IMAGE_TOKEN}', f'<img>{IMAGE_TOKEN}</img>')
                 prompt = prompt.replace('</img><img>', '')
                 prompt = prompt.replace('<img><img>', '<img>')
                 prompt = prompt.replace('</img></img>', '</img>')
@@ -277,14 +245,20 @@ class InternVLVisionModel(VisonModel):
         prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
         return prompt, IMAGE_TOKEN
 
+    @staticmethod
+    def _update_image_token_id(messages, tokenizer):
+        """update image_token_id."""
+        pad_token_id = getattr(tokenizer.model.model, 'pad_token_id', 0)
+        preps = [x['content'] for x in messages if x['role'] == 'preprocess']
+        for prep in preps:
+            for pp in prep:
+                pp['image_token_id'] = pad_token_id
+
     def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template,
-                                                 sequence_start)
-        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
-                                   sequence_start)
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
+        self._update_image_token_id(messages, tokenizer)
+        return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
 
     def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):
-        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template,
-                                                 sequence_start)
-        return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer,
-                                     sequence_start)
+        prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
+        return self.to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)

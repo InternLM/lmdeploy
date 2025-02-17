@@ -27,8 +27,7 @@ class SoftmaxTopKBuilder(ABC):
 class FusedMoEImpl(ABC):
     """fused moe implementation."""
 
-    def update_weights(self, gate_up_weights: torch.Tensor,
-                       down_weights: torch.Tensor):
+    def update_weights(self, gate_up_weights: torch.Tensor, down_weights: torch.Tensor):
         """update weights."""
         return gate_up_weights, down_weights
 
@@ -65,8 +64,7 @@ class FusedMoEBuilder(ABC):
 class FusedMoEW8A8Impl(ABC):
     """fused moe w8a8 implementation."""
 
-    def update_weights(self, gate_up_weights: torch.Tensor,
-                       down_weights: torch.Tensor, gate_up_scale: torch.Tensor,
+    def update_weights(self, gate_up_weights: torch.Tensor, down_weights: torch.Tensor, gate_up_scale: torch.Tensor,
                        down_scale: torch.Tensor):
         """update weights."""
         return gate_up_weights, down_weights, gate_up_scale, down_scale
@@ -111,8 +109,7 @@ class FusedMoEW8A8Builder(ABC):
 class FusedMoEBlockedF8Impl(ABC):
     """fused moe blocked f8 implementation."""
 
-    def update_weights(self, gate_up_weights: torch.Tensor,
-                       down_weights: torch.Tensor, gate_up_scale: torch.Tensor,
+    def update_weights(self, gate_up_weights: torch.Tensor, down_weights: torch.Tensor, gate_up_scale: torch.Tensor,
                        down_scale: torch.Tensor):
         """update weights."""
         return gate_up_weights, down_weights, gate_up_scale, down_scale
@@ -145,9 +142,6 @@ class FusedMoEBlockedF8Builder(ABC):
 
     @staticmethod
     @abstractmethod
-    def build(top_k: int,
-              num_experts: int,
-              renormalize: bool = False,
-              out_dtype: torch.dtype = torch.float16):
+    def build(top_k: int, num_experts: int, renormalize: bool = False, out_dtype: torch.dtype = torch.float16):
         """build from mlp."""
         raise NotImplementedError

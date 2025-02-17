@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import torch
@@ -8,10 +9,8 @@ from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.distributed import get_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, RopeType,
-                                 SiluAndMul, build_rotary_embedding)
-from lmdeploy.pytorch.nn.linear import (build_merged_colwise_linear,
-                                        build_qkv_proj, build_rowwise_linear)
+from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
+from lmdeploy.pytorch.nn.linear import build_merged_colwise_linear, build_qkv_proj, build_rowwise_linear
 from lmdeploy.pytorch.nn.moe import SoftmaxTopK, build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
@@ -21,10 +20,7 @@ from .utils.cudagraph import CudaGraphMixin
 class DeepseekAttention(nn.Module):
     """Rewrite module of MistralAttention."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         num_heads = config.num_attention_heads
@@ -75,8 +71,7 @@ class DeepseekAttention(nn.Module):
         qkv_states = self.qkv_proj(hidden_states)
         # (-1, heads, head_dim)
         qkv_states = qkv_states.flatten(0, -2)
-        query_states, key_states, value_states = self.qkv_proj.split_qkv(
-            qkv_states)
+        query_states, key_states, value_states = self.qkv_proj.split_qkv(qkv_states)
 
         # apply rotary embedding
         cos, sin = rotary_pos_emb
@@ -96,10 +91,8 @@ class DeepseekAttention(nn.Module):
             past_key_value[0],
             past_key_value[1],
             attn_metadata,
-            k_scales_zeros=None
-            if len(past_key_value) == 2 else past_key_value[2],
-            v_scales_zeros=None
-            if len(past_key_value) == 2 else past_key_value[3],
+            k_scales_zeros=None if len(past_key_value) == 2 else past_key_value[2],
+            v_scales_zeros=None if len(past_key_value) == 2 else past_key_value[3],
             inplace=True,
         )
         attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
@@ -112,10 +105,7 @@ class DeepseekAttention(nn.Module):
 class DeepseekMoE(nn.Module):
     """Deepseek MoE."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.hidden_dim = config.hidden_size
         self.ffn_dim = config.moe_intermediate_size
@@ -148,8 +138,7 @@ class DeepseekMoE(nn.Module):
 
         self.shared_experts = None
         if config.n_shared_experts is not None:
-            intermediate_size = (config.moe_intermediate_size *
-                                 config.n_shared_experts)
+            intermediate_size = (config.moe_intermediate_size * config.n_shared_experts)
             self.shared_experts = DeepseekMLP(
                 config=config,
                 intermediate_size=intermediate_size,
@@ -252,10 +241,8 @@ class DeepseekDecoderLayer(nn.Module):
 
         # build MLP
         self.mlp = (DeepseekMoE(config, dtype=dtype, device=device) if
-                    (config.n_routed_experts is not None
-                     and layer_idx >= config.first_k_dense_replace
-                     and layer_idx % config.moe_layer_freq == 0) else
-                    DeepseekMLP(config, dtype=dtype, device=device))
+                    (config.n_routed_experts is not None and layer_idx >= config.first_k_dense_replace
+                     and layer_idx % config.moe_layer_freq == 0) else DeepseekMLP(config, dtype=dtype, device=device))
 
         # build input layer norm
         self.input_layernorm = RMSNorm(config.hidden_size,
@@ -265,10 +252,7 @@ class DeepseekDecoderLayer(nn.Module):
                                        device=device)
 
         # build attention layer norm
-        self.post_attention_layernorm = RMSNorm(config.hidden_size,
-                                                config.rms_norm_eps,
-                                                dtype=dtype,
-                                                device=device)
+        self.post_attention_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
 
     def forward(
         self,
@@ -283,8 +267,7 @@ class DeepseekDecoderLayer(nn.Module):
             residual = hidden_states
             hidden_states = self.input_layernorm(hidden_states)
         else:
-            hidden_states, residual = self.input_layernorm(
-                hidden_states, residual)
+            hidden_states, residual = self.input_layernorm(hidden_states, residual)
 
         # Self Attention
         hidden_states = self.self_attn(
@@ -295,8 +278,7 @@ class DeepseekDecoderLayer(nn.Module):
         )
 
         # Fully Connected
-        hidden_states, residual = self.post_attention_layernorm(
-            hidden_states, residual)
+        hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
         hidden_states = self.mlp(hidden_states)
 
         outputs = (hidden_states, residual)
@@ -306,10 +288,7 @@ class DeepseekDecoderLayer(nn.Module):
 class DeepseekModel(nn.Module):
     """model."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
@@ -327,10 +306,7 @@ class DeepseekModel(nn.Module):
         ])
 
         # build norm
-        self.norm = RMSNorm(config.hidden_size,
-                            config.rms_norm_eps,
-                            dtype=dtype,
-                            device=device)
+        self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
 
         # build rotary embedding
         rope_scaling = getattr(config, 'rope_scaling', None)
@@ -477,9 +453,7 @@ class DeepseekForCausalLM(nn.Module, CudaGraphMixin):
         if vision_embeddings is not None and len(vision_embeddings) > 0:
             if inputs_embeds is None:
                 inputs_embeds = self.get_input_embeddings()(input_ids)
-            inputs_embeds[:,
-                          vision_embedding_indexing, :] = vision_embeddings.to(
-                              inputs_embeds)
+            inputs_embeds[:, vision_embedding_indexing, :] = vision_embeddings.to(inputs_embeds)
 
         # inputs of forward
         return dict(
@@ -490,20 +464,15 @@ class DeepseekForCausalLM(nn.Module, CudaGraphMixin):
             inputs_embeds=inputs_embeds,
         )
 
-    def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor,
-                             params_dict: Dict[str, nn.Parameter],
+    def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: Dict[str, nn.Parameter],
                              expert_params_mapping: List):
         """load weight experts."""
-        for (param_name, weight_name, expert_id,
-             shard_id) in expert_params_mapping:
+        for (param_name, weight_name, expert_id, shard_id) in expert_params_mapping:
             if weight_name not in name:
                 continue
             name = name.replace(weight_name, param_name)
             param = params_dict[name]
-            load_weight(param,
-                        loaded_weight,
-                        expert_id=expert_id,
-                        shard_id=shard_id)
+            load_weight(param, loaded_weight, expert_id=expert_id, shard_id=shard_id)
             break
         else:
             param = params_dict[name]
@@ -524,32 +493,23 @@ class DeepseekForCausalLM(nn.Module, CudaGraphMixin):
         num_experts = self.config.n_routed_experts
         expert_params_mapping = []
         for exp_id in range(num_experts):
-            gate_param = ('.experts.gate_up', f'.experts.{exp_id}.gate_proj',
-                          exp_id, 'gate')
-            up_param = ('.experts.gate_up', f'.experts.{exp_id}.up_proj',
-                        exp_id, 'up')
-            down_param = ('.experts.down', f'.experts.{exp_id}.down_proj',
-                          exp_id, 'down')
+            gate_param = ('.experts.gate_up', f'.experts.{exp_id}.gate_proj', exp_id, 'gate')
+            up_param = ('.experts.gate_up', f'.experts.{exp_id}.up_proj', exp_id, 'up')
+            down_param = ('.experts.down', f'.experts.{exp_id}.down_proj', exp_id, 'down')
             expert_params_mapping += [gate_param, up_param, down_param]
 
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:
             if 'rotary_emb.inv_freq' in name:
                 continue
-            if ('rotary_emb.cos_cached' in name
-                    or 'rotary_emb.sin_cached' in name):
+            if ('rotary_emb.cos_cached' in name or 'rotary_emb.sin_cached' in name):
                 continue
             if self.config.tie_word_embeddings and 'lm_head.weight' in name:
                 continue
             if '.experts' in name:
-                self._load_weight_experts(
-                    name,
-                    loaded_weight,
-                    params_dict,
-                    expert_params_mapping=expert_params_mapping)
+                self._load_weight_experts(name, loaded_weight, params_dict, expert_params_mapping=expert_params_mapping)
             else:
-                for (param_name, weight_name,
-                     shard_id) in stacked_params_mapping:
+                for (param_name, weight_name, shard_id) in stacked_params_mapping:
                     if weight_name not in name:
                         continue
                     name = name.replace(weight_name, param_name)

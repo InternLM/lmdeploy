@@ -26,13 +26,8 @@ def generation_test(config,
     tp_num = run_config['tp_num']
     model_path = '/'.join([config.get('model_path'), model])
     log_path = config.get('log_path')
-    benchmark_log = os.path.join(
-        log_path,
-        'benchmark_generation_' + model.split('/')[1] + worker_id + '.log')
-    benchmark_path = '/'.join([
-        config.get('benchmark_path'), run_id, model,
-        f'benchmark-generation-{backend}'
-    ])
+    benchmark_log = os.path.join(log_path, 'benchmark_generation_' + model.split('/')[1] + worker_id + '.log')
+    benchmark_path = '/'.join([config.get('benchmark_path'), run_id, model, f'benchmark-generation-{backend}'])
 
     create_multi_level_directory(benchmark_path)
 
@@ -58,26 +53,16 @@ def generation_test(config,
     if is_smoke:
         run_config = ' -c 1 -ct 128 -pt 128'
 
-    cmd = ' '.join([
-        command, run_config, '--tp',
-        str(tp_num),
-        get_max_cache_entry(model, backend), '--csv', csv_path
-    ])
+    cmd = ' '.join([command, run_config, '--tp', str(tp_num), get_max_cache_entry(model, backend), '--csv', csv_path])
 
     returncode, stderr = run_testcase(cmd, benchmark_log)
-    allure.attach.file(benchmark_log,
-                       attachment_type=allure.attachment_type.TEXT)
+    allure.attach.file(benchmark_log, attachment_type=allure.attachment_type.TEXT)
     if returncode == 0 and not os.path.isfile(csv_path):
         return False, 'result is empty'
     return returncode == 0, stderr
 
 
-def throughput_test(config,
-                    run_id,
-                    run_config,
-                    cuda_prefix: str = None,
-                    worker_id: str = '',
-                    is_smoke: bool = False):
+def throughput_test(config, run_id, run_config, cuda_prefix: str = None, worker_id: str = '', is_smoke: bool = False):
     model = run_config['model']
     backend = run_config['backend']
     tp_num = run_config['tp_num']
@@ -86,19 +71,12 @@ def throughput_test(config,
     model_path = '/'.join([config.get('model_path'), model])
     log_path = config.get('log_path')
     dataset_path = config.get('dataset_path')
-    benchmark_log = os.path.join(
-        log_path,
-        'benchmark_throughput_' + model.split('/')[1] + worker_id + '.log')
+    benchmark_log = os.path.join(log_path, 'benchmark_throughput_' + model.split('/')[1] + worker_id + '.log')
     if backend == 'turbomind' and quant_policy != 0:
-        benchmark_path = '/'.join([
-            config.get('benchmark_path'), run_id, model,
-            f'benchmark-throughput-{backend}-kvint{quant_policy}'
-        ])
+        benchmark_path = '/'.join(
+            [config.get('benchmark_path'), run_id, model, f'benchmark-throughput-{backend}-kvint{quant_policy}'])
     else:
-        benchmark_path = '/'.join([
-            config.get('benchmark_path'), run_id, model,
-            f'benchmark-throughput-{backend}'
-        ])
+        benchmark_path = '/'.join([config.get('benchmark_path'), run_id, model, f'benchmark-throughput-{backend}'])
 
     create_multi_level_directory(benchmark_path)
 
@@ -106,9 +84,9 @@ def throughput_test(config,
     command = get_command_with_extra(command, cuda_prefix)
 
     if is_smoke:
-        run_config = '--num-prompts 300'
+        run_config = '--num-prompts 500'
     else:
-        run_config = '--num-prompts 3000'
+        run_config = '--num-prompts 5000'
     if backend == 'pytorch':
         command += ' --backend pytorch'
         if not is_bf16_supported():
@@ -128,8 +106,7 @@ def throughput_test(config,
         ])
 
         returncode, stderr = run_testcase(cmd, benchmark_log)
-        allure.attach.file(benchmark_log,
-                           attachment_type=allure.attachment_type.TEXT)
+        allure.attach.file(benchmark_log, attachment_type=allure.attachment_type.TEXT)
 
         if returncode == 0 and not os.path.isfile(csv_path):
             return False, 'result is empty'
@@ -139,11 +116,7 @@ def throughput_test(config,
     return returncode == 0, stderr
 
 
-def restful_test(config,
-                 run_id,
-                 run_config,
-                 worker_id: str = '',
-                 is_smoke: bool = False):
+def restful_test(config, run_id, run_config, worker_id: str = '', is_smoke: bool = False):
     model = run_config['model']
     backend = run_config['backend']
     if backend == 'turbomind':
@@ -151,19 +124,12 @@ def restful_test(config,
     model_path = '/'.join([config.get('model_path'), model])
     log_path = config.get('log_path')
     dataset_path = config.get('dataset_path')
-    benchmark_log = os.path.join(
-        log_path,
-        'benchmark_restful_' + model.split('/')[1] + worker_id + '.log')
+    benchmark_log = os.path.join(log_path, 'benchmark_restful_' + model.split('/')[1] + worker_id + '.log')
     if backend == 'turbomind' and quant_policy != 0:
-        benchmark_path = '/'.join([
-            config.get('benchmark_path'), run_id, model,
-            f'benchmark-restful-{backend}-kvint{quant_policy}'
-        ])
+        benchmark_path = '/'.join(
+            [config.get('benchmark_path'), run_id, model, f'benchmark-restful-{backend}-kvint{quant_policy}'])
     else:
-        benchmark_path = '/'.join([
-            config.get('benchmark_path'), run_id, model,
-            f'benchmark-restful-{backend}'
-        ])
+        benchmark_path = '/'.join([config.get('benchmark_path'), run_id, model, f'benchmark-restful-{backend}'])
 
     create_multi_level_directory(benchmark_path)
 
@@ -173,11 +139,11 @@ def restful_test(config,
     else:
         port = DEFAULT_PORT + worker_num
 
-    http_url = f'http://localhost:{port}'
+    http_url = f'http://localhost:{port}'  # noqa: E231
     if not health_check(http_url):
         return False, 'server not start'
 
-    command = f'python3 /nvme/qa_test_models/offline_pkg/profile_restful_api.py localhost:{port} {model_path} {dataset_path} --stream-output True '  # noqa: F401, E501
+    command = f'python3 /nvme/qa_test_models/offline_pkg/profile_restful_api.py localhost:{port} {model_path} {dataset_path} --stream-output True '  # noqa: F401, E501, E231
     if is_smoke:
         command += ' --num-prompts 200'
     else:
@@ -185,23 +151,63 @@ def restful_test(config,
 
     for batch in [128, 256]:
         csv_path = f'{benchmark_path}/restful_batch_{batch}_1th.csv'
-        cmd = ' '.join(
-            [command, '--concurrency',
-             str(batch), '--csv', csv_path])
+        cmd = ' '.join([command, '--concurrency', str(batch), '--csv', csv_path])
 
         with open(benchmark_log, 'w') as f:
             f.writelines('reproduce command: ' + cmd + '\n')
             print('reproduce command: ' + cmd)
 
-            benchmark_res = subprocess.run([cmd],
-                                           stdout=f,
-                                           stderr=PIPE,
-                                           shell=True,
-                                           text=True,
-                                           encoding='utf-8')
+            benchmark_res = subprocess.run([cmd], stdout=f, stderr=PIPE, shell=True, text=True, encoding='utf-8')
             f.writelines(benchmark_res.stderr)
-        allure.attach.file(benchmark_log,
-                           attachment_type=allure.attachment_type.TEXT)
+        allure.attach.file(benchmark_log, attachment_type=allure.attachment_type.TEXT)
+    if benchmark_res.returncode == 0 and not os.path.isfile(csv_path):
+        return False, 'result is empty'
+    return benchmark_res.returncode == 0, benchmark_res.stderr
+
+
+def restful_test_new(config, run_id, run_config, worker_id: str = '', is_smoke: bool = False):
+    model = run_config['model']
+    backend = run_config['backend']
+    if backend == 'turbomind':
+        quant_policy = run_config['quant_policy']
+    log_path = config.get('log_path')
+    dataset_path = config.get('dataset_path')
+    benchmark_log = os.path.join(log_path, 'benchmark_restful_' + model.split('/')[1] + worker_id + '.log')
+    if backend == 'turbomind' and quant_policy != 0:
+        benchmark_path = '/'.join(
+            [config.get('benchmark_path'), run_id, model, f'benchmark-restful-{backend}-kvint{quant_policy}'])
+    else:
+        benchmark_path = '/'.join([config.get('benchmark_path'), run_id, model, f'benchmark-restful-{backend}'])
+
+    create_multi_level_directory(benchmark_path)
+
+    worker_num = get_workerid(worker_id)
+    if worker_num is None:
+        port = DEFAULT_PORT
+    else:
+        port = DEFAULT_PORT + worker_num
+
+    http_url = f'http://localhost:{port}'  # noqa: E231
+    if not health_check(http_url):
+        return False, 'server not start'
+
+    command = f'python3 benchmark/profile_restful_api.py --port {port} --host localhost --backend lmdeploy --dataset-path {dataset_path} --request-rate-range 2,30,2 --multi '  # noqa: F401, E501, E231
+
+    if is_smoke:
+        command += ' --num-prompts 200'
+    else:
+        command += ' --num-prompts 5000'
+
+    csv_path = f'{benchmark_path}/restful_batch_1th.csv'
+    cmd = ' '.join([command, '--output-file', csv_path])
+
+    with open(benchmark_log, 'w') as f:
+        f.writelines('reproduce command: ' + cmd + '\n')
+        print('reproduce command: ' + cmd)
+
+        benchmark_res = subprocess.run([cmd], stdout=f, stderr=PIPE, shell=True, text=True, encoding='utf-8')
+        f.writelines(benchmark_res.stderr)
+    allure.attach.file(benchmark_log, attachment_type=allure.attachment_type.TEXT)
     if benchmark_res.returncode == 0 and not os.path.isfile(csv_path):
         return False, 'result is empty'
     return benchmark_res.returncode == 0, benchmark_res.stderr
@@ -215,13 +221,7 @@ def run_testcase(cmd, benchmark_log):
     with open(benchmark_log, write_type) as f:
         f.writelines('reproduce command: ' + cmd + '\n')
         print('reproduce command: ' + cmd)
-        with Popen([cmd],
-                   stdin=PIPE,
-                   stdout=f,
-                   stderr=PIPE,
-                   shell=True,
-                   text=True,
-                   encoding='utf-8') as process:
+        with Popen([cmd], stdin=PIPE, stdout=f, stderr=PIPE, shell=True, text=True, encoding='utf-8') as process:
             try:
                 stdout, stderr = process.communicate(None)
             except Exception:

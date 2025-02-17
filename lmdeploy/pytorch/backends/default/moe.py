@@ -14,9 +14,7 @@ class DefaultSoftmaxTopKImpl(SoftmaxTopKImpl):
     def forward(self, x: torch.Tensor):
         """forward."""
         routing_weights = torch.softmax(x, dim=self.dim, dtype=torch.float32)
-        topk_weights, topk_ids = torch.topk(routing_weights,
-                                            self.top_k,
-                                            dim=self.dim)
+        topk_weights, topk_ids = torch.topk(routing_weights, self.top_k, dim=self.dim)
         return topk_weights, topk_ids
 
 

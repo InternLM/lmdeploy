@@ -1,11 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
 import asyncio
 from typing import Dict, List, Literal, Optional, Tuple, Union
 
 import PIL
 
-from lmdeploy.messages import (PytorchEngineConfig, TurbomindEngineConfig,
-                               VisionConfig)
+from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig, VisionConfig
 from lmdeploy.pytorch.check_env import try_import_deeplink
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.utils import get_logger
@@ -14,8 +14,7 @@ from lmdeploy.vl.utils import load_image
 
 logger = get_logger('lmdeploy')
 
-VLPromptType = Union[str, Tuple[str, PIL.Image.Image],
-                     Tuple[str, List[PIL.Image.Image]]]
+VLPromptType = Union[str, Tuple[str, PIL.Image.Image], Tuple[str, List[PIL.Image.Image]]]
 
 
 class VLAsyncEngine(AsyncEngine):
@@ -24,29 +23,20 @@ class VLAsyncEngine(AsyncEngine):
     def __init__(self,
                  model_path: str,
                  backend: Literal['turbomind', 'pytorch'] = 'turbomind',
-                 backend_config: Optional[Union[TurbomindEngineConfig,
-                                                PytorchEngineConfig]] = None,
+                 backend_config: Optional[Union[TurbomindEngineConfig, PytorchEngineConfig]] = None,
                  vision_config: Optional[VisionConfig] = None,
                  **kwargs) -> None:
         if backend == 'pytorch':
             try_import_deeplink(backend_config.device_type)
-        self.vl_encoder = ImageEncoder(model_path,
-                                       backend,
-                                       vision_config,
-                                       backend_config=backend_config)
-        super().__init__(model_path,
-                         backend=backend,
-                         backend_config=backend_config,
-                         **kwargs)
+        self.vl_encoder = ImageEncoder(model_path, backend, vision_config, backend_config=backend_config)
+        super().__init__(model_path, backend=backend, backend_config=backend_config, **kwargs)
         if self.model_name == 'base':
             raise RuntimeError(
                 'please specify chat template as guided in https://lmdeploy.readthedocs.io/en/latest/inference/vl_pipeline.html#set-chat-template'  # noqa: E501
             )
 
     @classmethod
-    def _convert_prompts(cls,
-                         prompts: Union[VLPromptType, List[Dict],
-                                        List[VLPromptType], List[List[Dict]]]):
+    def _convert_prompts(cls, prompts: Union[VLPromptType, List[Dict], List[VLPromptType], List[List[Dict]]]):
         """convert prompts to openai GPT4V format."""
         if isinstance(prompts, str) or isinstance(prompts, tuple):
             _prompts = cls.prompt_to_messages(prompts)
@@ -66,24 +56,18 @@ class VLAsyncEngine(AsyncEngine):
         """process messages and return the required data for the inference
         engines.
 
-        Refer to pytorch.engine.EngineInstance.async_stream_infer and
-        turbomind.TurboMindInstance.async_stream_infer for the argument
-        specification.
+        Refer to pytorch.engine.EngineInstance.async_stream_infer and turbomind.TurboMindInstance.async_stream_infer for
+        the argument specification.
         """
         if isinstance(messages, str):
-            return await super()._get_prompt_input(messages, do_preprocess,
-                                                   sequence_start,
-                                                   adapter_name, tools,
+            return await super()._get_prompt_input(messages, do_preprocess, sequence_start, adapter_name, tools,
                                                    **kwargs)
         elif isinstance(messages, List):
             has_multimodal_input = any(
-                isinstance(message['content'], list) and any(
-                    item['type'] in ['image_url', 'image_data']
-                    for item in message['content']) for message in messages)
+                isinstance(message['content'], list) and any(item['type'] in ['image_url', 'image_data']
+                                                             for item in message['content']) for message in messages)
             if not has_multimodal_input:
-                return await super()._get_prompt_input(messages, do_preprocess,
-                                                       sequence_start,
-                                                       adapter_name, tools,
+                return await super()._get_prompt_input(messages, do_preprocess, sequence_start, adapter_name, tools,
                                                        **kwargs)
         else:
             raise RuntimeError(f'unsupported messages {messages}')
@@ -97,18 +81,17 @@ class VLAsyncEngine(AsyncEngine):
             # embedding_ranges and so on. All the returned values are passed
             # to tm engine for token generation
             results = await self.vl_encoder.async_infer(results)
-            results = await self.vl_encoder.wrap_for_turbomind(
-                results, self.chat_template, self.tokenizer, sequence_start)
+            results = await self.vl_encoder.wrap_for_turbomind(results, self.chat_template, self.tokenizer,
+                                                               sequence_start)
         elif self.backend == 'pytorch':
             # for pt engine, this module only conduct the image preprocessing
             # It leaves the vision embedding to the pt engine
-            results = await self.vl_encoder.wrap_for_pytorch(
-                results, self.chat_template, self.tokenizer, sequence_start)
+            results = await self.vl_encoder.wrap_for_pytorch(results, self.chat_template, self.tokenizer,
+                                                             sequence_start)
         return results
 
     @classmethod
-    async def async_convert_to_pil_images(cls,
-                                          messages: List[Dict]) -> List[Dict]:
+    async def async_convert_to_pil_images(cls, messages: List[Dict]) -> List[Dict]:
         """Scan the provided messages to find image URLs or base64-encoded
         image data. Loads the images into Pillow image objects.
 
@@ -197,36 +180,36 @@ class VLAsyncEngine(AsyncEngine):
             out_messages[i] = message
 
         await asyncio.gather(*[
-            asyncio.get_event_loop().run_in_executor(None, _inner_call, i,
-                                                     messages, out_messages)
+            asyncio.get_event_loop().run_in_executor(None, _inner_call, i, messages, out_messages)
             for i in range(len(messages))
         ])
         return out_messages
 
-    def batch_infer(self, prompts: Union[VLPromptType, List[Dict],
-                                         List[VLPromptType], List[List[Dict]]],
+    def batch_infer(self, prompts: Union[VLPromptType, List[Dict], List[VLPromptType], List[List[Dict]]], *args,
                     **kwargs):
         """Inference a batch of prompts."""
         prompts = self._convert_prompts(prompts)
-        return super().batch_infer(prompts, **kwargs)
+        return super().batch_infer(prompts, *args, **kwargs)
 
-    def stream_infer(self, prompts: Union[VLPromptType, List[Dict],
-                                          List[VLPromptType],
-                                          List[List[Dict]]], **kwargs):
+    def stream_infer(self, prompts: Union[VLPromptType, List[Dict], List[VLPromptType], List[List[Dict]]], *args,
+                     **kwargs):
         """Inference a batch of prompts with stream mode."""
         prompts = self._convert_prompts(prompts)
-        return super().stream_infer(prompts, **kwargs)
+        return super().stream_infer(prompts, *args, **kwargs)
 
-    def __call__(self, prompts: Union[VLPromptType, List[Dict],
-                                      List[VLPromptType], List[List[Dict]]],
-                 **kwargs):
+    def __call__(self, prompts: Union[VLPromptType, List[Dict], List[VLPromptType], List[List[Dict]]], *args, **kwargs):
         """Inference a batch of prompts."""
-        return super().__call__(prompts, **kwargs)
+        return super().__call__(prompts, *args, **kwargs)
 
-    def chat(self, prompts: VLPromptType, **kwargs):
+    def close(self):
+        if hasattr(self, 'vl_encoder'):
+            del self.vl_encoder
+            super().close()
+
+    def chat(self, prompts: VLPromptType, *args, **kwargs):
         """chat."""
         _prompts = self._convert_prompts(prompts)
-        sess = super().chat(_prompts, **kwargs)
+        sess = super().chat(_prompts, *args, **kwargs)
 
         # recover prompts & history
         sess._prompt = prompts
@@ -256,22 +239,11 @@ class VLAsyncEngine(AsyncEngine):
                 # 'image_data': means PIL.Image.Image object.
                 if isinstance(image, str):
                     image = load_image(image)
-                    item = {
-                        'type': 'image_data',
-                        'image_data': {
-                            'data': image
-                        }
-                    }
+                    item = {'type': 'image_data', 'image_data': {'data': image}}
                 elif isinstance(image, PIL.Image.Image):
-                    item = {
-                        'type': 'image_data',
-                        'image_data': {
-                            'data': image
-                        }
-                    }
+                    item = {'type': 'image_data', 'image_data': {'data': image}}
                 else:
-                    raise ValueError(
-                        'image should be a str(url/path) or PIL.Image.Image')
+                    raise ValueError('image should be a str(url/path) or PIL.Image.Image')
 
                 messages['content'].append(item)
 

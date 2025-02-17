@@ -1,12 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
 from typing import Any, Iterable, List, Optional, Tuple
 
 import torch
 from torch import nn
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, RopeType,
-                                 build_rotary_embedding)
+from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, build_rotary_embedding
 from lmdeploy.pytorch.nn.linear import build_qkv_proj, build_rowwise_linear
 from lmdeploy.pytorch.nn.moe import SoftmaxTopK, build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
@@ -17,10 +17,7 @@ from .utils.cudagraph import CudaGraphMixin
 class MixtralAttention(nn.Module):
     """mixtral attention."""
 
-    def __init__(self,
-                 config: Any,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: Any, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
 
@@ -73,8 +70,7 @@ class MixtralAttention(nn.Module):
         qkv_states = self.qkv_proj(hidden_states)
         # (-1, heads, head_dim)
         qkv_states = qkv_states.flatten(0, -2)
-        query_states, key_states, value_states = self.qkv_proj.split_qkv(
-            qkv_states)
+        query_states, key_states, value_states = self.qkv_proj.split_qkv(qkv_states)
 
         cos, sin = rotary_pos_emb
         query_states, key_states = self.apply_rotary_pos_emb(
@@ -91,10 +87,8 @@ class MixtralAttention(nn.Module):
             past_key_value[0],
             past_key_value[1],
             attn_metadata,
-            k_scales_zeros=None
-            if len(past_key_value) == 2 else past_key_value[2],
-            v_scales_zeros=None
-            if len(past_key_value) == 2 else past_key_value[3],
+            k_scales_zeros=None if len(past_key_value) == 2 else past_key_value[2],
+            v_scales_zeros=None if len(past_key_value) == 2 else past_key_value[3],
             inplace=True,
         )
         attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
@@ -107,10 +101,7 @@ class MixtralAttention(nn.Module):
 class MixtralSparseMoeBlock(nn.Module):
     """mixtral sparse moe block."""
 
-    def __init__(self,
-                 config: Any,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: Any, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         self.hidden_dim = config.hidden_size
@@ -162,20 +153,14 @@ class MixtralSparseMoeBlock(nn.Module):
 class MixtralDecoderLayer(nn.Module):
     """mixtral decoder layer."""
 
-    def __init__(self,
-                 config: Any,
-                 layer_idx: int,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: Any, layer_idx: int, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.layer_idx = layer_idx
         quantization_config = getattr(config, 'quantization_config', None)
 
         # build attention layer
         self.self_attn = MixtralAttention(config, dtype=dtype, device=device)
-        self.block_sparse_moe = MixtralSparseMoeBlock(config,
-                                                      dtype=dtype,
-                                                      device=device)
+        self.block_sparse_moe = MixtralSparseMoeBlock(config, dtype=dtype, device=device)
 
         # build input layer norm
         self.input_layernorm = RMSNorm(config.hidden_size,
@@ -185,10 +170,7 @@ class MixtralDecoderLayer(nn.Module):
                                        device=device)
 
         # build attention layer norm
-        self.post_attention_layernorm = RMSNorm(config.hidden_size,
-                                                config.rms_norm_eps,
-                                                dtype=dtype,
-                                                device=device)
+        self.post_attention_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
 
     def forward(
         self,
@@ -203,8 +185,7 @@ class MixtralDecoderLayer(nn.Module):
             residual = hidden_states
             hidden_states = self.input_layernorm(hidden_states)
         else:
-            hidden_states, residual = self.input_layernorm(
-                hidden_states, residual)
+            hidden_states, residual = self.input_layernorm(hidden_states, residual)
 
         # Self Attention
         hidden_states = self.self_attn(
@@ -215,8 +196,7 @@ class MixtralDecoderLayer(nn.Module):
         )
 
         # Fully Connected
-        hidden_states, residual = self.post_attention_layernorm(
-            hidden_states, residual)
+        hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
         hidden_states, _ = self.block_sparse_moe(hidden_states)
 
         outputs = (hidden_states, residual)
@@ -226,10 +206,7 @@ class MixtralDecoderLayer(nn.Module):
 class MixtralModel(nn.Module):
     """mixtral model."""
 
-    def __init__(self,
-                 config: Any,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: Any, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
@@ -244,11 +221,7 @@ class MixtralModel(nn.Module):
         ])
 
         # build norm
-        self.norm = RMSNorm(config.hidden_size,
-                            config.rms_norm_eps,
-                            quant_config=None,
-                            dtype=dtype,
-                            device=device)
+        self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, quant_config=None, dtype=dtype, device=device)
 
         emb_type = RopeType.LinearScaling
         rope_dim = config.hidden_size // config.num_attention_heads
@@ -377,37 +350,28 @@ class MixtralForCausalLM(nn.Module, CudaGraphMixin):
         num_experts = self.config.num_local_experts
         expert_params_mapping = []
         for exp_id in range(num_experts):
-            gate_param = ('.experts.gate_up', f'.experts.{exp_id}.w1', exp_id,
-                          'gate')
-            up_param = ('.experts.gate_up', f'.experts.{exp_id}.w3', exp_id,
-                        'up')
-            down_param = ('.experts.down', f'.experts.{exp_id}.w2', exp_id,
-                          'down')
+            gate_param = ('.experts.gate_up', f'.experts.{exp_id}.w1', exp_id, 'gate')
+            up_param = ('.experts.gate_up', f'.experts.{exp_id}.w3', exp_id, 'up')
+            down_param = ('.experts.down', f'.experts.{exp_id}.w2', exp_id, 'down')
             expert_params_mapping += [gate_param, up_param, down_param]
 
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:
             if 'rotary_emb.inv_freq' in name:
                 continue
-            if ('rotary_emb.cos_cached' in name
-                    or 'rotary_emb.sin_cached' in name):
+            if ('rotary_emb.cos_cached' in name or 'rotary_emb.sin_cached' in name):
                 continue
             if self.config.tie_word_embeddings and 'lm_head.weight' in name:
                 continue
-            for (param_name, weight_name, expert_id,
-                 shard_id) in expert_params_mapping:
+            for (param_name, weight_name, expert_id, shard_id) in expert_params_mapping:
                 if weight_name not in name:
                     continue
                 name = name.replace(weight_name, param_name)
                 param = params_dict[name]
-                load_weight(param,
-                            loaded_weight,
-                            expert_id=expert_id,
-                            shard_id=shard_id)
+                load_weight(param, loaded_weight, expert_id=expert_id, shard_id=shard_id)
                 break
             else:
-                for (param_name, weight_name,
-                     shard_id) in stacked_params_mapping:
+                for (param_name, weight_name, shard_id) in stacked_params_mapping:
                     if weight_name not in name:
                         continue
                     name = name.replace(weight_name, param_name)

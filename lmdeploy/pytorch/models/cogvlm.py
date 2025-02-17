@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
 from argparse import Namespace
 from typing import Any, Iterable, List, Optional, Tuple
 
@@ -9,15 +10,12 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.distributed import get_world_rank
-from lmdeploy.pytorch.engine.input_process import (BaseModelInputProcessor,
-                                                   PreprocessInputResult)
+from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
-from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, RopeType,
-                                 SiluAndMul, build_rotary_embedding)
-from lmdeploy.pytorch.nn.linear import (build_colwise_linear,
-                                        build_merged_colwise_linear,
-                                        build_qkv_proj, build_rowwise_linear)
+from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
+from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_merged_colwise_linear, build_qkv_proj,
+                                        build_rowwise_linear)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
@@ -27,17 +25,13 @@ from .utils.model import DeployModelMixin
 class VisionExpertAttention(nn.Module):
     """Rewrite module of VisionExpertAttention."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         is_cogvlm2 = hasattr(config, 'num_multi_query_heads')
         quantization_config = getattr(config, 'quantization_config', None)
         num_heads = config.num_attention_heads
         num_key_value_heads = getattr(config, 'num_key_value_heads', num_heads)
-        num_replicate_kv_heads = getattr(config,
-                                         'num_replicate_key_value_heads', 1)
+        num_replicate_kv_heads = getattr(config, 'num_replicate_key_value_heads', 1)
         hidden_size = config.hidden_size
         head_dim = getattr(config, 'head_dim', hidden_size // num_heads)
         self.hidden_size = hidden_size
@@ -45,26 +39,24 @@ class VisionExpertAttention(nn.Module):
         self.head_dim = head_dim
 
         # packed qkv
-        self.vision_expert_query_key_value = build_qkv_proj(
-            hidden_size,
-            num_q_heads=num_heads,
-            num_kv_heads=num_key_value_heads,
-            head_size=head_dim,
-            bias=is_cogvlm2,
-            quant_config=quantization_config,
-            dtype=dtype,
-            device=device,
-            num_replicate_kv_heads=num_replicate_kv_heads)
-        self.language_expert_query_key_value = build_qkv_proj(
-            hidden_size,
-            num_q_heads=num_heads,
-            num_kv_heads=num_key_value_heads,
-            head_size=head_dim,
-            bias=False,
-            quant_config=quantization_config,
-            dtype=dtype,
-            device=device,
-            num_replicate_kv_heads=num_replicate_kv_heads)
+        self.vision_expert_query_key_value = build_qkv_proj(hidden_size,
+                                                            num_q_heads=num_heads,
+                                                            num_kv_heads=num_key_value_heads,
+                                                            head_size=head_dim,
+                                                            bias=is_cogvlm2,
+                                                            quant_config=quantization_config,
+                                                            dtype=dtype,
+                                                            device=device,
+                                                            num_replicate_kv_heads=num_replicate_kv_heads)
+        self.language_expert_query_key_value = build_qkv_proj(hidden_size,
+                                                              num_q_heads=num_heads,
+                                                              num_kv_heads=num_key_value_heads,
+                                                              head_size=head_dim,
+                                                              bias=False,
+                                                              quant_config=quantization_config,
+                                                              dtype=dtype,
+                                                              device=device,
+                                                              num_replicate_kv_heads=num_replicate_kv_heads)
 
         # rotary embedding
         self.apply_rotary_pos_emb = ApplyRotaryEmb()
@@ -77,24 +69,22 @@ class VisionExpertAttention(nn.Module):
         )
 
         # o_proj
-        self.vision_expert_dense = build_rowwise_linear(
-            hidden_size,
-            hidden_size,
-            bias=False,
-            quant_config=quantization_config,
-            dtype=dtype,
-            device=device,
-            is_tp=True,
-            all_reduce=False)
-        self.language_expert_dense = build_rowwise_linear(
-            hidden_size,
-            hidden_size,
-            bias=False,
-            quant_config=quantization_config,
-            dtype=dtype,
-            device=device,
-            is_tp=True,
-            all_reduce=False)
+        self.vision_expert_dense = build_rowwise_linear(hidden_size,
+                                                        hidden_size,
+                                                        bias=False,
+                                                        quant_config=quantization_config,
+                                                        dtype=dtype,
+                                                        device=device,
+                                                        is_tp=True,
+                                                        all_reduce=False)
+        self.language_expert_dense = build_rowwise_linear(hidden_size,
+                                                          hidden_size,
+                                                          bias=False,
+                                                          quant_config=quantization_config,
+                                                          dtype=dtype,
+                                                          device=device,
+                                                          is_tp=True,
+                                                          all_reduce=False)
         world_size, _ = get_world_rank()
         self.world_size = world_size
         self.all_reduce = world_size > 1
@@ -117,14 +107,11 @@ class VisionExpertAttention(nn.Module):
         if lang_ids is None and vision_ids is None:
             qkv_states = self.language_expert_query_key_value(hidden_states)
         else:
-            qkv_states = hidden_states.new_empty(bsz, seqlen,
-                                                 hidden_size + kv_size * 2)
+            qkv_states = hidden_states.new_empty(bsz, seqlen, hidden_size + kv_size * 2)
             if lang_ids is not None:
-                qkv_states[:, lang_ids] = self.language_expert_query_key_value(
-                    hidden_states[:, lang_ids])
+                qkv_states[:, lang_ids] = self.language_expert_query_key_value(hidden_states[:, lang_ids])
             if vision_ids is not None:
-                qkv_states[:, vision_ids] = self.vision_expert_query_key_value(
-                    hidden_states[:, vision_ids])
+                qkv_states[:, vision_ids] = self.vision_expert_query_key_value(hidden_states[:, vision_ids])
         # (-1, heads, head_dim)
         qkv_states = qkv_states.flatten(0, -2)
         query_states, key_states, value_states = \
@@ -148,10 +135,8 @@ class VisionExpertAttention(nn.Module):
             past_key_value[0],
             past_key_value[1],
             attn_metadata,
-            k_scales_zeros=None
-            if len(past_key_value) == 2 else past_key_value[2],
-            v_scales_zeros=None
-            if len(past_key_value) == 2 else past_key_value[3],
+            k_scales_zeros=None if len(past_key_value) == 2 else past_key_value[2],
+            v_scales_zeros=None if len(past_key_value) == 2 else past_key_value[3],
             inplace=True,
         )
         attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
@@ -162,11 +147,9 @@ class VisionExpertAttention(nn.Module):
         else:
             new_attn_output = torch.empty_like(hidden_states)
             if lang_ids is not None:
-                new_attn_output[:, lang_ids] = self.language_expert_dense(
-                    attn_output[:, lang_ids])
+                new_attn_output[:, lang_ids] = self.language_expert_dense(attn_output[:, lang_ids])
             if vision_ids is not None:
-                new_attn_output[:, vision_ids] = self.vision_expert_dense(
-                    attn_output[:, vision_ids])
+                new_attn_output[:, vision_ids] = self.vision_expert_dense(attn_output[:, vision_ids])
             attn_output = new_attn_output
 
         if self.all_reduce:
@@ -177,10 +160,7 @@ class VisionExpertAttention(nn.Module):
 class MLP(nn.Module):
     """mlp."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         assert config.hidden_act == 'silu'
 
@@ -220,10 +200,7 @@ class MLP(nn.Module):
 class VisionExpertMLP(nn.Module):
     """vision expert mlp."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.language_mlp = MLP(config, dtype=dtype, device=device)
         self.vision_mlp = MLP(config, dtype=dtype, device=device)
@@ -242,13 +219,9 @@ class VisionExpertMLP(nn.Module):
         else:
             output = torch.empty_like(hidden_states)
             if lang_ids is not None:
-                output[:,
-                       lang_ids] = self.language_mlp(hidden_states[:,
-                                                                   lang_ids])
+                output[:, lang_ids] = self.language_mlp(hidden_states[:, lang_ids])
             if vision_ids is not None:
-                output[:,
-                       vision_ids] = self.vision_mlp(hidden_states[:,
-                                                                   vision_ids])
+                output[:, vision_ids] = self.vision_mlp(hidden_states[:, vision_ids])
         if self.all_reduce:
             dist.all_reduce(output)
         return output
@@ -267,9 +240,7 @@ class CogVLMDecoderLayer(nn.Module):
         quantization_config = getattr(config, 'quantization_config', None)
 
         # build attention layer
-        self.self_attn = VisionExpertAttention(config,
-                                               dtype=dtype,
-                                               device=device)
+        self.self_attn = VisionExpertAttention(config, dtype=dtype, device=device)
 
         # build MLP
         self.mlp = VisionExpertMLP(config, dtype=dtype, device=device)
@@ -282,12 +253,11 @@ class CogVLMDecoderLayer(nn.Module):
                                        device=device)
 
         # build attention layer norm
-        self.post_attention_layernorm = RMSNorm(
-            config.hidden_size,
-            config.rms_norm_eps,
-            quant_config=quantization_config,
-            dtype=dtype,
-            device=device)
+        self.post_attention_layernorm = RMSNorm(config.hidden_size,
+                                                config.rms_norm_eps,
+                                                quant_config=quantization_config,
+                                                dtype=dtype,
+                                                device=device)
 
     def forward(
         self,
@@ -304,8 +274,7 @@ class CogVLMDecoderLayer(nn.Module):
             residual = hidden_states
             hidden_states = self.input_layernorm(hidden_states)
         else:
-            hidden_states, residual = self.input_layernorm(
-                hidden_states, residual)
+            hidden_states, residual = self.input_layernorm(hidden_states, residual)
 
         # Self Attention
         hidden_states = self.self_attn(
@@ -318,8 +287,7 @@ class CogVLMDecoderLayer(nn.Module):
         )
 
         # Fully Connected
-        hidden_states, residual = self.post_attention_layernorm(
-            hidden_states, residual)
+        hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
         hidden_states = self.mlp(
             hidden_states,
             lang_ids=lang_ids,
@@ -333,10 +301,7 @@ class CogVLMDecoderLayer(nn.Module):
 class PatchEmbedding(nn.Module):
     """vision embedding."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.proj = nn.Conv2d(config.in_channels,
                               config.hidden_size,
@@ -344,12 +309,8 @@ class PatchEmbedding(nn.Module):
                               stride=config.patch_size,
                               dtype=dtype,
                               device=device)
-        self.cls_embedding = nn.Parameter(
-            torch.empty(1, config.hidden_size, dtype=dtype, device=device))
-        self.position_embedding = nn.Embedding(config.num_positions,
-                                               config.hidden_size,
-                                               dtype=dtype,
-                                               device=device)
+        self.cls_embedding = nn.Parameter(torch.empty(1, config.hidden_size, dtype=dtype, device=device))
+        self.position_embedding = nn.Embedding(config.num_positions, config.hidden_size, dtype=dtype, device=device)
 
     def forward(self, images):
         """forward."""
@@ -364,10 +325,7 @@ class PatchEmbedding(nn.Module):
 class EVA2CLIPAttention(nn.Module):
     """vision attention."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         hidden_size = config.hidden_size
@@ -418,10 +376,7 @@ class EVA2CLIPAttention(nn.Module):
 class EVA2CLIPMLP(nn.Module):
     """vision MLP."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         from transformers.activations import ACT2FN
 
@@ -438,9 +393,7 @@ class EVA2CLIPMLP(nn.Module):
         )
 
         # silu and mul
-        if config.hidden_act in [
-                'gelu', 'gelu_fast', 'quick_gelu', 'gelu_python'
-        ]:
+        if config.hidden_act in ['gelu', 'gelu_fast', 'quick_gelu', 'gelu_python']:
             self.activation_fn = nn.GELU()
         else:
             self.activation_fn = ACT2FN[config.hidden_act]
@@ -465,15 +418,9 @@ class EVA2CLIPMLP(nn.Module):
 class EVA2CLIPTransformerLayer(nn.Module):
     """vision trans layer."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
-        self.input_layernorm = nn.LayerNorm(config.hidden_size,
-                                            eps=config.layer_norm_eps,
-                                            dtype=dtype,
-                                            device=device)
+        self.input_layernorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps, dtype=dtype, device=device)
         self.attention = EVA2CLIPAttention(config, dtype=dtype, device=device)
         self.mlp = EVA2CLIPMLP(config, dtype=dtype, device=device)
         self.post_attention_layernorm = nn.LayerNorm(config.hidden_size,
@@ -484,8 +431,7 @@ class EVA2CLIPTransformerLayer(nn.Module):
     def forward(self, hidden_states):
         """forward."""
         attention_input = hidden_states
-        attention_output = self.input_layernorm(
-            self.attention(attention_input))
+        attention_output = self.input_layernorm(self.attention(attention_input))
         hidden_states = attention_input + attention_output
         mlp_input = hidden_states
         mlp_output = self.post_attention_layernorm(self.mlp(mlp_input))
@@ -496,15 +442,10 @@ class EVA2CLIPTransformerLayer(nn.Module):
 class EVA2CLIPTransformer(nn.Module):
     """vision transformer."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
-        self.layers = nn.ModuleList([
-            EVA2CLIPTransformerLayer(config, dtype=dtype, device=device)
-            for _ in range(config.num_hidden_layers)
-        ])
+        self.layers = nn.ModuleList(
+            [EVA2CLIPTransformerLayer(config, dtype=dtype, device=device) for _ in range(config.num_hidden_layers)])
 
     def forward(self, hidden_states):
         """forward."""
@@ -522,14 +463,8 @@ class GLU(nn.Module):
                  dtype: torch.dtype = None,
                  device: torch.device = None):
         super().__init__()
-        self.linear_proj = nn.Linear(in_features,
-                                     config.hidden_size,
-                                     bias=False,
-                                     dtype=dtype,
-                                     device=device)
-        self.norm1 = nn.LayerNorm(config.hidden_size,
-                                  dtype=dtype,
-                                  device=device)
+        self.linear_proj = nn.Linear(in_features, config.hidden_size, bias=False, dtype=dtype, device=device)
+        self.norm1 = nn.LayerNorm(config.hidden_size, dtype=dtype, device=device)
         self.act1 = nn.GELU()
         self.act2 = nn.functional.silu
         self.dense_h_to_4h = nn.Linear(config.hidden_size,
@@ -537,11 +472,7 @@ class GLU(nn.Module):
                                        bias=False,
                                        dtype=dtype,
                                        device=device)
-        self.gate_proj = nn.Linear(config.hidden_size,
-                                   config.intermediate_size,
-                                   bias=False,
-                                   dtype=dtype,
-                                   device=device)
+        self.gate_proj = nn.Linear(config.hidden_size, config.intermediate_size, bias=False, dtype=dtype, device=device)
         self.dense_4h_to_h = nn.Linear(config.intermediate_size,
                                        config.hidden_size,
                                        bias=False,
@@ -559,33 +490,26 @@ class GLU(nn.Module):
 class EVA2CLIPModel(nn.Module):
     """vision model."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         vision_config = Namespace(**config.vision_config)
 
-        self.patch_embedding = PatchEmbedding(vision_config,
-                                              dtype=dtype,
-                                              device=device)
-        self.transformer = EVA2CLIPTransformer(vision_config,
-                                               dtype=dtype,
-                                               device=device)
-        self.linear_proj = GLU(config,
-                               in_features=vision_config.hidden_size,
-                               dtype=dtype,
-                               device=device)
-        self.conv = nn.Conv2d(in_channels=vision_config.hidden_size,
-                              out_channels=vision_config.hidden_size,
-                              kernel_size=2,
-                              stride=2,
-                              dtype=dtype,
-                              device=device)
-        self.boi = nn.Parameter(
-            torch.empty(1, 1, config.hidden_size, dtype=dtype, device=device))
-        self.eoi = nn.Parameter(
-            torch.empty(1, 1, config.hidden_size, dtype=dtype, device=device))
+        self.patch_embedding = PatchEmbedding(vision_config, dtype=dtype, device=device)
+        self.transformer = EVA2CLIPTransformer(vision_config, dtype=dtype, device=device)
+        self.linear_proj = GLU(config, in_features=vision_config.hidden_size, dtype=dtype, device=device)
+        if vision_config.num_positions == 1226:
+            # cogvlm-chat-hf
+            self.conv = None
+        else:
+            # cogvlm2
+            self.conv = nn.Conv2d(in_channels=vision_config.hidden_size,
+                                  out_channels=vision_config.hidden_size,
+                                  kernel_size=2,
+                                  stride=2,
+                                  dtype=dtype,
+                                  device=device)
+        self.boi = nn.Parameter(torch.empty(1, 1, config.hidden_size, dtype=dtype, device=device))
+        self.eoi = nn.Parameter(torch.empty(1, 1, config.hidden_size, dtype=dtype, device=device))
 
     def forward(self, images):
         """forward."""
@@ -593,13 +517,14 @@ class EVA2CLIPModel(nn.Module):
         x = self.transformer(x)
 
         x = x[:, 1:]
+        # cogvlm2
+        if self.conv is not None:
+            b, s, h = x.shape
+            grid_size = int(s**0.5)
+            x = x.view(b, grid_size, grid_size, h).permute(0, 3, 1, 2)
+            x = self.conv(x)
 
-        b, s, h = x.shape
-        grid_size = int(s**0.5)
-        x = x.view(b, grid_size, grid_size, h).permute(0, 3, 1, 2)
-        x = self.conv(x)
-
-        x = x.flatten(2).transpose(1, 2)
+            x = x.flatten(2).transpose(1, 2)
         x = self.linear_proj(x)
         boi = self.boi.expand(x.shape[0], -1, -1)
         eoi = self.eoi.expand(x.shape[0], -1, -1)
@@ -610,10 +535,7 @@ class EVA2CLIPModel(nn.Module):
 class CogVLMModel(nn.Module):
     """model."""
 
-    def __init__(self,
-                 config: PretrainedConfig,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None):
+    def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
@@ -631,10 +553,7 @@ class CogVLMModel(nn.Module):
         ])
 
         # build norm
-        self.norm = RMSNorm(config.hidden_size,
-                            config.rms_norm_eps,
-                            dtype=dtype,
-                            device=device)
+        self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
 
         # vision model
         self.vision = EVA2CLIPModel(config, dtype=dtype, device=device)
@@ -788,10 +707,7 @@ class CogVLMForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
         # vision inputs
         images = None
         if context.input_multimodals is not None:
-            images = [
-                input_mm.get('image', [])
-                for input_mm in context.input_multimodals
-            ]
+            images = [input_mm.get('image', []) for input_mm in context.input_multimodals]
             # flatten batch
             images = [data for im_data in images for data in im_data]
             if len(images) == 0:
@@ -803,9 +719,7 @@ class CogVLMForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
             images = torch.stack([data.data for data in images])
 
             # get lang_ids
-            vis_range = torch.arange(0,
-                                     input_ids.size(-1),
-                                     device=input_ids.device)
+            vis_range = torch.arange(0, input_ids.size(-1), device=input_ids.device)
             vis_ids = vis_range[vis_mask]
             lang_ids = vis_range[~vis_mask]
 
@@ -817,9 +731,7 @@ class CogVLMForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
         if vision_embeddings is not None and len(vision_embeddings) > 0:
             if inputs_embeds is None:
                 inputs_embeds = self.get_input_embeddings()(input_ids)
-            inputs_embeds[:,
-                          vision_embedding_indexing, :] = vision_embeddings.to(
-                              inputs_embeds)
+            inputs_embeds[:, vision_embedding_indexing, :] = vision_embeddings.to(inputs_embeds)
 
         # inputs of forward
         return dict(
@@ -846,8 +758,7 @@ class CogVLMForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
         for name, loaded_weight in weights:
             if 'rotary_emb.inv_freq' in name:
                 continue
-            if ('rotary_emb.cos_cached' in name
-                    or 'rotary_emb.sin_cached' in name):
+            if ('rotary_emb.cos_cached' in name or 'rotary_emb.sin_cached' in name):
                 continue
             if self.config.tie_word_embeddings and 'lm_head.weight' in name:
                 continue
@@ -894,12 +805,7 @@ class CogVLMForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
                 else:
                     input_imgs.append(mm.get('image', []))
 
-        config = self.config
-        image_size: int = config.vision_config['image_size']
-        patch_size: int = config.vision_config['patch_size']
-        vision_token_num = ((image_size // patch_size // 2) *
-                            (image_size // patch_size // 2) + 2)
-        num_pad = vision_token_num - 3
+        num_pad = self.input_processor.vision_token_num - 3
 
         batched_num_img_tokens = []
         new_model_metas = []
@@ -919,14 +825,11 @@ class CogVLMForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
         position_ids = context.position_ids
 
         if context.is_decoding or all(len(imgs) == 0 for imgs in input_imgs):
-            num_img_tokens = torch.tensor(batched_num_img_tokens,
-                                          device=position_ids.device)
+            num_img_tokens = torch.tensor(batched_num_img_tokens, device=position_ids.device)
             position_ids -= num_img_tokens[None]
         else:
             batched_position_ids = position_ids[0].split(q_seqlens)
-            for pos_ids, num_img_tok, imgs in zip(batched_position_ids,
-                                                  batched_num_img_tokens,
-                                                  input_imgs):
+            for pos_ids, num_img_tok, imgs in zip(batched_position_ids, batched_num_img_tokens, input_imgs):
                 pos_ids -= num_img_tok
                 if len(imgs) == 0:
                     continue
@@ -968,13 +871,14 @@ class CogVLMInputProcessor(BaseModelInputProcessor):
         self.dtype = dtype
         image_size: int = config.vision_config['image_size']
         patch_size: int = config.vision_config['patch_size']
-        self.vision_token_num = ((image_size // patch_size // 2) *
-                                 (image_size // patch_size // 2) + 2)
+        if config.vision_config['num_positions'] == 1226:
+            # # cogvlm-chat-hf
+            self.vision_token_num = 2 + (image_size // patch_size)**2
+        else:
+            # cogvlm2
+            self.vision_token_num = 2 + (image_size // patch_size // 2)**2
 
-    def preprocess_input(self,
-                         input_ids: List[int],
-                         input_multimodals=None,
-                         **kwargs) -> PreprocessInputResult:
+    def preprocess_input(self, input_ids: List[int], input_multimodals=None, **kwargs) -> PreprocessInputResult:
         """prepare multimodal input."""
         if input_multimodals is None or len(input_multimodals) == 0:
             return input_ids, input_multimodals
@@ -988,11 +892,10 @@ class CogVLMInputProcessor(BaseModelInputProcessor):
             if isinstance(num_pad, torch.Tensor):
                 num_pad = num_pad.item()
 
-            mm_data = MultiModalTensor(
-                data=pixel_values,
-                start=offset,
-                end=offset + num_pad,
-                meta=dict(image_token_id=image_token_id))
+            mm_data = MultiModalTensor(data=pixel_values,
+                                       start=offset,
+                                       end=offset + num_pad,
+                                       meta=dict(image_token_id=image_token_id))
             input_imgs.append(mm_data)
 
         result = PreprocessInputResult(

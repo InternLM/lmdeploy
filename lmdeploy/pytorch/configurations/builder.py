@@ -23,8 +23,7 @@ class AutoModelConfigBuilder(ABC):
     @classmethod
     def condition(cls, hf_config):
         """config."""
-        raise NotImplementedError(
-            f'`condition` of {cls.__name__} not implemented.')
+        raise NotImplementedError(f'`condition` of {cls.__name__} not implemented.')
 
     @classmethod
     def build(cls, hf_config, model_path: str = None, **kwargs):
@@ -32,8 +31,7 @@ class AutoModelConfigBuilder(ABC):
         from .default import DefaultModelConfigBuilder
 
         if cls != AutoModelConfigBuilder:
-            raise NotImplementedError(
-                f'`build` of {cls.__name__} not implemented.')
+            raise NotImplementedError(f'`build` of {cls.__name__} not implemented.')
 
         valid_builder = DefaultModelConfigBuilder
         for builder in cls._sub_classes:

@@ -42,11 +42,8 @@ def _stop_words(stop_words: List[str], tokenizer: Tokenizer):
     assert isinstance(stop_words, List) and \
         all(isinstance(elem, str) for elem in stop_words), \
         f'stop_words must be a list but got {type(stop_words)}'
-    stop_words = [
-        tokenizer.encode(stop_word, False)[-1] for stop_word in stop_words
-    ]
-    assert isinstance(stop_words, List) and all(
-        isinstance(elem, int) for elem in stop_words), 'invalid stop_words'
+    stop_words = [tokenizer.encode(stop_word, False)[-1] for stop_word in stop_words]
+    assert isinstance(stop_words, List) and all(isinstance(elem, int) for elem in stop_words), 'invalid stop_words'
     return stop_words
 
 
@@ -67,10 +64,11 @@ def run_chat(model_path: str,
         trust_remote_code (bool): trust remote code.
     """
     from lmdeploy.pytorch.engine import Engine
+    tokenizer = Tokenizer(model_path)
     tm_model = Engine.from_pretrained(model_path,
+                                      tokenizer=tokenizer,
                                       engine_config=engine_config,
                                       trust_remote_code=trust_remote_code)
-    tokenizer = tm_model.tokenizer
     generator = tm_model.create_instance()
     adapter_name = None
     if engine_config.adapters is not None:
@@ -120,8 +118,7 @@ def run_chat(model_path: str,
                                                   adapter_name=adapter_name):
                 res, tokens = input_ids + outputs.token_ids, outputs.num_token
                 # decode res
-                response, state = tokenizer.detokenize_incrementally(
-                    res, state)
+                response, state = tokenizer.detokenize_incrementally(res, state)
                 response = valid_str(response)
                 print(f'{response}', end='', flush=True)
 

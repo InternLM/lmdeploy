@@ -13,7 +13,6 @@ class InternVLModelConfigBuilder(AutoModelConfigBuilder):
     @classmethod
     def build(cls, hf_config, model_path: str = None, **kwargs):
         """build llava hf."""
-        cfg = DefaultModelConfigBuilder.build(hf_config.llm_config, model_path,
-                                              **kwargs)
+        cfg = DefaultModelConfigBuilder.build(hf_config.llm_config, model_path, **kwargs)
         cfg.hf_config = hf_config
         return cfg

@@ -19,7 +19,7 @@ from .policy import get_input_policy
 from .source_model.base import INPUT_MODELS
 from .target_model.base import OUTPUT_MODELS
 
-SUPPORTED_FORMATS = ['meta_llama', 'hf', 'awq', 'gptq', None]
+SUPPORTED_FORMATS = ['hf', 'awq', 'gptq', None]
 logger = get_logger('lmdeploy')
 
 
@@ -30,7 +30,7 @@ def get_input_model_registered_name(model_path: str, model_format: str):
     Args:
         model_path (str): the path of the input model
         model_format (str): the format of the model, which can be one of
-            ['meta_llama',  'hf', 'awq']
+            ['hf', 'awq', 'gptq']
     """
     arch = get_model_arch(model_path)[0]
     register_name = SUPPORTED_ARCHS[arch]
@@ -48,26 +48,21 @@ def create_workspace(_path: str):
         shutil.rmtree(_path)
     print(f'create workspace in directory {_path}')
     weight_path = osp.join(_path, 'triton_models', 'weights')
-    tokenizer_path = osp.join(_path, 'triton_models', 'tokenizer')
     os.makedirs(weight_path)
-    os.makedirs(tokenizer_path)
-    return weight_path, tokenizer_path
+    return weight_path, _path
 
 
-def copy_tokenizer(model_path: str, tokenizer_path: str,
-                   tm_tokenizer_path: str):
+def copy_tokenizer(model_path: str, tokenizer_path: str, tm_tokenizer_path: str):
     """Copy tokenizer."""
 
     if tokenizer_path is not None:
         assert osp.exists(tokenizer_path), f'{tokenizer_path} does not exists.'
 
-        shutil.copy(tokenizer_path,
-                    osp.join(tm_tokenizer_path, osp.basename(tokenizer_path)))
+        shutil.copy(tokenizer_path, osp.join(tm_tokenizer_path, osp.basename(tokenizer_path)))
     else:
         from transformers import AutoTokenizer
         try:
-            _ = AutoTokenizer.from_pretrained(model_path,
-                                              trust_remote_code=True)
+            _ = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
         except Exception as e:
             assert 0, f'{e}'
 
@@ -84,9 +79,7 @@ def copy_tokenizer(model_path: str, tokenizer_path: str,
             shutil.copy(json_path, osp.join(tm_tokenizer_path, _file))
 
 
-def get_output_model_registered_name_and_config(model_path: str,
-                                                model_format: str, dtype: str,
-                                                group_size: int):
+def get_output_model_registered_name_and_config(model_path: str, model_format: str, dtype: str, group_size: int):
     """Get the registered name of the turbomind model and its configuration
     according to the input model path, format and user-input config. The name
     will be used to access the OUTPUT_MODELS registry.
@@ -94,7 +87,7 @@ def get_output_model_registered_name_and_config(model_path: str,
     Args:
         model_path (str): the path of the input model
         model_format (str): the format of the model, which can be one of
-            ['meta_llama',  'hf', 'awq', 'gptq']
+            ['hf', 'awq', 'gptq']
         dtype (str): the data type of the model's weights and activations
         group_size (int): the size of group used by awq model
     """
@@ -103,35 +96,26 @@ def get_output_model_registered_name_and_config(model_path: str,
 
     config = TurbomindModelConfig.from_dict()
 
-    if model_format == 'meta_llama':
-        session_len = 2048
-    else:  # hf, awq, None
-        model_arch, model_config = get_model_arch(model_path)
-        session_len = _get_and_verify_max_len(model_config, None)
-        if model_format in ['awq', 'gptq']:
-            weight_type = 'int4'
-            group_size = 128 if group_size == 0 else group_size
-        else:
-            torch_dtype = getattr(model_config, 'torch_dtype', 'float16')
-            TORCH_DTYPE_MAP = {
-                torch.bfloat16: 'bfloat16',
-                torch.float16: 'float16'
-            }
-            weight_type = TORCH_DTYPE_MAP.get(torch_dtype, 'float16')
+    model_arch, model_config = get_model_arch(model_path)
+    session_len = _get_and_verify_max_len(model_config, None)
+    if model_format in ['awq', 'gptq']:
+        weight_type = 'int4'
+        group_size = 128 if group_size == 0 else group_size
+    else:
+        torch_dtype = getattr(model_config, 'torch_dtype', 'float16')
+        TORCH_DTYPE_MAP = {torch.bfloat16: 'bfloat16', torch.float16: 'float16'}
+        weight_type = TORCH_DTYPE_MAP.get(torch_dtype, 'float16')
 
-            # Qwen-1 didn't set torch_dtype. It used bf16 as default
-            if model_arch == 'QWenLMHeadModel':
-                weight_type = 'bfloat16'
+        # Qwen-1 didn't set torch_dtype. It used bf16 as default
+        if model_arch == 'QWenLMHeadModel':
+            weight_type = 'bfloat16'
 
     if dtype == 'auto':
-        weight_type = weight_type if weight_type in [
-            'float16', 'bfloat16', 'int4'
-        ] else 'float16'
+        weight_type = weight_type if weight_type in ['float16', 'bfloat16', 'int4'] else 'float16'
     elif dtype in ['float16', 'bfloat16']:
         if weight_type == 'int4':
-            logger.warning(
-                f'The model {model_path} is a quantized model, so the '
-                f'specified data type {dtype} is ignored')
+            logger.warning(f'The model {model_path} is a quantized model, so the '
+                           f'specified data type {dtype} is ignored')
         else:
             weight_type = dtype
     else:
@@ -157,22 +141,16 @@ def pack_model_repository(workspace_path: str):
         workspace_path: the path of workspace
     """
     os.symlink(src=osp.join('..', '..', 'tokenizer'),
-               dst=osp.join(workspace_path, 'triton_models', 'preprocessing',
-                            '1', 'tokenizer'))
+               dst=osp.join(workspace_path, 'triton_models', 'preprocessing', '1', 'tokenizer'))
     os.symlink(src=osp.join('..', '..', 'tokenizer'),
-               dst=osp.join(workspace_path, 'triton_models', 'postprocessing',
-                            '1', 'tokenizer'))
+               dst=osp.join(workspace_path, 'triton_models', 'postprocessing', '1', 'tokenizer'))
     os.symlink(src=osp.join('..', '..', 'weights'),
-               dst=osp.join(workspace_path, 'triton_models', 'interactive',
-                            '1', 'weights'))
+               dst=osp.join(workspace_path, 'triton_models', 'interactive', '1', 'weights'))
     model_repo_dir = osp.join(workspace_path, 'model_repository')
     os.makedirs(model_repo_dir, exist_ok=True)
-    os.symlink(src=osp.join('..', 'triton_models', 'interactive'),
-               dst=osp.join(model_repo_dir, 'turbomind'))
-    os.symlink(src=osp.join('..', 'triton_models', 'preprocessing'),
-               dst=osp.join(model_repo_dir, 'preprocessing'))
-    os.symlink(src=osp.join('..', 'triton_models', 'postprocessing'),
-               dst=osp.join(model_repo_dir, 'postprocessing'))
+    os.symlink(src=osp.join('..', 'triton_models', 'interactive'), dst=osp.join(model_repo_dir, 'turbomind'))
+    os.symlink(src=osp.join('..', 'triton_models', 'preprocessing'), dst=osp.join(model_repo_dir, 'preprocessing'))
+    os.symlink(src=osp.join('..', 'triton_models', 'postprocessing'), dst=osp.join(model_repo_dir, 'postprocessing'))
 
 
 def get_tm_model(model_path,
@@ -233,8 +211,7 @@ def get_tm_model(model_path,
             f'but group_size is {group_size}. Currently, only 128 ' \
             'is supported'
 
-    input_model_name = get_input_model_registered_name(
-        model_path, engine_config.model_format)
+    input_model_name = get_input_model_registered_name(model_path, engine_config.model_format)
     input_policy = get_input_policy(engine_config.model_format)
     input_model = INPUT_MODELS.get(input_model_name)(model_path=model_path,
                                                      tokenizer_path=model_path,
@@ -251,11 +228,10 @@ def get_tm_model(model_path,
     tm_cfg.model_config.model_name = model_name
     tm_cfg.model_config.tp = engine_config.tp
 
-    output_model = OUTPUT_MODELS.get(output_model_name)(
-        input_model=input_model,
-        cfg=tm_cfg,
-        model_cls=Transformer,
-        out_dir=out_dir)
+    output_model = OUTPUT_MODELS.get(output_model_name)(input_model=input_model,
+                                                        cfg=tm_cfg,
+                                                        model_cls=Transformer,
+                                                        out_dir=out_dir)
 
     return output_model
 
@@ -275,13 +251,13 @@ def main(model_name: str,
     """deploy llama family models via turbomind.
 
     Args:
-        model_name (str): unused any longer
+        model_name (str): the served model name, which can be accessed by
+            `v1/model`
         model_path (str): the directory path of the model
         model_format (str): the format of the model, should choose from
-            ['meta_llama', 'hf', 'awq', 'gptq']. 'meta_llama' stands for META's
-            llama format, 'hf' means huggingface model, and 'awq', `gptq`
-            means models quantized by `autoawq` and `autogptq` respectively.
-            The default value is hf
+            ['hf', 'awq', 'gptq']. 'hf' means huggingface model, and 'awq',
+            `gptq` means models quantized by `autoawq` and `autogptq`
+            respectively. The default value is hf
         dtype (str): data type for model weights and activations. It can be
             one of the following values, ['auto', 'float16', 'bfloat16']
             The `auto` option will use FP16 precision for FP32 and FP16
@@ -300,20 +276,13 @@ def main(model_name: str,
             default to the default cache directory of huggingface.
         kwargs (dict): other params for convert
     """
-    if model_name:
-        logger.warning(
-            'The argument `<model_name>` is deprecated and unused now. '
-            'It will be removed on 2024.12.31. It was originally used to '
-            'specify the name of the built-in chat template, but now it '
-            'is substituted with a clearer parameter `--chat-template`')
     if chat_template is None:
         chat_template = best_match_model(model_path)
     assert chat_template in MODELS.module_dict.keys(), \
         f"chat template '{chat_template}' is not a built-in template. " \
         f'The built-ins are: {MODELS.module_dict.keys()}'
-    assert is_supported(model_path), (
-        f'turbomind does not support {model_path}. '
-        'Plz try pytorch engine instead.')
+    assert is_supported(model_path), (f'turbomind does not support {model_path}. '
+                                      'Plz try pytorch engine instead.')
 
     assert ((tp & (tp - 1) == 0) and tp != 0), 'tp should be 2^n'
 
@@ -332,11 +301,8 @@ def main(model_name: str,
 
     tm_weight_path, tm_tokenizer_path = create_workspace(dst_path)
     copy_tokenizer(model_path, tokenizer_path, tm_tokenizer_path)
-    engine_config = TurbomindEngineConfig(tp=tp,
-                                          model_format=model_format,
-                                          dtype=dtype)
-    tm_model = get_tm_model(model_path, model_name, chat_template,
-                            engine_config, group_size, tm_weight_path)
+    engine_config = TurbomindEngineConfig(tp=tp, model_format=model_format, dtype=dtype)
+    tm_model = get_tm_model(model_path, model_name, chat_template, engine_config, group_size, tm_weight_path)
     tm_model.export()
 
 

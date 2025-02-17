@@ -133,16 +133,14 @@ jobs:
     timeout-minutes: 150
     env:
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
-      MODELSCOPE_CACHE: /root/modelscope_hub
-      MODELSCOPE_MODULES_CACHE: /root/modelscope_modules
+      MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
+      MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
     container:
       image: openmmlab/lmdeploy:latest-cu11
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
-        - /nvme/github-actions/modelscope_hub:/root/modelscope_hub
-        - /nvme/github-actions/modelscope_modules:/root/modelscope_modules
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /mnt/shared:/mnt/shared
         - /nvme/qa_test_models/lmdeploy/autotest:/local_case
@@ -156,7 +154,6 @@ jobs:
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-*.whl
-          python3 -m pip install /root/packages/xformers-*.whl --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
@@ -225,16 +222,14 @@ jobs:
             function: local_case
     env:
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
-      MODELSCOPE_CACHE: /root/modelscope_hub
-      MODELSCOPE_MODULES_CACHE: /root/modelscope_modules
+      MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
+      MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
     container:
       image: openmmlab/lmdeploy:latest-cu11
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
-        - /nvme/github-actions/modelscope_hub:/root/modelscope_hub
-        - /nvme/github-actions/modelscope_modules:/root/modelscope_modules
         - /nvme/github-actions/resources/lora:/root/lora
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /mnt/shared:/mnt/shared
@@ -249,7 +244,6 @@ jobs:
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-*.whl
-          python3 -m pip install /root/packages/xformers-*.whl --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
@@ -319,6 +313,8 @@ jobs:
       - name: Test lmdeploy - local testcase
         if: matrix.backend == 'turbomind' && matrix.model == 'llm' && matrix.function == 'local_case'
         run: |
+          pytest autotest/toolchain --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
           pytest /local_case/issue_regression --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}}|| true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Clear workfile
@@ -357,7 +353,6 @@ jobs:
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-*.whl
-          python3 -m pip install /root/packages/xformers-*.whl --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
@@ -448,7 +443,6 @@ jobs:
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-*.whl
-          python3 -m pip install /root/packages/xformers-*.whl --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
@@ -508,7 +502,6 @@ jobs:
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-*.whl
-          python3 -m pip install /root/packages/xformers-*.whl --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
@@ -570,7 +563,7 @@ jobs:
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
           python3 -m pip install /root/packages/flash_attn-*.whl
-          python3 -m pip install /root/packages/xformers-*.whl --no-deps
+          python3 -m pip install sentence_transformers==2.2.2 --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
@@ -581,6 +574,7 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/open-compass/opencompass.git
           cd opencompass
+          cp /nvme/qa_test_models/offline_pkg/requirements-oc.txt requirements/runtime.txt
           python3 -m pip install -e .
           echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
       - name: Check env
@@ -602,7 +596,7 @@ jobs:
         run: |
           export LMDEPLOY_DIR=$(pwd)
 
-          python3 .github/scripts/action_tools.py evaluate "[turbomind_internlm2_chat_7b, pytorch_internlm2_chat_7b, turbomind_internlm2_5_7b_chat, pytorch_internlm2_5_7b_chat, pytorch_internlm2_5_7b_chat_w8a8, turbomind_internlm2_5_20b_chat, pytorch_internlm2_5_20b_chat, turbomind_qwen1_5_7b_chat, pytorch_qwen1_5_7b_chat, turbomind_llama2_7b_chat, turbomind_llama3_8b_instruct, pytorch_llama3_8b_instruct, turbomind_llama3_1_8b_instruct, pytorch_llama3_1_8b_instruct, pytorch_llama3_1_8b_instruct_w8a8, turbomind_qwen2_7b_instruct, pytorch_qwen2_7b_instruct, turbomind_qwen2_5_7b_instruct, pytorch_qwen2_5_7b_instruct, pytorch_qwen2_5_7b_instruct_w8a8, pytorch_qwen1_5_moe_2_7b_chat, pytorch_gemma_2_9b_it, pytorch_gemma_2_27b_it]" "[*race_datasets, *gsm8k_datasets, *ifeval_datasets]" /root/evaluation-reports/${{ github.run_id }} chat true
+          python3 .github/scripts/action_tools.py evaluate "[turbomind_internlm2_chat_7b, pytorch_internlm2_chat_7b, turbomind_internlm2_5_7b_chat, pytorch_internlm2_5_7b_chat, turbomind_internlm2_5_7b_chat_batch1, turbomind_internlm2_5_7b_chat_batch1_4bits, turbomind_internlm3_8b_instruct, pytorch_internlm3_8b_instruct, turbomind_internlm2_5_20b_chat, pytorch_internlm2_5_20b_chat, turbomind_internlm2_chat_20b, pytorch_internlm2_chat_20b, turbomind_qwen1_5_7b_chat, pytorch_qwen1_5_7b_chat, turbomind_llama3_8b_instruct, pytorch_llama3_8b_instruct, turbomind_llama3_1_8b_instruct, pytorch_llama3_1_8b_instruct, turbomind_qwen2_7b_instruct, pytorch_qwen2_7b_instruct, turbomind_qwen2_5_7b_instruct, pytorch_qwen2_5_7b_instruct, turbomind_llama2_7b_chat, pytorch_qwen1_5_moe_2_7b_chat, pytorch_gemma_2_9b_it, pytorch_gemma_2_27b_it]" "[*race_datasets, *gsm8k_datasets, *ifeval_datasets]" /root/evaluation-reports/${{ github.run_id }} chat true
       - name: Evaluate base models
         if: matrix.evaluate_type == 'base'
         run: |

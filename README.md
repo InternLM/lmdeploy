@@ -23,7 +23,7 @@ ______________________________________________________________________
 
 ## Latest News 🎉
 
-<details open>
+<details close>
 <summary><b>2024</b></summary>
 
 - \[2024/11\] Support Mono-InternVL with PyTorch engine
@@ -91,14 +91,6 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
 
 ![v0 1 0-benchmark](https://github.com/InternLM/lmdeploy/assets/4560679/8e455cf1-a792-4fa8-91a2-75df96a2a5ba)
 
-For detailed inference benchmarks in more devices and more settings, please refer to the following link:
-
-- [A100](./docs/en/benchmark/a100_fp16.md)
-- V100
-- 4090
-- 3090
-- 2080
-
 # Supported Models
 
 <table>
@@ -120,6 +112,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
   <li>Llama3.2 (1B, 3B)</li>
   <li>InternLM (7B - 20B)</li>
   <li>InternLM2 (7B - 20B)</li>
+  <li>InternLM3 (8B)</li>
   <li>InternLM2.5 (7B)</li>
   <li>Qwen (1.8B - 72B)</li>
   <li>Qwen1.5 (0.5B - 110B)</li>
@@ -159,6 +152,7 @@ For detailed inference benchmarks in more devices and more settings, please refe
   <li>DeepSeek-VL (7B)</li>
   <li>InternVL-Chat (v1.1-v1.5)</li>
   <li>InternVL2 (1B-76B)</li>
+  <li>InternVL2.5(MPO) (1B-78B)</li>
   <li>Mono-InternVL (2B)</li>
   <li>ChemVLM (8B-26B)</li>
   <li>MiniGeminiLlama (7B)</li>
@@ -200,7 +194,7 @@ For more information on installing on CUDA 11+ platform, or for instructions on 
 
 ```python
 import lmdeploy
-pipe = lmdeploy.pipeline("internlm/internlm2-chat-7b")
+pipe = lmdeploy.pipeline("internlm/internlm3-8b-instruct")
 response = pipe(["Hi, pls intro yourself", "Shanghai is"])
 print(response)
 ```
