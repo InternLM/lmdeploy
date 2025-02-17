@@ -35,13 +35,9 @@ def run_cmd(cmd_lines: List[str], log_path: str, cwd: str = None):
     cmd_for_run = ' '.join(cmd_lines)
     cmd_for_log = f' {sep}\n'.join(cmd_lines) + '\n'
     with open(log_path, 'w', encoding='utf-8') as file_handler:
-        file_handler.write(f'Command:\n{cmd_for_log}\n')
+        file_handler.write(f'Command: {cmd_for_log}\n')
         file_handler.flush()
-        process_res = subprocess.Popen(cmd_for_run,
-                                       shell=True,
-                                       cwd=cwd,
-                                       stdout=file_handler,
-                                       stderr=file_handler)
+        process_res = subprocess.Popen(cmd_for_run, shell=True, cwd=cwd, stdout=file_handler, stderr=file_handler)
         process_res.wait()
         return_code = process_res.returncode
 
@@ -79,11 +75,7 @@ def add_summary(csv_path: str):
         _append_summary('\n')
 
 
-def evaluate(models: List[str],
-             datasets: List[str],
-             workspace: str,
-             evaluate_type: str,
-             is_smoke: bool = False):
+def evaluate(models: List[str], datasets: List[str], workspace: str, evaluate_type: str, is_smoke: bool = False):
     """Evaluate models from lmdeploy using opencompass.
 
     Args:
@@ -101,19 +93,16 @@ def evaluate(models: List[str],
         print(f'Start evaluating {idx+1}/{num_model} {ori_model} ...')
         model = ori_model.lower()
 
-        opencompass_dir = os.path.abspath(os.environ['OPENCOMPASS_DIR'])
         lmdeploy_dir = os.path.abspath(os.environ['LMDEPLOY_DIR'])
-        config_path = os.path.join(
-            lmdeploy_dir, f'.github/scripts/eval_{evaluate_type}_config.py')
-        config_path_new = os.path.join(opencompass_dir, 'configs',
-                                       'eval_lmdeploy.py')
+        config_path = os.path.join(lmdeploy_dir, f'.github/scripts/eval_{evaluate_type}_config.py')
+        config_path_new = os.path.join(lmdeploy_dir, 'eval_lmdeploy.py')
         if os.path.exists(config_path_new):
             os.remove(config_path_new)
         shutil.copy(config_path, config_path_new)
 
         cfg = Config.fromfile(config_path_new)
         if not hasattr(cfg, model):
-            logging.error(f'Model {model} not found in configuration file')
+            logging.error(f'Model {model} not in configuration file')
             continue
 
         model_cfg = cfg[model]
@@ -126,13 +115,13 @@ def evaluate(models: List[str],
                 f.write("    if d['reader_cfg'] is not None:\n")
                 f.write("        d['reader_cfg']['test_range'] = '[0:50]'\n")
             if model.startswith('hf'):
-                f.write(f'\nmodels = [ *{model} ]\n')
+                f.write(f'\nmodels = [*{model}]\n')
             else:
-                f.write(f'\nmodels = [ {model} ]\n')
+                f.write(f'\nmodels = [{model}]\n')
 
         work_dir = os.path.join(workspace, model)
         cmd_eval = [
-            f'python3 {opencompass_dir}/run.py {config_path_new} -w {work_dir} --reuse --max-num-workers 8 --dump-eval-details'  # noqa: E501
+            f'opencompass {config_path_new} -w {work_dir} --reuse --max-num-workers 8'  # noqa: E501
         ]
         eval_log = os.path.join(workspace, f'eval.{ori_model}.txt')
         start_time = time.time()
@@ -164,24 +153,20 @@ def evaluate(models: List[str],
                 row = [_.strip() for _ in row]
                 if row[-1] != '-':
                     model_results[row[0]] = row[-1]
-        crows_pairs_json = glob.glob(os.path.join(
-            work_dir, '*/results/*/crows_pairs.json'),
-                                     recursive=True)
+        crows_pairs_json = glob.glob(os.path.join(work_dir, '*/results/*/crows_pairs.json'), recursive=True)
         if len(crows_pairs_json) == 1:
             with open(crows_pairs_json[0], 'r') as f:
                 acc = json.load(f)['accuracy']
-                acc = f'{float(acc):.2f}'
+                acc = f'{float(acc):.2f}'  # noqa E231
                 model_results['crows_pairs'] = acc
         logging.info(f'\n{model}\n{model_results}')
         dataset_names = list(model_results.keys())
 
-        row = ','.join([model, str(task_duration_seconds)] +
-                       [model_results[_] for _ in dataset_names])
+        row = ','.join([model, str(task_duration_seconds)] + [model_results[_] for _ in dataset_names])
 
         if not os.path.exists(output_csv):
             with open(output_csv, 'w') as f:
-                header = ','.join(['Model', 'task_duration_secs'] +
-                                  dataset_names)
+                header = ','.join(['Model', 'task_duration_secs'] + dataset_names)
                 f.write(header + '\n')
                 f.write(row + '\n')
         else:
@@ -213,30 +198,22 @@ def generate_benchmark_report(report_path: str):
     _append_summary('## Benchmark Results Start')
     subfolders = [f.path for f in os.scandir(report_path) if f.is_dir()]
     for dir_path in subfolders:
-        second_subfolders = [
-            f.path for f in sorted(os.scandir(dir_path), key=lambda x: x.name)
-            if f.is_dir()
-        ]
+        second_subfolders = [f.path for f in sorted(os.scandir(dir_path), key=lambda x: x.name) if f.is_dir()]
         for sec_dir_path in second_subfolders:
             model = sec_dir_path.replace(report_path + '/', '')
             print('-' * 25, model, '-' * 25)
             _append_summary('-' * 25 + model + '-' * 25 + '\n')
 
             benchmark_subfolders = [
-                f.path
-                for f in sorted(os.scandir(sec_dir_path), key=lambda x: x.name)
-                if f.is_dir()
+                f.path for f in sorted(os.scandir(sec_dir_path), key=lambda x: x.name) if f.is_dir()
             ]
             for backend_subfolder in benchmark_subfolders:
-                benchmark_type = backend_subfolder.replace(
-                    sec_dir_path + '/', '')
+                benchmark_type = backend_subfolder.replace(sec_dir_path + '/', '')
                 print('*' * 10, benchmark_type, '*' * 10)
                 _append_summary('-' * 10 + benchmark_type + '-' * 10 + '\n')
-                merged_csv_path = os.path.join(backend_subfolder,
-                                               'summary.csv')
+                merged_csv_path = os.path.join(backend_subfolder, 'summary.csv')
                 csv_files = glob.glob(os.path.join(backend_subfolder, '*.csv'))
-                average_csv_path = os.path.join(backend_subfolder,
-                                                'average.csv')
+                average_csv_path = os.path.join(backend_subfolder, 'average.csv')
                 if merged_csv_path in csv_files:
                     csv_files.remove(merged_csv_path)
                 if average_csv_path in csv_files:
@@ -246,21 +223,18 @@ def generate_benchmark_report(report_path: str):
                 if len(csv_files) > 0:
                     for f in csv_files:
                         df = pd.read_csv(f)
-                        merged_df = pd.concat([merged_df, df],
-                                              ignore_index=True)
+                        merged_df = pd.concat([merged_df, df], ignore_index=True)
 
                     merged_df = merged_df.sort_values(by=merged_df.columns[0])
 
                     grouped_df = merged_df.groupby(merged_df.columns[0])
                     if 'generation' not in backend_subfolder:
-                        average_values = grouped_df.pipe(
-                            (lambda group: {
-                                'mean': group.mean().round(decimals=3)
-                            }))['mean']
+                        average_values = grouped_df.pipe((lambda group: {
+                            'mean': group.mean().round(decimals=3)
+                        }))['mean']
                         average_values.to_csv(average_csv_path, index=True)
                         avg_df = pd.read_csv(average_csv_path)
-                        merged_df = pd.concat([merged_df, avg_df],
-                                              ignore_index=True)
+                        merged_df = pd.concat([merged_df, avg_df], ignore_index=True)
                         add_summary(average_csv_path)
                     merged_df.to_csv(merged_csv_path, index=False)
                     if 'generation' in backend_subfolder:
@@ -287,10 +261,7 @@ def generate_csv_from_profile_result(file_path: str, out_path: str):
         import csv
         with open(out_path, 'w', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow([
-                'request_rate', 'completed', 'RPM', 'median_ttft_ms',
-                'output_throughput'
-            ])
+            writer.writerow(['request_rate', 'completed', 'RPM', 'median_ttft_ms', 'output_throughput'])
             writer.writerows(data_csv)
 
 

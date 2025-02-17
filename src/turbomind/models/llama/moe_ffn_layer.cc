@@ -110,9 +110,12 @@ void MoeFfnLayer<T>::forward(T* output, const T* input, int tokens, int layer_id
 
     // dump_logits(tokens, layer_id);
 
+    bool softmax = true;
     if (param_.topk_method == "group_limited_greedy") {
-        invokeMaskMoeTopKGroups(logits_, tokens, expert_num, expert_num / param_.n_group, param_.topk_group, stream_);
+        invokeMoeSoftmaxMaskTopKGroups(
+            logits_, tokens, expert_num, expert_num / param_.n_group, param_.topk_group, stream_);
         sync_check_cuda_error();
+        softmax = false;
     }
 
     /// TODO: fix illegal memory access even if NaN are present in logits
@@ -127,6 +130,7 @@ void MoeFfnLayer<T>::forward(T* output, const T* input, int tokens, int layer_id
                      padded,
                      expert_num,
                      param_.experts_per_token,
+                     softmax,
                      param_.norm_topk_prob,
                      param_.routed_scale,
                      stream_);

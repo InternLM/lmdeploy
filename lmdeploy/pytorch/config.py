@@ -16,8 +16,7 @@ def _update_torch_dtype(config: 'ModelConfig', dtype: str):
     from lmdeploy.utils import get_logger
     logger = get_logger('lmdeploy')
 
-    quantization_config = getattr(config.hf_config, 'quantization_config',
-                                  dict())
+    quantization_config = getattr(config.hf_config, 'quantization_config', dict())
     quant_method = quantization_config.get('quant_method', None)
     if quant_method == 'awq':
         logger.debug('set torch_dtype to float16 for awq.')
@@ -26,6 +25,10 @@ def _update_torch_dtype(config: 'ModelConfig', dtype: str):
         return config
 
     torch_dtype = getattr(config.hf_config, 'torch_dtype', None)
+    # deal with case when torch_dtype is not string but torch.dtype
+    if isinstance(torch_dtype, torch.dtype):
+        torch_dtype = str(torch_dtype).split('.')[1]
+
     if torch_dtype is None:
         _dtype = 'float16' if dtype == 'auto' else dtype
         logger.warning('Model config does not have `torch_dtype`,'
@@ -36,9 +39,7 @@ def _update_torch_dtype(config: 'ModelConfig', dtype: str):
     else:
         # change to user specified data type if it is not 'auto'
         if dtype == 'auto':
-            torch_dtype = torch_dtype if torch_dtype in [
-                torch.float16, torch.bfloat16
-            ] else torch.float16
+            torch_dtype = torch_dtype if torch_dtype in ['float16', 'bfloat16'] else 'float16'
         else:
             torch_dtype = dtype
     config.dtype = eval(f'torch.{torch_dtype}')
@@ -84,8 +85,7 @@ class CacheConfig:
         from lmdeploy.utils import get_logger
         logger = get_logger('lmdeploy')
         if self.window_size > 1 and self.enable_prefix_caching:
-            logger.warning(
-                'Prefix caching is not available for window attention.')
+            logger.warning('Prefix caching is not available for window attention.')
             self.enable_prefix_caching = False
 
 
@@ -104,7 +104,6 @@ class ModelConfig:
     v_head_dim: int = None
     sliding_window: int = -1
     dtype: torch.dtype = torch.float16
-    multi_query_attention: bool = False
     vocab_size: int = 40000
     hf_config: Any = None
     cogvlm_style: bool = False
@@ -118,7 +117,8 @@ class ModelConfig:
     def from_pretrained(cls,
                         pretrained_model_name_or_path: str,
                         trust_remote_code: bool = True,
-                        dtype: str = 'auto'):
+                        dtype: str = 'auto',
+                        tp: int = 1):
         """Instantiate one of the configuration classes of the library from a
         pretrained model configuration.
 
@@ -130,25 +130,18 @@ class ModelConfig:
                 activations. Refer to `PyTorchEngineConfig` for details
         """
         from transformers import AutoConfig
-        hf_config = AutoConfig.from_pretrained(
-            pretrained_model_name_or_path, trust_remote_code=trust_remote_code)
+        hf_config = AutoConfig.from_pretrained(pretrained_model_name_or_path, trust_remote_code=trust_remote_code)
         if getattr(hf_config, 'model_type', None) in ['phi3']:
             # phi3 + trust_remote_code leads to error when tp.
-            hf_config = AutoConfig.from_pretrained(
-                pretrained_model_name_or_path)
-        return cls.from_hf_config(hf_config,
-                                  pretrained_model_name_or_path,
-                                  dtype=dtype)
+            hf_config = AutoConfig.from_pretrained(pretrained_model_name_or_path)
+        return cls.from_hf_config(hf_config, pretrained_model_name_or_path, dtype=dtype, tp=tp)
 
     @classmethod
-    def from_hf_config(cls,
-                       hf_config: Any,
-                       model_path: str = None,
-                       dtype: str = 'auto'):
+    def from_hf_config(cls, hf_config: Any, model_path: str = None, dtype: str = 'auto', tp: int = 1):
         """from huggingface config."""
         from lmdeploy.pytorch.configurations import AutoModelConfigBuilder
 
-        model_config = AutoModelConfigBuilder.build(hf_config, model_path)
+        model_config = AutoModelConfigBuilder.build(hf_config, model_path, tp=tp)
 
         if model_config.k_head_dim is None:
             assert model_config.head_dim is not None
@@ -156,6 +149,13 @@ class ModelConfig:
         if model_config.v_head_dim is None:
             assert model_config.head_dim is not None
             model_config.v_head_dim = model_config.head_dim
+
+        # check for tp
+        assert model_config.num_attention_heads % tp == 0
+        if model_config.num_key_value_heads >= tp:
+            assert model_config.num_key_value_heads % tp == 0
+        else:
+            assert tp % model_config.num_key_value_heads == 0
 
         # should after setting `hf_config` and `model_arch` attributes
         model_config = _update_torch_dtype(model_config, dtype)

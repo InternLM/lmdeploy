@@ -14,15 +14,12 @@ class LogicalMemory:
         self._num_blocks = num_blocks
 
         self.phy_map: np.ndarray = np.zeros(self._num_blocks, dtype=np.int64)
-        self.ref_count: np.ndarray = np.zeros((self._num_blocks, ),
-                                              dtype=np.int64)
-        self.access_time: np.ndarray = np.zeros((self._num_blocks, ),
-                                                dtype=np.int64)
+        self.ref_count: np.ndarray = np.zeros((self._num_blocks, ), dtype=np.int64)
+        self.access_time: np.ndarray = np.zeros((self._num_blocks, ), dtype=np.int64)
 
     def get_physical_blocks(self, logical_address: np.ndarray):
         """get physical address."""
-        if isinstance(logical_address,
-                      np.ndarray) and len(logical_address) == 0:
+        if isinstance(logical_address, np.ndarray) and len(logical_address) == 0:
             return np.empty((0, ), dtype=np.int64)
         return self.phy_map[logical_address]
 
@@ -51,14 +48,10 @@ class PhysicalMemory:
 class PhysicalAllocator:
     """The physical block allocator.
 
-    The allocator won't allocate real memory. It is used to support block
-    manager.
+    The allocator won't allocate real memory. It is used to support block manager.
     """
 
-    def __init__(self,
-                 memory: PhysicalMemory,
-                 num_blocks: int,
-                 offset: int = 0):
+    def __init__(self, memory: PhysicalMemory, num_blocks: int, offset: int = 0):
         self._mem = memory
         self._num_blocks = num_blocks
         self._offset = offset
@@ -82,8 +75,7 @@ class PhysicalAllocator:
         num_freed_blocks = len(freed_blocks)
         if num_freed_blocks > 0:
             num_used = self._num_blocks - self._free_count
-            self._free_blocks[num_used -
-                              num_freed_blocks:num_used] = freed_blocks
+            self._free_blocks[num_used - num_freed_blocks:num_used] = freed_blocks
             self._free_count += num_freed_blocks
         return freed_blocks
 
@@ -100,10 +92,8 @@ class LogicalAllocator:
         self._phy_mem = PhysicalMemory(num_cpu_blocks, num_gpu_blocks)
 
         self._cpu_mem_offset = num_gpu_blocks
-        self._gpu_allocator = PhysicalAllocator(self._phy_mem, num_gpu_blocks,
-                                                0)
-        self._cpu_allocator = PhysicalAllocator(self._phy_mem, num_cpu_blocks,
-                                                self._cpu_mem_offset)
+        self._gpu_allocator = PhysicalAllocator(self._phy_mem, num_gpu_blocks, 0)
+        self._cpu_allocator = PhysicalAllocator(self._phy_mem, num_cpu_blocks, self._cpu_mem_offset)
 
         num_blocks = self._log_mem.num_blocks()
         self._num_blocks = num_blocks
@@ -244,9 +234,7 @@ class BaseBlockManager:
         self.block_tables: Dict[int, BlockTable] = {}
 
     @classmethod
-    def num_required_blocks(cls,
-                            obj: SchedulerSequence,
-                            prealloc_size: int = 0):
+    def num_required_blocks(cls, obj: SchedulerSequence, prealloc_size: int = 0):
         """get num required blocks."""
         raise NotImplementedError('Not implemented.')
 
@@ -278,8 +266,7 @@ class BaseBlockManager:
             msg (SchedulerSequence): The msg to get block table.
         """
         logical_blocks = msg.logical_blocks
-        return self.allocator.get_physical_blocks(
-            logical_blocks.get_real_blocks())
+        return self.allocator.get_physical_blocks(logical_blocks.get_real_blocks())
 
     def allocate(self, data: SchedulerSequence, prealloc_size: int = 0):
         """allocate stuff."""

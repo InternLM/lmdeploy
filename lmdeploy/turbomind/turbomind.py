@@ -1,15 +1,17 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+
 import asyncio
 import copy
 import json
 import os.path as osp
 import sys
-import os
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
+from functools import partial
 from itertools import repeat
-from queue import LifoQueue, Queue
-from typing import Dict, Iterable, List
+from queue import Queue
+from typing import Dict, List
 
 import numpy as np
 import torch
@@ -17,9 +19,7 @@ import yaml
 from torch.nn.utils.rnn import pad_sequence
 
 import lmdeploy
-from lmdeploy.messages import (EngineOutput, GenerationConfig, ResponseType,
-                               TurbomindEngineConfig)
-from lmdeploy.tokenizer import Tokenizer
+from lmdeploy.messages import EngineOutput, GenerationConfig, ResponseType, TurbomindEngineConfig
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model
 
 from .deploy.config import TurbomindModelConfig
@@ -81,6 +81,7 @@ class TurboMind:
 
     def __init__(self,
                  model_path: str,
+                 tokenizer: object,
                  model_name: str = None,
                  chat_template_name: str = None,
                  engine_config: TurbomindEngineConfig = None,
@@ -99,40 +100,27 @@ class TurboMind:
 
         self.gpu_count = _engine_config.tp
         self.gpu_list = _engine_config.devices
-        os.environ['LMDEPLOY_DEVICE_LIST'] = str(_engine_config.devices)
+        os.environ['LMDEPLOY_DEVICE_LIST'] = ','.join(_engine_config.devices)
 
+        self.tokenizer = tokenizer
         if model_source == ModelSource.WORKSPACE:
-            tokenizer_model_path = osp.join(model_path, 'triton_models',
-                                            'tokenizer')
-            self.tokenizer = Tokenizer(tokenizer_model_path)
-            self.model_comm = self._from_workspace(
-                model_path=model_path, engine_config=_engine_config)
+            self.model_comm = self._from_workspace(model_path=model_path, engine_config=_engine_config)
         else:
             if not osp.exists(model_path):
-                model_path = get_model(model_path, _engine_config.download_dir,
-                                       _engine_config.revision)
-            self.tokenizer = Tokenizer(model_path)
+                model_path = get_model(model_path, _engine_config.download_dir, _engine_config.revision)
             self.model_comm = self._from_hf(model_source=model_source,
                                             model_path=model_path,
                                             engine_config=_engine_config)
 
-
         with ThreadPoolExecutor(max_workers=self.gpu_count) as e:
-            ranks = [
-                self.node_id * self.gpu_count + device_id
-                for device_id in range(self.gpu_count)
-            ]
+            ranks = [self.node_id * self.gpu_count + device_id for device_id in range(self.gpu_count)]
             # This is for load_state_dict
             # process_weight will optimizer the kernel by col major matrix and pack_b
             # This will result in the failure of get_params
-            # for _ in e.map(self.model_comm.process_weight,
-            #                self.gpu_list, ranks):
+            # for _ in e.map(self.model_comm.process_weight, range(self.gpu_count), ranks):
             #     pass
-
             # implicit synchronization
-            for _ in e.map(self.model_comm.create_engine,
-                           self.gpu_list, ranks,
-                           repeat(self.nccl_params)):
+            for _ in e.map(self.model_comm.create_engine, range(self.gpu_count), ranks, repeat(self.nccl_params)):
                 pass
 
         self.session_len = self.config.session_len
@@ -198,9 +186,8 @@ class TurboMind:
                 and engine_config.num_tokens_per_iter == 0:
             self.engine_config.num_tokens_per_iter = \
                 engine_config.max_prefill_token_num
-            self.engine_config.max_prefill_iters = (
-                self.config.session_len + engine_config.max_prefill_token_num -
-                1) // engine_config.max_prefill_token_num
+            self.engine_config.max_prefill_iters = (self.config.session_len + engine_config.max_prefill_token_num -
+                                                    1) // engine_config.max_prefill_token_num
 
         # pack `self.config` and `self.engine_config` into a dict
         self.config_dict = self.config.to_dict()
@@ -208,27 +195,23 @@ class TurboMind:
         logger.info(f'turbomind model config:\n\n'
                     f'{json.dumps(self.config_dict, indent=2)}')
 
-    def _from_hf(self, model_source: ModelSource, model_path: str,
-                 engine_config: TurbomindEngineConfig):
+    def _from_hf(self, model_source: ModelSource, model_path: str, engine_config: TurbomindEngineConfig):
         """Load model which is in hf format."""
         assert model_source == ModelSource.HF_MODEL, \
             f'{model_source} is not supported'
-        assert is_supported(model_path), (
-            f'turbomind does not support {model_path}. '
-            'Plz try pytorch engine instead.')
+        assert is_supported(model_path), (f'turbomind does not support {model_path}. '
+                                          'Plz try pytorch engine instead.')
 
         # convert transformers model into turbomind model
         from .deploy.converter import get_tm_model
-        tm_model = get_tm_model(model_path, self.model_name,
-                                self.chat_template_name, engine_config)
+        tm_model = get_tm_model(model_path, self.model_name, self.chat_template_name, engine_config)
 
         self._postprocess_config(tm_model.tm_config, engine_config)
 
-        model_comm = _tm.AbstractTransformerModel.create_llama_model(
-            model_dir='',
-            config=yaml.safe_dump(self.config_dict),
-            tensor_para_size=self.gpu_count,
-            data_type=self.config.model_config.weight_type)
+        model_comm = _tm.AbstractTransformerModel.create_llama_model(model_dir='',
+                                                                     config=yaml.safe_dump(self.config_dict),
+                                                                     tensor_para_size=self.gpu_count,
+                                                                     data_type=self.config.model_config.weight_type)
 
         # create empty weight
         self._create_weight(model_comm)
@@ -242,10 +225,8 @@ class TurboMind:
         # there should be no left turbomind params.
         if len(tm_params) > 0:
             uninitialized = list(tm_params.keys())
-            logger.warning(
-                'the model may not be loaded successfully '
-                f'with {len(tm_params)} uninitialized params:\n{uninitialized}'
-            )
+            logger.warning('the model may not be loaded successfully '
+                           f'with {len(tm_params)} uninitialized params:\n{uninitialized}')
         return model_comm
 
     def load_weights(self, state_dict):
@@ -256,12 +237,10 @@ class TurboMind:
         input_model.model_path = state_dict
         self.tm_model.export()
         input_model.model_path = model_path
-
-    def _from_workspace(self, model_path: str,
-                        engine_config: TurbomindEngineConfig):
+		
+    def _from_workspace(self, model_path: str, engine_config: TurbomindEngineConfig):
         """Load model which is converted by `lmdeploy convert`"""
-        config_path = osp.join(model_path, 'triton_models', 'weights',
-                               'config.yaml')
+        config_path = osp.join(model_path, 'triton_models', 'weights', 'config.yaml')
         # load TurbomindModelConfig from config file
         with open(config_path, 'r') as f:
             _cfg = yaml.safe_load(f)
@@ -269,21 +248,19 @@ class TurboMind:
 
         # always use tp in converted model (config.yaml)
         if cfg.tensor_para_size != engine_config.tp:
-            logger.warning(
-                'tp in engine_config is different from in config.yaml'
-                f'({config_path}), {engine_config.tp} vs '
-                f'{cfg.tensor_para_size}, using tp={cfg.tensor_para_size}')
+            logger.warning('tp in engine_config is different from in config.yaml'
+                           f'({config_path}), {engine_config.tp} vs '
+                           f'{cfg.tensor_para_size}, using tp={cfg.tensor_para_size}')
         self.gpu_count = cfg.tensor_para_size
         engine_config.tp = self.gpu_count
 
         self._postprocess_config(cfg, engine_config)
 
         weight_dir = osp.join(model_path, 'triton_models', 'weights')
-        model_comm = _tm.AbstractTransformerModel.create_llama_model(
-            model_dir=weight_dir,
-            config=yaml.safe_dump(self.config_dict),
-            tensor_para_size=self.gpu_count,
-            data_type=self.config.weight_type)
+        model_comm = _tm.AbstractTransformerModel.create_llama_model(model_dir=weight_dir,
+                                                                     config=yaml.safe_dump(self.config_dict),
+                                                                     tensor_para_size=self.gpu_count,
+                                                                     data_type=self.config.weight_type)
 
         # create weight and load params
         self._create_weight(model_comm)
@@ -292,6 +269,7 @@ class TurboMind:
     @classmethod
     def from_pretrained(cls,
                         pretrained_model_name_or_path: str,
+                        tokenizer: object,
                         model_name: str = None,
                         chat_template_name: str = None,
                         engine_config: TurbomindEngineConfig = None,
@@ -318,11 +296,19 @@ class TurboMind:
         model_source = get_model_source(pretrained_model_name_or_path)
         logger.info(f'model_source: {model_source}')
         return cls(model_path=pretrained_model_name_or_path,
+                   tokenizer=tokenizer,
                    model_name=model_name,
                    chat_template_name=chat_template_name,
                    engine_config=engine_config,
                    model_source=model_source,
                    **kwargs)
+
+    def close(self):
+        if self.nccl_params is not None:
+            self.model_comm.destroy_nccl_params(self.nccl_params)
+            self.nccl_params = None
+        if self.model_comm is not None:
+            self.model_comm = None
 
     def create_instance(self, cuda_stream_id=0):
         """Create a turbomind instance.
@@ -335,6 +321,89 @@ class TurboMind:
         return TurboMindInstance(self, self.config, cuda_stream_id)
 
 
+def _get_logits(outputs, offset: int):
+    logits = outputs['logits']
+
+    def _func(out: EngineOutput, step: int):
+        out.logits = logits[:step - offset - 1, :]
+
+    return _func
+
+
+def _get_last_hidden_state(outputs, offset: int):
+    last_hidden_state = outputs['last_hidden_state']
+
+    def _func(out: EngineOutput, step: int):
+        out.last_hidden_state = last_hidden_state[:step - offset - 1, :]
+
+    return _func
+
+
+def _get_logprobs_impl(logprob_vals: torch.Tensor,
+                       logprob_idxs: torch.Tensor,
+                       logprob_nums: torch.Tensor,
+                       output_ids: List[int],
+                       logprobs: int,
+                       out_logprobs: List[Dict[int, float]] = None):
+    length = len(output_ids)
+    offset = len(out_logprobs)
+    if length == offset:
+        return out_logprobs
+    for (pos, idx, val, n) in zip(range(offset, length), logprob_idxs[offset:length], logprob_vals[offset:length],
+                                  logprob_nums[offset:length]):
+        topn = min(n.item(), logprobs)
+        tok_res = {idx[i].item(): val[i].item() for i in range(topn)}
+        token_id = output_ids[pos]
+        if token_id not in tok_res:
+            print(token_id, tok_res)
+            valid_n = n.item()
+            tok_res[token_id] = \
+                val[:valid_n][idx[:valid_n] == token_id].item()
+        ids = list(tok_res.keys())
+        for k in ids:
+            if tok_res[k] == float('-inf'):
+                tok_res.pop(k)
+        out_logprobs.append(tok_res)
+    return out_logprobs
+
+
+def _get_logprobs(outputs, output_logprobs: int):
+    logprob_vals = outputs['logprob_vals']
+    logprob_idxs = outputs['logprob_indexes']
+    logprob_nums = outputs['logprob_nums']
+
+    logprobs = []
+
+    def _func(out: EngineOutput, step: int):
+        _get_logprobs_impl(logprob_vals, logprob_idxs, logprob_nums, out.token_ids, output_logprobs, logprobs)
+        out.logprobs = logprobs
+
+    return _func
+
+
+class StreamingSemaphore:
+
+    def __init__(self):
+        self.loop = asyncio.get_running_loop()
+        self.fut = None
+        self.val = 0
+
+    async def acquire(self):
+        if self.val:
+            self.val = 0
+            return
+        self.fut = self.loop.create_future()
+        await self.fut
+        self.fut = None
+        self.val = 0
+
+    def release(self):
+        if not self.val:
+            self.val = 1
+            if self.fut:
+                self.fut.set_result(None)
+
+
 class TurboMindInstance:
     """Instance of TurboMind.
 
@@ -343,10 +412,7 @@ class TurboMindInstance:
         cuda_stream_id(int): identity of a cuda stream
     """
 
-    def __init__(self,
-                 tm_model: TurboMind,
-                 config: TurbomindModelConfig,
-                 cuda_stream_id: int = 0):
+    def __init__(self, tm_model: TurboMind, config: TurbomindModelConfig, cuda_stream_id: int = 0):
         self.tm_model = tm_model
         self.cuda_stream_id = cuda_stream_id
 
@@ -361,120 +427,31 @@ class TurboMindInstance:
         # create model instances
         self.model_inst = self._create_model_instance(0)
 
-        self.que = Queue()
-        self.executor: ThreadPoolExecutor = None
-        self.future = None
         self.config = config
+        self.lock = None
 
     def _create_model_instance(self, device_id):
-        rank = self.node_id * self.gpu_count + device_id
-        model_inst = self.tm_model.model_comm.create_model_instance(
-            eval(os.environ['LMDEPLOY_DEVICE_LIST'])[0], rank, self.cuda_stream_id, self.nccl_params)
+        model_inst = self.tm_model.model_comm.create_model_instance(os.environ['LMDEPLOY_DEVICE_LIST'].split(',')[0])
         return model_inst
 
-    def _forward_callback(self, result, ctx):
-        self.que.put((False, result))
+    def _get_extra_output_processors(self, outputs: Dict[str, torch.Tensor], gen_config: GenerationConfig,
+                                     input_len: int):
 
-    def _forward_thread(self, inputs):
+        def _get_offset(type):
+            return input_len - 1 if type == 'generation' else 0
 
-        def _func():
-            try:
-                output = self.model_inst.forward(inputs)
-            except Exception as e:
-                logger.error(f'unhandled exception: {e}')
-                self.que.put((-1, None))
-                return
-            self.que.put((True, output))
+        fs = []
+        if gen_config.output_logits:
+            offset = _get_offset(gen_config.output_logits)
+            fs.append(_get_logits(outputs, offset))
+        if gen_config.output_last_hidden_state:
+            offset = _get_offset(gen_config.output_last_hidden_state)
+            fs.append(_get_last_hidden_state(outputs, offset))
+        if gen_config.logprobs:
+            fs.append(_get_logprobs(outputs, gen_config.logprobs))
+        return fs
 
-        self.executor = ThreadPoolExecutor(1)
-        self.future = self.executor.submit(_func)
-
-    def _async_forward_callback(self, result, ctx, que: LifoQueue):
-        que.put((False, result))
-
-    def _async_forward_thread(self, inputs, que: LifoQueue):
-
-        def _func():
-            try:
-                output = self.model_inst.forward(inputs)
-            except Exception as e:
-                logger.error(f'unhandled exception: {e}')
-                que.put((-1, None))
-                return
-            que.put((True, output))
-
-        self.executor = ThreadPoolExecutor(1)
-        self.future = self.executor.submit(_func)
-
-    def _get_logprobs(self,
-                      logprob_vals: torch.Tensor,
-                      logprob_indexes: torch.Tensor,
-                      logprob_nums: torch.Tensor,
-                      output_ids: torch.Tensor,
-                      logprobs: int = None,
-                      length: int = None,
-                      out_logprobs: List[Dict[int, float]] = None,
-                      session_id: int = None):
-        if logprobs is None:
-            return None
-        if out_logprobs is None:
-            out_logprobs = []
-        if len(output_ids) <= len(out_logprobs):
-            return out_logprobs
-        offset = len(out_logprobs)
-        for (token_id, idx, val, n) in zip(output_ids[offset:length],
-                                           logprob_indexes[offset:length],
-                                           logprob_vals[offset:length],
-                                           logprob_nums[offset:length]):
-            topn = min(n.item(), logprobs)
-            tok_res = {idx[i].item(): val[i].item() for i in range(topn)}
-            if token_id.item() not in tok_res:
-                valid_n = n.item()
-                tok_res[token_id.item()] = \
-                    val[:valid_n][idx[:valid_n] == token_id].item()
-            ids = list(tok_res.keys())
-            for k in ids:
-                if tok_res[k] == float('-inf'):
-                    tok_res.pop(k)
-            out_logprobs.append(tok_res)
-        return out_logprobs
-
-    def end(self, session_id: int):
-        """End the given session."""
-        input_ids = [self.tm_model.tokenizer.eos_token_id]
-        end_generator = self.tm_model.create_instance()
-        for outputs in end_generator.stream_infer(
-                session_id,
-                input_ids,
-                sequence_start=False,
-                sequence_end=True,
-                gen_config=GenerationConfig(max_new_tokens=0)):
-            pass
-
-    async def async_end(self, session_id: int):
-        """End the given session."""
-        self.end(session_id)
-
-    def cancel(self, session_id: int):
-        """Stop current streaming inference."""
-        input_ids = [self.tm_model.tokenizer.eos_token_id]
-        stop_generator = self.tm_model.create_instance()
-        for outputs in stop_generator.stream_infer(
-                session_id,
-                input_ids,
-                sequence_start=False,
-                sequence_end=False,
-                stop=True,
-                gen_config=GenerationConfig(max_new_tokens=0)):
-            pass
-
-    async def async_cancel(self, session_id: int):
-        """End the given session."""
-        self.cancel(session_id)
-
-    def prepare_embeddings(self,
-                           input_embeddings=None,
-                           input_embedding_ranges=None):
+    def prepare_embeddings(self, input_embeddings=None, input_embedding_ranges=None):
         """Convert embeddings."""
         if input_embeddings is None:
             return None, None
@@ -501,101 +478,40 @@ class TurboMindInstance:
             if item and isinstance(item[0], np.ndarray):
                 item = [torch.from_numpy(x).squeeze() for x in item]
             # convert to lookup table type
-            _MAP = dict(float=torch.float,
-                        bfloat16=torch.bfloat16,
-                        float16=torch.float16)
+            _MAP = dict(float=torch.float, bfloat16=torch.bfloat16, float16=torch.float16)
             dtype = _MAP.get(self.tm_model.config.weight_type, torch.float16)
             item = [x.to(dtype=dtype) for x in item]
             item = item or [torch.zeros(0, hidden_dim, dtype=dtype)]
             input_embeddings[i] = item
         input_embeddings = [torch.cat(x) for x in input_embeddings]
         input_embeddings = pad_sequence(input_embeddings, batch_first=True)
-        input_embeddings = input_embeddings.reshape(input_embeddings.shape[0],
-                                                    -1).view(torch.int8)
+        input_embeddings = input_embeddings.reshape(input_embeddings.shape[0], -1).view(torch.int8)
         # construct input_embedding_ranges
         for i in range(len(input_embedding_ranges)):
             item = input_embedding_ranges[i] or []
             item = torch.IntTensor(item).reshape(-1, 2)
             input_embedding_ranges[i] = item
-        input_embedding_ranges = pad_sequence(input_embedding_ranges,
-                                              batch_first=True,
-                                              padding_value=-1)
+        input_embedding_ranges = pad_sequence(input_embedding_ranges, batch_first=True, padding_value=-1)
 
         return input_embeddings, input_embedding_ranges
 
     def prepare_inputs(self,
-                       session_id,
                        input_ids,
                        gen_config: GenerationConfig,
                        input_embeddings=None,
-                       input_embedding_ranges=None,
-                       sequence_start: bool = True,
-                       sequence_end: bool = False,
-                       step=0,
-                       stop=False):
+                       input_embedding_ranges=None):
         """Convert inputs format."""
-        if len(input_ids) == 0:
-            input_ids = [[]]
-        if isinstance(input_ids[0], int):
-            input_ids = [input_ids]
+        assert isinstance(input_ids, Sequence)
 
-        batch_size = len(input_ids)
+        input_ids = torch.IntTensor(input_ids)
+        input_len = len(input_ids)
 
-        def _broadcast_np(data, dtype, shape=(batch_size, )):
-            if isinstance(data, Iterable):
-                assert len(data) == batch_size
-                return data
+        inputs = dict(input_ids=input_ids, )
 
-            return np.full(shape, data, dtype=dtype)
-
-        input_ids = [torch.IntTensor(ids) for ids in input_ids]
-        input_lengths = torch.IntTensor([len(ids) for ids in input_ids])
-        input_ids = pad_sequence(input_ids,
-                                 batch_first=True,
-                                 padding_value=self.eos_id)
-
-        if isinstance(session_id, int):
-            session_id = [session_id]
-        assert len(session_id) == batch_size
-
-        step = _broadcast_np(step, np.int32)
-
-        inputs = dict(
-            input_ids=input_ids,
-            input_lengths=input_lengths,
-            request_output_len=np.full(input_lengths.shape,
-                                       gen_config.max_new_tokens,
-                                       dtype=np.uint32),
-            runtime_top_k=_broadcast_np(gen_config.top_k, np.uint32),
-            runtime_top_p=_broadcast_np(gen_config.top_p, np.float32),
-            runtime_min_p=_broadcast_np(gen_config.min_p, np.float32),
-            temperature=_broadcast_np(gen_config.temperature, np.float32),
-            repetition_penalty=_broadcast_np(gen_config.repetition_penalty,
-                                             np.float32),
-            step=step,
-
-            # session input
-            START=_broadcast_np((1 if sequence_start else 0), np.int32),
-            END=_broadcast_np((1 if sequence_end else 0), np.int32),
-            CORRID=np.array(session_id, dtype=np.uint64),
-            STOP=_broadcast_np((1 if stop else 0), np.int32))
-
-        input_embeddings, input_embedding_ranges = self.prepare_embeddings(
-            input_embeddings, input_embedding_ranges)
+        input_embeddings, input_embedding_ranges = self.prepare_embeddings(input_embeddings, input_embedding_ranges)
         if input_embeddings is not None:
             inputs['input_embeddings'] = input_embeddings
             inputs['input_embedding_ranges'] = input_embedding_ranges
-
-        if gen_config.min_new_tokens is not None:
-            inputs['min_length'] = _broadcast_np(gen_config.min_new_tokens,
-                                                 np.int32)
-
-        if gen_config.logprobs is not None and gen_config.logprobs > 0:
-            if gen_config.logprobs > MAX_LOGPROBS:
-                gen_config.logprobs = MAX_LOGPROBS
-                logger.warning('logprobs shoudd be in range [1, 1024]'
-                               f'update logprobs={gen_config.logprobs}')
-            inputs['logprobs'] = _broadcast_np(gen_config.logprobs, np.int32)
 
         bad_words = []
         if gen_config.bad_token_ids is not None:
@@ -615,10 +531,24 @@ class TurboMindInstance:
         if bad_words is not None:
             inputs['bad_words_list'] = bad_words
 
-        if gen_config.random_seed is not None:
-            inputs['random_seed'] = _broadcast_np(gen_config.random_seed,
-                                                  np.uint64)
-        return inputs, input_lengths
+        return inputs, input_len
+
+    async def async_cancel(self, session_id: int = None):
+        self.model_inst.cancel()
+
+    def async_end_cb(self, fut: asyncio.Future, status: int):
+        """executing on engine's signaling thread."""
+        logger.info(f'[async_end_cb] session ended, status = {status}')
+        fut.get_loop().call_soon_threadsafe(fut.set_result, status)
+
+    async def async_end(self, session_id):
+        fut = asyncio.get_running_loop().create_future()
+        self.model_inst.end(partial(self.async_end_cb, fut), session_id)
+        await fut
+
+    def async_signal_cb(self, s: StreamingSemaphore):
+        """executing on engine's signaling thread."""
+        s.loop.call_soon_threadsafe(s.release)
 
     async def async_stream_infer(self,
                                  session_id,
@@ -628,7 +558,6 @@ class TurboMindInstance:
                                  sequence_start: bool = True,
                                  sequence_end: bool = False,
                                  step=0,
-                                 stop=False,
                                  gen_config: GenerationConfig = None,
                                  stream_output=False,
                                  **kwargs):
@@ -648,295 +577,106 @@ class TurboMindInstance:
             stream_output (bool): indicator for stream output
             kwargs (dict): kwargs for backward compatibility
         """
-        # start forward thread
-        que = LifoQueue()
-        from functools import partial
-        _forward_callback = partial(self._async_forward_callback, que=que)
-        _forward_thread = partial(self._async_forward_thread, que=que)
-        if stream_output and not stop:
-            logger.info(f'Register stream callback for {session_id}')
-            self.model_inst.register_callback(_forward_callback)
+        logger.info(f'[async_stream_infer] session {session_id} start')
+        gen_cfg = self._get_generation_config(gen_config)
 
-        inputs, input_lengths = self.prepare_inputs(
-            session_id=session_id,
-            input_ids=input_ids,
-            input_embeddings=input_embeddings,
-            input_embedding_ranges=input_embedding_ranges,
-            sequence_start=sequence_start,
-            sequence_end=sequence_end,
-            step=step,
-            stop=stop,
-            gen_config=gen_config)
+        inputs, input_len = self.prepare_inputs(input_ids=input_ids,
+                                                input_embeddings=input_embeddings,
+                                                input_embedding_ranges=input_embedding_ranges,
+                                                gen_config=gen_config)
 
-        tm_inputs = _np_dict_to_tm_dict(inputs)
-        _forward_thread(tm_inputs)
+        session = _tm.SessionParam(id=session_id, step=step, start=sequence_start, end=sequence_end)
 
-        seq_start = input_lengths + input_lengths.new_tensor(step)
+        inputs = _np_dict_to_tm_dict(inputs)
 
-        out_logprobs = None
-        prev_len = 0
-        # generator
-        while True:
-            while que.qsize() == 0:  # let other requests in
-                await asyncio.sleep(0.002)
+        sem = StreamingSemaphore()
+        signal_cb = partial(self.async_signal_cb, sem)
 
-            finish, tm_outputs = que.get()
-            if finish < 0:
-                yield EngineOutput(status=ResponseType.INTERNAL_ENGINE_ERROR,
-                                   token_ids=[],
-                                   num_token=0)
-                self.executor.shutdown()
-                break
+        outputs, shared_state = self.model_inst.forward(inputs, session, gen_cfg, stream_output, signal_cb)
 
-            outputs = _tm_dict_to_torch_dict(tm_outputs)
+        outputs = _tm_dict_to_torch_dict(outputs)
 
-            output_ids = outputs['output_ids'][:, 0, :]
-            sequence_length = outputs['sequence_length'].long()[:, 0]
-            output_ids = [
-                output_id[s:l] for output_id, s, l in zip(
-                    output_ids, seq_start, sequence_length)
-            ]
-            sequence_length -= seq_start.to(sequence_length.device)
+        extra_fs = self._get_extra_output_processors(outputs, gen_config, input_len)
 
-            if 'logprob_vals' in outputs:
-                logprob_vals = outputs['logprob_vals'][0, 0]
-                logprob_indexes = outputs['logprob_indexes'][0, 0]
-                logprob_nums = outputs['logprob_nums'][0, 0]
-                out_logprobs = self._get_logprobs(logprob_vals,
-                                                  logprob_indexes,
-                                                  logprob_nums, output_ids[0],
-                                                  gen_config.logprobs,
-                                                  sequence_length.cpu().item(),
-                                                  out_logprobs, session_id)
+        output_ids_buf = outputs['output_ids']
 
-            outputs = []
-            status = ResponseType.FINISH if finish else ResponseType.SUCCESS
-            for output, len_ in zip(output_ids, sequence_length):
-                output, len_ = output, len_.item()
-                if len(output) > 0 and output[-1].item() == self.eos_id \
-                        and not gen_config.ignore_eos:
-                    outputs = EngineOutput(status, output[:-1].tolist(),
-                                           len_ - 1)
-                elif len(output) > 0 and \
-                    gen_config.stop_token_ids is not None and \
-                        output[-1].item() in gen_config.stop_token_ids:
-                    outputs = EngineOutput(status, output[:-1].tolist(), len_)
-                else:
-                    outputs = EngineOutput(status, output.tolist(), len_)
-            if outputs.num_token < prev_len and not finish:
-                continue
-            else:
-                prev_len = outputs.num_token
+        finish = False
+        state = None
 
-            if out_logprobs:
-                output_token_len = len(outputs.token_ids)
-                outputs.logprobs = out_logprobs[:output_token_len]
+        output_ids = []
+        output_len = 0
+        prev_len = step + input_len
+        try:
+            while True:
+                await sem.acquire()
+                state = shared_state.consume()
 
-            yield outputs
+                status, seq_len = state.status, state.seq_len
 
-            if finish:
-                self.future.result()
-                self.executor.shutdown()
-                break
+                if status in [7, 8]:  # finish / canceled
+                    finish, status = True, 0
+                elif status:
+                    yield self._get_error_output()
+                    break
 
-        if stream_output and not stop:
-            logger.info(f'UN-register stream callback for {session_id}')
-            self.model_inst.unregister_callback()
+                if seq_len == prev_len and not finish:
+                    continue
 
-    def stream_infer(self,
-                     session_id,
-                     input_ids,
-                     input_embeddings=None,
-                     input_embedding_ranges=None,
-                     sequence_start: bool = True,
-                     sequence_end: bool = False,
-                     step=0,
-                     stop=False,
-                     gen_config: GenerationConfig = None,
-                     stream_output=False,
-                     **kwargs):
-        """Perform model inference.
+                output_ids += output_ids_buf[prev_len:seq_len].tolist()
+                output_len += seq_len - prev_len
+                status = ResponseType.FINISH if finish else ResponseType.SUCCESS  # noqa
+                output = EngineOutput(status, output_ids, output_len)
 
-        Args:
-            session_id (int): the id of a session
-            input_ids (numpy.ndarray): the token ids of a prompt
-            input_embeddings (List[numpy.ndarray]): embeddings features
-            input_embedding_ranges (List[Tuple[int,int]]): the begin/end
-              offsets of input_embeddings to input_ids
-            sequence_start (bool): indicator for starting a sequence
-            sequence_end (bool): indicator for ending a sequence
-            step (int): the offset of the k/v cache
-            stop (bool): indicator for cancelling the session
-            gen_config (GenerationConfig): generation config
-            stream_output (bool): indicator for stream output
-            kwargs (dict): kwargs for backward compatibility
-        """
-        if stream_output and not stop:
-            logger.info(f'Register stream callback for {session_id}')
-            self.model_inst.register_callback(self._forward_callback)
+                for f in extra_fs:
+                    f(output, seq_len)
 
-        inputs, input_lengths = self.prepare_inputs(
-            session_id=session_id,
-            input_ids=input_ids,
-            input_embeddings=input_embeddings,
-            input_embedding_ranges=input_embedding_ranges,
-            sequence_start=sequence_start,
-            sequence_end=sequence_end,
-            step=step,
-            stop=stop,
-            gen_config=gen_config)
+                prev_len = seq_len
 
-        tm_inputs = _np_dict_to_tm_dict(inputs)
-        # start forward thread
-        self.que = Queue()
-        self._forward_thread(tm_inputs)
+                yield output
 
-        seq_start = input_lengths + input_lengths.new_tensor(step)
-        out_logprobs = None
+                if finish:
+                    break
 
-        # generator
-        while True:
-            while self.que.qsize() > 1:
-                self.que.get()
+        except (GeneratorExit, asyncio.CancelledError) as e:
+            logger.info(f'[async_stream_infer] {type(e).__name__}')
+            self.model_inst.cancel()
+        except Exception as e:
+            logger.error(f'[async_stream_infer] {type(e).__name__} {e}')
+            self.model_inst.cancel()
+            yield self._get_error_output()
+        finally:
+            # Contract: `cb` won't be called again if status is non-zero
+            # wait for status to be set as `finish` or `error`
+            while not state or state.status == 0:
+                await sem.acquire()
+                state = shared_state.consume()
+            logger.info(f'[async_stream_infer] session {session_id} done')
 
-            finish, tm_outputs = self.que.get()
-            if finish < 0:
-                yield EngineOutput(status=ResponseType.INTERNAL_ENGINE_ERROR,
-                                   token_ids=[],
-                                   num_token=0)
-                self.executor.shutdown()
-                break
+    def _get_error_output(self):
+        return EngineOutput(status=ResponseType.INTERNAL_ENGINE_ERROR, token_ids=[], num_token=0)
 
-            outputs = _tm_dict_to_torch_dict(tm_outputs)
-
-            output_ids = outputs['output_ids'][:, 0, :]
-            sequence_length = outputs['sequence_length'].long()[:, 0]
-            output_ids = [
-                output_id[s:l] for output_id, s, l in zip(
-                    output_ids, seq_start, sequence_length)
-            ]
-            sequence_length -= seq_start.to(sequence_length.device)
-
-            if 'logprob_vals' in outputs:
-                logprob_vals = outputs['logprob_vals'][0, 0]
-                logprob_indexes = outputs['logprob_indexes'][0, 0]
-                logprob_nums = outputs['logprob_nums'][0, 0]
-                out_logprobs = self._get_logprobs(logprob_vals,
-                                                  logprob_indexes,
-                                                  logprob_nums, output_ids[0],
-                                                  gen_config.logprobs,
-                                                  sequence_length.cpu().item(),
-                                                  out_logprobs, session_id)
-
-            outputs = []
-            status = ResponseType.FINISH if finish else ResponseType.SUCCESS
-            for output, len_ in zip(output_ids, sequence_length):
-                output, len_ = output, len_.item()
-                if len(output) > 0 and output[-1].item() == self.eos_id \
-                        and not gen_config.ignore_eos:
-                    outputs = EngineOutput(status, output[:-1].tolist(),
-                                           len_ - 1, out_logprobs)
-                elif len(output) > 0 and \
-                    gen_config.stop_token_ids is not None and \
-                        output[-1].item() in gen_config.stop_token_ids:
-                    outputs = EngineOutput(status, output[:-1].tolist(), len_,
-                                           out_logprobs)
-                else:
-                    outputs = EngineOutput(status, output.tolist(), len_,
-                                           out_logprobs)
-
-            if out_logprobs:
-                output_token_len = len(outputs.token_ids)
-                outputs.logprobs = out_logprobs[:output_token_len]
-
-            yield outputs
-
-            if finish:
-                self.future.result()
-                self.executor.shutdown()
-                while self.que.qsize() > 0:
-                    self.que.get()
-                break
-
-        if stream_output and not stop:
-            logger.info(f'UN-register stream callback for {session_id}')
-            self.model_inst.unregister_callback()
-
-    def decode(self,
-               input_ids,
-               steps: List[int] = None,
-               input_embeddings=None,
-               input_embedding_ranges=None,
-               sequence_start: bool = True,
-               sequence_end: bool = True):
-        """Perform context decode on input tokens.
-
-        Args:
-            input_ids (numpy.ndarray): the batch of input token ids
-            steps (List[int]): the offset of the k/v cache
-            input_embeddings (List[List[Union[torch.Tensor, np.ndarray]]]):
-                embeddings features
-            input_embedding_ranges: (List[List[Tuple[int, int]]]):
-                the begin/end offsets of input_embeddings to input_ids
-            sequence_start (bool): indicator for starting a sequence
-            sequence_end (bool): indicator for ending a sequence
-        """
-
-        if len(input_ids) == 0:
-            input_ids = [[]]
-        if isinstance(input_ids[0], int):
-            input_ids = [input_ids]
-        if steps is None:
-            steps = [0] * len(input_ids)
-        assert isinstance(steps, List) and len(steps) == len(input_ids)
-
-        # append an extra token since input_len-1 tokens will be
-        # decoded by context decoder
-        input_ids = [x[:] for x in input_ids]
-        for inputs in input_ids:
-            inputs.append(0)
-
-        batch_size = len(input_ids)
-
-        def _broadcast_np(data, dtype, shape=(batch_size, )):
-            if isinstance(data, Iterable):
-                assert len(data) == batch_size
-                return data
-
-            return np.full(shape, data, dtype=dtype)
-
-        input_ids = [torch.IntTensor(ids) for ids in input_ids]
-        input_lengths = torch.IntTensor([len(ids) for ids in input_ids])
-        input_ids = pad_sequence(input_ids,
-                                 batch_first=True,
-                                 padding_value=self.eos_id)
-        steps = torch.IntTensor([step for step in steps])
-
-        inputs = dict(input_ids=input_ids,
-                      input_lengths=input_lengths,
-                      request_output_len=_broadcast_np(0, dtype=np.uint32),
-                      is_return_logits=_broadcast_np(1, np.uint32),
-                      START=_broadcast_np((1 if sequence_start else 0),
-                                          np.int32),
-                      END=_broadcast_np((1 if sequence_end else 0), np.int32),
-                      step=steps)
-
-        input_embeddings, input_embedding_ranges = self.prepare_embeddings(
-            input_embeddings, input_embedding_ranges)
-        if input_embeddings is not None:
-            inputs['input_embeddings'] = input_embeddings
-            inputs['input_embedding_ranges'] = input_embedding_ranges
-
-        tm_inputs = _np_dict_to_tm_dict(inputs)
-
-        # start forward thread
-        self._forward_thread(tm_inputs)
-
-        res, tm_outputs = self.que.get()
-        if res < 0:
-            return None
-
-        outputs = _tm_dict_to_torch_dict(tm_outputs)
-        logits = outputs['logits']
-
-        return logits[:, :-1, :]
+    def _get_generation_config(self, cfg: GenerationConfig):
+        c = _tm.GenerationConfig()
+        c.max_new_tokens = cfg.max_new_tokens
+        c.top_k = cfg.top_k
+        c.top_p = cfg.top_p
+        c.min_p = cfg.min_p
+        c.temperature = cfg.temperature
+        c.repetition_penalty = cfg.repetition_penalty
+        if cfg.min_new_tokens:
+            c.min_new_tokens = cfg.min_new_tokens
+        output_type = dict(all=1, generation=2)
+        if cfg.output_last_hidden_state:
+            c.output_last_hidden_state = output_type[cfg.output_last_hidden_state]
+        if cfg.output_logits:
+            c.output_logits = output_type[cfg.output_logits]
+        if cfg.logprobs:
+            if cfg.logprobs > MAX_LOGPROBS:
+                cfg.logprobs = MAX_LOGPROBS
+                logger.warning(f'logprobs shoudd be in range [1, {MAX_LOGPROBS}]'
+                               f'update logprobs={cfg.logprobs}')
+            c.output_logprobs = cfg.logprobs
+        if cfg.random_seed is not None:
+            c.random_seed = cfg.random_seed
+        # print (c)
+        return c

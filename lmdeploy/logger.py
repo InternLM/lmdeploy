@@ -21,16 +21,20 @@ class RequestLogger:
         self.max_log_len = max_log_len
 
     def log_prompt(self, session_id: int, prompt: str) -> None:
+        if not isinstance(prompt, str):
+            # Prompt may be a GPT4V message with base64 images;
+            # logging might be impractical due to length
+            return
         if self.max_log_len is not None:
             if prompt is not None:
                 prompt = prompt[:self.max_log_len]
-        logger.info(f'session_id={session_id}, '
+        logger.info(f'session={session_id}, '
                     f'prompt={prompt!r}')
 
-    def log_inputs(self, session_id: int, prompt: Optional[str],
-                   prompt_token_ids: Optional[List[int]],
+    def log_inputs(self, session_id: int, prompt: Optional[str], prompt_token_ids: Optional[List[int]],
                    gen_config: GenerationConfig, adapter_name: str) -> None:
         max_log_len = self.max_log_len
+        input_tokens = len(prompt_token_ids)
         if max_log_len is not None:
             if prompt is not None:
                 prompt = prompt[:max_log_len]
@@ -38,8 +42,9 @@ class RequestLogger:
             if prompt_token_ids is not None:
                 prompt_token_ids = prompt_token_ids[:max_log_len]
 
-        logger.info(f'session_id={session_id}, '
-                    f'prompt={prompt!r}, '
+        logger.info(f'session={session_id}, '
+                    f'adapter_name={adapter_name}, '
+                    f'input_tokens={input_tokens}, '
                     f'gen_config={gen_config}, '
-                    f'prompt_token_id={prompt_token_ids}, '
-                    f'adapter_name={adapter_name}.')
+                    f'prompt={prompt!r}, '
+                    f'prompt_token_id={prompt_token_ids}')

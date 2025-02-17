@@ -19,8 +19,7 @@ def permute_v2(x: torch.Tensor, size_per_head: int = 128):
     output_dims = x.size(-1)
     head_num = output_dims // size_per_head
 
-    return x.view(-1, head_num, 2,
-                  size_per_head // 2).transpose(2, 3).reshape(x.shape)
+    return x.view(-1, head_num, 2, size_per_head // 2).transpose(2, 3).reshape(x.shape)
 
 
 def merge_qkv_v2(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, tp: int):
@@ -101,14 +100,7 @@ class Ffn(Module):
         self.inter_size = model.model_config.inter_size
         self.group_size = max(1, model.model_config.group_size)
 
-    def _export(self,
-                inter_size: int,
-                fmt: str,
-                idx: int,
-                w123,
-                kind: str,
-                pack_fn,
-                apply_gs=False):
+    def _export(self, inter_size: int, fmt: str, idx: int, w123, kind: str, pack_fn, apply_gs=False):
         is_lora_a, is_lora_b = get_lora_flags(kind)
         w1, w2, w3 = map(transpose, w123)
 
@@ -120,23 +112,13 @@ class Ffn(Module):
             w2 = pad_in_dims(w2, inter_size // group_size)
 
         w1, w2, w3 = map(pack_fn, (w1, w2, w3))
-        self.model.save_split(w1,
-                              fmt.format(idx, 'w1', kind),
-                              split_dim=-1,
-                              copy=is_lora_a)
-        self.model.save_split(w3,
-                              fmt.format(idx, 'w3', kind),
-                              split_dim=-1,
-                              copy=is_lora_a)
-        self.model.save_split(w2,
-                              fmt.format(idx, 'w2', kind),
-                              split_dim=0,
-                              copy=is_lora_b)
+        self.model.save_split(w1, fmt.format(idx, 'w1', kind), split_dim=-1, copy=is_lora_a)
+        self.model.save_split(w3, fmt.format(idx, 'w3', kind), split_dim=-1, copy=is_lora_a)
+        self.model.save_split(w2, fmt.format(idx, 'w2', kind), split_dim=0, copy=is_lora_b)
 
     def apply(self, i: int, r: BaseReader):
         for e in get_params(r.ffn(i, None)):
-            e(partial(self._export, self.inter_size[i], self._ffn),
-              partial(r.ffn, i), i)
+            e(partial(self._export, self.inter_size[i], self._ffn), partial(r.ffn, i), i)
 
 
 class MoeFfn(Ffn):
@@ -163,8 +145,7 @@ class MoeFfn(Ffn):
         for p in get_params(r.moe_ffn_expert()):
             for e in range(self.expert_num[i]):
                 fmt = self._moe_ffn_expert.replace('E', str(e))
-                p(partial(self._export, self.inter_size, fmt),
-                  partial(r.moe_ffn_expert, e, i), i)
+                p(partial(self._export, self.inter_size, fmt), partial(r.moe_ffn_expert, e, i), i)
 
         gate = transpose(r.moe_ffn_gate(i))
         self.model.save_split(gate, self._moe_ffn_gate.format(i))
@@ -172,8 +153,7 @@ class MoeFfn(Ffn):
         if self.shared_gate:
             shared_gate = transpose(r.moe_ffn_shared_gate(i))
             # print(shared_gate)
-            self.model.save_split(shared_gate,
-                                  self._moe_ffn_shared_gate.format(i))
+            self.model.save_split(shared_gate, self._moe_ffn_shared_gate.format(i))
 
 
 class Attn(Module):
@@ -191,7 +171,7 @@ class Attn(Module):
         self.attn_bias = model.model_config.attn_bias
 
     def _reorder_and_merge(self, qkvo):
-        q, k, v, o = map(transpose, qkvo)
+        q, k, v, o = qkvo
         # reorder output dim for tm's rotary embedding layout
         if self.model.permute_qk:
             q = permute_v2(q, self.head_dim)
@@ -202,6 +182,27 @@ class Attn(Module):
             o = torch.zeros_like(q)
         return qkv, o
 
+    def _repeat_kv(self, qkvo, kind: str):
+        """replicate kv."""
+        q, k, v, o = qkvo
+        head_dim = self.model.model_config.size_per_head
+        hidden_dim = self.model.model_config.hidden_units
+
+        def _repeat(x):
+            dim = hidden_dim if kind != 'bias' else 1
+            x = x.reshape(dim, -1, head_dim)
+            x = x.repeat(1, 1, self.model.repeat_kv)
+            x = x.reshape(dim, -1)
+            return x
+
+        k, v = map(_repeat, (k, v))
+        if kind == 'bias':
+            if o is None:
+                o = torch.zeros(hidden_dim, dtype=q.dtype, device=q.device)
+            q, k, v, o = map(torch.squeeze, (q, k, v, o))
+
+        return (q, k, v, o)
+
     def _export(self, idx: int, qkvo, kind: str, pack_fn, **kwargs):
         if all(x is None for x in qkvo):
             return
@@ -209,15 +210,12 @@ class Attn(Module):
         if is_lora_a:
             qkv, o = map(transpose, qkvo)
         else:
+            qkvo = tuple(map(transpose, qkvo))
+            if self.model.repeat_kv:
+                qkvo = self._repeat_kv(qkvo, kind)
             qkv, o = self._reorder_and_merge(qkvo)
-        self.model.save_split(pack_fn(qkv),
-                              self._attn.format(idx, 'w_qkv', kind),
-                              split_dim=-1,
-                              copy=is_lora_a)
-        self.model.save_split(pack_fn(o),
-                              self._attn.format(idx, 'wo', kind),
-                              split_dim=0,
-                              copy=is_lora_b)
+        self.model.save_split(pack_fn(qkv), self._attn.format(idx, 'w_qkv', kind), split_dim=-1, copy=is_lora_a)
+        self.model.save_split(pack_fn(o), self._attn.format(idx, 'wo', kind), split_dim=0, copy=is_lora_b)
 
     def apply(self, i: int, r: BaseReader):
         for e in get_params(r.attn(i, None), bias=self.attn_bias):
@@ -247,25 +245,16 @@ class MLA(Module):
         cfg = self.model.model_config
 
         o = o.reshape(cfg.head_num, cfg.v_head_dim, -1)
-        o = torch.nn.functional.pad(
-            o, (0, 0, 0, cfg.size_per_head - cfg.v_head_dim, 0, 0))
+        o = torch.nn.functional.pad(o, (0, 0, 0, cfg.size_per_head - cfg.v_head_dim, 0, 0))
         o = o.view(cfg.head_num * cfg.size_per_head, cfg.hidden_units)
 
         if q_a is not None:
-            self.model.save_split(pack_fn(q_a),
-                                  self._mla.format(idx, 'q_a_proj', kind))
+            self.model.save_split(pack_fn(q_a), self._mla.format(idx, 'q_a_proj', kind))
         q_b_name = 'q_proj' if q_a is None else 'q_b_proj'
-        self.model.save_split(pack_fn(q_b),
-                              self._mla.format(idx, q_b_name, kind),
-                              split_dim=-1)
-        self.model.save_split(pack_fn(kv_a),
-                              self._mla.format(idx, 'kv_a_proj', kind))
-        self.model.save_split(pack_fn(kv_b),
-                              self._mla.format(idx, 'kv_b_proj', kind),
-                              split_dim=-1)
-        self.model.save_split(pack_fn(o),
-                              self._mla.format(idx, 'wo', kind),
-                              split_dim=0)
+        self.model.save_split(pack_fn(q_b), self._mla.format(idx, q_b_name, kind), split_dim=-1)
+        self.model.save_split(pack_fn(kv_a), self._mla.format(idx, 'kv_a_proj', kind))
+        self.model.save_split(pack_fn(kv_b), self._mla.format(idx, 'kv_b_proj', kind), split_dim=-1)
+        self.model.save_split(pack_fn(o), self._mla.format(idx, 'wo', kind), split_dim=0)
 
     _layernorm = 'layers.{0}.attention.{1}_a_layernorm'
 
@@ -303,8 +292,7 @@ class Misc(Module):
 
             if pad_size is None:
                 return tensor
-            return torch.nn.functional.pad(tensor, (0, 0, 0, pad_size),
-                                           'constant', 0)
+            return torch.nn.functional.pad(tensor, (0, 0, 0, pad_size), 'constant', 0)
 
         if emb is not None:
             emb = pad_weight(emb)

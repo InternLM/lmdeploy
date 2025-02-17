@@ -89,8 +89,7 @@ class TestFillKVCache:
         yield torch.rand_like(k_states)
 
     @pytest.fixture
-    def k_caches(self, batch_size, max_num_blocks, block_size, num_heads,
-                 head_dim):
+    def k_caches(self, batch_size, max_num_blocks, block_size, num_heads, head_dim):
         shape = (batch_size * max_num_blocks, block_size, num_heads, head_dim)
         yield torch.full(shape, 0.0).cuda()
 
@@ -108,8 +107,7 @@ class TestFillKVCache:
         yield ret.cuda()
 
     @pytest.fixture
-    def gt(self, k_states, v_states, k_caches, v_caches, seq_lens,
-           history_lens, block_offsets, block_size):
+    def gt(self, k_states, v_states, k_caches, v_caches, seq_lens, history_lens, block_offsets, block_size):
         batch_size = len(seq_lens)
         k_caches = k_caches.clone()
         v_caches = v_caches.clone()
@@ -145,12 +143,10 @@ class TestFillKVCache:
         ((1, 8, 16, 24), (1, 16, 31, 24)),
     ],
                              indirect=True)
-    def test_fill_kv_cache(self, k_states, v_states, k_caches, v_caches,
-                           block_offsets, q_start_loc, q_seq_length,
+    def test_fill_kv_cache(self, k_states, v_states, k_caches, v_caches, block_offsets, q_start_loc, q_seq_length,
                            kv_seq_length, max_q_seq_length, gt):
-        fill_kv_cache(k_states, v_states, k_caches, v_caches, q_start_loc,
-                      q_seq_length, kv_seq_length, max_q_seq_length,
-                      block_offsets)
+        fill_kv_cache(k_states, v_states, k_caches, v_caches, q_start_loc, q_seq_length, kv_seq_length,
+                      max_q_seq_length, block_offsets)
 
         torch.testing.assert_close(k_caches, gt[0])
         torch.testing.assert_close(v_caches, gt[1])
@@ -159,8 +155,7 @@ class TestFillKVCache:
 class TestFillKVCacheInt8(TestFillKVCache):
 
     @pytest.fixture
-    def k_caches(self, batch_size, max_num_blocks, block_size, num_heads,
-                 head_dim):
+    def k_caches(self, batch_size, max_num_blocks, block_size, num_heads, head_dim):
         shape = (batch_size * max_num_blocks, block_size, num_heads, head_dim)
         yield torch.full(shape, 0, dtype=torch.uint8).cuda()
 
@@ -169,8 +164,7 @@ class TestFillKVCacheInt8(TestFillKVCache):
         yield torch.rand_like(k_caches.to(torch.float32)).to(torch.uint8)
 
     @pytest.fixture
-    def k_scales_zeros(self, batch_size, max_num_blocks, block_size,
-                       num_heads):
+    def k_scales_zeros(self, batch_size, max_num_blocks, block_size, num_heads):
         shape = (batch_size * max_num_blocks, block_size, num_heads, 2)
         yield torch.full(shape, 0.0).cuda()
 
@@ -183,9 +177,8 @@ class TestFillKVCacheInt8(TestFillKVCache):
         yield 8
 
     @pytest.fixture
-    def gt(self, k_states, v_states, k_caches, v_caches, seq_lens,
-           history_lens, block_offsets, block_size, k_scales_zeros,
-           v_scales_zeros, nbits):
+    def gt(self, k_states, v_states, k_caches, v_caches, seq_lens, history_lens, block_offsets, block_size,
+           k_scales_zeros, v_scales_zeros, nbits):
         k_states, k_states_sz = quant(k_states, nbits)
         v_states, v_states_sz = quant(v_states, nbits)
         batch_size = len(seq_lens)
@@ -233,13 +226,10 @@ class TestFillKVCacheInt8(TestFillKVCache):
         ((1, 8, 16, 24), (1, 16, 31, 24)),
     ],
                              indirect=True)
-    def test_fill_kv_cache(self, k_states, v_states, k_caches, v_caches,
-                           k_scales_zeros, v_scales_zeros, block_offsets,
-                           q_start_loc, q_seq_length, kv_seq_length,
-                           max_q_seq_length, gt):
-        fill_kv_cache(k_states, v_states, k_caches, v_caches, q_start_loc,
-                      q_seq_length, kv_seq_length, max_q_seq_length,
-                      block_offsets, k_scales_zeros, v_scales_zeros, 8)
+    def test_fill_kv_cache(self, k_states, v_states, k_caches, v_caches, k_scales_zeros, v_scales_zeros, block_offsets,
+                           q_start_loc, q_seq_length, kv_seq_length, max_q_seq_length, gt):
+        fill_kv_cache(k_states, v_states, k_caches, v_caches, q_start_loc, q_seq_length, kv_seq_length,
+                      max_q_seq_length, block_offsets, k_scales_zeros, v_scales_zeros, 8)
 
         torch.testing.assert_close(k_caches, gt[0])
         torch.testing.assert_close(v_caches, gt[1])
@@ -250,10 +240,8 @@ class TestFillKVCacheInt8(TestFillKVCache):
 class TestFillKVCacheInt4(TestFillKVCacheInt8):
 
     @pytest.fixture
-    def k_caches(self, batch_size, max_num_blocks, block_size, num_heads,
-                 head_dim):
-        shape = (batch_size * max_num_blocks, block_size, num_heads,
-                 head_dim // 2)
+    def k_caches(self, batch_size, max_num_blocks, block_size, num_heads, head_dim):
+        shape = (batch_size * max_num_blocks, block_size, num_heads, head_dim // 2)
         yield torch.full(shape, 0, dtype=torch.uint8).cuda()
 
     @pytest.fixture
@@ -265,15 +253,12 @@ class TestFillKVCacheInt4(TestFillKVCacheInt8):
         ((1, 8, 16, 24), (1, 16, 31, 24)),
     ],
                              indirect=True)
-    def test_fill_kv_cache(self, k_states, v_states, k_caches, v_caches,
-                           k_scales_zeros, v_scales_zeros, block_offsets,
-                           q_start_loc, q_seq_length, kv_seq_length,
-                           max_q_seq_length, gt, nbits):
+    def test_fill_kv_cache(self, k_states, v_states, k_caches, v_caches, k_scales_zeros, v_scales_zeros, block_offsets,
+                           q_start_loc, q_seq_length, kv_seq_length, max_q_seq_length, gt, nbits):
         k_scales_zeros = torch.zeros_like(k_scales_zeros)
         v_scales_zeros = torch.zeros_like(v_scales_zeros)
-        fill_kv_cache(k_states, v_states, k_caches, v_caches, q_start_loc,
-                      q_seq_length, kv_seq_length, max_q_seq_length,
-                      block_offsets, k_scales_zeros, v_scales_zeros, nbits)
+        fill_kv_cache(k_states, v_states, k_caches, v_caches, q_start_loc, q_seq_length, kv_seq_length,
+                      max_q_seq_length, block_offsets, k_scales_zeros, v_scales_zeros, nbits)
 
         torch.testing.assert_close(k_scales_zeros, gt[2])
         torch.testing.assert_close(v_scales_zeros, gt[3])

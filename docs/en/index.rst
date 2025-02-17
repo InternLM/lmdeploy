@@ -87,9 +87,7 @@ Documentation
    :maxdepth: 1
    :caption: Benchmark
 
-   benchmark/profile_generation.md
-   benchmark/profile_throughput.md
-   benchmark/profile_api_server.md
+   benchmark/benchmark.md
    benchmark/evaluate_with_opencompass.md
 
 .. toctree::

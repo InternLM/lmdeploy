@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <iostream>
 #include <limits>
 #include <numeric>
 #include <random>
@@ -249,7 +250,6 @@ __global__ void MoeScanKernel_v2(int*       f2n,      // [e*n]
 
 template<int max_expert_num,
          int max_top_k,
-         //  bool norm_top_k,
          int items_per_thread,
          int block_dim,
          int access_size,
@@ -264,6 +264,7 @@ __global__ void MoeGateKernel_v8(float*       scales,  // [e,n]
                                  int          token_num_padded,
                                  int          expert_num,
                                  int          top_k,
+                                 bool         softmax,
                                  bool         norm_topk,
                                  float        routed_scale)
 {
@@ -425,8 +426,7 @@ __global__ void MoeGateKernel_v8(float*       scales,  // [e,n]
     unsigned mask = (unsigned)-1;
     float    max_logit;
 
-    int   count{};
-    float sum_prob{};
+    int count{};
 
     const int warp_ti_offset = warp_ti * threads_per_token;
 
@@ -441,6 +441,7 @@ __global__ void MoeGateKernel_v8(float*       scales,  // [e,n]
                 max_bit = bit;
                 max_val = data[i];
             }
+            // weird thing that nvcc tends to use funnel shift for `bit <<= 1`
             asm("shl.b32 %0, %1, 1;\n" : "=r"(bit) : "r"(bit));
         }
 
@@ -483,20 +484,25 @@ __global__ void MoeGateKernel_v8(float*       scales,  // [e,n]
         }
     }
 
-    PRAGMA_UNROLL
-    for (int i = 0; i < items_per_thread; ++i) {
-        if (!norm_topk || used[i]) {
-            data[i] = expf(data[i] - max_logit);
-            sum_prob += data[i];
+    float sum_prob{};
+
+    if (softmax) {
+        PRAGMA_UNROLL
+        for (int i = 0; i < items_per_thread; ++i) {
+            if (!norm_topk || used[i]) {
+                data[i] = expf(data[i] - max_logit);
+                sum_prob += data[i];
+            }
         }
+        PRAGMA_UNROLL
+        for (int m = threads_per_token / 2; m >= 1; m /= 2) {
+            sum_prob += __shfl_xor_sync((uint32_t)-1, sum_prob, m);
+        }
+        sum_prob = fdividef(1.f, sum_prob);
     }
-
-    PRAGMA_UNROLL
-    for (int m = threads_per_token / 2; m >= 1; m /= 2) {
-        sum_prob += __shfl_xor_sync((uint32_t)-1, sum_prob, m);
+    else {
+        sum_prob = 1.f;
     }
-
-    sum_prob = fdividef(1.f, sum_prob);
 
     using WarpScan = cub::WarpScan<int, threads_per_token>;
     __shared__ typename WarpScan::TempStorage temp_storage[tokens_per_cta];
@@ -568,6 +574,7 @@ void invokeMoeGate_V2(int*         f2n,            // [e*n]  -> n
                       int          tokens_padded,  //  round_up(n, 4)
                       int          experts,        //  E
                       int          experts_per_token,
+                      bool         softmax,
                       bool         norm_topk,
                       float        routed_scale,
                       cudaStream_t st)
@@ -601,29 +608,24 @@ void invokeMoeGate_V2(int*         f2n,            // [e*n]  -> n
                 tokens_padded,
                 experts,
                 experts_per_token,
+                softmax,
                 norm_topk,
                 routed_scale);
     };
 
     auto fail = [&] {
         std::cerr << __FILE__ << "(" << __LINE__ << "): unsupported moe config: expert_num=" << experts
-                  << ", top_k=" << experts_per_token << "\n";
+                  << ", top_k=" << experts_per_token << ", softmax=" << softmax << ", norm_topk=" << norm_topk << "\n";
         std::abort();
     };
 
+    if (!softmax && norm_topk) {
+        // norm top-k is part of softmax impl
+        fail();
+    }
+
     if (experts <= 8) {
         if (experts_per_token <= 2) {
-            // MoeGateKernel_V2<2, 128><<<cdiv(tokens, 128), 128, 0, st>>>(scales,
-            //     (int8_t*)masks,
-            //     accum,
-            //     logits,
-            //     log_tile,
-            //     tiles,
-            //     tokens,
-            //     tokens_padded,
-            //     experts);
-
-            // std::cout << tokens << " " << experts << " " << experts_per_token << " " << tokens_padded << "\n";
             invoke(_Int<8>, _Int<2>, _Int<8>, _Int<4>);
         }
         else {
@@ -878,7 +880,7 @@ std::vector<int> SampleBalanced(int token_num, int expert_num, int exp_per_tok, 
 }
 
 template<int max_expert_num, int items_per_thread, int access_size>
-__global__ void MoeMaskTopKGroups(float* logits, int token_num, int expert_num, int top_k)
+__global__ void MoeSoftmaxMaskTopKGroups(float* logits, int token_num, int expert_num, int top_k)
 {
     constexpr int threads_per_token = max_expert_num / items_per_thread;
 
@@ -895,11 +897,12 @@ __global__ void MoeMaskTopKGroups(float* logits, int token_num, int expert_num, 
     for (int i = 0; i < items_per_thread; ++i) {
         data[i] = -std::numeric_limits<float>::infinity();
     }
+    // max logit in the group
     float max_val = -std::numeric_limits<float>::infinity();
     if (ti < token_num) {
         PRAGMA_UNROLL
         for (int i = 0; i < items_per_thread; i += access_size) {
-            const int e = ei * items_per_thread + i;
+            const int e = ei * items_per_thread + i;  // blocked partition
             if (e < expert_num) {
                 Ldg((Array<float, access_size>&)data[i], &logits[ti * expert_num + e]);
                 PRAGMA_UNROLL
@@ -913,7 +916,8 @@ __global__ void MoeMaskTopKGroups(float* logits, int token_num, int expert_num, 
     const int warp_ti        = threadIdx.x % WARP_SIZE / threads_per_token;
     const int warp_ti_offset = warp_ti * threads_per_token;
 
-    bool alive = false;
+    bool  alive     = false;
+    float max_logit = 0;
 
     for (int k = 0; k < top_k; ++k) {
         int   g_max_ei  = ei;
@@ -925,34 +929,58 @@ __global__ void MoeMaskTopKGroups(float* logits, int token_num, int expert_num, 
         // tie breaking
         const auto active = __ballot_sync((uint32_t)-1, max_val == g_max_val);
         g_max_ei          = __ffs(active >> (unsigned)warp_ti_offset) - 1;
+        if (k == 0) {
+            max_logit = g_max_val;
+        }
         if (ei == g_max_ei) {
             alive   = true;
             max_val = -std::numeric_limits<float>::infinity();
         }
     }
 
-    if (!alive && ti < token_num) {
-        Array<float, access_size> vec;
-        fill(vec, -std::numeric_limits<float>::infinity());
+    float sum_prob{};
+
+    PRAGMA_NO_UNROLL
+    for (int i = 0; i < items_per_thread; ++i) {
+        data[i] = expf(data[i] - max_logit);
+        sum_prob += data[i];
+    }
+
+    PRAGMA_UNROLL
+    for (int m = threads_per_token / 2; m >= 1; m /= 2) {
+        sum_prob += __shfl_xor_sync((uint32_t)-1, sum_prob, m);
+    }
+
+    // mask dead logits
+    sum_prob = alive ? fdividef(1.f, sum_prob) : 0;
+
+    PRAGMA_UNROLL
+    for (int i = 0; i < items_per_thread; ++i) {
+        data[i] *= sum_prob;
+    }
+
+    if (ti < token_num) {
         PRAGMA_UNROLL
         for (int i = 0; i < items_per_thread; i += access_size) {
             const int e = ei * items_per_thread + i;
             if (e < expert_num) {
-                Store(&logits[ti * expert_num + e], vec);
+                Store(&logits[ti * expert_num + e], (Array<float, access_size>&)data[i]);
             }
         }
     }
 }
 
-void invokeMaskMoeTopKGroups(float* logits, int token_num, int expert_num, int group_size, int top_k, cudaStream_t st)
+void invokeMoeSoftmaxMaskTopKGroups(
+    float* logits, int token_num, int expert_num, int group_size, int top_k, cudaStream_t st)
 {
     auto invoke = [&](auto max_expert_num, auto items_per_thread, auto vec_size) {
         constexpr int thrs_per_tok = max_expert_num.value / items_per_thread.value;
         constexpr int threads      = 256;
         const int     blocks       = ceil_div(token_num, threads / thrs_per_tok);
-        MoeMaskTopKGroups<max_expert_num.value, items_per_thread.value, vec_size.value>
+        MoeSoftmaxMaskTopKGroups<max_expert_num.value, items_per_thread.value, vec_size.value>
             <<<blocks, threads, 0, st>>>(logits, token_num, expert_num, top_k);
     };
+
     if (expert_num == 160 && group_size == 20) {
         return invoke(_Int<160>, _Int<20>, _Int<4>);
     }

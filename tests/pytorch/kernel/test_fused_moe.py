@@ -111,10 +111,8 @@ class TestFusedMoEKernelLauncher:
         yield C.flatten(0, 1)
 
     @torch.inference_mode()
-    def test_launcher(self, A, B, sorted_idx, exp_start, exp_end, weights,
-                      enable_weights, top_k, M, gt):
-        from lmdeploy.pytorch.kernels.cuda.fused_moe import \
-            fused_moe_kernel_launcher
+    def test_launcher(self, A, B, sorted_idx, exp_start, exp_end, weights, enable_weights, top_k, M, gt):
+        from lmdeploy.pytorch.kernels.cuda.fused_moe import fused_moe_kernel_launcher
         N = B.size(1)
         C = B.new_empty(M * top_k, N)
 
@@ -184,20 +182,12 @@ class TestFusedMoe:
 
     @pytest.fixture
     def w1(self, num_experts, hidden_size, in_size, dtype, device):
-        ret = torch.rand(num_experts,
-                         hidden_size,
-                         in_size,
-                         dtype=dtype,
-                         device=device)
+        ret = torch.rand(num_experts, hidden_size, in_size, dtype=dtype, device=device)
         yield (ret - 0.5) / 2
 
     @pytest.fixture
     def w2(self, num_experts, out_size, hidden_size, dtype, device):
-        ret = torch.rand(num_experts,
-                         out_size,
-                         hidden_size // 2,
-                         dtype=dtype,
-                         device=device)
+        ret = torch.rand(num_experts, out_size, hidden_size // 2, dtype=dtype, device=device)
         yield (ret - 0.5) / 2
 
     @pytest.fixture
@@ -206,9 +196,7 @@ class TestFusedMoe:
 
     @pytest.fixture
     def topk_logits(self, router_logits, top_k):
-        routing_weights = torch.softmax(router_logits,
-                                        dim=-1,
-                                        dtype=torch.float32)
+        routing_weights = torch.softmax(router_logits, dim=-1, dtype=torch.float32)
         yield torch.topk(routing_weights, top_k, dim=-1)
 
     @pytest.fixture
@@ -222,8 +210,7 @@ class TestFusedMoe:
     @pytest.fixture
     def gt(self, hidden_states, w1, w2, topk_weights, topk_idx, renormalize):
         if renormalize:
-            topk_weights = topk_weights / topk_weights.sum(dim=-1,
-                                                           keepdim=True)
+            topk_weights = topk_weights / topk_weights.sum(dim=-1, keepdim=True)
 
         seq_len = hidden_states.size(0)
         out_size = w2.size(1)
@@ -233,20 +220,60 @@ class TestFusedMoe:
             token_idx, k_idx = torch.where(topk_idx == eid)
             gate_proj, up_proj = w1[eid].chunk(2, dim=0)
             down_proj = w2[eid]
-            tmp_out = _mlp_forward(hidden_states[token_idx], gate_proj,
-                                   up_proj, down_proj)
+            tmp_out = _mlp_forward(hidden_states[token_idx], gate_proj, up_proj, down_proj)
             tmp_out = tmp_out * topk_weights[token_idx, k_idx, None]
             output.index_add_(0, token_idx, tmp_out.to(output.dtype))
         yield output
 
     @torch.inference_mode()
-    def test_fused_moe(self, hidden_states, w1, w2, topk_weights, topk_idx,
-                       top_k, renormalize, gt):
-        output = fused_moe(hidden_states,
-                           w1,
-                           w2,
-                           topk_weights,
-                           topk_idx,
-                           topk=top_k,
-                           renormalize=renormalize)
+    def test_fused_moe(self, hidden_states, w1, w2, topk_weights, topk_idx, top_k, renormalize, gt):
+        output = fused_moe(hidden_states, w1, w2, topk_weights, topk_idx, topk=top_k, renormalize=renormalize)
         torch.testing.assert_close(output, gt, atol=1e-3, rtol=1e-3)
+
+
+class TestFusedMoeW8A8(TestFusedMoe):
+
+    @pytest.fixture
+    def quant_states(self, hidden_states):
+        from lmdeploy.pytorch.kernels.cuda.w8a8_triton_kernels import per_token_quant_int8
+        states_i8, states_scale = per_token_quant_int8(hidden_states, 1e-7)
+        yield states_i8, states_scale
+
+    def quant_weight(self, w):
+        from lmdeploy.pytorch.kernels.cuda.w8a8_triton_kernels import per_channel_quant
+        num_experts, num_outs, _ = w.shape
+        w = w.flatten(0, -2)
+        w_i8, w_scale = per_channel_quant(w, torch.int8)
+        w_i8 = w_i8.view(num_experts, num_outs, -1)
+        w_scale = w_scale.view(num_experts, num_outs, -1)
+        return w_i8, w_scale
+
+    @pytest.fixture
+    def quant_w1(self, w1):
+        w_i8, w_scale = self.quant_weight(w1)
+        yield w_i8, w_scale
+
+    @pytest.fixture
+    def quant_w2(self, w2):
+        w_i8, w_scale = self.quant_weight(w2)
+        yield w_i8, w_scale
+
+    @torch.inference_mode()
+    def test_fused_moe(self, quant_states, quant_w1, quant_w2, topk_weights, topk_idx, top_k, renormalize, gt):
+        from lmdeploy.pytorch.kernels.cuda.w8a8_fused_moe import fused_moe_w8a8
+        state_i8, state_scale = quant_states
+        w1_i8, w1_scale = quant_w1
+        w2_i8, w2_scale = quant_w2
+
+        output = fused_moe_w8a8(state_i8,
+                                state_scale,
+                                w1_i8,
+                                w1_scale,
+                                w2_i8,
+                                w2_scale,
+                                topk_weights=topk_weights,
+                                topk_ids=topk_idx,
+                                topk=top_k,
+                                out_dtype=torch.float16,
+                                renormalize=renormalize)
+        torch.testing.assert_close(output, gt, atol=5e-3, rtol=1e-3)

@@ -7,6 +7,9 @@ import torch
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 
 from .tokenizer import Tokenizer
+from .utils import get_logger
+
+logger = get_logger('lmdeploy')
 
 LogitsProcessor = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 """LogitsProcessor is a function that takes a tensor of input_ids, the logits
@@ -52,6 +55,9 @@ class GenerationConfig:
             ignoring the number of tokens in the prompt.
         skip_special_tokens (bool): Whether or not to remove special tokens
             in the decoding. Default to be True.
+        spaces_between_special_tokens (bool): Whether or not to add spaces
+            around special tokens. The behavior of Fast tokenizers is to have
+            this to False. This is setup to True in slow tokenizers.
         logprobs (int): Number of log probabilities to return per output token.
         response_format (Dict): Only pytorch backend support formatting
         response. Examples:
@@ -94,9 +100,12 @@ class GenerationConfig:
     bad_token_ids: List[int] = None
     min_new_tokens: int = None
     skip_special_tokens: bool = True
+    spaces_between_special_tokens: bool = True
     logprobs: int = None
     response_format: Optional[Dict] = None
     logits_processors: Optional[List[LogitsProcessor]] = None
+    output_logits: Literal['all', 'generation'] = None
+    output_last_hidden_state: Literal['all', 'generation'] = None
 
     def convert_stop_bad_words_to_ids(self, tokenizer: Tokenizer):
         """convert stop_words/bad_sords to ids and append the ids to
@@ -122,9 +131,8 @@ class GenerationConfig:
 
     def __post_init__(self):
         """Check input validation."""
-        assert type(
-            self.n) == int and self.n > 0, 'n is not a positive integer'
-        assert self.top_p > 0 and self.top_p <= 1  # (0, 1]
+        assert type(self.n) == int and self.n > 0, 'n is not a positive integer'
+        assert self.top_p >= 0 and self.top_p <= 1  # [0, 1]
         assert self.top_k >= 0, 'top_k can not be a negative integer'
         assert self.temperature >= 0 and self.temperature <= 2  # [0,2]
         assert 0 <= self.min_p <= 1, \
@@ -141,11 +149,10 @@ class TurbomindEngineConfig:
             The `auto` option will use FP16 precision for FP32 and FP16
             models, and BF16 precision for BF16 models.
         model_format (str): the layout of the deployed model. It can be one
-            of the following values [hf, meta_llama, awq, gptq],`hf` meaning
-            huggingface model(.bin, .safetensors), `meta_llama` being
-            meta llama's format(.pth), `awq` and `gptq` meaning the quantized
-            model by AWQ and GPTQ, respectively. If it is not specified,
-            i.e. None, it will be extracted from the input model
+            of the following values [hf, awq, gptq],`hf` meaning
+            huggingface model(.bin, .safetensors), `awq` and `gptq` meaning
+            the quantized model by AWQ and GPTQ, respectively. If it is not
+            specified, i.e. None, it will be extracted from the input model
         tp (int): the number of GPU cards used in tensor parallelism,
             default to 1
         session_len (int): the max session length of a sequence, default to
@@ -292,14 +299,14 @@ class PytorchEngineConfig:
             'invalid max_prefill_token_num'
         assert self.num_gpu_blocks >= 0, 'invalid num_gpu_blocks'
         assert self.quant_policy in (0, 4, 8), 'invalid quant_policy'
-        assert self.device_type in [
-            'cuda', 'ascend', 'maca'
-        ], (f'invalid device_type: {self.device_type}')
-        if self.quant_policy > 0 and self.device_type not in [
-                'cuda', 'ascend'
-        ]:
+        assert self.device_type in ['cuda', 'ascend', 'maca', 'camb'], (f'invalid device_type: {self.device_type}')
+        if self.quant_policy > 0 and self.device_type not in ['cuda', 'ascend']:
             assert False, \
                    'kv cache quantization only works for CUDA and ASCEND.'
+        if self.device_type == 'camb' and self.block_size != 16:
+            self.block_size = 16
+            logger.warning('Currently, camb device requires block size to be 16, \
+                    setting block size to 16')
 
 
 class ResponseType(enum.Enum):
@@ -340,10 +347,11 @@ class Response:
     text: str
     generate_token_len: int
     input_token_len: int
-    session_id: int
     finish_reason: Optional[Literal['stop', 'length']] = None
     token_ids: List[int] = field(default_factory=list)
     logprobs: List[Dict[int, float]] = None
+    logits: torch.Tensor = None
+    last_hidden_state: torch.Tensor = None
     index: int = 0
 
 
@@ -363,6 +371,8 @@ class EngineOutput:
     token_ids: List[int]
     num_token: int
     logprobs: List[Dict[int, float]] = None
+    logits: torch.Tensor = None
+    last_hidden_state: torch.Tensor = None
 
 
 @dataclass

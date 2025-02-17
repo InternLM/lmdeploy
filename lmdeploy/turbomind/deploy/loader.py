@@ -28,8 +28,7 @@ class BaseLoader(ABC):
         self.pattern = pattern
         self.item_count = defaultdict(int)
 
-    def get_index(self, index_name: str,
-                  file_pattern: str) -> Tuple[dict, list]:
+    def get_index(self, index_name: str, file_pattern: str) -> Tuple[dict, list]:
         """get shards and weight map (if possible) for the model."""
         get_path = partial(osp.join, self.model_path)
         shards = []
@@ -42,8 +41,7 @@ class BaseLoader(ABC):
             index = {}
             shards = glob(get_path(file_pattern))
         if not shards:
-            raise RuntimeError(
-                f'failed to locate weight files for {self.model_path}')
+            raise RuntimeError(f'failed to locate weight files for {self.model_path}')
         return sorted(shards), index
 
     @abstractmethod
@@ -53,11 +51,7 @@ class BaseLoader(ABC):
 
 class SafetensorsLoader(BaseLoader):
 
-    def __init__(self,
-                 model_path: str,
-                 pattern: str,
-                 index_name=None,
-                 file_pattern=None):
+    def __init__(self, model_path: str, pattern: str, index_name=None, file_pattern=None):
         super().__init__(model_path, pattern)
         self.shards, index = self.get_index(index_name, file_pattern)
         if not index:
@@ -113,11 +107,7 @@ class SafetensorsLoader(BaseLoader):
 
 class PytorchLoader(BaseLoader):
 
-    def __init__(self,
-                 model_path: str,
-                 pattern: str,
-                 index_name=None,
-                 file_pattern=None):
+    def __init__(self, model_path: str, pattern: str, index_name=None, file_pattern=None):
         super().__init__(model_path, pattern)
         self.shards, index = self.get_index(index_name, file_pattern)
         for k in index.keys():

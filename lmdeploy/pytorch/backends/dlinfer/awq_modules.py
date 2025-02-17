@@ -11,8 +11,7 @@ from ..awq_modules import LinearW4A16Builder, LinearW4A16Impl
 class AwqLinearW4A16Impl(LinearW4A16Impl):
     """awq kernel linear."""
 
-    def __init__(self, in_features: int, out_features: int, w_bit: int,
-                 group_size: int):
+    def __init__(self, in_features: int, out_features: int, w_bit: int, group_size: int):
         self.in_features = in_features
         self.out_features = out_features
         self.w_bit = w_bit
@@ -26,8 +25,7 @@ class AwqLinearW4A16Impl(LinearW4A16Impl):
                 bias: Optional[torch.Tensor] = None,
                 all_reduce: bool = False):
         """forward."""
-        out = awq_linear(x, qweight, scales, qzeros, bias, all_reduce,
-                         self.group_size)
+        out = awq_linear(x, qweight, scales, qzeros, bias, all_reduce, self.group_size)
         return out
 
 

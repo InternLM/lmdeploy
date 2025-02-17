@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 from pathlib import Path
-from typing import Union
+from typing import Literal, Union
 
 import torch
 from torch import nn
@@ -9,12 +9,13 @@ from transformers import AutoTokenizer
 
 from lmdeploy.archs import get_task
 from lmdeploy.lite.quantization import CalibrationContext, CalibrationContextV2
-from lmdeploy.lite.utils import (collect_target_modules, get_calib_loaders,
-                                 load_hf_from_pretrained)
+from lmdeploy.lite.utils import collect_target_modules, get_calib_loaders, load_hf_from_pretrained
+from lmdeploy.vl.model.builder import load_vl_model
 
 LAYER_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMDecoderLayer',
     'InternLM2ForCausalLM': 'InternLM2DecoderLayer',
+    'InternLM3ForCausalLM': 'InternLM3DecoderLayer',
     'QWenLMHeadModel': 'QWenBlock',
     'Qwen2ForCausalLM': 'Qwen2DecoderLayer',
     'BaiChuanForCausalLM': 'DecoderLayer',  # Baichuan 7B
@@ -33,6 +34,7 @@ LAYER_TYPE_MAP = {
 NORM_TYPE_MAP = {
     'InternLMForCausalLM': 'InternLMRMSNorm',
     'InternLM2ForCausalLM': 'InternLM2RMSNorm',
+    'InternLM3ForCausalLM': 'InternLM3RMSNorm',
     'QWenLMHeadModel': 'RMSNorm',
     'Qwen2ForCausalLM': 'Qwen2RMSNorm',
     'BaiChuanForCausalLM': 'RMSNorm',  # Baichuan 7B
@@ -51,6 +53,7 @@ NORM_TYPE_MAP = {
 HEAD_NAME_MAP = {
     'InternLMForCausalLM': 'lm_head',
     'InternLM2ForCausalLM': 'output',
+    'InternLM3ForCausalLM': 'output',
     'QWenLMHeadModel': 'lm_head',
     'Qwen2ForCausalLM': 'lm_head',
     'BaiChuanForCausalLM': 'lm_head',  # Baichuan 7B
@@ -113,18 +116,15 @@ def _prepare_for_calibrate(model: nn.Module,
         elif isinstance(layer_type, type):
             is_layer = isinstance(child, layer_type)
         else:
-            raise TypeError(
-                'layer_type should be a string (class name) or a type')
+            raise TypeError('layer_type should be a string (class name) or a type')
 
         # Check if the child contains the target module type
-        contain_layer = len(
-            collect_target_modules(child, layer_type, [head_name]).keys()) > 0
+        contain_layer = len(collect_target_modules(child, layer_type, [head_name]).keys()) > 0
 
         # Check if the child matches the head name
         is_head = name == head_name
         # skip moving head layer to CPU when tie_word_embeddings is True
-        is_head = is_head and not getattr(model.config, 'tie_word_embeddings',
-                                          False)
+        is_head = is_head and not getattr(model.config, 'tie_word_embeddings', False)
 
         mod_name = f'{prefix}.{name}' if prefix else name
 
@@ -134,8 +134,7 @@ def _prepare_for_calibrate(model: nn.Module,
             child.to('cpu')
             print(f'Move {mod_name} to CPU.')
         elif contain_layer:
-            _prepare_for_calibrate(child, layer_type, head_name, device,
-                                   mod_name)
+            _prepare_for_calibrate(child, layer_type, head_name, device, mod_name)
         else:
             child.to(device)
             print(f'Move {mod_name} to GPU.')
@@ -179,8 +178,7 @@ def update_moe_mapping(model, model_type):
     for prev_fc, post_fc in fc2fcs.items():
         if '{i}' in prev_fc:
             for i in range(num_experts):
-                updated_fc2fcs.update(
-                    {prev_fc.format(i=i): [v.format(i=i) for v in post_fc]})
+                updated_fc2fcs.update({prev_fc.format(i=i): [v.format(i=i) for v in post_fc]})
         else:
             updated_fc2fcs.update({prev_fc: post_fc})
     FC_FCS_MAP[LAYER_TYPE_MAP[model_type]] = updated_fc2fcs
@@ -188,10 +186,7 @@ def update_moe_mapping(model, model_type):
     norm2fcs = NORM_FCS_MAP[LAYER_TYPE_MAP[model_type]]
     updated_norm2fcs = dict()
     for norm, fc in norm2fcs.items():
-        updated_norm2fcs.update({
-            norm:
-            list(set([v.format(i=i) for v in fc for i in range(num_experts)]))
-        })
+        updated_norm2fcs.update({norm: list(set([v.format(i=i) for v in fc for i in range(num_experts)]))})
     NORM_FCS_MAP[LAYER_TYPE_MAP[model_type]] = updated_norm2fcs
 
 
@@ -204,6 +199,7 @@ def calibrate(model: str,
               w_bits: int = 4,
               w_group_size: int = 128,
               search_scale: bool = False,
+              dtype: Literal['float16', 'bfloat16', 'auto'] = 'auto',
               batch_size: int = 1) -> None:
     """The main function for loading the model and performing calibration on a
     given dataset.
@@ -224,6 +220,7 @@ def calibrate(model: str,
         w_group_size (int): Group size for weight quantization statistics.
         search_scale (bool): Whether search scale ratio. Default to False,
             which means only smooth quant with 0.5 ratio will be applied.
+        dtype (str): Data type for loading model weights and calib infer.
         batch_size (int): The batch size for running the calib samples.
             Low GPU mem requires small batch_size. Large batch_size
             reduces the calibration time while costs more VRAM.
@@ -239,26 +236,38 @@ def calibrate(model: str,
 
     model_type, _ = get_task(model)
     make_compatible_internvl_config(model)
-    if model_type == 'llm':
-        # Load tokenizer and configuration
-        tokenizer = AutoTokenizer.from_pretrained(model,
-                                                  trust_remote_code=True)
 
-        model = load_hf_from_pretrained(model,
-                                        torch_dtype=torch.float16,
-                                        trust_remote_code=True)
+    # Load tokenizer and configuration
+    tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=True)
+
+    if model_type == 'llm':
+        model = load_hf_from_pretrained(model, dtype=dtype, trust_remote_code=True)
         vl_model = None
     elif model_type == 'vlm':
-        from lmdeploy.vl.model.builder import vl_model_with_tokenizer
-        vl_model, model, tokenizer = vl_model_with_tokenizer(model_path=model)
+        vl_model = load_vl_model(model, backend=None, with_llm=True).vl_model
+        model = vl_model
+        if hasattr(vl_model, 'language_model'):  # deepseek-vl, ...
+            model = vl_model.language_model
+        if hasattr(vl_model, 'llm'):  # MiniCPMV, ...
+            model = vl_model.llm
+        model.config.use_cache = False
+        if dtype == 'float16':
+            model.half()
+        elif dtype == 'bfloat16':
+            assert torch.cuda.is_bf16_supported(
+            ), 'your device does not support bfloat16 please set --dtype float16'  # noqa
+            model.to(torch.bfloat16)
+        elif dtype == 'auto' and model.config.torch_dtype == torch.bfloat16:
+            print('Warning: we cast model to float16 to prevent OOM. You'
+                  ' may enforce it bfloat16 by `--dtype bfloat16`')
+            model.half()
+        model.eval()
 
-    model.config.use_cache = False
     model_type = type(model).__name__
     if model_type not in LAYER_TYPE_MAP or model_type not in NORM_TYPE_MAP:
-        raise RuntimeError(
-            f'Currently, quantification and calibration of {model_type} are '
-            f'not supported. The supported model types are '
-            f"{', '.join(LAYER_TYPE_MAP.keys())}.")
+        raise RuntimeError(f'Currently, quantification and calibration of {model_type} are '
+                           f'not supported. The supported model types are '
+                           f"{', '.join(LAYER_TYPE_MAP.keys())}.")
 
     if model_type in ['MixtralForCausalLM']:
         update_moe_mapping(model, model_type)
@@ -267,22 +276,17 @@ def calibrate(model: str,
         try:
             import flash_attn  # noqa: F401
         except ImportError:
-            raise RuntimeError(
-                'When using Qwen, you need to `pip install flash-attn` first, '
-                'otherwise calibration and quantification will not work '
-                'properly.')
+            raise RuntimeError('When using Qwen, you need to `pip install flash-attn` first, '
+                               'otherwise calibration and quantification will not work '
+                               'properly.')
 
     layer_type = LAYER_TYPE_MAP[type(model).__name__]
     norm_type = NORM_TYPE_MAP[type(model).__name__]
 
-    _prepare_for_calibrate(model, layer_type,
-                           HEAD_NAME_MAP[type(model).__name__], device)
+    _prepare_for_calibrate(model, layer_type, HEAD_NAME_MAP[type(model).__name__], device)
 
     print('Loading calibrate dataset ...')
-    calib_loader, _ = get_calib_loaders(calib_dataset,
-                                        tokenizer,
-                                        nsamples=calib_samples,
-                                        seqlen=calib_seqlen)
+    calib_loader, _ = get_calib_loaders(calib_dataset, tokenizer, nsamples=calib_samples, seqlen=calib_seqlen)
 
     # Initialize calibration context
     if search_scale:
@@ -304,10 +308,7 @@ def calibrate(model: str,
                                        device=device)
 
     with calib_ctx:
-        all_data = torch.cat([
-            data if isinstance(data, torch.Tensor) else data[0]
-            for data in calib_loader
-        ]).to(device)
+        all_data = torch.cat([data if isinstance(data, torch.Tensor) else data[0] for data in calib_loader]).to(device)
         calib_ctx.calibrate(all_data)
 
     # Create work directory if not exists

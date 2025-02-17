@@ -20,13 +20,11 @@ def unpack_awq(qweight: torch.Tensor, qzeros: torch.Tensor, bits: int):
     shifts = get_shifts(bits, qzeros.device)
 
     # unpacking columnwise
-    iweights = torch.bitwise_right_shift(qweight[:, :, None],
-                                         shifts[None, None, :]).to(torch.int8)
+    iweights = torch.bitwise_right_shift(qweight[:, :, None], shifts[None, None, :]).to(torch.int8)
     iweights = iweights.view(iweights.shape[0], -1)
 
     # unpacking columnwise
-    izeros = torch.bitwise_right_shift(qzeros[:, :, None],
-                                       shifts[None, None, :]).to(torch.int8)
+    izeros = torch.bitwise_right_shift(qzeros[:, :, None], shifts[None, None, :]).to(torch.int8)
     izeros = izeros.view(izeros.shape[0], -1)
 
     # overflow checks
@@ -51,8 +49,7 @@ def dequantize_gemm(qweight, qzeros, scales, bits, group_size):
 class DefaultLinearW4A16Impl(LinearW4A16Impl):
     """w4a16 linear implementation."""
 
-    def __init__(self, in_features: int, out_features: int, w_bit: int,
-                 group_size: int):
+    def __init__(self, in_features: int, out_features: int, w_bit: int, group_size: int):
         self.in_features = in_features
         self.out_features = out_features
         self.w_bit = w_bit
@@ -70,8 +67,7 @@ class DefaultLinearW4A16Impl(LinearW4A16Impl):
         input_dtype = x.dtype
         if input_dtype != torch.float16:
             x = x.half()
-        out = dequantize_gemm(qweight, qzeros, scales, self.w_bit,
-                              self.group_size)
+        out = dequantize_gemm(qweight, qzeros, scales, self.w_bit, self.group_size)
         out = torch.matmul(x, out)
 
         out = out + bias if bias is not None else out
@@ -95,5 +91,4 @@ class DefaultLinearW4A16Builder(LinearW4A16Builder):
               bias: bool = False,
               dtype: torch.dtype = None):
         """build."""
-        return DefaultLinearW4A16Impl(in_features, out_features, w_bit,
-                                      group_size)
+        return DefaultLinearW4A16Impl(in_features, out_features, w_bit, group_size)

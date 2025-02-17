@@ -4,19 +4,23 @@ from typing import Any
 import torch
 from torch import nn
 
+from lmdeploy.pytorch.distributed import get_world_rank
+
 from ..backends import OpType, get_backend
+from .utils import chunk_aligned, get_distribute_size
 
 
 def _is_w8a8(quant_config: Any):
     """is w8a8."""
-    if quant_config is None:
-        return False
-    else:
+    quant_dtype = None
+    w8a8_flag = False
+    if quant_config is not None:
         quant_method = quant_config['quant_method']
-        if quant_method == 'w8a8':
-            return True
-        else:
-            return False
+        if quant_method == 'smooth_quant':
+            w8a8_flag = True
+            quant_dtype = quant_config.get('quant_dtype', 'int8')
+            quant_dtype = eval(f'torch.{quant_dtype}')
+    return w8a8_flag, quant_dtype
 
 
 class RMSNorm(nn.Module):
@@ -27,30 +31,46 @@ class RMSNorm(nn.Module):
                  eps: float = 1e-6,
                  dtype: torch.dtype = None,
                  device: torch.device = None,
-                 quant_config: Any = None):
+                 quant_config: Any = None,
+                 tp: bool = False,
+                 align: int = 1):
         super().__init__()
         backend = get_backend()
-        if _is_w8a8(quant_config):
+
+        w8a8_flag, quant_dtype = _is_w8a8(quant_config)
+        if w8a8_flag:
             builder = backend.get_layer_impl_builder(OpType.RMSNormW8A8)
         else:
             builder = backend.get_layer_impl_builder(OpType.RMSNorm)
-        self.register_parameter('weight',
-                                self.create_weight(hidden_size, dtype, device))
-        self.impl = builder.build(hidden_size, eps)
+
+        if tp:
+            world_size, rank = get_world_rank()
+            hidden_size = get_distribute_size(hidden_size, world_size, rank, align=align)
+
+        self.register_parameter('weight', self.create_weight(hidden_size, dtype, device))
+        if w8a8_flag:
+            self.impl = builder.build(hidden_size, eps, quant_dtype=quant_dtype)
+        else:
+            self.impl = builder.build(hidden_size, eps)
+
+        if tp:
+            self.weight.weight_loader = self.weight_loader
+        self.align = align
+
+    def weight_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor):
+        """weight loader."""
+        world_size, rank = get_world_rank()
+        loaded_weight = chunk_aligned(loaded_weight, world_size, 0, self.align)[rank]
+        param.copy_(loaded_weight)
 
     @staticmethod
-    def create_weight(hidden_size: int,
-                      dtype: torch.dtype = None,
-                      device: torch.device = None):
+    def create_weight(hidden_size: int, dtype: torch.dtype = None, device: torch.device = None):
         """create weight."""
         if dtype is None:
             dtype = torch.float16
         if device is None:
             device = 'cuda'
-        weight = torch.nn.Parameter(torch.ones(hidden_size,
-                                               dtype=dtype,
-                                               device=device),
-                                    requires_grad=False)
+        weight = torch.nn.Parameter(torch.ones(hidden_size, dtype=dtype, device=device), requires_grad=False)
         return weight
 
     def forward(self, x: torch.Tensor, residual: torch.Tensor = None):
@@ -76,24 +96,15 @@ class LayerNorm(nn.Module):
         self.impl = builder.build(hidden_size, eps)
 
     @staticmethod
-    def create_weight(hidden_size: int,
-                      bias: bool = True,
-                      dtype: torch.dtype = None,
-                      device: torch.device = None):
+    def create_weight(hidden_size: int, bias: bool = True, dtype: torch.dtype = None, device: torch.device = None):
         """create weight."""
         if dtype is None:
             dtype = torch.float16
         if device is None:
             device = 'cuda'
-        weight = torch.nn.Parameter(torch.ones(hidden_size,
-                                               dtype=dtype,
-                                               device=device),
-                                    requires_grad=False)
+        weight = torch.nn.Parameter(torch.ones(hidden_size, dtype=dtype, device=device), requires_grad=False)
         if bias:
-            bias = torch.nn.Parameter(torch.ones(hidden_size,
-                                                 dtype=dtype,
-                                                 device=device),
-                                      requires_grad=False)
+            bias = torch.nn.Parameter(torch.ones(hidden_size, dtype=dtype, device=device), requires_grad=False)
         else:
             bias = None
 

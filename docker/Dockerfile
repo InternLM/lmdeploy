@@ -10,9 +10,6 @@ FROM ${CUDA_VERSION} AS final
 
 ARG PYTHON_VERSION=3.10
 
-ARG TORCH_VERSION=2.3.0
-ARG TORCHVISION_VERSION=0.18.0
-
 RUN apt-get update -y && apt-get install -y software-properties-common wget vim git curl openssh-server ssh sudo &&\
     curl https://sh.rustup.rs -sSf | sh -s -- -y &&\
     add-apt-repository ppa:deadsnakes/ppa -y && apt-get update -y && apt-get install -y --no-install-recommends \
@@ -43,7 +40,6 @@ ENV LD_LIBRARY_PATH=/usr/local/nccl/lib:$LD_LIBRARY_PATH
 
 
 RUN --mount=type=cache,target=/root/.cache/pip python3 -m pip install --upgrade pip setuptools==69.5.1 &&\
-    python3 -m pip install torch==${TORCH_VERSION} torchvision==${TORCHVISION_VERSION} --index-url https://download.pytorch.org/whl/${CUDA_VERSION_SHORT} &&\
     python3 -m pip install cmake packaging wheel
 
 ENV NCCL_LAUNCH_MODE=GROUP
@@ -54,7 +50,7 @@ COPY . /opt/lmdeploy
 WORKDIR /opt/lmdeploy
 
 RUN --mount=type=cache,target=/root/.cache/pip cd /opt/lmdeploy &&\
-    python3 -m pip install -r requirements.txt &&\
+    python3 -m pip install -r requirements_cuda.txt --extra-index-url https://download.pytorch.org/whl/${CUDA_VERSION_SHORT} &&\
     mkdir -p build && cd build &&\
     sh ../generate.sh &&\
     ninja -j$(nproc) && ninja install &&\

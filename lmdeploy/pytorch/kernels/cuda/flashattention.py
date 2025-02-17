@@ -48,12 +48,18 @@ def softcapping(qk, logit_softcapping: tl.constexpr):
 
 
 @triton.jit
-def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs,
-                       loop_start, loop_end, sm_scale, history_mask,
-                       kv_min_loc, causal_mask: tl.constexpr,
-                       window_size: tl.constexpr,
-                       logit_softcapping: tl.constexpr, BLOCK_N: tl.constexpr,
-                       BLOCK_DK1: tl.constexpr):
+def _load_kv(ptrs, causal_mask: tl.constexpr, boundary_check: tl.constexpr):
+    """load kv."""
+    if causal_mask:
+        return tl.load(ptrs, boundary_check=boundary_check, padding_option='zero')
+    else:
+        return tl.load(ptrs)
+
+
+@triton.jit
+def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs, loop_start, loop_end, sm_scale, history_mask,
+                       kv_min_loc, causal_mask: tl.constexpr, window_size: tl.constexpr,
+                       logit_softcapping: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_DK1: tl.constexpr):
     k_ptrs = tl.advance(k_ptrs, (0, loop_start))
     v_ptrs = tl.advance(v_ptrs, (loop_start, 0))
     if BLOCK_DK1:
@@ -63,11 +69,11 @@ def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs,
     for start_n in range(loop_start, loop_end, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
 
-        k = tl.load(k_ptrs)
+        k = _load_kv(k_ptrs, causal_mask, boundary_check=(1, ))
         qk = tl.dot(q, k)
 
         if BLOCK_DK1 != 0:
-            k1 = tl.load(k1_ptrs)
+            k1 = _load_kv(k1_ptrs, causal_mask, boundary_check=(1, ))
             qk += tl.dot(q1, k1)
 
         if causal_mask:
@@ -76,8 +82,7 @@ def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs,
             qk = qk * tl_log2(math.e)
             qk_mask = (history_mask[:, None]) >= (start_n + offs_n[None, :])
             if window_size > 0:
-                qk_mask = qk_mask and (
-                    (start_n + offs_n[None, :]) >= kv_min_loc[:, None])
+                qk_mask = qk_mask and ((start_n + offs_n[None, :]) >= kv_min_loc[:, None])
             qk = tl.where(
                 qk_mask,
                 qk,
@@ -117,7 +122,7 @@ def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs,
         acc = acc * alpha[:, None]
 
         # update acc
-        v = tl.load(v_ptrs)
+        v = _load_kv(v_ptrs, causal_mask, boundary_check=(0, ))
         p = p.to(v.dtype)
         acc += tl.dot(p, v)
         # update m_i and l_i
@@ -172,6 +177,7 @@ def _flash_prefill_fwd_kernel(
     kv_group_num,
     head_dim_k,
     head_dim_v,
+    causal: tl.constexpr,
     window_size: tl.constexpr,
     logit_softcapping: tl.constexpr,
     BLOCK_M: tl.constexpr,
@@ -203,17 +209,14 @@ def _flash_prefill_fwd_kernel(
     loop_start = 0
     kv_min_loc = tl.zeros([BLOCK_M], dtype=tl.int32)
     if window_size > 0:
-        start_block_id = tl.maximum(
-            history_len + start_m * BLOCK_M - window_size, 0) // BLOCK_N
+        start_block_id = tl.maximum(history_len + start_m * BLOCK_M - window_size, 0) // BLOCK_N
         kv_min_loc = tl.maximum(history_len + offs_m - window_size, 0)
         loop_start = start_block_id * BLOCK_N
 
     offs_dk = tl.arange(0, BLOCK_DK)
     mask_dk = offs_dk < head_dim_k
-    offs_dk = tl.multiple_of(tl.max_contiguous(offs_dk % head_dim_k, BLOCK_DK),
-                             BLOCK_DK)
-    off_q = ((q_start_loc + offs_m[:, None]) * stride_qs +
-             head_id * stride_qh + offs_dk[None, :] * stride_qd)
+    offs_dk = tl.multiple_of(tl.max_contiguous(offs_dk % head_dim_k, BLOCK_DK), BLOCK_DK)
+    off_q = ((q_start_loc + offs_m[:, None]) * stride_qs + head_id * stride_qh + offs_dk[None, :] * stride_qd)
     q_ptrs = q_ptr + off_q
     q = tl.load(q_ptrs, mask=(offs_m[:, None] < q_seqlen and mask_dk[None, :]))
 
@@ -237,13 +240,10 @@ def _flash_prefill_fwd_kernel(
     if BLOCK_DK1 != 0:
         offs_dk1 = BLOCK_DK + tl.arange(0, BLOCK_DK1)
         mask_dk1 = offs_dk1 < head_dim_k
-        offs_dk1 = tl.multiple_of(
-            tl.max_contiguous(offs_dk1 % head_dim_k, BLOCK_DK1), BLOCK_DK1)
-        offs_q1 = ((q_start_loc + offs_m[:, None]) * stride_qs +
-                   head_id * stride_qh + offs_dk1[None, :] * stride_qd)
+        offs_dk1 = tl.multiple_of(tl.max_contiguous(offs_dk1 % head_dim_k, BLOCK_DK1), BLOCK_DK1)
+        offs_q1 = ((q_start_loc + offs_m[:, None]) * stride_qs + head_id * stride_qh + offs_dk1[None, :] * stride_qd)
         q1_ptrs = q_ptr + offs_q1
-        q1 = tl.load(q1_ptrs,
-                     mask=(offs_m[:, None] < q_seqlen and mask_dk1[None, :]))
+        q1 = tl.load(q1_ptrs, mask=(offs_m[:, None] < q_seqlen and mask_dk1[None, :]))
         k1_ptrs = tl.make_block_ptr(
             base=k_ptr + kv_start_loc * stride_ks + kv_head_id * stride_kh,
             shape=(head_dim_k, kv_seqlen),
@@ -260,9 +260,13 @@ def _flash_prefill_fwd_kernel(
     l_i = tl.zeros([BLOCK_M], dtype=tl.float32) + 1.0
     acc = tl.zeros([BLOCK_M, BLOCK_DV], dtype=tl.float32)
 
-    history_mask = history_len + start_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    if causal:
+        history_mask = history_len + start_m * BLOCK_M + tl.arange(0, BLOCK_M)
+        loop_end = (history_len + start_m * BLOCK_M) // BLOCK_N * BLOCK_N
+    else:
+        history_mask = tl.full([BLOCK_M], kv_seqlen - 1, dtype=tl.int32)
+        loop_end = kv_seqlen // BLOCK_N * BLOCK_N
 
-    loop_end = (history_len + start_m * BLOCK_M) // BLOCK_N * BLOCK_N
     acc, l_i, m_i = _prefill_fwd_inner(acc,
                                        l_i,
                                        m_i,
@@ -283,7 +287,10 @@ def _flash_prefill_fwd_kernel(
                                        BLOCK_DK1=BLOCK_DK1)
 
     loop_start = loop_end
-    loop_end = tl.minimum(kv_seqlen, loop_start + BLOCK_M + BLOCK_N)
+    if causal:
+        loop_end = tl.minimum(kv_seqlen, loop_start + BLOCK_M + BLOCK_N)
+    else:
+        loop_end = kv_seqlen
     acc, l_i, m_i = _prefill_fwd_inner(acc,
                                        l_i,
                                        m_i,
@@ -309,12 +316,9 @@ def _flash_prefill_fwd_kernel(
     # initialize pointers to output
     offs_dv = tl.arange(0, BLOCK_DV)
     mask_dv = offs_dv < head_dim_v
-    off_o = ((q_start_loc + offs_m[:, None]) * stride_os +
-             head_id * stride_oh + offs_dv[None, :] * stride_od)
+    off_o = ((q_start_loc + offs_m[:, None]) * stride_os + head_id * stride_oh + offs_dv[None, :] * stride_od)
     out_ptrs = o_ptr + off_o
-    tl.store(out_ptrs,
-             acc,
-             mask=(offs_m[:, None] < q_seqlen) & mask_dv[None, :])
+    tl.store(out_ptrs, acc, mask=(offs_m[:, None] < q_seqlen) & mask_dv[None, :])
 
 
 _nv_cap = None
@@ -333,12 +337,12 @@ def flash_attention_fwd(
     window_size: int = None,
     sm_scale: float = None,
     logit_softcapping: float = None,
+    causal: bool = True,
     kv_layout: str = 'hsd',
 ):
     """varlen flash Attention forward.
 
-    Support sliding window, softcapping. Note that this kernel will not perform
-    bound check for k,v.
+    Support sliding window, softcapping. Note that this kernel will not perform bound check for k,v.
     """
 
     global _nv_cap
@@ -383,6 +387,7 @@ def flash_attention_fwd(
         BLOCK_M = max(16, 8192 // BLOCK_DK)
     else:
         BLOCK_M = max(16, 16384 // BLOCK_DK)
+    BLOCK_M = min(128, BLOCK_M)
     num_warps = 4
     num_stages = min(4, max(2, 1024 // BLOCK_DK))
     if BLOCK_DK >= 512:
@@ -416,6 +421,7 @@ def flash_attention_fwd(
         kv_group_num=kv_group_num,
         head_dim_k=head_dim_k,
         head_dim_v=head_dim_v,
+        causal=causal,
         window_size=window_size,
         logit_softcapping=logit_softcapping,
         BLOCK_DK=BLOCK_DK,

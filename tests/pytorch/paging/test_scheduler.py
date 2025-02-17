@@ -29,15 +29,11 @@ class TestScheduler:
 
     @pytest.fixture
     def scheduler_config(self):
-        yield SchedulerConfig(max_batches=4,
-                              max_session_len=128,
-                              max_request_output_len=64,
-                              eviction_type='recompute')
+        yield SchedulerConfig(max_batches=4, max_session_len=128, max_request_output_len=64, eviction_type='recompute')
 
     @pytest.fixture
     def scheduler(self, cache_config, scheduler_config):
-        yield Scheduler(scheduler_config=scheduler_config,
-                        cache_config=cache_config)
+        yield Scheduler(scheduler_config=scheduler_config, cache_config=cache_config)
 
     def test_schedule_base(self, scheduler, block_size, num_gpu_blocks):
         block_manager = scheduler.block_manager
@@ -61,8 +57,7 @@ class TestScheduler:
         assert seq in output.running
         assert len(block_tables) == 1
         assert len(block_tables[0]) == num_blocks
-        assert block_manager.get_num_free_gpu_blocks(
-        ) == num_gpu_blocks - num_blocks
+        assert block_manager.get_num_free_gpu_blocks() == num_gpu_blocks - num_blocks
 
         assert scheduler.has_unfinished()
 
@@ -113,8 +108,7 @@ class TestScheduler:
         assert len(scheduler.hanging) == 0
         assert block_manager.get_num_free_gpu_blocks() == num_gpu_blocks
 
-    def test_evict(self, scheduler, block_size, num_gpu_blocks,
-                   num_cpu_blocks):
+    def test_evict(self, scheduler, block_size, num_gpu_blocks, num_cpu_blocks):
         block_manager = scheduler.block_manager
         session_id = 0
         session = scheduler.add_session(session_id)

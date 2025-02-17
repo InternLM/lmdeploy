@@ -11,8 +11,8 @@ class InternVLModelConfigBuilder(AutoModelConfigBuilder):
         return hf_config.architectures[0] == 'InternVLChatModel'
 
     @classmethod
-    def build(cls, hf_config, model_path: str = None):
+    def build(cls, hf_config, model_path: str = None, **kwargs):
         """build llava hf."""
-        cfg = DefaultModelConfigBuilder.build(hf_config.llm_config)
+        cfg = DefaultModelConfigBuilder.build(hf_config.llm_config, model_path, **kwargs)
         cfg.hf_config = hf_config
         return cfg

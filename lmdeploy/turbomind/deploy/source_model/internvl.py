@@ -16,11 +16,9 @@ class InternVLReader(LlamaReader):
     norm_weight_key = 'language_model.model.norm.weight'
     output_weight_key = 'language_model.lm_head.weight'
 
-    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
-                 model_cfg: dict, **kwargs):
+    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool, model_cfg: dict, **kwargs):
         model_cfg = model_cfg.get('llm_config')
-        super().__init__(new_params, unused_params, last_bin, model_cfg,
-                         **kwargs)
+        super().__init__(new_params, unused_params, last_bin, model_cfg, **kwargs)
 
 
 # Note the subtle difference in keys
@@ -33,11 +31,9 @@ class InternVL2Reader(InternLM2Reader):
     norm_weight_key = 'language_model.model.norm.weight'
     output_weight_key = 'language_model.output.weight'
 
-    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
-                 model_cfg: dict, **kwargs):
+    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool, model_cfg: dict, **kwargs):
         model_cfg = model_cfg.get('llm_config')
-        super().__init__(new_params, unused_params, last_bin, model_cfg,
-                         **kwargs)
+        super().__init__(new_params, unused_params, last_bin, model_cfg, **kwargs)
 
 
 @INPUT_MODELS.register_module(name='internvl')
@@ -70,8 +66,7 @@ class InternVLModel(LlamaModel):
             else:
                 kv_head_num = model_arg['num_attention_heads']
             rope_theta = float(model_arg.get('rope_theta', 10000.0))
-            max_position_embeddings = int(
-                model_arg.get('max_position_embeddings', 0))
+            max_position_embeddings = int(model_arg.get('max_position_embeddings', 0))
             rope_scaling = model_arg.get('rope_scaling', None)
             scaling_factor = 0.0
             use_dynamic_ntk = 0
@@ -80,8 +75,7 @@ class InternVLModel(LlamaModel):
                 scaling_factor = model_arg['rope_scaling'].get('factor', '')
                 if scaling_type == 'dynamic':
                     use_dynamic_ntk = 1
-            attn_bias = 1 if model_arg['architectures'][
-                0] == 'Qwen2ForCausalLM' else 0
+            attn_bias = 1 if model_arg['architectures'][0] == 'Qwen2ForCausalLM' else 0
 
         return dict(num_layer=num_layer,
                     size_per_head=hidden_units // attn_head_num,

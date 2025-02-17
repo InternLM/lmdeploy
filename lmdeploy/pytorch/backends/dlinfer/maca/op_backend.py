@@ -3,6 +3,7 @@ from typing import Tuple
 
 import torch
 
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.utils import get_logger
 
 from ..op_backend import DlinferOpsBackend
@@ -44,10 +45,9 @@ class MacaOpsBackend(DlinferOpsBackend):
 
         def get_total_slots():
             if cls.total_slots is None:
-                cls.total_slots = torch.arange(
-                    block_num * block_size,
-                    dtype=torch.long,
-                    device=step_context.block_offsets.device)
+                cls.total_slots = torch.arange(block_num * block_size,
+                                               dtype=torch.long,
+                                               device=step_context.block_offsets.device)
                 cls.total_slots = cls.total_slots.view(block_num, block_size)
             return cls.total_slots
 
@@ -60,8 +60,7 @@ class MacaOpsBackend(DlinferOpsBackend):
             is_unpaged_prefill = \
                all((step_context.q_seqlens ==
                     step_context.kv_seqlens).tolist())
-        q_start_loc = torch.cat((torch.tensor([0], device=device),
-                                 step_context.q_seqlens.cumsum(0))).int()
+        q_start_loc = torch.cat((torch.tensor([0], device=device), step_context.q_seqlens.cumsum(0))).int()
         q_seqlens = step_context.q_seqlens.int()
         kv_seqlens = step_context.kv_seqlens.int()
         max_q_seq_len = torch.max(q_seqlens).item()
@@ -72,8 +71,7 @@ class MacaOpsBackend(DlinferOpsBackend):
             # (fill kv-cache for just ONE token during the decoding phase)
             idx = (step_context.kv_seqlens - 1) % block_size
             b_num = (step_context.kv_seqlens - 1) // block_size
-            last_block = step_context.block_offsets.gather(
-                1, b_num.view(-1, 1)).view(-1)
+            last_block = step_context.block_offsets.gather(1, b_num.view(-1, 1)).view(-1)
             kv_start_indices = (last_block * block_size + idx).reshape((-1, 1))
         else:
             for i in range(step_context.q_start_loc.size(0)):
@@ -82,8 +80,7 @@ class MacaOpsBackend(DlinferOpsBackend):
                 # collect kv start indices during the prefill phase.
                 history_length = kv_seq_len - q_seq_len
                 total_slots = get_total_slots()
-                slot_tables = total_slots[step_context.block_offsets[i]].view(
-                    -1)
+                slot_tables = total_slots[step_context.block_offsets[i]].view(-1)
                 slots = slot_tables[history_length:kv_seq_len]
                 kv_start_indices.append(slots)
             kv_start_indices = torch.cat(kv_start_indices)
@@ -105,3 +102,10 @@ class MacaOpsBackend(DlinferOpsBackend):
 
         step_context.attn_metadata = attn_metadata
         return step_context
+
+    @staticmethod
+    def build_graph_runner(model: torch.nn.Module, model_config: ModelConfig, cache_config: CacheConfig,
+                           backend_config: BackendConfig, device: torch.device):
+        """build graph runner."""
+        from lmdeploy.pytorch.backends.cuda.graph_runner import CUDAGraphRunner
+        return CUDAGraphRunner(model, model_config, cache_config, backend_config, device)

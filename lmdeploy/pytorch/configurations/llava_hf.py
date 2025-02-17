@@ -9,13 +9,10 @@ class LlavaHfModelConfigBuilder(AutoModelConfigBuilder):
     @classmethod
     def condition(cls, hf_config):
         """config."""
-        return hf_config.architectures[0] in [
-            'LlavaForConditionalGeneration',
-            'LlavaNextForConditionalGeneration'
-        ]
+        return hf_config.architectures[0] in ['LlavaForConditionalGeneration', 'LlavaNextForConditionalGeneration']
 
     @classmethod
-    def build(cls, hf_config, model_path: str = None):
+    def build(cls, hf_config, model_path: str = None, **kwargs):
         """build llava hf."""
         text_config = hf_config.text_config
         hidden_size = getattr(text_config, 'hidden_size', 4096)

@@ -57,13 +57,11 @@ class TestMakeInputs:
     def past_key_values(self, history_length, num_key_value_heads, head_size):
         max_len = max(history_length)
         batch_size = len(history_length)
-        k_cache = torch.rand(batch_size, num_key_value_heads, max_len,
-                             head_size)
+        k_cache = torch.rand(batch_size, num_key_value_heads, max_len, head_size)
         v_cache = k_cache + 1
         yield [(k_cache, v_cache)]
 
-    def test_make_step_context(self, input_ids, seq_length, history_length,
-                               past_key_values, block_size, model_config):
+    def test_make_step_context(self, input_ids, seq_length, history_length, past_key_values, block_size, model_config):
         step_ctx = make_step_context(
             input_ids,
             seq_length=seq_length,
