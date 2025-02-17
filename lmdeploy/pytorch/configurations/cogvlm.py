@@ -8,6 +8,8 @@ class CogVLMModelConfigBuilder(AutoModelConfigBuilder):
     @classmethod
     def condition(cls, hf_config):
         """config."""
+        if getattr(hf_config, 'architectures', [None]) is None:
+            return False
         model_arch = getattr(hf_config, 'architectures', [None])[0]
         return model_arch == 'CogVLMForCausalLM'
 

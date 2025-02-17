@@ -103,14 +103,13 @@ def autoget_backend_config(
     return config
 
 
-def check_vl_llm(config: dict) -> bool:
+def check_vl_llm(arch: str, config: dict) -> bool:
     """check if the model is a vl model from model config."""
     if 'auto_map' in config:
         for _, v in config['auto_map'].items():
             if 'InternLMXComposer2ForCausalLM' in v:
                 return True
 
-    arch = config['architectures'][0]
     supported_archs = set([
         'LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM', 'CogVLMForCausalLM', 'InternLMXComposer2ForCausalLM',
         'InternVLChatModel', 'MiniGeminiLlamaForCausalLM', 'MGMLlamaForCausalLM', 'MiniCPMV',
@@ -122,6 +121,8 @@ def check_vl_llm(config: dict) -> bool:
     elif arch == 'MultiModalityCausalLM' and 'language_config' in config:
         return True
     elif arch in ['ChatGLMModel', 'ChatGLMForConditionalGeneration'] and 'vision_config' in config:
+        return True
+    elif arch == 'DeepseekV2ForCausalLM' and 'vision_config' in config:
         return True
     elif arch in supported_archs:
         return True
@@ -135,8 +136,8 @@ def get_task(model_path: str):
     if os.path.exists(os.path.join(model_path, 'triton_models', 'weights')):
         # workspace model
         return 'llm', AsyncEngine
-    _, config = get_model_arch(model_path)
-    if check_vl_llm(config.to_dict()):
+    arch, config = get_model_arch(model_path)
+    if check_vl_llm(arch, config.to_dict()):
         from lmdeploy.serve.vl_async_engine import VLAsyncEngine
         return 'vlm', VLAsyncEngine
 
@@ -176,6 +177,10 @@ def get_model_arch(model_path: str):
                 for _, v in _cfg['auto_map'].items():
                     if 'InternLMXComposer2ForCausalLM' in v:
                         arch = 'InternLMXComposer2ForCausalLM'
+        elif _cfg.get('language_config', None):
+            # only for deepseek-vl2, which has different config formats
+            # https://huggingface.co/deepseek-ai/deepseek-vl2/blob/main/config.json
+            arch = _cfg['language_config']['architectures'][0]
         elif _cfg.get('auto_map', None) and 'AutoModelForCausalLM' in _cfg['auto_map']:
             arch = _cfg['auto_map']['AutoModelForCausalLM'].split('.')[-1]
         else:
