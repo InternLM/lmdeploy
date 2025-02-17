@@ -120,7 +120,7 @@ class TurboMind:
             # for _ in e.map(self.model_comm.process_weight, range(self.gpu_count), ranks):
             #     pass
             # implicit synchronization
-            for _ in e.map(self.model_comm.create_engine, range(self.gpu_count), ranks, repeat(self.nccl_params)):
+            for _ in e.map(self.model_comm.create_engine, self.gpu_list, ranks, repeat(self.nccl_params)):
                 pass
 
         self.session_len = self.config.session_len
