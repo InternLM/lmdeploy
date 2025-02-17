@@ -235,6 +235,8 @@ class Engine:
 
     def _response(self, resp: Response, resp_type: ResponseType, data: Any = None, err_msg: str = ''):
         """response."""
+        if resp.type == ResponseType.FINISH:
+            return
         resp.type = resp_type
         resp.data = data
         resp.err_msg = err_msg
@@ -273,6 +275,12 @@ class Engine:
             resp_type = ResponseType.SESSION_NOT_EXIST
             if session_id in self.scheduler.sessions:
                 self.scheduler.stop_session(session_id)
+                session = self.scheduler.sessions[session_id]
+                for seq in session.sequences.values():
+                    resp: Response = getattr(seq, 'resp', None)
+                    if resp is not None:
+                        resp.type = ResponseType.FINISH
+                        self.req_manager.response(resp)
                 resp_type = ResponseType.SUCCESS
             if resp:
                 self._response(req.resp, resp_type)
