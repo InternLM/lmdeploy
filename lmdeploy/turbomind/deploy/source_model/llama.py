@@ -7,7 +7,6 @@ import re
 import torch
 
 from lmdeploy.archs import get_model_arch
-from lmdeploy.tokenizer import Tokenizer
 
 from ..loader import create_loader
 from .base import INPUT_MODELS, BaseInputModel, BaseReader
@@ -114,17 +113,6 @@ class LlamaModel(BaseInputModel):
         for i, param in loader.items():
             reader = self.Reader(param, {}, False, self.model_config, policy=self.policy)
             yield i, reader
-
-    def tokenizer_info(self):
-        """Read tokenizer info."""
-        assert osp.isdir(self.model_path), self.model_path
-        tk_model = Tokenizer(self.model_path)
-        n_words = tk_model.vocab_size
-        bos_id = tk_model.bos_token_id
-        eos_id = tk_model.eos_token_id
-        # bos_id may be None
-        bos_id = bos_id or 0
-        return n_words, bos_id, eos_id
 
     def model_info(self):
         """Read model info."""
