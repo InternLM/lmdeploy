@@ -100,7 +100,6 @@ class TurboMind:
 
         self.gpu_count = _engine_config.tp
         self.gpu_list = _engine_config.devices
-        os.environ['LMDEPLOY_DEVICE_LIST'] = ','.join(_engine_config.devices)
 
         self.tokenizer = tokenizer
         if model_source == ModelSource.WORKSPACE:
@@ -237,7 +236,7 @@ class TurboMind:
         input_model.model_path = state_dict
         self.tm_model.export()
         input_model.model_path = model_path
-		
+
     def _from_workspace(self, model_path: str, engine_config: TurbomindEngineConfig):
         """Load model which is converted by `lmdeploy convert`"""
         config_path = osp.join(model_path, 'triton_models', 'weights', 'config.yaml')
@@ -318,7 +317,7 @@ class TurboMind:
         Returns:
             TurboMindInstance: an instance of turbomind
         """
-        return TurboMindInstance(self, self.config, cuda_stream_id)
+        return TurboMindInstance(self, self.config, cuda_stream_id, self.gpu_list[0])
 
 
 def _get_logits(outputs, offset: int):
@@ -412,7 +411,7 @@ class TurboMindInstance:
         cuda_stream_id(int): identity of a cuda stream
     """
 
-    def __init__(self, tm_model: TurboMind, config: TurbomindModelConfig, cuda_stream_id: int = 0):
+    def __init__(self, tm_model: TurboMind, config: TurbomindModelConfig, cuda_stream_id: int = 0, device_id: int = 0):
         self.tm_model = tm_model
         self.cuda_stream_id = cuda_stream_id
 
@@ -425,13 +424,13 @@ class TurboMindInstance:
         self.nccl_params = tm_model.nccl_params
 
         # create model instances
-        self.model_inst = self._create_model_instance(0)
+        self.model_inst = self._create_model_instance(device_id)
 
         self.config = config
         self.lock = None
 
     def _create_model_instance(self, device_id):
-        model_inst = self.tm_model.model_comm.create_model_instance(os.environ['LMDEPLOY_DEVICE_LIST'].split(',')[0])
+        model_inst = self.tm_model.model_comm.create_model_instance(device_id)
         return model_inst
 
     def _get_extra_output_processors(self, outputs: Dict[str, torch.Tensor], gen_config: GenerationConfig,
