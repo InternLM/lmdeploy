@@ -161,15 +161,16 @@ void LogitsProcessorLayer<T>::forward(TensorMap* output_tensors, TensorMap* inpu
         const bool invoke_min_length_penalty = std::any_of(index.begin(), index.end(), [&](int i) {
             return min_lengths[i] > context_length_[i] + num_generated_tokens;
         });
-        if (invoke_min_length_penalty) {
-            FT_CHECK_WITH_INFO(input_tensors->isExist("end_id"), "Need end_id to apply min length penlaty");
+        if (invoke_min_length_penalty && input_tensors->isExist("end_ids")) {
+            const Tensor end_ids = input_tensors->at("end_ids");
+            FT_CHECK(end_ids.shape.size() == 2);
             invokeMinLengthPenalty(logits,
                                    min_lengths_buf_,
-                                   input_tensors->getPtr<const int>("end_id"),
                                    output_tensors->getPtr<const int>("sequence_length"),
-                                   max_input_length,
-                                   batch_size,
                                    args_.vocab_size_padded,
+                                   batch_size,
+                                   input_tensors->getPtr<const int>("end_ids"),
+                                   end_ids.shape[1],
                                    stream_);
             sync_check_cuda_error();
         }
