@@ -117,12 +117,13 @@ def smooth_quant(model: str,
         q_linear.to('cpu')
         torch.cuda.empty_cache()
 
+    quant_dtype_s = str(quant_dtype).split('.')[1]
+    model.config.update(dict(quantization_config=dict(quant_method='smooth_quant', quant_dtype=f'{quant_dtype_s}')))
+
     if vl_model:
         from .auto_awq import save_vl_model
         save_vl_model(vl_model, model_path, work_dir)
     else:
-        quant_dtype_s = str(quant_dtype).split('.')[1]
-        model.config.update(dict(quantization_config=dict(quant_method='smooth_quant', quant_dtype=f'{quant_dtype_s}')))
         model.save_pretrained(work_dir, max_shard_size='2GB', safe_serialization=False)
     tokenizer.save_pretrained(work_dir)
 
