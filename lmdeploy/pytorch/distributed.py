@@ -13,9 +13,8 @@ class DistContext:
     world_size: int = 1
     tp: int = 1
     dp: int = 1
-    local_rank: int = 0
+    tp_rank: int = 0
     world_cpu_group: dist.ProcessGroup = None
-    local_cpu_group: dist.ProcessGroup = None
     tp_cpu_group: dist.ProcessGroup = None
     tp_gpu_group: dist.ProcessGroup = None
     dp_cpu_group: dist.ProcessGroup = None
@@ -26,7 +25,7 @@ class DistContext:
         return tp * dp
 
     @classmethod
-    def build(cls, rank: int = 0, tp: int = 1, dp: int = 1, node_rank: int = 0, nproc_per_node: int = None):
+    def build(cls, rank: int = 0, tp: int = 1, dp: int = 1):
         """build dist context."""
         from datetime import timedelta
         cpu_backend = 'gloo'
@@ -37,32 +36,18 @@ class DistContext:
         if world_size == 1:
             return DistContext()
 
-        if nproc_per_node is None:
-            nproc_per_node = world_size
-
-        local_rank = rank % nproc_per_node
-
         assert dist.is_initialized()
         # world(assume world group is gloo)
         world_cpu_group = dist.GroupMember.WORLD
 
-        if nproc_per_node == world_size or nproc_per_node is None:
-            local_cpu_group = world_cpu_group
-        else:
-            local_rank0 = node_rank * nproc_per_node
-            local_ranks = list(range(local_rank0, local_rank0 + nproc_per_node))
-            local_cpu_group = dist.new_group(ranks=local_ranks, timeout=timeout, backend=cpu_backend)
-
         # tp
         tp_cpu_group = None
         tp_gpu_group = None
+        tp_rank = rank % tp
         if tp > 1:
             tp_rank0 = rank // tp
             tp_ranks = list(range(tp_rank0, tp_rank0 + tp))
-            if tp == nproc_per_node:
-                tp_cpu_group = local_cpu_group
-            else:
-                tp_cpu_group = dist.new_group(ranks=tp_ranks, timeout=timeout, backend=cpu_backend)
+            tp_cpu_group = dist.new_group(ranks=tp_ranks, timeout=timeout, backend=cpu_backend)
             tp_gpu_group = dist.new_group(ranks=tp_ranks, timeout=timeout, backend=gpu_backend)
 
         # dp
@@ -78,9 +63,8 @@ class DistContext:
             world_size=world_size,
             tp=tp,
             dp=dp,
-            local_rank=local_rank,
+            tp_rank=tp_rank,
             world_cpu_group=world_cpu_group,
-            local_cpu_group=local_cpu_group,
             tp_cpu_group=tp_cpu_group,
             tp_gpu_group=tp_gpu_group,
             dp_cpu_group=dp_cpu_group,

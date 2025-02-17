@@ -63,7 +63,11 @@ class EngineChecker(BaseChecker):
                 self.register_required_checker(adapter_checker)
 
         # dist
-        dist_checker = DistChecker(engine_config.tp, 1, engine_config.nproc_per_node, logger=logger)
+        dist_checker = DistChecker(engine_config.tp,
+                                   1,
+                                   engine_config.distributed_executor_backend,
+                                   device_type=engine_config.device_type,
+                                   logger=logger)
         self.register_required_checker(dist_checker)
 
     def check(self):

@@ -495,12 +495,12 @@ class BaseModelAgent(AutoModelAgent):
         self.device = device
         self.rank = rank
 
-        local_rank = dist_ctx.local_rank
+        tp_rank = dist_ctx.tp_rank
         tp = dist_ctx.tp
         world_size = dist_ctx.world_size
         self.tp = tp
         self.world_size = world_size
-        self.local_rank = local_rank
+        self.tp_rank = tp_rank
 
         self.patched_model = None
         self.cache_engine = None
@@ -541,7 +541,7 @@ class BaseModelAgent(AutoModelAgent):
     def build_cache_engine(self):
         """build cache engine."""
         with self.all_context():
-            self.cache_engine = CacheEngine(self.cache_config, self.model_config, self.local_rank, world_size=self.tp)
+            self.cache_engine = CacheEngine(self.cache_config, self.model_config, self.tp_rank, world_size=self.tp)
 
     def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
         cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)

@@ -126,7 +126,6 @@ class RayWorkerWrapper:
         device_type: str = 'cuda',
         dtype: str = 'auto',
         log_level: int = 30,
-        nproc_per_node: int = None,
     ):
         from lmdeploy.tokenizer import Tokenizer
         self.model_path = model_path
@@ -140,9 +139,6 @@ class RayWorkerWrapper:
         self.dp = dp
         self.tp = tp
         self.world_size = tp * dp
-        if nproc_per_node is None:
-            nproc_per_node = self.world_size
-        self.nproc_per_node = nproc_per_node
         self.device_type = device_type
         self.node_ip = ray.util.get_node_ip_address()
 
@@ -157,9 +153,8 @@ class RayWorkerWrapper:
         """initialize process group."""
         setup_master_addr(master_addr, master_port)
         self.rank = rank
-        self.device_id = rank % self.nproc_per_node
 
-        init_process_group(rank, self.world_size, self.nproc_per_node)
+        init_process_group(rank, self.world_size)
 
     def _warmup_dist(self):
         # None default CUDA_VISIBLE_DEVICES might leads to slow first time all_reduce
@@ -174,7 +169,7 @@ class RayWorkerWrapper:
 
     def build_model(self):
         """build model."""
-        self.dist_ctx = DistContext.build(self.rank, self.tp, self.dp, self.nproc_per_node)
+        self.dist_ctx = DistContext.build(self.rank, self.tp, self.dp)
         self.device_ctx = DeviceContext(device_type=self.device_type)
         self._warmup_dist()
 
@@ -249,7 +244,6 @@ class RayExecutor(ExecutorBase):
                  tokenizer: Any,
                  dp: int,
                  tp: int,
-                 nproc_per_node: int,
                  adapters: Dict[str, str] = None,
                  device_type: str = 'cuda',
                  dtype: str = 'auto'):
@@ -265,7 +259,6 @@ class RayExecutor(ExecutorBase):
                          device_type=device_type)
 
         self.world_size = tp * dp
-        self.nproc_per_node = nproc_per_node
         device_ctx = DeviceContext(device_type)
         with get_device_manager().context(device_ctx):
             placement_group = init_ray_cluster(self.world_size)
@@ -285,7 +278,6 @@ class RayExecutor(ExecutorBase):
             device_type=device_type,
             dtype=dtype,
             log_level=30,
-            nproc_per_node=nproc_per_node,
         )
         self.workers = self._init_workers_ray(placement_group, worker_kwargs)
         self.dag = None

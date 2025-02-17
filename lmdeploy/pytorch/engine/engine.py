@@ -142,8 +142,8 @@ class Engine:
                                        adapters=adapters,
                                        tp=tp,
                                        dp=dp,
-                                       nproc_per_node=engine_config.nproc_per_node,
                                        device_type=engine_config.device_type,
+                                       distributed_executor_backend=engine_config.distributed_executor_backend,
                                        dtype=engine_config.dtype)
         self.executor.init()
 

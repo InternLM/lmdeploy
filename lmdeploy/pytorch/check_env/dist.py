@@ -6,29 +6,25 @@ from .base import BaseChecker
 class DistChecker(BaseChecker):
     """check dist environment."""
 
-    def __init__(self, tp: int, dp: int, nproc_per_node: int, logger=None):
+    def __init__(self, tp: int, dp: int, distributed_executor_backend: str, device_type: str, logger=None):
         super().__init__(logger)
-        self.tp = tp
-        self.dp = dp
-        self.nproc_per_node = nproc_per_node
+        self.world_size = tp * dp
+        self.distributed_executor_backend = distributed_executor_backend
+        self.device_type = device_type
 
     def check(self):
         """check."""
+        distributed_executor_backend = self.distributed_executor_backend
 
-        tp = self.tp
-        dp = self.dp
-        world_size = tp * dp
-        nproc_per_node = self.nproc_per_node
-        if nproc_per_node is None:
-            nproc_per_node = world_size
+        if distributed_executor_backend is None:
+            from lmdeploy.pytorch.engine.executor import get_distributed_executor_backend
+            distributed_executor_backend = get_distributed_executor_backend(self.world_size, self.device_type)
 
-        if world_size % nproc_per_node != 0:
-            self.log_and_exit(
-                mod_name='Dist',
-                message=f'world_size={world_size} cannot be evenly divided by nproc_per_node={nproc_per_node}.')
+        if distributed_executor_backend not in [None, 'mp', 'ray']:
+            self.log_and_exit(mod_name='Dist',
+                              message=f'Unsupported distributed_executor_backend: {distributed_executor_backend}')
 
-        nnodes = world_size // nproc_per_node
-        if nnodes > 1:
+        if distributed_executor_backend == 'ray':
             try:
                 import ray  # noqa: F401
             except BaseException:

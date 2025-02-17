@@ -1,10 +1,26 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import os
 from typing import Any, Dict
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
+from lmdeploy.utils import get_logger
 
 from .base import ExecutorBase
+
+
+def get_distributed_executor_backend(world_size: int, device_type: str):
+    """get distributed executor backend."""
+    from lmdeploy.pytorch.backends import get_backend
+    if world_size == 1:
+        return None
+
+    backend = get_backend(device_type)
+    if not backend.support_ray():
+        return 'mp'
+    device_count = backend.device_count()
+    if device_count < world_size:
+        return 'ray'
+    else:
+        return 'mp'
 
 
 def build_executor(model_path: str,
@@ -13,21 +29,20 @@ def build_executor(model_path: str,
                    tokenizer: Any,
                    dp: int = 1,
                    tp: int = 1,
-                   nproc_per_node: int = None,
                    adapters: Dict[str, str] = None,
                    device_type: str = 'cuda',
+                   distributed_executor_backend: str = None,
                    dtype: str = 'auto') -> ExecutorBase:
     """build model agent executor."""
+    logger = get_logger('lmdeploy')
 
     world_size = dp * tp
-    if nproc_per_node is None:
-        nproc_per_node = world_size
-
-    nnodes = world_size // nproc_per_node
     model_config = ModelConfig.from_pretrained(model_path, trust_remote_code=True, dtype=dtype, tp=tp)
 
-    force_ray = os.environ.get('LMDEPLOY_FORCE_RAY', '0')
-    force_ray = int(force_ray)
+    if distributed_executor_backend is None:
+        distributed_executor_backend = get_distributed_executor_backend(world_size, device_type)
+        if distributed_executor_backend is not None:
+            logger.info(f'Distributed Executor backend: {distributed_executor_backend}')
 
     if world_size == 1:
         from .uni_executor import UniExecutor
@@ -40,7 +55,7 @@ def build_executor(model_path: str,
             adapters=adapters,
             device_type=device_type,
         )
-    elif nnodes == 1 and not force_ray:
+    elif distributed_executor_backend == 'mp':
         from .mp_executor import MPExecutor
         return MPExecutor(
             model_path=model_path,
@@ -53,7 +68,7 @@ def build_executor(model_path: str,
             adapters=adapters,
             device_type=device_type,
         )
-    else:
+    elif distributed_executor_backend == 'ray':
         from .ray_executor import RayExecutor
         return RayExecutor(
             model_path=model_path,
@@ -63,8 +78,9 @@ def build_executor(model_path: str,
             tokenizer=tokenizer,
             dp=dp,
             tp=tp,
-            nproc_per_node=nproc_per_node,
             adapters=adapters,
             device_type=device_type,
             dtype=dtype,
         )
+    else:
+        raise RuntimeError(f'Unsupported distributed_executor_backend: {distributed_executor_backend}.')

@@ -254,7 +254,7 @@ class MPExecutor(ExecutorBase):
         self.ret_all_mask = (1 << self.world_size) - 1
 
         # initialize local
-        init_process_group(0, self.world_size, 1)
+        init_process_group(0, self.world_size)
         self.dist_ctx = DistContext.build(0, tp, dp)
         self.device_ctx = DeviceContext(device_type=device_type)
         self.model_agent = build_model_agent(model_path=model_path,
@@ -468,7 +468,7 @@ class ExecutorProc:
         signal.signal(signal.SIGTERM, handle_sigterm)
 
         world_size = tp * dp
-        init_process_group(proc_id, world_size, 1)
+        init_process_group(proc_id, world_size)
 
         dist_ctx = DistContext.build(proc_id, tp, dp)
         device_ctx = DeviceContext(device_type=device_type)

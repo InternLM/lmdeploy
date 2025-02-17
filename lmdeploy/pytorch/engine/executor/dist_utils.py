@@ -28,17 +28,15 @@ def setup_master_addr(addr: str, port: str):
     logger.info(f'MASTER_ADDR={addr}, MASTER_PORT={port}')
 
 
-def init_dist_environ(rank: int, world_size: int, nproc_per_node: int):
+def init_dist_environ(rank: int, world_size: int):
     """init environ."""
     os.environ['RANK'] = str(rank)
-    os.environ['LOCAL_RANK'] = str(rank % nproc_per_node)
     os.environ['WORLD_SIZE'] = str(world_size)
-    os.environ['LOCAL_WORLD_SIZE'] = str(nproc_per_node)
 
 
-def init_process_group(rank: int, world_size: int, nproc_per_node: int):
+def init_process_group(rank: int, world_size: int):
     """init process group."""
     DIST_TIMEOUT = timedelta(days=35600)
     dist.init_process_group(backend='nccl', rank=rank, world_size=world_size, timeout=DIST_TIMEOUT)
     assert dist.is_initialized()
-    init_dist_environ(rank, world_size, nproc_per_node)
+    init_dist_environ(rank, world_size)
