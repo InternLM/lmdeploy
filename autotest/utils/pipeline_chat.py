@@ -1,7 +1,6 @@
 import json
 import os
 import subprocess
-from subprocess import PIPE
 
 import allure
 import numpy as np
@@ -43,8 +42,9 @@ def run_pipeline_chat_test(config,
                                      '_'.join(['pipeline', 'chat', type, worker_id,
                                                model_case.split('/')[1] + '.log']))
 
-    extra = json.dumps(extra, ensure_ascii=False, indent=None) if extra is not None else None
-    extra = extra.replace(' ', '')
+    if extra is not None:
+        extra = json.dumps(extra, ensure_ascii=False, indent=None)
+        extra = extra.replace(' ', '')
     with open(pipeline_chat_log, 'w') as f:
         cmd = f'python3 autotest/tools/pipeline/llm_case.py run_pipeline_chat_test {hf_path} autotest/prompt_case.yaml {tp} {type} {is_pr_test} {extra}'  # noqa E501
 
@@ -89,44 +89,6 @@ def get_response_from_output(output_text, case, prompt):
         if output.get('prompt') == prompt:
             return output.get('response')
     return None
-
-
-def save_pipeline_common_log(config, log_name, result, content, msg: str = '', write_type: str = 'w'):
-    log_path = config.get('log_path')
-
-    config_log = os.path.join(log_path, log_name)
-    file = open(config_log, write_type)
-    file.writelines(f'result:{result}, reason: {msg}, content: {content}')  # noqa E231
-    file.close()
-
-
-def assert_pipeline_common_log(config, log_name):
-    log_path = config.get('log_path')
-
-    config_log = os.path.join(log_path, log_name)
-    allure.attach.file(config_log, attachment_type=allure.attachment_type.TEXT)
-
-    msg = 'result is empty, please check again'
-    result = False
-    with open(config_log, 'r') as f:
-        lines = f.readlines()
-
-        for line in lines:
-            if 'result:False, reason:' in line:
-                result = False
-                msg = line
-                break
-            if 'result:True, reason:' in line and not result:
-                result = True
-                msg = ''
-    subprocess.run([' '.join(['rm -rf', config_log])],
-                   stdout=PIPE,
-                   stderr=PIPE,
-                   shell=True,
-                   text=True,
-                   encoding='utf-8')
-
-    assert result, msg
 
 
 def assert_pipeline_single_return(output, logprobs_num: int = 0):
