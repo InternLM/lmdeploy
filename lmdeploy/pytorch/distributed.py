@@ -28,7 +28,6 @@ class DistContext:
     def build(cls, rank: int = 0, tp: int = 1, dp: int = 1):
         """build dist context."""
         from datetime import timedelta
-        cpu_backend = 'gloo'
         gpu_backend = 'nccl'
         timeout = timedelta(days=35600)
 
@@ -41,21 +40,17 @@ class DistContext:
         world_cpu_group = dist.GroupMember.WORLD
 
         # tp
-        tp_cpu_group = None
         tp_gpu_group = None
         tp_rank = rank % tp
         if tp > 1:
             tp_rank0 = rank // tp
             tp_ranks = list(range(tp_rank0, tp_rank0 + tp))
-            tp_cpu_group = dist.new_group(ranks=tp_ranks, timeout=timeout, backend=cpu_backend)
             tp_gpu_group = dist.new_group(ranks=tp_ranks, timeout=timeout, backend=gpu_backend)
 
         # dp
-        dp_cpu_group = None
         dp_gpu_group = None
         if dp > 1 and rank % tp == 0:
             dp_ranks = list(range(0, world_size, tp))
-            dp_cpu_group = dist.new_group(ranks=dp_ranks, timeout=timeout, backend=cpu_backend)
             dp_gpu_group = dist.new_group(ranks=dp_ranks, timeout=timeout, backend=gpu_backend)
 
         context = DistContext(
@@ -65,9 +60,9 @@ class DistContext:
             dp=dp,
             tp_rank=tp_rank,
             world_cpu_group=world_cpu_group,
-            tp_cpu_group=tp_cpu_group,
+            tp_cpu_group=None,
             tp_gpu_group=tp_gpu_group,
-            dp_cpu_group=dp_cpu_group,
+            dp_cpu_group=None,
             dp_gpu_group=dp_gpu_group,
         )
         return context

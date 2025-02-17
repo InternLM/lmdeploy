@@ -29,3 +29,8 @@ class DistChecker(BaseChecker):
                 import ray  # noqa: F401
             except BaseException:
                 self.log_and_exit(mod_name='Dist', message='Multi-nodes support requires `ray`.')
+
+            from lmdeploy.pytorch.backends import get_backend
+            backend = get_backend(self.device_type)
+            if not backend.support_ray():
+                self.log_and_exit(mod_name='Dist', message=f'device={self.device_type} does not support ray.')

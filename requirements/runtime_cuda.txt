@@ -11,6 +11,7 @@ pillow
 protobuf
 pydantic>2.0.0
 pynvml
+ray
 safetensors
 sentencepiece
 shortuuid
