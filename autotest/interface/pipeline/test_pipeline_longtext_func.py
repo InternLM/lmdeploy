@@ -131,7 +131,7 @@ def passkey_retrival(config, model, backend, log_name, tp_num, session_len: int 
 
     close_pipeline(pipe)
 
-    assert pass_key in response1.text, str(response1)
+    assert str(pass_key) in response1.text, str(response1)
     assert str(pass_key) in response2[0].text and str(pass_key) in response2[1].text, str(response2)
 
 
