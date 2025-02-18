@@ -2,7 +2,6 @@ import json
 
 import fire
 import numpy as np
-from decord import VideoReader, cpu
 from PIL import Image
 
 from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
@@ -76,17 +75,17 @@ def run_pipeline_mllm_test(model_path, resource_path, tp, backend_type, is_pr_te
     image_urls = [f'{resource_path}/{PIC2}', f'{resource_path}/{PIC1}']
     prompts = [(prompt, load_image(img_url)) for img_url in image_urls]
     response = pipe(prompts, gen_config=gen_config, log_level='INFO', max_log_len=10)
-    print('[caseresult Batch-example1 start]' + json.dumps(response[0].text, ensure_ascii=False) +
-          '[caseresult Batch-example1 end]\n')
-    print('[caseresult Batch-example2 start]' + json.dumps(response[1].text, ensure_ascii=False) +
-          '[caseresult Batch-example2 end]\n')
+    print('[caseresult batch-example1 start]' + json.dumps(response[0].text, ensure_ascii=False) +
+          '[caseresult batch-example1 end]\n')
+    print('[caseresult batch-example2 start]' + json.dumps(response[1].text, ensure_ascii=False) +
+          '[caseresult batch-example2 end]\n')
 
     image = load_image(f'{resource_path}/{PIC2}')
     sess = pipe.chat((prompt, image))
-    print('[caseresult multi-turn1 start]' + json.dumps(sess.text, ensure_ascii=False) +
+    print('[caseresult multi-turn1 start]' + json.dumps(sess.response.text, ensure_ascii=False) +
           '[caseresult multi-turn1 end]\n')
     sess = pipe.chat('What is the woman doing?', session=sess)
-    print('[caseresult multi-turn2 start]' + json.dumps(sess.text, ensure_ascii=False) +
+    print('[caseresult multi-turn2 start]' + json.dumps(sess.response.text, ensure_ascii=False) +
           '[caseresult multi-turn2 end]\n')
 
     if not is_pr_test:
@@ -121,14 +120,14 @@ def internvl_vl_testcase(pipe, resource_path, lang='en'):
              ])
     ]
     response = pipe(messages, gen_config=gen_config, log_level='INFO', max_log_len=10)
-    print('[caseresult internvl-combined-images-{lang} start]' + json.dumps(response.text, ensure_ascii=False) +
-          '[caseresult internvl-combined-images-{lang} end]\n')
+    print(f'[caseresult internvl-combined-images-{lang} start]' + json.dumps(response.text, ensure_ascii=False) +
+          f'[caseresult internvl-combined-images-{lang} end]\n')
 
     messages.append(dict(role='assistant', content=response.text))
     messages.append(dict(role='user', content=description))
     response = pipe(messages, gen_config=gen_config, log_level='INFO', max_log_len=10)
-    print('[caseresult internvl-combined-images2-{lang} start]' + json.dumps(response.text, ensure_ascii=False) +
-          '[caseresult internvl-combined-images2-{lang} end]\n')
+    print(f'[caseresult internvl-combined-images2-{lang} start]' + json.dumps(response.text, ensure_ascii=False) +
+          f'[caseresult internvl-combined-images2-{lang} end]\n')
 
     # multi-image multi-round conversation, separate images
     messages = [
@@ -144,14 +143,14 @@ def internvl_vl_testcase(pipe, resource_path, lang='en'):
             ])
     ]
     response = pipe(messages, gen_config=gen_config, log_level='INFO', max_log_len=10)
-    print('[caseresult internvl-separate-images-{lang} start]' + json.dumps(response.text, ensure_ascii=False) +
-          '[caseresult internvl-separate-images-{lang} end]\n')
+    print(f'[caseresult internvl-separate-images-{lang} start]' + json.dumps(response.text, ensure_ascii=False) +
+          f'[caseresult internvl-separate-images-{lang} end]\n')
 
     messages.append(dict(role='assistant', content=response.text))
     messages.append(dict(role='user', content=description))
     response = pipe(messages, gen_config=gen_config, log_level='INFO', max_log_len=10)
-    print('[caseresult internvl-separate-images2-{lang} start]' + json.dumps(response.text, ensure_ascii=False) +
-          '[caseresult internvl-separate-images2-{lang} end]\n')
+    print(f'[caseresult internvl-separate-images2-{lang} start]' + json.dumps(response.text, ensure_ascii=False) +
+          f'[caseresult internvl-separate-images2-{lang} end]\n')
 
     # video multi-round conversation
     def get_index(bound, fps, max_frame, first_idx=0, num_segments=32):
@@ -167,6 +166,7 @@ def internvl_vl_testcase(pipe, resource_path, lang='en'):
         return frame_indices
 
     def load_video(video_path, bound=None, num_segments=32):
+        from decord import VideoReader, cpu
         vr = VideoReader(video_path, ctx=cpu(0), num_threads=1)
         max_frame = len(vr) - 1
         fps = float(vr.get_avg_fps())
@@ -201,8 +201,8 @@ def internvl_vl_testcase(pipe, resource_path, lang='en'):
 
     messages = [dict(role='user', content=content)]
     response = pipe(messages, gen_config=gen_config, log_level='INFO', max_log_len=10)
-    print('[caseresult internvl-video-{lang} start]' + json.dumps(response.text, ensure_ascii=False) +
-          '[caseresult internvl-video-{lang} end]\n')
+    print(f'[caseresult internvl-video-{lang} start]' + json.dumps(response.text, ensure_ascii=False) +
+          f'[caseresult internvl-video-{lang} end]\n')
 
     messages.append(dict(role='assistant', content=response.text))
     if lang == 'cn':
@@ -210,29 +210,8 @@ def internvl_vl_testcase(pipe, resource_path, lang='en'):
     else:
         messages.append(dict(role='user', content='Describe this video in detail. Don\'t repeat.'))
     response = pipe(messages, gen_config=gen_config, log_level='INFO', max_log_len=10)
-    print('[caseresult internvl-video2-{lang} start]' + json.dumps(response.text, ensure_ascii=False) +
-          '[caseresult internvl-video2-{lang} end]\n')
-
-
-def llava_vl_testcase(pipe, resource_path):
-    # multi-image multi-round conversation, combined images
-    messages = [
-        dict(role='user',
-             content=[
-                 dict(type='text', text='Describe the two images in detail.'),
-                 dict(type='image_url', image_url=dict(url=f'{resource_path}/{PIC_BEIJING}')),
-                 dict(type='image_url', image_url=dict(url=f'{resource_path}/{PIC_CHONGQING}'))
-             ])
-    ]
-    response = pipe(messages, gen_config=gen_config, log_level='INFO', max_log_len=10)
-    print('[caseresult llava-combined-images start]' + json.dumps(response.text, ensure_ascii=False) +
-          '[caseresult llava-combined-images end]\n')
-
-    messages.append(dict(role='assistant', content=response.text))
-    messages.append(dict(role='user', content=DESC))
-    response = pipe(messages, gen_config=gen_config, log_level='INFO', max_log_len=10)
-    print('[caseresult llava-combined-images2 start]' + json.dumps(response.text, ensure_ascii=False) +
-          '[caseresult llava-combined-images2 end]\n')
+    print(f'[caseresult internvl-video2-{lang} start]' + json.dumps(response.text, ensure_ascii=False) +
+          f'[caseresult internvl-video2-{lang} end]\n')
 
 
 def MiniCPM_vl_testcase(pipe, resource_path):
@@ -290,6 +269,7 @@ def MiniCPM_vl_testcase(pipe, resource_path):
             idxs = [int(i * gap + gap / 2) for i in range(n)]
             return [length[i] for i in idxs]
 
+        from decord import VideoReader, cpu
         vr = VideoReader(video_path, ctx=cpu(0))
         sample_fps = round(vr.get_avg_fps() / 1)  # FPS
         frame_idx = [i for i in range(0, len(vr), sample_fps)]
