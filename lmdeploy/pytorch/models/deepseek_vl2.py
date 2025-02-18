@@ -19,11 +19,9 @@ from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .deepseek_v2 import DeepseekV2ForCausalLM
-from .deepseek_vl2_config import DeepseekV2Config
+from .deepseek_vl2_config import DeepseekVLV2Config, MlpProjectorConfig, VisionEncoderConfig
 from .utils.cudagraph import CudaGraphMixin
 from .utils.model import DeployModelMixin
-
-DEBUG_WITH_VISION = True
 
 
 class MlpProjector(nn.Module):
@@ -77,13 +75,12 @@ class MlpProjector(nn.Module):
             w = h = int(wxh**0.5)
             x = x.view(batch_size, w, h, channels)
             x = x.permute(0, 3, 1, 2)
-            # import ipdb; ipdb.set_trace()
             patches = x.unfold(2, 2, 2).unfold(3, 2, 2)
             batch_size, channels, h_patches, w_patches, _, _ = patches.size()
-            # 在通道维度上拼接
+            # concatenate along the channel dimension
             patches = patches.contiguous().view(batch_size, channels, h_patches * w_patches, -1)
 
-            # 通过线性层
+            # pass through the linear layer
             patches = patches.permute(0, 2, 1, 3).contiguous()
             patches = patches.view(batch_size, h_patches * w_patches, channels * 4)
 
@@ -107,82 +104,6 @@ class MlpProjector(nn.Module):
             x = x.permute(0, 2, 1)
 
         return self.layers(x)
-
-
-class VisionEncoderConfig(PretrainedConfig):
-    model_type: str = 'vision'
-    model_name: str = 'siglip_large_patch16_384'
-    image_size: int = 384
-    patch_size: int = 16
-    width: int = 1024
-    layers: int = 24
-    heads: int = 16
-    mlp_ratio: int = 4
-    global_pool: str = 'map'
-    ignore_head: bool = True
-    class_token: bool = False
-    num_classes: int = 0
-    use_checkpoint: bool = False
-    weight_init: str = 'skip'
-    deterministic: bool = False
-    num_recomputing_layers: int = 0
-
-    def __init__(self,
-                 model_name: str = 'siglip_large_patch16_384',
-                 image_size: int = 384,
-                 patch_size: int = 16,
-                 width: int = 1024,
-                 layers: int = 24,
-                 heads: int = 16,
-                 mlp_ratio: int = 4,
-                 global_pool: str = 'map',
-                 ignore_head: bool = True,
-                 class_token: bool = False,
-                 num_classes: int = 0,
-                 use_checkpoint: bool = False,
-                 **kwargs):
-        self.model_name = model_name
-        self.image_size = image_size
-        self.patch_size = patch_size
-        self.width = width
-        self.layers = layers
-        self.heads = heads
-        self.mlp_ratio = mlp_ratio
-        self.global_pool = global_pool
-        self.ignore_head = ignore_head
-        self.class_token = class_token
-        self.num_classes = num_classes
-        self.use_checkpoint = use_checkpoint
-
-        super().__init__(**kwargs)
-
-
-class MlpProjectorConfig(PretrainedConfig):
-    model_type = 'mlp_projector'
-    projector_type: str = 'downsample_mlp_gelu'
-    input_dim: int = 1152
-    n_embed: int = 2048
-    depth: int = 2
-    mlp_ratio: int = 1
-    downsample_ratio: int = 2
-    token_pooling: bool = False
-
-    def __init__(self,
-                 projector_type: str = 'downsample_mlp_gelu',
-                 input_dim: int = 1152,
-                 n_embed: int = 2048,
-                 depth: int = 2,
-                 mlp_ratio: int = 1,
-                 downsample_ratio: int = 2,
-                 **kwargs):
-        self.projector_type = projector_type
-        self.input_dim = input_dim
-        self.n_embed = n_embed
-        self.depth = depth
-        self.mlp_ratio = mlp_ratio
-        self.downsample_ratio = downsample_ratio
-
-        super().__init__(**kwargs)
 
 
 @dataclass
@@ -227,40 +148,6 @@ class DeepSeekVLV2CausalLMOutputWithPast(ModelOutput):
     rope_deltas: Optional[torch.LongTensor] = None
 
 
-class DeepseekVLV2Config(PretrainedConfig):
-    model_type = 'deepseek_vl_v2'
-    vision_config: VisionEncoderConfig
-    projector_config: MlpProjectorConfig
-    language_config: DeepseekV2Config
-
-    tile_tag: str = '2D'
-    global_view_pos: str = 'head'
-    candidate_resolutions: Tuple[Tuple[int, int]] = ((384, 384), )
-
-    def __init__(self,
-                 tile_tag: str = 'tile_tag',
-                 global_view_pos: str = 'head',
-                 candidate_resolutions: Tuple[Tuple[int, int]] = ((384, 384), ),
-                 **kwargs):
-        super().__init__(**kwargs)
-
-        vision_config = kwargs.get('vision_config', {})
-        self.vision_config = VisionEncoderConfig(**vision_config)
-
-        projector_config = kwargs.get('projector_config', {})
-        self.projector_config = MlpProjectorConfig(**projector_config)
-
-        language_config = kwargs.get('language_config', {})
-        if isinstance(language_config, DeepseekV2Config):
-            self.language_config = language_config
-        else:
-            self.language_config = DeepseekV2Config(**language_config)
-
-        self.tile_tag = tile_tag
-        self.global_view_pos = global_view_pos
-        self.candidate_resolutions = candidate_resolutions
-
-
 class DeepseekVLV2PreTrainedModel(PreTrainedModel):
     config_class = DeepseekVLV2Config
     base_model_prefix = 'deepseek_vl_v2'
@@ -286,12 +173,11 @@ class DeepseekVLV2ForCausalLM(DeepseekVLV2PreTrainedModel, nn.Module, CudaGraphM
         projector_config = config.projector_config
         self.projector = MlpProjector(projector_config, dtype)
 
-        # image token format 形式
-        # FIXME 目前tile tag & global_view_pos的默认取值都是之前的实验策略；后续应当去掉默认取值，改为没有取值就raise error
+        # image token format
         self.tile_tag = config.tile_tag
         self.global_view_pos = config.global_view_pos
 
-        # 用于format image token sequence的特殊token
+        # special tokens used to format image token sequence
         embed_std = 1 / torch.sqrt(torch.tensor(projector_config.n_embed, dtype=torch.float32))
         if self.tile_tag == '2D':
             # <|view_separator|>, <|\n|>
@@ -330,7 +216,6 @@ class DeepseekVLV2ForCausalLM(DeepseekVLV2PreTrainedModel, nn.Module, CudaGraphM
 
         model = timm.create_model(
             'vit_so400m_patch14_siglip_384.webli',
-            # "vit_so400m_patch14_siglip_384",
             pretrained=False,
             num_classes=0,
             dynamic_img_size=True,
@@ -357,7 +242,6 @@ class DeepseekVLV2ForCausalLM(DeepseekVLV2PreTrainedModel, nn.Module, CudaGraphM
             input_embeds (torch.Tensor): [b, T, D]
         """
 
-        # import pdb; pdb.set_trace()
         if images is None or images_spatial_crop.sum() == 0:
             return self.language.get_input_embeddings()(input_ids)
 
@@ -393,7 +277,7 @@ class DeepseekVLV2ForCausalLM(DeepseekVLV2PreTrainedModel, nn.Module, CudaGraphM
         # put image tokens into the input_embeds, [b, T, D]
         input_embeds = self.language.get_input_embeddings()(input_ids)
 
-        # 根据self.tile_tag & self.global_view_pos填充image token sequence
+        # fill image token sequence according to self.tile_tag & self.global_view_pos
         tile_index = 0
         for idx in range(images_spatial_crop.shape[0]):
             images_in_this_batch = []
@@ -455,7 +339,7 @@ class DeepseekVLV2ForCausalLM(DeepseekVLV2PreTrainedModel, nn.Module, CudaGraphM
                             [local_features, self.view_seperator[None, :], global_features], dim=0)
 
                 else:
-                    # abandoned，实际上不会走这个逻辑
+                    # abandoned，will not step into this logic
                     global_features = torch.cat([self.tile_indicators[0:1], global_features], dim=0)
                     local_features = torch.cat(
                         [self.tile_indicators[1:num_tiles_in_image + 1].unsqueeze(1), local_features], dim=1)
