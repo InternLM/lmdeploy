@@ -54,7 +54,7 @@ def run_pipeline_chat_test(model_path, cases_path, tp, backend_type, is_pr_test,
             response_list.append({'prompt': prompt, 'response': response})
             prompts.append({'role': 'assistant', 'content': response})
 
-        print(f"[caseresult {case} start]" + json.dumps(response_list, ensure_ascii=False) +
+        print(f'[caseresult {case} start]' + json.dumps(response_list, ensure_ascii=False) +
               f'[caseresult {case} end]\n')
 
     pipe.close()
