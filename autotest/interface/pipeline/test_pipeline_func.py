@@ -10,7 +10,6 @@ from utils.pipeline_chat import (assert_pipeline_batch_return, assert_pipeline_b
 from utils.restful_return_check import get_repeat_times
 
 from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
-from lmdeploy.utils import is_bf16_supported
 
 
 @pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
