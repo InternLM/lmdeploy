@@ -375,7 +375,7 @@ class MPExecutor(ExecutorBase):
 
     async def forward_async(self, inputs):
         """start forward."""
-        self.collective_rpc('set_forward_inputs', args=(inputs, ))
+        await self.collective_rpc_async('set_forward_inputs', args=(inputs, ))
         self.model_agent.set_forward_inputs(inputs)
 
     async def get_output_async(self):
