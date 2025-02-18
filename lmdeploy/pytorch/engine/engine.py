@@ -723,8 +723,6 @@ class Engine:
             forward_inputs = self._make_forward_inputs(prefill)
             next_running = forward_inputs.pop('running')
             await self.executor.forward_async(forward_inputs)
-            self.scheduler.lock_running(next_running)
-            self._set_has_runable_event(has_runable_event)
 
         async def _prefetch_next_inputs():
             enable = False
@@ -750,12 +748,12 @@ class Engine:
             num_loops = forward_inputs['loop_count']
             running = next_running
             next_running = None
+            self.scheduler.lock_running(running)
             for idx in range(num_loops):
                 if idx >= num_loops - 1:
                     await _prefetch_next_inputs()
                 out = await self.executor.get_output_async()
                 step_outputs = self._make_infer_outputs(**out, running=running)
-                self._set_has_runable_event(has_runable_event)
                 resp_que.put_nowait(step_outputs)
             self.scheduler.unlock_running(running)
             self._set_has_runable_event(has_runable_event)
