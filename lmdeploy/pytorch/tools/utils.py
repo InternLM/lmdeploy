@@ -22,6 +22,7 @@ class Timer:
         start.record()
         yield self
         end.record()
+        torch.cuda.synchronize()
         self.duration = start.elapsed_time(end)
 
     @classmethod
@@ -34,7 +35,7 @@ class Timer:
             yield from timer.tic_cpu()
 
     @staticmethod
-    def format_duration(duration: float):
+    def format_duration(duration: float, acc: int = 3):
         """format duration."""
         unit = 'ms'
         if duration < 1:
@@ -43,37 +44,51 @@ class Timer:
         elif duration > 1000:
             duration /= 1000
             unit = 's'
-        
-        return f'{duration:.3f} {unit}'
+
+        return f'{duration:.{acc}f} {unit}'
 
     @staticmethod
-    def format_flops(flops: float):
-        """compute flops"""
+    def format_flops(flops: float, acc: int = 3):
+        """compute flops."""
         unit = ''
-        if flops > (1<<40):
-            flops /= (1<<40)
+        if flops > (1 << 40):
+            flops /= (1 << 40)
             unit = 'T'
-        elif flops > (1<<30):
-            flops /= (1<<30)
+        elif flops > (1 << 30):
+            flops /= (1 << 30)
             unit = 'G'
-        elif flops > (1<<20):
-            flops /= (1<<20)
+        elif flops > (1 << 20):
+            flops /= (1 << 20)
             unit = 'M'
-        elif flops > (1<<10):
-            flops /= (1<<10)
+        elif flops > (1 << 10):
+            flops /= (1 << 10)
             unit = 'K'
-        return f'{flops:.3f} {unit}Flop/s'
-    
+        return f'{flops:.{acc}f} {unit}Flop/s'
+
+    @staticmethod
+    def formatted_print(out_info: dict):
+        """formatted print."""
+        max_key_len = max(len(k) for k in out_info.keys())
+        max_key_len = min(10, max_key_len)
+        max_val_len = max(len(k) for k in out_info.values())
+        max_val_len = min(10, max_val_len)
+        for k, v in out_info.items():
+            print(f'{k:>{max_key_len}} : {v:>{max_val_len}}')
+
     def print(self, flop: int = None):
         """print."""
         if self.duration is None:
             print('Please run Timer.tic() first.')
             return
 
+        out_info = dict()
+
         formated_dur = self.format_duration(self.duration)
-        print(f'Take time: {formated_dur}')
+        out_info['Duration'] = f'{formated_dur}'
 
         if flop is not None:
             flops = flop / self.duration * 1000
             formated_flops = self.format_flops(flops)
-            print(f'Flops: {formated_flops}')
+            out_info['Flops'] = f'{formated_flops}'
+
+        self.formatted_print(out_info)

@@ -420,6 +420,7 @@ class RayExecutor(ExecutorBase):
                 num_cpus=0,
                 num_gpus=1.0,
                 scheduling_strategy=scheduling_strategy,
+                runtime_env={'nsight': 'default'},
             )(RayWorkerWrapper).remote(**worker_kwargs)
             workers.append(worker)
 

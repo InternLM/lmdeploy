@@ -511,7 +511,7 @@ class Engine:
             model_metas = [None] * len(running)
         next_token_ids = next_token_ids.numpy()
         for token, msg, stop, model_meta in zip(next_token_ids, running, stopped, model_metas):
-            if msg.status != MessageStatus.RUNNING:
+            if msg.status != MessageStatus.LOCKED:
                 continue
             update_token = token
             if stop:
@@ -522,12 +522,28 @@ class Engine:
             if stop:
                 msg.status = MessageStatus.STOPPED
 
+    def _do_prefill(self):
+        # decoding if no waiting
+        if not self.scheduler.has_waiting():
+            return False
+        num_running = self.scheduler.num_running()
+        num_waiting = self.scheduler.num_waiting()
+        max_batches = self.scheduler_config.max_batches
+        # prefill if too much waiting
+        if num_waiting >= 4:
+            return True
+        # prefill if no enough running
+        if num_running < max_batches * 0.5:
+            return True
+        # decoding
+        return False
+
     def _make_infer_outputs(self, next_token_ids: torch.LongTensor, running: SeqList, logits: torch.Tensor,
                             stopped: torch.Tensor, model_metas: List[Dict[str, Any]]):
         """make infer output."""
 
         seq_length = [seq.num_token_ids for seq in running]
-        is_run = [seq.status == MessageStatus.RUNNING for seq in running]
+        is_run = [seq.status == MessageStatus.LOCKED for seq in running]
         stopped = stopped.tolist()
         self.update_running(running, next_token_ids, stopped, model_metas)
 
@@ -553,7 +569,7 @@ class Engine:
                 outputs[session_id].logits = logits.split(seq_length)[idx]
         return outputs
 
-    def _make_forward_inputs(self):
+    def _make_forward_inputs(self, prefill: bool = None):
         """make forward inputs."""
         prefill_interval = self.scheduler_config.prefill_interval
 
@@ -605,23 +621,8 @@ class Engine:
             """need logits."""
             return any(seq.return_logits for seq in seqs)
 
-        def __do_prefill():
-            # decoding if no waiting
-            if not self.scheduler.has_waiting():
-                return False
-            num_running = self.scheduler.num_running()
-            num_waiting = self.scheduler.num_waiting()
-            max_batches = self.scheduler_config.max_batches
-            # prefill if too much waiting
-            if num_waiting >= 4:
-                return True
-            # prefill if no enough running
-            if num_running < max_batches * 0.5:
-                return True
-            # decoding
-            return False
-
-        prefill = __do_prefill()
+        if prefill is None:
+            prefill = self._do_prefill()
         scheduler_output = self.scheduler.schedule(is_prefill=prefill, prealloc_size=prefill_interval)
         # schedule decoding if no valid prefill reqs.
         if prefill and len(scheduler_output.running) == 0:
@@ -714,18 +715,50 @@ class Engine:
         Each engine instance would communicate with the engine by queue.
         """
 
-        while True:
-            await has_runable_event.wait()
+        forward_inputs = None
+        next_running = None
 
-            forward_inputs = self._make_forward_inputs()
-            num_loops = forward_inputs['loop_count']
-            running = forward_inputs.pop('running')
+        async def _send_next_inputs(prefill: bool = None):
+            nonlocal forward_inputs, next_running
+            forward_inputs = self._make_forward_inputs(prefill)
+            next_running = forward_inputs.pop('running')
             await self.executor.forward_async(forward_inputs)
-            for _ in range(num_loops):
+            self.scheduler.lock_running(next_running)
+            self._set_has_runable_event(has_runable_event)
+
+        async def _prefetch_next_inputs():
+            enable = False
+            prefill = self._do_prefill()
+            if prefill:
+                enable = True
+            else:
+                num_running = self.scheduler.num_running()
+                is_decoding = forward_inputs['inputs'].is_decoding
+                running_threshold = (self.scheduler_config.max_batches // 4) if is_decoding else 0
+
+                if num_running > running_threshold:
+                    enable = True
+
+            if enable:
+                # send next forward
+                await _send_next_inputs(prefill)
+
+        while True:
+            if next_running is None:
+                await has_runable_event.wait()
+                await _send_next_inputs()
+            num_loops = forward_inputs['loop_count']
+            running = next_running
+            next_running = None
+            for idx in range(num_loops):
+                if idx >= num_loops - 1:
+                    await _prefetch_next_inputs()
                 out = await self.executor.get_output_async()
                 step_outputs = self._make_infer_outputs(**out, running=running)
                 self._set_has_runable_event(has_runable_event)
                 resp_que.put_nowait(step_outputs)
+            self.scheduler.unlock_running(running)
+            self._set_has_runable_event(has_runable_event)
 
     @staticmethod
     def _add_loop_tasks_done_callback(tasks: List[asyncio.Task]):

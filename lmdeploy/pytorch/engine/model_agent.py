@@ -329,15 +329,18 @@ class AutoModelAgent:
         logger.debug('<ForwardTask>: '
                      f'batch_size={inputs.seq_length.size(0)} '
                      f'num_tokens={inputs.input_ids.size(-1)}')
-        inputs = inputs.to_device('cuda')
+        non_blocking = True
+        inputs = inputs.to_device('cuda', non_blocking=non_blocking)
         is_decoding = inputs.is_decoding
         if all_ids is not None:
-            all_ids = all_ids.cuda()
+            all_ids = all_ids.cuda(non_blocking=non_blocking)
         if guided_input_ids is not None:
-            guided_input_ids = guided_input_ids.cuda()
-        sampling_inputs = sampling_inputs.to_device('cuda')
-        num_appendable_ids = num_appendable_ids.cuda()
-        num_ignore_eos = num_ignore_eos.cuda()
+            guided_input_ids = guided_input_ids.cuda(non_blocking=non_blocking)
+        sampling_inputs = sampling_inputs.to_device('cuda', non_blocking=non_blocking)
+        num_appendable_ids = num_appendable_ids.cuda(non_blocking=non_blocking)
+        num_ignore_eos = num_ignore_eos.cuda(non_blocking=non_blocking)
+
+        self.stream.synchronize()
 
         # dist tools
         dist_ctx = get_dist_manager().current_context()
