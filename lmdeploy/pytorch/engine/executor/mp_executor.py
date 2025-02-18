@@ -55,6 +55,7 @@ class Notifier:
         if self._event_id == NUM_SHARED_BLOCK - 1:
             self.bar.wait()
             [event.clear() for event in self.events]
+            self.bar.wait()
         self._update_event_id()
 
     async def set_async(self):
@@ -63,6 +64,7 @@ class Notifier:
         if self._event_id == NUM_SHARED_BLOCK - 1:
             await event_loop.run_in_executor(None, self.bar.wait)
             [event.clear() for event in self.events]
+            self.bar.wait()
         self._update_event_id()
 
     @contextmanager
@@ -70,6 +72,7 @@ class Notifier:
         self.events[self._event_id].wait()
         yield
         if self._event_id == NUM_SHARED_BLOCK - 1:
+            self.bar.wait()
             self.bar.wait()
         self._update_event_id()
 
@@ -79,6 +82,7 @@ class Notifier:
         await event_loop.run_in_executor(None, self.events[self._event_id].wait)
         yield
         if self._event_id == NUM_SHARED_BLOCK - 1:
+            self.bar.wait()
             self.bar.wait()
         self._update_event_id()
 
@@ -316,7 +320,7 @@ class MPExecutor(ExecutorBase):
             args = list()
         if kwargs is None:
             kwargs = dict()
-        self.comm_buf.send(
+        await self.comm_buf.send_async(
             dict(
                 method=method,
                 args=args,
