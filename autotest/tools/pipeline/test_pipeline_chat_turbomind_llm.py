@@ -136,7 +136,6 @@ def test_pipeline_chat_pr(config, common_case_config, model, worker_id):
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.pipeline_chat
 @pytest.mark.gpu_num_1
-@pytest.mark.test
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('model', ['Qwen/Qwen2.5-7B-Instruct'])
 def test_modelscope_pipeline_chat_tp1(config, common_case_config, model, worker_id):

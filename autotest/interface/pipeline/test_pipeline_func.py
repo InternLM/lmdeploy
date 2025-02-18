@@ -24,6 +24,7 @@ def init_pipeline(model_path, backend_config):
 def test_return_with_prompt(config, model, backend, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     model_path = '/'.join([config.get('model_path'), model])
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
@@ -41,6 +42,7 @@ def test_return_with_prompt(config, model, backend, worker_id):
 def test_return_with_prompt_stream(config, model, backend, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     model_path = '/'.join([config.get('model_path'), model])
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
@@ -60,6 +62,7 @@ def test_return_with_prompt_stream(config, model, backend, worker_id):
 def test_return_with_multi_prompt(config, model, backend, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     model_path = '/'.join([config.get('model_path'), model])
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
@@ -77,6 +80,7 @@ def test_return_with_multi_prompt(config, model, backend, worker_id):
 def test_return_with_multi_prompt_stream(config, model, backend, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     model_path = '/'.join([config.get('model_path'), model])
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
@@ -95,6 +99,7 @@ def test_return_with_multi_prompt_stream(config, model, backend, worker_id):
 def test_return_with_message(config, model, backend, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     model_path = '/'.join([config.get('model_path'), model])
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
@@ -113,6 +118,7 @@ def test_return_with_message(config, model, backend, worker_id):
 def test_return_with_message_stream(config, model, backend, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     model_path = '/'.join([config.get('model_path'), model])
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
@@ -132,6 +138,7 @@ def test_return_with_message_stream(config, model, backend, worker_id):
 def test_return_with_message_batch(config, model, backend, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     model_path = '/'.join([config.get('model_path'), model])
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
@@ -150,6 +157,7 @@ def test_return_with_message_batch(config, model, backend, worker_id):
 def test_return_with_message_batch_stream(config, model, backend, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     model_path = '/'.join([config.get('model_path'), model])
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
@@ -169,6 +177,7 @@ def test_return_with_message_batch_stream(config, model, backend, worker_id):
 def test_return_check_logprobs(config, model, backend, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     model_path = '/'.join([config.get('model_path'), model])
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
@@ -186,6 +195,7 @@ def test_return_check_logprobs(config, model, backend, worker_id):
 def test_return_check_logprobs_stream(config, model, backend, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     model_path = '/'.join([config.get('model_path'), model])
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
@@ -205,6 +215,7 @@ def test_return_check_logprobs_stream(config, model, backend, worker_id):
 def test_backend_config_session_len(config, model, backend, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     model_path = '/'.join([config.get('model_path'), model])
     backend_config = backend(session_len=10, tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
@@ -225,6 +236,7 @@ def test_backend_config_session_len(config, model, backend, worker_id):
 def test_gen_config_min_new_tokens(config, model, backend, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     model_path = '/'.join([config.get('model_path'), model])
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
@@ -246,6 +258,7 @@ def test_gen_config_min_new_tokens(config, model, backend, worker_id):
 def test_gen_config_stop_words(config, model, backend, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     model_path = '/'.join([config.get('model_path'), model])
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
@@ -268,6 +281,7 @@ def test_gen_config_stop_words(config, model, backend, worker_id):
 def test_gen_config_bad_words(config, model, backend, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     model_path = '/'.join([config.get('model_path'), model])
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
@@ -288,6 +302,7 @@ def test_gen_config_bad_words(config, model, backend, worker_id):
 def test_gen_config_special_words_false(config, model, backend, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     model_path = '/'.join([config.get('model_path'), model])
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
@@ -316,6 +331,7 @@ def test_gen_config_special_words_false(config, model, backend, worker_id):
 def test_gen_config_special_words_true(config, model, backend, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     model_path = '/'.join([config.get('model_path'), model])
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
@@ -344,6 +360,7 @@ def test_gen_config_special_words_true(config, model, backend, worker_id):
 def test_gen_config_minimum_repetition_penalty(config, model, backend, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     model_path = '/'.join([config.get('model_path'), model])
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
@@ -363,6 +380,7 @@ def test_gen_config_minimum_repetition_penalty(config, model, backend, worker_id
 def test_gen_config_repetition_penalty_bigger_than_1(config, model, backend, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     model_path = '/'.join([config.get('model_path'), model])
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
@@ -381,6 +399,7 @@ def test_gen_config_repetition_penalty_bigger_than_1(config, model, backend, wor
 def test_gen_config_minimun_topp(config, model, backend, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     model_path = '/'.join([config.get('model_path'), model])
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
@@ -399,6 +418,7 @@ def test_gen_config_minimun_topp(config, model, backend, worker_id):
 def test_gen_config_minimun_topk(config, model, backend, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     model_path = '/'.join([config.get('model_path'), model])
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
@@ -419,6 +439,7 @@ def test_gen_config_minimun_topk(config, model, backend, worker_id):
 def test_gen_config_diff_random_seed(config, model, backend, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     model_path = '/'.join([config.get('model_path'), model])
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
@@ -438,6 +459,7 @@ def test_gen_config_diff_random_seed(config, model, backend, worker_id):
 def test_gen_config_same_random_seed(config, model, backend, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     model_path = '/'.join([config.get('model_path'), model])
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
@@ -457,6 +479,7 @@ def test_gen_config_same_random_seed(config, model, backend, worker_id):
 def test_gen_config_do_sample_batch(config, model, backend, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     model_path = '/'.join([config.get('model_path'), model])
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
@@ -474,6 +497,7 @@ def test_gen_config_do_sample_batch(config, model, backend, worker_id):
 def test_gen_config_max_new_tokens(config, model, backend, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     model_path = '/'.join([config.get('model_path'), model])
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
@@ -495,6 +519,7 @@ def test_gen_config_max_new_tokens(config, model, backend, worker_id):
 def test_gen_config_ignore_eos(config, model, backend, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     model_path = '/'.join([config.get('model_path'), model])
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
@@ -516,6 +541,7 @@ def test_gen_config_ignore_eos(config, model, backend, worker_id):
 def test_backend_config_input_validation(config, model, backend, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     model_path = '/'.join([config.get('model_path'), model])
     backend_config = backend(tp=2)
     pipe = init_pipeline(model_path, backend_config=backend_config)
@@ -554,6 +580,7 @@ def test_backend_config_input_validation(config, model, backend, worker_id):
 def test_backend_config_validate_turbomind(config, model, backend, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     model_path = '/'.join([config.get('model_path'), model])
     with pytest.raises(pydantic.ValidationError, match='tp must be a positive integer'):
         backend_config = backend(tp=0)
@@ -592,6 +619,7 @@ def test_backend_config_validate_turbomind(config, model, backend, worker_id):
 def test_backend_config_validate_pytorch(config, model, backend, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
     model_path = '/'.join([config.get('model_path'), model])
     with pytest.raises(AssertionError):
         backend_config = backend(tp=0)
@@ -623,6 +651,7 @@ def test_backend_config_tp(config, model, backend, worker_id):
     with pytest.raises(AssertionError):
         if 'gw' in worker_id:
             os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+            os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
         model_path = '/'.join([config.get('model_path'), model])
         backend_config = backend(tp=100)
         pipe = init_pipeline(model_path, backend_config=backend_config)

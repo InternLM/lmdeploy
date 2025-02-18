@@ -10,18 +10,16 @@ from lmdeploy.utils import is_bf16_supported
 gen_config = GenerationConfig(max_new_tokens=500)
 
 
-def run_pipeline_chat_test(model_path, cases_path, tp, type, is_pr_test, extra: object = None):
+def run_pipeline_chat_test(model_path, cases_path, tp, backend_type, is_pr_test, extra: object = None):
 
-    if 'pytorch' in type:
+    if 'pytorch' in backend_type:
         backend_config = PytorchEngineConfig(tp=tp)
-        if not is_bf16_supported():
-            backend_config.dtype = 'float16'
     else:
         backend_config = TurbomindEngineConfig(tp=tp)
 
-    if 'lora' in type:
+    if 'lora' in backend_type:
         backend_config.adapters = extra.get('adapters')
-    if 'kvint' in type:
+    if 'kvint' in backend_type:
         backend_config.quant_policy = extra.get('quant_policy')
 
     # if llava support kvint or awq, this code should refactor
@@ -31,6 +29,8 @@ def run_pipeline_chat_test(model_path, cases_path, tp, type, is_pr_test, extra: 
         backend_config.model_format = 'awq'
     if 'gptq' in model_path.lower():
         backend_config.model_format = 'gptq'
+    if not is_bf16_supported():
+        backend_config.dtype = 'float16'
 
     pipe = pipeline(model_path, backend_config=backend_config)
 
@@ -54,7 +54,8 @@ def run_pipeline_chat_test(model_path, cases_path, tp, type, is_pr_test, extra: 
             response_list.append({'prompt': prompt, 'response': response})
             prompts.append({'role': 'assistant', 'content': response})
 
-        print(f"caseresult {case}: " + json.dumps(response_list, ensure_ascii=False) + '\n')
+        print(f"[caseresult {case} start]" + json.dumps(response_list, ensure_ascii=False) +
+              f'[caseresult {case} end]\n')
 
     pipe.close()
     import gc
