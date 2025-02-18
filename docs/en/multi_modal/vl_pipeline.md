@@ -213,3 +213,19 @@ print(sess.response.text)
 sess = pipe.chat('What is the woman doing?', session=sess, gen_config=gen_config)
 print(sess.response.text)
 ```
+
+## Release pipeline
+
+You can release the pipeline explicitly by calling its `close()` method, or alternatively, use the `with` statement as demonstrated below:
+
+```python
+from lmdeploy import pipeline
+
+from lmdeploy import pipeline
+from lmdeploy.vl import load_image
+
+with pipeline('OpenGVLab/InternVL2_5-8B') as pipe:
+    image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
+    response = pipe(('describe this image', image))
+    print(response)
+```

@@ -191,9 +191,9 @@ CUDA 11+プラットフォームでのインストールに関する情報、ま
 
 ```python
 import lmdeploy
-pipe = lmdeploy.pipeline("internlm/internlm3-8b-instruct")
-response = pipe(["Hi, pls intro yourself", "Shanghai is"])
-print(response)
+with lmdeploy.pipeline("internlm/internlm3-8b-instruct") as pipe:
+    response = pipe(["Hi, pls intro yourself", "Shanghai is"])
+    print(response)
 ```
 
 > \[!NOTE\]
