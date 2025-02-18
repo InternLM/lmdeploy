@@ -11,7 +11,6 @@ BACKEND_KVINT = 'turbomind-kvint'
 @pytest.mark.order(6)
 @pytest.mark.pipeline_chat
 @pytest.mark.gpu_num_1
-@pytest.mark.test
 @pytest.mark.parametrize('model', get_all_model_list(tp_num=1, model_type='vl_model'))
 def test_pipeline_chat_tp1(config, model, worker_id):
     if 'gw' in worker_id:
@@ -115,4 +114,4 @@ def test_pipeline_chat_kvint8_tp4(config, model, worker_id):
 def test_pipeline_pr_test(config, model, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = str(int(get_cuda_id_by_workerid(worker_id)) + 5)
-    run_pipeline_vl_chat_test(config, model, BACKEND, worker_id)
+    run_pipeline_vl_chat_test(config, model, BACKEND, worker_id, is_pr_test=True)

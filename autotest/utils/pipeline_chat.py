@@ -151,13 +151,14 @@ def run_pipeline_vl_chat_test(config,
                          response + '\n')
             with assume:
                 assert case_result, 'reason: batch-example1: tiger should in ' + response
-        if 'internvl' in model_case.lower():
-            internvl_vl_testcase(output_text, f)
-            internvl_vl_testcase(output_text, f, 'cn')
-        if 'minicpm' in model_case.lower():
-            MiniCPM_vl_testcase(output_text, f)
-        if 'qwen' in model_case.lower():
-            Qwen_vl_testcase(output_text, f)
+        if not is_pr_test:
+            if 'internvl' in model_case.lower():
+                internvl_vl_testcase(output_text, f)
+                internvl_vl_testcase(output_text, f, 'cn')
+            if 'minicpm' in model_case.lower():
+                MiniCPM_vl_testcase(output_text, f)
+            if 'qwen' in model_case.lower():
+                Qwen_vl_testcase(output_text, f)
     allure.attach.file(pipeline_chat_log, attachment_type=allure.attachment_type.TEXT)
 
 
