@@ -13,7 +13,7 @@ class Timer:
         self.timer_type = 'cpu'
         import time
         self._start = time.perf_counter()
-    
+
     def toc_cpu(self):
         assert self.timer_type == 'cpu'
         import time
@@ -25,14 +25,14 @@ class Timer:
         import torch
         self._start = torch.cuda.Event(enable_timing=True)
         self._end = torch.cuda.Event(enable_timing=True)
-        start.record()
+        self._start.record()
 
     def toc_cuda(self):
         assert self.timer_type == 'cuda'
         import torch
         self._end.record()
         torch.cuda.synchronize()
-        self.duration = start.elapsed_time(end)
+        self.duration = self._start.elapsed_time(self._end)
 
     @classmethod
     def tic(cls, is_cuda: bool = False) -> 'Timer':
