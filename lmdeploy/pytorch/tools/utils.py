@@ -7,32 +7,56 @@ class Timer:
 
     def __init__(self):
         self.duration = None
+        self.timer_type = None
 
     def tic_cpu(self):
+        self.timer_type = 'cpu'
         import time
-        start = time.perf_counter()
-        yield self
-        end = time.perf_counter()
-        self.duration = (end - start) * 1000
+        self._start = time.perf_counter()
+    
+    def toc_cpu(self):
+        assert self.timer_type == 'cpu'
+        import time
+        self._end = time.perf_counter()
+        self.duration = (self._end - self._start) * 1000
 
     def tic_cuda(self):
+        self.timer_type = 'cuda'
         import torch
-        start = torch.cuda.Event(enable_timing=True)
-        end = torch.cuda.Event(enable_timing=True)
+        self._start = torch.cuda.Event(enable_timing=True)
+        self._end = torch.cuda.Event(enable_timing=True)
         start.record()
-        yield self
-        end.record()
+
+    def toc_cuda(self):
+        assert self.timer_type == 'cuda'
+        import torch
+        self._end.record()
         torch.cuda.synchronize()
         self.duration = start.elapsed_time(end)
 
     @classmethod
-    @contextmanager
     def tic(cls, is_cuda: bool = False) -> 'Timer':
         timer = Timer()
         if is_cuda:
-            yield from timer.tic_cuda()
+            timer.tic_cuda()
         else:
-            yield from timer.tic_cpu()
+            timer.tic_cpu()
+        return timer
+
+    def toc(self):
+        if self.timer_type == 'cpu':
+            return self.toc_cpu()
+        elif self.timer_type == 'cuda':
+            return self.toc_cuda()
+        else:
+            raise RuntimeError(f'Unknown timer_type: {self.timer_type}')
+
+    @classmethod
+    @contextmanager
+    def timing(cls, is_cuda: bool = False) -> 'Timer':
+        timer = cls.tic(is_cuda=is_cuda)
+        yield timer
+        timer.toc()
 
     @staticmethod
     def format_duration(duration: float, acc: int = 3):

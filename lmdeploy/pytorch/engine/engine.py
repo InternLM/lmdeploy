@@ -698,13 +698,19 @@ class Engine:
             resp_type = (ResponseType.FINISH if out.finish else ResponseType.SUCCESS)
             self._response(out.resp, resp_type, data=dict(token_ids=out.token_ids, logits=out.logits))
 
-        def __send_resps(step_outputs: Dict[int, InferOutput]):
+        def __send_resps(step_outputs: List[InferOutput]):
             """send response callback."""
-            for out in step_outputs.values():
+            for out in step_outputs:
                 __send_resp(out)
 
         while True:
-            resps = await que.get()
+            num_outs = que.qsize()
+            if num_outs > 0:
+                resps = []
+                for _ in range(num_outs):
+                    resps += que.get_nowait().values()
+            else:
+                resps = (await que.get()).values()
             await self._await_forward_event(forward_event)
             __send_resps(resps)
 
