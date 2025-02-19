@@ -4,10 +4,10 @@ import os
 import os.path as osp
 import re
 from abc import ABC, abstractmethod
-from collections import defaultdict, OrderedDict
+from collections import OrderedDict, defaultdict
 from functools import partial
 from glob import glob
-from typing import Iterator, Tuple, Dict
+from typing import Iterator, Tuple
 
 import torch
 from safetensors import safe_open
@@ -147,6 +147,7 @@ class PytorchLoader(BaseLoader):
 
 def create_loader(model_path: str, pattern: str) -> BaseLoader:
     if not isinstance(model_path, (str, os.PathLike)):
+
         def generate():
             generator = OrderedDict()
             model_dict = {}
