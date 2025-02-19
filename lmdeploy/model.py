@@ -543,7 +543,11 @@ class InternLM2Chat7B(InternLMChat7B):
             if role == 'assistant' and message.get('tool_calls', None) is not None:
                 for tool_call in message['tool_calls']:
                     function = tool_call.get('function', {})
-                    function['arguments'] = function.pop('parameters', {})
+                    function['name'] = function.get('name', '')
+                    function['parameters'] = function.get('arguments', function.get('arguments', ''))
+                    function.pop('arguments')
+                    if isinstance(function['parameters'], str):
+                        function['parameters'] = json.loads(function['parameters'])
                     content += f'<|action_start|><|plugin|>\n{json.dumps(function, ensure_ascii=False)}<|action_end|>'
             if 'name' in message and message['name'] in name_map:
                 begin = box_map[role].strip() + f" name={name_map[message['name']]}\n"
@@ -1043,6 +1047,8 @@ class Qwen2d5Chat(Qwen7BChat):
                     for tool_call in tool_calls:
                         if tool_call.get('function') is not None:
                             tool_call = tool_call['function']
+                        if isinstance(tool_call['arguments'], str):
+                            tool_call['arguments'] = json.loads(tool_call['arguments'])
                         ret += f'{self.separator}<tool_call>{self.separator}{{"name": "{tool_call["name"]}", "arguments": {json.dumps(tool_call["arguments"], ensure_ascii=False)}}}{self.separator}</tool_call>'
                 ret += self.eosys
             if message['role'] == 'tool':
