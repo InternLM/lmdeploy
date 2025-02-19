@@ -196,7 +196,10 @@ class InternVLVisionModel(VisonModel):
             pixel_values = self.processor(image, params)
             image_tokens = (pixel_values.shape[0] * self.image_tokens_per_patch)
             outputs.append(
-                dict(pixel_values=pixel_values, image_tokens=image_tokens, image_token_id=0, image_size=image.size))
+                dict(pixel_values=pixel_values,
+                     image_tokens=image_tokens,
+                     image_token_id=self.image_token_id,
+                     image_size=image.size))
         messages.append(dict(role='preprocess', content=outputs))
         return messages
 

@@ -97,7 +97,7 @@ class DeepSeekVisionModel(VisonModel):
                     # refer to https://github.com/deepseek-ai/DeepSeek-VL/blob/main/deepseek_vl/models/processing_vlm.py  # noqa
                     # which is hardcoded 576
                     image_tokens=576,
-                    image_token_id=0))
+                    image_token_id=self.image_token_id))
         messages.append(dict(role='preprocess', content=outputs))
         return messages
 

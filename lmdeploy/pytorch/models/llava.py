@@ -549,7 +549,7 @@ class LLavaInputProcessor(BaseModelInputProcessor):
         for input_mm in input_multimodals:
             pixel_values = input_mm['pixel_values'].to(self.dtype)
             offset = input_mm['offset']
-            image_token_id = input_mm.get('image_token_id', 0)
+            image_token_id = input_mm['image_token_id']
             num_pad = input_mm['image_tokens']
             if isinstance(num_pad, torch.Tensor):
                 num_pad = num_pad.item()
@@ -828,7 +828,7 @@ class LLavaNextInputProcessor(BaseModelInputProcessor):
             pixel_values = input_mm['pixel_values'].to(self.dtype)
             image_sizes = input_mm['image_sizes']
             offset = input_mm['offset']
-            image_token_id = input_mm.get('image_token_id', 0)
+            image_token_id = input_mm['image_token_id']
             num_pad = input_mm['image_tokens']
             if isinstance(num_pad, torch.Tensor):
                 num_pad = num_pad.item()
