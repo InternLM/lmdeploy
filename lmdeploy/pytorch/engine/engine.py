@@ -399,8 +399,7 @@ class Engine:
         Args:
             messages (SeqList): The input messages.
         """
-        history_lengths = [msg.history_len for msg in messages]
-        history_lengths = torch.tensor(history_lengths)
+        history_lengths = torch.tensor([msg.history_len for msg in messages])
 
         token_ids = [msg.token_ids for msg in messages]
 
@@ -412,27 +411,30 @@ class Engine:
 
         is_decoding = not is_prefill
         if not is_decoding:
-            seq_length = [len(tokens) for tokens in token_ids]
-            seq_length = torch.tensor(seq_length, dtype=torch.long)
+            seq_length = torch.tensor(
+                [len(tokens) for tokens in token_ids],
+                dtype=torch.long
+            )
         else:
             seq_length = torch.ones(batch_size, dtype=torch.long)
         max_q_seq_length = seq_length.max().item()
 
-        block_offsets = self.scheduler.get_block_tables(messages)
-        block_offsets = _tensorlize_block_offsets(block_offsets)
+        block_offsets = _tensorlize_block_offsets(self.scheduler.get_block_tables(messages))
 
         local_adapter_ids = None
         if self.adapter_manager.num_adapters() > 1:
             adapter_names = [msg.adapter_name for msg in messages]
-            local_adapter_ids = self.adapter_manager.get_adapter_ids(adapter_names)
-            local_adapter_ids = seq_length.new_tensor(local_adapter_ids)
+            local_adapter_ids = seq_length.new_tensor(
+                self.adapter_manager.get_adapter_ids(adapter_names)
+            )
 
         # add batch dim [bs=1, seq_len]
         if input_ids.ndim == 1:
             input_ids = input_ids.unsqueeze(0)
 
-        num_ignored_history = [msg.num_ignored_history for msg in messages]
-        num_ignored_history = torch.tensor(num_ignored_history)
+        num_ignored_history = torch.tensor(
+            [msg.num_ignored_history for msg in messages]
+        )
 
         model_metas = [msg.model_meta for msg in messages]
 
