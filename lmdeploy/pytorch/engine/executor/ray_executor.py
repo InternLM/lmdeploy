@@ -143,7 +143,8 @@ class RayWorkerWrapper:
         self.node_ip = ray.util.get_node_ip_address()
 
         logger.setLevel(log_level)
-        self.model = None
+        self.out_que = None
+        self._output_loop = None
 
     def get_node_ip(self):
         """get worker ip."""
@@ -155,8 +156,9 @@ class RayWorkerWrapper:
         self.rank = rank
 
         init_process_group(rank, self.world_size)
+        self.dist_ctx = DistContext.build(self.rank, self.tp, self.dp)
 
-    def _warmup_dist(self):
+    def warmup_dist(self):
         # None default CUDA_VISIBLE_DEVICES might leads to slow first time all_reduce
         # WHY?
         logger.debug('Warmup all_reduce.')
@@ -167,11 +169,32 @@ class RayWorkerWrapper:
             tmp = torch.empty((1, ), device='cuda')
             all_reduce(tmp)
 
+    async def _get_outputs_loop(self):
+        """get outputs loop."""
+        assert self.out_que is not None
+        while True:
+            ret = await self.get_output_async()
+            # pack to numpy
+            for k, v in ret.items():
+                if isinstance(v, torch.Tensor):
+                    ret[k] = v.numpy()
+            self.out_que.put_nowait(ret)
+
+    async def get_outputs(self):
+        """get outputs."""
+        assert self.out_que is not None
+        qsize = self.out_que.qsize()
+        if qsize > 0:
+            outs = []
+            for _ in range(qsize):
+                outs.append(self.out_que.get_nowait())
+            return outs
+        else:
+            return [await self.out_que.get()]
+
     def build_model(self):
         """build model."""
-        self.dist_ctx = DistContext.build(self.rank, self.tp, self.dp)
         self.device_ctx = DeviceContext(device_type=self.device_type)
-        self._warmup_dist()
 
         self.model_agent = build_model_agent(model_path=self.model_path,
                                              model_config=self.model_config,
@@ -210,10 +233,15 @@ class RayWorkerWrapper:
     def start(self):
         """start engine loop."""
         self.model_agent.start()
+        event_loop = asyncio.get_event_loop()
+        self.out_que = asyncio.Queue()
+        self._output_loop = event_loop.create_task(self._get_outputs_loop(), name='GetOutputsLoop')
 
     def stop(self):
         """stop engine loop."""
         self.model_agent.stop()
+        if self._output_loop is not None:
+            self._output_loop.cancel()
 
     async def forward_async(self, inputs):
         """start forward."""
@@ -279,16 +307,21 @@ class RayExecutor(ExecutorBase):
             dtype=dtype,
             log_level=30,
         )
+
+        logger.info('Init ray workers.')
         self.workers = self._init_workers_ray(placement_group, worker_kwargs)
         self.dag = None
         self._prefetch_task: asyncio.Task = None
         self.remote_outs: asyncio.Queue = None
 
-        # initialize process group
+        logger.info('Init distributed process group.')
         ray.get([
             worker.init_process_group.remote(rank, self.master_addr, self.master_port)
             for rank, worker in enumerate(self.workers)
         ])
+
+        logger.info('Warmuping distribute environment, Please waiting...')
+        ray.get([worker.warmup_dist.remote() for rank, worker in enumerate(self.workers)])
 
     def collective_rpc(self, method: str, args: Tuple[Any] = None, kwargs: Dict[str, Any] = None):
         """collective rpc."""
@@ -328,12 +361,13 @@ class RayExecutor(ExecutorBase):
 
     async def _prefetch_outputs(self):
         while True:
-            out = await self.workers[0].get_output_async.remote()
-            # pack pytorch
-            for k, v in out.items():
-                if isinstance(v, np.ndarray):
-                    out[k] = torch.from_numpy(v)
-            self.remote_outs.put_nowait(out)
+            outs = await self.workers[0].get_outputs.remote()
+            for out in outs:
+                # pack pytorch
+                for k, v in out.items():
+                    if isinstance(v, np.ndarray):
+                        out[k] = torch.from_numpy(v)
+                self.remote_outs.put_nowait(out)
 
     def start(self, forward_event: asyncio.Event):
         """start engine loop."""
@@ -363,10 +397,12 @@ class RayExecutor(ExecutorBase):
         """start forward."""
         # we don't need return of forward async
         inputs = ray.put(inputs)
-        self.collective_rpc('forward_async', (inputs, ))
+        await asyncio.wait([worker.forward_async.remote(inputs) for worker in self.workers])
 
     async def get_output_async(self):
         """get output async."""
+        if self.remote_outs.qsize() > 0:
+            return self.remote_outs.get_nowait()
         return await self.remote_outs.get()
 
     def _sort_workers(self, driver_ip: str, workers: List[RayWorkerWrapper]):
