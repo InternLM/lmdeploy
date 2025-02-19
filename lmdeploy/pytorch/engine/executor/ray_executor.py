@@ -289,6 +289,7 @@ class RayExecutor(ExecutorBase):
         self.world_size = tp * dp
         device_ctx = DeviceContext(device_type)
         with get_device_manager().context(device_ctx):
+            logger.info('Init ray cluster.')
             placement_group = init_ray_cluster(self.world_size)
         self.placement_group = placement_group
         self.master_addr = _get_master_addr()
@@ -321,7 +322,7 @@ class RayExecutor(ExecutorBase):
         ])
 
         logger.info('Warmuping distribute environment, Please waiting...')
-        ray.get([worker.warmup_dist.remote() for rank, worker in enumerate(self.workers)])
+        ray.get([worker.warmup_dist.remote() for worker in self.workers])
 
     def collective_rpc(self, method: str, args: Tuple[Any] = None, kwargs: Dict[str, Any] = None):
         """collective rpc."""
@@ -389,15 +390,25 @@ class RayExecutor(ExecutorBase):
         self.collective_rpc('release')
         for worker in self.workers:
             ray.kill(worker)
-        if self.dag is not None:
-            self.dag.teardown()
         ray.util.remove_placement_group(self.placement_group)
+
+    def _compile_dag(self):
+        """compile dag."""
+        from ray.dag.input_node import InputNode
+        from ray.dag.output_node import MultiOutputNode
+        with InputNode() as input_data:
+            outputs = [worker.forward_async.bind(input_data) for worker in self.workers]
+            output = MultiOutputNode(outputs)
+
+        return output
 
     async def forward_async(self, inputs):
         """start forward."""
         # we don't need return of forward async
+        if self.dag is None:
+            self.dag = self._compile_dag()
         inputs = ray.put(inputs)
-        await asyncio.wait([worker.forward_async.remote(inputs) for worker in self.workers])
+        self.dag.execute(inputs)
 
     async def get_output_async(self):
         """get output async."""

@@ -19,6 +19,7 @@ class Timer:
         import time
         self._end = time.perf_counter()
         self.duration = (self._end - self._start) * 1000
+        return self
 
     def tic_cuda(self):
         self.timer_type = 'cuda'
@@ -33,6 +34,7 @@ class Timer:
         self._end.record()
         torch.cuda.synchronize()
         self.duration = self._start.elapsed_time(self._end)
+        return self
 
     @classmethod
     def tic(cls, is_cuda: bool = False) -> 'Timer':
@@ -90,16 +92,19 @@ class Timer:
         return f'{flops:.{acc}f} {unit}Flop/s'
 
     @staticmethod
-    def formatted_print(out_info: dict):
+    def formatted_print(out_info: dict, title: str = None):
         """formatted print."""
         max_key_len = max(len(k) for k in out_info.keys())
         max_key_len = min(10, max_key_len)
         max_val_len = max(len(k) for k in out_info.values())
         max_val_len = min(10, max_val_len)
+
+        if title is not None:
+            print(title)
         for k, v in out_info.items():
             print(f'{k:>{max_key_len}} : {v:>{max_val_len}}')
 
-    def print(self, flop: int = None):
+    def print(self, flop: int = None, title: str = None):
         """print."""
         if self.duration is None:
             print('Please run Timer.tic() first.')
@@ -115,4 +120,7 @@ class Timer:
             formated_flops = self.format_flops(flops)
             out_info['Flops'] = f'{formated_flops}'
 
-        self.formatted_print(out_info)
+        self.formatted_print(out_info, title)
+
+    def toc_print(self, flop: int = None, title: str = None):
+        return self.toc().print(flop=flop, title=title)

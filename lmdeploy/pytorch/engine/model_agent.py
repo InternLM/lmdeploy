@@ -28,36 +28,6 @@ def msg_with_rank(rank: int, msg: str):
     return f'rank[{rank}] - {msg}'
 
 
-def _broadcast_config(cache_config: CacheConfig):
-    """broadcast cache config, use minimum cache."""
-    # get dist info
-    dist_ctx = get_dist_manager().current_context()
-    world_group = dist_ctx.world_cpu_group
-    world_size = dist_ctx.world_size
-    rank = dist_ctx.rank
-
-    if rank == 0:
-        gathered_configs = [None] * world_size
-        dist.gather_object(cache_config, gathered_configs, group=world_group)
-
-        # set minimal blocks
-        num_gpu_blocks_list = [config.num_gpu_blocks for config in gathered_configs]
-        num_cpu_blocks_list = [config.num_cpu_blocks for config in gathered_configs]
-        min_num_gpu_blocks = min(num_gpu_blocks_list)
-        min_num_cpu_blocks = min(num_cpu_blocks_list)
-        cache_config.num_cpu_blocks = min_num_cpu_blocks
-        cache_config.num_gpu_blocks = min_num_gpu_blocks
-        config_list = [cache_config]
-    else:
-        gathered_configs = None
-        dist.gather_object(cache_config, gathered_configs, group=world_group)
-        config_list = [None]
-
-    # broadcast
-    dist.broadcast_object_list(config_list, group=world_group)
-    return config_list[0]
-
-
 def cache_swapping(cache_engine: CacheEngine, swap_in_map: dict, swap_out_map: dict):
     """perform cache swapping."""
     issued_cache_op = False

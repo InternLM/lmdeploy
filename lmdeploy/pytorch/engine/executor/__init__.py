@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import os
 from logging import Logger
 from typing import Any, Dict
 
@@ -23,6 +24,14 @@ def get_distributed_executor_backend(world_size: int, device_type: str, logger: 
     if not backend.support_ray():
         executor_backend = 'mp'
         _log_info(f'device={device_type} does not support ray. '
+                  f'distributed_executor_backend={executor_backend}.')
+        return executor_backend
+
+    force_ray = os.environ.get('LMDEPLOY_FORCE_RAY', '0')
+    force_ray = int(force_ray)
+    if force_ray:
+        executor_backend = 'ray'
+        _log_info(f'found environment LMDEPLOY_FORCE_RAY. '
                   f'distributed_executor_backend={executor_backend}.')
         return executor_backend
 
@@ -63,6 +72,8 @@ def build_executor(model_path: str,
     if distributed_executor_backend is None:
         distributed_executor_backend = get_distributed_executor_backend(world_size, device_type, logger)
 
+    if distributed_executor_backend is not None:
+        logger.info(f'Build <{distributed_executor_backend}> executor.')
     if world_size == 1:
         from .uni_executor import UniExecutor
         return UniExecutor(
