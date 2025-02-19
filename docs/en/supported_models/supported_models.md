@@ -81,6 +81,7 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |          DeepSeek-MoE          |     16B     | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |          DeepSeek-V2           |  16B, 236B  | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |         DeepSeek-V2.5          |    236B     | LLM  |    Yes    |   No    |   No    |  No  |  No   |
+|          DeepSeek-VL2          |  16B, 72B   | MLLM |    Yes    |   No    |   No    |  No  |  No   |
 |            MiniCPM3            |     4B      | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 |         MiniCPM-V-2_6          |     8B      | LLM  |    Yes    |   No    |   No    |  No  |  Yes  |
 |             Gemma              |    2B-7B    | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |

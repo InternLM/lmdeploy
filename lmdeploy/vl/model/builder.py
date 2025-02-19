@@ -11,7 +11,7 @@ from lmdeploy.vl.model.base import VISION_MODELS
 
 from .cogvlm import CogVLMVisionModel  # noqa F401
 from .deepseek import DeepSeekVisionModel  # noqa F401
-from .deepseek_vl2 import DeepSeekVisionModel2  # noqa F401
+from .deepseek_vl2 import DeepSeek2VisionModel  # noqa F401
 from .glm_4v import GLM4VisionModel  # noqa F401
 from .internvl import InternVLVisionModel  # noqa F401
 from .internvl_llava import InternVLLlavaVisionModel  # noqa F401
@@ -54,20 +54,8 @@ def load_vl_model(model_path: str,
         tp = getattr(backend_config, 'tp', 1)
         max_memory = {i: torch.cuda.mem_get_info(i)[0] for i in range(tp)}
 
-    arch, hf_config = get_model_arch(model_path)
+    _, hf_config = get_model_arch(model_path)
     kwargs = dict(model_path=model_path, with_llm=with_llm, max_memory=max_memory, hf_config=hf_config, backend=backend)
-
-    if arch == 'DeepseekV2ForCausalLM':
-        # only for deepseek-vl2, which has different config formats
-        logger.info(f'matching vision model: {arch}')
-        module = VISION_MODELS.module_dict['DeepSeekVisionModel2']
-        model = module(**kwargs)
-        model.build_preprocessor()
-        # build the vision part of a VLM model when backend is
-        # turbomind, or load the whole VLM model when `with_llm==True`
-        if backend == 'turbomind' or with_llm:
-            model.build_model()
-        return model
 
     for name, module in VISION_MODELS.module_dict.items():
         try:

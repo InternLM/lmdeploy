@@ -1,24 +1,30 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-# adapted from https://github.com/InternLM/lmdeploy/blob/main/lmdeploy/vl/model/deepseek.py
-
-import warnings
 from typing import Dict, List
 
 import torch
-from transformers import AutoModelForCausalLM
+from transformers import AutoConfig
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
-from lmdeploy.vl.model.utils import disable_logging
 
 logger = get_logger('lmdeploy')
 
 
 @VISION_MODELS.register_module()
-class DeepSeekVisionModel2(VisonModel):
+class DeepSeek2VisionModel(VisonModel):
     """DeepSeek vision model."""
 
     _arch = 'MultiModalityCausalLM'
+
+    @classmethod
+    def match(cls, config: AutoConfig):
+        """check whether the config match the model."""
+        if 'language_config' in config and \
+           'vision_config' in config and \
+           config.language_config['architectures'][0] == 'DeepseekV2ForCausalLM':
+            return True
+
+        return False
 
     def build_preprocessor(self):
         from lmdeploy.vl.model.deepseek_vl2_processors import DeepseekVLV2Processor
@@ -27,52 +33,8 @@ class DeepSeekVisionModel2(VisonModel):
     def build_model(self):
         """build the vision part of a VLM model when backend is turbomind, or
         load the whole VLM model when `self.with_llm==True`"""
-        from accelerate import init_empty_weights
-        with init_empty_weights():
-            warnings.simplefilter('ignore')
-            model = AutoModelForCausalLM.from_pretrained(self.model_path)
-            self.vl_model = model
-            if not self.with_llm:
-                del model.language_model
-
-        from accelerate.utils import get_balanced_memory, infer_auto_device_map
-        max_memory = get_balanced_memory(model,
-                                         max_memory=self.max_memory,
-                                         dtype=torch.half,
-                                         no_split_module_classes=['Block'])
-        device_map = infer_auto_device_map(model,
-                                           no_split_module_classes=['Block'],
-                                           max_memory=max_memory,
-                                           dtype=torch.half)
-        same_device_keys = [('vision_model.vision_tower_high.vision_tower.pos_embed',
-                             'vision_model.vision_tower_high.vision_tower.patch_embed'),
-                            ('vision_model.vision_tower_low.vision_tower.pos_embed',
-                             'vision_model.vision_tower_low.vision_tower.patch_embed')]
-        for (a, b) in same_device_keys:
-            if a in device_map and b in device_map:
-                device_map[b] = device_map[a]
-        downsamples = []
-        ka = 'vision_model.vision_tower_high.vision_tower.downsamples'
-        kb = 'vision_model.vision_tower_high.vision_tower.hd_alpha_downsamples'  # noqa: E501
-        for k in device_map:
-            if k.startswith(ka):
-                downsamples.append(k)
-        if len(downsamples) == 1:
-            device_map[ka] = device_map[kb]
-        elif len(downsamples) > 1:
-            numbers = [int(x[len(ka) + 1:]) for x in downsamples]
-            device_map[f'{ka}.{numbers[-1]}'] = device_map[kb]
-
-        from accelerate import load_checkpoint_and_dispatch
-        with disable_logging():
-            load_checkpoint_and_dispatch(model=model,
-                                         checkpoint=self.model_path,
-                                         device_map=device_map if not self.with_llm else {'': 'cpu'},
-                                         dtype=torch.half)
-
-        self.model = model.eval()
-        self.vision_model = model.vision_model.eval()
-        self.aligner = model.aligner.eval()
+        # TODO, implement for tubomind engine
+        raise NotImplementedError()
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """refers to the spec of `super.preprocess()"""
@@ -104,7 +66,7 @@ class DeepSeekVisionModel2(VisonModel):
         Return:
             the message list with forwarding results included
         """
-        # TODO, add deepseek-vl2 model support for turbomind engine
+        # TODO, implement for turbomind engine
         raise NotImplementedError()
 
     @staticmethod

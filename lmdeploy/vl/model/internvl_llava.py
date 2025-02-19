@@ -64,6 +64,8 @@ class InternVLLlavaVisionModel(LlavaVisionModel):
     @classmethod
     def match(cls, config: AutoConfig):
         """check whether the config match the model."""
+        if getattr(config, 'architectures', [None]) is None:
+            return False
         arch = config.architectures[0]
         if arch == 'LlavaLlamaForCausalLM':
             mm_vision_tower = getattr(config, 'mm_vision_tower', '')
