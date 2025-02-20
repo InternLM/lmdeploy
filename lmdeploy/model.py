@@ -544,7 +544,7 @@ class InternLM2Chat7B(InternLMChat7B):
                 for tool_call in message['tool_calls']:
                     function = tool_call.get('function', {})
                     function['name'] = function.get('name', '')
-                    function['parameters'] = function.get('arguments', function.get('arguments', ''))
+                    function['parameters'] = function.get('parameters', function.get('arguments', ''))
                     function.pop('arguments')
                     if isinstance(function['parameters'], str):
                         function['parameters'] = json.loads(function['parameters'])
