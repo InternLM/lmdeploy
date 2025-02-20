@@ -5,6 +5,7 @@ from typing import List
 
 import torch
 
+from ..config import RopeParam
 from .base import INPUT_MODELS
 from .llama import LlamaModel, LlamaReader
 
@@ -93,6 +94,7 @@ class Glm4Model(LlamaModel):
         if config['multi_query_attention']:
             kv_head_num = config['multi_query_group_num']
         seq_length = config['seq_length']
+        rope_param = RopeParam.create_default(base=rope_theta, dim=64)
         return dict(num_layer=num_layer,
                     norm_eps=norm_eps,
                     head_num=attn_head_num,
@@ -101,7 +103,6 @@ class Glm4Model(LlamaModel):
                     attn_bias=int(attn_bias),
                     inter_size=inter_size,
                     vocab_size=vocab_size,
-                    rope_theta=rope_theta,
+                    rope_param=rope_param,
                     max_position_embeddings=seq_length,
-                    rotary_embedding=64,
                     permute_qk=False)  # head layout is same as TM

@@ -4,6 +4,7 @@ import os.path as osp
 
 import torch
 
+from ..config import DefaultRopeParam, DynamicRopeParam, RopeParam
 from .base import INPUT_MODELS
 from .llama import LlamaModel, LlamaReader
 
@@ -71,6 +72,7 @@ class QwenModel(LlamaModel):
             hidden_units = config['hidden_size']
             num_layer = config['num_hidden_layers']
             norm_eps = config['layer_norm_epsilon']
+            kv_channels = config['kv_channels']
             rope_theta = float(config.get('rotary_emb_base', 10000.0))
             if 'num_key_value_heads' in config:
                 kv_head_num = config['num_key_value_heads']
@@ -82,7 +84,18 @@ class QwenModel(LlamaModel):
             use_logn_attn = int(config['use_logn_attn'])
             vocab_size = config['vocab_size']
             inter_size = config['intermediate_size']
-        return dict(num_layer=num_layer,
+            if use_dynamic_ntk:
+                # need setting rope_scaling_factor in TurbomindEngineConfig
+                dynamic_rope_param = DynamicRopeParam(base=rope_theta,
+                                                      dim=kv_channels,
+                                                      max_position_embeddings=seq_length,
+                                                      factor=0)
+                rope_param = RopeParam('dynamic', param=dynamic_rope_param)
+            else:
+                rope_param = RopeParam('default', param=DefaultRopeParam(base=rope_theta, dim=kv_channels))
+
+        return dict(size_per_head=kv_channels,
+                    num_layer=num_layer,
                     norm_eps=norm_eps,
                     hidden_units=hidden_units,
                     head_num=attn_head_num,
@@ -90,7 +103,7 @@ class QwenModel(LlamaModel):
                     vocab_size=vocab_size,
                     inter_size=inter_size,
                     attn_bias=1,
-                    rope_theta=rope_theta,
+                    rope_param=rope_param,
                     max_position_embeddings=seq_length,
                     use_dynamic_ntk=int(use_dynamic_ntk),
                     use_logn_attn=use_logn_attn)

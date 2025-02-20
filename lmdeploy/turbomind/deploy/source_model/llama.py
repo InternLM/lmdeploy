@@ -9,6 +9,7 @@ import torch
 from lmdeploy.archs import get_model_arch
 from lmdeploy.tokenizer import Tokenizer
 
+from ..config import DefaultRopeParam, DynamicRopeParam, LinearRopeParam, Llama3RopeParam, RopeParam, YarnRopeParam
 from ..loader import create_loader
 from .base import INPUT_MODELS, BaseInputModel, BaseReader
 
@@ -141,19 +142,11 @@ class LlamaModel(BaseInputModel):
             else:
                 kv_head_num = model_arg['num_attention_heads']
             hidden_units = model_arg['hidden_size']
+            head_dim = model_arg.get('head_dim', hidden_units // attn_head_num)
+            # compute rope param
             rope_theta = float(model_arg.get('rope_theta', 10000.0))
             max_position_embeddings = int(model_arg.get('max_position_embeddings', 0))
             rope_scaling = model_arg.get('rope_scaling', None)
-            head_dim = model_arg.get('head_dim', hidden_units // attn_head_num)
-            scaling_factor = 0.0
-            use_dynamic_ntk = 0
-            scaling_type = ''
-            low_freq_factor = 1.0
-            high_freq_factor = 1.0
-            attention_factor = -1.0
-            beta_fast = 32.0
-            beta_slow = 1.0
-            original_max_position_embeddings = 0
             if isinstance(rope_scaling, dict):
                 llama2_scaling_type = rope_scaling.get('type', '')
                 llama3_scaling_type = rope_scaling.get('rope_type', '')
@@ -163,21 +156,47 @@ class LlamaModel(BaseInputModel):
                     else llama3_scaling_type
                 scaling_factor = rope_scaling.get('factor', 0.0)
                 if scaling_type == 'dynamic':
-                    use_dynamic_ntk = 1
+                    dynamic_rope_param = DynamicRopeParam(base=rope_theta,
+                                                          dim=head_dim,
+                                                          max_position_embeddings=max_position_embeddings,
+                                                          factor=scaling_factor)
+                    rope_param = RopeParam(type='dynamic', param=dynamic_rope_param)
+                elif scaling_type == 'linear':
+                    linear_rope_param = LinearRopeParam(base=rope_theta, dim=head_dim, factor=scaling_factor)
+                    rope_param = RopeParam(type='linear', param=linear_rope_param)
                 elif scaling_type == 'llama3':
                     low_freq_factor = rope_scaling.get('low_freq_factor', 1.0)
                     high_freq_factor = rope_scaling.get('high_freq_factor', 1.0)
                     original_max_position_embeddings = model_arg['rope_scaling'].get(
                         'original_max_position_embeddings', 0)
+                    llama3_rope_param = Llama3RopeParam(
+                        base=rope_theta,
+                        dim=head_dim,
+                        factor=scaling_factor,
+                        low_freq_factor=low_freq_factor,
+                        high_freq_factor=high_freq_factor,
+                        original_max_position_embeddings=original_max_position_embeddings)
+                    rope_param = RopeParam(type='llama3', param=llama3_rope_param)
                 elif scaling_type == 'yarn':
                     attention_factor = rope_scaling.get('attention_factor', None)
                     if attention_factor is None:
                         attention_factor = 0.1 * math.log(scaling_factor) + 1.0
                     beta_fast = rope_scaling.get('beta_fast', 32.0)
                     beta_slow = rope_scaling.get('beta_slow', 1.0)
+                    yarn_rope_param = YarnRopeParam(base=rope_theta,
+                                                    dim=head_dim,
+                                                    max_position_embeddings=max_position_embeddings,
+                                                    factor=scaling_factor,
+                                                    attention_factor=attention_factor,
+                                                    beta_fast=beta_fast,
+                                                    beta_slow=beta_slow)
+                    rope_param = RopeParam(type='yarn', param=yarn_rope_param)
+                else:
+                    raise RuntimeError(f'Unsupported rope type: {scaling_type}')
+            else:
+                rope_param = RopeParam('default', DefaultRopeParam(base=rope_theta, dim=head_dim))
 
         return dict(size_per_head=head_dim,
-                    rotary_embedding=head_dim,
                     num_layer=num_layer,
                     norm_eps=norm_eps,
                     head_num=attn_head_num,
@@ -185,14 +204,5 @@ class LlamaModel(BaseInputModel):
                     hidden_units=hidden_units,
                     inter_size=inter_size,
                     vocab_size=vocab_size,
-                    rope_theta=rope_theta,
                     max_position_embeddings=max_position_embeddings,
-                    original_max_position_embeddings=original_max_position_embeddings,
-                    use_dynamic_ntk=use_dynamic_ntk,
-                    rope_scaling_type=scaling_type,
-                    rope_scaling_factor=scaling_factor,
-                    low_freq_factor=low_freq_factor,
-                    high_freq_factor=high_freq_factor,
-                    attention_factor=attention_factor,
-                    beta_fast=beta_fast,
-                    beta_slow=beta_slow)
+                    rope_param=rope_param)

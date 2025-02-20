@@ -2,7 +2,7 @@
 import inspect
 import json
 from dataclasses import asdict, fields
-from typing import List
+from typing import List, Union
 
 # use pydantic.dataclasses.dataclass to check data type
 from pydantic.dataclasses import dataclass
@@ -81,22 +81,60 @@ class ModelConfig:
 
 
 @dataclass
+class DefaultRopeParam:
+    base: float
+    dim: int
+
+
+@dataclass
+class LinearRopeParam(DefaultRopeParam):
+    factor: float
+
+
+@dataclass
+class DynamicRopeParam(DefaultRopeParam):
+    max_position_embeddings: int
+    factor: float
+
+
+@dataclass
+class YarnRopeParam(DefaultRopeParam):
+    max_position_embeddings: int
+    factor: float
+    attention_factor: float
+    beta_fast: float
+    beta_slow: float
+
+
+@dataclass
+class Llama3RopeParam(DefaultRopeParam):
+    factor: float
+    low_freq_factor: float
+    high_freq_factor: float
+    original_max_position_embeddings: int
+
+
+@dataclass
+class RopeParam:
+    type: str
+    param: Union[DefaultRopeParam, LinearRopeParam, DynamicRopeParam, YarnRopeParam, Llama3RopeParam]
+
+    @classmethod
+    def create_default(cls, *args, **kwargs):
+        return RopeParam(type='default', param=DefaultRopeParam(*args, **kwargs))
+
+    @classmethod
+    def create_dynamic(cls, *args, **kwargs):
+        return RopeParam(type='dynamic', param=DynamicRopeParam(*args, **kwargs))
+
+
+@dataclass
 class AttentionConfig:
-    rotary_embedding: int = 128
-    rope_theta: float = 10000.0
     softmax_scale: float = 0
-    attention_factor: float = None
-    max_position_embeddings: int = 0
-    original_max_position_embeddings: int = 0
-    rope_scaling_type: str = ''
-    rope_scaling_factor: float = 0.0
-    use_dynamic_ntk: int = 0
-    low_freq_factor: float = 1.0
-    high_freq_factor: float = 1.0
-    beta_fast: float = 32.0
-    beta_slow: float = 1.0
-    use_logn_attn: int = 0
     cache_block_seq_len: int = 64
+    use_logn_attn: int = 0
+    max_position_embeddings: int = 0
+    rope_param: RopeParam = None
 
 
 @dataclass

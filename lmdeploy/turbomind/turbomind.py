@@ -165,7 +165,7 @@ class TurboMind:
                     tm_params[k] = []
                 tm_params[k].append(v)
 
-    def _postprocess_config(self, tm_config, engine_config):
+    def _postprocess_config(self, tm_config: TurbomindModelConfig, engine_config: TurbomindEngineConfig):
         """postprocess turbomind config by."""
         import copy
         self.config = copy.deepcopy(tm_config)
@@ -183,6 +183,20 @@ class TurboMind:
                 engine_config.max_prefill_token_num
             self.engine_config.max_prefill_iters = (self.config.session_len + engine_config.max_prefill_token_num -
                                                     1) // engine_config.max_prefill_token_num
+
+        # use dynamic ntk
+        if engine_config.rope_scaling_factor:
+            rope_param = self.config.attention_config.rope_param
+            if rope_param.type == 'dynamic':
+                rope_param.param.factor = engine_config.rope_scaling_factor
+            else:
+                from .deploy.config import DynamicRopeParam, RopeParam
+                dynamic_rope_param = DynamicRopeParam(
+                    base=rope_param.param.base,
+                    dim=rope_param.param.dim,
+                    factor=engine_config.rope_scaling_factor,
+                    max_position_embeddings=self.config.attention_config.max_position_embeddings)
+                self.config.attention_config.rope_param = RopeParam(type='dynamic', param=dynamic_rope_param)
 
         # pack `self.config` and `self.engine_config` into a dict
         self.config_dict = self.config.to_dict()
