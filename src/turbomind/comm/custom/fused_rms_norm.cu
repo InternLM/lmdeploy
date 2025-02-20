@@ -1,6 +1,6 @@
+// Copyright (c) OpenMMLab. All rights reserved.
 
 #include <atomic>
-#include <stdexcept>
 #include <type_traits>
 
 #include "cub/block/block_reduce.cuh"

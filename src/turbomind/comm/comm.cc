@@ -1,4 +1,4 @@
-
+// Copyright (c) OpenMMLab. All rights reserved.
 
 #include "src/turbomind/comm/comm.h"
 #include "src/turbomind/utils/cuda_utils.h"

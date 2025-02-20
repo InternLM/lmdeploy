@@ -1,3 +1,4 @@
+# Copyright (c) OpenMMLab. All rights reserved.
 
 cmake_minimum_required(VERSION 3.8)
 

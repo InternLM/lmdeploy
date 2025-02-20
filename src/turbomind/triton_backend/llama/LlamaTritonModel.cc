@@ -268,6 +268,8 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t                                 ten
     engine_param_.num_tokens_per_iter = engine_reader["num_tokens_per_iter"].as<int>(0);
     engine_param_.max_prefill_iters   = engine_reader["max_prefill_iters"].as<int>(1);
 
+    const auto communicator = engine_reader["communicator"].as<std::string>();
+
     lora_param_.policy        = getLoraPolicy(reader["lora_config"]["lora_policy"].as<std::string>(""));
     lora_param_.r             = lora_reader["lora_r"].as<int>(0);
     lora_param_.scale         = lora_reader["lora_scale"].as<float>(0);
@@ -328,12 +330,11 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t                                 ten
         moe_param_.method = MoeParam::kFused;
     }
 
-    //
-    group_id_ = comm::CreateGroupId("custom");
-
-    // if (rank == 0) {
-    group_id_->Initialize();
-    // }
+    // NOTE: This runs on Python main thread
+    if (tensor_para_size > 1) {
+        group_id_ = comm::CreateGroupId(communicator);
+        group_id_->Initialize();
+    }
 
     TM_LOG_INFO("%s", toString().c_str());
 }

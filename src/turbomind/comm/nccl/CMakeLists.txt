@@ -1,3 +1,5 @@
+# Copyright (c) OpenMMLab. All rights reserved.
+
 cmake_minimum_required(VERSION 3.8)
 
 add_library(nccl_comm STATIC nccl.cu)

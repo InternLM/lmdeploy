@@ -83,6 +83,8 @@ struct Context {
 
         allocator.reset();
 
+        // `comm` destroyed by infer threads collectively
+
         cudaStreamDestroy(stream);
         stream = {};
     }

@@ -1,4 +1,4 @@
-
+// Copyright (c) OpenMMLab. All rights reserved.
 
 #include <atomic>
 #include <stdexcept>
@@ -144,6 +144,7 @@ __global__ void __launch_bounds__(1024, 1) AllreduceKernel_LL_WS(T*             
     }
 }
 
+// Modified from https://github.com/microsoft/mscclpp/blob/591276f9d07d2df8e2a45a16738e27867e468ca3/test/mscclpp-test/allreduce_test.cu#L963
 template<class T, int vec_size, class Relaxed>
 __global__ void Allreduce_Simple_Pull(T*                                             buf,
                                       Array<T*, kMaxNearPeers>                       chns,

@@ -699,8 +699,6 @@ void LlamaBatch<T>::AllocateBuffer(size_t batch_size, size_t session_len, int ca
     const size_t max_batch_block_count =
         batch_size * ((session_len + cache_block_seq_len - 1) / cache_block_seq_len) + 1;
 
-    context_decoder_output_buf_ = (T*)CommBufAlloc(sizeof(T) * max_forward_token_num_ * hidden_units, true);
-
     context_decoder_input_buf_ =
         (T*)allocator_->reMalloc(context_decoder_input_buf_, sizeof(T) * max_forward_token_num_ * hidden_units, false);
     context_decoder_ids_buf_ =
@@ -720,8 +718,6 @@ void LlamaBatch<T>::AllocateBuffer(size_t batch_size, size_t session_len, int ca
     block_ptrs_      = (uintptr_t*)allocator_->reMalloc(block_ptrs_, sizeof(uintptr_t) * max_batch_block_count);
 
     logits_buf_ = (float*)allocator_->reMalloc(logits_buf_, sizeof(float) * batchxbeam * vocab_size, false);
-
-    local_logits_buf_ = (float*)CommBufAlloc(sizeof(float) * batchxbeam * vocab_size, true);
 
     sampled_logprobs_ =
         (float*)allocator_->reMalloc(sampled_logprobs_, sizeof(float) * batchxbeam * kMaxLogProb, false);
@@ -822,14 +818,34 @@ void LlamaBatch<T>::AllocatePersistantBuffer(size_t max_batch_size, int cache_bl
     is_allocate_persistant_buffer_ = true;
 }
 
+template<class T>
+void LlamaBatch<T>::AllocCommBuffers()
+{
+    const size_t hidden_units      = model_->hidden_units_;
+    const size_t vocab_size_padded = model_->vocab_size_padded_;
+
+    // TODO: rename this to hidden_states
+    context_decoder_output_buf_ = (T*)CommBufAlloc(sizeof(T) * max_forward_token_num_ * hidden_units, true);
+    local_logits_buf_           = (float*)CommBufAlloc(sizeof(float) * max_batch_size_ * vocab_size_padded, true);
+}
+
+template<class T>
+void LlamaBatch<T>::FreeCommBuffers()
+{
+    CommBufFree((void**)&context_decoder_output_buf_, true);
+    CommBufFree((void**)&local_logits_buf_, true);
+    if (local_context_logits_buf_) {
+        CommBufFree((void**)&local_context_logits_buf_, true);
+        local_context_logits_buf_size_ = 0;
+    }
+}
+
 template<typename T>
 void LlamaBatch<T>::FreeBuffer()
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (is_allocate_buffer_) {
         allocator_->free((void**)&context_decoder_input_buf_);
-
-        CommBufFree((void**)&context_decoder_output_buf_, true);
 
         allocator_->free((void**)&context_decoder_ids_buf_);
         allocator_->free((void**)&lora_mask_buf_);
@@ -848,13 +864,6 @@ void LlamaBatch<T>::FreeBuffer()
         allocator_->free((void**)&block_ptrs_);
 
         allocator_->free((void**)&logits_buf_);
-
-        CommBufFree((void**)&local_logits_buf_, true);
-
-        if (local_context_logits_buf_) {
-            CommBufFree((void**)&local_context_logits_buf_, true);
-            local_context_logits_buf_size_ = 0;
-        }
 
         if (context_logits_buf_) {
             allocator_->free((void**)&context_logits_buf_);
@@ -1005,6 +1014,8 @@ LlamaBatch<T>::LlamaBatch(const EngineParam&           param,
     state_    = &states_[0];
     back_     = &states_[1];
     incoming_ = &states_[2];
+
+    AllocCommBuffers();
 
     AllocateBuffer(max_batch_size_, session_len_, cache_block_seq_len);
     AllocatePersistantBuffer(max_batch_size_, cache_block_seq_len);
@@ -2001,6 +2012,10 @@ void LlamaBatch<T>::DestroyCommunicators()
 {
     if (context_->comm.tp) {
         cudaStreamSynchronize(stream_);
+        shared_state_->barrier->wait();
+
+        FreeCommBuffers();
+
         shared_state_->barrier->wait();
 
         context_->comm.tp.reset();

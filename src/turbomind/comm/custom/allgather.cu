@@ -1,54 +1,14 @@
-#include <stdexcept>
+// Copyright (c) OpenMMLab. All rights reserved.
 
 #include "src/turbomind/comm/custom/custom_comm.h"
 
 #include "src/turbomind/comm/custom/device_semaphore.h"
-
-#include "mscclpp/concurrency_device.hpp"
-
 #include "src/turbomind/utils/Tensor.h"
-#include "src/turbomind/utils/cuda_utils.h"
-#include "src/turbomind/utils/string_utils.h"
 
 namespace turbomind::comm {
 
-// __device__ inline void local_allgather(SmChannels&            channels,  //
-//                                        mscclpp::DeviceSyncer* device_syncer,
-//                                        int                    rank,
-//                                        int                    world_size,
-//                                        size_t                 size)
-// {
-//     int tid = threadIdx.x + blockIdx.x * blockDim.x;
-
-//     const int block_num  = gridDim.x;
-//     const int thread_num = blockDim.x * block_num;
-
-//     const int n_peer = world_size - 1;
-
-//     if (tid < n_peer) {
-//         channels[tid].signal();
-//         channels[tid].wait();
-//     }
-
-//     device_syncer->sync(gridDim.x);
-
-//     for (int i = 0; i < n_peer; ++i) {
-//         const int    peer_idx        = i + rank < n_peer ? i + rank : i + rank - n_peer;
-//         const int    remote_rank_idx = peer_idx < rank ? peer_idx : peer_idx + 1;
-//         const size_t offset          = size * remote_rank_idx;
-//         channels[peer_idx].get<16, false>(offset, size, tid, thread_num);
-//     }
-// }
-
-// __global__ void __launch_bounds__(1024, 1) local_allgather_kernel(SmChannels             channels,  //
-//                                                                   mscclpp::DeviceSyncer* device_syncer,
-//                                                                   int                    rank,
-//                                                                   int                    world_size,
-//                                                                   size_t                 size)
-// {
-//     local_allgather(channels, device_syncer, rank, world_size, size);
-// }
-
+// Modified from
+// https://github.com/microsoft/mscclpp/blob/591276f9d07d2df8e2a45a16738e27867e468ca3/test/mscclpp-test/allgather_test.cu#L294
 template<class T, class Relaxed>
 __global__ void __launch_bounds__(1024, 1) AllgatherKernel(T*                                             local,
                                                            Array<T*, kMaxNearPeers>                       near,
@@ -117,4 +77,4 @@ void CustomComm::AllGather(const void* sendbuff, void* recvbuff, size_t sendcoun
     }
 }
 
-}  // namespace turbomind
+}  // namespace turbomind::comm
