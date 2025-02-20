@@ -250,10 +250,6 @@ class RayWorkerWrapper:
     async def get_output_async(self):
         """get output async."""
         ret = await self.model_agent.get_output_async()
-        # pack to numpy
-        for k, v in ret.items():
-            if isinstance(v, torch.Tensor):
-                ret[k] = v.numpy()
         return ret
 
     def release(self):
@@ -321,7 +317,7 @@ class RayExecutor(ExecutorBase):
             for rank, worker in enumerate(self.workers)
         ])
 
-        logger.info('Warmuping distribute environment, Please waiting...')
+        logger.info('Warming up distribute environment, this might take long time, please waiting...')
         ray.get([worker.warmup_dist.remote() for worker in self.workers])
 
     def collective_rpc(self, method: str, args: Tuple[Any] = None, kwargs: Dict[str, Any] = None):

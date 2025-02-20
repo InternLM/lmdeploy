@@ -86,6 +86,11 @@ class Notifier:
             self.bar.wait()
         self._update_event_id()
 
+    def close(self):
+        for event in self.events:
+            event.set()
+        self.bar.abort()
+
 
 class SharedBuffer:
     """shared buffer."""
@@ -282,7 +287,6 @@ class MPExecutor(ExecutorBase):
                        method: str,
                        args: Tuple[Any] = None,
                        kwargs: Dict[str, Any] = None,
-                       call_async: bool = False,
                        receiver_mask: int = 0xff,
                        return_mask: int = 0):
         """collective rpc."""
@@ -295,7 +299,6 @@ class MPExecutor(ExecutorBase):
                 method=method,
                 args=args,
                 kwargs=kwargs,
-                call_async=call_async,
                 return_mask=return_mask,
             ),
             receiver_mask=receiver_mask,
@@ -312,7 +315,6 @@ class MPExecutor(ExecutorBase):
                                    method: str,
                                    args: Tuple[Any] = None,
                                    kwargs: Dict[str, Any] = None,
-                                   call_async: bool = False,
                                    receiver_mask: int = 0xff,
                                    return_mask: int = 0):
         """collective rpc."""
@@ -325,7 +327,6 @@ class MPExecutor(ExecutorBase):
                 method=method,
                 args=args,
                 kwargs=kwargs,
-                call_async=call_async,
                 return_mask=return_mask,
             ),
             receiver_mask=receiver_mask,
@@ -344,7 +345,7 @@ class MPExecutor(ExecutorBase):
 
     def build_model(self):
         """build model."""
-        self.collective_rpc('build_model')
+        self.collective_rpc('build_model', return_mask=self.ret_all_mask)
         self.model_agent.build_model()
 
     def gather_free_mem(self):
@@ -354,27 +355,27 @@ class MPExecutor(ExecutorBase):
 
     def set_cache_config(self, cache_config: CacheConfig):
         """set all cache config."""
-        self.collective_rpc('set_cache_config', args=(cache_config, ))
+        self.collective_rpc('set_cache_config', args=(cache_config, ), return_mask=self.ret_all_mask)
         self.model_agent.set_cache_config(cache_config)
 
     def set_model_config(self, model_config: ModelConfig):
         """set all cache config."""
-        self.collective_rpc('set_model_config', args=(model_config, ))
+        self.collective_rpc('set_model_config', args=(model_config, ), return_mask=self.ret_all_mask)
         self.model_agent.set_model_config(model_config)
 
     def build_graph_runner(self):
         """build graph runner."""
-        self.collective_rpc('build_graph_runner')
+        self.collective_rpc('build_graph_runner', return_mask=self.ret_all_mask)
         self.model_agent.build_graph_runner()
 
     def build_cache_engine(self):
         """build cache engine."""
-        self.collective_rpc('build_cache_engine')
+        self.collective_rpc('build_cache_engine', return_mask=self.ret_all_mask)
         self.model_agent.build_cache_engine()
 
     def start(self, forward_event: asyncio.Event):
         """start engine loop."""
-        self.collective_rpc('start')
+        self.collective_rpc('start', return_mask=self.ret_all_mask)
         self.model_agent.start(forward_event)
 
     async def forward_async(self, inputs):
@@ -513,10 +514,17 @@ class ExecutorProc:
                 dist.destroy_process_group()
             os._exit(0)
 
+    @staticmethod
+    async def _task_wrapper(func, args: List, kwargs: Dict, need_return: bool, ret_buf: SharedBuffer):
+        ret = await func(*args, **kwargs)
+        if need_return:
+            await ret_buf.send_async(ret)
+
     async def _main_loop_impl(self, proc_id: int, comm_buf: SharedBuffer, ret_buf: SharedBuffer,
                               model_agent: BaseModelAgent):
         """main loop."""
         proc_mask = 1 << proc_id
+        event_loop = asyncio.get_event_loop()
         while True:
             command = await comm_buf.receive_async()
             if command is None:
@@ -524,18 +532,17 @@ class ExecutorProc:
             method = command['method']
             args = command.get('args', list())
             kwargs = command.get('kwargs', dict())
-            call_async = command.get('call_async', False)
             return_mask = command.get('return_mask', True)
             need_return = bool(proc_mask & return_mask)
 
             func = getattr(model_agent, method, None)
+            call_async = asyncio.iscoroutinefunction(func)
             assert func is not None
 
             logger.debug(f'proc[{proc_id}] call method: <{method}>.')
             if call_async:
-                ret = await func(*args, **kwargs)
+                event_loop.create_task(self._task_wrapper(func, args, kwargs, need_return, ret_buf))
             else:
                 ret = func(*args, **kwargs)
-
-            if need_return:
-                ret_buf.send(ret)
+                if need_return:
+                    ret_buf.send(ret)
