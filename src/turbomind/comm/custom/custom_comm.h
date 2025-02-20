@@ -13,7 +13,6 @@
 #define MSCCLPP_DEVICE_INLINE __device__ __inline__
 #endif
 
-#include <stdexcept>
 #include <unordered_map>
 
 #include "mscclpp/concurrency_device.hpp"
@@ -24,8 +23,9 @@
 #include "src/turbomind/comm/comm.h"
 #include "src/turbomind/kernels/core/array.h"
 #include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
-namespace turbomind {
+namespace turbomind::comm {
 
 static constexpr int kMaxNearPeers = 7;
 
@@ -38,6 +38,18 @@ public:
     CustomComm(std::shared_ptr<mscclpp::Bootstrap> bootstrap);
 
     void Initialize();
+
+    void* Allocate(size_t size) override
+    {
+        void* ptr{};
+        check_cuda_error(cudaMalloc(&ptr, size));
+        return ptr;
+    }
+
+    void Free(void* ptr) override
+    {
+        check_cuda_error(cudaFree(ptr));
+    }
 
     void RegisterBuffer(void* ptr, size_t size) override;
 
@@ -108,4 +120,4 @@ struct Rank {
     }
 };
 
-}  // namespace turbomind
+}  // namespace turbomind::comm

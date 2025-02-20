@@ -16,12 +16,11 @@ namespace turbomind {
 template<class T>
 class MoeFfnLayer {
 public:
-    MoeFfnLayer(ModelParam model, const MoeParam& param, const NcclParam& tp, const Context<T>& ctx):
-        inter_size_(param.inter_size / tp.world_size_),
+    MoeFfnLayer(ModelParam model, const MoeParam& param, size_t tp_size, const Context<T>& ctx):
+        inter_size_(param.inter_size / tp_size),
         hidden_dim_(model.hidden_units),
         param_(param),
         dtype_(getTensorType<T>()),
-        tensor_para_(tp),
         stream_(ctx.stream),
         cublas_(ctx.cublas_wrapper.get()),
         linear_(ctx.linear.get()),
@@ -35,7 +34,7 @@ public:
                 max_expert_num, param.experts_per_token, ctx.cuda_device_prop, stream_);
         }
         else {
-            expert_ffn_ = std::make_unique<LlamaFfnLayer<T>>(model, tp, ctx);
+            expert_ffn_ = std::make_unique<LlamaFfnLayer<T>>(model, ctx);
         }
 
         h_offsets_ = (int*)allocator_->malloc(sizeof(int) * (max_expert_num + 1), false, true);

@@ -6,15 +6,16 @@
 #include <numeric>
 #include <ostream>
 #include <random>
+#include <sstream>
 #include <thread>
 
 #include <cuda_profiler_api.h>
 #include <cuda_runtime.h>
 
+#include "src/turbomind/comm/barrier.h"
 #include "src/turbomind/comm/comm.h"
-#include "src/turbomind/utils/nvtx_utils.h"
 
-using namespace turbomind;
+using namespace turbomind::comm;
 
 [[maybe_unused]] static constexpr bool is_ncu = 0;
 
@@ -89,6 +90,38 @@ struct TestComm {
 
     std::optional<Barrier> barrier_;
 
+    static auto Init(int world_size, const std::string& backend) -> std::vector<std::unique_ptr<Comm>>
+    {
+        std::unique_ptr<GroupId> group_id = CreateGroupId(backend);
+        std::string              group_id_str;
+        if (1) {  // master
+            group_id->Initialize();
+            std::stringstream ss;
+            group_id->Export(ss);
+            group_id_str = ss.str();
+        }
+
+        std::vector<std::unique_ptr<Comm>> comm(world_size);
+
+        auto init = [&](int rank) {
+            cudaSetDevice(rank);
+            std::stringstream        ss(group_id_str);
+            std::unique_ptr<GroupId> group_id = CreateGroupId(backend);
+            group_id->Import(ss);
+            comm[rank] = group_id->CreateCommunicator(rank, world_size);
+        };
+
+        std::vector<std::thread> threads;
+        for (int i = 0; i < world_size; ++i) {
+            threads.emplace_back(init, i);
+        }
+        for (auto& t : threads) {
+            t.join();
+        }
+
+        return comm;
+    }
+
     void Run(int hidden_dim, int vocab_size, int tp, int warmup, int iters, std::vector<int> tokens)
     {
         int device_num{};
@@ -102,11 +135,7 @@ struct TestComm {
 
         barrier_.emplace(device_num);
 
-        std::vector<int> devices(device_num);
-        std::iota(devices.begin(), devices.end(), 0);
-
-        // comm_ = CreateNcclComm(devices);
-        comm_ = CreateCustomComm(devices);
+        comm_ = Init(device_num, "custom");
 
         warmup_ = warmup;
         iters_  = iters;
@@ -114,10 +143,10 @@ struct TestComm {
 
         max_tokens_ = *std::max_element(tokens_.begin(), tokens_.end());
 
-        // TestAllReduce<half>(hidden_dim);
-        TestAllreduceResidualBiasRMSnorm<half>(hidden_dim);
-        // TestAllGather<half>(hidden_dim / tp); // tp embedding
-        // TestAllGather<float>(vocab_size / tp);
+        TestAllReduce<half>(hidden_dim);
+        // TestAllreduceResidualBiasRMSnorm<half>(hidden_dim);
+        TestAllGather<half>(hidden_dim / tp);  // tp embedding
+        TestAllGather<float>(vocab_size / tp);
     }
 
     template<class T>
@@ -417,12 +446,16 @@ struct TestComm {
         std::uniform_int_distribution<int> dist{0, 100};
         std::vector<std::vector<T>>        data;
 
+        std::cout << "preparing data ... " << std::flush;
+
         for (int i = 0; i < (int)comm_.size(); ++i) {
             auto& rank_data = data.emplace_back(max_tokens_ * dim);
             for (size_t j = 0; j < rank_data.size(); ++j) {
                 rank_data[j] = T(dist(gen));
             }
         }
+
+        std::cout << "done.\n";
 
         auto func = [&](Comm& comm) {
             const int    rank       = comm.rank();
@@ -526,7 +559,7 @@ int main(int argc, char* argv[])
              128000,
              -1,
              10,
-             10000,
+             100,
              // {512});
              //    {1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 24, 32, 48, 64, 96, 128});
              //  {128, 256, 512, 1024, 2048, 4096, 8192});

@@ -1,12 +1,18 @@
 
+#include <memory>
+#include <mutex>
 
-#include "mscclpp/core.hpp"
-#include "src/turbomind/comm/custom/bootstrap.h"
+#include <cuda.h>
+
 #include "src/turbomind/comm/custom/custom_comm.h"
 
+#include "mscclpp/core.hpp"
 #include "mscclpp/semaphore_device.hpp"
 
-namespace turbomind {
+#include "src/turbomind/comm/custom/bootstrap.h"
+#include "src/turbomind/utils/cuda_utils.h"
+
+namespace turbomind::comm {
 
 CustomComm::CustomComm(std::shared_ptr<mscclpp::Bootstrap> bootstrap):
     Comm{bootstrap->getNranks(), bootstrap->getRank()}
@@ -64,7 +70,6 @@ void CustomComm::Initialize()
 
     RegisterBuffer(packet_buff_, kPacketBuffSize);
     RegisterBuffer(scratch_buff_, kScratchBuffSize);
-
 }
 
 void CustomComm::RegisterBuffer(void* ptr, size_t size)
@@ -97,38 +102,6 @@ void CustomComm::RegisterBuffer(void* ptr, size_t size)
     registered_memories_.emplace(ptr, std::move(memories));
 }
 
-std::vector<std::unique_ptr<Comm>> CreateCustomComm(const std::vector<int>& devices)
-{
-    const int num   = devices.size();
-    auto      state = std::make_shared<LocalBootstrap::State>(num);
-
-    std::vector<std::unique_ptr<Comm>> comm;
-
-    for (int i = 0; i < num; ++i) {
-        auto bootstrap = std::make_shared<LocalBootstrap>(num, i, state);
-        comm.push_back(std::make_unique<CustomComm>(std::static_pointer_cast<mscclpp::Bootstrap>(bootstrap)));
-    }
-
-    std::vector<std::thread> threads;
-
-    for (const auto& c : comm) {
-        threads.emplace_back([&] {
-            cudaSetDevice(devices[c->rank()]);
-            for (int i = 0; i < c->world_size(); ++i) {
-                if (i != c->rank()) {
-                    cudaDeviceEnablePeerAccess(devices[i], 0);
-                }
-            }
-            ((CustomComm&)*c).Initialize();
-        });
-    }
-    for (auto& t : threads) {
-        t.join();
-    }
-
-    return comm;
-}
-
 Array<void*, kMaxNearPeers> CustomComm::get_near_impl(void* ptr)
 {
     auto& memories = registered_memories_.at(ptr);
@@ -140,4 +113,79 @@ Array<void*, kMaxNearPeers> CustomComm::get_near_impl(void* ptr)
     return ret;
 }
 
-}  // namespace turbomind
+class LocalGroupId: public GroupId {
+public:
+    void Initialize() override
+    {
+        internal_ = std::make_shared<Internal>();
+    }
+
+    void Export(std::ostream& os) override
+    {
+        FT_CHECK((bool)internal_);  // `Initialize` must come befor `Export`
+
+        const void* ptr = this;
+        os.write((const char*)&ptr, sizeof(ptr));
+    }
+
+    void Import(std::istream& is) override
+    {
+        void* ptr{};
+        is.read((char*)&ptr, sizeof(ptr));
+        internal_ = reinterpret_cast<LocalGroupId*>(ptr)->internal_;
+
+        FT_CHECK((bool)internal_);
+    }
+
+    std::unique_ptr<Comm> CreateCommunicator(int rank, int world_size) override
+    {
+        auto init_shared_state = [&] {  //
+            internal_->state = std::make_shared<LocalBootstrap::State>(world_size);
+        };
+
+        FT_CHECK((bool)internal_);
+
+        // one of the rank initialize the shared state
+        std::call_once(internal_->flag, init_shared_state);
+
+        FT_CHECK((bool)internal_->state);
+
+        auto bootstrap = std::make_shared<LocalBootstrap>(world_size, rank, internal_->state);
+
+        std::vector<CUcontext> ctx(world_size);
+        CUDRVCHECK(cuCtxGetCurrent(&ctx[rank]));
+
+        bootstrap->allGather(ctx.data(), sizeof(CUcontext));
+
+        for (int i = 0; i < world_size; ++i) {
+            if (i != rank) {
+                auto ec = cuCtxEnablePeerAccess(ctx[i], 0);
+                FT_CHECK(ec == CUDA_SUCCESS || ec == CUDA_ERROR_PEER_ACCESS_ALREADY_ENABLED);
+            }
+        }
+
+        bootstrap->barrier();
+
+        auto comm = std::make_unique<CustomComm>(bootstrap);
+
+        comm->Initialize();
+
+        return comm;
+    }
+
+private:
+    struct Internal {
+        std::once_flag                         flag;
+        std::shared_ptr<LocalBootstrap::State> state;
+    };
+
+private:
+    std::shared_ptr<Internal> internal_;
+};
+
+std::unique_ptr<GroupId> CreateCustomGroupId()
+{
+    return std::make_unique<LocalGroupId>();
+}
+
+}  // namespace turbomind::comm

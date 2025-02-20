@@ -58,37 +58,37 @@ LlamaV2<T>::LlamaV2(const ModelParam&               model,
                     const AttentionParam&           attn,
                     const MoeParam&                 moe,
                     const LoraParam&                lora,
-                    const NcclParam&                tp,
                     const Context<T>&               ctx,
                     int                             max_batch_size,
                     std::shared_ptr<LlamaWeight<T>> weights):
     param_(model),
     attn_param_(attn),
     lora_param_(lora),
+    comm_(&ctx.comm),
+    tp_size_(comm_->tp ? comm_->tp->world_size() : 1),
+    tp_rank_(comm_->tp ? comm_->tp->rank() : 0),
     head_num_(model.head_num),
     size_per_head_(model.head_dim),
     hidden_units_(model.hidden_units),
     layer_num_(model.layer_num),
     vocab_size_(model.vocab_size),
-    vocab_size_padded_(pad_vocab_size(model.vocab_size, tp.world_size_)),
+    vocab_size_padded_(pad_vocab_size(model.vocab_size, tp_size_)),
     rmsnorm_eps_(model.norm_eps),
     start_id_(model.start_id),
     end_id_(model.end_id),
-    tensor_para_(tp),
-    local_head_num_(model.head_num / tp.world_size_),
-    local_kv_head_num_(model.kv_head_num / tp.world_size_),
+    local_head_num_(model.head_num / tp_size_),
+    local_kv_head_num_(model.kv_head_num / tp_size_),
     weights_(std::move(weights)),
     stream_(ctx.stream),
     cublas_wrapper_(ctx.cublas_wrapper.get()),
     allocator_(ctx.allocator.get()),
-    peer_allcator_(ctx.peer_allocator.get()),
     linear_(ctx.linear.get()),
     is_free_buffer_after_forward_(false),
     debug_(isDebug())
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
-    unified_decoder_ = std::make_unique<UnifiedDecoder<T>>(model, attn, moe, lora, tp, ctx);
+    unified_decoder_ = std::make_unique<UnifiedDecoder<T>>(model, attn, moe, lora, ctx);
 
     dynamic_decode_layer_ = std::make_unique<DynamicDecodeLayer<float>>(vocab_size_,
                                                                         vocab_size_padded_,
@@ -211,7 +211,7 @@ void LlamaV2<T>::forwardUnified(T*               out,
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
-    if (tensor_para_.world_size_ == 1) {
+    if (tp_size_ == 1) {
         invokeInputIdsEmbeddingLookupPosEncoding(decoder_input,
                                                  nullptr,  // processed somewhere else
                                                  weights_->pre_decoder_embedding_table,
@@ -227,8 +227,9 @@ void LlamaV2<T>::forwardUnified(T*               out,
         sync_check_cuda_error();
     }
     else {
-        const size_t local_hidden_units = hidden_units_ / tensor_para_.world_size_;
-        invokeInputIdsEmbeddingLookupPosEncoding(decoder_output + tensor_para_.rank_ * token_num * local_hidden_units,
+        const size_t local_hidden_units = hidden_units_ / tp_size_;
+        const size_t slice              = token_num * local_hidden_units;
+        invokeInputIdsEmbeddingLookupPosEncoding(decoder_output + tp_rank_ * slice,
                                                  nullptr,  // processed somewhere else
                                                  weights_->pre_decoder_embedding_table,
                                                  static_cast<T*>(nullptr),
@@ -242,20 +243,11 @@ void LlamaV2<T>::forwardUnified(T*               out,
                                                  stream_);
         sync_check_cuda_error();
 
-        {
-            NcclGuard nccl_guard(tensor_para_, stream_);
-            ftNcclAllGather(decoder_output,                                        // send_buf
-                            decoder_output,                                        // recv_buf
-                            token_num * hidden_units_ / tensor_para_.world_size_,  // data_size
-                            tensor_para_.rank_,
-                            tensor_para_,
-                            stream_);
-
-            sync_check_cuda_error();
-        }
+        comm_->tp->AllGather(decoder_output + tp_rank_ * slice, decoder_output, slice, stream_);
+        sync_check_cuda_error();
 
         invokeInPlaceTranspose102(
-            decoder_input, decoder_output, tensor_para_.world_size_, token_num, local_hidden_units, false, stream_);
+            decoder_input, decoder_output, tp_size_, token_num, local_hidden_units, false, stream_);
 
         sync_check_cuda_error();
     }
@@ -305,7 +297,7 @@ void LlamaV2<T>::postDecodeEmbedding(float* logits, float* local_logits, const T
     cudaDataType_t data_type = getCudaDataType<T>();
     float          alpha     = 1.f;
     float          beta      = 0.f;
-    if (tensor_para_.world_size_ == 1) {
+    if (tp_size_ == 1) {
         cublas_wrapper_->Gemm(CUBLAS_OP_T,
                               CUBLAS_OP_N,
                               vocab_size_,  // n
@@ -326,8 +318,11 @@ void LlamaV2<T>::postDecodeEmbedding(float* logits, float* local_logits, const T
                               cublasGemmAlgo_t(-1));
     }
     else {
-        FT_CHECK(vocab_size_padded_ % tensor_para_.world_size_ == 0);
-        const size_t local_vocab_size = vocab_size_padded_ / tensor_para_.world_size_;
+        FT_CHECK(vocab_size_padded_ % tp_size_ == 0);
+
+        const size_t local_vocab_size = vocab_size_padded_ / tp_size_;
+        const size_t slice            = batch_size * local_vocab_size;
+
         cublas_wrapper_->Gemm(CUBLAS_OP_T,
                               CUBLAS_OP_N,
                               local_vocab_size,  // n
@@ -341,22 +336,16 @@ void LlamaV2<T>::postDecodeEmbedding(float* logits, float* local_logits, const T
                               data_type,
                               hidden_units_,  // k
                               &beta,
-                              local_logits + tensor_para_.rank_ * batch_size * local_vocab_size,
+                              local_logits + tp_rank_ * slice,
                               CUDA_R_32F,
                               local_vocab_size,  // n
                               CUDA_R_32F,
                               cublasGemmAlgo_t(-1));
-        {
-            NcclGuard nccl_guard(tensor_para_, stream_);
-            ftNcclAllGather(local_logits,                   // send_buf
-                            local_logits,                   // recv_buf
-                            batch_size * local_vocab_size,  // data_size
-                            tensor_para_.rank_,
-                            tensor_para_,
-                            stream_);
-            sync_check_cuda_error();
-        }
-        invokeTransposeAxis01(logits, local_logits, tensor_para_.world_size_, batch_size, local_vocab_size, stream_);
+
+        comm_->tp->AllGather(local_logits + tp_rank_ * slice, local_logits, slice, stream_);
+        sync_check_cuda_error();
+
+        invokeTransposeAxis01(logits, local_logits, tp_size_, batch_size, local_vocab_size, stream_);
         sync_check_cuda_error();
     }
 }

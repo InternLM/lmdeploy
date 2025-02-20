@@ -1,8 +1,8 @@
 #pragma once
 
-#include <condition_variable>
 #include <memory>
-#include <mutex>
+
+#include <ostream>
 #include <stdexcept>
 #include <vector>
 
@@ -10,35 +10,7 @@
 
 #include "src/turbomind/utils/Tensor.h"
 
-namespace turbomind {
-
-class Barrier {
-public:
-    explicit Barrier(int count): threshold_{count}, count_{count} {}
-
-    void arrive_and_wait()
-    {
-        std::unique_lock lock{mutex_};
-        auto             phase = phase_;
-        if (--count_ == 0) {
-            ++phase_;
-            count_ = threshold_;
-            cv_.notify_all();
-        }
-        else {
-            cv_.wait(lock, [this, phase] { return phase_ != phase; });
-        }
-    }
-
-private:
-    std::mutex              mutex_;
-    std::condition_variable cv_;
-
-    int threshold_;
-    int count_;
-
-    uint32_t phase_{};
-};
+namespace turbomind::comm {
 
 class Comm {
 public:
@@ -56,7 +28,13 @@ public:
         return world_size_;
     }
 
+    virtual void* Allocate(size_t size) = 0;
+
+    virtual void Free(void* ptr) = 0;
+
     virtual void RegisterBuffer(void* ptr, size_t size) {}
+
+    virtual void Deregister(void* ptr) {};
 
     template<class T>
     void AllReduceSum(const T* sendbuff, T* recvbuff, size_t count, cudaStream_t stream)
@@ -117,4 +95,22 @@ std::vector<std::unique_ptr<Comm>> CreateNcclComm(const std::vector<int>& device
 
 std::vector<std::unique_ptr<Comm>> CreateCustomComm(const std::vector<int>& devices);
 
-}  // namespace turbomind
+// GroupId
+class GroupId {
+public:
+    virtual ~GroupId() = default;
+
+    virtual void Initialize()             = 0;
+    virtual void Export(std::ostream& os) = 0;
+    virtual void Import(std::istream& is) = 0;
+
+    virtual std::unique_ptr<Comm> CreateCommunicator(int rank, int world_size) = 0;
+};
+
+std::unique_ptr<GroupId> CreateGroupId(const std::string& backend);
+
+struct Splits {
+    std::unique_ptr<Comm> tp;  //
+};
+
+}  // namespace turbomind::comm

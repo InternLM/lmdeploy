@@ -574,20 +574,6 @@ PYBIND11_MODULE(_turbomind, m)
             "pipeline_para_size"_a       = 1,
             "enable_custom_all_reduce"_a = 0,
             "data_type"_a                = "half")
-        .def("create_nccl_params",
-             &AbstractTransformerModel::createNcclParams,
-             "node_id"_a,
-             "device_id_start"_a = 0,
-             "multi_node"_a      = false)
-        .def("destroy_nccl_params", &AbstractTransformerModel::destroyNcclParams, "params"_a)
-        .def(
-            "create_custom_comms",
-            [](AbstractTransformerModel* model, int world_size) {
-                std::vector<std::shared_ptr<ft::AbstractCustomComm>> ret;
-                model->createCustomComms(&ret, world_size);
-                return ret;
-            },
-            "world_size"_a)
         .def(
             "create_model_instance",
             [](AbstractTransformerModel* model, int deviceId) { return model->createModelInstance(deviceId); },
@@ -620,18 +606,10 @@ PYBIND11_MODULE(_turbomind, m)
             "rank"_a)
         .def(
             "create_engine",
-            [](AbstractTransformerModel*                                         model,
-               int                                                               deviceId,
-               int                                                               rank,
-               std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>> nccl_params,
-               std::shared_ptr<ft::AbstractCustomComm>                           custom_all_reduce_comm = nullptr) {
-                model->createEngine(deviceId, rank, nccl_params, custom_all_reduce_comm);
-            },
+            [](AbstractTransformerModel* model, int deviceId, int rank) { model->createEngine(deviceId, rank); },
             py::call_guard<py::gil_scoped_release>(),
             "device_id"_a,
-            "rank"_a,
-            "nccl_params"_a,
-            "custom_all_reduce_comm"_a = nullptr)
+            "rank"_a)
         .def("__str__", &AbstractTransformerModel::toString)
         .def("__repr__", &AbstractTransformerModel::toString)
         .def("get_tensor_para_size", &AbstractTransformerModel::getTensorParaSize)

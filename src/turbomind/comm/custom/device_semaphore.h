@@ -6,7 +6,7 @@
 
 #include "mscclpp/semaphore_device.hpp"
 
-namespace turbomind {
+namespace turbomind::comm {
 
 template<class T>
 __device__ T* cvta_generic_to_global(T* p)
@@ -78,4 +78,4 @@ struct DeviceSemaphore {
     uint64_t* remote_inbound_semaphore_id;
 };
 
-}  // namespace turbomind
+}  // namespace turbomind::comm

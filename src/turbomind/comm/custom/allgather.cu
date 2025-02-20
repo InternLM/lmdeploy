@@ -10,7 +10,7 @@
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/string_utils.h"
 
-namespace turbomind {
+namespace turbomind::comm {
 
 // __device__ inline void local_allgather(SmChannels&            channels,  //
 //                                        mscclpp::DeviceSyncer* device_syncer,
@@ -113,7 +113,6 @@ void CustomComm::AllGather(const void* sendbuff, void* recvbuff, size_t sendcoun
         invoke(uint{});
     }
     else {
-        std::cout << "fuck\n";
         throw std::runtime_error("not implemented");
     }
 }

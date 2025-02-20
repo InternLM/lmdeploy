@@ -4,9 +4,10 @@
 
 #include "mscclpp/core.hpp"
 
+#include "src/turbomind/comm/barrier.h"
 #include "src/turbomind/comm/comm.h"
 
-namespace turbomind {
+namespace turbomind::comm {
 
 class LocalBootstrap: public mscclpp::Bootstrap {
 public:
@@ -28,7 +29,7 @@ public:
 
         int num;
 
-        Barrier barrier;
+        comm::Barrier barrier;
 
         std::vector<void*>     ptrs;
         std::deque<std::mutex> mutexes;
@@ -112,4 +113,4 @@ private:
     std::shared_ptr<State> state_;
 };
 
-}  // namespace turbomind
+}  // namespace turbomind::comm

@@ -20,6 +20,7 @@
 
 #pragma once
 
+#include "src/turbomind/comm/comm.h"
 #include <functional>
 #include <memory>
 #include <vector>
@@ -67,14 +68,6 @@ struct AbstractTransformerModel {
 
     virtual ~AbstractTransformerModel() = default;
 
-    virtual std::pair<std::vector<NcclParam>, std::vector<NcclParam>>
-    createNcclParams(const int node_id, const int device_id_start = 0, const bool multi_node = false);
-
-    virtual void destroyNcclParams(std::pair<std::vector<NcclParam>, std::vector<NcclParam>> params);
-
-    virtual void createCustomComms(std::vector<std::shared_ptr<AbstractCustomComm>>* custom_all_reduce_comms,
-                                   int                                               world_size) = 0;
-
     virtual std::unique_ptr<ModelRequest> createModelInstance(int deviceId) = 0;
 
     virtual void createSharedWeights(int deviceId, int rank) = 0;
@@ -83,14 +76,12 @@ struct AbstractTransformerModel {
 
     virtual void processWeights(int deviceId, int rank) = 0;
 
-    virtual void createEngine(int                                                       device_id,
-                              int                                                       rank,
-                              std::pair<std::vector<NcclParam>, std::vector<NcclParam>> nccl_params,
-                              std::shared_ptr<AbstractCustomComm>) = 0;
+    virtual void createEngine(int device_id, int rank) = 0;
 
-    virtual std::string toString()            = 0;
-    virtual int         getTensorParaSize()   = 0;
-    virtual int         getPipelineParaSize() = 0;
+    virtual std::string toString() = 0;
+
+    virtual int getTensorParaSize()   = 0;
+    virtual int getPipelineParaSize() = 0;
 };
 
 }  // namespace turbomind

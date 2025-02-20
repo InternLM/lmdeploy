@@ -196,6 +196,34 @@ private:
         IndexedCopyImpl(nullptr, nullptr, count, cpys...);
     }
 
+    void* CommBufAlloc(size_t size, bool register_)
+    {
+        if (auto& tp = model_->comm_->tp) {
+            auto ptr = tp->Allocate(size);
+            if (register_) {
+                tp->RegisterBuffer(ptr, size);
+            }
+            return ptr;
+        }
+        else {
+            return allocator_->malloc(size);
+        }
+    }
+
+    void CommBufFree(void** ptr, bool deregister)
+    {
+        if (auto& tp = model_->comm_->tp) {
+            if (deregister) {
+                tp->Deregister(*ptr);
+            }
+            tp->Free(*ptr);
+            *ptr = {};
+        }
+        else {
+            return allocator_->free(ptr);
+        }
+    }
+
 private:
     const EngineParam param_;
 
@@ -208,7 +236,8 @@ private:
     const int      num_tokens_per_iter_;
     const int      max_prefill_iters_;
     const int      device_id_;
-    const int      rank_;
+    const int      tp_size_;
+    const int      rank_;  //  tp rank
     const DataType data_type_;
     const bool     debug_;
 
@@ -250,6 +279,8 @@ private:
     float* local_logits_buf_{};  // tensor parallel local logits
     float* context_logits_buf_{};
     float* local_context_logits_buf_{};
+
+    size_t local_context_logits_buf_size_{};
 
     float*    sampled_logprobs_{};
     uint32_t* sampled_indexes_{};

@@ -115,7 +115,7 @@ class TurboMind:
             for _ in e.map(self.model_comm.process_weight, range(self.gpu_count), ranks):
                 pass
             # implicit synchronization
-            for _ in e.map(self.model_comm.create_engine, range(self.gpu_count), ranks, repeat(self.nccl_params)):
+            for _ in e.map(self.model_comm.create_engine, range(self.gpu_count), ranks):
                 pass
 
         self.session_len = self.config.session_len
@@ -127,7 +127,6 @@ class TurboMind:
         # TODO: support mpi
         self.node_id = 0
         self.node_num = 1
-        self.nccl_params = model_comm.create_nccl_params(self.node_id)
         torch.cuda.synchronize()
 
         # create weight
@@ -289,9 +288,6 @@ class TurboMind:
                    **kwargs)
 
     def close(self):
-        if self.nccl_params is not None:
-            self.model_comm.destroy_nccl_params(self.nccl_params)
-            self.nccl_params = None
         if self.model_comm is not None:
             self.model_comm = None
 
@@ -406,8 +402,6 @@ class TurboMindInstance:
 
         self.eos_id = tm_model.eos_id
         self.session_len = tm_model.session_len
-
-        self.nccl_params = tm_model.nccl_params
 
         # create model instances
         self.model_inst = self._create_model_instance(0)

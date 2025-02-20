@@ -2,17 +2,21 @@
 
 #pragma once
 
+#include <memory>
+
+#include <cuda_runtime.h>
+
+#include <cublasLt.h>
+#include <cublas_v2.h>
+
+#include "src/turbomind/comm/comm.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
-#include <cublasLt.h>
-#include <cublas_v2.h>
-#include <cuda_runtime.h>
-#include <cuda_runtime_api.h>
-#include <memory>
 
 namespace turbomind {
 
+// Execution context for the model
 template<class T>
 struct Context {
     cudaStream_t                                    stream;
@@ -24,6 +28,7 @@ struct Context {
     std::unique_ptr<std::mutex>                     cublas_wrapper_mutex;
     std::unique_ptr<cublasMMWrapper>                cublas_wrapper;
     std::unique_ptr<LlamaLinear<T>>                 linear;
+    comm::Splits                                    comm;
     cudaDeviceProp                                  cuda_device_prop;
 
     Context(int device_id)

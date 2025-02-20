@@ -41,21 +41,17 @@
 namespace turbomind {
 
 template<class T>
-UnifiedAttentionLayer<T>::UnifiedAttentionLayer(const ModelParam&     model,
-                                                const AttentionParam& attn,
-                                                const LoraParam&      lora,
-                                                const NcclParam&      tp,
-                                                const Context<T>&     ctx):
+UnifiedAttentionLayer<T>::UnifiedAttentionLayer(
+    const ModelParam& model, const AttentionParam& attn, const LoraParam& lora, size_t tp_size, const Context<T>& ctx):
     head_num_(model.head_num),
     kv_head_num_(model.kv_head_num),
     size_per_head_(model.head_dim),
     hidden_units_(model.hidden_units),
-    local_head_num_(head_num_ / tp.world_size_),
-    local_kv_head_num_(model.kv_head_num / tp.world_size_),
+    local_head_num_(head_num_ / tp_size),
+    local_kv_head_num_(model.kv_head_num / tp_size),
     param_(attn),
     model_param_(model),
     lora_param_(lora),
-    tensor_para_(tp),
     context_(ctx),
     stream_(ctx.stream),
     linear_(ctx.linear.get()),
@@ -434,12 +430,6 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     sync_check_cuda_error();
 
     count_and_fix(attention_out, token_num * weights->output.output_dims, Concat("wo", layer_id), 3);
-
-    if (tensor_para_.world_size_ > 1) {
-        NcclGuard nccl_guard(tensor_para_, stream_);
-        ftNcclAllReduceSum(attention_out, attention_out, token_num * hidden_units_, tensor_para_, stream_);
-        sync_check_cuda_error();
-    }
 
     // if (tensor_para_.rank_ == 0) {
     //     Compare(attention_out, token_num * hidden_units_, Concat("attn_out", layer_id), compare_mode, stream_);

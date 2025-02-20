@@ -16,7 +16,7 @@
 #include "mscclpp/packet_device.hpp"
 #include "src/turbomind/utils/cuda_utils.h"
 
-namespace turbomind {
+namespace turbomind::comm {
 
 using mscclpp::LLPacket;
 

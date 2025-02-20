@@ -17,7 +17,7 @@
         throw std::runtime_error(msg.c_str());                                                                         \
     }
 
-namespace turbomind {
+namespace turbomind::comm {
 
 static inline ncclDataType_t getNcclDataType(DataType type)
 {
@@ -42,6 +42,18 @@ public:
     ~NcclComm()
     {
         ncclCommDestroy(comm_);
+    }
+
+    void* Allocate(size_t size) override
+    {
+        void* ptr{};
+        NCCLCHECK(ncclMemAlloc(&ptr, size));
+        return ptr;
+    }
+
+    void Free(void* ptr) override
+    {
+        NCCLCHECK(ncclMemFree(ptr));
     }
 
     void AllReduceSum(const void* sendbuff, void* recvbuff, size_t count, DataType type, cudaStream_t stream) override
@@ -116,30 +128,37 @@ private:
     ncclComm_t comm_;
 };
 
-std::vector<std::unique_ptr<Comm>> CreateNcclComm(const std::vector<int>& devices)
-{
-    ncclUniqueId uid{};
-    NCCLCHECK(ncclGetUniqueId(&uid));
-
-    std::vector<std::unique_ptr<Comm>> ret(devices.size());
-
-    int old_device{};
-    // Note this will create ctx on dev 0 if CUDA is never called before
-    cudaGetDevice(&old_device);
-
-    // initialize the communicator clique
-    NCCLCHECK(ncclGroupStart());
-    for (int i = 0; i < (int)ret.size(); ++i) {
-        cudaSetDevice(devices[i]);
-        ncclComm_t comm{};
-        NCCLCHECK(ncclCommInitRank(&comm, ret.size(), uid, i));
-        ret[i] = std::unique_ptr<Comm>{new NcclComm{comm, (int)ret.size(), i}};
+class NcclGroupId: public GroupId {
+public:
+    void Initialize() override
+    {
+        NCCLCHECK(ncclGetUniqueId(&uid_));
     }
-    NCCLCHECK(ncclGroupEnd());
 
-    cudaSetDevice(old_device);
+    void Export(std::ostream& os) override
+    {
+        os.write((const char*)&uid_, sizeof(uid_));
+    }
 
-    return ret;
+    void Import(std::istream& is) override
+    {
+        is.read((char*)&uid_, sizeof(uid_));
+    }
+
+    std::unique_ptr<Comm> CreateCommunicator(int rank, int world_size) override
+    {
+        ncclComm_t comm{};
+        NCCLCHECK(ncclCommInitRank(&comm, world_size, uid_, rank));
+        return std::make_unique<NcclComm>(comm, world_size, rank);
+    }
+
+private:
+    ncclUniqueId uid_{};
+};
+
+std::unique_ptr<GroupId> CreateNcclGroupId()
+{
+    return std::make_unique<NcclGroupId>();
 }
 
-}  // namespace turbomind
+}  // namespace turbomind::comm

@@ -23,16 +23,14 @@
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/utils/Tensor.h"
-#include "src/turbomind/utils/nccl_utils.h"
 
 namespace turbomind {
 
 template<typename T>
 class LlamaFfnLayer {
 public:
-    LlamaFfnLayer(const ModelParam& model, const NcclParam& tp, const Context<T>& ctx):
+    LlamaFfnLayer(const ModelParam& model, const Context<T>& ctx):
         hidden_units_(model.hidden_units),
-        tensor_para_(tp),
         stream_(ctx.stream),
         linear_(ctx.linear.get()),
         allocator_(ctx.allocator.get())
@@ -55,7 +53,6 @@ private:
     void activation(int token_num, int inter_size, bool is_chunked);
 
     const size_t          hidden_units_;
-    const NcclParam       tensor_para_;
     cudaStream_t const    stream_;
     LlamaLinear<T>* const linear_;
     IAllocator* const     allocator_;

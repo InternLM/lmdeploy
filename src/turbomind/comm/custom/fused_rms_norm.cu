@@ -17,7 +17,7 @@
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
-namespace turbomind {
+namespace turbomind::comm {
 
 namespace detail {
 
@@ -549,4 +549,4 @@ void CustomComm::AllreduceResidualBiasRMSnorm(void*        hidden,
     invokeResidualBiasRMSNorm(hidden, residual, weights, bias, dtype, dim, token_num, eps, stream);
 }
 
-}  // namespace turbomind
+}  // namespace turbomind::comm
