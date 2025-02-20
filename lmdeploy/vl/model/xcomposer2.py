@@ -102,9 +102,9 @@ class Xcomposer2VisionModel(VisonModel):
     @classmethod
     def match(cls, config: AutoConfig):
         """check whether the config match the model."""
-        target = 'InternLMXComposer2ForCausalLM'
-        if getattr(config, 'architectures', [None]) is None:
+        if config.architectures is None:
             return False
+        target = 'InternLMXComposer2ForCausalLM'
         if config.architectures[0] == target:
             return True
         for _, v in getattr(config, 'auto_map', {}).items():

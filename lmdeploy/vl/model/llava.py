@@ -208,7 +208,7 @@ class LlavaVisionModel(LlavaHfVisionModel):
     @classmethod
     def match(cls, config: AutoConfig):
         """check whether the config match the model."""
-        if getattr(config, 'architectures', [None]) is None:
+        if config.architectures is None:
             return False
         arch = config.architectures[0]
         if arch in ['LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM']:
