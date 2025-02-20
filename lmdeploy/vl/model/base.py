@@ -4,7 +4,7 @@ from typing import Dict, List, Union
 
 import numpy as np
 from mmengine import Registry
-from transformers import AutoConfig
+from transformers import AutoConfig, AutoTokenizer
 
 from lmdeploy.archs import get_model_arch
 
@@ -29,7 +29,19 @@ class VisonModel(ABC):
         if hf_config is None:
             _, hf_config = get_model_arch(model_path)
         self.hf_config = hf_config
-        self.image_token_id = getattr(hf_config, 'pad_token_id', 0)
+        self.image_token_id = self.get_pad_token_id(model_path, hf_config) or 0
+
+    def get_pad_token_id(self, model_path, hf_config):
+        """get pad_token_id from hf_config or tokenizer."""
+        pad_token_id = getattr(hf_config, 'pad_token_id', None)
+        if pad_token_id is None:
+            try:
+                tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+                pad_token_id = getattr(tokenizer, 'pad_token_id', None)
+            except Exception as e:
+                print(e)
+                pass
+        return pad_token_id
 
     @abstractmethod
     def build_preprocessor(self, ):
@@ -154,8 +166,7 @@ class VisonModel(ABC):
             }) for x in content if x['type'] == 'image'])
         return images
 
-    @staticmethod
-    def to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start):
+    def to_pytorch_aux(self, messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start):
         """auxiliary function to pack the preprocessing results in a format
         compatible with what is required by pytorch engine.
 
@@ -183,15 +194,14 @@ class VisonModel(ABC):
             if i > 0 and i <= len(preps):
                 preps[i - 1].update(offset=len(input_ids))
                 image_tokens = preps[i - 1]['image_tokens']
-                image_token_id = preps[i - 1]['image_token_id']
-                input_ids.extend([image_token_id] * image_tokens)
+                assert self.image_token_id == preps[i - 1]['image_token_id']
+                input_ids.extend([self.image_token_id] * image_tokens)
             token_ids = tokenizer.encode(seg, add_bos=((i == 0) and sequence_start))
             input_ids.extend(token_ids)
 
         return dict(prompt=prompt, input_ids=input_ids, multimodal=preps)
 
-    @staticmethod
-    def to_turbomind_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start):
+    def to_turbomind_aux(self, messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start):
         """auxiliary function to pack the forwarding results in a format
         compatible with what is required by turbomind engine.
 
@@ -207,7 +217,6 @@ class VisonModel(ABC):
         features = [x['content'] for x in messages if x['role'] == 'forward']
         features = features[0]
         features = [x.cpu().numpy() for x in features]
-
         # split prompt into segments and validate data
         segs = prompt.split(IMAGE_TOKEN)
         assert len(segs) == len(features) + 1, (f'the number of {IMAGE_TOKEN} is not equal '
@@ -217,13 +226,12 @@ class VisonModel(ABC):
         input_ids = []
         begins = []
         ends = []
-        IMAGE_DUMMY_TOKEN_INDEX = 0
         for i, seg in enumerate(segs):
             if i > 0 and i <= len(features):
                 image_dim = features[i - 1].shape[0]
                 begins.append(len(input_ids))
                 ends.append(begins[-1] + image_dim)
-                input_ids.extend([IMAGE_DUMMY_TOKEN_INDEX] * image_dim)
+                input_ids.extend([self.image_token_id] * image_dim)
             seg_ids = tokenizer.encode(seg, add_bos=((i == 0) and sequence_start))
             input_ids.extend(seg_ids)
         ranges = np.stack([begins, ends], axis=1).tolist()
