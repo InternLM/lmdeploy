@@ -257,7 +257,8 @@ class BaseModelAgent(AutoModelAgent):
             swap_in_map (SwapMap): Cache maps to swap in.
             swap_out_map (SwapMap): Cache maps to swap out.
         """
-        output = await asyncio.get_event_loop().run_in_executor(None, self._forward_impl, inputs, swap_in_map, swap_out_map)
+        loop = asyncio.get_event_loop()
+        output = await loop.run_in_executor(None, self._forward_impl, inputs, swap_in_map, swap_out_map)
         return output
 
     def get_logits(self, hidden_states: torch.Tensor):
