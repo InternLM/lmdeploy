@@ -178,7 +178,7 @@ struct TestComm {
 
             T* d_tmp{};
             cudaMalloc(&d_tmp, sizeof(T) * max_count);
-            comm.RegisterBuffer(d_tmp, sizeof(T) * max_count);
+            comm.Register(d_tmp, sizeof(T) * max_count);
 
             ctx.copy_n(data[rank].data(), max_count, d_rank_data);
 
@@ -325,10 +325,10 @@ struct TestComm {
             T* d_tmp_data{};
             cudaMalloc(&d_tmp_data, sizeof(T) * max_count);
 
-            // RegisterBuffer in NCCL impl is NOP, cudaMalloc may conflict later kernel launch
+            // Register in NCCL impl is NOP, cudaMalloc may conflict later kernel launch
             barrier_->arrive_and_wait();
 
-            comm.RegisterBuffer(d_tmp_data, sizeof(T) * max_count);
+            comm.Register(d_tmp_data, sizeof(T) * max_count);
 
             ctx.copy_n(data[rank].data(), max_count, d_rank_data);
             ctx.copy_n(residual.data(), max_count, d_residual);
@@ -467,10 +467,10 @@ struct TestComm {
             T* d_tmp{};
             cudaMalloc(&d_tmp, sizeof(T) * max_count * world_size);
 
-            // RegisterBuffer in NCCL impl is NOP, cudaMalloc may conflict later kernel launch
+            // Register in NCCL impl is NOP, cudaMalloc may conflict later kernel launch
             barrier_->arrive_and_wait();
 
-            comm.RegisterBuffer(d_tmp, sizeof(T) * max_count * world_size);
+            comm.Register(d_tmp, sizeof(T) * max_count * world_size);
 
             ctx.copy_n(data[rank].data(), max_count, d_rank_data);
 

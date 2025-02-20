@@ -20,6 +20,21 @@ CustomComm::CustomComm(std::shared_ptr<mscclpp::Bootstrap> bootstrap):
     comm_ = std::make_shared<mscclpp::Communicator>(std::move(bootstrap));
 }
 
+CustomComm::~CustomComm()
+{
+    Free(scratch_buff_);
+    Free(packet_buff_);
+    Free(device_syncer_);
+    Free(device_semaphores_);
+
+    // make destruction order explicit
+    registered_channels_.clear();  // channels are constructed on memories
+    registered_memories_.clear();
+    semaphores_.clear();
+    connections_.clear();
+    comm_.reset();
+}
+
 void CustomComm::Initialize()
 {
     FT_CHECK(comm_->bootstrap()->getNranks() == comm_->bootstrap()->getNranksPerNode());
@@ -46,33 +61,44 @@ void CustomComm::Initialize()
 
     comm_->setup();
 
-    cudaMallocAsync(
-        &device_semaphores_, sizeof(mscclpp::SmDevice2DeviceSemaphoreDeviceHandle) * semaphores_.size(), {});
+    device_semaphores_ = (mscclpp::SmDevice2DeviceSemaphoreDeviceHandle*)Allocate(
+        sizeof(mscclpp::SmDevice2DeviceSemaphoreDeviceHandle) * semaphores_.size());
+
     std::vector<mscclpp::SmDevice2DeviceSemaphoreDeviceHandle> device_semaphores;
     for (auto& s : semaphores_) {
         device_semaphores.push_back(s->deviceHandle());
     }
-    cudaMemcpyAsync(device_semaphores_,
-                    device_semaphores.data(),
-                    sizeof(mscclpp::SmDevice2DeviceSemaphoreDeviceHandle) * semaphores_.size(),
-                    cudaMemcpyDefault,
-                    {});
+    check_cuda_error(cudaMemcpy(device_semaphores_,
+                                device_semaphores.data(),
+                                sizeof(mscclpp::SmDevice2DeviceSemaphoreDeviceHandle) * semaphores_.size(),
+                                cudaMemcpyHostToDevice));
 
-    cudaMallocAsync(&device_syncer_, sizeof(mscclpp::DeviceSyncer), {});
-    cudaMemsetAsync(device_syncer_, 0, sizeof(mscclpp::DeviceSyncer), {});
-    cudaStreamSynchronize({});
+    device_syncer_ = (mscclpp::DeviceSyncer*)Allocate(sizeof(mscclpp::DeviceSyncer));
+    check_cuda_error(cudaMemset(device_syncer_, 0, sizeof(mscclpp::DeviceSyncer)));
 
-    cudaMalloc(&packet_buff_, kPacketBuffSize);
-    cudaMemset(packet_buff_, 0, kPacketBuffSize);
+    packet_buff_ = Allocate(kPacketBuffSize);
+    check_cuda_error(cudaMemset(packet_buff_, 0, kPacketBuffSize));
 
-    cudaMalloc(&scratch_buff_, kScratchBuffSize);
-    cudaMemset(scratch_buff_, 0, kScratchBuffSize);
+    scratch_buff_ = Allocate(kScratchBuffSize);
+    check_cuda_error(cudaMemset(scratch_buff_, 0, kScratchBuffSize));
 
-    RegisterBuffer(packet_buff_, kPacketBuffSize);
-    RegisterBuffer(scratch_buff_, kScratchBuffSize);
+    Register(packet_buff_, kPacketBuffSize);
+    Register(scratch_buff_, kScratchBuffSize);
 }
 
-void CustomComm::RegisterBuffer(void* ptr, size_t size)
+void* CustomComm::Allocate(size_t size)
+{
+    void* ptr{};
+    check_cuda_error(cudaMalloc(&ptr, size));
+    return ptr;
+}
+
+void CustomComm::Free(void* ptr)
+{
+    check_cuda_error(cudaFree(ptr));
+}
+
+void CustomComm::Register(void* ptr, size_t size)
 {
     FT_CHECK(registered_channels_.count(ptr) == 0);
 
@@ -98,8 +124,14 @@ void CustomComm::RegisterBuffer(void* ptr, size_t size)
         channels.emplace_back(semaphores_[i], remote_memory, ptr, nullptr);
     }
 
-    registered_channels_.emplace(ptr, std::move(channels));
     registered_memories_.emplace(ptr, std::move(memories));
+    registered_channels_.emplace(ptr, std::move(channels));
+}
+
+void CustomComm::Deregister(void* ptr)
+{
+    registered_channels_.erase(ptr);
+    registered_memories_.erase(ptr);
 }
 
 Array<void*, kMaxNearPeers> CustomComm::get_near_impl(void* ptr)

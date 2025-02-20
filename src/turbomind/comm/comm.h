@@ -32,9 +32,9 @@ public:
 
     virtual void Free(void* ptr) = 0;
 
-    virtual void RegisterBuffer(void* ptr, size_t size) {}
+    virtual void Register(void* ptr, size_t size) = 0;
 
-    virtual void Deregister(void* ptr) {};
+    virtual void Deregister(void* ptr) = 0;
 
     template<class T>
     void AllReduceSum(const T* sendbuff, T* recvbuff, size_t count, cudaStream_t stream)

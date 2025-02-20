@@ -21,7 +21,6 @@ template<class T>
 struct Context {
     cudaStream_t                                    stream;
     std::unique_ptr<Allocator<AllocatorType::CUDA>> allocator;
-    std::unique_ptr<Allocator<AllocatorType::CUDA>> peer_allocator;
     cublasHandle_t                                  cublas_handle;
     cublasLtHandle_t                                cublasLt_handle;
     std::unique_ptr<cublasAlgoMap>                  cublas_algo_map;
@@ -37,9 +36,6 @@ struct Context {
 
         allocator = std::make_unique<Allocator<AllocatorType::CUDA>>(device_id, false);
         allocator->setStream(stream);
-
-        peer_allocator = std::make_unique<Allocator<AllocatorType::CUDA>>(device_id, true);
-        peer_allocator->setStream(stream);
 
         cublasCreate(&cublas_handle);
         cublasLtCreate(&cublasLt_handle);
@@ -85,7 +81,6 @@ struct Context {
         cublasLtDestroy(cublasLt_handle);
         cublasLt_handle = {};
 
-        peer_allocator.reset();
         allocator.reset();
 
         cudaStreamDestroy(stream);

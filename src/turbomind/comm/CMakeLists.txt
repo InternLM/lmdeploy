@@ -5,7 +5,7 @@ add_subdirectory(nccl)
 add_subdirectory(custom)
 
 add_library(comm STATIC comm.cc)
-target_link_libraries(comm PRIVATE nccl_comm custom_comm)
+target_link_libraries(comm PRIVATE nccl_comm custom_comm logger)
 
 set_property(TARGET comm PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET comm PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)

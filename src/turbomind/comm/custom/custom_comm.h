@@ -35,23 +35,19 @@ public:
     static constexpr int kScratchBuffSize = 64 << 20;
     static constexpr int kChannelsPerConn = 64;
 
+    ~CustomComm() override;
+
     CustomComm(std::shared_ptr<mscclpp::Bootstrap> bootstrap);
 
     void Initialize();
 
-    void* Allocate(size_t size) override
-    {
-        void* ptr{};
-        check_cuda_error(cudaMalloc(&ptr, size));
-        return ptr;
-    }
+    void* Allocate(size_t size) override;
 
-    void Free(void* ptr) override
-    {
-        check_cuda_error(cudaFree(ptr));
-    }
+    void Free(void* ptr) override;
 
-    void RegisterBuffer(void* ptr, size_t size) override;
+    void Register(void* ptr, size_t size) override;
+
+    void Deregister(void* ptr) override;
 
     void AllReduceSum(const void* sendbuff, void* recvbuff, size_t count, DataType type, cudaStream_t stream) override;
 

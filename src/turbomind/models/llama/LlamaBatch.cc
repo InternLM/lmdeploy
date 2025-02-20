@@ -6,8 +6,6 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cuda_runtime.h>
-#include <driver_types.h>
 #include <functional>
 #include <iomanip>
 #include <memory>
@@ -18,6 +16,8 @@
 #include <thread>
 #include <unordered_map>
 #include <utility>
+
+#include <cuda_runtime.h>
 
 #include "src/turbomind/macro.h"
 
@@ -951,7 +951,6 @@ LlamaBatch<T>::LlamaBatch(const EngineParam&           param,
     debug_(isDebug()),
     stream_(ctx->stream),
     allocator_(ctx->allocator.get()),
-    peer_allocator_(ctx->peer_allocator.get()),
     cublas_wrapper_(ctx->cublas_wrapper.get()),
     context_(std::move(ctx)),
     model_(std::move(model)),
@@ -1210,7 +1209,7 @@ void LlamaBatch<T>::ComputeAndOutputLogits(T* hidden_states, int first, int last
             CommBufFree((void**)&local_context_logits_buf_, true);
             local_context_logits_buf_      = (float*)CommBufAlloc(byte_size, true);
             local_context_logits_buf_size_ = byte_size;
-            
+
             check_cuda_error(cudaStreamSynchronize(stream_));
             shared_state_->barrier->wait();
         }
@@ -1599,7 +1598,7 @@ void LlamaBatch<T>::InternalThreadEntry()
 
         if (shared_state_->abort) {
             TM_LOG_INFO("[InternalThreadEntry] stop requested.");
-            return;
+            break;
         }
 
         std::vector<Signal> signals;
@@ -1645,8 +1644,8 @@ void LlamaBatch<T>::InternalThreadEntry()
         }
     }
 
-    // Unreachable
-    FT_CHECK(0);
+    // barrier synchronization inside
+    DestroyCommunicators();
 }
 
 template<typename T>
@@ -1964,6 +1963,50 @@ void LlamaBatch<T>::tune()
             const auto    n_records = context_->linear->Export(ofs);
             TM_LOG_INFO("[Gemm2] %d records exported.", n_records);
         }
+    }
+}
+
+template<class T>
+void* LlamaBatch<T>::CommBufAlloc(size_t size, bool register_)
+{
+    if (auto& tp = model_->comm_->tp) {
+        auto ptr = tp->Allocate(size);
+        if (register_) {
+            tp->Register(ptr, size);
+        }
+        return ptr;
+    }
+    else {
+        return allocator_->malloc(size);
+    }
+}
+
+template<class T>
+void LlamaBatch<T>::CommBufFree(void** ptr, bool deregister)
+{
+    if (auto& tp = model_->comm_->tp) {
+        if (deregister) {
+            tp->Deregister(*ptr);
+        }
+        tp->Free(*ptr);
+        *ptr = {};
+    }
+    else {
+        return allocator_->free(ptr);
+    }
+}
+
+template<class T>
+void LlamaBatch<T>::DestroyCommunicators()
+{
+    if (context_->comm.tp) {
+        cudaStreamSynchronize(stream_);
+        shared_state_->barrier->wait();
+
+        context_->comm.tp.reset();
+
+        cudaStreamSynchronize(stream_);
+        shared_state_->barrier->wait();
     }
 }
 

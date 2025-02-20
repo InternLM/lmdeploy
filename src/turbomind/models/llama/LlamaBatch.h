@@ -196,33 +196,11 @@ private:
         IndexedCopyImpl(nullptr, nullptr, count, cpys...);
     }
 
-    void* CommBufAlloc(size_t size, bool register_)
-    {
-        if (auto& tp = model_->comm_->tp) {
-            auto ptr = tp->Allocate(size);
-            if (register_) {
-                tp->RegisterBuffer(ptr, size);
-            }
-            return ptr;
-        }
-        else {
-            return allocator_->malloc(size);
-        }
-    }
+    void* CommBufAlloc(size_t size, bool register_);
 
-    void CommBufFree(void** ptr, bool deregister)
-    {
-        if (auto& tp = model_->comm_->tp) {
-            if (deregister) {
-                tp->Deregister(*ptr);
-            }
-            tp->Free(*ptr);
-            *ptr = {};
-        }
-        else {
-            return allocator_->free(ptr);
-        }
-    }
+    void CommBufFree(void** ptr, bool deregister);
+
+    void DestroyCommunicators();
 
 private:
     const EngineParam param_;
@@ -245,7 +223,6 @@ private:
     cudaStream_t const     stream_{};
     cublasMMWrapper* const cublas_wrapper_{};
     IAllocator* const      allocator_{};
-    IAllocator* const      peer_allocator_{};
 
     int session_len_;  // May be truncated in ctor
 

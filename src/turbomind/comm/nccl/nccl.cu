@@ -1,12 +1,13 @@
 
 #include <cstdint>
 #include <memory>
+#include <unordered_map>
 
 #include <nccl.h>
-#include <stdexcept>
 
 #include "src/turbomind/comm/comm.h"
 #include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/logger.h"
 #include "src/turbomind/utils/string_utils.h"
 
 #include "src/turbomind/kernels/norm/rms_norm.h"
@@ -41,19 +42,63 @@ public:
 
     ~NcclComm()
     {
-        ncclCommDestroy(comm_);
+        for (const auto& [ptr, _] : handles_) {
+            TM_LOG_WARNING("[TM][NCCL][%d] Buffer %p is not deregistered", rank_, ptr);
+        }
+
+        for (const auto& [ptr, size] : buffers_) {
+            TM_LOG_WARNING("[TM][NCCL][%d] Allocation (%p, %lu) is not freed", rank_, ptr, size);
+        }
+
+        if (auto ec = ncclCommFinalize(comm_); ec != ncclSuccess) {
+            TM_LOG_ERROR("[TM][NCCL][%d] Failed to finalize communicator: %s", rank_, ncclGetErrorString(ec));
+        }
+
+        if (auto ec = ncclCommDestroy(comm_); ec != ncclSuccess) {
+            TM_LOG_ERROR("[TM][NCCL][%d] Failed to destroy communicator: %s", rank_, ncclGetErrorString(ec));
+        }
     }
 
     void* Allocate(size_t size) override
     {
         void* ptr{};
         NCCLCHECK(ncclMemAlloc(&ptr, size));
+        buffers_.emplace(ptr, size);
         return ptr;
     }
 
     void Free(void* ptr) override
     {
-        NCCLCHECK(ncclMemFree(ptr));
+        if (auto it = buffers_.find(ptr); it != buffers_.end()) {
+            NCCLCHECK(ncclMemFree(ptr));
+            buffers_.erase(ptr);
+        }
+        else {
+            TM_LOG_WARNING("[TM][NCCL][%d] Freeing %p which is not allocated by NcclComm", rank_, ptr);
+        }
+    }
+
+    void Register(void* ptr, size_t size) override
+    {
+        if (!handles_.count(ptr)) {
+            void* handle{};
+            NCCLCHECK(ncclCommRegister(comm_, ptr, size, &handle));
+            handles_.emplace(ptr, handle);
+        }
+        else {
+            TM_LOG_WARNING("[TM][NCCL][%d] Duplicated registration on (%p, %lu)", rank_, ptr, size);
+        }
+    }
+
+    void Deregister(void* ptr) override
+    {
+        if (auto it = handles_.find(ptr); it != handles_.end()) {
+            NCCLCHECK(ncclCommDeregister(comm_, it->second));
+            handles_.erase(it);
+        }
+        else {
+            TM_LOG_WARNING("[TM][NCCL][%d] Deregistering non-registered address %p", rank_, ptr);
+        }
     }
 
     void AllReduceSum(const void* sendbuff, void* recvbuff, size_t count, DataType type, cudaStream_t stream) override
@@ -76,13 +121,6 @@ public:
         NCCLCHECK(ncclGroupStart());
         NCCLCHECK(ncclReduceScatter(sendbuff, recvbuff, recvcount, getNcclDataType(type), ncclSum, comm_, stream));
         NCCLCHECK(ncclGroupEnd());
-    }
-
-    void RegisterBuffer(void* ptr, size_t size) override
-    {
-        // make no difference
-        // void* handle{};
-        // ncclCommRegister(comm_, ptr, size, &handle);
     }
 
     void AllreduceResidualBiasRMSnorm(void*        hidden,
@@ -126,6 +164,9 @@ public:
 
 private:
     ncclComm_t comm_;
+
+    std::unordered_map<void*, void*>  handles_;
+    std::unordered_map<void*, size_t> buffers_;
 };
 
 class NcclGroupId: public GroupId {
