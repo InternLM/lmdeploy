@@ -28,7 +28,7 @@ logger = get_logger('lmdeploy')
 # 1m shared memory
 SHARED_BLOCK_SIZE = 1 << 20
 # num shared block
-NUM_SHARED_BLOCK = 16
+NUM_SHARED_BLOCK = 32
 # data size
 HEAD_SIZE = 8
 # block real size
@@ -59,6 +59,7 @@ class Notifier:
         self._update_event_id()
 
     async def set_async(self):
+        # not safe if we might launch multiple reqs
         event_loop = asyncio.get_event_loop()
         self.events[self._event_id].set()
         if self._event_id == NUM_SHARED_BLOCK - 1:
@@ -110,6 +111,8 @@ class SharedBuffer:
             self.proc_mask = 1 << proc_id
         else:
             self.proc_mask = 0
+
+        self.is_closed = False
 
     @contextmanager
     def acquire_buf(self):
@@ -187,9 +190,13 @@ class SharedBuffer:
             return self._receive()
 
     def close(self):
+        if self.is_closed:
+            return
         self.shm.close()
         if self.is_create:
             self.shm.unlink()
+        self.notifier.close()
+        self.is_closed = True
 
 
 class MPExecutor(ExecutorBase):
@@ -231,13 +238,13 @@ class MPExecutor(ExecutorBase):
         self.world_size = tp * dp
         mp_ctx = mp.get_context('spawn')
         self.mp_ctx = mp_ctx
-        self.comm_notifier = Notifier(self.world_size - 1, mp_ctx)
+        self.comm_notifier = Notifier(self.world_size, mp_ctx)
         self.comm_buf = SharedBuffer(-1, notifier=self.comm_notifier)
         self.comm_buf_name = self.comm_buf.name()
 
         self.procs: List[ExecutorProc] = []
         self.ret_bufs: List[SharedBuffer] = []
-        for proc_id in range(1, self.world_size):
+        for proc_id in range(self.world_size):
             proc = ExecutorProc(proc_id=proc_id, mp_ctx=mp_ctx)
 
             ret_notifier = Notifier(1, mp_ctx)
@@ -261,19 +268,8 @@ class MPExecutor(ExecutorBase):
             self.procs.append(proc)
 
         self.ret_all_mask = (1 << self.world_size) - 1
-
-        # initialize local
-        init_process_group(0, self.world_size)
-        self.dist_ctx = DistContext.build(0, tp, dp)
-        self.device_ctx = DeviceContext(device_type=device_type)
-        self.model_agent = build_model_agent(model_path=model_path,
-                                             model_config=model_config,
-                                             cache_config=cache_config,
-                                             backend_config=backend_config,
-                                             tokenizer=tokenizer,
-                                             dist_ctx=self.dist_ctx,
-                                             device_ctx=self.device_ctx,
-                                             adapters=adapters)
+        self._prefetch_task: asyncio.Task = None
+        self.remote_outs: asyncio.Queue = None
 
         def signal_handler(signum, frame):
             logger.error('Received custom termination signal from sub processing, exiting...')
@@ -322,7 +318,7 @@ class MPExecutor(ExecutorBase):
             args = list()
         if kwargs is None:
             kwargs = dict()
-        await self.comm_buf.send_async(
+        self.comm_buf.send(
             dict(
                 method=method,
                 args=args,
@@ -346,70 +342,70 @@ class MPExecutor(ExecutorBase):
     def build_model(self):
         """build model."""
         self.collective_rpc('build_model', return_mask=self.ret_all_mask)
-        self.model_agent.build_model()
 
     def gather_free_mem(self):
         """gather available memory."""
-        ret = self.collective_rpc('get_free_mem', return_mask=self.ret_all_mask) + [self.model_agent.get_free_mem()]
+        ret = self.collective_rpc('get_free_mem', return_mask=self.ret_all_mask)
         return ret
 
     def set_cache_config(self, cache_config: CacheConfig):
         """set all cache config."""
         self.collective_rpc('set_cache_config', args=(cache_config, ), return_mask=self.ret_all_mask)
-        self.model_agent.set_cache_config(cache_config)
 
     def set_model_config(self, model_config: ModelConfig):
         """set all cache config."""
         self.collective_rpc('set_model_config', args=(model_config, ), return_mask=self.ret_all_mask)
-        self.model_agent.set_model_config(model_config)
 
     def build_graph_runner(self):
         """build graph runner."""
         self.collective_rpc('build_graph_runner', return_mask=self.ret_all_mask)
-        self.model_agent.build_graph_runner()
 
     def build_cache_engine(self):
         """build cache engine."""
         self.collective_rpc('build_cache_engine', return_mask=self.ret_all_mask)
-        self.model_agent.build_cache_engine()
+
+    async def _prefetch_outputs(self):
+        while True:
+            outs = (await self.collective_rpc_async('get_outputs', receiver_mask=1, return_mask=1))[0]
+            for out in outs:
+                self.remote_outs.put_nowait(out)
 
     def start(self, forward_event: asyncio.Event):
         """start engine loop."""
         self.collective_rpc('start', return_mask=self.ret_all_mask)
-        self.model_agent.start(forward_event)
+
+        self.remote_outs = asyncio.Queue()
+        event_loop = asyncio.get_event_loop()
+        self._prefetch_task = event_loop.create_task(self._prefetch_outputs())
 
     async def forward_async(self, inputs):
         """start forward."""
         await self.collective_rpc_async('set_forward_inputs', args=(inputs, ))
-        self.model_agent.set_forward_inputs(inputs)
 
     async def get_output_async(self):
         """get output async."""
-        return await self.model_agent.get_output_async()
+        return await self.remote_outs.get()
 
     def get_input_processor(self):
         """get input processor."""
-        return self.model_agent.get_input_processor()
+        return self.collective_rpc('get_input_processor', receiver_mask=1, return_mask=1)[0]
 
     def stop(self):
         """stop engine loop."""
-        self.model_agent.stop()
+        if self._prefetch_task is not None:
+            self._prefetch_task.cancel()
 
     def release(self):
         """release."""
         for proc in self.procs:
             proc.close()
 
-        self.model_agent.release()
-        if dist.is_initialized():
-            dist.destroy_process_group()
+        for proc in self.procs:
+            proc.join()
 
         self.comm_buf.close()
         for ret_buf in self.ret_bufs:
             ret_buf.close()
-
-        for proc in self.procs:
-            proc.join()
 
 
 class ExecutorProc:
@@ -512,7 +508,6 @@ class ExecutorProc:
             ret_buf.close()
             if dist.is_initialized() and destroy_pg:
                 dist.destroy_process_group()
-            os._exit(0)
 
     @staticmethod
     async def _task_wrapper(func, args: List, kwargs: Dict, need_return: bool, ret_buf: SharedBuffer):
@@ -520,22 +515,48 @@ class ExecutorProc:
         if need_return:
             await ret_buf.send_async(ret)
 
+    @staticmethod
+    async def _prefetch_output_loop(model_agent: BaseModelAgent, out_que: asyncio.Queue):
+        """prefetch output loop."""
+        while True:
+            out = await model_agent.get_output_async()
+            out_que.put_nowait(out)
+
+    @staticmethod
+    async def _get_outputs(out_que: asyncio.Queue):
+        """get outputs."""
+        qsize = out_que.qsize()
+        outs = []
+        if qsize > 0:
+            for _ in range(qsize):
+                outs.append(out_que.get_nowait())
+            return outs
+        else:
+            return [await out_que.get()]
+
     async def _main_loop_impl(self, proc_id: int, comm_buf: SharedBuffer, ret_buf: SharedBuffer,
                               model_agent: BaseModelAgent):
         """main loop."""
         proc_mask = 1 << proc_id
         event_loop = asyncio.get_event_loop()
+        out_que = asyncio.Queue()
+        prefetch_out_task = None
         while True:
             command = await comm_buf.receive_async()
             if command is None:
                 continue
             method = command['method']
-            args = command.get('args', list())
-            kwargs = command.get('kwargs', dict())
             return_mask = command.get('return_mask', True)
             need_return = bool(proc_mask & return_mask)
 
-            func = getattr(model_agent, method, None)
+            if method == 'get_outputs':
+                func = self._get_outputs
+                args = (out_que, )
+                kwargs = dict()
+            else:
+                func = getattr(model_agent, method, None)
+                args = command.get('args', list())
+                kwargs = command.get('kwargs', dict())
             call_async = asyncio.iscoroutinefunction(func)
             assert func is not None
 
@@ -544,5 +565,8 @@ class ExecutorProc:
                 event_loop.create_task(self._task_wrapper(func, args, kwargs, need_return, ret_buf))
             else:
                 ret = func(*args, **kwargs)
+                if method == 'start':
+                    prefetch_out_task = event_loop.create_task(self._prefetch_output_loop(model_agent, out_que))
+                    prefetch_out_task.set_name(f'PrefetchOut_Proc{proc_id}')
                 if need_return:
                     ret_buf.send(ret)
