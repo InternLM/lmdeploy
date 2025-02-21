@@ -150,8 +150,8 @@ class SharedBuffer:
         for _ in self.pack_data(data, receiver_mask):
             await self.notifier.set_async()
 
-    def _receive(self):
-        """unpack data."""
+    def _receive_step0(self):
+        """step0."""
         with self.acquire_buf() as buf:
             head = buf[:HEAD_SIZE]
             data_size, receiver_mask = struct.unpack('II', head)
@@ -164,6 +164,10 @@ class SharedBuffer:
             if is_receiver:
                 dumped_data += buf[HEAD_SIZE:HEAD_SIZE + pac_size]
 
+        return dumped_data, is_receiver, remain_size
+
+    def _receive_step1(self, dumped_data, is_receiver, remain_size):
+        """step1."""
         while remain_size > 0:
             with self.notifier.wait(), self.acquire_buf() as buf:
                 pac_size = min(remain_size, SHARED_BLOCK_SIZE)
@@ -180,12 +184,14 @@ class SharedBuffer:
     def receive(self):
         """unpack data."""
         with self.notifier.wait():
-            return self._receive()
+            dumped_data, is_receiver, remain_size = self._receive_step0()
+        return self._receive_step1(dumped_data, is_receiver, remain_size)
 
     async def receive_async(self):
         """async receive data."""
         async with self.notifier.wait_async():
-            return self._receive()
+            dumped_data, is_receiver, remain_size = self._receive_step0()
+        return self._receive_step1(dumped_data, is_receiver, remain_size)
 
     def close(self):
         if self.is_closed:
@@ -240,6 +246,7 @@ class MPExecutor(ExecutorBase):
         self.comm_buf = SharedBuffer(-1, notifier=self.comm_notifier)
         self.comm_buf_name = self.comm_buf.name()
 
+        logger.info('Creating processes.')
         self.procs: List[ExecutorProc] = []
         self.ret_bufs: List[SharedBuffer] = []
         for proc_id in range(self.world_size):
