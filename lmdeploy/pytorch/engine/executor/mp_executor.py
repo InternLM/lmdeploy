@@ -265,7 +265,6 @@ class MPExecutor(ExecutorBase):
                        log_level=logger.level)
             self.procs.append(proc)
 
-        self.ret_all_mask = (1 << self.world_size) - 1
         self._prefetch_task: asyncio.Task = None
         self.remote_outs: asyncio.Queue = None
 
@@ -282,12 +281,13 @@ class MPExecutor(ExecutorBase):
                        args: Tuple[Any] = None,
                        kwargs: Dict[str, Any] = None,
                        receiver_mask: int = 0xff,
-                       return_mask: int = 0):
+                       return_mask: int = 0xff):
         """collective rpc."""
         if args is None:
             args = list()
         if kwargs is None:
             kwargs = dict()
+        return_mask &= receiver_mask
         self.comm_buf.send(
             dict(
                 method=method,
@@ -310,7 +310,7 @@ class MPExecutor(ExecutorBase):
                                    args: Tuple[Any] = None,
                                    kwargs: Dict[str, Any] = None,
                                    receiver_mask: int = 0xff,
-                                   return_mask: int = 0):
+                                   return_mask: int = 0xff):
         """collective rpc."""
         if args is None:
             args = list()
@@ -339,28 +339,28 @@ class MPExecutor(ExecutorBase):
 
     def build_model(self):
         """build model."""
-        self.collective_rpc('build_model', return_mask=self.ret_all_mask)
+        self.collective_rpc('build_model')
 
     def gather_free_mem(self):
         """gather available memory."""
-        ret = self.collective_rpc('get_free_mem', return_mask=self.ret_all_mask)
+        ret = self.collective_rpc('get_free_mem')
         return ret
 
     def set_cache_config(self, cache_config: CacheConfig):
         """set all cache config."""
-        self.collective_rpc('set_cache_config', args=(cache_config, ), return_mask=self.ret_all_mask)
+        self.collective_rpc('set_cache_config', args=(cache_config, ))
 
     def set_model_config(self, model_config: ModelConfig):
         """set all cache config."""
-        self.collective_rpc('set_model_config', args=(model_config, ), return_mask=self.ret_all_mask)
+        self.collective_rpc('set_model_config', args=(model_config, ))
 
     def build_graph_runner(self):
         """build graph runner."""
-        self.collective_rpc('build_graph_runner', return_mask=self.ret_all_mask)
+        self.collective_rpc('build_graph_runner')
 
     def build_cache_engine(self):
         """build cache engine."""
-        self.collective_rpc('build_cache_engine', return_mask=self.ret_all_mask)
+        self.collective_rpc('build_cache_engine')
 
     async def _prefetch_outputs(self):
         while True:
@@ -370,7 +370,7 @@ class MPExecutor(ExecutorBase):
 
     def start(self, forward_event: asyncio.Event):
         """start engine loop."""
-        self.collective_rpc('start', return_mask=self.ret_all_mask)
+        self.collective_rpc('start')
 
         self.remote_outs = asyncio.Queue()
         event_loop = asyncio.get_event_loop()
@@ -378,7 +378,7 @@ class MPExecutor(ExecutorBase):
 
     async def forward_async(self, inputs):
         """start forward."""
-        await self.collective_rpc_async('forward_async', args=(inputs, ))
+        await self.collective_rpc_async('forward_async', args=(inputs, ), return_mask=0)
 
     async def get_output_async(self):
         """get output async."""
