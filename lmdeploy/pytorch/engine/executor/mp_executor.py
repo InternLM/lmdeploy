@@ -517,7 +517,7 @@ class ExecutorProc:
         ret_buf = SharedBuffer(-1, notifier=ret_notifier, name=ret_buf_name)
         event_loop = asyncio.new_event_loop()
         asyncio.set_event_loop(event_loop)
-        destroy_pg = True
+        destroy_pg = worker.world_size > 1
         try:
             event_loop.run_until_complete(
                 self._main_loop_impl(proc_id, comm_buf=comm_buf, ret_buf=ret_buf, worker=worker))
