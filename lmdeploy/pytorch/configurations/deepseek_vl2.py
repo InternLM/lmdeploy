@@ -19,7 +19,7 @@ class DeepseekVLV2ModelConfigBuilder(AutoModelConfigBuilder):
             cfg = DeepseekV2ModelConfigBuilder.build(hf_config.language_config, model_path, **kwargs)
             cfg.hf_config = hf_config
         else:
-            # deepseek-vl2-tiny use MHA, rather than MLA
+            # deepseek-vl2-tiny uses MHA, rather than MLA
             # in this case, we use DefaultModelConfigBuilder
             cfg = DefaultModelConfigBuilder.build(hf_config.language_config, model_path, **kwargs)
             cfg.hf_config = hf_config

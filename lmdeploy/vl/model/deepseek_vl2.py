@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import os
+from contextlib import redirect_stdout
 from typing import Dict, List
 
 import torch
@@ -10,25 +12,39 @@ from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
 logger = get_logger('lmdeploy')
 
 
+def check_deepseek_vl2_install():
+    """check deepseek_vl install."""
+    try:
+        import deepseek_vl2  # noqa: F401
+    except ImportError:
+        raise ImportError('To use DeepSeek-VL2, please install deepseek_vl2 by '
+                          '`pip install git+https://github.com/deepseek-ai/DeepSeek-VL2.git'
+                          ' --no-deps`')
+
+
 @VISION_MODELS.register_module()
 class DeepSeek2VisionModel(VisonModel):
-    """DeepSeek vision model."""
+    """DeepSeek2 vision model."""
 
-    _arch = 'MultiModalityCausalLM'
+    _arch = 'DeepseekV2ForCausalLM'
 
     @classmethod
     def match(cls, config: AutoConfig):
         """check whether the config match the model."""
-        if 'language_config' in config and \
-           'vision_config' in config and \
-           config.language_config['architectures'][0] == 'DeepseekV2ForCausalLM':
-            return True
-
+        if hasattr(config, 'language_config') and hasattr(config, 'vision_config'):
+            arch = config.language_config.get('architectures', [None])[0]
+            return arch == cls._arch
         return False
 
     def build_preprocessor(self):
-        from lmdeploy.vl.model.deepseek_vl2_processors import DeepseekVLV2Processor
-        self.image_processor = DeepseekVLV2Processor.from_pretrained(self.model_path)
+        check_deepseek_vl2_install()
+        from deepseek_vl2.models.processing_deepseek_vl_v2 import DeepseekVLV2Processor
+
+        # suppress deepseek-vl2 processor initialization print logs
+        with open(os.devnull, 'w') as devnull:
+            with redirect_stdout(devnull):
+                self.image_processor = DeepseekVLV2Processor.from_pretrained(self.model_path,
+                                                                             image_token='<IMAGE_TOKEN>')
 
     def build_model(self):
         """build the vision part of a VLM model when backend is turbomind, or
@@ -39,19 +55,43 @@ class DeepSeek2VisionModel(VisonModel):
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """refers to the spec of `super.preprocess()"""
         images = self.collect_images(messages)
-        outputs = []
-        for image, _ in images:
-            image = image.convert('RGB')
-            pixel_values, num_image_tokens, images_spatial_crop = self.image_processor.process_single_image(
-                image=image, cropping=len(images) <= 2)
 
-            outputs.append(
-                dict(pixel_values=pixel_values,
-                     image_tokens=num_image_tokens,
-                     image_token_id=0,
-                     image_size=image.size,
-                     images_spatial_crop=images_spatial_crop))
-        messages.append(dict(role='preprocess', content=outputs))
+        # convert to upstream api formats
+        images = [img_parameter[0] for img_parameter in images]
+        formatted_messages = []
+        for msg in messages:
+            crt_role = msg['role']
+
+            text_content = ''
+            image_content = []
+            for ele in msg['content']:
+                if ele['type'] == 'text':
+                    text_content = ele['text']
+                elif ele['type'] == 'image':
+                    image_content.append(ele['image'])
+
+            formatted_messages.append({'role': crt_role, 'content': text_content, 'images': image_content})
+
+        # NOTE: DeepseekVLV2Processor inputs
+        # conversations (List[Dict]): conversations with a list of messages;
+        # images (List[ImageType]): the list of images;
+        # force_batchify (bool): force batchify the inputs;
+        # inference_mode (bool): if True, then remove the last eos token;
+        prepare = self.image_processor(conversations=formatted_messages,
+                                       images=images,
+                                       force_batchify=False,
+                                       inference_mode=False)
+
+        messages.append(
+            dict(role='preprocess',
+                 content=[
+                     dict(pixel_values=prepare.images,
+                          image_tokens=prepare.num_image_tokens[0],
+                          image_token_id=0,
+                          image_size=self.image_processor.image_size,
+                          images_spatial_crop=prepare.images_spatial_crop,
+                          images_seq_mask=prepare.images_seq_mask)
+                 ]))
         return messages
 
     @torch.no_grad()
@@ -102,44 +142,8 @@ class DeepSeek2VisionModel(VisonModel):
         prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
         return prompt, IMAGE_TOKEN
 
-    # https://github.com/deepseek-ai/DeepSeek-VL2/blob/main/deepseek_vl2/models/processing_deepseek_vl_v2.py#L523
-    def get_images_seq_mask(self, prompt, messages, bos=True, eos=True, inference_mode=True) -> None:
-        for message in messages:
-            if message['role'] not in ['preprocess']:
-                continue
-
-            num_image_tokens = message['content'][0]['image_tokens']
-            if isinstance(num_image_tokens, int):
-                num_image_tokens = [num_image_tokens]
-
-            images_seq_mask = []
-
-            IMAGE_TOKEN = '<IMAGE_TOKEN>'
-            text_splits = prompt.split(IMAGE_TOKEN)
-            assert len(text_splits) == len(num_image_tokens) + 1
-
-            for sep_idx, text_sep in enumerate(text_splits):
-                tokenized_sep = self.image_processor.encode(text_sep, bos=False, eos=False)
-                images_seq_mask += [False] * len(tokenized_sep)
-
-                if sep_idx < len(num_image_tokens):
-                    images_seq_mask += [True] * num_image_tokens[sep_idx]
-            """add the bos and eos tokens"""
-            if bos:
-                images_seq_mask = [False] + images_seq_mask
-            if eos:
-                images_seq_mask = images_seq_mask + [False]
-
-            if inference_mode:
-                # remove eos token
-                images_seq_mask = images_seq_mask[:-1]
-
-            # add images_seq_mask into messages, used in vision embedding extractions
-            message['content'][0]['images_seq_mask'] = images_seq_mask
-
     def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
         prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
-        self.get_images_seq_mask(prompt, messages)
         return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
 
     def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):

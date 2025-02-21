@@ -2,16 +2,15 @@
 # adapted from https://github.com/deepseek-ai/DeepSeek-VL2/blob/main/deepseek_vl2/models/modeling_deepseek_vl_v2.py
 
 import gc
-from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from deepseek_vl2.models.modeling_deepseek_vl_v2 import DeepseekVLV2Config, MlpProjectorConfig, VisionEncoderConfig
 from einops import rearrange, repeat
-from transformers import AutoConfig, AutoModelForCausalLM, PreTrainedModel
+from transformers import AutoConfig, AutoModelForCausalLM
 from transformers.configuration_utils import PretrainedConfig
-from transformers.modeling_outputs import ModelOutput
 
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
@@ -19,7 +18,6 @@ from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .deepseek_v2 import DeepseekV2ForCausalLM
-from .deepseek_vl2_config import DeepseekVLV2Config, MlpProjectorConfig, VisionEncoderConfig
 from .utils.cudagraph import CudaGraphMixin
 from .utils.model import DeployModelMixin
 
@@ -106,65 +104,15 @@ class MlpProjector(nn.Module):
         return self.layers(x)
 
 
-@dataclass
-class DeepSeekVLV2CausalLMOutputWithPast(ModelOutput):
-    """Base class for DeepSeek-VL2 causal language model (or autoregressive)
-    outputs.
-
-    Args:
-        loss (`torch.FloatTensor` of shape `(1,)`, *optional*, returned when `labels` is provided):
-            Language modeling loss (for next-token prediction).
-        logits (`torch.FloatTensor` of shape `(batch_size, sequence_length, config.vocab_size)`):
-            Prediction scores of the language modeling head (scores for each vocabulary token before SoftMax).
-        past_key_values (`tuple(tuple(torch.FloatTensor))`, *optional*, returned when
-            `use_cache=True` is passed or when `config.use_cache=True`):
-            Tuple of `tuple(torch.FloatTensor)` of length `config.n_layers`, with each tuple having 2 tensors of shape
-            `(batch_size, num_heads, sequence_length, embed_size_per_head)`)
-
-            Contains pre-computed hidden-states (key and values in the self-attention blocks) that can be used (see
-            `past_key_values` input) to speed up sequential decoding.
-        hidden_states (`tuple(torch.FloatTensor)`, *optional*, returned when
-            `output_hidden_states=True` is passed or when `config.output_hidden_states=True`):
-            Tuple of `torch.FloatTensor` (one for the output of the embeddings, if the model has an embedding layer, +
-            one for the output of each layer) of shape `(batch_size, sequence_length, hidden_size)`.
-
-            Hidden-states of the model at the output of each layer plus the optional initial embedding outputs.
-        attentions (`tuple(torch.FloatTensor)`, *optional*, returned when
-            `output_attentions=True` is passed or when `config.output_attentions=True`):
-            Tuple of `torch.FloatTensor` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
-            sequence_length)`.
-
-            Attentions weights after the attention softmax, used to compute the weighted average in the self-attention
-            heads.
-        rope_deltas (`torch.LongTensor` of shape `(batch_size, )`, *optional*):
-            The rope index difference between sequence length and multimodal rope.
-    """
-
-    loss: Optional[torch.FloatTensor] = None
-    logits: torch.FloatTensor = None
-    past_key_values: Optional[List[torch.FloatTensor]] = None
-    hidden_states: Optional[Tuple[torch.FloatTensor]] = None
-    attentions: Optional[Tuple[torch.FloatTensor]] = None
-    rope_deltas: Optional[torch.LongTensor] = None
-
-
-class DeepseekVLV2PreTrainedModel(PreTrainedModel):
-    config_class = DeepseekVLV2Config
-    base_model_prefix = 'deepseek_vl_v2'
-    _no_split_modules = []
-    _skip_keys_device_placement = 'past_key_values'
-
-
-class DeepseekVLV2ForCausalLM(DeepseekVLV2PreTrainedModel, nn.Module, CudaGraphMixin, DeployModelMixin):
+class DeepseekVLV2ForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
 
     def __init__(self,
                  config: PretrainedConfig,
                  ctx_mgr: StepContextManager,
                  dtype: torch.dtype = None,
                  device: torch.device = None):
-        super().__init__(config)
+        super().__init__()
         self.ctx_mgr = ctx_mgr
-        self._use_flash_attention_2 = config._attn_implementation == 'flash_attention_2'
 
         # ----------- vision encoder ------------
         self.vision = self._init_vision_module(dtype=dtype)
@@ -208,7 +156,6 @@ class DeepseekVLV2ForCausalLM(DeepseekVLV2PreTrainedModel, nn.Module, CudaGraphM
         self,
         dtype: torch.dtype,
     ) -> nn.Module:
-        # TODO: refactor vision model through timm wrapper from transformers
         try:
             import timm
         except ImportError:
@@ -395,7 +342,6 @@ class DeepseekVLV2ForCausalLM(DeepseekVLV2PreTrainedModel, nn.Module, CudaGraphM
             chunk_end = min(i + chunk_size, prefilling_len)
             chunk_inputs_embeds = inputs_embeds[:, chunk_start:chunk_end]
             chunk_attention_mask = attention_mask[:, 0:chunk_end]
-            # print(f"start = {chunk_start}, end = {chunk_end}, prefilling_len = {prefilling_len}, seq_len = {seq_len}")
 
             # compute position_ids
             if past_key_values is not None:
@@ -445,7 +391,7 @@ class DeepseekVLV2ForCausalLM(DeepseekVLV2PreTrainedModel, nn.Module, CudaGraphM
         # process image embeddings
         if inputs_embeds is None and pixel_values is not None:
             inputs_embeds = self.prepare_inputs_embeds(input_ids=input_ids,
-                                                       images=pixel_values.unsqueeze(0),
+                                                       images=pixel_values,
                                                        images_seq_mask=image_mask,
                                                        images_spatial_crop=images_spatial_crop)
 
@@ -466,13 +412,11 @@ class DeepseekVLV2ForCausalLM(DeepseekVLV2PreTrainedModel, nn.Module, CudaGraphM
             torch.cuda.synchronize()
 
     def _move_past_key_values_to_cpu(self, past_key_values):
-        # print(f"past_key_values -> cpu")
         if past_key_values is None:
             return None
         return tuple(tuple(t.cpu() for t in layer) for layer in past_key_values)
 
     def _move_past_key_values_to_gpu(self, past_key_values, device='cuda:0'):
-        # print(f"past_key_values -> gpu")
         if past_key_values is None:
             return None
         return tuple(tuple(t.to(device) for t in layer) for layer in past_key_values)
@@ -498,7 +442,6 @@ class DeepseekVLV2ForCausalLM(DeepseekVLV2PreTrainedModel, nn.Module, CudaGraphM
 
         # vision inputs
         pixel_values = None
-        # image_mask = None
         images_spatial_crop = None
         images_seq_mask = None
         if context.input_multimodals is not None:
@@ -506,39 +449,29 @@ class DeepseekVLV2ForCausalLM(DeepseekVLV2PreTrainedModel, nn.Module, CudaGraphM
             images_spatial_crop = [p_value[0].meta.get('images_spatial_crop', None) for p_value in pixel_values]
             images_seq_mask = [p_value[0].meta.get('images_seq_mask', None) for p_value in pixel_values]
 
-            if images_spatial_crop is not None:
-                images_spatial_crop = torch.tensor(images_spatial_crop)
-            if images_seq_mask is not None:
-                images_seq_mask = torch.tensor(images_seq_mask)
-
             # flatten batch
             pixel_values = [data for im_data in pixel_values for data in im_data]
             if len(pixel_values) > 0:
-                # image_token_id = pixel_values[0].meta['image_token_id']
-                # image_mask = input_ids == image_token_id
-                pixel_values = torch.cat([data.data for data in pixel_values])
+                pixel_values = torch.cat([data.data for data in pixel_values]).unsqueeze(0)
             else:
                 pixel_values = None
-                # image_mask = None
+
+            # flatten batch
+            if len(images_seq_mask) > 0:
+                images_seq_mask = torch.cat([mask for mask in images_seq_mask]).unsqueeze(0)
+            if len(images_spatial_crop) > 0:
+                images_spatial_crop = torch.cat([crop for crop in images_spatial_crop]).unsqueeze(0)
 
         return dict(
-            input_ids=input_ids,
+            input_ids=input_ids,  # [b, T]
             position_ids=position_ids,
             past_key_values=past_key_values,
             attn_metadata=attn_metadata,
-            pixel_values=pixel_values,
-            images_spatial_crop=images_spatial_crop,
-            image_mask=images_seq_mask,
+            pixel_values=pixel_values,  # [b, max_n_images, 3, height, width]
+            images_spatial_crop=images_spatial_crop,  # [b, max_n_images, 2]
+            image_mask=images_seq_mask,  # [b, T]
             inputs_embeds=inputs_embeds,
         )
-
-    @staticmethod
-    def _reorder_cache(past_key_values, beam_idx):
-        reordered_past = ()
-        for layer_past in past_key_values:
-            reordered_past += (tuple(
-                past_state.index_select(0, beam_idx.to(past_state.device)) for past_state in layer_past), )
-        return reordered_past
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
         """load weights."""
@@ -555,7 +488,6 @@ class DeepseekVLV2ForCausalLM(DeepseekVLV2PreTrainedModel, nn.Module, CudaGraphM
                 continue
 
             if 'qkv' in name and 'vision' not in name:
-                print(f'qkv para => {name}')
                 param = params_dict[name]
                 q, k, v = param.weight_spliter(loaded_weight)
                 load_weight(param, q, shard_id='q')
@@ -599,6 +531,11 @@ class DeepSeekVLV2InputProcessor(BaseModelInputProcessor):
             images_seq_mask = input_mm.get('images_seq_mask', None)
             if isinstance(num_pad, torch.Tensor):
                 num_pad = num_pad.item()
+
+            # in multi-round conversations, lmdeploy won't add bos_id for non-first-round messages
+            # but upstream deepseek-vl2 processor always add bos_id for each message, need to remove bos_id
+            if len(input_ids) != images_seq_mask.shape[0]:
+                images_seq_mask = images_seq_mask[1:]
 
             mm_data = MultiModalTensor(data=pixel_values,
                                        start=offset,

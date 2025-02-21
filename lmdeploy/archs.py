@@ -110,9 +110,8 @@ def check_vl_llm(config: dict) -> bool:
             if 'InternLMXComposer2ForCausalLM' in v:
                 return True
 
-    if 'language_config' in config and \
-       'vision_config' in config and \
-       config.get('language_config').get('architectures', [None])[0] == 'DeepseekV2ForCausalLM':
+    if 'language_config' in config and 'vision_config' in config and config['language_config'].get(
+            'architectures', [None])[0] == 'DeepseekV2ForCausalLM':
         return True
 
     arch = config['architectures'][0]
@@ -181,12 +180,11 @@ def get_model_arch(model_path: str):
                 for _, v in _cfg['auto_map'].items():
                     if 'InternLMXComposer2ForCausalLM' in v:
                         arch = 'InternLMXComposer2ForCausalLM'
-        elif _cfg.get('language_config', None):
-            # only for deepseek-vl2, which has different config formats
-            # https://huggingface.co/deepseek-ai/deepseek-vl2/blob/main/config.json
-            arch = _cfg['language_config']['architectures'][0]
         elif _cfg.get('auto_map', None) and 'AutoModelForCausalLM' in _cfg['auto_map']:
             arch = _cfg['auto_map']['AutoModelForCausalLM'].split('.')[-1]
+        elif _cfg.get('language_config', None) and _cfg['language_config'].get(
+                'auto_map', None) and 'AutoModelForCausalLM' in _cfg['language_config']['auto_map']:
+            arch = _cfg['language_config']['auto_map']['AutoModelForCausalLM'].split('.')[-1]
         else:
             raise RuntimeError(f'Could not find model architecture from config: {_cfg}')
         return arch, cfg
