@@ -5,7 +5,7 @@ import math
 import torch
 from torch import nn
 
-from ..default.rotary_embedding import LlamaDynamicNTKScalingRotaryEmbedding
+from ..default.rotary_embedding import LlamaDynamicNTKScalingRotaryEmbedding, YarnRotaryEmbeddingImpl
 from ..rotary_embedding import (Llama3Parameters, LongRoPEScalingParameters, RopeType, RotaryEmbeddingBuilder,
                                 RotaryEmbeddingImpl, YarnParameters)
 
@@ -126,6 +126,25 @@ class DlinferLlama3RotaryEmbeddingImpl(DlinferRotaryEmbeddingImpl):
         self.register_buffer('inv_freq', inv_freq_llama)
 
 
+class DlinferYarnRotaryEmbeddingImpl(YarnRotaryEmbeddingImpl):
+    """yarn rotary embedding implementation."""
+
+    def __init__(self,
+                 dim: int,
+                 base: int = 10000,
+                 scaling_factor: float = 1.0,
+                 original_max_position_embeddings: int = 4096,
+                 yarn_params: YarnParameters = None):
+        super().__init__(dim, base, scaling_factor, original_max_position_embeddings, yarn_params)
+
+    def forward(self, x: torch.Tensor, position_ids: torch.Tensor):
+        """forward."""
+        dtype = x.dtype
+        if self.inv_freq.device != x.device:
+            self.inv_freq = self.inv_freq.to(x.device)
+        return _rotary_embedding_fwd(position_ids, self.inv_freq, scaling_factor=1.0, mscale=self.mscale, dtype=dtype)
+
+
 class DlinferRotaryEmbeddingBuilder(RotaryEmbeddingBuilder):
     """rotary embedding dlinfer builder."""
 
@@ -148,5 +167,11 @@ class DlinferRotaryEmbeddingBuilder(RotaryEmbeddingBuilder):
         elif emb_type == RopeType.Llama3:
             return DlinferLlama3RotaryEmbeddingImpl(dim, base, scaling_factor, llama3_params.low_freq_factor,
                                                     llama3_params.high_freq_factor, max_position_embeddings)
+        elif emb_type == RopeType.Yarn:
+            return DlinferYarnRotaryEmbeddingImpl(dim,
+                                                  base,
+                                                  scaling_factor,
+                                                  max_position_embeddings,
+                                                  yarn_params=yarn_params)
         else:
             raise NotImplementedError(f'Unsupported embedding type: {emb_type}')

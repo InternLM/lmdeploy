@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import json
 import os.path as osp
-from typing import List
 
 import torch
 
@@ -66,15 +65,6 @@ class Glm4Model(LlamaModel):
         config_path = osp.join(self.model_path, 'config.json')
         with open(config_path) as f:
             self.config = json.load(f)
-
-    def tokenizer_info(self):
-        """Read tokenizer info."""
-        n_words = self.config['padded_vocab_size']
-        bos_id = 0
-        eos_id = self.config['eos_token_id']
-        if isinstance(eos_id, List):
-            eos_id = eos_id[0]
-        return n_words, bos_id, eos_id
 
     def model_info(self):
         """Read model info."""

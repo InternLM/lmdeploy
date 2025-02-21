@@ -16,6 +16,7 @@ from queue import Queue
 from threading import Thread
 from typing import Any, AsyncIterator, Dict, Iterator, List, Literal, Optional, Tuple, Union
 
+import torch
 import tqdm
 
 from lmdeploy import Tokenizer
@@ -24,7 +25,7 @@ from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, Response, R
 from lmdeploy.model import MODELS, ChatTemplateConfig, best_match_model
 from lmdeploy.serve.utils import LogitsMixin
 from lmdeploy.tokenizer import DetokenizeState
-from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_logger
+from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_hf_gen_cfg, get_logger
 
 logger = get_logger('lmdeploy')
 
@@ -269,6 +270,8 @@ class AsyncEngine(LogitsMixin):
         logger.info(f'updated chat_template_onfig={chat_template_config}')
 
         self.tokenizer = Tokenizer(model_path)
+        self.hf_gen_cfg = get_hf_gen_cfg(model_path)
+
         # build backend engine
         if backend == 'turbomind':
             self._build_turbomind(model_path=model_path, backend_config=backend_config, **kwargs)
@@ -297,6 +300,16 @@ class AsyncEngine(LogitsMixin):
 
     def close(self):
         self.internal_thread.close()
+        self.free_insts = None
+        self.instances.clear()
+        self.engine.close()
+        torch._C._cuda_clearCublasWorkspaces()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
 
     def _get_free_insts(self):
         if self.free_insts is None:
@@ -625,6 +638,7 @@ class AsyncEngine(LogitsMixin):
         gen_config.convert_stop_bad_words_to_ids(self.tokenizer)
         if gen_config.stop_token_ids is None:
             gen_config.stop_token_ids = self.stop_words
+        gen_config.update_from_hf_gen_cfg(self.hf_gen_cfg, self.tokenizer.eos_token_id)
         if not gen_config.do_sample:
             logger.warning(f'GenerationConfig: {gen_config}')
             logger.warning('Since v0.6.0, lmdeploy add `do_sample` in '

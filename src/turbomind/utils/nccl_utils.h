@@ -119,6 +119,8 @@ void ftNcclParamDestroy(NcclParam& param);
 int ftNcclNextGroupId();
 int ftNcclGroupCount();
 
+void ftResetNcclGroup();
+
 size_t getLocalBatchSize(const size_t batch_size, const size_t seq_len, const size_t pipeline_para_size);
 
 }  // namespace turbomind
