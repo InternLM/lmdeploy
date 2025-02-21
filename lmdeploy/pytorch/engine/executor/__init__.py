@@ -11,27 +11,25 @@ from .base import ExecutorBase
 
 def get_distributed_executor_backend(world_size: int, device_type: str, logger: Logger = None):
     """get distributed executor backend."""
+    from lmdeploy.pytorch.backends import get_backend
 
     def _log_info(message):
         if logger is not None:
             logger.info(message)
 
-    from lmdeploy.pytorch.backends import get_backend
+    executor_backend = os.environ.get('LMDEPLOY_EXECUTOR_BACKEND', None)
+    if executor_backend is not None:
+        _log_info(f'found environment LMDEPLOY_EXECUTOR_BACKEND. '
+                  f'distributed_executor_backend={executor_backend}.')
+        return executor_backend
+
     if world_size == 1:
-        return None
+        return 'uni'
 
     backend = get_backend(device_type)
     if not backend.support_ray():
         executor_backend = 'mp'
         _log_info(f'device={device_type} does not support ray. '
-                  f'distributed_executor_backend={executor_backend}.')
-        return executor_backend
-
-    force_ray = os.environ.get('LMDEPLOY_FORCE_RAY', '0')
-    force_ray = int(force_ray)
-    if force_ray:
-        executor_backend = 'ray'
-        _log_info(f'found environment LMDEPLOY_FORCE_RAY. '
                   f'distributed_executor_backend={executor_backend}.')
         return executor_backend
 
@@ -74,7 +72,8 @@ def build_executor(model_path: str,
 
     if distributed_executor_backend is not None:
         logger.info(f'Build <{distributed_executor_backend}> executor.')
-    if world_size == 1:
+    if distributed_executor_backend == 'uni':
+        assert world_size == 1, 'uni executor only support world_size==1.'
         from .uni_executor import UniExecutor
         return UniExecutor(
             model_path=model_path,

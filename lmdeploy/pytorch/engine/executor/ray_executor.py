@@ -242,7 +242,7 @@ class RayExecutor(ExecutorBase):
         """build model."""
         self.collective_rpc('build_model')
 
-    def get_free_mem(self):
+    def gather_free_mem(self):
         """gather available memory."""
         return self.collective_rpc('get_free_mem')
 

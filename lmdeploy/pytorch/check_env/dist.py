@@ -20,7 +20,7 @@ class DistChecker(BaseChecker):
             from lmdeploy.pytorch.engine.executor import get_distributed_executor_backend
             distributed_executor_backend = get_distributed_executor_backend(self.world_size, self.device_type)
 
-        if distributed_executor_backend not in [None, 'mp', 'ray']:
+        if distributed_executor_backend not in [None, 'uni', 'mp', 'ray']:
             self.log_and_exit(mod_name='Dist',
                               message=f'Unsupported distributed_executor_backend: {distributed_executor_backend}')
 

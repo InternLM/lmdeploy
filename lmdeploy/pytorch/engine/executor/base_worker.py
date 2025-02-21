@@ -1,13 +1,14 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Dict, Any
-from lmdeploy.pytorch.config import CacheConfig,BackendConfig, ModelConfig
-from lmdeploy.utils import get_logger
-from .dist_utils import init_process_group, setup_master_addr
+import asyncio
+from typing import Any, Dict
+
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.pytorch.devices import DeviceContext
 from lmdeploy.pytorch.distributed import DistContext
-import asyncio
 from lmdeploy.pytorch.engine.model_agent import build_model_agent
+from lmdeploy.utils import get_logger
 
+from .dist_utils import init_process_group, setup_master_addr
 
 logger = get_logger('lmdeploy')
 
