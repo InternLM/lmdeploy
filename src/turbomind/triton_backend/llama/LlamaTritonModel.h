@@ -64,6 +64,14 @@ struct LlamaTritonModel: public AbstractTransformerModel {
     int         getTensorParaSize() override;
     int         getPipelineParaSize() override;
 
+    std::shared_ptr<std::mutex> mutex() const noexcept override
+    {
+        if (!shared_state_->mutex) {
+            shared_state_->mutex = std::make_shared<std::mutex>();
+        }
+        return shared_state_->mutex;
+    }
+
 private:
     std::unique_ptr<Engine<T>>
     createSharedModelInstance(int                                                       deviceId,

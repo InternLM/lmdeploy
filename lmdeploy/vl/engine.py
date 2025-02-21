@@ -39,6 +39,7 @@ class ImageEncoder:
         self.vision_config = vision_config
         self.max_batch_size = vision_config.max_batch_size
         self.executor = ThreadPoolExecutor(max_workers=1)
+        self.tm_mutex = None  # set by `VLAsyncEngine` later if needed
         torch.cuda.empty_cache()
 
     async def preprocess(self, messages: List[Dict]) -> List[Dict]:
@@ -55,8 +56,19 @@ class ImageEncoder:
             messages (List[Dict]): a list of message, which is the output
             of `preprocess()`
         """
-        future = asyncio.get_event_loop().run_in_executor(self.executor, self.model.forward, messages,
-                                                          self.max_batch_size)
+
+        def forward():
+            if self.tm_mutex:
+                self.tm_mutex.lock()
+            try:
+                return self.model.forward(messages, self.max_batch_size)
+            finally:
+                # TODO: make sure work on GPU is actually done at this point
+                if self.tm_mutex:
+                    self.tm_mutex.unlock()
+
+        future = asyncio.get_event_loop().run_in_executor(self.executor, forward)
+
         future.add_done_callback(_raise_exception_on_finish)
         outputs = await future
         return outputs
