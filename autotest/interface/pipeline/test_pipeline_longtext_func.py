@@ -118,7 +118,7 @@ def passkey_retrival(config, model, backend, log_name, tp_num, session_len: int 
 
     gen_config = GenerationConfig(top_k=40)
     # inference
-    pass_key, prompt = get_passkey_prompt(pipe, session_len)
+    pass_key1, prompt = get_passkey_prompt(pipe, session_len)
     response1 = pipe(prompt, gen_config=gen_config)
 
     # remove config, https://huggingface.co/Qwen/Qwen2.5-7B-Instruct
@@ -126,13 +126,13 @@ def passkey_retrival(config, model, backend, log_name, tp_num, session_len: int 
         remove_config_Qwen(model_path)
 
     # inference
-    pass_key, prompt = get_passkey_prompt(pipe, session_len)
+    pass_key2, prompt = get_passkey_prompt(pipe, session_len)
     response2 = pipe([prompt] * 2, gen_config=gen_config)
 
     close_pipeline(pipe)
 
-    assert str(pass_key) in response1.text, str(response1)
-    assert str(pass_key) in response2[0].text and str(pass_key) in response2[1].text, str(response2)
+    assert str(pass_key1) in response1.text, str(response1)
+    assert str(pass_key2) in response2[0].text and str(pass_key2) in response2[1].text, str(response2)
 
 
 def get_passkey_prompt(pipe, session_len):
