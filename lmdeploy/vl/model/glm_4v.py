@@ -59,8 +59,10 @@ class GLM4VisionModel(VisonModel):
             images = [x.convert('RGB') for x in images]
             pixel_values = [self.image_transform(x) for x in images]
             outputs.extend([
-                dict(pixel_values=_2, image_size=_1.size, image_tokens=self.n_token_per_image, image_token_id=0)
-                for _1, _2 in zip(images, pixel_values)
+                dict(pixel_values=_2,
+                     image_size=_1.size,
+                     image_tokens=self.n_token_per_image,
+                     image_token_id=self.image_token_id) for _1, _2 in zip(images, pixel_values)
             ])
         messages.append(dict(role='preprocess', content=outputs))
         return messages

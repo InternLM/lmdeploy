@@ -926,7 +926,7 @@ class Qwen2VLInputProcessor(BaseModelInputProcessor):
             image_grid_thw = input_mm['image_grid_thw']
             offset = input_mm['offset']
             start = offset
-            image_token_id = input_mm.get('image_token_id', 0)
+            image_token_id = input_mm['image_token_id']
             num_pad = input_mm['image_tokens']
             if isinstance(num_pad, torch.Tensor):
                 num_pad = num_pad.item()

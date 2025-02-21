@@ -47,7 +47,7 @@ class Qwen2VLModel(VisonModel):
             result = self.processor.image_processor(images=image_inputs, videos=None, return_tensors='pt')
             merge_length = self.processor.image_processor.merge_size**2
             image_tokens = result['image_grid_thw'].prod(dim=1) // merge_length
-            result.update(dict(image_size=image.size, image_tokens=image_tokens, image_token_id=0))
+            result.update(dict(image_size=image.size, image_tokens=image_tokens, image_token_id=self.image_token_id))
             outputs.append(result)
         messages.append(dict(role='preprocess', content=outputs))
         return messages
