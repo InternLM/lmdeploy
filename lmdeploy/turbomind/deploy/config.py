@@ -172,6 +172,20 @@ class TurbomindModelConfig:
             if hasattr(self.attention_config, key):
                 setattr(self.attention_config, key, value)
 
+        # use dynamic ntk
+        if config.rope_scaling_factor:
+            rope_param = self.attention_config.rope_param
+            rope_param = rope_param or RopeParam(type='default', param=DefaultRopeParam(0, 0))
+            if rope_param.type == 'dynamic':
+                rope_param.param.factor = config.rope_scaling_factor
+            else:
+                dynamic_rope_param = DynamicRopeParam(
+                    base=rope_param.param.base,
+                    dim=rope_param.param.dim,
+                    factor=config.rope_scaling_factor,
+                    max_position_embeddings=self.attention_config.max_position_embeddings)
+                self.attention_config.rope_param = RopeParam(type='dynamic', param=dynamic_rope_param)
+
     @classmethod
     def from_dict(cls, config: dict = {}):
         """construct TurbomindModelConfig instance from config in a dict."""

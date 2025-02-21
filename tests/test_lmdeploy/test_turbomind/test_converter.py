@@ -78,6 +78,7 @@ def test_update_from_engine_config():
 
     assert (config.tensor_para_size == engine_config.tp)
     assert (config.session_len == engine_config.session_len)
+    assert (config.attention_config.rope_param.type == 'dynamic')
     assert (config.attention_config.rope_param.param.factor == engine_config.rope_scaling_factor)
     assert (config.attention_config.use_logn_attn == engine_config.use_logn_attn)
 
