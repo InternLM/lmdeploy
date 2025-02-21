@@ -4,7 +4,7 @@ import fire
 import numpy as np
 from PIL import Image
 
-from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
+from lmdeploy import ChatTemplateConfig, GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
 from lmdeploy.utils import is_bf16_supported
 from lmdeploy.vl import load_image
 from lmdeploy.vl.constants import IMAGE_TOKEN
@@ -31,13 +31,16 @@ def run_pipeline_mllm_test(model_path, resource_path, tp, backend_type, is_pr_te
     if 'kvint' in backend_type:
         backend_config.quant_policy = extra.get('quant_policy')
 
-    if 'llava' in model_path:
-        backend_config.model_name = 'vicuna'
     if 'w4' in model_path or ('4bits' in model_path or 'awq' in model_path.lower()):
         backend_config.model_format = 'awq'
     if not is_bf16_supported():
         backend_config.dtype = 'float16'
 
+    if 'llava' in model_path:
+        chat_template = ChatTemplateConfig(model_name='vicuna')
+        pipe = pipeline(model_path, backend_config=backend_config, chat_template_config=chat_template)
+    else:
+        pipe = pipeline(model_path, backend_config=backend_config)
     pipe = pipeline(model_path, backend_config=backend_config)
 
     image = load_image(f'{resource_path}/{PIC1}')

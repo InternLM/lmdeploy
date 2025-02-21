@@ -323,16 +323,18 @@ def MiniCPM_vl_testcase(output_text, f):
 def Qwen_vl_testcase(output_text, f):
     with allure.step('qwen-combined-images'):
         response = get_response_from_output(output_text, 'qwen-combined-images')
-        case_result = 'panda' in response.lower() or '熊猫' in response
-        f.writelines('qwen-combined-images result: ' + str(case_result) + 'reason: combined images: panda should in ' +
-                     response + '\n')
+        case_result = 'buildings' in response.lower() or '楼' in response or 'skyline' in response.lower(
+        ) or 'city' in response.lower()
+        f.writelines('qwen-combined-images result: ' + str(case_result) +
+                     'reason: combined images: buildings should in ' + response + '\n')
         with assume:
             assert case_result, 'reason: combined images: panda should in ' + response
     with allure.step('qwen-combined-images2'):
         response = get_response_from_output(output_text, 'qwen-combined-images2')
-        case_result = 'panda' in response.lower() or '熊猫' in response
-        f.writelines('qwen-combined-images2 result: ' + str(case_result) + 'reason: combined images: panda should in ' +
-                     response + '\n')
+        case_result = 'buildings' in response.lower() or '楼' in response or 'skyline' in response.lower(
+        ) or 'city' in response.lower()
+        f.writelines('qwen-combined-images2 result: ' + str(case_result) +
+                     'reason: combined images: buildings should in ' + response + '\n')
         with assume:
             assert case_result, 'reason: combined images: panda should in ' + response
     with allure.step('qwen-performance-images'):

@@ -4,7 +4,7 @@ import os
 import fire
 import yaml
 
-from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
+from lmdeploy import ChatTemplateConfig, GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
 from lmdeploy.utils import is_bf16_supported
 
 gen_config = GenerationConfig(max_new_tokens=500)
@@ -22,9 +22,6 @@ def run_pipeline_chat_test(model_path, cases_path, tp, backend_type, is_pr_test,
     if 'kvint' in backend_type:
         backend_config.quant_policy = extra.get('quant_policy')
 
-    # if llava support kvint or awq, this code should refactor
-    if 'llava' in model_path:
-        backend_config.model_name = 'vicuna'
     if 'w4' in model_path or ('4bits' in model_path or 'awq' in model_path.lower()):
         backend_config.model_format = 'awq'
     if 'gptq' in model_path.lower():
@@ -32,7 +29,11 @@ def run_pipeline_chat_test(model_path, cases_path, tp, backend_type, is_pr_test,
     if not is_bf16_supported():
         backend_config.dtype = 'float16'
 
-    pipe = pipeline(model_path, backend_config=backend_config)
+    if 'llava' in model_path:
+        chat_template = ChatTemplateConfig(model_name='vicuna')
+        pipe = pipeline(model_path, backend_config=backend_config, chat_template_config=chat_template)
+    else:
+        pipe = pipeline(model_path, backend_config=backend_config)
 
     cases_path = os.path.join(cases_path)
     with open(cases_path) as f:
