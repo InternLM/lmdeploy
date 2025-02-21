@@ -335,6 +335,9 @@ PYBIND11_MODULE(_turbomind, m)
         .def(py::init())
         .def_readwrite("max_new_tokens", &ft::GenerationConfig::max_new_tokens)
         .def_readwrite("min_new_tokens", &ft::GenerationConfig::min_new_tokens)
+        .def_readwrite("eos_ids", &ft::GenerationConfig::eos_ids)
+        .def_readwrite("stop_ids", &ft::GenerationConfig::stop_ids)
+        .def_readwrite("bad_ids", &ft::GenerationConfig::bad_ids)
         .def_readwrite("top_p", &ft::GenerationConfig::top_p)
         .def_readwrite("top_k", &ft::GenerationConfig::top_k)
         .def_readwrite("min_p", &ft::GenerationConfig::min_p)
@@ -528,15 +531,31 @@ PYBIND11_MODULE(_turbomind, m)
                     // erase the type
                     return std::static_pointer_cast<void>(std::make_shared<ScopedGIL>());
                 };
+                auto no_gil_deleter = [](AbstractTransformerModel* ptr) {
+                    pybind11::gil_scoped_release release;
+                    delete ptr;
+                };
+
                 if (data_type == "half" || data_type == "fp16" || data_type == "float16" || data_type == "int4") {
-                    auto model = std::make_shared<LlamaTritonModel<half>>(
-                        tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir, config, gil_factory);
+                    std::shared_ptr<LlamaTritonModel<half>> model(new LlamaTritonModel<half>(tensor_para_size,
+                                                                                             pipeline_para_size,
+                                                                                             enable_custom_all_reduce,
+                                                                                             model_dir,
+                                                                                             config,
+                                                                                             gil_factory),
+                                                                  no_gil_deleter);
                     return model;
                 }
                 else if (data_type == "bf16" || data_type == "bfloat16") {
 #ifdef ENABLE_BF16
-                    auto model = std::make_shared<LlamaTritonModel<__nv_bfloat16>>(
-                        tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir, config, gil_factory);
+                    std::shared_ptr<LlamaTritonModel<__nv_bfloat16>> model(
+                        new LlamaTritonModel<__nv_bfloat16>(tensor_para_size,
+                                                            pipeline_para_size,
+                                                            enable_custom_all_reduce,
+                                                            model_dir,
+                                                            config,
+                                                            gil_factory),
+                        no_gil_deleter);
                     return model;
 #else
                     throw std::runtime_error("Error: turbomind has not been built with bf16 support.");
@@ -563,6 +582,7 @@ PYBIND11_MODULE(_turbomind, m)
              "node_id"_a,
              "device_id_start"_a = 0,
              "multi_node"_a      = false)
+        .def("destroy_nccl_params", &AbstractTransformerModel::destroyNcclParams, "params"_a)
         .def(
             "create_custom_comms",
             [](AbstractTransformerModel* model, int world_size) {

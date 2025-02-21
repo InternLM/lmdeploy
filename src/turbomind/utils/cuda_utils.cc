@@ -372,5 +372,12 @@ bool is_16xx_series(const char* name)
     return std::regex_search(name, re);
 }
 
+void trim_default_mempool(int device_id)
+{
+    cudaMemPool_t mempool;
+    check_cuda_error(cudaDeviceGetDefaultMemPool(&mempool, device_id));
+    check_cuda_error(cudaMemPoolTrimTo(mempool, 0));
+}
+
 /* ************************** end of common utils ************************** */
 }  // namespace turbomind

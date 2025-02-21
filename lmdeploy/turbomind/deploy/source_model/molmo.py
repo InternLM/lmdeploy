@@ -84,13 +84,6 @@ class MolmoModel(LlamaModel):
         with open(config_path) as f:
             self.config = json.load(f)
 
-    def tokenizer_info(self):
-
-        n_words = 152064
-        bos_id = 151643
-        eos_id = 151643
-        return n_words, bos_id, eos_id
-
     def model_info(self):
         config = self.config
         num_layer = config['num_hidden_layers']

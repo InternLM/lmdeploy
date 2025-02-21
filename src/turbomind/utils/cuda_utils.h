@@ -503,5 +503,7 @@ private:
     int last_device_id_{-1};
 };
 
+void trim_default_mempool(int device_id);
+
 /* ************************** end of common utils ************************** */
 }  // namespace turbomind
