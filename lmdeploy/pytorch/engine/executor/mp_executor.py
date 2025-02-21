@@ -510,7 +510,7 @@ class ExecutorProc:
         ret_buf = SharedBuffer(-1, notifier=ret_notifier, name=ret_buf_name)
         event_loop = asyncio.new_event_loop()
         asyncio.set_event_loop(event_loop)
-        destroy_pg = worker.world_size > 1
+        destroy_pg = True
         try:
             event_loop.run_until_complete(
                 self._main_loop_impl(proc_id, comm_buf=comm_buf, ret_buf=ret_buf, worker=worker))
@@ -520,7 +520,10 @@ class ExecutorProc:
             os.kill(os.getppid(), signal.SIGUSR1)
         except SystemExit:
             # terminated by executor
-            pass
+            logger.debug(f'Proc[{proc_id}] system exit.')
+        except KeyboardInterrupt:
+            logger.debug(f'Proc[{proc_id}] keyboard interrupt.')
+            exit(0)
         except BaseException:
             logger.exception(f'Proc[{proc_id}] failed')
             os.kill(os.getppid(), signal.SIGUSR1)
