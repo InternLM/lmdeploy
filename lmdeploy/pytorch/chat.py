@@ -91,42 +91,49 @@ def run_chat(model_path: str,
     _, model_config = get_model_arch(model_path)
     session_len = _get_and_verify_max_len(model_config, None)
 
-    while True:
-        prompt = input_prompt(chat_template_name)
-        if prompt == 'exit':
-            exit(0)
-        elif prompt == 'end':
-            generator.end(session_id)
-            nth_round = 1
-            step = 0
-            seed = random.getrandbits(64)
-        else:
-            prompt = model.get_prompt(prompt, nth_round == 1)
-            input_ids = tokenizer.encode(prompt, nth_round == 1)
-            if step >= session_len:
-                print('WARNING: exceed session max length.'
-                      ' Please end the session.')
-                continue
+    try:
+        while True:
+            prompt = input_prompt(chat_template_name)
+            if prompt == 'exit':
+                exit(0)
+            elif prompt == 'end':
+                generator.end(session_id)
+                nth_round = 1
+                step = 0
+                seed = random.getrandbits(64)
+            else:
+                prompt = model.get_prompt(prompt, nth_round == 1)
+                input_ids = tokenizer.encode(prompt, nth_round == 1)
+                if step >= session_len:
+                    print('WARNING: exceed session max length.'
+                          ' Please end the session.')
+                    continue
 
-            print(f'{prompt}', end='', flush=True)
-            state = DetokenizeState(len(input_ids))
-            gen_config.random_seed = seed
-            gen_config.stop_token_ids = stop_words
-            for outputs in generator.stream_infer(session_id=session_id,
-                                                  input_ids=input_ids,
-                                                  gen_config=gen_config,
-                                                  adapter_name=adapter_name):
-                res, tokens = input_ids + outputs.token_ids, outputs.num_token
-                # decode res
-                response, state = tokenizer.detokenize_incrementally(res, state)
-                response = valid_str(response)
-                print(f'{response}', end='', flush=True)
+                print(f'{prompt}', end='', flush=True)
+                state = DetokenizeState(len(input_ids))
+                gen_config.random_seed = seed
+                gen_config.stop_token_ids = stop_words
+                for outputs in generator.stream_infer(session_id=session_id,
+                                                      input_ids=input_ids,
+                                                      gen_config=gen_config,
+                                                      adapter_name=adapter_name):
+                    res, tokens = input_ids + outputs.token_ids, outputs.num_token
+                    # decode res
+                    response, state = tokenizer.detokenize_incrementally(res, state)
+                    response = valid_str(response)
+                    print(f'{response}', end='', flush=True)
 
-            # update step
-            step += len(input_ids) + tokens
-            print()
+                # update step
+                step += len(input_ids) + tokens
+                print()
 
-            nth_round += 1
+                nth_round += 1
+    except SystemExit:
+        pass
+    except KeyboardInterrupt:
+        pass
+    finally:
+        tm_model.close()
 
 
 def main(model_path: str,

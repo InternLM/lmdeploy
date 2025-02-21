@@ -132,6 +132,7 @@ class MessageStatus(enum.Enum):
     STOPPED = enum.auto()
     ENDED = enum.auto()
     ABORTED = enum.auto()
+    LOCKED = enum.auto()
 
 
 _SEQ_COUNT = 0
