@@ -11,12 +11,11 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
-from lmdeploy.pytorch.distributed import DistContext
-from lmdeploy.pytorch.engine.model_agent import build_model_agent
 from lmdeploy.utils import get_logger
 
 from .base import ExecutorBase
-from .dist_utils import find_available_port, init_process_group, setup_master_addr
+from .base_worker import WorkerWrapperBase
+from .dist_utils import find_available_port, setup_master_addr
 
 logger = get_logger('lmdeploy')
 
@@ -112,8 +111,8 @@ def _get_master_addr():
     return master_addr
 
 
-class RayWorkerWrapper:
-    """worker warpper."""
+class RayWorkerWrapper(WorkerWrapperBase):
+    """worker wrapper."""
 
     def __init__(
         self,
@@ -128,35 +127,25 @@ class RayWorkerWrapper:
         log_level: int = 30,
     ):
         from lmdeploy.tokenizer import Tokenizer
-        self.model_path = model_path
-        self.model_config = ModelConfig.from_pretrained(model_path, dtype=dtype, tp=tp)
-        self.cache_config = cache_config
-        self.backend_config = backend_config
-        self.tokenizer = Tokenizer(model_path).model.model
-        self.adapters = adapters
-        self.device_type = device_type
-        self.log_level = log_level
-        self.dp = dp
-        self.tp = tp
-        self.world_size = tp * dp
-        self.device_type = device_type
+        tokenizer = Tokenizer(model_path).model.model
+        model_config = ModelConfig.from_pretrained(model_path, dtype=dtype, tp=tp)
+        super().__init__(
+            model_path=model_path,
+            cache_config=cache_config,
+            backend_config=backend_config,
+            model_config=model_config,
+            dp=dp,
+            tp=tp,
+            adapters=adapters,
+            device_type=device_type,
+            tokenizer=tokenizer,
+            log_level=log_level,
+        )
         self.node_ip = ray.util.get_node_ip_address()
-
-        logger.setLevel(log_level)
-        self.out_que = None
-        self._output_loop = None
 
     def get_node_ip(self):
         """get worker ip."""
         return self.node_ip
-
-    def init_process_group(self, rank: int, master_addr: str, master_port: str):
-        """initialize process group."""
-        setup_master_addr(master_addr, master_port)
-        self.rank = rank
-
-        init_process_group(rank, self.world_size)
-        self.dist_ctx = DistContext.build(self.rank, self.tp, self.dp)
 
     def warmup_dist(self):
         # None default CUDA_VISIBLE_DEVICES might leads to slow first time all_reduce
@@ -169,92 +158,12 @@ class RayWorkerWrapper:
             tmp = torch.empty((1, ), device='cuda')
             all_reduce(tmp)
 
-    async def _get_outputs_loop(self):
-        """get outputs loop."""
-        assert self.out_que is not None
-        while True:
-            ret = await self.get_output_async()
-            # pack to numpy
-            for k, v in ret.items():
-                if isinstance(v, torch.Tensor):
-                    ret[k] = v.numpy()
-            self.out_que.put_nowait(ret)
-
-    async def get_outputs(self):
-        """get outputs."""
-        assert self.out_que is not None
-        qsize = self.out_que.qsize()
-        if qsize > 0:
-            outs = []
-            for _ in range(qsize):
-                outs.append(self.out_que.get_nowait())
-            return outs
-        else:
-            return [await self.out_que.get()]
-
-    def build_model(self):
-        """build model."""
-        self.device_ctx = DeviceContext(device_type=self.device_type)
-
-        self.model_agent = build_model_agent(model_path=self.model_path,
-                                             model_config=self.model_config,
-                                             cache_config=self.cache_config,
-                                             backend_config=self.backend_config,
-                                             tokenizer=self.tokenizer,
-                                             device_ctx=self.device_ctx,
-                                             dist_ctx=self.dist_ctx,
-                                             adapters=self.adapters)
-        self.model_agent.build_model()
-
-    def gather_free_mem(self):
-        """gather free mem."""
-        return self.model_agent.get_free_mem()
-
-    def set_cache_config(self, cache_config: CacheConfig):
-        """set all cache config."""
-        self.model_agent.set_cache_config(cache_config)
-
-    def set_model_config(self, model_config: ModelConfig):
-        """set all model config."""
-        self.model_agent.set_model_config(model_config)
-
-    def build_graph_runner(self):
-        """build graph runner."""
-        self.model_agent.build_graph_runner()
-
-    def build_cache_engine(self):
-        """build cache engine."""
-        self.model_agent.build_cache_engine()
-
-    def get_input_processor(self):
-        """build cache engine."""
-        return self.model_agent.get_input_processor()
-
-    def start(self):
-        """start engine loop."""
-        self.model_agent.start()
-        event_loop = asyncio.get_event_loop()
-        self.out_que = asyncio.Queue()
-        self._output_loop = event_loop.create_task(self._get_outputs_loop(), name='GetOutputsLoop')
-
-    def stop(self):
-        """stop engine loop."""
-        self.model_agent.stop()
-        if self._output_loop is not None:
-            self._output_loop.cancel()
-
-    async def forward_async(self, inputs):
-        """start forward."""
-        self.model_agent.set_forward_inputs(inputs)
-
-    async def get_output_async(self):
-        """get output async."""
-        ret = await self.model_agent.get_output_async()
-        return ret
-
-    def release(self):
-        """stop engine loop."""
-        self.model_agent.release()
+    def pack_output(self, output: Dict):
+        """pack output."""
+        for k, v in output.items():
+            if isinstance(v, torch.Tensor):
+                output[k] = v.numpy()
+        return output
 
 
 class RayExecutor(ExecutorBase):
@@ -317,8 +226,9 @@ class RayExecutor(ExecutorBase):
             for rank, worker in enumerate(self.workers)
         ])
 
-        logger.info('Warming up distribute environment, this might take long time, please waiting...')
-        ray.get([worker.warmup_dist.remote() for worker in self.workers])
+        if self.world_size > 1:
+            logger.info('Warming up distribute environment, this might take long time, please waiting...')
+            ray.get([worker.warmup_dist.remote() for worker in self.workers])
 
     def collective_rpc(self, method: str, args: Tuple[Any] = None, kwargs: Dict[str, Any] = None):
         """collective rpc."""
@@ -332,9 +242,9 @@ class RayExecutor(ExecutorBase):
         """build model."""
         self.collective_rpc('build_model')
 
-    def gather_free_mem(self):
+    def get_free_mem(self):
         """gather available memory."""
-        return self.collective_rpc('gather_free_mem')
+        return self.collective_rpc('get_free_mem')
 
     def set_cache_config(self, cache_config: CacheConfig):
         """set all cache config."""

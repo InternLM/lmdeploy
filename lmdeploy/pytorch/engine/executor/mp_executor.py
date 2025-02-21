@@ -15,13 +15,11 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
-from lmdeploy.pytorch.devices import DeviceContext
-from lmdeploy.pytorch.distributed import DistContext
-from lmdeploy.pytorch.engine.model_agent import BaseModelAgent, build_model_agent
 from lmdeploy.utils import get_logger
 
 from .base import ExecutorBase
-from .dist_utils import find_available_port, init_process_group, setup_master_addr
+from .base_worker import WorkerWrapperBase
+from .dist_utils import find_available_port, setup_master_addr
 
 logger = get_logger('lmdeploy')
 
@@ -380,7 +378,7 @@ class MPExecutor(ExecutorBase):
 
     async def forward_async(self, inputs):
         """start forward."""
-        await self.collective_rpc_async('set_forward_inputs', args=(inputs, ))
+        await self.collective_rpc_async('forward_async', args=(inputs, ))
 
     async def get_output_async(self):
         """get output async."""
@@ -406,6 +404,36 @@ class MPExecutor(ExecutorBase):
         self.comm_buf.close()
         for ret_buf in self.ret_bufs:
             ret_buf.close()
+
+
+class MPWorkerWrapper(WorkerWrapperBase):
+    """Mp worker wrapper."""
+
+    def __init__(
+        self,
+        model_path: str,
+        cache_config: CacheConfig,
+        backend_config: BackendConfig,
+        model_config: ModelConfig,
+        dp: int,
+        tp: int,
+        adapters: Dict[str, str] = None,
+        device_type: str = 'cuda',
+        tokenizer: Any = None,
+        log_level: int = 30,
+    ):
+        super().__init__(
+            model_path=model_path,
+            cache_config=cache_config,
+            backend_config=backend_config,
+            model_config=model_config,
+            dp=dp,
+            tp=tp,
+            adapters=adapters,
+            device_type=device_type,
+            tokenizer=tokenizer,
+            log_level=log_level,
+        )
 
 
 class ExecutorProc:
@@ -458,7 +486,6 @@ class ExecutorProc:
         log_level: int = 30,
     ):
         """main loop."""
-        logger.setLevel(log_level)
         torch.cuda.set_device(proc_id)
 
         # catch signal
@@ -468,20 +495,17 @@ class ExecutorProc:
 
         signal.signal(signal.SIGTERM, handle_sigterm)
 
-        world_size = tp * dp
-        init_process_group(proc_id, world_size)
-
-        dist_ctx = DistContext.build(proc_id, tp, dp)
-        device_ctx = DeviceContext(device_type=device_type)
-
-        model_agent = build_model_agent(model_path=model_path,
-                                        model_config=model_config,
-                                        cache_config=cache_config,
-                                        backend_config=backend_config,
-                                        tokenizer=tokenizer,
-                                        device_ctx=device_ctx,
-                                        dist_ctx=dist_ctx,
-                                        adapters=adapters)
+        worker = MPWorkerWrapper(model_path,
+                                 cache_config=cache_config,
+                                 backend_config=backend_config,
+                                 model_config=model_config,
+                                 dp=dp,
+                                 tp=tp,
+                                 adapters=adapters,
+                                 device_type=device_type,
+                                 tokenizer=tokenizer,
+                                 log_level=log_level)
+        worker.init_process_group(proc_id)
         comm_buf = SharedBuffer(proc_id, notifier=comm_notifier, name=comm_buf_name)
         ret_buf = SharedBuffer(-1, notifier=ret_notifier, name=ret_buf_name)
         event_loop = asyncio.new_event_loop()
@@ -489,7 +513,7 @@ class ExecutorProc:
         destroy_pg = True
         try:
             event_loop.run_until_complete(
-                self._main_loop_impl(proc_id, comm_buf=comm_buf, ret_buf=ret_buf, model_agent=model_agent))
+                self._main_loop_impl(proc_id, comm_buf=comm_buf, ret_buf=ret_buf, worker=worker))
         except asyncio.CancelledError:
             logger.warning(f'Proc[{proc_id}] main loop cancelled.')
             destroy_pg = False
@@ -502,8 +526,8 @@ class ExecutorProc:
             os.kill(os.getppid(), signal.SIGUSR1)
         finally:
             logger.debug(f'Proc[{proc_id}] cleanup.')
-            model_agent.stop()
-            model_agent.release()
+            worker.stop()
+            worker.release()
             comm_buf.close()
             ret_buf.close()
             if dist.is_initialized() and destroy_pg:
@@ -515,58 +539,29 @@ class ExecutorProc:
         if need_return:
             await ret_buf.send_async(ret)
 
-    @staticmethod
-    async def _prefetch_output_loop(model_agent: BaseModelAgent, out_que: asyncio.Queue):
-        """prefetch output loop."""
-        while True:
-            out = await model_agent.get_output_async()
-            out_que.put_nowait(out)
-
-    @staticmethod
-    async def _get_outputs(out_que: asyncio.Queue):
-        """get outputs."""
-        qsize = out_que.qsize()
-        outs = []
-        if qsize > 0:
-            for _ in range(qsize):
-                outs.append(out_que.get_nowait())
-            return outs
-        else:
-            return [await out_que.get()]
-
     async def _main_loop_impl(self, proc_id: int, comm_buf: SharedBuffer, ret_buf: SharedBuffer,
-                              model_agent: BaseModelAgent):
+                              worker: MPWorkerWrapper):
         """main loop."""
         proc_mask = 1 << proc_id
         event_loop = asyncio.get_event_loop()
-        out_que = asyncio.Queue()
-        prefetch_out_task = None
         while True:
             command = await comm_buf.receive_async()
             if command is None:
                 continue
             method = command['method']
             return_mask = command.get('return_mask', True)
+            args = command.get('args', list())
+            kwargs = command.get('kwargs', dict())
             need_return = bool(proc_mask & return_mask)
 
-            if method == 'get_outputs':
-                func = self._get_outputs
-                args = (out_que, )
-                kwargs = dict()
-            else:
-                func = getattr(model_agent, method, None)
-                args = command.get('args', list())
-                kwargs = command.get('kwargs', dict())
+            func = getattr(worker, method, None)
+            assert func is not None, f'method: <{method}> not exists.'
             call_async = asyncio.iscoroutinefunction(func)
-            assert func is not None
 
             logger.debug(f'proc[{proc_id}] call method: <{method}>.')
             if call_async:
                 event_loop.create_task(self._task_wrapper(func, args, kwargs, need_return, ret_buf))
             else:
                 ret = func(*args, **kwargs)
-                if method == 'start':
-                    prefetch_out_task = event_loop.create_task(self._prefetch_output_loop(model_agent, out_que))
-                    prefetch_out_task.set_name(f'PrefetchOut_Proc{proc_id}')
                 if need_return:
                     ret_buf.send(ret)
