@@ -211,7 +211,10 @@ class Xcomposer2VisionModel(VisonModel):
             image = image.convert('RGB')
             pixel_values, n_token = self.preprocess_func(image, params)
             outputs.append(
-                dict(pixel_values=pixel_values, image_size=image.size, image_tokens=n_token, image_token_id=0))
+                dict(pixel_values=pixel_values,
+                     image_size=image.size,
+                     image_tokens=n_token,
+                     image_token_id=self.image_token_id))
         messages.append(dict(role='preprocess', content=outputs))
         return messages
 

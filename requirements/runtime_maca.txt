@@ -10,7 +10,6 @@ peft<=0.11.1
 pillow
 protobuf
 pydantic>2.0.0
-pynvml
 safetensors
 sentencepiece
 shortuuid
