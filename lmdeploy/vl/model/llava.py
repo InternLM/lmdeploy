@@ -208,7 +208,7 @@ class LlavaVisionModel(LlavaHfVisionModel):
     @classmethod
     def match(cls, config: AutoConfig):
         """check whether the config match the model."""
-        arch = config.architectures[0]
+        arch = config.architectures[0] if config.architectures else None
         if arch in ['LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM']:
             # internvl-llava has vision_tower of OpenGVLab/xxx
             mm_vision_tower = getattr(config, 'mm_vision_tower', '')

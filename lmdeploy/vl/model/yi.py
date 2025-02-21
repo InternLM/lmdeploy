@@ -88,7 +88,7 @@ class YiVisionModel(LlavaVisionModel):
     @classmethod
     def match(cls, config: AutoConfig):
         """check whether the config match the model."""
-        arch = config.architectures[0]
+        arch = config.architectures[0] if config.architectures else None
         if arch == 'LlavaLlamaForCausalLM':
             projector_type = getattr(config, 'mm_projector_type', 'linear')
             if '_Norm' in projector_type:

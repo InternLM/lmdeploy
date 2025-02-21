@@ -240,7 +240,7 @@ class VisonModel(ABC):
     @classmethod
     def match(cls, config: AutoConfig):
         """check whether the config match the model."""
-        arch = config.architectures[0]
-        if arch == cls._arch or arch in cls._arch:
+        arch = config.architectures[0] if config.architectures else None
+        if arch and (arch == cls._arch or arch in cls._arch):
             return True
         return False
