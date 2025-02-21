@@ -13,7 +13,7 @@ logger = get_logger('lmdeploy')
 
 
 def check_deepseek_vl2_install():
-    """check deepseek_vl install."""
+    """check deepseek_vl2 install."""
     try:
         import deepseek_vl2  # noqa: F401
     except ImportError:
@@ -45,6 +45,7 @@ class DeepSeek2VisionModel(VisonModel):
             with redirect_stdout(devnull):
                 self.image_processor = DeepseekVLV2Processor.from_pretrained(self.model_path,
                                                                              image_token='<IMAGE_TOKEN>')
+                self.image_token_id = self.image_processor.image_token_id
 
     def build_model(self):
         """build the vision part of a VLM model when backend is turbomind, or
@@ -59,18 +60,10 @@ class DeepSeek2VisionModel(VisonModel):
         # convert to upstream api formats
         images = [img_parameter[0] for img_parameter in images]
         formatted_messages = []
-        for msg in messages:
-            crt_role = msg['role']
-
-            text_content = ''
-            image_content = []
-            for ele in msg['content']:
-                if ele['type'] == 'text':
-                    text_content = ele['text']
-                elif ele['type'] == 'image':
-                    image_content.append(ele['image'])
-
-            formatted_messages.append({'role': crt_role, 'content': text_content, 'images': image_content})
+        for message in messages:
+            text_content = DeepSeek2VisionModel.proc_single_message(message)
+            image_content = [x['image'] for x in message['content'] if x['type'] == 'image']
+            formatted_messages.append(dict(role=message['role'], content=text_content, images=image_content))
 
         # NOTE: DeepseekVLV2Processor inputs
         # conversations (List[Dict]): conversations with a list of messages;
@@ -85,12 +78,13 @@ class DeepSeek2VisionModel(VisonModel):
         messages.append(
             dict(role='preprocess',
                  content=[
-                     dict(pixel_values=prepare.images,
-                          image_tokens=prepare.num_image_tokens[0],
-                          image_token_id=0,
-                          image_size=self.image_processor.image_size,
-                          images_spatial_crop=prepare.images_spatial_crop,
-                          images_seq_mask=prepare.images_seq_mask)
+                     dict(
+                         pixel_values=prepare.images,
+                         image_tokens=prepare.num_image_tokens[0],
+                         image_token_id=self.image_processor.image_token_id,
+                         image_size=self.image_processor.image_size,
+                         images_spatial_crop=prepare.images_spatial_crop,
+                     )
                  ]))
         return messages
 
@@ -110,34 +104,43 @@ class DeepSeek2VisionModel(VisonModel):
         raise NotImplementedError()
 
     @staticmethod
+    def proc_single_message(message):
+        IMAGE_TOKEN = '<IMAGE_TOKEN>'
+
+        if isinstance(message['content'], str):
+            return message
+        elif message['role'] in ['images', 'preprocess', 'forward']:
+            return None
+
+        content = [x['text'] for x in message['content'] if x['type'] == 'text']
+        content = content[0]
+        n_image = sum([1 for x in message['content'] if x['type'] == 'image'])
+        n_placeholder = content.count(IMAGE_TOKEN)
+        if n_placeholder == 0:
+            logger.warning(f"""for deepseek-vl2 model, the user should insert the {IMAGE_TOKEN}
+                to user prompt manually, please read https://lmdeploy.readthedocs.io/en/latest/inference/vl_pipeline.html
+                for more details.""")  # noqa
+        if n_placeholder != 0 and n_placeholder != n_image:
+            logger.error(f'unmatched placeholder and image: {n_placeholder} vs '
+                         f'{n_image}. Ignore the placeholder')
+            content = content.replace(IMAGE_TOKEN, '')
+            n_placeholder = 0
+        if n_placeholder == 0:
+            if n_image == 1:
+                content = f'{IMAGE_TOKEN}{content}'
+            else:
+                content = ''.join([f'{IMAGE_TOKEN} is Figure {str(i)}.\n' for i in range(n_image)]) + content
+        return content
+
+    @staticmethod
     def proc_messages(messages, chat_template, sequence_start):
         """apply chat template to get the prompt."""
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
         for message in messages:
-            if isinstance(message['content'], str):
-                prompt_messages.append(message)
+            content = DeepSeek2VisionModel.proc_single_message(message)
+            if content is None:
                 continue
-            elif message['role'] in ['images', 'preprocess', 'forward']:
-                continue
-            content = [x['text'] for x in message['content'] if x['type'] == 'text']
-            content = content[0]
-            n_image = sum([1 for x in message['content'] if x['type'] == 'image'])
-            n_placeholder = content.count(IMAGE_TOKEN)
-            if n_placeholder == 0:
-                logger.warning(f"""for deepseek-vl model, the user should insert the {IMAGE_TOKEN}
-                    to user prompt manually, please read https://lmdeploy.readthedocs.io/en/latest/inference/vl_pipeline.html
-                    for more details.""")  # noqa
-            if n_placeholder != 0 and n_placeholder != n_image:
-                logger.error(f'unmatched placeholder and image: {n_placeholder} vs '
-                             f'{n_image}. Ignore the placeholder')
-                content = content.replace(IMAGE_TOKEN, '')
-                n_placeholder = 0
-            if n_placeholder == 0:
-                if n_image == 1:
-                    content = f'{IMAGE_TOKEN}{content}'
-                else:
-                    content = ''.join([f'{IMAGE_TOKEN} is Figure {str(i)}.\n' for i in range(n_image)]) + content
             prompt_messages.append(dict(role='user', content=content))
         prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
         return prompt, IMAGE_TOKEN

@@ -7,9 +7,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from deepseek_vl2.models.modeling_deepseek_vl_v2 import DeepseekVLV2Config, MlpProjectorConfig, VisionEncoderConfig
 from einops import rearrange, repeat
-from transformers import AutoConfig, AutoModelForCausalLM
 from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
@@ -347,7 +345,6 @@ class DeepseekVLV2ForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
             if past_key_values is not None:
                 position_ids = torch.arange(chunk_start, chunk_end, dtype=torch.long,
                                             device=inputs_embeds.device).unsqueeze(0)
-                past_key_values = self._move_past_key_values_to_gpu(past_key_values, inputs_embeds.device)
             else:
                 position_ids = None
 
@@ -362,7 +359,6 @@ class DeepseekVLV2ForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
                 )
                 # update past_key_values
                 past_key_values = outputs.past_key_values
-                past_key_values = self._move_past_key_values_to_cpu(past_key_values)
 
                 del outputs, position_ids
                 self._clear_cuda_cache()
@@ -411,16 +407,6 @@ class DeepseekVLV2ForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
             torch.cuda.empty_cache()
             torch.cuda.synchronize()
 
-    def _move_past_key_values_to_cpu(self, past_key_values):
-        if past_key_values is None:
-            return None
-        return tuple(tuple(t.cpu() for t in layer) for layer in past_key_values)
-
-    def _move_past_key_values_to_gpu(self, past_key_values, device='cuda:0'):
-        if past_key_values is None:
-            return None
-        return tuple(tuple(t.to(device) for t in layer) for layer in past_key_values)
-
     def get_logits(self, hidden_states: torch.Tensor):
         """compute logits of the model output."""
         return self.language.get_logits(hidden_states)
@@ -443,22 +429,20 @@ class DeepseekVLV2ForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
         # vision inputs
         pixel_values = None
         images_spatial_crop = None
-        images_seq_mask = None
+        image_mask = None
         if context.input_multimodals is not None:
             pixel_values = [input_mm.get('image', []) for input_mm in context.input_multimodals]
             images_spatial_crop = [p_value[0].meta.get('images_spatial_crop', None) for p_value in pixel_values]
-            images_seq_mask = [p_value[0].meta.get('images_seq_mask', None) for p_value in pixel_values]
-
             # flatten batch
             pixel_values = [data for im_data in pixel_values for data in im_data]
             if len(pixel_values) > 0:
+                image_token_id = pixel_values[0].meta['image_token_id']
+                image_mask = input_ids == image_token_id
                 pixel_values = torch.cat([data.data for data in pixel_values]).unsqueeze(0)
             else:
                 pixel_values = None
+                image_mask = None
 
-            # flatten batch
-            if len(images_seq_mask) > 0:
-                images_seq_mask = torch.cat([mask for mask in images_seq_mask]).unsqueeze(0)
             if len(images_spatial_crop) > 0:
                 images_spatial_crop = torch.cat([crop for crop in images_spatial_crop]).unsqueeze(0)
 
@@ -469,7 +453,7 @@ class DeepseekVLV2ForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
             attn_metadata=attn_metadata,
             pixel_values=pixel_values,  # [b, max_n_images, 3, height, width]
             images_spatial_crop=images_spatial_crop,  # [b, max_n_images, 2]
-            image_mask=images_seq_mask,  # [b, T]
+            image_mask=image_mask,  # [b, T]
             inputs_embeds=inputs_embeds,
         )
 
@@ -525,24 +509,19 @@ class DeepSeekVLV2InputProcessor(BaseModelInputProcessor):
         for input_mm in input_multimodals:
             pixel_values = input_mm['pixel_values'].to(self.dtype)
             offset = input_mm['offset']
-            image_token_id = input_mm.get('image_token_id', 0)
+            image_token_id = input_mm['image_token_id']
             num_pad = input_mm['image_tokens']
             images_spatial_crop = input_mm.get('images_spatial_crop', None)
-            images_seq_mask = input_mm.get('images_seq_mask', None)
             if isinstance(num_pad, torch.Tensor):
                 num_pad = num_pad.item()
-
-            # in multi-round conversations, lmdeploy won't add bos_id for non-first-round messages
-            # but upstream deepseek-vl2 processor always add bos_id for each message, need to remove bos_id
-            if len(input_ids) != images_seq_mask.shape[0]:
-                images_seq_mask = images_seq_mask[1:]
 
             mm_data = MultiModalTensor(data=pixel_values,
                                        start=offset,
                                        end=offset + num_pad,
-                                       meta=dict(image_token_id=image_token_id,
-                                                 images_spatial_crop=images_spatial_crop,
-                                                 images_seq_mask=images_seq_mask))
+                                       meta=dict(
+                                           image_token_id=image_token_id,
+                                           images_spatial_crop=images_spatial_crop,
+                                       ))
 
             input_imgs.append(mm_data)
 
@@ -552,9 +531,3 @@ class DeepSeekVLV2InputProcessor(BaseModelInputProcessor):
         )
 
         return result
-
-
-AutoConfig.register('vision', VisionEncoderConfig)
-AutoConfig.register('mlp_projector', MlpProjectorConfig)
-AutoConfig.register('deepseek_vl_v2', DeepseekVLV2Config)
-AutoModelForCausalLM.register(DeepseekVLV2Config, DeepseekVLV2ForCausalLM)
