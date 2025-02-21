@@ -278,7 +278,7 @@ class PytorchEngineConfig:
         quant_policy (int): default to 0. When k/v is quantized into 4 or 8
             bit, set it to 4 or 8, respectively
         distributed_executor_backend (str): backend of distributed backend,
-            options: ['mp', 'ray']
+            options: ['uni', 'mp', 'ray']
     """
     dtype: str = 'auto'
     tp: int = 1

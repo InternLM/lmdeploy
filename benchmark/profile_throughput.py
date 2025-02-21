@@ -190,7 +190,11 @@ def parse_args():
     parser.add_argument('--use-uvloop', action='store_true')
     parser.add_argument('--csv', type=str, help='Where to save the result.', default='./profile_throughput.csv')
     parser.add_argument('--seed', type=int, default=0, help='Seed used in sampling prompts from dataset')
-    parser.add_argument('--distributed-executor-backend', type=str, default=None, help='backend of executor backend')
+    parser.add_argument('--distributed-executor-backend',
+                        type=str,
+                        default=None,
+                        choices=['uni', 'mp', 'ray'],
+                        help='backend of executor backend')
     # other args
     ArgumentHelper.top_p(parser)
     ArgumentHelper.temperature(parser)
