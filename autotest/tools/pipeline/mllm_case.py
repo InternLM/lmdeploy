@@ -24,9 +24,9 @@ DESC_ZH = '两张图有什么相同和不同的地方.'
 
 def run_pipeline_mllm_test(model_path, resource_path, tp, backend_type, is_pr_test, extra: object = None):
     if 'pytorch' in backend_type:
-        backend_config = PytorchEngineConfig(tp=tp, session_len=32576)
+        backend_config = PytorchEngineConfig(tp=tp, session_len=32576, cache_max_entry_count=0.7)
     else:
-        backend_config = TurbomindEngineConfig(tp=tp, session_len=32576)
+        backend_config = TurbomindEngineConfig(tp=tp, session_len=32576, cache_max_entry_count=0.7)
 
     if 'kvint' in backend_type:
         backend_config.quant_policy = extra.get('quant_policy')
@@ -180,7 +180,7 @@ def internvl_vl_testcase(pipe, resource_path, lang='en'):
             imgs.append(img)
         return imgs
 
-    video_path = f'{resource_path}/red-panda.mp4'
+    video_path = resource_path + '/red-panda.mp4'
     imgs = load_video(video_path, num_segments=8)
 
     question = ''
@@ -283,7 +283,7 @@ def MiniCPM_vl_testcase(pipe, resource_path):
         print('num frames:', len(frames))
         return frames
 
-    video_path = f'{resource_path}red-panda.mp4'
+    video_path = resource_path + '/red-panda.mp4'
     frames = encode_video(video_path)
     question = 'Describe the video'
 
