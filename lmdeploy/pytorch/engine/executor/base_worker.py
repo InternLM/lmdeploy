@@ -48,10 +48,10 @@ class WorkerWrapperBase:
 
     def init_process_group(self, rank: int, master_addr: str = None, master_port: str = None):
         """initialize process group."""
+        self.rank = rank
         if self.world_size > 1:
             if master_addr is not None and master_port is not None:
                 setup_master_addr(master_addr, master_port)
-            self.rank = rank
 
             init_process_group(rank, self.world_size)
         self.dist_ctx = DistContext.build(self.rank, self.tp, self.dp)
