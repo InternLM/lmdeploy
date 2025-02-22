@@ -98,7 +98,7 @@ class Qwen2VLModel(VisonModel):
                 # same decorated prompt as Qwen2-VL
                 prompt = f'<|vision_start|>{IMAGE_TOKEN}<|vision_end|>' * \
                     n_images + prompt
-                prompt_messages.append(dict(role='user', content=prompt))
+            prompt_messages.append(dict(role=message['role'], content=prompt))
         prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
         return prompt, IMAGE_TOKEN
 
