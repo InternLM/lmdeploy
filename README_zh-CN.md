@@ -23,6 +23,10 @@ ______________________________________________________________________
 
 ## 最新进展 🎉
 
+<details open>
+<summary><b>2025</b></summary>
+</details>
+
 <details close>
 <summary><b>2024</b></summary>
 
