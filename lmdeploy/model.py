@@ -1458,6 +1458,45 @@ class DeepseekVL(BaseChatTemplate):
             return 'deepseek-vl'
 
 
+@MODELS.register_module(name=['deepseek-vl2'])
+class DeepseekVL2(BaseChatTemplate):
+
+    def __init__(self,
+                 meta_instruction='',
+                 eosys='',
+                 user='<|User|>: ',
+                 eoh='\n\n',
+                 assistant='<|Assistant|>: ',
+                 eoa='<｜end▁of▁sentence｜>',
+                 **kwargs):
+        super().__init__(meta_instruction=meta_instruction,
+                         eosys=eosys,
+                         user=user,
+                         eoh=eoh,
+                         assistant=assistant,
+                         eoa=eoa,
+                         **kwargs)
+
+    def get_prompt(self, prompt, sequence_start=True):
+        return super().get_prompt(prompt, sequence_start)[:-1]
+
+    def messages2prompt(self, messages, sequence_start=True, **kwargs):
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        return super().messages2prompt(messages, sequence_start, **kwargs)[:-1]
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'deepseek-vl2' in path:
+            return 'deepseek-vl2'
+
+
 @MODELS.register_module(name='deepseek-coder')
 class DeepSeek(BaseChatTemplate):
     """Chat template of deepseek model."""
