@@ -13,7 +13,7 @@ docker run -it \
     openmmlab/lmdeploy:latest
 ```
 
-> [!IMPORTANT]
+> \[!IMPORTANT\]
 > 请确保将模型放置在各个节点容器的相同目录中。
 
 ## 2. 使用 ray 搭建集群
@@ -36,7 +36,7 @@ ray start --address=$DRIVER_NODE_ADDR:$DRIVER_PORT
 
 完成后可以在主节点使用 `ray status` 查看集群状态，确保所有节点都被成功加入集群。
 
-> [!IMPORTANT]
+> \[!IMPORTANT\]
 > 请确保 `DRIVER_NODE_ADDR` 为主节点的地址，`DRIVER_PORT` 与主节点初始化时使用的端口号一致。
 
 ## 3. 使用 LMDeploy 接口
@@ -64,10 +64,10 @@ if __name__ == '__main__':
         outputs = pipe('Hakuna Matata')
 ```
 
-> [!NOTE]
+> \[!NOTE\]
 > PytorchEngine 会根据 tp 数以及集群上的设备数量自动选择合适的启动方式（单机/多机）。如果希望强制使用 ray 集群，可以配置 `PytorchEngineConfig` 中的 `distributed_executor_backend='ray'` 或使用环境变量 `LMDEPLOY_EXECUTOR_BACKEND=ray`。
 
 通过以上步骤，您可以成功在多节点环境中部署 PyTorchEngine，并利用 Ray 集群进行分布式计算。
 
-> [!WARNING]
+> \[!WARNING\]
 > 为了能够得到更好的性能，我们建议用户配置更好的网络环境（比如使用 [InfiniBand](https://en.wikipedia.org/wiki/InfiniBand)）以提高引擎运行效率

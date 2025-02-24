@@ -13,7 +13,7 @@ docker run -it \
     openmmlab/lmdeploy:latest
 ```
 
-> [!IMPORTANT]
+> \[!IMPORTANT\]
 > Ensure that the model is placed in the same directory on all node containers.
 
 ## 2. Set Up the Cluster Using Ray
@@ -36,7 +36,7 @@ ray start --address=$DRIVER_NODE_ADDR:$DRIVER_PORT
 
 run `ray status` on head node to check the cluster.
 
-> [!IMPORTANT]
+> \[!IMPORTANT\]
 > Ensure that `DRIVER_NODE_ADDR` is the address of the head node and `DRIVER_PORT` matches the port number used during the head node initialization.
 
 ## 3. Use LMDeploy Interfaces
@@ -64,12 +64,12 @@ if __name__ == '__main__':
         outputs = pipe('Hakuna Matata')
 ```
 
-> [!NOTE]
+> \[!NOTE\]
 > PyTorchEngine will automatically choose the appropriate launch method (single-node/multi-node) based on the `tp` parameter and the number of devices available in the cluster. If you want to enforce the use of the Ray cluster, you can configure `distributed_executor_backend='ray'` in `PytorchEngineConfig` or use the environment variable `LMDEPLOY_EXECUTOR_BACKEND=ray`.
 
----
+______________________________________________________________________
 
 By following the steps above, you can successfully deploy PyTorchEngine in a multi-node environment and leverage the Ray cluster for distributed computing.
 
-> [!WARNING]
+> \[!WARNING\]
 > To achieve better performance, we recommend users to configure a higher-quality network environment (such as using [InfiniBand](https://en.wikipedia.org/wiki/InfiniBand)) to improve engine efficiency.
