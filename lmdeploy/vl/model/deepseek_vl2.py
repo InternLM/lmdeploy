@@ -10,6 +10,7 @@ from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
 
 logger = get_logger('lmdeploy')
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
 
 def check_deepseek_vl2_install():
