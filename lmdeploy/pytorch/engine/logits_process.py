@@ -306,6 +306,8 @@ class FusedLogitsProcessor:
             torch.FloatTensor: The processed prediction scores.
 
         """
+        import pdb
+        pdb.set_trace()
         sampling_inputs = self.sampling_inputs
 
         custom_logits_processors = self.sampling_inputs.logits_processors
@@ -326,11 +328,11 @@ class FusedLogitsProcessor:
             bad_mask = sampling_inputs.bad_mask
             scores = _process_bad_words_(scores, bad_words, bad_mask)
 
-        stop_words = sampling_inputs.stop_words
-        if stop_words is not None:
-            stop_mask = sampling_inputs.stop_mask
-            stop_mask = torch.where(self.ignore_eos[:, None], stop_mask, False)
-            scores = _process_bad_words_(scores, stop_words, stop_mask)
+        # stop_words = sampling_inputs.stop_words
+        # if stop_words is not None:
+        #     stop_mask = sampling_inputs.stop_mask
+        #     stop_mask = torch.where(self.ignore_eos[:, None], stop_mask, False)
+        #     scores = _process_bad_words_(scores, stop_words, stop_mask)
 
         if guided_input_ids is not None:
             await self._wait_stream_once()

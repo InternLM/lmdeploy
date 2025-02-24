@@ -295,13 +295,40 @@ class Misc(Module):
             return torch.nn.functional.pad(tensor, (0, 0, 0, pad_size), 'constant', 0)
 
         if emb is not None:
+            import pdb
+            pdb.set_trace()
             emb = pad_weight(emb)
             self.model.save_split(emb, 'tok_embeddings.weight', split_dim=1)
         if norm_weight is not None:
             self.model.export_weight(norm_weight, 'norm.weight')
         if output_weight is not None:
+            import pdb
+            pdb.set_trace()
             output_weight = pad_weight(output_weight)
             self.model.save_split(output_weight, 'output.weight', split_dim=0)
+
+
+class InternLM2Reward(Module):
+    """the reward head of internlm2-reward model is
+    `nn.Linear(config.hidden_size, 1, bias=False)`"""
+
+    def __init__(self, model):
+        super().__init__(model)
+
+    def apply(self, i: int, r: BaseReader):
+        """Export internlm2 v_head weight."""
+        weight = r.reward_weight()
+        if weight is not None:
+            import pdb
+            pdb.set_trace()
+            tp = self.model.tensor_para_size
+            pad_size = tp - 1 if tp > 1 else tp
+            weight = torch.nn.functional.pad(weight, (0, 0, 0, pad_size), 'const', 0)
+            self.model.save_split(weight, 'reward.weight', split_dim=0)
+            # else:
+
+            # self.model.export_weight(weight, 'reward.weight', copy=True)
+            # self.model.export_weight(weight, 'reward.weight')
 
 
 class Transformer:
@@ -319,6 +346,11 @@ class Transformer:
             modules.append(MoeFfn)
         self.modules = [c(model) for c in modules]
         self.misc = Misc(model)
+        # reward models
+        self.reward = None
+        arch = model.model_config.model_arch
+        if arch == 'InternLM2ForRewardModel':
+            self.reward = InternLM2Reward(model)
 
     def __call__(self, i: int, r: BaseReader):
         if i >= 0:
@@ -327,3 +359,5 @@ class Transformer:
             return 1
         else:
             self.misc(i, r)
+            if self.reward:
+                self.reward(i, r)

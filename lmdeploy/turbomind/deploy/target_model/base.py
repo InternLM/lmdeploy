@@ -163,7 +163,9 @@ class BaseOutputModel(ABC):
         """save split.
 
         - 2D input
-            shape must be (input_dims, output_dims)
+            Lienar weight in Attention module, the shape must be (input_dims, output_dims)
+            The shape of the output weight is (output_dims, input_dims)
+            TODO: offer llama3 as an example
         - 1D input (bias)
             shape must be (output_dims)
             split is skipped when split_dim == 0

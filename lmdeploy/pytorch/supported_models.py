@@ -23,6 +23,7 @@ _SUPPORTED_ARCHS = dict(
     InternLMForCausalLM=True,
     # internlm2
     InternLM2ForCausalLM=True,
+    InternLM2ForRewardModel=True,
     # internlm-xcomposer
     InternLMXComposerForCausalLM=False,
     # internlm2-xcomposer
@@ -103,7 +104,7 @@ def is_supported(model_path: str):
 
     triton_model_path = os.path.join(model_path, 'triton_models')
     if os.path.exists(triton_model_path):
-        logger.warning(f'{model_path} seems to be a turbomind workspace, '
+        logger.warning(f'{model_path} seems to be a turbomind model, '
                        'which can only be ran with turbomind engine.')
     else:
         try:

@@ -17,7 +17,23 @@ PromptType = Union[str, List[Dict]]
 
 
 class LogitsMixin:
-    """Helper class to calculate ppl."""
+    """Helper class to get logits, reward score and calculate ppl."""
+
+    def get_reward_score(self, input_ids: List):
+        """
+        Args:
+            input_ids(List): a list of token id or a list of token_id list
+        """
+        supported_reward_models = ['InternLM2ForRewardModel', 'Qwen2ForRewardModel']
+        if self.arch not in supported_reward_models:
+            raise ValueError(f'{self.arch} is not in reward mode list: {supported_reward_models}')
+
+        assert isinstance(input_ids, List)
+        assert all(isinstance(x, int) for x in input_ids) or all(isinstance(x, List) for x in input_ids)
+        # Make input_ids a list of token_id list
+        input_ids = [input_ids] if isinstance(input_ids[0], int) else input_ids
+        logits = self._run(coro=self._async_get_logits(input_ids=input_ids)).result()
+        return logits
 
     async def _async_get_logits(self,
                                 input_ids,
