@@ -17,8 +17,7 @@ LMDeploy 目前在 Pytorch 引擎中支持 [deepseek-vl2-tiny](https://huggingfa
 
 ```
 pip install git+https://github.com/deepseek-ai/DeepSeek-VL2.git --no-deps
-pip install attrdict
-pip install timm
+pip install attrdict timm 'transformers<=4.48.0'
 ```
 
 值得注意的是，如果使用 transformers>=4.48.0，可能会出现失败的情况，详情可以参考此 [Issue](https://github.com/deepseek-ai/DeepSeek-VL2/issues/45)。
