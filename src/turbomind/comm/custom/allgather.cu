@@ -3,6 +3,7 @@
 #include "src/turbomind/comm/custom/custom_comm.h"
 
 #include "src/turbomind/comm/custom/device_semaphore.h"
+#include "src/turbomind/kernels/core/meta.h"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
@@ -81,7 +82,7 @@ void CustomComm::AllGather(const void* sendbuff, void* recvbuff, size_t sendcoun
     }
 }
 
-template<class T, class Relaxed>
+template<class T, int log2_block_dim, class Relaxed>
 __global__ void __launch_bounds__(1024, 1)
     Allgather2D_Simple_Pull(T*                                             local,
                             Array<T*, kMaxNearPeers>                       near,
@@ -92,7 +93,9 @@ __global__ void __launch_bounds__(1024, 1)
                             int64_t                                        stride,
                             int                                            width,
                             int                                            height,
-                            Relaxed                                        relaxed)
+                            int                                            log2_groups,
+                            constant<log2_block_dim>,
+                            Relaxed relaxed)
 {
     const int       sem_id = blockIdx.x * peers + threadIdx.x;
     DeviceSemaphore sem;
@@ -100,6 +103,15 @@ __global__ void __launch_bounds__(1024, 1)
         sem.Load(&semaphores[sem_id]);
         sem.SignalAndWait(relaxed);
     }
+
+    const int log2_threads = log2_block_dim - log2_groups;
+    const int threads      = 1 << log2_threads;
+    const int groups       = 1 << log2_groups;
+
+    const int gi = threadIdx.x >> log2_threads;
+    const int di = (threadIdx.x & (threads - 1));
+    const int bi = blockIdx.x * groups + gi;
+    const int bn = gridDim.x * groups;
 
     __syncthreads();
 
@@ -110,8 +122,8 @@ __global__ void __launch_bounds__(1024, 1)
         const int     p_rank = r.get_peer_rank(p);
         const T*      ch     = cvta_generic_to_global(near[p]);
         const int64_t offset = stride * p_rank;
-        for (int y = blockIdx.x; y < height; y += gridDim.x) {
-            for (int x = threadIdx.x; x < width; x += blockDim.x) {
+        for (int x = di; x < width; x += threads) {
+            for (int y = bi; y < height; y += bn) {
                 local[offset + y * pitch + x] = ch[offset + y * pitch + x];
             }
         }
@@ -171,8 +183,13 @@ void CustomComm::AllGather2D(const void*  sendbuff,
                 p += offset / sizeof(T);
             }
         }
-        const int threads = 1024;
-        const int blocks  = std::min<int>(32, height);
+        const int threads     = 1024;
+        int       log2_groups = 0;
+        while ((threads * sizeof(T) >> log2_groups) > byte_width * 2) {
+            ++log2_groups;
+        }
+        const int groups = 1 << log2_groups;
+        const int blocks = std::min<int>(48, (height + groups - 1) >> log2_groups);
         Allgather2D_Simple_Pull<T><<<blocks, threads, 0, stream>>>((T*)recvbuff,  //
                                                                    near,
                                                                    device_semaphores_,
@@ -182,6 +199,8 @@ void CustomComm::AllGather2D(const void*  sendbuff,
                                                                    byte_stride / sizeof(T),
                                                                    byte_width / sizeof(T),
                                                                    height,
+                                                                   log2_groups,
+                                                                   constant<10>{},
                                                                    std::false_type{});
     };
 
