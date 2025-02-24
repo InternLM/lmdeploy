@@ -9,46 +9,45 @@ from lmdeploy.utils import get_logger
 from .base import ExecutorBase
 
 
-def get_distributed_executor_backend(world_size: int, device_type: str, logger: Logger = None):
+def get_distributed_executor_backend(world_size: int, dp: int, device_type: str, logger: Logger = None):
     """get distributed executor backend."""
     from lmdeploy.pytorch.backends import get_backend
 
-    def _log_info(message):
+    def _log_info(message: str):
         if logger is not None:
             logger.info(message)
 
+    def _log_and_set_backend(message: str, executor_backend: str):
+        """log and set backend."""
+        message += f' distributed_executor_backend={executor_backend}.'
+        _log_info(message)
+        return executor_backend
+
     executor_backend = os.environ.get('LMDEPLOY_EXECUTOR_BACKEND', None)
     if executor_backend is not None:
-        _log_info(f'found environment LMDEPLOY_EXECUTOR_BACKEND. '
-                  f'distributed_executor_backend={executor_backend}.')
-        return executor_backend
+        return _log_and_set_backend('found environment LMDEPLOY_EXECUTOR_BACKEND.', executor_backend)
 
     if world_size == 1:
         return 'uni'
 
+    if dp > 1:
+        executor_backend = 'ray'
+        return _log_and_set_backend(f'dp={dp}.', 'ray')
+
     backend = get_backend(device_type)
     if not backend.support_ray():
-        executor_backend = 'mp'
-        _log_info(f'device={device_type} does not support ray. '
-                  f'distributed_executor_backend={executor_backend}.')
-        return executor_backend
+        return _log_and_set_backend(f'device={device_type} does not support ray.', 'mp')
 
     device_count = backend.device_count()
     if device_count is None:
-        executor_backend = 'mp'
-        _log_info(f'device={device_type} can not get device_count. '
-                  f'distributed_executor_backend={executor_backend}.')
-        return executor_backend
+        return _log_and_set_backend(f'device={device_type} can not get device_count.', 'mp')
 
     if device_count < world_size:
         executor_backend = 'ray'
-        _log_info(f'local device_count({device_count})<world_size({world_size}), '
-                  f'distributed_executor_backend={executor_backend}.')
+        return _log_and_set_backend(f'local device_count({device_count})<world_size({world_size}),', 'ray')
     else:
         executor_backend = 'mp'
-        _log_info(f'local device_count({device_count})>=world_size({world_size}), '
-                  f'distributed_executor_backend={executor_backend}.')
-    return executor_backend
+        return _log_and_set_backend(f'local device_count({device_count})>=world_size({world_size}),', 'mp')
 
 
 def build_executor(model_path: str,
@@ -68,7 +67,12 @@ def build_executor(model_path: str,
     model_config = ModelConfig.from_pretrained(model_path, trust_remote_code=True, dtype=dtype, tp=tp)
 
     if distributed_executor_backend is None:
-        distributed_executor_backend = get_distributed_executor_backend(world_size, device_type, logger)
+        distributed_executor_backend = get_distributed_executor_backend(world_size, dp, device_type, logger)
+
+    if dp > 1:
+        assert distributed_executor_backend == 'ray', (
+            'dp>1 requires distributed_executor_backend="ray", ',
+            f'get distributed_executor_backend="{distributed_executor_backend}"')
 
     if distributed_executor_backend is not None:
         logger.info(f'Build <{distributed_executor_backend}> executor.')
