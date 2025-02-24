@@ -103,6 +103,38 @@ def test_internlm_chat():
         assert _prompt is None
 
 
+def test_internlm_tool_call():
+    messages = []
+    messages.append({
+        'role':
+        'system',
+        'name':
+        'plugin',
+        'content':
+        '[{"description": "Compute the sum of two numbers", "name": "add", "parameters": {"type": "object", "properties": {"a": {"type": "int", "description": "A number"}, "b": {"type": "int", "description": "A number"}}, "required": ["a", "b"]}}, {"description": "Calculate the product of two numbers", "name": "mul", "parameters": {"type": "object", "properties": {"a": {"type": "int", "description": "A number"}, "b": {"type": "int", "description": "A number"}}, "required": ["a", "b"]}}]'  # noqa
+    })
+    messages.append({'role': 'user', 'content': 'Compute (3+5)*2'})
+    messages.append({
+        'content':
+        '(3+5)*2 = 8*2 =',
+        'role':
+        'assistant',
+        'tool_calls': [{
+            'id': '1',
+            'function': {
+                'arguments': '{"a": 8, "b": 2}',
+                'name': 'mul'
+            },
+            'type': 'function'
+        }]
+    })
+    messages.append({'role': 'tool', 'content': '3+5=16', 'tool_call_id': '1'})
+    model = MODELS.get('internlm2')(capability='chat')
+    assert model.messages2prompt(
+        messages
+    ) == """<|im_start|>system name=<|plugin|>\n[{"description": "Compute the sum of two numbers", "name": "add", "parameters": {"type": "object", "properties": {"a": {"type": "int", "description": "A number"}, "b": {"type": "int", "description": "A number"}}, "required": ["a", "b"]}}, {"description": "Calculate the product of two numbers", "name": "mul", "parameters": {"type": "object", "properties": {"a": {"type": "int", "description": "A number"}, "b": {"type": "int", "description": "A number"}}, "required": ["a", "b"]}}]<|im_end|>\n<|im_start|>user\nCompute (3+5)*2<|im_end|>\n<|im_start|>assistant\n(3+5)*2 = 8*2 =<|action_start|><|plugin|>\n{"name": "mul", "parameters": {"a": 8, "b": 2}}<|action_end|><|im_end|>\n<|im_start|>environment\n3+5=16<|im_end|>\n<|im_start|>assistant\n"""  # noqa
+
+
 def test_messages2prompt4internlm2_chat():
     model = MODELS.get('internlm2')()
     # Test with a single message
@@ -339,7 +371,18 @@ def test_qwen2d5():
                    "|>user\nWhat's the temperature in San Francisco "
                    'now?<|im_end|>\n<|im_start|>assistant\n')
     assert model.messages2prompt(messages, tools=tools) == tool_prompt
-
+    # tool call send back
+    messages.append(
+        dict(role='assistant',
+             content='',
+             tool_calls=[{
+                 'id': '0',
+                 'function': {
+                     'arguments': '{"location": "San Francisco, CA, USA", "unit": "celsius"}',
+                     'name': 'get_current_temperature'
+                 },
+                 'type': 'function'
+             }]))
     messages.append(
         dict(role='tool',
              name='get_current_temperature',
@@ -370,7 +413,11 @@ def test_qwen2d5():
                    "\"name\": <function-name>, \"arguments\": "
                    '<args-json-object>}\n</tool_call><|im_end|>\n<|im_start'
                    "|>user\nWhat's the temperature in San Francisco "
-                   'now?<|im_end|>\n<|im_start|>user\n<tool_response>\n{'
+                   'now?<|im_end|>\n<|im_start|>assistant\n\n<tool_call>\n'
+                   '{"name": "get_current_temperature", "arguments": '
+                   '{"location": "San Francisco, CA, USA", "unit": '
+                   '"celsius"}}\n</tool_call><|im_end|>\n<|im_start|>'
+                   'user\n<tool_response>\n{'
                    "'temperature': 26.1, 'location': 'San Francisco, "
                    "California, USA', 'unit': "
                    "'celsius'}\n</tool_response><|im_end|>\n<|im_start"
@@ -835,4 +882,33 @@ def test_deepseek_r1(model_path_or_name):
     lm_res = chat_template.messages2prompt(messages)
     if model_path_or_name != 'deepseek-ai/DeepSeek-V3':
         lm_res += '<think>\n'
+    assert ref == lm_res
+
+
+@pytest.mark.parametrize(
+    'model_path_or_name',
+    ['deepseek-ai/deepseek-vl2-tiny', 'deepseek-ai/deepseek-vl2-small', 'deepseek-ai/deepseek-vl2'])
+def test_deepseek_vl2(model_path_or_name):
+    deduced_name = best_match_model(model_path_or_name)
+    assert deduced_name == 'deepseek-vl2'
+
+    chat_template = MODELS.get(deduced_name)()
+    messages = [{
+        'role': 'user',
+        'content': 'This is image_1: <image>\n'
+        'This is image_2: <image>\n'
+        'This is image_3: <image>\n Can you tell me what are in the images?',
+        'images': [
+            'images/multi_image_1.jpeg',
+            'images/multi_image_2.jpeg',
+            'images/multi_image_3.jpeg',
+        ],
+    }, {
+        'role': 'assistant',
+        'content': ''
+    }]
+
+    ref = '<|User|>: This is image_1: <image>\nThis is image_2: <image>\nThis is image_3: <image>' + \
+          '\n Can you tell me what are in the images?\n\n<|Assistant|>:'
+    lm_res = chat_template.messages2prompt(messages)
     assert ref == lm_res
