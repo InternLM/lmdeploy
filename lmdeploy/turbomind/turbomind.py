@@ -9,7 +9,6 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from functools import partial
-from itertools import repeat
 from queue import Queue
 from typing import Dict, List
 

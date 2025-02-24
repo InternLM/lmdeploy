@@ -17,4 +17,3 @@ if (BUILD_MULTI_GPU)
     target_link_libraries(test_comm PRIVATE comm pthread nvtx_utils)
     target_compile_options(test_comm PRIVATE -O3 -march=native -mtune=native)
 endif ()
-
