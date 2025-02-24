@@ -222,8 +222,6 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t                                 ten
     model_param_.vocab_size         = model_reader["vocab_size"].as<int>();
     model_param_.embedding_size     = model_reader["embedding_size"].as<int>();
     model_param_.norm_eps           = model_reader["norm_eps"].as<float>();
-    model_param_.start_id           = model_reader["start_id"].as<int>();
-    model_param_.end_id             = model_reader["end_id"].as<int>();
     model_param_.tune_layer_num     = model_reader["tune_layer_num"].as<int>(1);
     model_param_.mla.q_lora_rank    = model_reader["q_lora_rank"].as<int>();
     model_param_.mla.kv_lora_rank   = model_reader["kv_lora_rank"].as<int>();
@@ -469,7 +467,7 @@ std::string LlamaTritonModel<T>::toString()
        << "\ncache_max_entry_count: " << engine_param_.cache_max_block_count
        << "\ncache_block_seq_len: " << attn_param_.cache_block_seq_len
        << "\ncache_chunk_size: " << engine_param_.cache_chunk_size
-       << "\nenable_prefix_caching: " << engine_param_.enable_prefix_caching << "\nstart_id: " << model_param_.start_id
+       << "\nenable_prefix_caching: " << engine_param_.enable_prefix_caching
        << "\ntensor_para_size: " << tensor_para_size_ << "\npipeline_para_size: " << pipeline_para_size_
        << "\nenable_custom_all_reduce: " << enable_custom_all_reduce_ << "\nmodel_name: " << model_name_
        << "\nmodel_dir: " << model_dir_ << "\nquant_policy: " << model_param_.quant_policy << "\ngroup_size: "

@@ -235,6 +235,8 @@ class Engine:
 
     def _response(self, resp: Response, resp_type: ResponseType, data: Any = None, err_msg: str = ''):
         """response."""
+        if resp.type == ResponseType.FINISH:
+            return
         resp.type = resp_type
         resp.data = data
         resp.err_msg = err_msg
@@ -253,7 +255,7 @@ class Engine:
             session_len = min(max_tokens, session_len)
         return session_len
 
-    def _on_add_session(self, reqs: Request, **kwargs):
+    def _on_add_session(self, reqs: List[Request], **kwargs):
         """on add session callback."""
         for req in reqs:
             session_id = req.data['session_id']
@@ -265,7 +267,7 @@ class Engine:
             if resp:
                 self._response(req.resp, resp_type)
 
-    def _on_stop_session(self, reqs: Request, **kwargs):
+    def _on_stop_session(self, reqs: List[Request], **kwargs):
         """on stop session callback."""
         for req in reqs:
             session_id = req.data['session_id']
@@ -273,11 +275,17 @@ class Engine:
             resp_type = ResponseType.SESSION_NOT_EXIST
             if session_id in self.scheduler.sessions:
                 self.scheduler.stop_session(session_id)
+                session = self.scheduler.sessions[session_id]
+                for seq in session.sequences.values():
+                    resp: Response = getattr(seq, 'resp', None)
+                    if resp is not None:
+                        resp.type = ResponseType.FINISH
+                        self.req_manager.response(resp)
                 resp_type = ResponseType.SUCCESS
             if resp:
                 self._response(req.resp, resp_type)
 
-    def _on_end_session(self, reqs: Request, **kwargs):
+    def _on_end_session(self, reqs: List[Request], **kwargs):
         """on end session callback."""
         for req in reqs:
             session_id = req.data['session_id']
@@ -289,7 +297,7 @@ class Engine:
             if resp:
                 self._response(req.resp, resp_type)
 
-    def _on_add_message(self, reqs: Request, **kwargs):
+    def _on_add_message(self, reqs: List[Request], **kwargs):
         """on add message callback."""
         for req in reqs:
             req_data = req.data
@@ -314,7 +322,7 @@ class Engine:
         if len(reqs) > 0:
             self._add_message(reqs)
 
-    def _add_message(self, reqs):
+    def _add_message(self, reqs: List[Request]):
 
         def __update_bad_words(msg):
             """update bad words."""

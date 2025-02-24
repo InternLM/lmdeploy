@@ -132,6 +132,7 @@ class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
             is_decoding=is_decoding,
             block_size=block_size,
             attn_mask=attn_mask,
+            softmax_scale=self.scale,
             is_unpaged_prefill=is_unpaged_prefill,
             kv_scales=kv_scales,
             kv_zeros=kv_zeros,
