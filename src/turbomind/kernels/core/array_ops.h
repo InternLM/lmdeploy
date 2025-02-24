@@ -275,7 +275,6 @@ inline __device__ void Ldcs(Array<T, N>& dst, const T* src)
     }
 }
 
-
 template<typename T, int N>
 inline __device__ void Load(Array<T, N>& dst, const T* src)
 {

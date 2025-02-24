@@ -14,7 +14,8 @@
 
 namespace turbomind::comm {
 
-enum QueryAttr {
+enum QueryAttr
+{
     kHasAllGather2D
 };
 

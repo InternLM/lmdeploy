@@ -115,7 +115,6 @@ static inline size_t get_elem_size(DataType type)
     }
 }
 
-
 typedef enum memorytype_enum
 {
     MEMORY_CPU,
