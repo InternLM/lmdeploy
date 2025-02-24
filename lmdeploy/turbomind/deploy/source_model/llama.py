@@ -8,7 +8,8 @@ import torch
 
 from lmdeploy.archs import get_model_arch
 
-from ..config import DefaultRopeParam, DynamicRopeParam, LinearRopeParam, Llama3RopeParam, RopeParam, YarnRopeParam
+from ..config import (DefaultRopeParam, DynamicRopeParam, LinearRopeParam, Llama3RopeParam, MultimodalRopeParam,
+                      RopeParam, YarnRopeParam)
 from ..loader import create_loader
 from .base import INPUT_MODELS, BaseInputModel, BaseReader
 
@@ -179,6 +180,12 @@ class LlamaModel(BaseInputModel):
                                                     beta_fast=beta_fast,
                                                     beta_slow=beta_slow)
                     rope_param = RopeParam(type='yarn', param=yarn_rope_param)
+                elif scaling_type == 'mrope':
+                    mrope_section = rope_scaling.get('mrope_section')
+                    multimodal_rope_param = MultimodalRopeParam(base=rope_theta,
+                                                                dim=head_dim,
+                                                                mrope_section=mrope_section)
+                    rope_param = RopeParam('multimodal', param=multimodal_rope_param)
                 else:
                     raise RuntimeError(f'Unsupported rope type: {scaling_type}')
             else:

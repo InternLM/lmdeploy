@@ -315,6 +315,13 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         if (rope_param_.type == RopeType::kDynamic) {
             rope_param_.base = rope_theta + offset;
         }
+        else if (rope_param_.type == RopeType::kMultimodal) {
+            const auto& position_ids              = inputs->at("mrope_position_ids");
+            rope_param_.multimodal.session_len    = position_ids.shape[1];
+            rope_param_.multimodal.position_ids   = position_ids.getPtr<int>() + offset * position_ids.shape[1] * 3;
+            rope_param_.multimodal.position_delta = inputs->getPtr<int>("mrope_position_delta") + offset;
+            rope_param_.multimodal.length         = inputs->getPtr<int>("mrope_position_length") + offset;
+        }
         params.rope_param = rope_param_;
 
         // logn attn

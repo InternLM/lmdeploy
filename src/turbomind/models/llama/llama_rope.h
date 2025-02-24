@@ -16,6 +16,7 @@ enum class RopeType
     kDynamic,
     kYarn,
     kLlama3,
+    kMultimodal,
 };
 
 inline RopeType GetRoPEType(const std::string& type)
@@ -24,7 +25,8 @@ inline RopeType GetRoPEType(const std::string& type)
                                               {"linear", RopeType::kLinear},
                                               {"dynamic", RopeType::kDynamic},
                                               {"yarn", RopeType::kYarn},
-                                              {"llama3", RopeType::kLlama3}};
+                                              {"llama3", RopeType::kLlama3},
+                                              {"multimodal", RopeType::kMultimodal}};
     return lookup.at(type);
 }
 
@@ -40,6 +42,10 @@ struct Llama3RopeParam {
     int   original_max_position_embeddings;
 };
 
+struct MultimodalRopeParam {
+    int3 section;
+};
+
 struct RopeParam {
     RopeType type;
     // common
@@ -49,8 +55,9 @@ struct RopeParam {
     int   max_position_embeddings;
     // unique
     union {
-        YarnRopeParam   yarn;
-        Llama3RopeParam llama3;
+        YarnRopeParam       yarn;
+        Llama3RopeParam     llama3;
+        MultimodalRopeParam multimodal;
     };
 };
 
@@ -67,6 +74,15 @@ struct InnerLlama3RopeParam {
     float beta;
 };
 
+struct InnerMultimodalRopeParam {
+    int3 section;
+    // runtime set
+    int  session_len{};
+    int* position_ids{};
+    int* position_delta{};
+    int* length{};
+};
+
 struct InnerRopeParam {
     RopeType type;
 
@@ -75,8 +91,9 @@ struct InnerRopeParam {
     float  scale_factor;
     float  inv_factor;
 
-    InnerYarnRopeParam   yarn;
-    InnerLlama3RopeParam llama3;
+    InnerYarnRopeParam       yarn;
+    InnerLlama3RopeParam     llama3;
+    InnerMultimodalRopeParam multimodal;
 };
 
 inline void init_inner_rope_param(const RopeParam& rope, InnerRopeParam& inner_rope)
@@ -121,6 +138,13 @@ inline void init_inner_rope_param(const RopeParam& rope, InnerRopeParam& inner_r
         float        inv_diff_freq_factor = 1.0 / (src.high_freq_factor - src.low_freq_factor);
         dst.alpha                         = src.original_max_position_embeddings / (2 * PI) * inv_diff_freq_factor;
         dst.beta                          = src.low_freq_factor * inv_diff_freq_factor;
+    }
+    else if (rope.type == RopeType::kMultimodal) {
+        auto& src     = rope.multimodal;
+        auto& dst     = inner_rope.multimodal;
+        dst.section.x = src.section.x * 2;
+        dst.section.y = src.section.y * 2 + dst.section.x;
+        dst.section.z = src.section.z * 2 + dst.section.y;
     }
 }
 

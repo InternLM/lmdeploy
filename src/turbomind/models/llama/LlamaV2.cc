@@ -204,6 +204,7 @@ void LlamaV2<T>::forwardUnified(T*               out,
                                 int              dc_batch_size,
                                 int              pf_batch_size,
                                 int*             lora_mask,
+                                MultimodalRope*  mrope,
                                 const Sequence** sequences)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
@@ -289,6 +290,13 @@ void LlamaV2<T>::forwardUnified(T*               out,
 
     if (lora_mask != nullptr && have_embeddings) {
         inputs.insert({"lora_mask", {MEMORY_GPU, TYPE_INT32, {token_num}, lora_mask}});
+    }
+
+    if (mrope != nullptr) {
+        inputs.insert({"mrope_position_ids",
+                       {MEMORY_GPU, TYPE_INT32, {bsz, (size_t)mrope->session_len, 3}, mrope->position_ids}});
+        inputs.insert({"mrope_position_delta", {MEMORY_GPU, TYPE_INT32, {bsz}, mrope->position_delta}});
+        inputs.insert({"mrope_position_length", {MEMORY_GPU, TYPE_INT32, {bsz}, mrope->length}});
     }
 
     unified_decoder_->forward(&outputs, &inputs, &weights_->decoder_layer_weights);

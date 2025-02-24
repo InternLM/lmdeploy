@@ -60,6 +60,7 @@ struct FastRoPE {
     Array<float, N / 2> inv_freq_;
     bool                is_valid_;
     float               attention_scaling_{1.f};
+    int                 idx_;
 
     typedef void (*Func)(Array<float, N / 2>&, int, InnerRopeParam&);
     Func fill_func_;
@@ -74,6 +75,11 @@ struct FastRoPE {
         else if (param_.type == RopeType::kYarn) {
             attention_scaling_ = param_.yarn.attention_factor;
         }
+        else if (param_.type == RopeType::kMultimodal) {
+            param_.multimodal.position_ids += batch_idx * param_.multimodal.session_len * 3;
+            param_.multimodal.position_delta += batch_idx;
+            param_.multimodal.length += batch_idx;
+        }
 
         get_fill_function();
     }
@@ -87,6 +93,7 @@ struct FastRoPE {
             fill_default<N>,
             fill_yarn<N>,
             fill_llama3<N>,
+            fill_default<N>,
         };
 
         fill_func_ = funcs[(int)param_.type];
@@ -94,6 +101,7 @@ struct FastRoPE {
 
     __device__ void fill(int idx)
     {
+        idx_ = idx;
         if (is_valid_ = (idx < param_.dim) && (param_.type != RopeType::kNull); is_valid_) {
             fill_func_(inv_freq_, idx, param_);
         }
@@ -102,6 +110,10 @@ struct FastRoPE {
     template<typename T>
     __device__ void apply(Array<T, N>& x, float timestep)
     {
+        if (param_.type == RopeType::kMultimodal) {
+            return apply_mrope(x, timestep);
+        }
+
         // Most models apply rotary embedding in half precision
         PRAGMA_UNROLL
         for (int i = 0; i < N; i += 2) {
@@ -109,6 +121,43 @@ struct FastRoPE {
             sincosf(timestep * inv_freq_[i / 2], &s, &c);
             s *= attention_scaling_;
             c *= attention_scaling_;
+            T tmp0 = (T)c * x[i] - (T)s * x[i + 1];
+            T tmp1 = (T)c * x[i + 1] + (T)s * x[i];
+            if (is_valid_) {
+                x[i]     = tmp0;
+                x[i + 1] = tmp1;
+            }
+        }
+    }
+
+    template<typename T>
+    __device__ void apply_mrope(Array<T, N>& x, float timestep)
+    {
+        int  tt, th, tw;
+        int3 section = param_.multimodal.section;
+        if (timestep < *param_.multimodal.length) {
+            const int* t = param_.multimodal.position_ids + 3 * (int)timestep;
+            tt           = t[0];
+            th           = t[1];
+            tw           = t[2];
+        }
+        else {
+            tt = th = tw = (int)timestep + (*param_.multimodal.position_delta);
+        }
+
+        PRAGMA_UNROLL
+        for (int i = 0; i < N; i += 2) {
+            if (i + idx_ < section.x) {
+                timestep = (float)tt;
+            }
+            else if (i + idx_ < section.y) {
+                timestep = (float)th;
+            }
+            else {
+                timestep = (float)tw;
+            }
+            float c, s;
+            sincosf(timestep * inv_freq_[i / 2], &s, &c);
             T tmp0 = (T)c * x[i] - (T)s * x[i + 1];
             T tmp1 = (T)c * x[i + 1] + (T)s * x[i];
             if (is_valid_) {

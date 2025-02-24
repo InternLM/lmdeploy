@@ -332,6 +332,20 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& reqs, std::vector<Signa
             }
         }
 
+        // copy multimodal rope input meta
+        if (model_->attn_param_.rope.type == RopeType::kMultimodal) {
+            if (r->inputs.count("mrope_length")) {
+                Copy(r->inputs.getPtr<int>("mrope_position_ids"),
+                     input_length * 3,
+                     state.mrope.position_ids + idx * 3 * session_len_);
+                Copy(r->inputs.getPtr<int>("mrope_position_delta"), 1, state.mrope.position_delta + idx);
+                Copy(r->inputs.getPtr<int>("mrope_length"), 1, state.mrope.length + idx);
+            }
+            else {
+                cudaMemsetAsync(state.mrope.length + idx, 0, sizeof(int), stream_);
+            }
+        }
+
         const int max_new_tokens = state.requests[idx]->gen_cfg.max_new_tokens;
         state.seq_len_limit[idx] = state.h_context_length[idx] + max_new_tokens;
         // `length_criterion` sets finish flag when step >= seq_limit_len, however when step == seq_limit_len
@@ -672,6 +686,14 @@ void LlamaBatch<T>::CopyState(const std::vector<std::tuple<BatchState*, BatchSta
                     d_idx,
                     std::tuple{s->output_ids, d->output_ids, session_len_},
                     std::tuple{s->curand_state, d->curand_state, 1});
+
+        if (model_->attn_param_.rope.type == RopeType::kMultimodal) {
+            IndexedCopy(s_idx,
+                        d_idx,
+                        std::tuple{s->mrope.position_ids, d->mrope.position_ids, session_len_ * 3},
+                        std::tuple{s->mrope.position_delta, d->mrope.position_delta, 1},
+                        std::tuple{s->mrope.length, d->mrope.length, 1});
+        }
     }
 
     for (const auto& [s, d, si, di] : desc) {
@@ -785,6 +807,12 @@ void LlamaBatch<T>::AllocatePersistantBuffer(size_t max_batch_size, int cache_bl
         s.output_ids = (int*)allocator_->reMalloc(s.output_ids, sizeof(int) * max_batch_size * session_len_, true);
         s.curand_state =
             (curandState_t*)allocator_->reMalloc(s.curand_state, sizeof(curandState_t) * max_batch_size, true);
+        if (model_->attn_param_.rope.type == RopeType::kMultimodal) {
+            s.mrope.position_ids =
+                (int*)allocator_->reMalloc(s.mrope.position_ids, sizeof(int) * max_batch_size * session_len_ * 3);
+            s.mrope.position_delta = (int*)allocator_->reMalloc(s.mrope.position_delta, sizeof(int) * max_batch_size);
+            s.mrope.length         = (int*)allocator_->reMalloc(s.mrope.length, sizeof(int) * max_batch_size);
+        }
     }
 
     const size_t max_batch_block_count =
@@ -894,6 +922,11 @@ void LlamaBatch<T>::FreeBuffer()
             allocator_->free((void**)&s.h_rope_theta, true);
             allocator_->free((void**)&s.output_ids);
             allocator_->free((void**)&s.curand_state);
+            if (model_->attn_param_.rope.type == RopeType::kMultimodal) {
+                allocator_->free((void**)&s.mrope.position_ids);
+                allocator_->free((void**)&s.mrope.position_delta);
+                allocator_->free((void**)&s.mrope.length);
+            }
         }
         allocator_->free((void**)&h_cu_block_counts_, true);
         allocator_->free((void**)&h_block_ptrs_, true);
@@ -1758,6 +1791,14 @@ bool LlamaBatch<T>::Forward(GenerationState& g)
             }
         }
 
+        std::shared_ptr<MultimodalRope> mrope_sptr;
+        if (model_->attn_param_.rope.type == RopeType::kMultimodal) {
+            mrope_sptr.reset(new MultimodalRope{session_len_,
+                                                state_->mrope.position_ids + first * 3 * session_len_,
+                                                state_->mrope.position_delta + first,
+                                                state_->mrope.length + first});
+        }
+
         model_->forwardUnified(decoder_output_buf_ + first * model_->hidden_units_,
                                context_decoder_output_buf_,  // temp
                                context_decoder_input_buf_,   // temp
@@ -1772,6 +1813,7 @@ bool LlamaBatch<T>::Forward(GenerationState& g)
                                dc_batch_size,
                                pf_batch_size,
                                lora_mask_buf_,
+                               mrope_sptr.get(),
                                state_->sequences.data() + first);
 
         ComputeAndOutputLogits(context_decoder_output_buf_, first, last);
@@ -1947,6 +1989,7 @@ void LlamaBatch<T>::tune()
                                    bs,
                                    0,
                                    1,
+                                   nullptr,
                                    nullptr,
                                    nullptr);
             // implicit barrier for TP

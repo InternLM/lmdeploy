@@ -113,6 +113,11 @@ class Llama3RopeParam(DefaultRopeParam):
 
 
 @dataclass
+class MultimodalRopeParam(DefaultRopeParam):
+    mrope_section: List[int]
+
+
+@dataclass
 class RopeParam:
     type: str
     param: Union[DefaultRopeParam, LinearRopeParam, DynamicRopeParam, YarnRopeParam, Llama3RopeParam]

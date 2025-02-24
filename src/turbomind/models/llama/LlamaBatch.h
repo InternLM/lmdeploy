@@ -27,6 +27,13 @@ struct SharedState {
     std::atomic<size_t>                   free_size{std::numeric_limits<size_t>::max()};
 };
 
+struct MultimodalRope {
+    int  session_len;
+    int* position_ids{};
+    int* position_delta{};
+    int* length{};
+};
+
 struct BatchState {
     int*  h_prompt_length;  // history + input, ignore generated
     int*  h_context_length;
@@ -35,7 +42,8 @@ struct BatchState {
     curandState_t* curand_state;
     int*           output_ids;  // output ids in [B, S]
 
-    float* h_rope_theta;
+    float*         h_rope_theta;
+    MultimodalRope mrope;
 
     std::vector<int> seq_len_limit;
 
