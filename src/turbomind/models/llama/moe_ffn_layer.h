@@ -8,7 +8,6 @@
 #include "src/turbomind/models/llama/LlamaFfnLayer.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
-#include "src/turbomind/utils/nccl_utils.h"
 #include <algorithm>
 
 namespace turbomind {
@@ -65,7 +64,6 @@ private:
     const size_t           hidden_dim_;
     const MoeParam         param_;
     const DataType         dtype_;
-    const NcclParam        tensor_para_;
     cudaStream_t const     stream_;
     cublasMMWrapper* const cublas_;
     LlamaLinear<T>* const  linear_;

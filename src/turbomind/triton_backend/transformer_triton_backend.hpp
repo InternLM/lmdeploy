@@ -30,8 +30,6 @@
 #endif
 
 #include "src/turbomind/utils/Tensor.h"
-#include "src/turbomind/utils/custom_ar_comm.h"
-#include "src/turbomind/utils/nccl_utils.h"
 
 #include "src/turbomind/engine/model_request.h"
 

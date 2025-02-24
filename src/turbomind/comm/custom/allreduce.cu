@@ -9,7 +9,6 @@
 
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/meta.h"
-#include "src/turbomind/kernels/custom_ar_kernels.h"
 #include "src/turbomind/utils/Tensor.h"
 
 #include "mscclpp/concurrency_device.hpp"

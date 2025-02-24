@@ -18,7 +18,6 @@
 #include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
-#include "src/turbomind/utils/nccl_utils.h"
 
 namespace py = pybind11;
 namespace ft = turbomind;
@@ -302,14 +301,6 @@ struct ScopedGIL {
 
 PYBIND11_MODULE(_turbomind, m)
 {
-    // nccl param
-    py::class_<ft::NcclParam>(m, "NcclParam")
-        .def(py::init<int, int>(), "rank"_a = 0, "world_size"_a = 1)
-        .def("__str__", &ft::NcclParam::toString);
-
-    // custom comm
-    (void)py::class_<ft::AbstractCustomComm, std::shared_ptr<ft::AbstractCustomComm>>(m, "AbstractCustomComm");
-
     py::class_<ft::SessionParam>(m, "SessionParam")
         .def(py::init([](uint64_t id, int step, bool start, bool end) {
                  if (!start && end) {

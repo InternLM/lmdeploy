@@ -32,7 +32,6 @@
 
 #include "src/turbomind/models/llama/BlockManager.h"
 #include "src/turbomind/models/llama/LlamaBatch.h"
-#include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/models/llama/LlamaV2.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/models/llama/copy.h"
@@ -45,7 +44,6 @@
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/debug_utils.h"
 #include "src/turbomind/utils/logger.h"
-#include "src/turbomind/utils/nccl_utils.h"
 
 namespace turbomind {
 

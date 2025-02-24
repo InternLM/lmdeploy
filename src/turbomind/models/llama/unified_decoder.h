@@ -9,7 +9,6 @@
 #include "src/turbomind/models/llama/unified_attention_layer.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
 #include "src/turbomind/utils/cuda_utils.h"
-#include "src/turbomind/utils/nccl_utils.h"
 
 namespace turbomind {
 
