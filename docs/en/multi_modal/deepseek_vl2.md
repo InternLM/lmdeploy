@@ -13,11 +13,12 @@ Install LMDeploy by following the [installation guide](../get_started/installati
 
 ### Prepare
 
-When deploying the **DeepSeek-VL2** model using LMDeploy, you must download the official GitHub repository. This is because LMDeploy reuses the image processing functions provided in the official repository.
+When deploying the **DeepSeek-VL2** model using LMDeploy, you must install the official GitHub repository and related 3-rd party libs. This is because LMDeploy reuses the image processing functions provided in the official repository.
 
 ```
 pip install git+https://github.com/deepseek-ai/DeepSeek-VL2.git --no-deps
 pip install attrdict
+pip install timm
 ```
 
 Worth noticing that it may fail with `transformers>=4.48.0`, as known in this [issue](https://github.com/deepseek-ai/DeepSeek-VL2/issues/45).
@@ -26,7 +27,7 @@ Worth noticing that it may fail with `transformers>=4.48.0`, as known in this [i
 
 The following sample code shows the basic usage of VLM pipeline. For more examples, please refer to [VLM Offline Inference Pipeline](./vl_pipeline.md).
 
-To construct valid DeepSeek-VL2 prompts with image inputs, users should insert `<IMAGE_TOKENS>` manually.
+To construct valid DeepSeek-VL2 prompts with image inputs, users should insert `<IMAGE_TOKEN>` manually.
 
 ```python
 from lmdeploy import pipeline

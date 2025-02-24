@@ -22,6 +22,19 @@ def check_deepseek_vl2_install():
                           ' --no-deps`')
 
 
+def check_trans_version():
+    """check if the installed version of the 'transformers' library is smaller
+    than the specified version."""
+    import transformers
+    from packaging import version
+
+    max_version = '4.48.0'
+    installed_version = transformers.__version__
+    assert version.parse(installed_version) < version.parse(
+        max_version
+    ), f'deepseek_vl2 requires transformers version < 4.48.0, but found version: {installed_version}. Please downgrade.'
+
+
 @VISION_MODELS.register_module()
 class DeepSeek2VisionModel(VisonModel):
     """DeepSeek2 vision model."""
@@ -37,6 +50,7 @@ class DeepSeek2VisionModel(VisonModel):
         return False
 
     def build_preprocessor(self):
+        check_trans_version()
         check_deepseek_vl2_install()
         from deepseek_vl2.models.processing_deepseek_vl_v2 import DeepseekVLV2Processor
 

@@ -190,9 +190,7 @@ class DeepseekVLV2ForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
         if images is None or images_spatial_crop.sum() == 0:
             return self.language.get_input_embeddings()(input_ids)
 
-        # 1, 1, 2
         bs, max_n_images, _ = images_spatial_crop.shape
-        # [tensor(2, device='cuda:0')]
         batch_num_tiles = [0 for _ in range(bs)]
         total_tiles = []
         for idx in range(bs):
@@ -205,7 +203,6 @@ class DeepseekVLV2ForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
             total_tiles.append(images[idx, :batch_num_tiles[idx]])
 
         # [batch_all_tiles, 3, height, width]
-        # [2, 384, 384]
         total_tiles = torch.cat(total_tiles, dim=0)
         assert total_tiles.shape[0] == sum(batch_num_tiles)
         if total_tiles.shape[0] == 0:
@@ -445,6 +442,8 @@ class DeepseekVLV2ForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
 
             if len(images_spatial_crop) > 0:
                 images_spatial_crop = torch.cat([crop for crop in images_spatial_crop]).unsqueeze(0)
+            else:
+                images_spatial_crop = None
 
         return dict(
             input_ids=input_ids,  # [b, T]
