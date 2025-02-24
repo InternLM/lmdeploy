@@ -128,6 +128,8 @@ private:
     IAllocator* const      allocator_;
     LlamaLinear<T>* const  linear_;
 
+    bool use_allgather_2d_{false};
+
     const bool is_free_buffer_after_forward_;
     const bool debug_;
 

@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <memory>
 
+#include "src/turbomind/comm/comm.h"
 #include "src/turbomind/macro.h"
 
 #include "src/turbomind/models/llama/LlamaBatch.h"
@@ -87,6 +88,10 @@ LlamaV2<T>::LlamaV2(const ModelParam&               model,
     debug_(isDebug())
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
+
+    if (comm_->tp && comm_->tp->Query(comm::kHasAllGather2D)) {
+        use_allgather_2d_ = true;
+    }
 
     unified_decoder_ = std::make_unique<UnifiedDecoder<T>>(model, attn, moe, lora, ctx);
 
@@ -294,59 +299,79 @@ void LlamaV2<T>::postDecodeEmbedding(float* logits, float* local_logits, const T
 {
     NvtxScope scope("postDecodeEmbedding");
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
+
     cudaDataType_t data_type = getCudaDataType<T>();
     float          alpha     = 1.f;
     float          beta      = 0.f;
+    FT_CHECK(vocab_size_padded_ % tp_size_ == 0);
+    const size_t local_vocab_size = vocab_size_padded_ / tp_size_;
+
+    auto invoke_gemm = [&](int first, int n, auto output, size_t batch_stride, size_t rank_stride) {
+        cublas_wrapper_->Gemm(CUBLAS_OP_T,
+                              CUBLAS_OP_N,
+                              local_vocab_size,  // m
+                              n,
+                              hidden_units_,  // k
+                              &alpha,
+                              weights_->post_decoder_embedding_kernel,
+                              data_type,
+                              hidden_units_,  // k
+                              decoder_output + first * hidden_units_,
+                              data_type,
+                              hidden_units_,  // k
+                              &beta,
+                              output + first * batch_stride + tp_rank_ * rank_stride,
+                              CUDA_R_32F,
+                              vocab_size_padded_,  // n
+                              CUDA_R_32F,
+                              cublasGemmAlgo_t(-1));
+    };
+
     if (tp_size_ == 1) {
-        cublas_wrapper_->Gemm(CUBLAS_OP_T,
-                              CUBLAS_OP_N,
-                              vocab_size_,  // n
-                              batch_size,
-                              hidden_units_,  // k
-                              &alpha,
-                              weights_->post_decoder_embedding_kernel,
-                              data_type,
-                              hidden_units_,  // k
-                              decoder_output,
-                              data_type,
-                              hidden_units_,  // k
-                              &beta,
-                              logits,
-                              CUDA_R_32F,
-                              vocab_size_,  // n
-                              CUDA_R_32F,
-                              cublasGemmAlgo_t(-1));
+        invoke_gemm(0, batch_size, logits, 0, 0);
     }
-    else {
-        FT_CHECK(vocab_size_padded_ % tp_size_ == 0);
-
-        const size_t local_vocab_size = vocab_size_padded_ / tp_size_;
-        const size_t slice            = batch_size * local_vocab_size;
-
-        cublas_wrapper_->Gemm(CUBLAS_OP_T,
-                              CUBLAS_OP_N,
-                              local_vocab_size,  // n
-                              batch_size,
-                              hidden_units_,  // k
-                              &alpha,
-                              weights_->post_decoder_embedding_kernel,
-                              data_type,
-                              hidden_units_,  // k
-                              decoder_output,
-                              data_type,
-                              hidden_units_,  // k
-                              &beta,
-                              local_logits + tp_rank_ * slice,
-                              CUDA_R_32F,
-                              local_vocab_size,  // n
-                              CUDA_R_32F,
-                              cublasGemmAlgo_t(-1));
-
+    else if (!use_allgather_2d_) {
+        const size_t slice = batch_size * local_vocab_size;
+        invoke_gemm(0, batch_size, local_logits, 0, slice);
         comm_->tp->AllGather(local_logits + tp_rank_ * slice, local_logits, slice, stream_);
         sync_check_cuda_error();
-
         invokeTransposeAxis01(logits, local_logits, tp_size_, batch_size, local_vocab_size, stream_);
         sync_check_cuda_error();
+    }
+    else {
+        FT_CHECK(logits == local_logits);
+        const int max_stages       = 1;
+        const int min_stage_tokens = 512;
+        const int step = std::max(std::min(batch_size, min_stage_tokens), (batch_size + max_stages - 1) / max_stages);
+        cudaStream_t comm_stream = stream_;
+        cudaEvent_t  comm_event{};
+        if (step < batch_size) {
+            check_cuda_error(cudaStreamCreateWithFlags(&comm_stream, cudaStreamNonBlocking));
+            check_cuda_error(cudaEventCreateWithFlags(&comm_event, cudaEventDisableTiming));
+        }
+        for (int first = 0; first < batch_size; first += step) {
+            const int n = std::min(first + step, batch_size) - first;
+            invoke_gemm(first, n, local_logits, vocab_size_padded_, local_vocab_size);
+            if (comm_stream != stream_) {
+                check_cuda_error(cudaEventRecord(comm_event, stream_));
+                check_cuda_error(cudaStreamWaitEvent(comm_stream, comm_event));
+            }
+            comm_->tp->AllGather2D(local_logits + first * vocab_size_padded_ + tp_rank_ * local_vocab_size,
+                                   local_logits + first * vocab_size_padded_,
+                                   vocab_size_padded_,
+                                   local_vocab_size,
+                                   local_vocab_size,
+                                   n,
+                                   {first == 0, first + n == batch_size},
+                                   comm_stream);
+            sync_check_cuda_error();
+        }
+        if (comm_stream != stream_) {
+            check_cuda_error(cudaEventRecord(comm_event, comm_stream));
+            check_cuda_error(cudaStreamWaitEvent(stream_, comm_event));
+            check_cuda_error(cudaEventDestroy(comm_event));
+            check_cuda_error(cudaStreamDestroy(comm_stream));
+        }
     }
 }
 

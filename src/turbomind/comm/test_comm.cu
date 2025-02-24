@@ -145,7 +145,7 @@ struct TestComm {
         max_tokens_ = *std::max_element(tokens_.begin(), tokens_.end());
 
         TestAllReduce<half>(hidden_dim);
-        // TestAllreduceResidualBiasRMSnorm<half>(hidden_dim);
+        TestAllreduceResidualBiasRMSnorm<half>(hidden_dim);
         TestAllGather<half>(hidden_dim / tp);  // tp embedding
         TestAllGather<float>(vocab_size / tp);
     }
@@ -175,12 +175,8 @@ struct TestComm {
             Context      ctx{rank};
             const size_t max_count   = ref_data.size();
             T*           d_rank_data = ctx.malloc<T>(max_count);
-            // T*           d_tmp       = ctx.malloc<T>(max_count);
-
-            T* d_tmp{};
-            cudaMalloc(&d_tmp, sizeof(T) * max_count);
+            T*           d_tmp       = (T*)comm.Allocate(sizeof(T) * max_count);
             comm.Register(d_tmp, sizeof(T) * max_count);
-
             ctx.copy_n(data[rank].data(), max_count, d_rank_data);
 
             [[maybe_unused]] auto verify = [&](auto count) {
@@ -247,6 +243,9 @@ struct TestComm {
                     SummaryEntry(tokens_[i], count, sizeof(T), avg, algbw, busbw);
                 }
             }
+
+            comm.Deregister(d_tmp);
+            comm.Free(d_tmp);
         };
 
         std::vector<std::thread> threads;
@@ -311,10 +310,7 @@ struct TestComm {
         std::cout << "done.\n";
 
         auto func = [&](Comm& comm) noexcept {
-            const int rank = comm.rank();
-
-            // printf("[rank %d] Start\n", rank);
-
+            const int    rank = comm.rank();
             Context      ctx{rank};
             const size_t max_count   = ref_data.size();
             T*           d_rank_data = ctx.malloc<T>(max_count);
@@ -322,12 +318,7 @@ struct TestComm {
             T*           d_bias      = ctx.malloc<T>(dim);
             T*           d_weight    = ctx.malloc<T>(dim);
             T*           d_tmp_res   = ctx.malloc<T>(max_count);
-
-            T* d_tmp_data{};
-            cudaMalloc(&d_tmp_data, sizeof(T) * max_count);
-
-            // Register in NCCL impl is NOP, cudaMalloc may conflict later kernel launch
-            barrier_->arrive_and_wait();
+            T*           d_tmp_data  = (T*)comm.Allocate(sizeof(T) * max_count);
 
             comm.Register(d_tmp_data, sizeof(T) * max_count);
 
@@ -416,8 +407,8 @@ struct TestComm {
                 verify(n);
             }
 
-            cudaFree(d_tmp_data);
-            cudaFree(d_tmp_res);
+            comm.Deregister(d_tmp_data);
+            comm.Free(d_tmp_data);
 
             if (rank == 0) {
                 SummaryHeader("allreduce | rmsnorm", dim, comm.world_size());
@@ -464,17 +455,9 @@ struct TestComm {
             Context      ctx{rank};
             const size_t max_count   = max_tokens_ * dim;
             T*           d_rank_data = ctx.malloc<T>(max_count);
-
-            T* d_tmp{};
-            cudaMalloc(&d_tmp, sizeof(T) * max_count * world_size);
-
-            // Register in NCCL impl is NOP, cudaMalloc may conflict later kernel launch
-            barrier_->arrive_and_wait();
-
+            T*           d_tmp       = (T*)comm.Allocate(sizeof(T) * max_count * world_size);
             comm.Register(d_tmp, sizeof(T) * max_count * world_size);
-
             ctx.copy_n(data[rank].data(), max_count, d_rank_data);
-
             [[maybe_unused]] auto verify = [&](int64_t count) {
                 auto           total_count = count * world_size;
                 std::vector<T> res(total_count);
@@ -507,11 +490,17 @@ struct TestComm {
                     cudaMemsetAsync(d_tmp, 0, sizeof(T) * count * comm.world_size(), ctx.stream);
                     ctx.copy_n(d_rank_data, count, d_tmp + rank * count);
                     auto ms = ctx.exec([&](auto stream) {  //
-                        comm.AllGather(d_tmp + rank * count, d_tmp, count, stream);
+                        if (comm.Query(kHasAllGather2D)) {
+                            comm.AllGather2D(d_tmp + rank * count, d_tmp, dim, count, dim, n, {1, 1}, stream);
+                        }
+                        else {
+                            comm.AllGather(d_tmp + rank * count, d_tmp, count, stream);
+                        }
                     });
                     if (i >= warmup_) {
                         delta += ms;
                     }
+                    // verify(count);
                 }
 
                 verify(count);
@@ -527,6 +516,9 @@ struct TestComm {
                     SummaryEntry(tokens_[i], count, sizeof(T), avg, algbw, busbw);
                 }
             }
+
+            comm.Deregister(d_tmp);
+            comm.Free(d_tmp);
         };
 
         std::vector<std::thread> threads;
@@ -561,15 +553,15 @@ int main(int argc, char* argv[])
              -1,
              10,
              100,
+             //  {1024});
              // {512});
-             //    {1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 24, 32, 48, 64, 96, 128});
+             //  {1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 24, 32, 48, 64, 96, 128});
              //  {128, 256, 512, 1024, 2048, 4096, 8192});
              //  {8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048, 4096, 6144, 8192});
              //   {8192, 16384, 32768});
-             //   {1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024});
+             //  {1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024});
              {1,   2,   4,   6,   8,   12,   16,   24,   32,   48,   64,   96,  128,
               192, 256, 384, 512, 768, 1024, 1536, 2048, 3072, 4096, 6144, 8192});
-    // );
 
     return 0;
 }

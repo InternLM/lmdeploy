@@ -19,6 +19,7 @@
 
 #include <cuda_runtime.h>
 
+#include "src/turbomind/comm/comm.h"
 #include "src/turbomind/macro.h"
 
 #include "src/turbomind/engine/gateway.h"
@@ -717,7 +718,9 @@ void LlamaBatch<T>::AllocateBuffer(size_t batch_size, size_t session_len, int ca
     cu_block_counts_ = (int*)allocator_->reMalloc(cu_block_counts_, sizeof(int) * (batch_size + 1));
     block_ptrs_      = (uintptr_t*)allocator_->reMalloc(block_ptrs_, sizeof(uintptr_t) * max_batch_block_count);
 
-    logits_buf_ = (float*)allocator_->reMalloc(logits_buf_, sizeof(float) * batchxbeam * vocab_size, false);
+    if (!logits_buf_) { // may be alias of local_logits_buf_
+        logits_buf_ = (float*)allocator_->reMalloc(logits_buf_, sizeof(float) * batchxbeam * vocab_size, false);
+    }
 
     sampled_logprobs_ =
         (float*)allocator_->reMalloc(sampled_logprobs_, sizeof(float) * batchxbeam * kMaxLogProb, false);
@@ -826,17 +829,30 @@ void LlamaBatch<T>::AllocCommBuffers()
 
     // TODO: rename this to hidden_states
     context_decoder_output_buf_ = (T*)CommBufAlloc(sizeof(T) * max_forward_token_num_ * hidden_units, true);
-    local_logits_buf_           = (float*)CommBufAlloc(sizeof(float) * max_batch_size_ * vocab_size_padded, true);
+
+    local_logits_buf_ = (float*)CommBufAlloc(sizeof(float) * max_batch_size_ * vocab_size_padded, true);
+    if (model_->use_allgather_2d_) {
+        logits_buf_ = local_logits_buf_;
+    }
 }
 
 template<class T>
 void LlamaBatch<T>::FreeCommBuffers()
 {
     CommBufFree((void**)&context_decoder_output_buf_, true);
-    CommBufFree((void**)&local_logits_buf_, true);
+
+    if (local_logits_buf_) {
+        if (logits_buf_ == local_logits_buf_) {
+            logits_buf_ = {};
+        }
+        CommBufFree((void**)&local_logits_buf_, true);
+    }
+
     if (local_context_logits_buf_) {
+        if (context_logits_buf_ == local_context_logits_buf_) {
+            context_logits_buf_ = {};
+        }
         CommBufFree((void**)&local_context_logits_buf_, true);
-        local_context_logits_buf_size_ = 0;
     }
 }
 
@@ -863,8 +879,9 @@ void LlamaBatch<T>::FreeBuffer()
         allocator_->free((void**)&cu_block_counts_);
         allocator_->free((void**)&block_ptrs_);
 
-        allocator_->free((void**)&logits_buf_);
-
+        if (logits_buf_) {
+            allocator_->free((void**)&logits_buf_);
+        }
         if (context_logits_buf_) {
             allocator_->free((void**)&context_logits_buf_);
         }
@@ -928,8 +945,8 @@ LlamaBatch<T>::~LlamaBatch()
     internal_thread_.join();
 
     // The dtor maybe called from unknown thread, set device id before CUDA calls
-    check_cuda_error(cudaSetDevice(device_id_));
-    check_cuda_error(cudaStreamSynchronize(stream_));
+    cudaSetDevice(device_id_);
+    cudaStreamSynchronize(stream_);
 
     FreeBuffer();
 
@@ -1205,11 +1222,7 @@ void LlamaBatch<T>::ComputeAndOutputLogits(T* hidden_states, int first, int last
         return;
     }
 
-    context_logits_buf_ = (float*)allocator_->reMalloc(
-        context_logits_buf_, sizeof(float) * model_->vocab_size_padded_ * token_num, false);
-
     if (tp_size_ > 1) {
-
         FT_CHECK(model_->vocab_size_padded_ % tp_size_ == 0);
         const size_t byte_size = sizeof(float) * model_->vocab_size_padded_ * token_num;
 
@@ -1220,10 +1233,18 @@ void LlamaBatch<T>::ComputeAndOutputLogits(T* hidden_states, int first, int last
             CommBufFree((void**)&local_context_logits_buf_, true);
             local_context_logits_buf_      = (float*)CommBufAlloc(byte_size, true);
             local_context_logits_buf_size_ = byte_size;
+            if (model_->use_allgather_2d_) {
+                context_logits_buf_ = local_context_logits_buf_;
+            }
 
             check_cuda_error(cudaStreamSynchronize(stream_));
             shared_state_->barrier->wait();
         }
+    }
+
+    if (!context_logits_buf_) {
+        context_logits_buf_ = (float*)allocator_->reMalloc(
+            context_logits_buf_, sizeof(float) * model_->vocab_size_padded_ * token_num, false);
     }
 
     model_->postDecodeEmbedding(context_logits_buf_, local_context_logits_buf_, hidden_states, token_num);
@@ -1995,6 +2016,9 @@ void* LlamaBatch<T>::CommBufAlloc(size_t size, bool register_)
 template<class T>
 void LlamaBatch<T>::CommBufFree(void** ptr, bool deregister)
 {
+    if (!ptr) {
+        return;
+    }
     if (auto& tp = model_->comm_->tp) {
         if (deregister) {
             tp->Deregister(*ptr);

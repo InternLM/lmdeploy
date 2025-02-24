@@ -14,6 +14,10 @@
 
 namespace turbomind::comm {
 
+enum QueryAttr {
+    kHasAllGather2D
+};
+
 class Comm {
 public:
     virtual ~Comm() = default;
@@ -37,6 +41,8 @@ public:
     virtual void Register(void* ptr, size_t size) = 0;
 
     virtual void Deregister(void* ptr) = 0;
+
+    virtual int Query(QueryAttr attr) const noexcept = 0;
 
     template<class T>
     void AllReduceSum(const T* sendbuff, T* recvbuff, size_t count, cudaStream_t stream)
@@ -86,6 +92,32 @@ public:
         T* hidden, T* residual, const T* bias, const T* weights, float eps, int dim, int token_num, cudaStream_t stream)
     {
         AllreduceResidualBiasRMSnorm(hidden, residual, bias, weights, eps, dim, token_num, getTensorType<T>(), stream);
+    }
+
+    virtual void AllGather2D(const void*  sendbuff,
+                             void*        recvbuff,
+                             size_t       pitch,
+                             size_t       stride,
+                             int          width,
+                             int          height,
+                             DataType     type,
+                             int2         flags,  // (is_first, is_last)
+                             cudaStream_t stream)
+    {
+        throw std::runtime_error("not implemented");
+    }
+
+    template<class T>
+    void AllGather2D(const T*     sendbuff,
+                     T*           recvbuff,
+                     size_t       pitch,
+                     size_t       stride,
+                     int          width,
+                     int          height,
+                     int2         flags,
+                     cudaStream_t stream)
+    {
+        AllGather2D(sendbuff, recvbuff, pitch, stride, width, height, getTensorType<T>(), flags, stream);
     }
 
 protected:

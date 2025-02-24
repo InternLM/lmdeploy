@@ -102,6 +102,11 @@ public:
         }
     }
 
+    int Query(QueryAttr attr) const noexcept override
+    {
+        return 0;
+    }
+
     void AllReduceSum(const void* sendbuff, void* recvbuff, size_t count, DataType type, cudaStream_t stream) override
     {
         NCCLCHECK(ncclGroupStart());

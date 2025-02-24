@@ -18,8 +18,7 @@
 
 #include "mscclpp/concurrency_device.hpp"
 #include "mscclpp/core.hpp"
-#include "mscclpp/semaphore.hpp"
-#include "mscclpp/sm_channel.hpp"
+#include "mscclpp/semaphore_device.hpp"
 
 #include "src/turbomind/comm/comm.h"
 #include "src/turbomind/kernels/core/array.h"
@@ -50,6 +49,8 @@ public:
 
     void Deregister(void* ptr) override;
 
+    int Query(QueryAttr attr) const noexcept override;
+
     void AllReduceSum(const void* sendbuff, void* recvbuff, size_t count, DataType type, cudaStream_t stream) override;
 
     void AllGather(const void* sendbuff, void* recvbuff, size_t sendcount, DataType type, cudaStream_t stream) override;
@@ -63,6 +64,16 @@ public:
                                       int          token_num,
                                       DataType     dtype,
                                       cudaStream_t stream) override;
+
+    void AllGather2D(const void*  sendbuff,
+                     void*        recvbuff,
+                     size_t       pitch,
+                     size_t       stride,
+                     int          width,
+                     int          height,
+                     DataType     type,
+                     int2         flags,
+                     cudaStream_t stream) override;
 
 private:
     template<class T>
@@ -79,39 +90,50 @@ private:
     Array<void*, kMaxNearPeers> get_near_impl(void* ptr);
 
 private:
-    std::shared_ptr<mscclpp::Communicator>            comm_;
-    std::vector<std::shared_ptr<mscclpp::Connection>> connections_;
+    std::shared_ptr<mscclpp::Communicator> comm_;
 
-    std::vector<std::shared_ptr<mscclpp::SmDevice2DeviceSemaphore>>   semaphores_;
-    std::unordered_map<void*, std::vector<mscclpp::SmChannel>>        registered_channels_;
-    std::unordered_map<void*, std::vector<mscclpp::RegisteredMemory>> registered_memories_;
+    std::vector<int> ordinals_;
+
+    std::unordered_map<void*, std::vector<std::pair<void*, size_t>>> registered_memories_;
 
     void*    packet_buff_{};
     void*    scratch_buff_{};
     uint32_t flag_{1};
 
+    uint64_t*                                      device_semaphore_data_{};
     mscclpp::SmDevice2DeviceSemaphoreDeviceHandle* device_semaphores_;
     mscclpp::DeviceSyncer*                         device_syncer_{};
+
+    struct Allocation {
+        CUmemGenericAllocationHandle handle;
+        size_t                       size;
+    };
+
+    CUmemAllocationProp          alloc_prop_{};
+    size_t                       alloc_granularity_{};
+    std::vector<CUmemAccessDesc> alloc_access_descs_{};
+
+    std::unordered_map<void*, Allocation> allocations_;
 };
 
 std::vector<std::unique_ptr<Comm>> CreateCustomComm(const std::vector<int>& devices);
 
 struct Rank {
-    int            rank;
-    int            peers;
-    __device__ int get_next_peer(int i)
+    int                     rank;
+    int                     peers;
+    __host__ __device__ int get_next_peer(int i)
     {
         return i + rank < peers ? i + rank : i + rank - peers;
     }
-    __device__ int get_prev_peer(int i)
+    __host__ __device__ int get_prev_peer(int i)
     {
         return get_next_peer(peers - 1 - i);
     }
-    __device__ int get_peer_rank(int p)  // rank of `p`
+    __host__ __device__ int get_peer_rank(int p)  // rank of `p`
     {
         return p < rank ? p : p + 1;
     }
-    __device__ int inverse_peer(int p)  // peer idx of `rank` on peer `p`
+    __host__ __device__ int inverse_peer(int p)  // peer idx of `rank` on peer `p`
     {
         return p < rank ? rank - 1 : rank;
     }
