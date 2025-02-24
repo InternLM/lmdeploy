@@ -15,7 +15,7 @@ on:
         default: 'main'
       benchmark_type:
         required: true
-        description: 'Set benchmark type. Default is "["generation", "throughtput", "api_server"]"'
+        description: 'Set benchmark type. Default is "["generation", "throughput", "api_server"]"'
         type: string
         default: "['apiserver', 'generation', 'throughput']"
       offline_mode:
