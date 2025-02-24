@@ -25,7 +25,7 @@ def check_qwen_vl_deps_install():
 class Qwen2VLModel(VisonModel):
     """Qwen2VL model."""
 
-    _arch = 'Qwen2VLForConditionalGeneration'
+    _arch = ['Qwen2VLForConditionalGeneration', 'Qwen2_5_VLForConditionalGeneration']
 
     def build_preprocessor(self):
         check_qwen_vl_deps_install()
@@ -55,9 +55,16 @@ class Qwen2VLModel(VisonModel):
 
     def build_model(self):
         check_qwen_vl_deps_install()
-        from transformers import Qwen2VLForConditionalGeneration
+        arch = self.hf_config.architectures[0]
+        if arch == 'Qwen2VLForConditionalGeneration':
+            from transformers import Qwen2VLForConditionalGeneration
+            model_cls = Qwen2VLForConditionalGeneration
+        else:
+            from transformers import Qwen2_5_VLForConditionalGeneration
+            model_cls = Qwen2_5_VLForConditionalGeneration
+
         if self.with_llm:
-            self.vl_model = Qwen2VLForConditionalGeneration.from_pretrained(self.model_path, device_map='cpu')
+            self.vl_model = model_cls.from_pretrained(self.model_path, device_map='cpu')
         else:
             from accelerate import init_empty_weights
             with init_empty_weights():
@@ -65,9 +72,7 @@ class Qwen2VLModel(VisonModel):
                 config.quantization_config = {}  # disable vision part quantization
                 # disable accelerate check_tied_parameters_in_config for Qwen2-VL-2B-Instruct
                 config.tie_word_embeddings = False
-
-                from transformers import Qwen2VLForConditionalGeneration
-                model = Qwen2VLForConditionalGeneration._from_config(config)
+                model = model_cls._from_config(config)
                 del model.model
                 del model.lm_head
                 model.half()
@@ -78,7 +83,7 @@ class Qwen2VLModel(VisonModel):
                                              checkpoint=self.model_path,
                                              device_map='auto' if not self.with_llm else {'': 'cpu'},
                                              max_memory=self.max_memory,
-                                             no_split_module_classes=['Qwen2VLVisionBlock'],
+                                             no_split_module_classes=['Qwen2VLVisionBlock', 'Qwen2_5_VLVisionBlock'],
                                              dtype=torch.half)
             self.model = model.eval()
 
@@ -95,10 +100,9 @@ class Qwen2VLModel(VisonModel):
             the message list with forwarding results included
         """
         inputs = [x['content'] for x in messages if x['role'] == 'preprocess'][0]
-        dtype = self.model.visual.get_dtype()
-        device = self.model.visual.get_device()
+        dtype = torch.half
+        device = next(self.model.visual.parameters()).device
         outputs = []
-        max_batch_size = 10  # to remove
         for idx in range(0, len(inputs), max_batch_size):
             pixel_values = [x['pixel_values'].type(dtype) for x in inputs[idx:idx + max_batch_size]]
             image_grid_thw = [x['image_grid_thw'] for x in inputs[idx:idx + max_batch_size]]
