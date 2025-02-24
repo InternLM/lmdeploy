@@ -37,11 +37,6 @@ class BaseInputModel(ABC):
         self.tokenizer_path = tokenizer_path
 
     @abstractmethod
-    def tokenizer_info(self):
-        """Read tokenizer info."""
-        pass
-
-    @abstractmethod
     def model_info(self) -> Dict:
         """Read model info."""
         pass

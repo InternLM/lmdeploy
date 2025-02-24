@@ -513,7 +513,7 @@ class InternVLInputProcessor(BaseModelInputProcessor):
         for input_mm in input_multimodals:
             pixel_values = input_mm['pixel_values'].to(self.dtype)
             offset = input_mm['offset']
-            image_token_id = input_mm.get('image_token_id', 0)
+            image_token_id = input_mm['image_token_id']
             num_pad = input_mm['image_tokens']
             if isinstance(num_pad, torch.Tensor):
                 num_pad = num_pad.item()

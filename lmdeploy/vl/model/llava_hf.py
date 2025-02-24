@@ -66,7 +66,7 @@ class LlavaHfVisionModel(VisonModel):
                 dict(pixel_values=pixel_values,
                      image_size=image.size,
                      image_tokens=self.n_token_per_image,
-                     image_token_id=0))
+                     image_token_id=self.image_token_id))
         messages.append(dict(role='preprocess', content=outputs))
         return messages
 

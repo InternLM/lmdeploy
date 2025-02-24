@@ -31,8 +31,6 @@ struct ModelParam {
     bool       attn_bias;
     WeightType weight_type;
     int        group_size;
-    int        start_id;
-    int        end_id;
     MLAParam   mla;
     int        tune_layer_num;
 

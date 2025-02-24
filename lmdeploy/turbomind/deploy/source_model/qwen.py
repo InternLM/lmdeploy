@@ -56,13 +56,6 @@ class QwenModel(LlamaModel):
 
     Reader = QwenReader
 
-    def tokenizer_info(self):
-        """Read tokenizer info."""
-        n_words = 151851
-        bos_id = 0
-        eos_id = 151643
-        return n_words, bos_id, eos_id
-
     def model_info(self):
         """Read model info."""
         params_path = osp.join(self.model_path, 'config.json')
@@ -104,16 +97,6 @@ class Qwen2Model(LlamaModel):
     """
 
     Reader = LlamaReader
-
-    def tokenizer_info(self):
-        """set tokenizer info.
-
-        Refer to https://huggingface.co/Qwen/Qwen1.5-7B-Chat/blob/main/generation_config.json
-        """  # noqa: E501
-        n_words = 152064
-        bos_id = 151643
-        eos_id = 151645
-        return n_words, bos_id, eos_id
 
     def model_info(self):
         cfg = super().model_info()
@@ -158,14 +141,6 @@ class Qwen2MoeReader(LlamaReader):
 class Qwen2MoeModel(LlamaModel):
 
     Reader = Qwen2MoeReader
-
-    def tokenizer_info(self):
-        """https://huggingface.co/Qwen/Qwen1.5-7B-Chat/blob/main/generation_con
-        fig.json."""  # noqa: E501
-        n_words = 152064
-        bos_id = 151643
-        eos_id = 151645
-        return n_words, bos_id, eos_id
 
     def model_info(self):
         cfg = self.model_config

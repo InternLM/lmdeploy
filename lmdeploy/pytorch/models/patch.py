@@ -166,6 +166,15 @@ def _get_model_class(config, module_map):
         raise RuntimeError(f'Can not found rewrite for auto_map: {mapname}')
 
     architectures = getattr(config, 'architectures', [])
+
+    if architectures is None:
+        # only for deepseek-vl2, which has different config formats
+        # https://huggingface.co/deepseek-ai/deepseek-vl2/blob/main/config.json
+        assert getattr(config.language_config, 'architectures', []) is not None
+        qualname = module_map['DeepseekVLV2ForCausalLM']
+        module_cls = _class_from_qualname(qualname)
+        return module_cls
+
     for arch in architectures:
         if arch in module_map:
             qualname = module_map[arch]
