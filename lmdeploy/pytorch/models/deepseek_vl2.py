@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # adapted from https://github.com/deepseek-ai/DeepSeek-VL2/blob/main/deepseek_vl2/models/modeling_deepseek_vl_v2.py
 
-import gc
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import torch
@@ -301,74 +300,6 @@ class DeepseekVLV2ForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
 
         return input_embeds
 
-    @torch.no_grad()
-    def incremental_prefilling(self,
-                               input_ids: Optional[torch.LongTensor] = None,
-                               attention_mask: Optional[torch.Tensor] = None,
-                               inputs_embeds: Optional[torch.FloatTensor] = None,
-                               images: Optional[torch.FloatTensor] = None,
-                               images_seq_mask: Optional[torch.LongTensor] = None,
-                               images_spatial_crop: Optional[torch.LongTensor] = None,
-                               chunk_size: int = 1024):
-        if inputs_embeds is None:
-            inputs_embeds = self.prepare_inputs_embeds(
-                input_ids=input_ids,
-                images=images,
-                images_seq_mask=images_seq_mask,
-                images_spatial_crop=images_spatial_crop,
-            )
-
-            del images
-            del images_seq_mask
-            del images_spatial_crop
-
-            if attention_mask is not None:
-                attention_mask = attention_mask.to(inputs_embeds.device)
-
-            self._clear_cuda_cache()
-
-        bzs, seq_len, _ = inputs_embeds.shape
-        past_key_values = None
-
-        # remain the last token for the next forward
-        prefilling_len = seq_len - 1
-        for i in range(0, prefilling_len, chunk_size):
-            chunk_start = i
-            chunk_end = min(i + chunk_size, prefilling_len)
-            chunk_inputs_embeds = inputs_embeds[:, chunk_start:chunk_end]
-            chunk_attention_mask = attention_mask[:, 0:chunk_end]
-
-            # compute position_ids
-            if past_key_values is not None:
-                position_ids = torch.arange(chunk_start, chunk_end, dtype=torch.long,
-                                            device=inputs_embeds.device).unsqueeze(0)
-            else:
-                position_ids = None
-
-            # chunk-forward
-            with torch.no_grad():
-                outputs = self.forward(
-                    inputs_embeds=chunk_inputs_embeds,
-                    attention_mask=chunk_attention_mask,
-                    past_key_values=past_key_values,
-                    position_ids=position_ids,
-                    use_cache=True,
-                )
-                # update past_key_values
-                past_key_values = outputs.past_key_values
-
-                del outputs, position_ids
-                self._clear_cuda_cache()
-
-        prefilling_key_values = []
-        for layer_past in past_key_values:
-            prefilling_key_values.append((
-                layer_past[0][:, :, 0:prefilling_len, ...].to(inputs_embeds.device),
-                layer_past[1][:, :, 0:prefilling_len, ...].to(inputs_embeds.device),
-            ))
-
-        return inputs_embeds, prefilling_key_values
-
     def forward(
         self,
         input_ids: torch.Tensor,
@@ -396,13 +327,6 @@ class DeepseekVLV2ForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
             attn_metadata=attn_metadata,
         )
         return outputs
-
-    def _clear_cuda_cache(self):
-        """clear CUDA memory cache."""
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            torch.cuda.synchronize()
 
     def get_logits(self, hidden_states: torch.Tensor):
         """compute logits of the model output."""
