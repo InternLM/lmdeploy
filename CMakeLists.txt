@@ -22,13 +22,6 @@ if(${CUDA_VERSION_MAJOR} VERSION_GREATER_EQUAL "11")
   message("CUDA_VERSION ${CUDA_VERSION_MAJOR}.${CUDA_VERSION_MINOR} is greater or equal than 11.0, enable -DENABLE_BF16 flag")
 endif()
 
-# if((${CUDA_VERSION_MAJOR} VERSION_GREATER_EQUAL "11" AND ${CUDA_VERSION_MINOR} VERSION_GREATER_EQUAL "8") OR (${CUDA_VERSION_MAJOR} VERSION_GREATER_EQUAL "12"))
-#   add_definitions("-DENABLE_FP8")
-#   option(ENABLE_FP8 "ENABLE_FP8" OFF)
-#   if(ENABLE_FP8)
-#     message("CUDA_VERSION ${CUDA_VERSION_MAJOR}.${CUDA_VERSION_MINOR} is greater or equal than 11.8, enable -DENABLE_FP8 flag")
-#   endif()
-# endif()
 
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake/Modules)
 
@@ -339,8 +332,6 @@ add_library(transformer-shared SHARED
   $<TARGET_OBJECTS:cublasAlgoMap>
   $<TARGET_OBJECTS:cublasMMWrapper>
   $<TARGET_OBJECTS:cuda_utils>
-  $<TARGET_OBJECTS:custom_ar_comm>
-  $<TARGET_OBJECTS:custom_ar_kernels>
   $<TARGET_OBJECTS:attention>
   $<TARGET_OBJECTS:decoding_kernels>
   $<TARGET_OBJECTS:gpt_kernels>
@@ -348,7 +339,6 @@ add_library(transformer-shared SHARED
   $<TARGET_OBJECTS:logger>
   $<TARGET_OBJECTS:memory_utils>
   $<TARGET_OBJECTS:mpi_utils>
-  $<TARGET_OBJECTS:nccl_utils>
   $<TARGET_OBJECTS:nvtx_utils>
   $<TARGET_OBJECTS:anomaly_handler>
   $<TARGET_OBJECTS:sampling_penalty_kernels>
