@@ -113,7 +113,7 @@ def fused_moe_blocked_f8_kernel(
     b_ptrs = B + exp_off + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
 
     offs_bsn = pid_n * BLOCK_SIZE_N // group_bn
-    as_ptrs = A_scale + (offs_am % M) * stride_asm
+    as_ptrs = A_scale + offs_am * stride_asm
     bs_ptrs = B_scale + stride_bse * exp_id + offs_bsn * stride_bsn
 
     acc_scale = tl.load(as_ptrs) * tl.load(bs_ptrs)
@@ -124,7 +124,7 @@ def fused_moe_blocked_f8_kernel(
         k_start = (k + 1) * BLOCK_SIZE_K
         offs_ksa = k_start // group_ak
         offs_ksb = k_start // group_bk
-        a_scale = tl.load(as_ptrs + offs_ksa * stride_ask, mask=k_start < K, other=1.0)
+        a_scale = tl.load(as_ptrs + offs_ksa * stride_ask, mask=mask_sid & k_start < K, other=1.0)
         b_scale = tl.load(bs_ptrs + offs_ksb * stride_bsk, mask=k_start < K, other=1.0)
 
         # load ab
