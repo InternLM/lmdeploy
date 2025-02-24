@@ -1,6 +1,6 @@
 import pytest
 from utils.benchmark_utils import throughput_test
-from utils.config_utils import get_benchmark_model_list, get_cuda_prefix_by_workerid
+from utils.config_utils import get_benchmark_model_list, get_cuda_id_by_workerid, get_cuda_prefix_by_workerid
 
 
 @pytest.mark.gpu_num_1
@@ -83,7 +83,8 @@ def test_throughput_prtest_tp1(config, run_id, run_config, worker_id):
     result, msg = throughput_test(config,
                                   run_id,
                                   run_config,
-                                  cuda_prefix=str(int(get_cuda_prefix_by_workerid(worker_id)) + 5),
+                                  cuda_prefix='CUDA_VISIBLE_DEVICES=' +
+                                  str(int(get_cuda_id_by_workerid(worker_id)) + 5),
                                   worker_id=worker_id,
                                   is_smoke=True)
 
