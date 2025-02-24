@@ -1,12 +1,10 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
-#include <atomic>
 #include <type_traits>
 
 #include "cub/block/block_reduce.cuh"
 
 #include "src/turbomind/comm/custom/custom_comm.h"
-
 #include "src/turbomind/comm/custom/device_semaphore.h"
 
 #include "src/turbomind/kernels/core/array_ops.h"
@@ -14,6 +12,7 @@
 #include "src/turbomind/kernels/core/meta.h"
 
 #include "src/turbomind/kernels/norm/rms_norm.h"
+
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
 

@@ -1,8 +1,8 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include "src/turbomind/comm/custom/custom_comm.h"
-
 #include "src/turbomind/comm/custom/device_semaphore.h"
+
 #include "src/turbomind/kernels/core/meta.h"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"

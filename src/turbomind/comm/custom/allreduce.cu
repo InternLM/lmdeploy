@@ -4,15 +4,12 @@
 #include <stdexcept>
 
 #include "src/turbomind/comm/custom/custom_comm.h"
-
 #include "src/turbomind/comm/custom/device_semaphore.h"
 
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/meta.h"
 #include "src/turbomind/utils/Tensor.h"
 
-#include "mscclpp/concurrency_device.hpp"
-#include "mscclpp/packet_device.hpp"
 #include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind::comm {

@@ -2,31 +2,27 @@
 
 #include <memory>
 #include <mutex>
-
-#include <cuda.h>
 #include <vector>
 
+#include <cuda.h>
+
 #include "src/turbomind/comm/comm.h"
+#include "src/turbomind/comm/custom/bootstrap.h"
 #include "src/turbomind/comm/custom/custom_comm.h"
 
-#include "mscclpp/core.hpp"
-#include "mscclpp/semaphore_device.hpp"
-
-#include "src/turbomind/comm/custom/bootstrap.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/logger.h"
 
 namespace turbomind::comm {
 
-CustomComm::CustomComm(std::shared_ptr<mscclpp::Bootstrap> bootstrap):
-    Comm{bootstrap->getNranks(), bootstrap->getRank()}
+CustomComm::CustomComm(std::shared_ptr<LocalBootstrap> bootstrap): Comm{bootstrap->getNranks(), bootstrap->getRank()}
 {
-    comm_ = std::make_shared<mscclpp::Communicator>(std::move(bootstrap));
+    bootstrap_ = bootstrap;
 
     // Exchange device ordinals
     ordinals_.resize(world_size_);
     check_cuda_error(cudaGetDevice(&ordinals_[rank_]));
-    comm_->bootstrap()->allGather(ordinals_.data(), sizeof(int));
+    bootstrap_->allGather(ordinals_.data(), sizeof(int));
 
     // Prepare allocation properties & granularity
     alloc_prop_.type          = CU_MEM_ALLOCATION_TYPE_PINNED;
@@ -61,11 +57,9 @@ CustomComm::~CustomComm()
         TM_LOG_WARNING("[TM][COMM][%d] Allocation (%p, %lu) is not freed", rank_, ptr, alloc.size);
     }
 
-    check_cuda_error(cudaFreeAsync(device_syncer_, 0));
+    // check_cuda_error(cudaFreeAsync(device_syncer_, 0));
     check_cuda_error(cudaFreeAsync(device_semaphores_, 0));
     check_cuda_error(cudaStreamSynchronize(0));
-
-    comm_.reset();
 }
 
 void CustomComm::Initialize()
@@ -77,7 +71,7 @@ void CustomComm::Initialize()
 
     std::vector<uint64_t*> all_flags(world_size_);
     all_flags[rank_] = flags;
-    comm_->bootstrap()->allGather(all_flags.data(), sizeof(uint64_t*));
+    bootstrap_->allGather(all_flags.data(), sizeof(uint64_t*));
 
     const int peers = world_size_ - 1;
 
@@ -111,9 +105,6 @@ void CustomComm::Initialize()
 
     scratch_buff_ = Allocate(kScratchBuffSize);
     check_cuda_error(cudaMemsetAsync(scratch_buff_, 0, kScratchBuffSize));
-
-    check_cuda_error(cudaMallocAsync(&device_syncer_, sizeof(mscclpp::DeviceSyncer), 0));
-    check_cuda_error(cudaMemsetAsync(device_syncer_, 0, sizeof(mscclpp::DeviceSyncer)));
 
     check_cuda_error(cudaStreamSynchronize(0));
 
@@ -157,7 +148,7 @@ void CustomComm::Register(void* ptr, size_t size)
 
         std::vector<Buffer> buffers(world_size_);
         buffers[rank_] = {ptr, size};
-        comm_->bootstrap()->allGather(buffers.data(), sizeof(Buffer));
+        bootstrap_->allGather(buffers.data(), sizeof(Buffer));
 
         std::vector<Buffer> bufs;
         for (int i = 0; i < world_size_; ++i) {

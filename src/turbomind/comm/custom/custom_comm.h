@@ -2,26 +2,14 @@
 
 #pragma once
 
-#ifdef _CLANGD
-#define MSCCLPP_DEVICE_COMPILE 1
-#define MSCCLPP_DEVICE_CUDA 1
-
-#ifdef MSCCLPP_HOST_DEVICE_INLINE
-#undef MSCCLPP_HOST_DEVICE_INLINE
-#endif
-
-#define MSCCLPP_HOST_DEVICE_INLINE __host__ __device__ __inline__
-#define MSCCLPP_DEVICE_INLINE __device__ __inline__
-#endif
-
 #include <unordered_map>
 
-#include "mscclpp/concurrency_device.hpp"
-#include "mscclpp/core.hpp"
-#include "mscclpp/semaphore_device.hpp"
-
 #include "src/turbomind/comm/comm.h"
+#include "src/turbomind/comm/custom/bootstrap.h"
+#include "src/turbomind/comm/custom/mscclpp.h"
+
 #include "src/turbomind/kernels/core/array.h"
+
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
@@ -31,13 +19,13 @@ static constexpr int kMaxNearPeers = 7;
 
 class CustomComm: public Comm {
 public:
-    static constexpr int kPacketBuffSize  = 16 << 20;
-    static constexpr int kScratchBuffSize = 64 << 20;
+    static constexpr int kPacketBuffSize  = 8 << 20;
+    static constexpr int kScratchBuffSize = 8 << 20;
     static constexpr int kChannelsPerConn = 64;
 
     ~CustomComm() override;
 
-    CustomComm(std::shared_ptr<mscclpp::Bootstrap> bootstrap);
+    CustomComm(std::shared_ptr<LocalBootstrap> bootstrap);
 
     void Initialize();
 
@@ -90,7 +78,7 @@ private:
     Array<void*, kMaxNearPeers> get_near_impl(void* ptr);
 
 private:
-    std::shared_ptr<mscclpp::Communicator> comm_;
+    std::shared_ptr<LocalBootstrap> bootstrap_;
 
     std::vector<int> ordinals_;
 
@@ -102,7 +90,6 @@ private:
 
     uint64_t*                                      device_semaphore_data_{};
     mscclpp::SmDevice2DeviceSemaphoreDeviceHandle* device_semaphores_;
-    mscclpp::DeviceSyncer*                         device_syncer_{};
 
     struct Allocation {
         CUmemGenericAllocationHandle handle;

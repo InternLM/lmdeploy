@@ -1,16 +1,19 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
+#pragma once
+
 #include <mutex>
 #include <queue>
-
-#include "mscclpp/core.hpp"
+#include <thread>
 
 #include "src/turbomind/comm/barrier.h"
 #include "src/turbomind/comm/comm.h"
 
 namespace turbomind::comm {
 
-class LocalBootstrap: public mscclpp::Bootstrap {
+// Inspired by
+// https://github.com/microsoft/mscclpp/blob/591276f9d07d2df8e2a45a16738e27867e468ca3/include/mscclpp/core.hpp#L31
+class LocalBootstrap {
 public:
     struct State {
 
@@ -42,22 +45,22 @@ public:
     {
     }
 
-    int getRank() override
+    int getRank()
     {
         return rank_;
     }
 
-    int getNranks() override
+    int getNranks()
     {
         return world_size_;
     }
 
-    int getNranksPerNode() override
+    int getNranksPerNode()
     {
         return world_size_;
     }
 
-    void send(void* data, int size, int peer, int tag) override
+    void send(void* data, int size, int peer, int tag)
     {
         // std::cerr << "send " << size << " " << rank_ << " -> " << peer << " " << tag << "\n";
         std::lock_guard lock{state_->mutexes[peer]};
@@ -65,7 +68,7 @@ public:
         que.push(std::vector<uint8_t>((uint8_t*)data, (uint8_t*)data + size));
     }
 
-    void recv(void* data, int size, int peer, int tag) override
+    void recv(void* data, int size, int peer, int tag)
     {
         // std::cerr << "recv " << size << " " << rank_ << " <- " << peer << " " << tag << "\n";
         auto& que = state_->get_que(peer, rank_);
@@ -83,7 +86,7 @@ public:
         }
     }
 
-    void allGather(void* allData, int size) override
+    void allGather(void* allData, int size)
     {
         barrier();
 
@@ -102,7 +105,7 @@ public:
         barrier();
     }
 
-    void barrier() override
+    void barrier()
     {
         state_->barrier.arrive_and_wait();
     }

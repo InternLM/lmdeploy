@@ -2,9 +2,10 @@
 
 #pragma once
 
-#include "src/turbomind/comm/custom/custom_comm.h"  // MUST come before all mscclpp
+#include "src/turbomind/comm/custom/custom_comm.h"
+#include "src/turbomind/comm/custom/mscclpp.h"
 
-#include "mscclpp/semaphore_device.hpp"
+#include <cuda/atomic>
 
 namespace turbomind::comm {
 
@@ -16,6 +17,8 @@ __device__ T* cvta_generic_to_global(T* p)
     return reinterpret_cast<T*>(ret);
 }
 
+// Modified from
+// https://github.com/microsoft/mscclpp/blob/591276f9d07d2df8e2a45a16738e27867e468ca3/include/mscclpp/semaphore_device.hpp#L40
 struct DeviceSemaphore {
 
     __device__ void Load(mscclpp::SmDevice2DeviceSemaphoreDeviceHandle* data)
