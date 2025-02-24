@@ -17,7 +17,7 @@ When deploying the **DeepSeek-VL2** model using LMDeploy, you must install the o
 
 ```
 pip install git+https://github.com/deepseek-ai/DeepSeek-VL2.git --no-deps
-pip install attrdict timm 'transformers<=4.48.0'
+pip install attrdict timm 'transformers<4.48.0'
 ```
 
 Worth noticing that it may fail with `transformers>=4.48.0`, as known in this [issue](https://github.com/deepseek-ai/DeepSeek-VL2/issues/45).
