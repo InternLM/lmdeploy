@@ -66,8 +66,8 @@ class CambOpsBackend(DlinferOpsBackend):
         q_seqlens = step_context.q_seqlens
         kv_seqlens = step_context.kv_seqlens.to(torch.int32)
         block_offsets = step_context.block_offsets.to(torch.int32)
-        max_q_seq_len = torch.max(q_seqlens).cpu().item()
-        max_kv_seq_len = torch.max(kv_seqlens).cpu().item()
+        max_q_seq_len = torch.max(q_seqlens)
+        max_kv_seq_len = torch.max(kv_seqlens)
 
         cu_seqlens = torch.cat((q_start_loc, q_seqlens.sum().unsqueeze(0))).int()
         cu_seq_lens_kv = None

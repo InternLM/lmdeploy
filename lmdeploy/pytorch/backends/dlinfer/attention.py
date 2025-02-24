@@ -14,8 +14,8 @@ class DlinferAttentionMetadata(AttentionMetadata):
     block_size: int = 64
     attention_mask: Sequence[Tensor] = tuple()
     is_unpaged_prefill: Optional[bool] = None
-    max_q_seq_len: int = 1
-    max_kv_seq_len: int = 1
+    max_q_seq_len: Tensor = None
+    max_kv_seq_len: Tensor = None
     quant_meta: Dict = None
     cu_seq_lens_kv: Optional[Tensor] = None
 

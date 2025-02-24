@@ -53,18 +53,19 @@ class MacaOpsBackend(DlinferOpsBackend):
 
         kv_start_indices, attention_mask = [], []
         block_num, _, block_size, _ = step_context.kv_caches[0][1].shape
-        device = step_context.block_offsets.device
 
         is_unpaged_prefill = False
         if not step_context.is_decoding:
             is_unpaged_prefill = \
                all((step_context.q_seqlens ==
                     step_context.kv_seqlens).tolist())
-        q_start_loc = torch.cat((torch.tensor([0], device=device), step_context.q_seqlens.cumsum(0))).int()
         q_seqlens = step_context.q_seqlens.int()
         kv_seqlens = step_context.kv_seqlens.int()
-        max_q_seq_len = torch.max(q_seqlens).item()
-        max_kv_seq_len = torch.max(kv_seqlens).item()
+        max_q_seq_len = torch.max(q_seqlens)
+        max_kv_seq_len = torch.max(kv_seqlens)
+
+        cumsum_q_seqlens = q_seqlens.cumsum(0)
+        q_start_loc = torch.cat((cumsum_q_seqlens - q_seqlens, cumsum_q_seqlens[-1:])).int()
 
         if step_context.is_decoding:
             # collect kv_start_indices without using a for-loop,

@@ -116,8 +116,8 @@ class AscendOpsBackend(DlinferOpsBackend):
                      step_context.kv_seqlens).tolist())
         q_seqlens_list = step_context.q_seqlens.tolist()
         kv_seqlens_list = step_context.kv_seqlens.tolist()
-        max_q_seq_len = max(q_seqlens_list)
-        max_kv_seq_len = max(kv_seqlens_list)
+        max_q_seq_len = torch.max(step_context.q_seqlens)
+        max_kv_seq_len = torch.max(step_context.kv_seqlens)
 
         if step_context.is_decoding:
             # collect kv_start_indices without using a for-loop,
