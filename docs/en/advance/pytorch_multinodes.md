@@ -1,6 +1,6 @@
 # PyTorchEngine Multi-Node Deployment Guide
 
-To support larger-scale model deployment requirements, PyTorchEngine provides multi-node deployment support. Below are the detailed steps for deploying a `tp=16` model across two 8-card nodes.
+To support larger-scale model deployment requirements, PyTorchEngine provides multi-node deployment support. Below are the detailed steps for deploying a `tp=16` model across two 8-GPU nodes.
 
 ## 1. Create Docker Containers (Optional)
 
