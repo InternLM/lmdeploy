@@ -83,7 +83,7 @@ def test_throughput_prtest_tp1(config, run_id, run_config, worker_id):
     result, msg = throughput_test(config,
                                   run_id,
                                   run_config,
-                                  cuda_prefix=get_cuda_prefix_by_workerid(worker_id, tp_num=1),
+                                  cuda_prefix=str(int(get_cuda_prefix_by_workerid(worker_id)) + 5),
                                   worker_id=worker_id,
                                   is_smoke=True)
 

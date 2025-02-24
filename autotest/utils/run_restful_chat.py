@@ -18,6 +18,7 @@ from lmdeploy.utils import is_bf16_supported
 
 BASE_HTTP_URL = 'http://localhost'
 DEFAULT_PORT = 23333
+LLAVA_TEMPLATE = 'autotest/llava_template.json'
 
 
 def start_restful_api(config, param, model, model_path, backend_type, worker_id):
@@ -63,7 +64,7 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
         if not is_bf16_supported():
             cmd += ' --dtype float16'
     if 'llava' in model:
-        cmd += ' --model-name vicuna'
+        cmd += ' --chat-template ' + LLAVA_TEMPLATE
     if 'quant_policy' in param.keys() and param['quant_policy'] is not None:
         quant_policy = param['quant_policy']
         cmd += f' --quant-policy {quant_policy}'
