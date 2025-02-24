@@ -34,7 +34,7 @@ from lmdeploy.vl import load_image
 
 
 if __name__ == "__main__":
-    pipe = pipeline('deepseek-vl2-tiny')
+    pipe = pipeline('deepseek-ai/deepseek-vl2-tiny')
 
     image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
     response = pipe(('<IMAGE_TOKEN>describe this image', image))
