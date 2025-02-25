@@ -65,6 +65,13 @@ class Qwen2VLModel(VisonModel):
 
         if self.with_llm:
             self.vl_model = model_cls.from_pretrained(self.model_path, device_map='cpu')
+            # TODO treat mrope as an option to the common rope functions
+            # it seems mrope is build upon default/linear/dynamic rope functions and is not a rope type
+            # current implementation bind mrope with default rope function which is the default
+            # behavior in official model.
+            self.vl_model.config.rope_scaling['type'] = 'mrope'
+            if 'rope_type' in self.vl_model.config.rope_scaling:
+                del self.vl_model.config.rope_scaling['rope_type']
         else:
             from accelerate import init_empty_weights
             with init_empty_weights():
