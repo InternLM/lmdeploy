@@ -63,8 +63,6 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
         cmd += ' --backend pytorch'
         if not is_bf16_supported():
             cmd += ' --dtype float16'
-    if 'llava' in model:
-        cmd += ' --chat-template ' + LLAVA_TEMPLATE
     if 'quant_policy' in param.keys() and param['quant_policy'] is not None:
         quant_policy = param['quant_policy']
         cmd += f' --quant-policy {quant_policy}'

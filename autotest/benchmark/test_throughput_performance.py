@@ -65,7 +65,6 @@ def test_throughput_func_tp2(config, run_id, run_config, worker_id):
     assert result, msg
 
 
-@pytest.mark.function
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_1
 @pytest.mark.pr_test

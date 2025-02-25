@@ -339,7 +339,7 @@ def Qwen_vl_testcase(output_text, f):
             assert case_result, 'reason: combined images: panda should in ' + response
     with allure.step('qwen-performance-images'):
         response = get_response_from_output(output_text, 'qwen-performance-images')
-        case_result = 'buildings' in response.lower() or '楼' in response or 'skyline' in response.text.lower(
+        case_result = 'buildings' in response.lower() or '楼' in response or 'skyline' in response.lower(
         ) or 'cityscape' in response.lower()
         f.writelines('qwen-performance-images result: ' + str(case_result) +
                      'reason: performance images: panda should in ' + response + '\n')
@@ -347,7 +347,7 @@ def Qwen_vl_testcase(output_text, f):
             assert case_result, 'reason: performance images: panda should in ' + response
     with allure.step('qwen-performance-images2'):
         response = get_response_from_output(output_text, 'qwen-performance-images2')
-        case_result = 'buildings' in response.lower() or '楼' in response or 'skyline' in response.text.lower(
+        case_result = 'buildings' in response.lower() or '楼' in response or 'skyline' in response.lower(
         ) or 'cityscape' in response.lower()
         f.writelines('qwen-performance-images2 result: ' + str(case_result) +
                      'reason: performance images: panda should in ' + response + '\n')
