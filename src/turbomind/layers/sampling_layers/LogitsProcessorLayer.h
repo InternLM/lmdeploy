@@ -50,6 +50,7 @@ private:
     std::vector<int>   min_lengths_;
     std::vector<float> temperature_;
     std::vector<int>   context_length_;
+    std::vector<int>   prompt_length_;
 
     // device buffer
     int*   repetition_penalty_workspace_ = nullptr;

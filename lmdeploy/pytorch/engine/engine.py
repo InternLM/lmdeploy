@@ -255,7 +255,7 @@ class Engine:
             session_len = min(max_tokens, session_len)
         return session_len
 
-    def _on_add_session(self, reqs: Request, **kwargs):
+    def _on_add_session(self, reqs: List[Request], **kwargs):
         """on add session callback."""
         for req in reqs:
             session_id = req.data['session_id']
@@ -267,7 +267,7 @@ class Engine:
             if resp:
                 self._response(req.resp, resp_type)
 
-    def _on_stop_session(self, reqs: Request, **kwargs):
+    def _on_stop_session(self, reqs: List[Request], **kwargs):
         """on stop session callback."""
         for req in reqs:
             session_id = req.data['session_id']
@@ -285,7 +285,7 @@ class Engine:
             if resp:
                 self._response(req.resp, resp_type)
 
-    def _on_end_session(self, reqs: Request, **kwargs):
+    def _on_end_session(self, reqs: List[Request], **kwargs):
         """on end session callback."""
         for req in reqs:
             session_id = req.data['session_id']
@@ -297,7 +297,7 @@ class Engine:
             if resp:
                 self._response(req.resp, resp_type)
 
-    def _on_add_message(self, reqs: Request, **kwargs):
+    def _on_add_message(self, reqs: List[Request], **kwargs):
         """on add message callback."""
         for req in reqs:
             req_data = req.data
@@ -322,20 +322,7 @@ class Engine:
         if len(reqs) > 0:
             self._add_message(reqs)
 
-    def _add_message(self, reqs):
-
-        def __update_bad_words(msg):
-            """update bad words."""
-            sampling_param = msg.sampling_param
-            eos_token_id = self.model_config.eos_token_id
-            if eos_token_id is None:
-                return
-            if sampling_param.ignore_eos:
-                sampling_param.bad_words += eos_token_id
-            else:
-                for eid in eos_token_id:
-                    if eid not in sampling_param.stop_words:
-                        sampling_param.stop_words.append(eid)
+    def _add_message(self, reqs: List[Request]):
 
         def __update_max_new_tokens(msg):
             """update max new tokens."""
@@ -364,7 +351,6 @@ class Engine:
                     input_embeddings=req.data.get('input_embeddings'),
                 )
                 msg = next(iter(sess.sequences.values()))
-                __update_bad_words(msg)
                 __update_max_new_tokens(msg)
                 self.scheduler.add_sequence(msg)
             else:
@@ -378,7 +364,6 @@ class Engine:
                 msg.sampling_param = sampling_param
                 msg.return_logits = return_logits
                 msg.status = MessageStatus.WAITING
-                __update_bad_words(msg)
                 __update_max_new_tokens(msg)
 
             msg.resp = req.resp
