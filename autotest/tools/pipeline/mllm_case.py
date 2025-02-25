@@ -24,9 +24,9 @@ DESC_ZH = '两张图有什么相同和不同的地方.'
 
 def run_pipeline_mllm_test(model_path, resource_path, tp, backend_type, is_pr_test, extra: object = None):
     if 'pytorch' in backend_type:
-        backend_config = PytorchEngineConfig(tp=tp, session_len=32576, cache_max_entry_count=0.7)
+        backend_config = PytorchEngineConfig(tp=tp, session_len=32576, cache_max_entry_count=0.6)
     else:
-        backend_config = TurbomindEngineConfig(tp=tp, session_len=32576, cache_max_entry_count=0.7)
+        backend_config = TurbomindEngineConfig(tp=tp, session_len=32576, cache_max_entry_count=0.6)
 
     if 'kvint' in backend_type:
         backend_config.quant_policy = extra.get('quant_policy')
