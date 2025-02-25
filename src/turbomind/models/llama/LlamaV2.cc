@@ -302,7 +302,7 @@ void LlamaV2<T>::postDecodeEmbedding(float* logits, float* local_logits, const T
     FT_CHECK(vocab_size_padded_ % tp_size_ == 0);
     const size_t local_vocab_size = vocab_size_padded_ / tp_size_;
 
-    auto invoke_gemm = [&](int first, int n, auto output, size_t batch_stride, size_t rank_stride) {
+    auto invoke_gemm = [&](int first, int n, auto C, size_t batch_stride_C, size_t rank_stride_C) {
         cublas_wrapper_->Gemm(CUBLAS_OP_T,
                               CUBLAS_OP_N,
                               local_vocab_size,  // m
@@ -316,19 +316,22 @@ void LlamaV2<T>::postDecodeEmbedding(float* logits, float* local_logits, const T
                               data_type,
                               hidden_units_,  // k
                               &beta,
-                              output + first * batch_stride + tp_rank_ * rank_stride,
+                              C + first * batch_stride_C + tp_rank_ * rank_stride_C,
                               CUDA_R_32F,
-                              vocab_size_padded_,  // n
+                              batch_stride_C,  // ldc
                               CUDA_R_32F,
                               cublasGemmAlgo_t(-1));
     };
 
     if (tp_size_ == 1) {
-        invoke_gemm(0, batch_size, logits, 0, 0);
+        invoke_gemm(0, batch_size, logits, vocab_size_padded_, 0);
+        sync_check_cuda_error();
     }
-    else if (!use_allgather_2d_) {
+    else if (use_allgather_2d_ == false) {
+        FT_CHECK(logits != local_logits);
         const size_t slice = batch_size * local_vocab_size;
-        invoke_gemm(0, batch_size, local_logits, 0, slice);
+        invoke_gemm(0, batch_size, local_logits, local_vocab_size, slice);
+        sync_check_cuda_error();
         comm_->tp->AllGather(local_logits + tp_rank_ * slice, local_logits, slice, stream_);
         sync_check_cuda_error();
         invokeTransposeAxis01(logits, local_logits, tp_size_, batch_size, local_vocab_size, stream_);
@@ -348,6 +351,7 @@ void LlamaV2<T>::postDecodeEmbedding(float* logits, float* local_logits, const T
         for (int first = 0; first < batch_size; first += step) {
             const int n = std::min(first + step, batch_size) - first;
             invoke_gemm(first, n, local_logits, vocab_size_padded_, local_vocab_size);
+            sync_check_cuda_error();
             if (comm_stream != stream_) {
                 check_cuda_error(cudaEventRecord(comm_event, stream_));
                 check_cuda_error(cudaStreamWaitEvent(comm_stream, comm_event));

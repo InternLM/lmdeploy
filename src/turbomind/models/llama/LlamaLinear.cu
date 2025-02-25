@@ -248,10 +248,15 @@ LlamaLinear<T>::LlamaLinear(cublasMMWrapper* cublas_wrapper, cudaStream_t stream
 }
 
 template<class T>
-void LlamaLinear<T>::forward(
-    T* output_data, Pitched input_data, int batch_size, const LlamaDenseWeight<T>& weight, Type type, int* lora_mask)
+void LlamaLinear<T>::forward(T*                         output_data,
+                             Pitched                    input_data,
+                             int                        batch_size,
+                             const LlamaDenseWeight<T>& weight,
+                             Type                       type,
+                             T*                         lora_buff,
+                             int*                       lora_mask)
 {
-    impl_->forward(output_data, input_data, batch_size, weight, type, lora_mask);
+    impl_->forward(output_data, input_data, batch_size, weight, type, lora_buff, lora_mask);
 }
 
 template<class T>
