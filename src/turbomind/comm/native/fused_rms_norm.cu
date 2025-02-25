@@ -4,8 +4,8 @@
 
 #include "cub/block/block_reduce.cuh"
 
-#include "src/turbomind/comm/custom/custom_comm.h"
-#include "src/turbomind/comm/custom/device_semaphore.h"
+#include "src/turbomind/comm/native/device_semaphore.h"
+#include "src/turbomind/comm/native/native_comm.h"
 
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"

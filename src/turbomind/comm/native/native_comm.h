@@ -5,8 +5,8 @@
 #include <unordered_map>
 
 #include "src/turbomind/comm/comm.h"
-#include "src/turbomind/comm/custom/bootstrap.h"
-#include "src/turbomind/comm/custom/mscclpp.h"
+#include "src/turbomind/comm/native/bootstrap.h"
+#include "src/turbomind/comm/native/mscclpp.h"
 
 #include "src/turbomind/kernels/core/array.h"
 

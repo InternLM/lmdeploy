@@ -7,8 +7,8 @@
 #include <cuda.h>
 
 #include "src/turbomind/comm/comm.h"
-#include "src/turbomind/comm/custom/bootstrap.h"
-#include "src/turbomind/comm/custom/custom_comm.h"
+#include "src/turbomind/comm/native/bootstrap.h"
+#include "src/turbomind/comm/native/native_comm.h"
 
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/logger.h"

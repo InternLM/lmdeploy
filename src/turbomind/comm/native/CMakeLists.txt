@@ -18,8 +18,8 @@ if (USE_MSCCLLPP)
     FetchContent_MakeAvailable(repo-mscclpp)
 endif ()
 
-add_library(custom_comm STATIC custom_comm.cu allreduce.cu allgather.cu fused_rms_norm.cu)
-target_link_libraries(custom_comm PRIVATE rms_norm CUDA::cuda_driver logger)
+add_library(native_comm STATIC native_comm.cu allreduce.cu allgather.cu fused_rms_norm.cu)
+target_link_libraries(native_comm PRIVATE rms_norm CUDA::cuda_driver logger)
 
-set_property(TARGET custom_comm PROPERTY POSITION_INDEPENDENT_CODE  ON)
-set_property(TARGET custom_comm PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+set_property(TARGET native_comm PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET native_comm PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)

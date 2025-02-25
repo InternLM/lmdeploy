@@ -9,8 +9,8 @@ set_property(TARGET comm PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET comm PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 
 if (BUILD_MULTI_GPU)
-    add_subdirectory(custom)
-    target_link_libraries(comm PRIVATE custom_comm)
+    add_subdirectory(native)
+    target_link_libraries(comm PRIVATE native_comm)
 
     if (USE_NCCL)
         add_subdirectory(nccl)
