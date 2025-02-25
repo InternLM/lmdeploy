@@ -19,6 +19,12 @@
         throw std::runtime_error(msg.c_str());                                                                         \
     }
 
+#if NCCL_VERSION_CODE >= NCCL_VERSION(2, 19, 0)
+#define NCCL_BUFF_REG 1
+#else
+#define NCCL_BUFF_REG 0
+#endif
+
 namespace turbomind::comm {
 
 static inline ncclDataType_t getNcclDataType(DataType type)
@@ -63,15 +69,24 @@ public:
     void* Allocate(size_t size) override
     {
         void* ptr{};
+#if NCCL_BUFF_REG
         NCCLCHECK(ncclMemAlloc(&ptr, size));
+#else
+        check_cuda_error(cudaMalloc(&ptr, size));
+#endif
         buffers_.emplace(ptr, size);
         return ptr;
     }
 
     void Free(void* ptr) override
     {
+
         if (auto it = buffers_.find(ptr); it != buffers_.end()) {
+#if NCCL_BUFF_REG
             NCCLCHECK(ncclMemFree(ptr));
+#else
+            check_cuda_error(cudaFree(ptr));
+#endif
             buffers_.erase(ptr);
         }
         else {
@@ -81,6 +96,7 @@ public:
 
     void Register(void* ptr, size_t size) override
     {
+#if NCCL_BUFF_REG
         if (!handles_.count(ptr)) {
             void* handle{};
             NCCLCHECK(ncclCommRegister(comm_, ptr, size, &handle));
@@ -89,10 +105,12 @@ public:
         else {
             TM_LOG_WARNING("[TM][NCCL][%d] Duplicated registration on (%p, %lu)", rank_, ptr, size);
         }
+#endif
     }
 
     void Deregister(void* ptr) override
     {
+#if NCCL_BUFF_REG
         if (auto it = handles_.find(ptr); it != handles_.end()) {
             NCCLCHECK(ncclCommDeregister(comm_, it->second));
             handles_.erase(it);
@@ -100,6 +118,7 @@ public:
         else {
             TM_LOG_WARNING("[TM][NCCL][%d] Deregistering non-registered address %p", rank_, ptr);
         }
+#endif
     }
 
     int Query(QueryAttr attr) const noexcept override
