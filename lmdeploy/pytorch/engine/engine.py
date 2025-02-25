@@ -103,8 +103,7 @@ class Engine:
             engine_config = copy.deepcopy(engine_config)
         if engine_config.max_batch_size is None:
             engine_config.max_batch_size = get_max_batch_size(engine_config.device_type)
-        engine_config.tp = 2
-        engine_config.dp = 2
+
         tp = engine_config.tp
         dp = engine_config.dp
 
