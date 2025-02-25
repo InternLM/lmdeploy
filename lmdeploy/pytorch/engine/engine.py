@@ -103,13 +103,15 @@ class Engine:
             engine_config = copy.deepcopy(engine_config)
         if engine_config.max_batch_size is None:
             engine_config.max_batch_size = get_max_batch_size(engine_config.device_type)
-
+        engine_config.tp = 2
+        engine_config.dp = 2
         tp = engine_config.tp
-        dp = 1
+        dp = engine_config.dp
 
         self.tokenizer = tokenizer
         self.tp = tp
         self.dp = dp
+        self.should_execute_dummy_batch = engine_config.should_execute_dummy_batch
 
         # download models and adapters
         if not os.path.exists(model_path):
@@ -150,7 +152,8 @@ class Engine:
         self.input_processor = self.executor.get_input_processor()
         cache_config = self.executor.cache_config
         self.adapter_manager = self._build_adapter_manager(adapters)
-        self.scheduler = Scheduler(scheduler_config, cache_config)
+        self.schedulers = [Scheduler(scheduler_config, cache_config) for _ in range(dp)]
+        self.session_dp_map: Dict[int, int] = dict()
 
         # engine args
         self.model_path = model_path
@@ -249,15 +252,54 @@ class Engine:
             session_len = min(max_tokens, session_len)
         return session_len
 
+    def _get_scheduler_by_dp_rank(self, dp_rank: int):
+        """get scheduler by dp rank."""
+        return self.schedulers[dp_rank]
+
+    def _get_scheduler_by_session_id(self, session_id: int):
+        """get scheduler by session id."""
+        if session_id not in self.session_dp_map:
+            return None
+        else:
+            dp_rank = self.session_dp_map[session_id]
+            return self.schedulers[dp_rank]
+
+    def _add_session(self, session_id: int):
+        """add session."""
+        # find candidate scheduler
+        seq_count = self.schedulers[0].seq_count
+        session_count = self.schedulers[0].session_count
+        dp_rank = 0
+        for idx, scheduler in enumerate(self.schedulers[1:], 1):
+            new_seq_count = scheduler.seq_count
+            new_session_count = scheduler.session_count
+            if new_seq_count < seq_count:
+                update = True
+            elif new_seq_count == seq_count and new_session_count < session_count:
+                update = True
+            else:
+                update = False
+            if update:
+                seq_count = new_seq_count
+                session_count = new_session_count
+                dp_rank = idx
+        scheduler = self.schedulers[dp_rank]
+
+        # add session
+        scheduler.add_session(session_id)
+        resp_type = ResponseType.SUCCESS
+        self.session_dp_map[session_id] = dp_rank
+        return resp_type
+
     def _on_add_session(self, reqs: List[Request], **kwargs):
         """on add session callback."""
         for req in reqs:
             session_id = req.data['session_id']
             resp = req.data.get('response', True)
             resp_type = ResponseType.SESSION_REPEAT
-            if session_id not in self.scheduler.sessions:
-                self.scheduler.add_session(session_id)
-                resp_type = ResponseType.SUCCESS
+
+            if session_id not in self.session_dp_map:
+                resp_type = self._add_session(session_id)
             if resp:
                 self._response(req.resp, resp_type)
 
@@ -267,9 +309,11 @@ class Engine:
             session_id = req.data['session_id']
             resp = req.data.get('response', True)
             resp_type = ResponseType.SESSION_NOT_EXIST
-            if session_id in self.scheduler.sessions:
-                self.scheduler.stop_session(session_id)
-                session = self.scheduler.sessions[session_id]
+
+            scheduler = self._get_scheduler_by_session_id(session_id)
+            if scheduler is not None:
+                scheduler.stop_session(session_id)
+                session = scheduler.sessions[session_id]
                 for seq in session.sequences.values():
                     resp: Response = getattr(seq, 'resp', None)
                     if resp is not None:
@@ -285,9 +329,11 @@ class Engine:
             session_id = req.data['session_id']
             resp = req.data.get('response', True)
             resp_type = ResponseType.SESSION_NOT_EXIST
-            if session_id in self.scheduler.sessions:
-                self.scheduler.end_session(session_id)
+            scheduler = self._get_scheduler_by_session_id(session_id)
+            if scheduler is not None:
+                scheduler.end_session(session_id)
                 resp_type = ResponseType.SUCCESS
+                self.session_dp_map.pop(session_id)
             if resp:
                 self._response(req.resp, resp_type)
 
@@ -318,19 +364,6 @@ class Engine:
 
     def _add_message(self, reqs: List[Request]):
 
-        def __update_bad_words(msg):
-            """update bad words."""
-            sampling_param = msg.sampling_param
-            eos_token_id = self.model_config.eos_token_id
-            if eos_token_id is None:
-                return
-            if sampling_param.ignore_eos:
-                sampling_param.bad_words += eos_token_id
-            else:
-                for eid in eos_token_id:
-                    if eid not in sampling_param.stop_words:
-                        sampling_param.stop_words.append(eid)
-
         def __update_max_new_tokens(msg):
             """update max new tokens."""
             max_session_len = self.max_session_len
@@ -339,11 +372,12 @@ class Engine:
 
         for req in reqs:
             session_id = req.data['session_id']
-            if session_id not in self.scheduler.sessions:
+            scheduler = self._get_scheduler_by_session_id(session_id)
+            if scheduler is None:
                 self._response(req.resp, ResponseType.SESSION_NOT_EXIST)
                 continue
             session_id = req.data['session_id']
-            sess = self.scheduler.sessions[session_id]
+            sess = scheduler.sessions[session_id]
             # TODO: support 1 session n sequence
             sampling_param = req.data['sampling_param']
             return_logits = sampling_param.out_logits
@@ -358,9 +392,8 @@ class Engine:
                     input_embeddings=req.data.get('input_embeddings'),
                 )
                 msg = next(iter(sess.sequences.values()))
-                __update_bad_words(msg)
                 __update_max_new_tokens(msg)
-                self.scheduler.add_sequence(msg)
+                scheduler.add_sequence(msg)
             else:
                 msg = next(iter(sess.sequences.values()))
                 msg.update_token_ids(
@@ -372,7 +405,6 @@ class Engine:
                 msg.sampling_param = sampling_param
                 msg.return_logits = return_logits
                 msg.status = MessageStatus.WAITING
-                __update_bad_words(msg)
                 __update_max_new_tokens(msg)
 
             msg.resp = req.resp
@@ -412,7 +444,9 @@ class Engine:
             seq_length = torch.ones(batch_size, dtype=torch.long)
         max_q_seq_length = seq_length.max().item()
 
-        block_offsets = self.scheduler.get_block_tables(messages)
+        session_id = messages[0].session_id
+        scheduler = self._get_scheduler_by_session_id(session_id)
+        block_offsets = scheduler.get_block_tables(messages)
         block_offsets = _tensorlize_block_offsets(block_offsets)
 
         local_adapter_ids = None
@@ -522,12 +556,12 @@ class Engine:
             if stop:
                 msg.status = MessageStatus.STOPPED
 
-    def _do_prefill(self):
+    def _do_prefill(self, scheduler: Scheduler):
         # decoding if no waiting
-        if not self.scheduler.has_waiting():
+        if not scheduler.has_waiting():
             return False
-        num_running = self.scheduler.num_running()
-        num_waiting = self.scheduler.num_waiting()
+        num_running = scheduler.num_running()
+        num_waiting = scheduler.num_waiting()
         max_batches = self.scheduler_config.max_batches
         # prefill if too much waiting
         if num_waiting >= 4:
@@ -569,7 +603,7 @@ class Engine:
                 outputs[session_id].logits = logits.split(seq_length)[idx]
         return outputs
 
-    def _make_forward_inputs(self, prefill: bool = None):
+    def _make_forward_inputs(self, prefill: bool, scheduler: Scheduler):
         """make forward inputs."""
         prefill_interval = self.scheduler_config.prefill_interval
 
@@ -621,13 +655,11 @@ class Engine:
             """need logits."""
             return any(seq.return_logits for seq in seqs)
 
-        if prefill is None:
-            prefill = self._do_prefill()
-        scheduler_output = self.scheduler.schedule(is_prefill=prefill, prealloc_size=prefill_interval)
+        scheduler_output = scheduler.schedule(is_prefill=prefill, prealloc_size=prefill_interval)
         # schedule decoding if no valid prefill reqs.
         if prefill and len(scheduler_output.running) == 0:
             prefill = False
-            scheduler_output = self.scheduler.schedule(is_prefill=prefill, prealloc_size=prefill_interval)
+            scheduler_output = scheduler.schedule(is_prefill=prefill, prealloc_size=prefill_interval)
 
         running = scheduler_output.running
         swap_in_map = scheduler_output.swap_in_map
@@ -657,38 +689,31 @@ class Engine:
                     loop_count=num_loops,
                     return_logits=return_logits)
 
-    def _set_has_runable_event(self, has_runable_event: asyncio.Event):
+    def _set_has_runable_event(self, has_runable_event: asyncio.Event, scheduler: Scheduler):
         """set has runable event."""
-        if self.scheduler.has_unfinished():
+        if scheduler.has_unfinished():
             has_runable_event.set()
         else:
             has_runable_event.clear()
 
+    def _set_has_runable_events(self, has_runable_events: List[asyncio.Event]):
+        """set has runable events."""
+        for event, scheduler in zip(has_runable_events, self.schedulers):
+            self._set_has_runable_event(event, scheduler)
+
     async def _await_forward_event(self, forward_event: asyncio.Event):
         """await forward event."""
-        if self.scheduler.has_unfinished():
+        if any(scheduler.has_unfinished() for scheduler in self.schedulers):
             await forward_event.wait()
 
     @torch.inference_mode()
-    async def _async_loop_preprocess_message(self, forward_event: asyncio.Event, has_runable_event: asyncio.Event):
+    async def _async_loop_preprocess_message(self, forward_event: asyncio.Event,
+                                             has_runable_events: List[asyncio.Event]):
         """preprocess msg."""
         while True:
             await self._await_forward_event(forward_event)
             await self.req_manager.step()
-            self._set_has_runable_event(has_runable_event)
-
-    @torch.inference_mode()
-    async def _async_loop_background(self, in_que: asyncio.Queue, out_que: asyncio.Queue, forward_event: asyncio.Event):
-        """async loop background."""
-        while True:
-            forward_inputs = await in_que.get()
-
-            forward_event.clear()
-            await self.model_agent._async_step_background(
-                **forward_inputs,
-                output_que=out_que,
-            )
-            forward_event.set()
+            self._set_has_runable_events(has_runable_events)
 
     async def _async_loop_send_responses(self, que: asyncio.Queue, forward_event: asyncio.Event):
         """send responses."""
@@ -715,28 +740,28 @@ class Engine:
             __send_resps(resps)
 
     @torch.inference_mode()
-    async def _async_loop_main(self, resp_que: asyncio.Queue, has_runable_event: asyncio.Event):
+    async def _async_loop_main(self, dp_rank: int, resp_que: asyncio.Queue, has_runable_event: asyncio.Event):
         """Main loop of the engine.
 
         Each engine instance would communicate with the engine by queue.
         """
-
+        scheduler = self._get_scheduler_by_dp_rank(dp_rank)
         forward_inputs = None
         next_running = None
 
-        async def _send_next_inputs(prefill: bool = None):
+        async def _send_next_inputs(prefill: bool):
             nonlocal forward_inputs, next_running
-            forward_inputs = self._make_forward_inputs(prefill)
+            forward_inputs = self._make_forward_inputs(prefill, scheduler)
             next_running = forward_inputs.pop('running')
-            await self.executor.forward_async(forward_inputs)
+            await self.executor.forward_async(forward_inputs, (dp_rank, ))
 
         async def _prefetch_next_inputs():
             enable = False
-            prefill = self._do_prefill()
+            prefill = self._do_prefill(scheduler)
             if prefill:
                 enable = True
             else:
-                num_running = self.scheduler.num_running()
+                num_running = scheduler.num_running()
                 is_decoding = forward_inputs['inputs'].is_decoding
                 running_threshold = (self.scheduler_config.max_batches // 4) if is_decoding else 0
 
@@ -750,19 +775,20 @@ class Engine:
         while True:
             if next_running is None:
                 await has_runable_event.wait()
-                await _send_next_inputs()
+                prefill = self._do_prefill(scheduler)
+                await _send_next_inputs(prefill)
             num_loops = forward_inputs['loop_count']
             running = next_running
             next_running = None
-            self.scheduler.lock_running(running)
+            scheduler.lock_running(running)
             for idx in range(num_loops):
                 if idx >= num_loops - 1:
                     await _prefetch_next_inputs()
-                out = await self.executor.get_output_async()
+                out = await self.executor.get_output_async(dp_rank)
                 step_outputs = self._make_infer_outputs(**out, running=running)
                 resp_que.put_nowait(step_outputs)
-            self.scheduler.unlock_running(running)
-            self._set_has_runable_event(has_runable_event)
+            scheduler.unlock_running(running)
+            self._set_has_runable_event(has_runable_event, scheduler)
 
     @staticmethod
     def _add_loop_tasks_done_callback(tasks: List[asyncio.Task]):
@@ -804,9 +830,9 @@ class Engine:
 
             # preprocess task
             logger.debug('Starting async task MainLoopPreprocessMessage.')
-            has_runable_event = asyncio.Event()
+            has_runable_events = [asyncio.Event() for _ in range(self.dp)]
             loop_msg_proc = event_loop.create_task(self._async_loop_preprocess_message(
-                forward_event, has_runable_event),
+                forward_event, has_runable_events),
                                                    name='MainLoopPreprocessMessage')
 
             # response task
@@ -823,7 +849,10 @@ class Engine:
 
             # main loop
             logger.debug('Starting async task MainLoop.')
-            await self._async_loop_main(resp_que=resp_que, has_runable_event=has_runable_event)
+            await asyncio.gather(*[
+                self._async_loop_main(dp_rank, resp_que=resp_que, has_runable_event=has_runable_event)
+                for dp_rank, has_runable_event in enumerate(has_runable_events)
+            ])
         finally:
             self._loop_finally()
 

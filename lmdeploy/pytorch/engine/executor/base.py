@@ -77,11 +77,11 @@ class ExecutorBase:
         """release resources."""
         raise NotImplementedError('Not Implemented.')
 
-    async def forward_async(self, inputs):
+    async def forward_async(self, inputs, dp_ranks=None):
         """start forward."""
         raise NotImplementedError('Not Implemented')
 
-    async def get_output_async(self):
+    async def get_output_async(self, dp_rank: int = 0):
         """get output async."""
         raise NotImplementedError('Not Implemented')
 

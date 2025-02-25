@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import ray
+import ray.exceptions
 import torch
 from ray.util.placement_group import PlacementGroup
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
@@ -165,6 +166,10 @@ class RayWorkerWrapper(WorkerWrapperBase):
                 output[k] = v.numpy()
         return output
 
+    def exit(self):
+        """exit actor."""
+        ray.actor.exit_actor()
+
 
 class RayExecutor(ExecutorBase):
     """ray executor."""
@@ -216,9 +221,16 @@ class RayExecutor(ExecutorBase):
 
         logger.info('Init ray workers.')
         self.workers = self._init_workers_ray(placement_group, worker_kwargs)
-        self.dag = None
-        self._prefetch_task: asyncio.Task = None
-        self.remote_outs: asyncio.Queue = None
+
+        self.workers_by_dp: List[List[RayWorkerWrapper]] = []
+        for dp_rank in range(dp):
+            start_id = dp_rank * tp
+            end_id = start_id + tp
+            self.workers_by_dp.append(self.workers[start_id:end_id])
+
+        self.dags = dict()
+        self._prefetch_tasks: List[asyncio.Task] = None
+        self.remote_outs: List[asyncio.Queue] = []
 
         logger.info('Init distributed process group.')
         ray.get([
@@ -226,7 +238,7 @@ class RayExecutor(ExecutorBase):
             for rank, worker in enumerate(self.workers)
         ])
 
-        if self.world_size > 1:
+        if self.tp > 1:
             logger.info('Warming up distribute environment, this might take long time, please waiting...')
             ray.get([worker.warmup_dist.remote() for worker in self.workers])
 
@@ -266,61 +278,93 @@ class RayExecutor(ExecutorBase):
         """build cache engine."""
         return ray.get(self.workers[0].get_input_processor.remote())
 
-    async def _prefetch_outputs(self):
+    async def _prefetch_outputs(self, dp_rank: int):
+        """prefetch outputs."""
+        worker = self.workers_by_dp[dp_rank][0]
+        que = self.remote_outs[dp_rank]
         while True:
-            outs = await self.workers[0].get_outputs.remote()
+            outs = await worker.get_outputs.remote()
             for out in outs:
                 # pack pytorch
                 for k, v in out.items():
                     if isinstance(v, np.ndarray):
                         out[k] = torch.from_numpy(v)
-                self.remote_outs.put_nowait(out)
+                que.put_nowait(out)
+
+    def _prefetch_task_callback(self, task: asyncio.Task):
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            pass
+        except BaseException:
+            logger.exception('Ray executor prefetch task failed.')
 
     def start(self, forward_event: asyncio.Event):
         """start engine loop."""
         self.forward_event = forward_event
         self.collective_rpc('start')
 
-        self.remote_outs = asyncio.Queue()
+        self.remote_outs = [asyncio.Queue() for _ in range(self.dp)]
         event_loop = asyncio.get_event_loop()
-        self._prefetch_task = event_loop.create_task(self._prefetch_outputs())
+        self._prefetch_tasks = [event_loop.create_task(self._prefetch_outputs(dp_rank)) for dp_rank in range(self.dp)]
 
     def stop(self):
         """stop engine loop."""
         self.collective_rpc('stop')
-        if self._prefetch_task is not None:
-            self._prefetch_task.cancel()
+        if self._prefetch_tasks is not None:
+            for task in self._prefetch_tasks:
+                task.cancel()
 
     def release(self):
         """release."""
         self.collective_rpc('release')
-        for worker in self.workers:
-            ray.kill(worker)
+        try:
+            self.collective_rpc('exit')
+        except ray.exceptions.RayActorError as e:
+            logger.debug(f'ray actor exit: {e}')
+        # for worker in self.workers:
+        #     ray.kill(worker)
+        # # sleep to prevent crash
+        # import time
+        # time.sleep(1)
         ray.util.remove_placement_group(self.placement_group)
 
-    def _compile_dag(self):
+    def _compile_dag(self, dp_ranks: List[int]):
         """compile dag."""
         from ray.dag.input_node import InputNode
         from ray.dag.output_node import MultiOutputNode
-        with InputNode() as input_data:
-            outputs = [worker.forward_async.bind(input_data) for worker in self.workers]
-            output = MultiOutputNode(outputs)
+
+        outputs = []
+        for dp_rank in dp_ranks:
+            workers = self.workers_by_dp[dp_rank]
+            with InputNode() as input_data:
+                outputs += [worker.forward_async.bind(input_data) for worker in workers]
+        output = MultiOutputNode(outputs)
 
         return output
 
-    async def forward_async(self, inputs):
+    async def forward_async(self, inputs, dp_ranks=None):
         """start forward."""
+        if dp_ranks is None:
+            dp_ranks = (0, )
+        dp_ranks = tuple(sorted(dp_ranks))
         # we don't need return of forward async
-        if self.dag is None:
-            self.dag = self._compile_dag()
-        inputs = ray.put(inputs)
-        self.dag.execute(inputs)
+        if dp_ranks not in self.dags:
+            dag = self._compile_dag(dp_ranks)
+            self.dags[dp_ranks] = dag
+        dag = self.dags[dp_ranks]
 
-    async def get_output_async(self):
+        if len(dp_ranks) == 1 and not isinstance(inputs, List):
+            dag.execute(inputs)
+        else:
+            dag.execute(*inputs)
+
+    async def get_output_async(self, dp_rank: int = 0):
         """get output async."""
-        if self.remote_outs.qsize() > 0:
-            return self.remote_outs.get_nowait()
-        return await self.remote_outs.get()
+        que = self.remote_outs[dp_rank]
+        if que.qsize() > 0:
+            return que.get_nowait()
+        return await que.get()
 
     def _sort_workers(self, driver_ip: str, workers: List[RayWorkerWrapper]):
         """sort workers by ip."""

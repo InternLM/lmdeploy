@@ -5,7 +5,7 @@ import torch
 from torch import nn
 
 import lmdeploy.pytorch.distributed as dist
-from lmdeploy.pytorch.distributed import get_world_rank
+from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader
 from lmdeploy.utils import get_logger
 
@@ -43,7 +43,7 @@ class QKVMixin:
 
     def _update_num_heads(self, num_q_heads: int, num_kv_heads: int):
         """update num heads."""
-        world_size, rank = get_world_rank()
+        world_size, rank = get_tp_world_rank()
         num_q_heads = get_distribute_size(num_q_heads, world_size, rank)
         num_kv_heads = get_distribute_size(num_kv_heads, world_size, rank)
 
@@ -120,7 +120,7 @@ class LoRA(nn.Module):
         param_r = param.data[r_start:r_end]
 
         if self.is_tp and not self.colwise:
-            world_size, rank = get_world_rank()
+            world_size, rank = get_tp_world_rank()
             loaded_weight = loaded_weight.to(param_r.device)
             loaded_weight = loaded_weight.chunk(world_size, dim=1)[rank]
 
@@ -134,7 +134,7 @@ class LoRA(nn.Module):
         param_r = param.data[r_start:r_end]
 
         if self.is_tp and self.colwise:
-            world_size, rank = get_world_rank()
+            world_size, rank = get_tp_world_rank()
             if self.lora_b_spliter is not None:
                 loaded_weights = self.lora_b_spliter(loaded_weight)
                 new_weights = []
@@ -195,7 +195,7 @@ class BlockedF8Linear(nn.Module):
 
     def _get_io_features(self, in_features: int, out_features: int, colwise: bool):
         """get io features."""
-        world_size, rank = get_world_rank()
+        world_size, rank = get_tp_world_rank()
         if colwise:
             out_features = get_distribute_size(out_features, world_size, rank)
         else:
@@ -226,7 +226,7 @@ class BlockedF8Linear(nn.Module):
         if not self.is_tp:
             return default_weight_loader(param, loaded_weight)
 
-        world_size, rank = get_world_rank()
+        world_size, rank = get_tp_world_rank()
         if self.colwise:
             return self._weight_loader_tp_colwise(param, loaded_weight, rank, world_size)
         else:
@@ -314,7 +314,7 @@ class MergedBlockedF8Linear(BlockedF8Linear):
 
     def _update_all_out_features(self, all_out_features: List[int], replicate: Optional[List[bool]]):
         """update all out features."""
-        world_size, rank = get_world_rank()
+        world_size, rank = get_tp_world_rank()
         new_all_out_features = []
         for out_feat, rep in zip(all_out_features, replicate):
             if rep:
@@ -325,7 +325,7 @@ class MergedBlockedF8Linear(BlockedF8Linear):
 
     def weight_loader(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, shard_id: Any):
         """weight loader."""
-        world_size, rank = get_world_rank()
+        world_size, rank = get_tp_world_rank()
         shard_idx = self.out_names_map[shard_id]
         if loaded_weight.dim() == 2 and loaded_weight.dtype == torch.float32:
             all_out_features = [feats // self.block_size for feats in self.all_out_features]
@@ -407,7 +407,7 @@ class AwqLinear(nn.Module):
     def _get_io_features(self, in_features: int, out_features: int, w_bit: int, group_size: int, colwise: bool):
         """get io features."""
         align = max(32 // w_bit, group_size)
-        world_size, rank = get_world_rank()
+        world_size, rank = get_tp_world_rank()
         if colwise:
             out_features = get_distribute_size(out_features, world_size, rank, align=align)
         else:
@@ -457,7 +457,7 @@ class AwqLinear(nn.Module):
         if not self.is_tp:
             return default_weight_loader(param, loaded_weight)
 
-        world_size, rank = get_world_rank()
+        world_size, rank = get_tp_world_rank()
         if self.colwise:
             return self._weight_loader_tp_colwise(param, loaded_weight, rank, world_size)
         else:
@@ -563,7 +563,7 @@ class MergedAwqLinear(AwqLinear):
 
     def _update_all_out_features(self, all_out_features: List[int], w_bit: int, group_size: int):
         """update all out features."""
-        world_size, rank = get_world_rank()
+        world_size, rank = get_tp_world_rank()
         new_all_out_features = []
         align = max(32 // w_bit, group_size)
         for out_feat in all_out_features:
@@ -573,7 +573,7 @@ class MergedAwqLinear(AwqLinear):
 
     def weight_loader(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, shard_id: Any):
         """weight loader."""
-        world_size, rank = get_world_rank()
+        world_size, rank = get_tp_world_rank()
         shard_idx = self.out_names_map[shard_id]
         if loaded_weight.dim() == 1:
             # bias
@@ -649,7 +649,7 @@ class QKVAwqLinear(MergedAwqLinear, QKVMixin):
 
     def weight_loader(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, shard_id: Any):
         """weight loader."""
-        world_size, rank = get_world_rank()
+        world_size, rank = get_tp_world_rank()
         chunk_size, chunk_idx = world_size, rank
         shard_idx = self.out_names_map[shard_id]
 
@@ -765,7 +765,7 @@ class W8A8Linear(nn.Module):
 
     def _get_io_features(self, in_features: int, out_features: int, colwise: bool):
         """get io features."""
-        world_size, rank = get_world_rank()
+        world_size, rank = get_tp_world_rank()
         if colwise:
             out_features = get_distribute_size(out_features, world_size, rank)
         else:
@@ -799,7 +799,7 @@ class W8A8Linear(nn.Module):
         if not self.is_tp:
             return default_weight_loader(param, loaded_weight)
 
-        world_size, rank = get_world_rank()
+        world_size, rank = get_tp_world_rank()
         if self.colwise:
             return self._weight_loader_tp_colwise(param, loaded_weight, rank, world_size)
         else:
@@ -886,7 +886,7 @@ class MergedW8A8Linear(W8A8Linear):
 
     def _update_all_out_features(self, all_out_features: List[int]):
         """update all out features."""
-        world_size, rank = get_world_rank()
+        world_size, rank = get_tp_world_rank()
         new_all_out_features = []
         for out_feat in all_out_features:
             new_out_feat = get_distribute_size(out_feat, world_size, rank)
@@ -895,7 +895,7 @@ class MergedW8A8Linear(W8A8Linear):
 
     def weight_loader(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, shard_id: Any):
         """weight loader."""
-        world_size, rank = get_world_rank()
+        world_size, rank = get_tp_world_rank()
         shard_idx = self.out_names_map[shard_id]
         param_w = param.data.split(self.all_out_features, 0)[shard_idx]
         loaded_weight = loaded_weight.chunk(world_size, 0)[rank]
@@ -950,7 +950,7 @@ class QKVW8A8Linear(MergedW8A8Linear, QKVMixin):
 
     def weight_loader(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, shard_id: Any):
         """weight loader."""
-        _, rank = get_world_rank()
+        _, rank = get_tp_world_rank()
         shard_idx = self.out_names_map[shard_id]
         param_w = param.data.split(self.all_out_features, 0)[shard_idx]
         num_head = self.num_q_heads if shard_id == 'q' \
@@ -1029,7 +1029,7 @@ class BaseLinear(nn.Module):
 
     def _get_io_features(self, in_features: int, out_features: int, colwise: bool):
         """get io features."""
-        world_size, rank = get_world_rank()
+        world_size, rank = get_tp_world_rank()
         if colwise:
             out_features = get_distribute_size(out_features, world_size, rank, align=self.tp_align_size)
         else:
@@ -1060,7 +1060,7 @@ class BaseLinear(nn.Module):
         if not self.is_tp:
             return default_weight_loader(param, loaded_weight)
 
-        world_size, rank = get_world_rank()
+        world_size, rank = get_tp_world_rank()
         if self.colwise:
             return self._weight_loader_tp_colwise(param, loaded_weight, rank, world_size)
         else:
@@ -1133,7 +1133,7 @@ class MergedBaseLinear(BaseLinear):
 
     def _update_all_out_features(self, all_out_features: List[int]):
         """update all out features."""
-        world_size, rank = get_world_rank()
+        world_size, rank = get_tp_world_rank()
         new_all_out_features = []
         for out_feat in all_out_features:
             new_out_feat = get_distribute_size(out_feat, world_size, rank)
@@ -1142,7 +1142,7 @@ class MergedBaseLinear(BaseLinear):
 
     def weight_loader(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, shard_id: Any):
         """weight loader."""
-        world_size, rank = get_world_rank()
+        world_size, rank = get_tp_world_rank()
         shard_idx = self.out_names_map[shard_id]
         param_w = param.data.split(self.all_out_features, 0)[shard_idx]
         loaded_weight = loaded_weight.chunk(world_size, 0)[rank]
@@ -1196,7 +1196,7 @@ class QKVBaseLinear(MergedBaseLinear, QKVMixin):
 
     def weight_loader(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, shard_id: Any):
         """weight loader."""
-        world_size, rank = get_world_rank()
+        world_size, rank = get_tp_world_rank()
         chunk_size, chunk_idx = world_size, rank
         shard_idx = self.out_names_map[shard_id]
         param_w = param.data.split(self.all_out_features, 0)[shard_idx]
@@ -1244,8 +1244,7 @@ def build_linear(in_features: int,
                  tp_align_size: int = 1) -> nn.Module:
     """build linear."""
     if is_tp:
-        world_size, _ = get_world_rank()
-        is_tp = world_size > 1
+        is_tp = get_tp_world_rank()[0] > 1
 
     if quant_config is None:
         return BaseLinear(
@@ -1367,8 +1366,7 @@ def build_merged_colwise_linear(
 ):
     """merge linear."""
     if is_tp:
-        world_size, _ = get_world_rank()
-        is_tp = world_size > 1
+        is_tp = get_tp_world_rank()[0] > 1
 
     if quant_config is None:
         return MergedBaseLinear(
@@ -1442,8 +1440,7 @@ def build_qkv_proj(in_features: int,
                    num_replicate_kv_heads: int = 1):
     """build qkv proj."""
     if is_tp:
-        world_size, _ = get_world_rank()
-        is_tp = world_size > 1
+        is_tp = get_tp_world_rank()[0] > 1
 
     if head_size_v is None:
         head_size_v = head_size

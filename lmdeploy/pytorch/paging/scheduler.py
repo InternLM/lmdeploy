@@ -47,6 +47,12 @@ class Scheduler:
         self.eviction_helper = self.build_eviction_helper(self.scheduler_config.eviction_type)
 
         self.seq_manager = SequenceManager()
+        self.seq_count = 0
+
+    @property
+    def session_count(self):
+        """get session count."""
+        return len(self.sessions)
 
     @property
     def waiting(self):
@@ -113,6 +119,7 @@ class Scheduler:
 
         # push message to waiting queue
         self._set_message_status(seq, MessageStatus.WAITING)
+        self.seq_count += 1
 
     @logging_timer('SchedulePrefilling', logger)
     def _schedule_prefill(self):
@@ -250,6 +257,7 @@ class Scheduler:
         self.block_manager.free(seq)
         seq.set_step(0)
         seq.session.remove_sequence(seq)
+        self.seq_count -= 1
 
     def end_session(self, session_id: int):
         """End session.
