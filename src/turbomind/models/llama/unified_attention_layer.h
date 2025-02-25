@@ -148,6 +148,7 @@ private:
     float* qk_buf_float_{};
     T*     qkv_buf_2_{};
     T*     qkv_buf_3_{};
+    T*     lora_buf_{};
 
     float* partial_M_{};
     float* partial_L_{};

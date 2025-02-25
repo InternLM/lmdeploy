@@ -74,16 +74,12 @@ void UnifiedAttentionLayer<T>::allocateBuffer(size_t q_count, size_t k_count, si
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
-    const int local_q_kv_head_num = local_head_num_ + 2 * local_kv_head_num_;
-
     if (qkv_lora_rank) {
-        size_t sz = sizeof(T) * q_count * (local_q_kv_head_num * size_per_head_ + qkv_lora_rank);
-        qkv_buf_  = (T*)allocator_->reMalloc(qkv_buf_, sz, false);
+        lora_buf_ = (T*)allocator_->reMalloc(lora_buf_, sizeof(T) * q_count * qkv_lora_rank);
     }
-    else {
-        qkv_buf_ =
-            (T*)allocator_->reMalloc(qkv_buf_, sizeof(T) * q_count * local_q_kv_head_num * size_per_head_, false);
-    }
+
+    const int local_q_kv_head_num = local_head_num_ + 2 * local_kv_head_num_;
+    qkv_buf_ = (T*)allocator_->reMalloc(qkv_buf_, sizeof(T) * q_count * local_q_kv_head_num * size_per_head_, false);
 
     qkv_buf_3_ = (T*)allocator_->reMalloc(qkv_buf_3_, sizeof(T) * q_count * local_head_num_ * size_per_head_, false);
 
@@ -132,6 +128,7 @@ void UnifiedAttentionLayer<T>::freeBuffer()
         allocator_->free((void**)&qkv_buf_);
         allocator_->free((void**)&qkv_buf_3_);
         allocator_->free((void**)&tmp_kv_buf_);
+        allocator_->free((void**)&lora_buf_);
 
         is_allocate_buffer_ = false;
     }
@@ -210,7 +207,8 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         //////////////////////////////////////////////
         /// qkv gemm
         // [token_num, hidden_dim] -> [token_num, 3, local_hidden_dim]
-        linear_->forward(qkv_buf_, attention_input, token_num, weights->qkv, LlamaLinear<T>::kGemm, lora_mask);
+        linear_->forward(
+            qkv_buf_, attention_input, token_num, weights->qkv, LlamaLinear<T>::kGemm, lora_buf_, lora_mask);
         sync_check_cuda_error();
     }
     else {
@@ -425,7 +423,8 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
 
     //////////////////////////////////////////////
     /// output gemm <Bs,HD> -> <Bs,HD>
-    linear_->forward(attention_out, qkv_buf_3_, token_num, weights->output, LlamaLinear<T>::kGemm, lora_mask);
+    linear_->forward(
+        attention_out, qkv_buf_3_, token_num, weights->output, LlamaLinear<T>::kGemm, lora_buf_, lora_mask);
     sync_check_cuda_error();
 
     count_and_fix(attention_out, token_num * weights->output.output_dims, Concat("wo", layer_id), 3);

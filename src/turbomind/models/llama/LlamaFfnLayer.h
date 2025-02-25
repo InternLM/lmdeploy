@@ -60,6 +60,7 @@ private:
 
     T* gating_buf_{};
     T* inter_buf_{};
+    T* lora_buf_{};
 
     bool is_allocate_buffer_{};
 };

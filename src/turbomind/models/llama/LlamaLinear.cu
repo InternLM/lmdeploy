@@ -33,8 +33,9 @@ struct LlamaLinear<T>::Impl {
                  Pitched                    input_data,
                  int                        batch_size,
                  const LlamaDenseWeight<T>& weight,
-                 Type                       type      = kGemm,
-                 int*                       lora_mask = nullptr)
+                 Type                       type,
+                 T*                         lora_buff,
+                 int*                       lora_mask)
     {
         if (input_data.pitch == 0) {
             input_data.pitch = weight.input_dims;
@@ -46,29 +47,29 @@ struct LlamaLinear<T>::Impl {
             // output = x*W + output
             cublas_wrapper_->Gemm(CUBLAS_OP_N,
                                   CUBLAS_OP_N,
-                                  weight.lora.r,                                  // m
-                                  batch_size,                                     // n
-                                  weight.input_dims,                              // k
-                                  (const T*)weight.lora.a,                        // A
-                                  weight.lora.r,                                  // lda
-                                  input_data.ptr,                                 // B
-                                  input_data.pitch,                               // ldb
-                                  output_data + batch_size * weight.output_dims,  // C
-                                  weight.lora.r);                                 // ldc
+                                  weight.lora.r,            // m
+                                  batch_size,               // n
+                                  weight.input_dims,        // k
+                                  (const T*)weight.lora.a,  // A
+                                  weight.lora.r,            // lda
+                                  input_data.ptr,           // B
+                                  input_data.pitch,         // ldb
+                                  lora_buff,                // C
+                                  weight.lora.r);           // ldc
 
             cublas_wrapper_->Gemm(CUBLAS_OP_N,
                                   CUBLAS_OP_N,
-                                  weight.output_dims,                             // m
-                                  batch_size,                                     // n
-                                  weight.lora.r,                                  // k
-                                  (const T*)weight.lora.b,                        // A
-                                  weight.output_dims,                             // lda
-                                  output_data + batch_size * weight.output_dims,  // B
-                                  weight.lora.r,                                  // ldb
-                                  output_data,                                    // C
-                                  weight.output_dims,                             // ldc
-                                  weight.lora.scale,                              // alpha
-                                  0.0f);                                          // beta
+                                  weight.output_dims,       // m
+                                  batch_size,               // n
+                                  weight.lora.r,            // k
+                                  (const T*)weight.lora.b,  // A
+                                  weight.output_dims,       // lda
+                                  lora_buff,                // B
+                                  weight.lora.r,            // ldb
+                                  output_data,              // C
+                                  weight.output_dims,       // ldc
+                                  weight.lora.scale,        // alpha
+                                  0.0f);                    // beta
 
             invokeMask(output_data, lora_mask, batch_size, weight.output_dims, stream_);
             sync_check_cuda_error();
