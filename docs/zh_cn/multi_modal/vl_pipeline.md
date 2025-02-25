@@ -228,4 +228,10 @@ with pipeline('OpenGVLab/InternVL2_5-8B') as pipe:
     image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
     response = pipe(('describe this image', image))
     print(response)
+
+# Clear the torch cache and perform garbage collection if needed
+import torch
+import gc
+torch.cuda.empty_cache()
+gc.collect()
 ```
