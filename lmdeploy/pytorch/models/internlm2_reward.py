@@ -58,8 +58,6 @@ class InternLM2ForRewardModel(nn.Module, CudaGraphMixin):
 
     def get_logits(self, hidden_states: torch.Tensor):
         """compute logits of the model output."""
-        import pdb
-        pdb.set_trace()
         return self.v_head(hidden_states)
 
     def get_input_embeddings(self):

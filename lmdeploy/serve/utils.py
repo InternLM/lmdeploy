@@ -19,21 +19,33 @@ PromptType = Union[str, List[Dict]]
 class LogitsMixin:
     """Helper class to get logits, reward score and calculate ppl."""
 
-    def get_reward_score(self, input_ids: List):
+    def get_reward_score(self, input_ids: List) -> List[float]:
         """
         Args:
-            input_ids(List): a list of token id or a list of token_id list
+            input_ids(List): a list of token_id or a list of token_id list or a tensor containing
+                token_ids
+        Return:
+            reward score in a list. If the input_ids is a list of token_id, the return value
+            is still a list with length 1.
         """
         supported_reward_models = ['InternLM2ForRewardModel', 'Qwen2ForRewardModel']
         if self.arch not in supported_reward_models:
             raise ValueError(f'{self.arch} is not in reward mode list: {supported_reward_models}')
-
         assert isinstance(input_ids, List)
         assert all(isinstance(x, int) for x in input_ids) or all(isinstance(x, List) for x in input_ids)
         # Make input_ids a list of token_id list
         input_ids = [input_ids] if isinstance(input_ids[0], int) else input_ids
         logits = self._run(coro=self._async_get_logits(input_ids=input_ids)).result()
-        return logits
+        scores = []
+        if self.arch == 'InternLM2ForRewardModel':
+            logits = [x.squeeze(-1) for x in logits]
+            scores = [x[-1].cpu().item() for x in logits]
+        elif self.arch == 'Qwen2ForRewardModel':
+            # from torch.nn import MSELoss
+            logits = [x.squeeze() for x in logits]
+            # loss = loss_fct(pooled_logits.squeeze(), labels.squeeze())
+
+        return scores
 
     async def _async_get_logits(self,
                                 input_ids,
@@ -50,7 +62,7 @@ class LogitsMixin:
                 input_len = len(input_ids[i])
                 # TODO(lvhan): Fix the ugly code later on
                 max_new_tokens = 1 if self.backend == 'turbomind' else 0
-                gen_config = GenerationConfig(max_new_tokens=max_new_tokens, output_logits='all')
+                gen_config = GenerationConfig(max_new_tokens=max_new_tokens, output_logits='all', top_k=1)
                 async with self.safe_run(inst,
                                          session_id=i,
                                          input_ids=input_ids[i],

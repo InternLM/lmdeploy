@@ -535,8 +535,6 @@ class Engine:
             last_idx = seq_length.cumsum(-1) - 1
             return logits[last_idx, :]
 
-        import pdb
-        pdb.set_trace()
         split_logits = __get_last_logits()
         logits_processor = FusedLogitsProcessor(sampling_inputs, ignore_eos, self.tokenizer.model.model)
         logits = await logits_processor(all_ids, guided_input_ids, split_logits)
@@ -740,10 +738,7 @@ class Engine:
                                                      return_logits=return_logits)
             logits = output['logits']
             logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
-
             # sampling
-            import pdb
-            pdb.set_trace()
             next_token_ids = await self.async_sampling_logits(logits, all_ids, guided_input_ids, sampling_inputs,
                                                               inputs, num_ignore_eos > 0)
             num_ignore_eos = num_ignore_eos - 1

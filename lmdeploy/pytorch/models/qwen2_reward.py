@@ -38,17 +38,17 @@ class Qwen2ForRewardModel(nn.Module, CudaGraphMixin):
         self.ctx_mgr = ctx_mgr
         # build model
         self.model = Qwen2Model(config, dtype=dtype, device=device)
-        # # build lm_head
-        # self.lm_head = build_rowwise_linear(config.hidden_size,
-        #                                     config.vocab_size,
-        #                                     bias=False,
-        #                                     dtype=dtype,
-        #                                     device=device)
+
+        self.lm_head = build_rowwise_linear(config.hidden_size,
+                                            config.vocab_size,
+                                            bias=False,
+                                            dtype=dtype,
+                                            device=device)
+
         self.num_labels = 1
         self.score = nn.Sequential(
-            build_rowwise_linear(config.hidden_size, config.hidden_size, bias=False, dtype=dtype, device=device),
-            nn.ReLU(), build_rowwise_linear(config.hidden_size, self.num_labels, bias=False, dtype=dtype,
-                                            device=device))
+            build_rowwise_linear(config.hidden_size, config.hidden_size, bias=True, dtype=dtype, device=device),
+            nn.ReLU(), build_rowwise_linear(config.hidden_size, self.num_labels, bias=True, dtype=dtype, device=device))
 
     def forward(
         self,
@@ -95,14 +95,6 @@ class Qwen2ForRewardModel(nn.Module, CudaGraphMixin):
         input_ids = context.input_ids
         position_ids = context.position_ids
         attn_metadata = context.attn_metadata
-
-        # # process vision embeddings
-        # vision_embeddings = context.input_embeddings
-        # vision_embedding_indexing = context.input_embedding_indexing
-        # if vision_embeddings is not None and len(vision_embeddings) > 0:
-        #     if inputs_embeds is None:
-        #         inputs_embeds = self.get_input_embeddings()(input_ids)
-        #     inputs_embeds[:, vision_embedding_indexing, :] = vision_embeddings.to(inputs_embeds)
 
         # inputs of forward
         return dict(
