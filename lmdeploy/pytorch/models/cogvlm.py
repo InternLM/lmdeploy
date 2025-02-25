@@ -9,7 +9,7 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 import lmdeploy.pytorch.distributed as dist
-from lmdeploy.pytorch.distributed import get_world_rank
+from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
@@ -85,7 +85,7 @@ class VisionExpertAttention(nn.Module):
                                                           device=device,
                                                           is_tp=True,
                                                           all_reduce=False)
-        world_size, _ = get_world_rank()
+        world_size, _ = get_tp_world_rank()
         self.world_size = world_size
         self.all_reduce = world_size > 1
 
@@ -204,7 +204,7 @@ class VisionExpertMLP(nn.Module):
         super().__init__()
         self.language_mlp = MLP(config, dtype=dtype, device=device)
         self.vision_mlp = MLP(config, dtype=dtype, device=device)
-        world_size, _ = get_world_rank()
+        world_size, _ = get_tp_world_rank()
         self.all_reduce = world_size > 1
 
     def forward(
