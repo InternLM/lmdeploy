@@ -7,7 +7,7 @@ namespace turbomind::comm {
 
 std::unique_ptr<GroupId> CreateNcclGroupId();
 
-std::unique_ptr<GroupId> CreateCustomGroupId();
+std::unique_ptr<GroupId> CreateNativeGroupId();
 
 std::unique_ptr<GroupId> CreateGroupId(const std::string& backend)
 {
@@ -18,8 +18,8 @@ std::unique_ptr<GroupId> CreateGroupId(const std::string& backend)
 #endif
 
 #if BUILD_MULTI_GPU
-    if (backend == "custom") {
-        return CreateCustomGroupId();
+    if (backend == "native") {
+        return CreateNativeGroupId();
     }
 #endif
 

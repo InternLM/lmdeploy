@@ -469,5 +469,5 @@ class ArgumentHelper:
         return parser.add_argument('--communicator',
                                    type=str,
                                    default='nccl',
-                                   choices=['nccl', 'custom'],
+                                   choices=['nccl', 'native'],
                                    help='Communication backend for multi-GPU inference')

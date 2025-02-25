@@ -3,6 +3,7 @@
 #pragma once
 
 #include <condition_variable>
+#include <cstdint>
 #include <mutex>
 
 namespace turbomind::comm {

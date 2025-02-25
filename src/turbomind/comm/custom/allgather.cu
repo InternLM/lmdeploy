@@ -49,7 +49,7 @@ __global__ void __launch_bounds__(1024, 1)
     }
 }
 
-void CustomComm::AllGather(const void* sendbuff, void* recvbuff, size_t sendcount, DataType type, cudaStream_t stream)
+void NativeComm::AllGather(const void* sendbuff, void* recvbuff, size_t sendcount, DataType type, cudaStream_t stream)
 {
     const size_t bytesize = get_elem_size(type) * sendcount;
 
@@ -150,7 +150,7 @@ __global__ void Barrier(mscclpp::SmDevice2DeviceSemaphoreDeviceHandle* semaphore
     }
 }
 
-void CustomComm::AllGather2D(const void*  sendbuff,
+void NativeComm::AllGather2D(const void*  sendbuff,
                              void*        recvbuff,
                              size_t       pitch,
                              size_t       stride,

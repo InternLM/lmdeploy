@@ -128,7 +128,7 @@ protected:
 
 std::vector<std::unique_ptr<Comm>> CreateNcclComm(const std::vector<int>& devices);
 
-std::vector<std::unique_ptr<Comm>> CreateCustomComm(const std::vector<int>& devices);
+std::vector<std::unique_ptr<Comm>> CreateNativeComm(const std::vector<int>& devices);
 
 // GroupId
 class GroupId {

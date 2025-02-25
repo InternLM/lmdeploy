@@ -17,15 +17,15 @@ namespace turbomind::comm {
 
 static constexpr int kMaxNearPeers = 7;
 
-class CustomComm: public Comm {
+class NativeComm: public Comm {
 public:
     static constexpr int kPacketBuffSize  = 8 << 20;
     static constexpr int kScratchBuffSize = 8 << 20;
     static constexpr int kChannelsPerConn = 64;
 
-    ~CustomComm() override;
+    ~NativeComm() override;
 
-    CustomComm(std::shared_ptr<LocalBootstrap> bootstrap);
+    NativeComm(std::shared_ptr<LocalBootstrap> bootstrap);
 
     void Initialize();
 
@@ -103,7 +103,7 @@ private:
     std::unordered_map<void*, Allocation> allocations_;
 };
 
-std::vector<std::unique_ptr<Comm>> CreateCustomComm(const std::vector<int>& devices);
+std::vector<std::unique_ptr<Comm>> CreateNativeComm(const std::vector<int>& devices);
 
 struct Rank {
     int                     rank;

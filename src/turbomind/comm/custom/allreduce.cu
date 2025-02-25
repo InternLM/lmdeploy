@@ -355,7 +355,7 @@ __global__ void Allreduce_Simple_Push_v2(T*                                     
     }
 }
 
-void CustomComm::AllReduceSum(const void* sendbuff, void* recvbuff, size_t count, DataType type, cudaStream_t stream)
+void NativeComm::AllReduceSum(const void* sendbuff, void* recvbuff, size_t count, DataType type, cudaStream_t stream)
 {
     FT_CHECK(sendbuff == recvbuff);
 

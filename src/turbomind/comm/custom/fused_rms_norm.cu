@@ -441,7 +441,7 @@ __global__ void AllreduceResidualBiasRMSnorm_Simple_Push(T*                     
     }
 }
 
-void CustomComm::AllreduceResidualBiasRMSnorm(void*        hidden,
+void NativeComm::AllreduceResidualBiasRMSnorm(void*        hidden,
                                               void*        residual,
                                               const void*  bias,
                                               const void*  weights,

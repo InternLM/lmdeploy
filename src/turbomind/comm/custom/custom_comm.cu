@@ -15,7 +15,7 @@
 
 namespace turbomind::comm {
 
-CustomComm::CustomComm(std::shared_ptr<LocalBootstrap> bootstrap): Comm{bootstrap->getNranks(), bootstrap->getRank()}
+NativeComm::NativeComm(std::shared_ptr<LocalBootstrap> bootstrap): Comm{bootstrap->getNranks(), bootstrap->getRank()}
 {
     bootstrap_ = bootstrap;
 
@@ -39,7 +39,7 @@ CustomComm::CustomComm(std::shared_ptr<LocalBootstrap> bootstrap): Comm{bootstra
     }
 }
 
-CustomComm::~CustomComm()
+NativeComm::~NativeComm()
 {
     Deregister(scratch_buff_);
     Deregister(packet_buff_);
@@ -62,7 +62,7 @@ CustomComm::~CustomComm()
     check_cuda_error(cudaStreamSynchronize(0));
 }
 
-void CustomComm::Initialize()
+void NativeComm::Initialize()
 {
     const int flags_size = 3 * sizeof(uint64_t) * kChannelsPerConn * (world_size_ - 1);
     uint64_t* flags      = (uint64_t*)Allocate(flags_size);
@@ -112,7 +112,7 @@ void CustomComm::Initialize()
     Register(scratch_buff_, kScratchBuffSize);
 }
 
-void* CustomComm::Allocate(size_t size)
+void* NativeComm::Allocate(size_t size)
 {
     CUmemGenericAllocationHandle handle{};
     size = (size + alloc_granularity_ - 1) / alloc_granularity_ * alloc_granularity_;
@@ -126,7 +126,7 @@ void* CustomComm::Allocate(size_t size)
     return ptr;
 }
 
-void CustomComm::Free(void* ptr)
+void NativeComm::Free(void* ptr)
 {
     if (auto it = allocations_.find(ptr); it != allocations_.end()) {
         auto allocation = it->second;
@@ -141,7 +141,7 @@ void CustomComm::Free(void* ptr)
     }
 }
 
-void CustomComm::Register(void* ptr, size_t size)
+void NativeComm::Register(void* ptr, size_t size)
 {
     if (!registered_memories_.count(ptr)) {
         using Buffer = std::pair<void*, size_t>;
@@ -164,14 +164,14 @@ void CustomComm::Register(void* ptr, size_t size)
     }
 }
 
-void CustomComm::Deregister(void* ptr)
+void NativeComm::Deregister(void* ptr)
 {
     if (int erased = registered_memories_.erase(ptr); erased == 0) {
         TM_LOG_WARNING("[TM][COMM][%d] Deregistering non-registered address %p", rank_, ptr);
     }
 }
 
-int CustomComm::Query(QueryAttr attr) const noexcept
+int NativeComm::Query(QueryAttr attr) const noexcept
 {
     if (attr == kHasAllGather2D) {
         return 1;
@@ -179,7 +179,7 @@ int CustomComm::Query(QueryAttr attr) const noexcept
     return 0;
 }
 
-Array<void*, kMaxNearPeers> CustomComm::get_near_impl(void* ptr)
+Array<void*, kMaxNearPeers> NativeComm::get_near_impl(void* ptr)
 {
     auto& memories = registered_memories_.at(ptr);
     FT_CHECK(memories.size() <= kMaxNearPeers);
@@ -229,7 +229,7 @@ public:
 
         auto bootstrap = std::make_shared<LocalBootstrap>(world_size, rank, internal_->state);
 
-        auto comm = std::make_unique<CustomComm>(bootstrap);
+        auto comm = std::make_unique<NativeComm>(bootstrap);
 
         comm->Initialize();
 
@@ -246,7 +246,7 @@ private:
     std::shared_ptr<Internal> internal_;
 };
 
-std::unique_ptr<GroupId> CreateCustomGroupId()
+std::unique_ptr<GroupId> CreateNativeGroupId()
 {
     return std::make_unique<LocalGroupId>();
 }

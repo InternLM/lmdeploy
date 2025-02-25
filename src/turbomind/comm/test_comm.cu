@@ -3,8 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
-#include <cuda_runtime_api.h>
 #include <numeric>
+#include <optional>
 #include <ostream>
 #include <random>
 #include <sstream>
@@ -136,7 +136,7 @@ struct TestComm {
 
         barrier_.emplace(device_num);
 
-        comm_ = Init(device_num, "custom");
+        comm_ = Init(device_num, "native");
 
         warmup_ = warmup;
         iters_  = iters;
