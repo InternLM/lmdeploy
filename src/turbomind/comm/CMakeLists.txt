@@ -12,7 +12,7 @@ if (BUILD_MULTI_GPU)
     add_subdirectory(custom)
     target_link_libraries(comm PRIVATE custom_comm)
 
-    if (USE_NCCL) 
+    if (USE_NCCL)
         add_subdirectory(nccl)
         target_link_libraries(comm PRIVATE nccl_comm)
     endif ()
