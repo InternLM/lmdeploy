@@ -106,7 +106,7 @@ class MiniCPMVModel(VisonModel):
             best_grid=best_grid,
             num_patches=num_patches,
             image_tokens=1,
-            image_token_id=0)
+            image_token_id=self.image_token_id)
 
     def _preprocess_v2_6(self, image: Image, params: Dict = None) -> Dict:
         """image preprocessing for MiniCPM-V-2_6."""
@@ -127,7 +127,7 @@ class MiniCPMVModel(VisonModel):
             best_grid=grid,
             num_patches=num_patches,
             image_tokens=1,
-            image_token_id=0,
+            image_token_id=self.image_token_id,
             use_image_id=use_image_id)
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:

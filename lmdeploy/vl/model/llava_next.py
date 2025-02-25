@@ -93,7 +93,7 @@ class LlavaNextVisionModel(LlavaHfVisionModel):
                 dict(image_size=image.size,
                      image_patches=image_num_patches,
                      image_tokens=image_tokens,
-                     image_token_id=0))
+                     image_token_id=self.image_token_id))
             outputs.append(result)
         messages.append(dict(role='preprocess', content=outputs))
         return messages

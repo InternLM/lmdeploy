@@ -1,6 +1,6 @@
 allure-pytest
 coverage
-pynvml
+nvidia-ml-py
 pytest
 pytest-assume
 pytest-cov
