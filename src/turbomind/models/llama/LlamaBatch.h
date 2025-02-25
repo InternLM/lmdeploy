@@ -131,7 +131,7 @@ public:
         return session_len_;
     }
 
-    void tune();
+    void Warmup();
 
 private:
     void BroadcastCancelFlags();

@@ -1692,7 +1692,15 @@ template<typename T>
 void LlamaBatch<T>::Start()
 {
     TM_LOG_INFO("LlamaBatch<T>::Start()");
-    internal_thread_ = std::thread(&LlamaBatch::InternalThreadEntry, this);
+    internal_thread_ = std::thread([this] {
+        try {
+            InternalThreadEntry();
+        }
+        catch (const std::exception& e) {
+            TM_LOG_ERROR("[TM][Engine] %s", e.what());
+            std::abort();
+        }
+    });
 }
 
 template<typename T>
@@ -1921,7 +1929,7 @@ struct TuningContext {
 }  // namespace
 
 template<class T>
-void LlamaBatch<T>::tune()
+void LlamaBatch<T>::Warmup()
 {
     auto& linear = *context_->linear;
     if (auto str = std::getenv("TM_GEMM_IMPORT")) {

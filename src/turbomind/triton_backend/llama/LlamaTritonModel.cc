@@ -429,12 +429,18 @@ void LlamaTritonModel<T>::createEngine(int device_id, int global_rank) noexcept
 
     shared_state_->barrier->wait();
 
-    engines_[device_id] = std::make_unique<Engine<T>>(engine_param_,  //
-                                                      std::move(model),
-                                                      std::move(ctx),
-                                                      shared_state_,
-                                                      gateway_,
-                                                      device_id);
+    try {
+        engines_[device_id] = std::make_unique<Engine<T>>(engine_param_,  //
+                                                          std::move(model),
+                                                          std::move(ctx),
+                                                          shared_state_,
+                                                          gateway_,
+                                                          device_id);
+    }
+    catch (const std::exception& e) {
+        TM_LOG_ERROR("[TM][Engine][Init] %s", e.what());
+        std::abort();
+    }
 
     // Wait for pinned buffers to be allocated for all ranks, otherwise tuning will hang
     // due to concurrent kernel launch & cudaMallocHost
@@ -442,7 +448,13 @@ void LlamaTritonModel<T>::createEngine(int device_id, int global_rank) noexcept
 
     auto& engine = *engines_[device_id];
 
-    engine.tune();
+    try {
+        engine.Warmup();
+    }
+    catch (const std::exception& e) {
+        TM_LOG_ERROR("[TM][Engine][Warmup] %s", e.what());
+        std::abort();
+    }
 
     shared_state_->barrier->wait();
 
