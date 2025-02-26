@@ -143,9 +143,11 @@ def main(model_path: str,
                                   top_p=top_p,
                                   temperature=temperature,
                                   repetition_penalty=repetition_penalty)
+    stop_words = _stop_words(model.stop_words, tokenizer)
     gen_config.convert_stop_bad_words_to_ids(tokenizer)
+    if stop_words is not None:
+        stop_words = stop_words[0][0].tolist()
     if gen_config.stop_token_ids is None:
-        stop_words = _stop_words(model.stop_words, tokenizer)
         gen_config.stop_token_ids = stop_words
     hf_gen_cfg = get_hf_gen_cfg(model_path)
     gen_config.update_from_hf_gen_cfg(hf_gen_cfg, tokenizer.eos_token_id)
