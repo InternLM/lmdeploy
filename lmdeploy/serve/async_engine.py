@@ -20,6 +20,7 @@ import torch
 import tqdm
 
 from lmdeploy import Tokenizer
+from lmdeploy.archs import get_model_arch
 from lmdeploy.logger import RequestLogger
 from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, Response, ResponseType, TurbomindEngineConfig
 from lmdeploy.model import MODELS, ChatTemplateConfig, best_match_model
@@ -271,6 +272,7 @@ class AsyncEngine(LogitsMixin):
 
         self.tokenizer = Tokenizer(model_path)
         self.hf_gen_cfg = get_hf_gen_cfg(model_path)
+        self.arch, _ = get_model_arch(model_path)
 
         # build backend engine
         if backend == 'turbomind':

@@ -64,7 +64,9 @@ def _get_llama3_parameters(config: PretrainedConfig):
 def build_rotary_params(config: PretrainedConfig):
     """get scaling_factor rotary params, and emb_type."""
     params = dict(emb_type=RopeType.Default)
-    if config.rope_scaling is not None:
+    # cannot access config.rope_scaling when the model is "Qwen/Qwen2-Math-RM-72B"
+    rope_scaling = getattr(config, 'rope_scaling', None)
+    if rope_scaling is not None:
         rope_type_str = config.rope_scaling.get('rope_type', 'default')
         build_funcs = dict(default=_get_default_rope_parameters,
                            linear=_get_linear_scaling_rope_parameters,
