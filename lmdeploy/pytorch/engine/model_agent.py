@@ -604,7 +604,7 @@ class TPModelAgent(AutoModelAgent):
         )
 
         stop_event = threading.Event()
-        t_watchdog = threading.Thread(target=self._mp_watchdog, args=[self.mp_context, 1.0, stop_event], daemon=True)
+        t_watchdog = threading.Thread(target=self._mp_watchdog, args=[self.mp_context, 1.0, stop_event])
         t_watchdog.start()
         self.t_watchdog = t_watchdog
         self.t_watchdog.stop_event = stop_event
