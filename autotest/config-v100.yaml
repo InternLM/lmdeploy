@@ -120,6 +120,8 @@ turbomind_quatization:
         - Qwen/Qwen2-7B-Instruct-GPTQ-Int4
     no_kvint8:
         - deepseek-ai/DeepSeek-V2-Lite-Chat
+    no_converted:
+        - deepseek-ai/DeepSeek-V2-Lite-Chat
 
 pytorch_quatization:
     awq:

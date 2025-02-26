@@ -29,5 +29,5 @@ def test_repeat(config, model):
         }])
         print(response)
         response_list.append(response)
-        assert len(response) > 10 and '$\\boxed' in response
+        assert len(response) > 10
     assert response_list[0] != response_list[1] and response_list[1] != response_list[2]

@@ -7,6 +7,7 @@ from utils.rule_condition_assert import assert_result
 from lmdeploy.utils import is_bf16_supported
 
 TEMPLATE = 'autotest/template.json'
+LLAVA_TEMPLATE = 'autotest/llava_template.json'
 
 
 def command_line_test(config,
@@ -67,6 +68,8 @@ def hf_command_line_test(config,
 
     if case == 'base_testcase':
         cmd += ' --chat-template ' + TEMPLATE
+    if 'llava' in model_case:
+        cmd += ' --chat-template ' + LLAVA_TEMPLATE
     return command_test(config, [cmd], model_case, '_'.join(['hf', type, case]), case_info, True)
 
 
