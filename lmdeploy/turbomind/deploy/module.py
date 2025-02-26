@@ -295,15 +295,11 @@ class Misc(Module):
             return torch.nn.functional.pad(tensor, (0, 0, 0, pad_size), 'constant', 0)
 
         if emb is not None:
-            import pdb
-            pdb.set_trace()
             emb = pad_weight(emb)
             self.model.save_split(emb, 'tok_embeddings.weight', split_dim=1)
         if norm_weight is not None:
             self.model.export_weight(norm_weight, 'norm.weight')
         if output_weight is not None:
-            import pdb
-            pdb.set_trace()
             output_weight = pad_weight(output_weight)
             self.model.save_split(output_weight, 'output.weight', split_dim=0)
 
@@ -319,8 +315,6 @@ class InternLM2Reward(Module):
         """Export internlm2 v_head weight."""
         weight = r.reward_weight()
         if weight is not None:
-            import pdb
-            pdb.set_trace()
             tp = self.model.tensor_para_size
             pad_size = tp - 1 if tp > 1 else tp
             weight = torch.nn.functional.pad(weight, (0, 0, 0, pad_size), 'const', 0)

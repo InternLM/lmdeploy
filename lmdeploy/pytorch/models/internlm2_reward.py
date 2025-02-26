@@ -144,6 +144,4 @@ class InternLM2ForRewardModel(nn.Module, CudaGraphMixin):
                     load_weight(param, v, shard_id='v')
                 else:
                     param = params_dict[name]
-                    # if name == 'v_head.weight':
-                    #     import pdb; pdb.set_trace()
                     load_weight(param, loaded_weight)

@@ -36,15 +36,8 @@ class LogitsMixin:
         # Make input_ids a list of token_id list
         input_ids = [input_ids] if isinstance(input_ids[0], int) else input_ids
         logits = self._run(coro=self._async_get_logits(input_ids=input_ids)).result()
-        scores = []
-        if self.arch == 'InternLM2ForRewardModel':
-            logits = [x.squeeze(-1) for x in logits]
-            scores = [x[-1].cpu().item() for x in logits]
-        elif self.arch == 'Qwen2ForRewardModel':
-            # from torch.nn import MSELoss
-            logits = [x.squeeze() for x in logits]
-            # loss = loss_fct(pooled_logits.squeeze(), labels.squeeze())
-
+        logits = [x.squeeze() for x in logits]
+        scores = [x[-1].cpu().item() for x in logits]
         return scores
 
     async def _async_get_logits(self,
