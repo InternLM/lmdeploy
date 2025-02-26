@@ -69,6 +69,7 @@ def main(model_path: str,
          stream_output: bool = True,
          request_output_len: int = 1024,
          chat_template_config: ChatTemplateConfig = None,
+         communicator: str = 'nccl',
          **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -130,7 +131,8 @@ def main(model_path: str,
                                        quant_policy=quant_policy,
                                        rope_scaling_factor=rope_scaling_factor,
                                        dtype=dtype,
-                                       tp=tp)
+                                       tp=tp,
+                                       communicator=communicator)
     print('engine_cfg:\n', engine_cfg, sep='', flush=True)
     tokenizer = Tokenizer(model_path)
     from lmdeploy import turbomind as tm

@@ -19,7 +19,6 @@
 
 #include "src/turbomind/models/llama/LlamaFfnLayer.h"
 #include "src/turbomind/kernels/activation_kernels.h"
-#include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/nvtx_utils.h"
@@ -32,16 +31,11 @@ void LlamaFfnLayer<T>::allocateBuffer(
 {
     const size_t sz = token_num * inter_size;
 
-    const size_t sz_gate  = token_num * gating_lora_r;
-    const size_t sz_inter = token_num * inter_lora_r;
+    gating_buf_ = (T*)allocator_->reMalloc(gating_buf_, sizeof(T) * sz * inter_buf_factor, false);
+    inter_buf_  = gating_buf_ + sz;
 
-    gating_buf_ =
-        (T*)allocator_->reMalloc(gating_buf_, sizeof(T) * (sz * inter_buf_factor + sz_gate + sz_inter), false);
-    inter_buf_ = gating_buf_ + sz;
-
-    // gate & inter is not fused when lora is enabled
-    if (gating_lora_r) {
-        inter_buf_ += sz_gate;
+    if (gating_lora_r + inter_lora_r) {
+        lora_buf_ = (T*)allocator_->reMalloc(lora_buf_, sizeof(T) * token_num * (gating_lora_r + inter_lora_r));
     }
 
     is_allocate_buffer_ = true;
@@ -52,6 +46,7 @@ void LlamaFfnLayer<T>::freeBuffer()
 {
     if (is_allocate_buffer_) {
         allocator_->free((void**)&gating_buf_);
+        allocator_->free((void**)&lora_buf_);
         is_allocate_buffer_ = false;
     }
 }
@@ -119,15 +114,26 @@ void LlamaFfnLayer<T>::forward(TensorMap*               output_tensors,
     else {
         {  // w1(x)
             NvtxScope scope("w1");
-            linear_->forward(gating_buf_, ffn_input_data, token_num, weights->gating, LlamaLinear<T>::kGemm, lora_mask);
+            linear_->forward(gating_buf_,  //
+                             ffn_input_data,
+                             token_num,
+                             weights->gating,
+                             LlamaLinear<T>::kGemm,
+                             lora_buf_,
+                             lora_mask);
             sync_check_cuda_error();
         }
         count_and_fix(gating_buf_, token_num * weights->gating.output_dims, Concat("w1", layer_id), 3);
 
         {  // w3(x)
             NvtxScope scope("w3");
-            linear_->forward(
-                inter_buf_, ffn_input_data, token_num, weights->intermediate, LlamaLinear<T>::kGemm, lora_mask);
+            linear_->forward(inter_buf_,
+                             ffn_input_data,
+                             token_num,
+                             weights->intermediate,
+                             LlamaLinear<T>::kGemm,
+                             lora_buf_,
+                             lora_mask);
             sync_check_cuda_error();
         }
         count_and_fix(inter_buf_, token_num * weights->intermediate.output_dims, Concat("w3", layer_id), 3);
@@ -141,19 +147,17 @@ void LlamaFfnLayer<T>::forward(TensorMap*               output_tensors,
     {  // w2(x)
         NvtxScope scope("w2");
         const int pitch = (weights->fused_gating_intermediate.kernel && !weights->is_fused_silu) ? inter_size * 2 : 0;
-        linear_->forward(
-            ffn_output_data, {gating_buf_, pitch}, token_num, weights->output, LlamaLinear<T>::kGemm, lora_mask);
+        linear_->forward(ffn_output_data,
+                         {gating_buf_, pitch},
+                         token_num,
+                         weights->output,
+                         LlamaLinear<T>::kGemm,
+                         lora_buf_,
+                         lora_mask);
         sync_check_cuda_error();
     }
 
     count_and_fix(ffn_output_data, token_num * weights->output.output_dims, Concat("w2", layer_id), 3);
-
-    if (all_reduce && tensor_para_.world_size_ > 1) {
-        // std::cout << "ffn all reduce " << layer_id << "\n";
-        NcclGuard nccl_guard(tensor_para_, stream_);
-        ftNcclAllReduceSum(ffn_output_data, ffn_output_data, token_num * hidden_units_, tensor_para_, stream_);
-        sync_check_cuda_error();
-    }
 
     if (is_free_buffer_after_forward_) {
         freeBuffer();

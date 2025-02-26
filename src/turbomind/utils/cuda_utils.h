@@ -16,21 +16,24 @@
 
 #pragma once
 
-#include "src/turbomind/macro.h"
-#include "src/turbomind/utils/cuda_bf16_wrapper.h"
-#include "src/turbomind/utils/logger.h"
-
 #include <algorithm>
-#include <cublasLt.h>
-#include <cublas_v2.h>
-#include <cuda_runtime.h>
 #include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
+
+#include <cuda.h>
+#include <cuda_runtime.h>
+
+#include <cublasLt.h>
+#include <cublas_v2.h>
 #ifdef SPARSITY_ENABLED
 #include <cusparseLt.h>
 #endif
+
+#include "src/turbomind/macro.h"
+#include "src/turbomind/utils/cuda_bf16_wrapper.h"
+#include "src/turbomind/utils/logger.h"
 
 namespace turbomind {
 
@@ -156,6 +159,15 @@ inline void syncAndCheck(const char* const file, int const line)
 }
 
 #define sync_check_cuda_error() syncAndCheck(__FILE__, __LINE__)
+
+#define CUDRVCHECK(expr)                                                                                               \
+    if (auto ec = expr; ec != CUDA_SUCCESS) {                                                                          \
+        const char* p_str{};                                                                                           \
+        cuGetErrorString(ec, &p_str);                                                                                  \
+        p_str    = p_str ? p_str : "Unknown error";                                                                    \
+        auto msg = fmtstr("[TM][ERROR] CUDA driver error: %s:%d '%s'", __FILE__, __LINE__, p_str);                     \
+        throw std::runtime_error(msg.c_str());                                                                         \
+    }
 
 #define checkCUDNN(expression)                                                                                         \
     {                                                                                                                  \

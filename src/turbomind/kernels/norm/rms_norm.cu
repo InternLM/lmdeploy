@@ -4,6 +4,7 @@
 
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
+#include "src/turbomind/kernels/norm/rms_norm.h"
 
 namespace turbomind {
 
@@ -231,5 +232,39 @@ template void invokeBiasResidualRMSNorm(nv_bfloat16*       residual,
                                         float              eps,
                                         cudaStream_t       st);
 #endif
+
+void invokeResidualBiasRMSNorm(void*        hidden_states,
+                               void*        residual,
+                               const void*  weights,
+                               const void*  bias,
+                               DataType     dtype,
+                               int          dims,
+                               int          num,
+                               float        eps,
+                               cudaStream_t st)
+{
+    auto invoke = [&](auto t) {
+        using T                = decltype(t);
+        constexpr int vec_size = sizeof(uint4) / sizeof(T);
+        constexpr int threads  = 512;
+        const int     blocks   = num;
+        BiasResidualRMSNormKernel<T, float, threads, vec_size><<<blocks, threads, 0, st>>>((T*)residual,  //
+                                                                                           (T*)hidden_states,
+                                                                                           (const T*)weights,
+                                                                                           (const T*)bias,
+                                                                                           dims,
+                                                                                           num,
+                                                                                           eps,
+                                                                                           1.f / dims);
+    };
+    switch (dtype) {
+        case DataType::TYPE_FP16:
+            return invoke(half{});
+        case DataType::TYPE_BF16:
+            return invoke(nv_bfloat16{});
+        default:
+            FT_CHECK(0);
+    }
+}
 
 }  // namespace turbomind

@@ -463,3 +463,11 @@ class ArgumentHelper:
                                    default=False,
                                    help='Whether to enable eager mode. '
                                    'If True, cuda graph would be disabled')
+
+    @staticmethod
+    def communicator(parser):
+        return parser.add_argument('--communicator',
+                                   type=str,
+                                   default='nccl',
+                                   choices=['nccl', 'native'],
+                                   help='Communication backend for multi-GPU inference')
