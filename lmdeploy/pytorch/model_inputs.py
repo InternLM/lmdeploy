@@ -4,8 +4,9 @@ from dataclasses import dataclass, field, fields
 from typing import Any, Dict, List, Literal
 
 import torch
-from torch import distributed as dist
 
+# from torch import distributed as dist
+import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.config import ModelConfig
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
@@ -15,7 +16,7 @@ def _broadcast_tensor(value: torch.Tensor, src: int = 0, device: str = 'cuda'):
     """broadcast tensor."""
     if value.device.type == 'meta':
         value = torch.empty_like(value, device=device)
-    dist.broadcast(value, src)
+    dist.broadcast(value, src, group=dist.get_tp_group('gpu'))
     return value
 
 
@@ -30,7 +31,7 @@ class VisionModelInputs:
     input_embedding_indexing: torch.BoolTensor = None
     input_multimodals: List[MultiModalTensor] = None
 
-    def to_device(self, device: str):
+    def to_device(self, device: str, non_blocking: bool = False):
         """to device."""
         out_dict = dict()
         for f in fields(self):
@@ -39,17 +40,17 @@ class VisionModelInputs:
             if v is None:
                 continue
             if isinstance(v, torch.Tensor):
-                v = v.to(device)
+                v = v.to(device, non_blocking=non_blocking)
             elif k == 'input_embedding_ranges':
-                v = [e.to(device) for e in v]
+                v = [e.to(device, non_blocking=non_blocking) for e in v]
             elif k == 'input_embeddings':
-                v = [[e.to(device) for e in li] for li in v]
+                v = [[e.to(device, non_blocking=non_blocking) for e in li] for li in v]
             elif k == 'input_multimodals':
                 new_v = []
                 for mm_datas in v:
                     new_mm_datas = dict()
                     for modal_type, data in mm_datas.items():
-                        data = [d.to_device(device) for d in data]
+                        data = [d.to_device(device, non_blocking=non_blocking) for d in data]
                         new_mm_datas[modal_type] = data
                     new_v.append(new_mm_datas)
                 v = new_v
@@ -220,16 +221,16 @@ class ModelInputs:
 
         return ret
 
-    def to_device(self, device: str):
+    def to_device(self, device: str, non_blocking: bool = False):
         """to device."""
         out_dict = dict()
         for f in fields(self):
             k = f.name
             v = getattr(self, k)
             if isinstance(v, torch.Tensor):
-                v = v.to(device)
+                v = v.to(device, non_blocking=non_blocking)
             elif isinstance(v, VisionModelInputs):
-                v = v.to_device(device)
+                v = v.to_device(device, non_blocking=non_blocking)
             out_dict[k] = v
 
         return ModelInputs(**out_dict)

@@ -160,3 +160,13 @@ class CudaOpsBackend(DefaultOpsBackend):
         """build graph runner."""
         from .graph_runner import CUDAGraphRunner
         return CUDAGraphRunner(model, model_config, cache_config, backend_config, device)
+
+    @staticmethod
+    def device_count():
+        """get num available devices."""
+        return torch.cuda.device_count()
+
+    @staticmethod
+    def support_ray():
+        """support ray."""
+        return True
