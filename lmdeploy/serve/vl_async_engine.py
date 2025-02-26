@@ -30,6 +30,10 @@ class VLAsyncEngine(AsyncEngine):
             try_import_deeplink(backend_config.device_type)
         self.vl_encoder = ImageEncoder(model_path, backend, vision_config, backend_config=backend_config)
         super().__init__(model_path, backend=backend, backend_config=backend_config, **kwargs)
+        if backend == 'turbomind':
+            # for mutual exclusion with LLM inference
+            # reading `model_comm.mutex` will trigger its creation in tm
+            self.vl_encoder.tm_mutex = self.engine.model_comm.mutex
         if self.model_name == 'base':
             raise RuntimeError(
                 'please specify chat template as guided in https://lmdeploy.readthedocs.io/en/latest/inference/vl_pipeline.html#set-chat-template'  # noqa: E501
