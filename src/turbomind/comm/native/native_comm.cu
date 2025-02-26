@@ -27,7 +27,7 @@ NativeComm::NativeComm(std::shared_ptr<LocalBootstrap> bootstrap): Comm{bootstra
     // Prepare allocation properties & granularity
     alloc_prop_.type          = CU_MEM_ALLOCATION_TYPE_PINNED;
     alloc_prop_.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
-    alloc_prop_.location.id   = rank_;
+    alloc_prop_.location.id   = ordinals_[rank_];
     CUDRVCHECK(cuMemGetAllocationGranularity(&alloc_granularity_, &alloc_prop_, CU_MEM_ALLOC_GRANULARITY_RECOMMENDED));
 
     // Prepare access descriptors
