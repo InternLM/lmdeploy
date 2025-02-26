@@ -76,8 +76,6 @@ class Qwen2ForRewardModel(nn.Module, CudaGraphMixin):
 
     def update_weights(self):
         """update weights."""
-        # if self.config.tie_word_embeddings:
-        #     self.lm_head.weight = self.model.embed_tokens.weight
         pass
 
     def get_input_embeddings(self):

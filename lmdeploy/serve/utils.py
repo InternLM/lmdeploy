@@ -55,6 +55,8 @@ class LogitsMixin:
                 input_len = len(input_ids[i])
                 # TODO(lvhan): Fix the ugly code later on
                 max_new_tokens = 1 if self.backend == 'turbomind' else 0
+                # The reason to set `top_k=1` is that pt engine crashes at top_k sampling stage
+                # when perform inference on a reward model.
                 gen_config = GenerationConfig(max_new_tokens=max_new_tokens, output_logits='all', top_k=1)
                 async with self.safe_run(inst,
                                          session_id=i,
