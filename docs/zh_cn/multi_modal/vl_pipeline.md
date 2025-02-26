@@ -213,3 +213,25 @@ print(sess.response.text)
 sess = pipe.chat('What is the woman doing?', session=sess, gen_config=gen_config)
 print(sess.response.text)
 ```
+
+### 释放 pipeline
+
+您可以通过调用其 `close()` 方法来显式释放 pipeline，或者，也可以使用 `with` 语句，如下所示：
+
+```python
+from lmdeploy import pipeline
+
+from lmdeploy import pipeline
+from lmdeploy.vl import load_image
+
+with pipeline('OpenGVLab/InternVL2_5-8B') as pipe:
+    image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
+    response = pipe(('describe this image', image))
+    print(response)
+
+# Clear the torch cache and perform garbage collection if needed
+import torch
+import gc
+torch.cuda.empty_cache()
+gc.collect()
+```

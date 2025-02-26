@@ -217,6 +217,18 @@ response = pipe(prompts, gen_config=gen_config, adapter_name='lora_name_1')
 print(response)
 ```
 
+### Release pipeline
+
+You can release the pipeline explicitly by calling its `close()` method, or alternatively, use the `with` statement as demonstrated below:
+
+```python
+from lmdeploy import pipeline
+
+with pipeline('internlm/internlm2_5-7b-chat') as pipe:
+    response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
+    print(response)
+```
+
 ## FAQs
 
 - **RuntimeError: An attempt has been made to start a new process before the current process has finished its bootstrapping phase**.

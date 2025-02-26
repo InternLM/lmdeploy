@@ -23,6 +23,10 @@ ______________________________________________________________________
 
 ## Latest News 🎉
 
+<details open>
+<summary><b>2025</b></summary>
+</details>
+
 <details close>
 <summary><b>2024</b></summary>
 
@@ -195,9 +199,9 @@ For more information on installing on CUDA 11+ platform, or for instructions on 
 
 ```python
 import lmdeploy
-pipe = lmdeploy.pipeline("internlm/internlm3-8b-instruct")
-response = pipe(["Hi, pls intro yourself", "Shanghai is"])
-print(response)
+with lmdeploy.pipeline("internlm/internlm3-8b-instruct") as pipe:
+    response = pipe(["Hi, pls intro yourself", "Shanghai is"])
+    print(response)
 ```
 
 > \[!NOTE\]
