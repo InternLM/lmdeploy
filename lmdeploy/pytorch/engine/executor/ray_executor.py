@@ -335,10 +335,14 @@ class RayExecutor(ExecutorBase):
         from ray.dag.output_node import MultiOutputNode
 
         outputs = []
-        for dp_rank in dp_ranks:
-            workers = self.workers_by_dp[dp_rank]
-            with InputNode() as input_data:
+        with InputNode() as input_data:
+            if len(dp_ranks) == 1:
+                workers = self.workers_by_dp[dp_ranks[0]]
                 outputs += [worker.forward_async.bind(input_data) for worker in workers]
+            else:
+                for idx, dp_rank in enumerate(dp_ranks):
+                    workers = self.workers_by_dp[dp_rank]
+                    outputs += [worker.forward_async.bind(input_data[idx]) for worker in workers]
         output = MultiOutputNode(outputs)
 
         return output

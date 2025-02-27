@@ -88,6 +88,17 @@ def _batch_stopping_criteria(token_ids: torch.Tensor, stop_words: torch.Tensor, 
     return stopped, num_appendable_ids
 
 
+def _try_to_cuda(val, non_blocking: bool = False):
+    if val is None:
+        return val
+    elif isinstance(val, torch.Tensor):
+        return val.cuda(non_blocking=non_blocking)
+    elif hasattr(val, 'to_device'):
+        return val.to_device('cuda', non_blocking=non_blocking)
+    else:
+        raise RuntimeError(f'Can not cast {type(val)} to cuda.')
+
+
 SwapMap = Dict[int, int]
 
 
@@ -172,8 +183,14 @@ class AutoModelAgent:
             gpu_mem_physical_free, _ = get_gpu_memory()
             return gpu_mem_physical_free
 
-    async def _async_model_forward(self, inputs: ModelInputs, swap_in_map: Dict, swap_out_map: Dict,
-                                   return_logits: bool):
+    async def _async_model_forward(
+        self,
+        inputs: ModelInputs,
+        swap_in_map: Dict,
+        swap_out_map: Dict,
+        return_logits: bool,
+        sync_long_context: bool,
+    ):
         """model forward."""
         max_prefill_token_num = self.cache_config.max_prefill_token_num
         swap_done = False
@@ -219,17 +236,10 @@ class AutoModelAgent:
                 swap_done = True
                 return await self.async_forward(inputs, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
 
-        async def __long_context_single_forward(inputs):
+        async def __long_context_single_forward(new_inputs, max_seqlen: int):
             """one large sequence."""
-            seq_len = inputs.seq_length
-            max_seq_len = inputs.seq_length[0]
-            batch_size = seq_len.size(0)
-            assert batch_size == 1
-
-            new_inputs = inputs.split(max_prefill_token_num)
-
             model_metas = new_inputs[0].model_metas
-            output_gather = _OutputGather(max_seq_len)
+            output_gather = _OutputGather(max_seqlen)
             for inp in new_inputs:
                 inp.model_metas = model_metas
                 tmp_out = await __forward(inp)
@@ -239,18 +249,44 @@ class AutoModelAgent:
             tmp_out['hidden_states'] = output_gather.get_output()
             return tmp_out
 
-        if inputs.input_ids.numel() <= max_prefill_token_num:
+        # make long context inputs
+        is_long_context = inputs.input_ids.numel() > max_prefill_token_num
+        max_seqlen = 0
+        if is_long_context:
+            seq_len = inputs.seq_length
+            batch_size = seq_len.size(0)
+            assert batch_size == 1, 'Do not support batched long context.'
+            max_seqlen = inputs.seq_length[0]
+            inputs = inputs.split(max_prefill_token_num)
+
+        # get num dummy loop
+        dummy_loop = 0
+        if sync_long_context:
+            forward_loop = 1
+            if is_long_context:
+                forward_loop = len(inputs)
+            max_loop = torch.tensor(forward_loop, device='cuda')
+            dist.all_reduce(max_loop, op=dist.ReduceOp.MAX)
+            dummy_loop = max_loop - forward_loop
+
+        if not is_long_context:
             ret = await __forward(inputs)
             if not return_logits and not inputs.is_decoding:
                 last_token_loc = inputs.seq_length.cumsum(0) - 1
                 ret['hidden_states'] = ret['hidden_states'][:, last_token_loc]
         else:
-            ret = await __long_context_single_forward(inputs)
-            if not return_logits and not inputs.is_decoding:
+            ret = await __long_context_single_forward(inputs, max_seqlen)
+            if not return_logits:
                 last_token_loc = [-1]
                 ret['hidden_states'] = ret['hidden_states'][:, last_token_loc]
             else:
                 ret['hidden_states'] = ret['hidden_states'].to('cuda')
+
+        # compute dummy loop
+        if dummy_loop > 0:
+            dummy_inputs = ModelInputs.make_dummy(1, False, 'cuda')
+        for _ in range(dummy_loop):
+            await __forward(dummy_inputs)
 
         hidden_states = ret.pop('hidden_states')
         logits = self.get_logits(hidden_states)
@@ -278,11 +314,21 @@ class AutoModelAgent:
 
         return next_token_ids
 
-    async def _async_step_background(self, inputs: ModelInputs, swap_in_map: Dict, swap_out_map: Dict,
-                                     all_ids: torch.Tensor, guided_input_ids: torch.Tensor,
-                                     sampling_inputs: SamplingInputs, num_appendable_ids: torch.LongTensor,
-                                     num_ignore_eos: torch.LongTensor, loop_count: int, return_logits: bool,
-                                     output_que: asyncio.Queue):
+    async def _async_step_background(
+        self,
+        inputs: ModelInputs,
+        swap_in_map: Dict,
+        swap_out_map: Dict,
+        loop_count: int,
+        all_ids: torch.Tensor = None,
+        guided_input_ids: torch.Tensor = None,
+        sampling_inputs: SamplingInputs = None,
+        num_appendable_ids: torch.LongTensor = None,
+        num_ignore_eos: torch.LongTensor = None,
+        return_logits: bool = False,
+        is_dummy: bool = False,
+        sync_long_context: bool = False,
+    ):
         """asyc forward task."""
 
         def __update_inputs(next_token_ids):
@@ -300,15 +346,13 @@ class AutoModelAgent:
                      f'batch_size={inputs.seq_length.size(0)} '
                      f'num_tokens={inputs.input_ids.size(-1)}')
         non_blocking = True
-        inputs = inputs.to_device('cuda', non_blocking=non_blocking)
+        inputs = _try_to_cuda(inputs, non_blocking=non_blocking)
+        all_ids = _try_to_cuda(all_ids, non_blocking=non_blocking)
+        guided_input_ids = _try_to_cuda(guided_input_ids, non_blocking=non_blocking)
+        sampling_inputs = _try_to_cuda(sampling_inputs, non_blocking=non_blocking)
+        num_appendable_ids = _try_to_cuda(num_appendable_ids, non_blocking=non_blocking)
+        num_ignore_eos = _try_to_cuda(num_ignore_eos, non_blocking=non_blocking)
         is_decoding = inputs.is_decoding
-        if all_ids is not None:
-            all_ids = all_ids.cuda(non_blocking=non_blocking)
-        if guided_input_ids is not None:
-            guided_input_ids = guided_input_ids.cuda(non_blocking=non_blocking)
-        sampling_inputs = sampling_inputs.to_device('cuda', non_blocking=non_blocking)
-        num_appendable_ids = num_appendable_ids.cuda(non_blocking=non_blocking)
-        num_ignore_eos = num_ignore_eos.cuda(non_blocking=non_blocking)
 
         self.stream.synchronize()
 
@@ -319,12 +363,18 @@ class AutoModelAgent:
 
         for idx in range(loop_count):
             # inference
-            output = await self._async_model_forward(inputs,
-                                                     swap_in_map=swap_in_map,
-                                                     swap_out_map=swap_out_map,
-                                                     return_logits=return_logits)
+            output = await self._async_model_forward(
+                inputs,
+                swap_in_map=swap_in_map,
+                swap_out_map=swap_out_map,
+                return_logits=return_logits,
+                sync_long_context=sync_long_context,
+            )
             logits = output['logits']
             logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
+
+            if is_dummy:
+                continue
 
             if rank % tp == 0:
                 # sampling
@@ -353,7 +403,7 @@ class AutoModelAgent:
                               stopped=stopped,
                               model_metas=model_metas,
                               event=event)
-                output_que.put_nowait(output)
+                self._out_que.put_nowait(output)
 
             # update for next loop
             if is_decoding and idx < loop_count - 1:
@@ -371,10 +421,7 @@ class AutoModelAgent:
 
                 if forward_event is not None:
                     forward_event.clear()
-                await self._async_step_background(
-                    **forward_inputs,
-                    output_que=self._out_que,
-                )
+                await self._async_step_background(**forward_inputs, )
                 if forward_event is not None:
                     forward_event.set()
 
