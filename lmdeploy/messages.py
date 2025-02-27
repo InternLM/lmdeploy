@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Literal, Optional
+from typing import Any, Callable, Dict, List, Literal, Optional
 
 import torch
 from pydantic.dataclasses import dataclass as pydantic_dataclass
@@ -223,6 +223,7 @@ class TurbomindEngineConfig:
     max_prefill_token_num: int = 8192
     num_tokens_per_iter: int = 0
     max_prefill_iters: int = 1
+    model_params_que: Any = None
 
     def __post_init__(self):
         """Check input validation."""

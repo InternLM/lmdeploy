@@ -90,7 +90,7 @@ class TurboMind:
         self.model_name = model_name
         self.chat_template_name = chat_template_name
 
-        _engine_config = copy.deepcopy(engine_config)
+        _engine_config = copy.copy(engine_config)
         if _engine_config is None:
             _engine_config = TurbomindEngineConfig()
         if _engine_config.max_batch_size is None:
@@ -200,6 +200,10 @@ class TurboMind:
         from .deploy.converter import get_tm_model
         tm_model = get_tm_model(model_path, self.model_name, self.chat_template_name, engine_config)
 
+        # get model_params_que
+        model_params_que = engine_config.model_params_que
+        engine_config.model_params_que = None
+
         self._postprocess_config(tm_model.tm_config, engine_config)
 
         model_comm = _tm.AbstractTransformerModel.create_llama_model(model_dir='',
@@ -214,6 +218,8 @@ class TurboMind:
         tm_params = tm_model.tm_params
         self._get_model_params(model_comm, tm_params)
         logger.warning(f'get {len(tm_params)} model params')
+        if model_params_que is not None:
+            tm_model.input_model.model_path = model_params_que
         tm_model.export()
         # there should be no left turbomind params.
         if len(tm_params) > 0:
