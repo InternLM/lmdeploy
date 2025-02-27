@@ -116,5 +116,8 @@ def is_supported(model_path: str):
                 kv_heads = cfg.num_key_value_heads
                 # TM hasn't supported allenai/Molmo-7B-O-0924 yet
                 support_by_turbomind = kv_heads is not None
+            elif arch == 'DeepseekV2ForCausalLM':
+                if getattr(cfg, 'vision_config', None) is not None:
+                    support_by_turbomind = False
 
     return support_by_turbomind
