@@ -18,7 +18,6 @@ from lmdeploy.utils import is_bf16_supported
 
 BASE_HTTP_URL = 'http://localhost'
 DEFAULT_PORT = 23333
-LLAVA_TEMPLATE = 'autotest/llava_template.json'
 
 
 def start_restful_api(config, param, model, model_path, backend_type, worker_id):
