@@ -2,6 +2,7 @@
 import json
 import os.path as osp
 
+from ..config import RopeParam
 from .base import INPUT_MODELS
 from .llama import LlamaModel, LlamaReader
 
@@ -69,16 +70,21 @@ class LlavaModel(LlamaModel):
                 scaling_factor = model_arg['rope_scaling'].get('factor', '')
                 if scaling_type == 'dynamic':
                     use_dynamic_ntk = 1
+            if use_dynamic_ntk:
+                rope_param = RopeParam.create_dynamic(base=rope_theta,
+                                                      dim=hidden_units // attn_head_num,
+                                                      max_position_embeddings=max_position_embeddings,
+                                                      factor=scaling_factor)
+            else:
+                rope_param = RopeParam.create_default(base=rope_theta, dim=hidden_units)
 
         return dict(num_layer=num_layer,
                     norm_eps=norm_eps,
                     head_num=attn_head_num,
                     hidden_units=hidden_units,
                     kv_head_num=kv_head_num,
-                    rope_theta=rope_theta,
+                    rope_param=rope_param,
                     max_position_embeddings=max_position_embeddings,
-                    use_dynamic_ntk=use_dynamic_ntk,
-                    rope_scaling_factor=scaling_factor,
                     inter_size=intermediate_size,
                     use_logn_attn=use_logn_attn,
                     attn_bias=attn_bias,
