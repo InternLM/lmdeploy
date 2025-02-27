@@ -13,7 +13,7 @@ LMDeploy 支持 Qwen-VL 系列模型，具体如下：
 请参考[安装文档](../get_started/installation.md)安装 LMDeploy，并安装上游 Qwen2.5-VL 模型库所需的依赖。
 
 ```shell
-# Qwen2.5-VL requires the latest transformers (transformers >= 0.49.0)
+# Qwen2.5-VL requires the latest transformers (transformers >= 4.49.0)
 pip install git+https://github.com/huggingface/transformers
 # It's highly recommended to use `[decord]` feature for faster video loading.
 pip install qwen-vl-utils[decord]==0.0.8
