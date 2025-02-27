@@ -45,13 +45,13 @@ public:
 
     std::unique_ptr<ModelRequest> createModelInstance(int deviceId) override;
 
-    void createSharedWeights(int deviceId, int rank) noexcept override;
+    void createSharedWeights(int deviceId, int rank) override;
 
-    std::unordered_map<std::string, Tensor> getParams(int deviceId, int rank) noexcept override;
+    std::unordered_map<std::string, Tensor> getParams(int deviceId, int rank) override;
 
-    void processWeights(int deviceId, int rank) noexcept override;
+    void processWeights(int deviceId, int rank) override;
 
-    void createEngine(int device_id, int rank) noexcept override;
+    void createEngine(int device_id, int rank) override;
 
     std::string toString() override;
     int         getTensorParaSize() override;
@@ -60,7 +60,7 @@ public:
 private:
     void handleMissingParams();
 
-    comm::Splits createCommSplits(int global_rank);
+    comm::Splits createCommSplits(int rank);
 
 private:
     ModelParam     model_param_;
@@ -70,18 +70,18 @@ private:
     EngineParam    engine_param_;
     size_t         tensor_para_size_;
     size_t         pipeline_para_size_;
+    size_t         dp_size_;
 
-    std::unique_ptr<comm::GroupId> group_id_;
+    std::vector<std::unique_ptr<comm::GroupId>> group_ids_;
+    std::vector<std::shared_ptr<SharedState>>   shared_states_;
 
-    std::shared_ptr<SharedState> shared_state_;
-    std::shared_ptr<Gateway>     gateway_;
+    std::shared_ptr<Gateway> gateway_;
 
     // Weights & engine instances for the ranks
     std::vector<std::shared_ptr<LlamaWeight<T>>> weights_;
     std::vector<std::shared_ptr<Engine<T>>>      engines_;
 
     bool is_fp16_;
-    int  enable_custom_all_reduce_ = 0;
 
     std::string model_name_;
     std::string model_dir_;

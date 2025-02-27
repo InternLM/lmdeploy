@@ -955,7 +955,8 @@ LlamaBatch<T>::LlamaBatch(const EngineParam&           param,
                           std::unique_ptr<Context<T>>  ctx,    // ! This is moved
                           std::shared_ptr<SharedState> state,
                           std::shared_ptr<Gateway>     gateway,
-                          int                          device_id):
+                          int                          device_id,
+                          int                          dp_rank):
     param_(param),
     gateway_(gateway),
     shared_state_(state),
@@ -965,6 +966,7 @@ LlamaBatch<T>::LlamaBatch(const EngineParam&           param,
     num_tokens_per_iter_(param.num_tokens_per_iter),
     max_prefill_iters_(param.max_prefill_iters),
     device_id_(device_id),
+    dp_rank_(dp_rank),
     tp_size_(model->tp_size_),
     rank_(model->tp_rank_),
     data_type_(getTensorType<T>()),
@@ -1624,7 +1626,7 @@ void LlamaBatch<T>::InternalThreadEntry()
                 const int  free_slot_count = max_batch_size_ - state_->size + g.finished_count;
                 const bool is_empty        = (free_slot_count == max_batch_size_);
                 // Block if batch is empty
-                gateway_->pop(infer_reqs, kill_reqs, free_slot_count, is_empty, shared_state_->abort);
+                gateway_->pop(infer_reqs, kill_reqs, free_slot_count, is_empty, shared_state_->abort, dp_rank_);
             }
             // Mark reqs to the same session_id as invalid (which are dangerous to the engine)
             DisableConflictRequests(infer_reqs, kill_reqs);

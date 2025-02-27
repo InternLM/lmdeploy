@@ -97,7 +97,10 @@ class TurboMind:
         assert _engine_config.max_batch_size > 0, 'max_batch_size should be' \
             f' greater than 0, but got {_engine_config.max_batch_size}'
 
-        self.gpu_count = _engine_config.tp
+        self.gpu_count = _engine_config.tp * _engine_config.dp
+
+        self.tp = _engine_config.tp
+        self.dp = _engine_config.dp
 
         self.tokenizer = tokenizer
         if model_source == ModelSource.WORKSPACE:
@@ -202,7 +205,7 @@ class TurboMind:
 
         model_comm = _tm.AbstractTransformerModel.create_llama_model(model_dir='',
                                                                      config=yaml.safe_dump(self.config_dict),
-                                                                     tensor_para_size=self.gpu_count,
+                                                                     tensor_para_size=self.tp,
                                                                      data_type=self.config.model_config.weight_type)
 
         # create empty weight
@@ -233,15 +236,13 @@ class TurboMind:
             logger.warning('tp in engine_config is different from in config.yaml'
                            f'({config_path}), {engine_config.tp} vs '
                            f'{cfg.tensor_para_size}, using tp={cfg.tensor_para_size}')
-        self.gpu_count = cfg.tensor_para_size
-        engine_config.tp = self.gpu_count
 
         self._postprocess_config(cfg, engine_config)
 
         weight_dir = osp.join(model_path, 'triton_models', 'weights')
         model_comm = _tm.AbstractTransformerModel.create_llama_model(model_dir=weight_dir,
                                                                      config=yaml.safe_dump(self.config_dict),
-                                                                     tensor_para_size=self.gpu_count,
+                                                                     tensor_para_size=self.tp,
                                                                      data_type=self.config.weight_type)
 
         # create weight and load params

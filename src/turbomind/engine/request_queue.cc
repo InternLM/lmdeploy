@@ -90,4 +90,21 @@ void RequestQueue::close()
     cv_.notify_all();
 }
 
+void RequestQueueV2::cancel(std::shared_ptr<Request> r)
+{
+    // -1 canceled
+    //  0 queued
+    //  1 active
+    if (r->cancel_flag.exchange(-1, std::memory_order_acq_rel) != 0) {
+        // request is picked up by engine
+        return;
+    }
+    else {
+        // not picked by engine yet, skip directly
+        gateway_->notify({[r = std::move(r)] {  //
+            UpdateState(*r, Request::kCancel, 0);
+        }});
+    }
+}
+
 }  // namespace turbomind

@@ -209,6 +209,7 @@ class TurbomindEngineConfig:
     dtype: str = 'auto'
     model_format: Optional[str] = None
     tp: int = 1
+    dp: int = 1
     session_len: Optional[int] = None
     max_batch_size: int = None
     cache_max_entry_count: float = 0.8

@@ -115,7 +115,8 @@ public:
                         std::unique_ptr<Context<T>>  ctx,
                         std::shared_ptr<SharedState> state,
                         std::shared_ptr<Gateway>     gateway,
-                        int                          device_id);
+                        int                          device_id,
+                        int                          dp_rank);
 
     ~LlamaBatch();
 
@@ -218,6 +219,7 @@ private:
     const int      num_tokens_per_iter_;
     const int      max_prefill_iters_;
     const int      device_id_;
+    const int      dp_rank_;
     const int      tp_size_;
     const int      rank_;  //  tp rank
     const DataType data_type_;
