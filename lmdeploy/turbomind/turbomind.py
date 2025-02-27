@@ -493,7 +493,7 @@ class TurboMindInstance:
 
         input_embeddings, input_embedding_ranges = self.prepare_embeddings(input_embeddings, input_embedding_ranges)
         if input_embeddings is not None:
-            inputs['input_embeddings'] = input_embeddings
+            inputs['input_embeddings'] = input_embeddings.cpu()
             inputs['input_embedding_ranges'] = input_embedding_ranges
 
         return inputs, input_len

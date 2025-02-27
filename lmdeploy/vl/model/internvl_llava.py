@@ -64,7 +64,7 @@ class InternVLLlavaVisionModel(LlavaVisionModel):
     @classmethod
     def match(cls, config: AutoConfig):
         """check whether the config match the model."""
-        arch = config.architectures[0]
+        arch = config.architectures[0] if config.architectures else None
         if arch == 'LlavaLlamaForCausalLM':
             mm_vision_tower = getattr(config, 'mm_vision_tower', '')
             if 'OpenGVLab' in mm_vision_tower:

@@ -11,6 +11,7 @@ from lmdeploy.vl.model.base import VISION_MODELS
 
 from .cogvlm import CogVLMVisionModel  # noqa F401
 from .deepseek import DeepSeekVisionModel  # noqa F401
+from .deepseek_vl2 import DeepSeek2VisionModel  # noqa F401
 from .glm_4v import GLM4VisionModel  # noqa F401
 from .internvl import InternVLVisionModel  # noqa F401
 from .internvl_llava import InternVLLlavaVisionModel  # noqa F401
@@ -55,6 +56,7 @@ def load_vl_model(model_path: str,
 
     _, hf_config = get_model_arch(model_path)
     kwargs = dict(model_path=model_path, with_llm=with_llm, max_memory=max_memory, hf_config=hf_config, backend=backend)
+
     for name, module in VISION_MODELS.module_dict.items():
         try:
             if module.match(hf_config):

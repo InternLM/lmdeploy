@@ -1070,7 +1070,7 @@ void LlamaBatch<T>::InitializeSampling(const GenerationState& g)
     member_to_tensor(&G::top_k, "runtime_top_k", h_runtime_top_k_, 0);
     member_to_tensor(&G::top_p, "runtime_top_p", h_runtime_top_p_, 0);
     member_to_tensor(&G::min_p, "runtime_min_p", h_runtime_min_p_, 0);
-    member_to_tensor(&G::temperature, "temperature", h_temperature_, 0.f);
+    member_to_tensor(&G::temperature, "temperature", h_temperature_, 1.f);
     member_to_tensor(&G::repetition_penalty, "repetition_penalty", h_repetition_penalty_, 1.f);
     member_to_tensor(&G::min_new_tokens, "min_length", h_min_length_, 0);
 

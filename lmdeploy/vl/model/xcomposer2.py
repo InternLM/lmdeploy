@@ -102,8 +102,9 @@ class Xcomposer2VisionModel(VisonModel):
     @classmethod
     def match(cls, config: AutoConfig):
         """check whether the config match the model."""
+        arch = config.architectures[0] if config.architectures else None
         target = 'InternLMXComposer2ForCausalLM'
-        if config.architectures[0] == target:
+        if arch == target:
             return True
         for _, v in getattr(config, 'auto_map', {}).items():
             if target in v:
@@ -211,7 +212,10 @@ class Xcomposer2VisionModel(VisonModel):
             image = image.convert('RGB')
             pixel_values, n_token = self.preprocess_func(image, params)
             outputs.append(
-                dict(pixel_values=pixel_values, image_size=image.size, image_tokens=n_token, image_token_id=0))
+                dict(pixel_values=pixel_values,
+                     image_size=image.size,
+                     image_tokens=n_token,
+                     image_token_id=self.image_token_id))
         messages.append(dict(role='preprocess', content=outputs))
         return messages
 
