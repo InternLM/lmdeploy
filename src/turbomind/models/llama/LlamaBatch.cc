@@ -821,8 +821,11 @@ void LlamaBatch<T>::AllocCommBuffers()
     const size_t hidden_units      = model_->hidden_units_;
     const size_t vocab_size_padded = model_->vocab_size_padded_;
 
+    // Native comm fuses allreduce & rmsnorm in token granularity
+    const size_t max_fwd_token_num = ((size_t)max_forward_token_num_ + tp_size_ - 1) / tp_size_ * tp_size_;
+
     // TODO: rename this to hidden_states
-    context_decoder_output_buf_ = (T*)CommBufAlloc(sizeof(T) * max_forward_token_num_ * hidden_units, true);
+    context_decoder_output_buf_ = (T*)CommBufAlloc(sizeof(T) * max_fwd_token_num * hidden_units, true);
 
     local_logits_buf_ = (float*)CommBufAlloc(sizeof(float) * max_batch_size_ * vocab_size_padded, true);
     if (model_->use_allgather_2d_) {
