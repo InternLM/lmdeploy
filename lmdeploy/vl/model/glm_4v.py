@@ -18,7 +18,7 @@ class GLM4VisionModel(VisonModel):
     @classmethod
     def match(cls, config: AutoConfig):
         """check whether the config match the model."""
-        arch = config.architectures[0]
+        arch = config.architectures[0] if config.architectures else None
         if arch in cls._arch and hasattr(config, 'vision_config'):
             return True
         return False

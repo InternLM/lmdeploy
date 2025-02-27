@@ -1,11 +1,11 @@
 import os
-from multiprocessing import get_context
 
 import pytest
 from utils.config_utils import get_all_model_list, get_cuda_id_by_workerid
-from utils.pipeline_chat import assert_pipeline_vl_chat_log, run_pipeline_vl_chat_test
+from utils.pipeline_chat import run_pipeline_vl_chat_test
 
 BACKEND = 'turbomind'
+BACKEND_KVINT = 'turbomind-kvint'
 
 
 @pytest.mark.order(6)
@@ -15,11 +15,7 @@ BACKEND = 'turbomind'
 def test_pipeline_chat_tp1(config, model, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
-    spawn_context = get_context('spawn')
-    p = spawn_context.Process(target=run_pipeline_vl_chat_test, args=(config, model, BACKEND, worker_id))
-    p.start()
-    p.join()
-    assert_pipeline_vl_chat_log(config, model, worker_id)
+    run_pipeline_vl_chat_test(config, model, BACKEND, worker_id)
 
 
 @pytest.mark.order(6)
@@ -30,11 +26,7 @@ def test_pipeline_chat_tp2(config, model, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    spawn_context = get_context('spawn')
-    p = spawn_context.Process(target=run_pipeline_vl_chat_test, args=(config, model, BACKEND, worker_id))
-    p.start()
-    p.join()
-    assert_pipeline_vl_chat_log(config, model, worker_id)
+    run_pipeline_vl_chat_test(config, model, BACKEND, worker_id)
 
 
 @pytest.mark.order(6)
@@ -45,11 +37,7 @@ def test_pipeline_chat_tp4(config, model, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=4)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    spawn_context = get_context('spawn')
-    p = spawn_context.Process(target=run_pipeline_vl_chat_test, args=(config, model, BACKEND, worker_id))
-    p.start()
-    p.join()
-    assert_pipeline_vl_chat_log(config, model, worker_id)
+    run_pipeline_vl_chat_test(config, model, BACKEND, worker_id)
 
 
 @pytest.mark.order(6)
@@ -59,11 +47,7 @@ def test_pipeline_chat_tp4(config, model, worker_id):
 def test_pipeline_chat_kvint4_tp1(config, model, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
-    spawn_context = get_context('spawn')
-    p = spawn_context.Process(target=run_pipeline_vl_chat_test, args=(config, model, BACKEND, worker_id, 4))
-    p.start()
-    p.join()
-    assert_pipeline_vl_chat_log(config, model, worker_id)
+    run_pipeline_vl_chat_test(config, model, BACKEND_KVINT, worker_id, {'quant_policy': 4})
 
 
 @pytest.mark.order(6)
@@ -74,11 +58,7 @@ def test_pipeline_chat_kvint4_tp2(config, model, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    spawn_context = get_context('spawn')
-    p = spawn_context.Process(target=run_pipeline_vl_chat_test, args=(config, model, BACKEND, worker_id, 4))
-    p.start()
-    p.join()
-    assert_pipeline_vl_chat_log(config, model, worker_id)
+    run_pipeline_vl_chat_test(config, model, BACKEND_KVINT, worker_id, {'quant_policy': 4})
 
 
 @pytest.mark.order(6)
@@ -89,11 +69,7 @@ def test_pipeline_chat_kvint4_tp4(config, model, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=4)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    spawn_context = get_context('spawn')
-    p = spawn_context.Process(target=run_pipeline_vl_chat_test, args=(config, model, BACKEND, worker_id, 4))
-    p.start()
-    p.join()
-    assert_pipeline_vl_chat_log(config, model, worker_id)
+    run_pipeline_vl_chat_test(config, model, BACKEND_KVINT, worker_id, {'quant_policy': 4})
 
 
 @pytest.mark.order(6)
@@ -103,11 +79,7 @@ def test_pipeline_chat_kvint4_tp4(config, model, worker_id):
 def test_pipeline_chat_kvint8_tp1(config, model, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id)
-    spawn_context = get_context('spawn')
-    p = spawn_context.Process(target=run_pipeline_vl_chat_test, args=(config, model, BACKEND, worker_id, 8))
-    p.start()
-    p.join()
-    assert_pipeline_vl_chat_log(config, model, worker_id)
+    run_pipeline_vl_chat_test(config, model, BACKEND_KVINT, worker_id, {'quant_policy': 8})
 
 
 @pytest.mark.order(6)
@@ -118,11 +90,7 @@ def test_pipeline_chat_kvint8_tp2(config, model, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    spawn_context = get_context('spawn')
-    p = spawn_context.Process(target=run_pipeline_vl_chat_test, args=(config, model, BACKEND, worker_id, 8))
-    p.start()
-    p.join()
-    assert_pipeline_vl_chat_log(config, model, worker_id)
+    run_pipeline_vl_chat_test(config, model, BACKEND_KVINT, worker_id, {'quant_policy': 8})
 
 
 @pytest.mark.order(6)
@@ -133,11 +101,7 @@ def test_pipeline_chat_kvint8_tp4(config, model, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=4)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    spawn_context = get_context('spawn')
-    p = spawn_context.Process(target=run_pipeline_vl_chat_test, args=(config, model, BACKEND, worker_id, 8))
-    p.start()
-    p.join()
-    assert_pipeline_vl_chat_log(config, model, worker_id)
+    run_pipeline_vl_chat_test(config, model, BACKEND_KVINT, worker_id, {'quant_policy': 8})
 
 
 @pytest.mark.pipeline_chat
@@ -150,8 +114,4 @@ def test_pipeline_chat_kvint8_tp4(config, model, worker_id):
 def test_pipeline_pr_test(config, model, worker_id):
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = str(int(get_cuda_id_by_workerid(worker_id)) + 5)
-    spawn_context = get_context('spawn')
-    p = spawn_context.Process(target=run_pipeline_vl_chat_test, args=(config, model, BACKEND, worker_id))
-    p.start()
-    p.join()
-    assert_pipeline_vl_chat_log(config, model, worker_id)
+    run_pipeline_vl_chat_test(config, model, BACKEND, worker_id, is_pr_test=True)

@@ -883,3 +883,32 @@ def test_deepseek_r1(model_path_or_name):
     if model_path_or_name != 'deepseek-ai/DeepSeek-V3':
         lm_res += '<think>\n'
     assert ref == lm_res
+
+
+@pytest.mark.parametrize(
+    'model_path_or_name',
+    ['deepseek-ai/deepseek-vl2-tiny', 'deepseek-ai/deepseek-vl2-small', 'deepseek-ai/deepseek-vl2'])
+def test_deepseek_vl2(model_path_or_name):
+    deduced_name = best_match_model(model_path_or_name)
+    assert deduced_name == 'deepseek-vl2'
+
+    chat_template = MODELS.get(deduced_name)()
+    messages = [{
+        'role': 'user',
+        'content': 'This is image_1: <image>\n'
+        'This is image_2: <image>\n'
+        'This is image_3: <image>\n Can you tell me what are in the images?',
+        'images': [
+            'images/multi_image_1.jpeg',
+            'images/multi_image_2.jpeg',
+            'images/multi_image_3.jpeg',
+        ],
+    }, {
+        'role': 'assistant',
+        'content': ''
+    }]
+
+    ref = '<|User|>: This is image_1: <image>\nThis is image_2: <image>\nThis is image_3: <image>' + \
+          '\n Can you tell me what are in the images?\n\n<|Assistant|>:'
+    lm_res = chat_template.messages2prompt(messages)
+    assert ref == lm_res
