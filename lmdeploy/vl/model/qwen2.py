@@ -24,7 +24,7 @@ def check_qwen_vl_deps_install():
 class Qwen2VLModel(VisonModel):
     """Qwen2VL model."""
 
-    _arch = 'Qwen2VLForConditionalGeneration'
+    _arch = ['Qwen2VLForConditionalGeneration', 'Qwen2_5_VLForConditionalGeneration']
 
     def build_preprocessor(self):
         check_qwen_vl_deps_install()

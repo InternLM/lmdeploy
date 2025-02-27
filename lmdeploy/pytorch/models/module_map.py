@@ -103,6 +103,12 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen2_vl.Qwen2VLForConditionalGeneration',
 })
 
+# qwen2_5_vl
+MODULE_MAP.update({
+    'Qwen2_5_VLForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen2_5_vl.Qwen2_5_VLForConditionalGeneration',
+})
+
 # dbrx
 MODULE_MAP.update({
     'DbrxForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.dbrx.DbrxForCausalLM',
