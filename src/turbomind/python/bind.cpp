@@ -353,6 +353,10 @@ PYBIND11_MODULE(_turbomind, m)
             return oss.str();
         });
 
+    py::class_<std::mutex, std::shared_ptr<std::mutex>>(m, "Mutex")
+        .def("lock", [](std::mutex& mutex) { mutex.lock(); })
+        .def("unlock", [](std::mutex& mutex) { mutex.unlock(); });
+
     py::class_<ft::RequestState, std::unique_ptr<ft::RequestState>>(m, "RequestState")
         .def_readonly("status", &ft::RequestState::status)
         .def_readonly("seq_len", &ft::RequestState::seq_len);
@@ -638,5 +642,6 @@ PYBIND11_MODULE(_turbomind, m)
         .def("__str__", &AbstractTransformerModel::toString)
         .def("__repr__", &AbstractTransformerModel::toString)
         .def("get_tensor_para_size", &AbstractTransformerModel::getTensorParaSize)
-        .def("get_pipeline_para_size", &AbstractTransformerModel::getPipelineParaSize);
+        .def("get_pipeline_para_size", &AbstractTransformerModel::getPipelineParaSize)
+        .def_property_readonly("mutex", [](AbstractTransformerModel* model) { return model->mutex(); });
 }
