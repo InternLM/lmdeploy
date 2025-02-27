@@ -5,6 +5,7 @@ Vision-Language Models
    :maxdepth: 2
    :caption: Examples
 
+   deepseek_vl2.md
    llava.md
    internvl.md
    xcomposer2d5.md

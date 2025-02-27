@@ -455,7 +455,12 @@ class DeepseekV2DecoderLayer(nn.Module):
         quantization_config = None
 
         # build attention layer
-        self.self_attn = DeepseekV2Attention(config, dtype=dtype, device=device)
+        if getattr(config, 'use_mla', True):
+            self.self_attn = DeepseekV2Attention(config, dtype=dtype, device=device)
+        else:
+            # deepseek-vl2-tiny uses MHA LlamaAttention structure
+            from lmdeploy.pytorch.models.llama import LlamaAttention
+            self.self_attn = LlamaAttention(config, dtype=dtype, device=device)
 
         # mlp
         self.mlp = (DeepseekV2MoE(config, dtype=dtype, device=device) if
@@ -525,7 +530,8 @@ class DeepseekV2Model(nn.Module):
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, quant_config=None, dtype=dtype, device=device)
 
         emb_type = RopeType.LinearScaling
-        rope_dim = config.qk_rope_head_dim
+        rope_dim = config.qk_rope_head_dim if getattr(config, 'use_mla', True) else (config.hidden_size //
+                                                                                     config.num_attention_heads)
         rope_max_pos_emb = config.max_position_embeddings
         rope_base = config.rope_theta
         scaling_factor = 1.0
@@ -784,13 +790,24 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
         scale_suffix = '.weight_scale_inv'
 
         config = self.config
-        qk_rope_head_dim = config.qk_rope_head_dim
-        kv_lora_rank = config.kv_lora_rank
-        qk_nope_head_dim = config.qk_nope_head_dim
-        q_head_dim = config.qk_nope_head_dim + config.qk_rope_head_dim
-        kv_dim = kv_lora_rank + qk_rope_head_dim
-        update_pe_mapping = [('q_proj', q_head_dim, qk_nope_head_dim), ('q_b_proj', q_head_dim, qk_nope_head_dim),
-                             ('kv_a_proj_with_mqa', kv_dim, kv_lora_rank)]
+
+        update_pe_mapping = []
+        if getattr(config, 'use_mla', True):
+            qk_rope_head_dim = config.qk_rope_head_dim
+            kv_lora_rank = config.kv_lora_rank
+            qk_nope_head_dim = config.qk_nope_head_dim
+            q_head_dim = config.qk_nope_head_dim + config.qk_rope_head_dim
+            kv_dim = kv_lora_rank + qk_rope_head_dim
+            update_pe_mapping = [('q_proj', q_head_dim, qk_nope_head_dim), ('q_b_proj', q_head_dim, qk_nope_head_dim),
+                                 ('kv_a_proj_with_mqa', kv_dim, kv_lora_rank)]
+        else:
+            # deepseek-vl2-tiny uses MHA LlamaAttention, weight loading differs from MLA
+            stacked_params_mapping.extend([
+                # (param_name, shard_name, shard_id)
+                ('.qkv_proj', '.q_proj', 'q'),
+                ('.qkv_proj', '.k_proj', 'k'),
+                ('.qkv_proj', '.v_proj', 'v'),
+            ])
 
         num_experts = self.config.n_routed_experts
         expert_params_mapping = []
@@ -821,7 +838,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                 name = name[:-len(scale_suffix)] + '.scale'
             if '.experts' in name:
                 self._load_weight_experts(name, loaded_weight, params_dict, expert_params_mapping=expert_params_mapping)
-            elif '.self_attn' in name:
+            elif '.self_attn' in name and getattr(config, 'use_mla', True):
                 # attention
                 self._load_weight_attention(name, loaded_weight, params_dict, update_pe_mapping)
             else:

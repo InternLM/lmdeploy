@@ -59,6 +59,7 @@ void LogitsProcessorLayer<T>::allocateBuffer(const size_t batch_size)
     repetition_penalty_.resize(batch_size);
     min_lengths_.resize(batch_size);
     context_length_.resize(batch_size);
+    prompt_length_.resize(batch_size);
     temperature_.resize(batch_size);
 
     TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
@@ -72,6 +73,7 @@ void LogitsProcessorLayer<T>::freeBuffer()
     repetition_penalty_ = {};
     min_lengths_        = {};
     context_length_     = {};
+    prompt_length_      = {};
     temperature_        = {};
 
     allocator_->free((void**)&repetition_penalty_workspace_);
@@ -207,9 +209,11 @@ void LogitsProcessorLayer<T>::setup(const size_t batch_size, const size_t beam_w
     // min_length
     init_host_buffer(runtime_args, "min_length", batch_size, min_lengths_.data(), 0);
     init_host_buffer(runtime_args, "context_length", batch_size, context_length_.data(), 0);
+    init_host_buffer(runtime_args, "prompt_length", batch_size, prompt_length_.data(), 0);
 
+    // invokeMinLengthPenalty if min_length > context_length - prompt_length + num_generated_tokens
     std::transform(
-        min_lengths_.begin(), min_lengths_.end(), context_length_.begin(), min_lengths_.begin(), std::plus<int>());
+        min_lengths_.begin(), min_lengths_.end(), prompt_length_.begin(), min_lengths_.begin(), std::plus<int>());
 
     cudaAutoCpy(temperature_buf_, temperature_.data(), batch_size, stream_);
     cudaAutoCpy(repetition_penalty_buf_, repetition_penalty_.data(), batch_size, stream_);
