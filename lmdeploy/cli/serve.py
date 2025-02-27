@@ -135,6 +135,8 @@ class SubCliServe:
 
         # chat template args
         ArgumentHelper.chat_template(parser)
+        ArgumentHelper.enable_reasoning(parser)
+        ArgumentHelper.reasoning_parser(parser)
 
         # model args
         ArgumentHelper.revision(parser)
@@ -328,7 +330,9 @@ class SubCliServe:
                        proxy_url=args.proxy_url,
                        max_log_len=args.max_log_len,
                        disable_fastapi_docs=args.disable_fastapi_docs,
-                       max_concurrent_requests=args.max_concurrent_requests)
+                       max_concurrent_requests=args.max_concurrent_requests,
+                       enable_reasoning=args.enable_reasoning,
+                       reasoning_parser=args.reasoning_parser)
 
     @staticmethod
     def api_client(args):

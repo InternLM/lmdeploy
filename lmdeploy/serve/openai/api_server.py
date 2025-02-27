@@ -28,6 +28,7 @@ from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, ChatCompletio
                                             EmbeddingsRequest, EncodeRequest, EncodeResponse, ErrorResponse,
                                             FunctionResponse, GenerateRequest, GenerateResponse, LogProbs, ModelCard,
                                             ModelList, ModelPermission, ToolCall, TopLogprob, UsageInfo)
+from lmdeploy.serve.parser.reasoning_parser import ReasoningParser, ReasoningParserManager
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import get_logger
 
@@ -45,6 +46,9 @@ class VariableInterface:
     # following are for registering to proxy server
     proxy_url: Optional[str] = None
     api_server_url: Optional[str] = None
+    # following are for reasoning parsers
+    enable_reasoning: bool = False
+    reasoning_parser: Optional[ReasoningParser] = None
 
 
 router = APIRouter()
@@ -399,12 +403,12 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     )
 
     def create_stream_response_json(index: int,
-                                    text: str,
+                                    delta_message: DeltaMessage,
                                     finish_reason: Optional[str] = None,
                                     logprobs: Optional[LogProbs] = None,
                                     usage: Optional[UsageInfo] = None) -> str:
         choice_data = ChatCompletionResponseStreamChoice(index=index,
-                                                         delta=DeltaMessage(role='assistant', content=text),
+                                                         delta=delta_message,
                                                          finish_reason=finish_reason,
                                                          logprobs=logprobs)
         response = ChatCompletionStreamResponse(
@@ -419,6 +423,11 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         return response_json
 
     async def completion_stream_generator() -> AsyncGenerator[str, None]:
+        previous_text = ''
+        current_text = ''
+        previous_token_ids = []
+        current_token_ids = []
+        delta_token_ids = []
         async for res in result_generator:
             logprobs, usage = None, None
             if gen_logprobs and res.logprobs:
@@ -431,8 +440,25 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                     completion_tokens=res.generate_token_len,
                     total_tokens=total_tokens,
                 )
+            delta_message = DeltaMessage(role='assistant', content=res.response)
+            if VariableInterface.enable_reasoning:
+                current_text = current_text + res.response
+                delta_token_ids = res.token_ids if res.token_ids is not None else []
+                current_token_ids = current_token_ids + delta_token_ids
+                reasoning_delta = VariableInterface.reasoning_parser.extract_reasoning_content_streaming(
+                    previous_text=previous_text,
+                    current_text=current_text,
+                    delta_text=res.response,
+                    previous_token_ids=previous_token_ids,
+                    current_token_ids=current_token_ids,
+                    delta_token_ids=delta_token_ids)
+                if reasoning_delta is not None:
+                    delta_message.reasoning_content = reasoning_delta.reasoning_content
+                    delta_message.content = reasoning_delta.content
+                current_text = previous_text
+                previous_token_ids = current_token_ids
             response_json = create_stream_response_json(index=0,
-                                                        text=res.response,
+                                                        delta_message=delta_message,
                                                         finish_reason=res.finish_reason,
                                                         logprobs=logprobs,
                                                         usage=usage)
@@ -461,6 +487,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             final_logprobs.extend(res.logprobs)
 
     tool_calls = None
+    reasoning_content = None
     if request.tool_choice != 'none' and ('<|plugin|>' in text or '<function=' in text or '<tool_call>' in text):
         if final_res.finish_reason == 'stop':
             final_res.finish_reason = 'tool_calls'
@@ -474,6 +501,9 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         except Exception as e:
             logger.error(f'Failed to parse {text}. Exception: {e}.')
             return create_error_response(HTTPStatus.BAD_REQUEST, 'Failed to parse fc related info to json format!')
+    # assume reasoning uncompatible with tool call
+    elif VariableInterface.enable_reasoning is True:
+        reasoning_content, text = VariableInterface.reasoning_parser.extract_reasoning_content(text, request)
 
     logprobs = None
     if gen_logprobs and len(final_logprobs):
@@ -484,7 +514,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     choices = []
     choice_data = ChatCompletionResponseChoice(
         index=0,
-        message=ChatMessage(role='assistant', content=text, tool_calls=tool_calls),
+        message=ChatMessage(role='assistant', content=text, tool_calls=tool_calls, reasoning_content=reasoning_content),
         logprobs=logprobs,
         finish_reason=final_res.finish_reason,
     )
@@ -939,6 +969,8 @@ def serve(model_path: str,
           max_log_len: int = None,
           disable_fastapi_docs: bool = False,
           max_concurrent_requests: Optional[int] = None,
+          enable_reasoning: bool = False,
+          reasoning_parser: Optional[str] = None,
           **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -1012,6 +1044,7 @@ def serve(model_path: str,
             allow_methods=allow_methods,
             allow_headers=allow_headers,
         )
+
     # Set the maximum number of concurrent requests
     if max_concurrent_requests is not None:
         app.add_middleware(ConcurrencyLimitMiddleware, max_concurrent_requests=max_concurrent_requests)
@@ -1035,6 +1068,17 @@ def serve(model_path: str,
                                                     chat_template_config=chat_template_config,
                                                     max_log_len=max_log_len,
                                                     **kwargs)
+
+    # set reasoning parser
+    if enable_reasoning:
+        if reasoning_parser in ReasoningParserManager.module_dict:
+            tokenizer = VariableInterface.async_engine.tokenizer
+            VariableInterface.reasoning_parser = ReasoningParserManager.get(reasoning_parser)(tokenizer)
+            VariableInterface.enable_reasoning = True
+        else:
+            raise ValueError(
+                f'The reasoning parser {reasoning_parser} is not in the parser list: {ReasoningParserManager.module_dict.keys()}'  # noqa
+            )
 
     if proxy_url is not None:
         VariableInterface.proxy_url = proxy_url

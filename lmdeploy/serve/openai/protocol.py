@@ -155,6 +155,7 @@ class ChatMessage(BaseModel):
     """Chat messages."""
     role: str
     content: str
+    reasoning_content: Optional[str] = Field(default=None, examples=[None])
     tool_calls: Optional[List[ToolCall]] = Field(default=None, examples=[None])
 
 
@@ -204,6 +205,7 @@ class DeltaMessage(BaseModel):
     """Delta messages."""
     role: Optional[str] = None
     content: Optional[str] = None
+    reasoning_content: Optional[str] = None
 
 
 class ChatCompletionResponseStreamChoice(BaseModel):

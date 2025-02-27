@@ -359,6 +359,24 @@ class ArgumentHelper:
         )
 
     @staticmethod
+    def enable_reasoning(parser):
+        """Add argument enable_reasoning to parser."""
+
+        return parser.add_argument('--enable-reasoning',
+                                   action='store_true',
+                                   default=False,
+                                   help='Whether to enable reasoning extraction. Default to disable.')
+
+    @staticmethod
+    def reasoning_parser(parser):
+        """Add reasoning parser to parser."""
+
+        return parser.add_argument('--reasoning-parser',
+                                   type=str,
+                                   default=None,
+                                   help='The registered reasoning parser name. Default to None.')
+
+    @staticmethod
     def cache_max_entry_count(parser):
         """Add argument cache_max_entry_count to parser."""
 
