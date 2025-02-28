@@ -35,10 +35,12 @@ def valid_str(string, coding='utf-8'):
     return ret
 
 
-def _stop_words(stop_words: List[str], tokenizer: Tokenizer):
+def _stop_words(stop_words: List[str], eoa: str, tokenizer: Tokenizer):
     """Return a list of token ids corresponding to stop-words."""
     if stop_words is None:
-        return None
+        stop_words = [eoa]
+    elif eoa not in stop_words:
+        stop_words += [eoa]
     assert isinstance(stop_words, List) and \
         all(isinstance(elem, str) for elem in stop_words), \
         f'stop_words must be a list but got {type(stop_words)}'
@@ -86,7 +88,7 @@ def run_chat(model_path: str,
         chat_template_config = ChatTemplateConfig(chat_template_name)
     model = chat_template_config.chat_template
 
-    stop_words = _stop_words(model.stop_words, tokenizer)
+    stop_words = _stop_words(model.stop_words, model.eoa, tokenizer)
 
     _, model_config = get_model_arch(model_path)
     session_len = _get_and_verify_max_len(model_config, None)
