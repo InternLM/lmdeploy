@@ -2,6 +2,8 @@
 
 #include <cuda_runtime.h>
 
+#include "src/turbomind/utils/Tensor.h"
+
 namespace turbomind {
 
 template<class T>
@@ -17,5 +19,15 @@ void invokeRMSNorm(T* dst, const T* src, const T* weights, int dims, int num, fl
 template<class T>
 void invokeBiasResidualRMSNorm(
     T* residual, T* hidden_states, const T* weights, const T* bias, int dims, int num, float eps, cudaStream_t st);
+
+void invokeResidualBiasRMSNorm(void*        hidden_states,
+                               void*        residual,
+                               const void*  weights,
+                               const void*  bias,
+                               DataType     dtype,
+                               int          dims,
+                               int          num,
+                               float        eps,
+                               cudaStream_t st);
 
 }  // namespace turbomind

@@ -223,6 +223,7 @@ class TurbomindEngineConfig:
     max_prefill_token_num: int = 8192
     num_tokens_per_iter: int = 0
     max_prefill_iters: int = 1
+    communicator: str = 'nccl'
 
     def __post_init__(self):
         """Check input validation."""

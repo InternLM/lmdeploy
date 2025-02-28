@@ -167,6 +167,7 @@ def parse_args():
     ArgumentHelper.quant_policy(tb_group, default=0)
     ArgumentHelper.num_tokens_per_iter(tb_group)
     ArgumentHelper.max_prefill_iters(tb_group)
+    ArgumentHelper.communicator(tb_group)
 
     args = parser.parse_args()
     return args
@@ -188,6 +189,7 @@ def main():
             num_tokens_per_iter=args.num_tokens_per_iter,
             max_prefill_iters=args.max_prefill_iters,
             enable_prefix_caching=args.enable_prefix_caching,
+            communicator=args.communicator,
         )
     elif args.backend == 'pytorch':
         engine_config = PytorchEngineConfig(

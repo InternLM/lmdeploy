@@ -75,6 +75,10 @@ class LlamaBatch {
 public:
     void AllocateBuffer(size_t batch_size, size_t session_len, int cache_block_seq_len);
     void AllocatePersistantBuffer(size_t max_batch_size, int cache_block_seq_len);
+
+    void AllocCommBuffers();
+    void FreeCommBuffers();
+
     void FreeBuffer();
 
     using Requests = std::vector<std::shared_ptr<Request>>;
@@ -127,7 +131,7 @@ public:
         return session_len_;
     }
 
-    void tune();
+    void Warmup();
 
 private:
     void BroadcastCancelFlags();
@@ -196,6 +200,12 @@ private:
         IndexedCopyImpl(nullptr, nullptr, count, cpys...);
     }
 
+    void* CommBufAlloc(size_t size, bool register_);
+
+    void CommBufFree(void** ptr, bool deregister);
+
+    void DestroyCommunicators();
+
 private:
     const EngineParam param_;
 
@@ -208,7 +218,8 @@ private:
     const int      num_tokens_per_iter_;
     const int      max_prefill_iters_;
     const int      device_id_;
-    const int      rank_;
+    const int      tp_size_;
+    const int      rank_;  //  tp rank
     const DataType data_type_;
     const bool     debug_;
 
@@ -216,7 +227,6 @@ private:
     cudaStream_t const     stream_{};
     cublasMMWrapper* const cublas_wrapper_{};
     IAllocator* const      allocator_{};
-    IAllocator* const      peer_allocator_{};
 
     int session_len_;  // May be truncated in ctor
 
@@ -250,6 +260,8 @@ private:
     float* local_logits_buf_{};  // tensor parallel local logits
     float* context_logits_buf_{};
     float* local_context_logits_buf_{};
+
+    size_t local_context_logits_buf_size_{};
 
     float*    sampled_logprobs_{};
     uint32_t* sampled_indexes_{};
