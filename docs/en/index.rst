@@ -101,6 +101,7 @@ Documentation
    advance/chat_template.md
    advance/debug_turbomind.md
    advance/structed_output.md
+   advance/pytorch_multinodes.md
 
 .. toctree::
    :maxdepth: 1

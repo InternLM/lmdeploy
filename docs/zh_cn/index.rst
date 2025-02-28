@@ -102,6 +102,7 @@ LMDeploy 工具箱提供以下核心功能：
    advance/chat_template.md
    advance/debug_turbomind.md
    advance/structed_output.md
+   advance/pytorch_multinodes.md
 
 .. toctree::
    :maxdepth: 1
