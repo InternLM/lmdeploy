@@ -10,10 +10,9 @@ from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaMessage
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
-ReasoningParserManager = Registry('reasoning_parser', locations=['lmdeploy.serve.parser.reasoning_parser'])
+ReasoningParserManager = Registry('reasoning_parser', locations=['lmdeploy.serve.openai.reasoning_parser'])
 
 
-@ReasoningParserManager.register_module(name='abs')
 class ReasoningParser:
 
     def __init__(self, tokenizer: object):

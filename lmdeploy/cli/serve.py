@@ -135,6 +135,7 @@ class SubCliServe:
 
         # chat template args
         ArgumentHelper.chat_template(parser)
+        ArgumentHelper.tool_call_parser(parser)
         ArgumentHelper.enable_reasoning(parser)
         ArgumentHelper.reasoning_parser(parser)
 
@@ -332,7 +333,8 @@ class SubCliServe:
                        disable_fastapi_docs=args.disable_fastapi_docs,
                        max_concurrent_requests=args.max_concurrent_requests,
                        enable_reasoning=args.enable_reasoning,
-                       reasoning_parser=args.reasoning_parser)
+                       reasoning_parser=args.reasoning_parser,
+                       tool_call_parser=args.tool_call_parser)
 
     @staticmethod
     def api_client(args):

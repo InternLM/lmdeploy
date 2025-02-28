@@ -377,6 +377,15 @@ class ArgumentHelper:
                                    help='The registered reasoning parser name. Default to None.')
 
     @staticmethod
+    def tool_call_parser(parser):
+        """Add tool call parser to parser."""
+
+        return parser.add_argument('--tool-call-parser',
+                                   type=str,
+                                   default=None,
+                                   help='The registered tool parser name. Default to None.')
+
+    @staticmethod
     def cache_max_entry_count(parser):
         """Add argument cache_max_entry_count to parser."""
 
