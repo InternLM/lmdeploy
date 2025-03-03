@@ -88,6 +88,11 @@ struct AbstractTransformerModel {
                               std::pair<std::vector<NcclParam>, std::vector<NcclParam>> nccl_params,
                               std::shared_ptr<AbstractCustomComm>) = 0;
 
+    virtual std::shared_ptr<std::mutex> mutex() const noexcept
+    {
+        return {};
+    }
+
     virtual std::string toString()            = 0;
     virtual int         getTensorParaSize()   = 0;
     virtual int         getPipelineParaSize() = 0;
