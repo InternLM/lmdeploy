@@ -1244,16 +1244,17 @@ void LlamaBatch<T>::ComputeAndOutputLogits(T* hidden_states, int first, int last
             CommBufFree((void**)&local_context_logits_buf_, true);
             local_context_logits_buf_      = (float*)CommBufAlloc(byte_size, true);
             local_context_logits_buf_size_ = byte_size;
-            if (model_->use_allgather_2d_) {
-                context_logits_buf_ = local_context_logits_buf_;
-            }
 
             check_cuda_error(cudaStreamSynchronize(stream_));
             shared_state_->barrier->wait();
         }
     }
 
-    if (!model_->use_allgather_2d_) {
+    if (model_->use_allgather_2d_) {
+        // No intermediate transpose needed
+        context_logits_buf_ = local_context_logits_buf_;
+    }
+    else {
         context_logits_buf_ = (float*)allocator_->reMalloc(
             context_logits_buf_, sizeof(float) * model_->vocab_size_padded_ * token_num, false);
     }
