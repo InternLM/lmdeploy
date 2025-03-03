@@ -164,11 +164,10 @@ LlamaTritonModel<T>::~LlamaTritonModel()
 
     for (int device_id = 0; device_id < (int)engines_.size(); ++device_id) {
         // Set device id before destructing CUDA resources
-        int used_device_id = devices_[device_id];
-        check_cuda_error(cudaSetDevice(used_device_id));
+        check_cuda_error(cudaSetDevice(devices_[device_id]));
         engines_[device_id].reset();
         weights_[device_id].reset();
-        trim_default_mempool(used_device_id);
+        trim_default_mempool(devices_[device_id]);
     }
 }
 
@@ -342,8 +341,7 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t                                 ten
 template<typename T>
 std::unique_ptr<ModelRequest> LlamaTritonModel<T>::createModelInstance(int device_id)
 {
-    int used_device_id = devices_[device_id];
-    check_cuda_error(cudaSetDevice(used_device_id));
+    check_cuda_error(cudaSetDevice(devices_[device_id]));
 
     FT_CHECK(engines_[device_id] != nullptr);
 
@@ -357,8 +355,7 @@ std::unique_ptr<ModelRequest> LlamaTritonModel<T>::createModelInstance(int devic
 template<typename T>
 void LlamaTritonModel<T>::createSharedWeights(int device_id, int rank) noexcept
 {
-    int used_device_id = devices_[device_id];
-    check_cuda_error(cudaSetDevice(used_device_id));
+    check_cuda_error(cudaSetDevice(devices_[device_id]));
     const int tensor_para_rank   = rank % tensor_para_size_;
     const int pipeline_para_rank = rank / tensor_para_size_;
     FT_CHECK(pipeline_para_size_ == 1 && pipeline_para_rank == 0);
@@ -374,8 +371,7 @@ void LlamaTritonModel<T>::createSharedWeights(int device_id, int rank) noexcept
 template<typename T>
 std::unordered_map<std::string, Tensor> LlamaTritonModel<T>::getParams(int deviceId, int rank) noexcept
 {
-    int used_device_id = devices_[deviceId];
-    check_cuda_error(cudaSetDevice(used_device_id));
+    check_cuda_error(cudaSetDevice(devices_[deviceId]));
 
     // shared_weight should be created before getParams
     FT_CHECK(weights_[deviceId] != nullptr);
@@ -393,12 +389,11 @@ std::unordered_map<std::string, Tensor> LlamaTritonModel<T>::getParams(int devic
 template<typename T>
 void LlamaTritonModel<T>::processWeights(int device_id, int rank) noexcept
 {
-    int used_device_id = devices_[device_id];
-    check_cuda_error(cudaSetDevice(used_device_id));
+    check_cuda_error(cudaSetDevice(devices_[device_id]));
     FT_CHECK(weights_[device_id] != nullptr);
 
     cudaDeviceProp props{};
-    check_cuda_error(cudaGetDeviceProperties(&props, used_device_id));
+    check_cuda_error(cudaGetDeviceProperties(&props, devices_[device_id]));
 
     weights_[device_id]->prepare(props);
     sync_check_cuda_error();
@@ -417,10 +412,9 @@ comm::Splits LlamaTritonModel<T>::createCommSplits(int global_rank)
 template<typename T>
 void LlamaTritonModel<T>::createEngine(int device_id, int global_rank) noexcept
 {
-    int used_device_id = devices_[device_id];
-    check_cuda_error(cudaSetDevice(used_device_id));
+    check_cuda_error(cudaSetDevice(devices_[device_id]));
 
-    auto ctx = std::make_unique<Context<T>>(used_device_id);
+    auto ctx = std::make_unique<Context<T>>(devices_[device_id]);
 
     ctx->comm = createCommSplits(global_rank);
 
@@ -442,7 +436,7 @@ void LlamaTritonModel<T>::createEngine(int device_id, int global_rank) noexcept
                                                           std::move(ctx),
                                                           shared_state_,
                                                           gateway_,
-                                                          used_device_id);
+                                                          devices_[device_id]);
     }
     catch (const std::exception& e) {
         TM_LOG_ERROR("[TM][Engine][Init] %s", e.what());
