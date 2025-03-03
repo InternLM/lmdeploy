@@ -258,12 +258,6 @@ void MoeFfnLayer<T>::reduce(T* output, int tokens, float output_scale, int layer
                     output_scale,
                     stream_);
     sync_check_cuda_error();
-
-    if (tensor_para_.world_size_ > 1) {
-        // std::cout << "moe all reduce " << layer_id << "\n";
-        ftNcclAllReduceSum(output, output, tokens * hidden_dim_, tensor_para_, stream_);
-        sync_check_cuda_error();
-    }
 }
 
 template<class T>
