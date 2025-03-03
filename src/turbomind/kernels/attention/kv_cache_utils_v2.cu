@@ -12,31 +12,21 @@
 namespace turbomind {
 
 template<class Tkv, int CTA_S, int HeadDim, int WarpCnt, class T, class BlockLayout>
-__global__ void __launch_bounds__(128) ProcessKV_v2(char**       blocks,
-                                                    const T*     k,
-                                                    const T*     v,
-                                                    const T*     k_bias,
-                                                    const T*     v_bias,
-                                                    const int*   cu_q_len,
-                                                    const int*   cu_k_len,
-                                                    const int*   cu_block_num,
-                                                    const float* rope_base,
-                                                    int          rope_dim,
-                                                    float        rope_ti_scale,
-                                                    float        rope_scaling_factor,
-                                                    float        llama3_inv_scaling_factor,
-                                                    float        llama3_alpha,
-                                                    float        llama3_beta,
-                                                    float        yarn_ramp_inv_factor_div_2,
-                                                    float        yarn_ramp_inv_factor_mul_min,
-                                                    float        yarn_inv_scaling_factor,
-                                                    float        attention_scaling,
-                                                    int64_t      stride_b,
-                                                    int64_t      stride_c,
-                                                    int64_t      stride_h,
-                                                    int64_t      stride_s,
-                                                    int          layer_id,
-                                                    BlockLayout  block_layout)
+__global__ void __launch_bounds__(128) ProcessKV_v2(char**         blocks,
+                                                    const T*       k,
+                                                    const T*       v,
+                                                    const T*       k_bias,
+                                                    const T*       v_bias,
+                                                    const int*     cu_q_len,
+                                                    const int*     cu_k_len,
+                                                    const int*     cu_block_num,
+                                                    InnerRopeParam rope_param,
+                                                    int64_t        stride_b,
+                                                    int64_t        stride_c,
+                                                    int64_t        stride_h,
+                                                    int64_t        stride_s,
+                                                    int            layer_id,
+                                                    BlockLayout    block_layout)
 {
 
     constexpr int kVecSize = sizeof(uint4) / sizeof(T);
@@ -124,24 +114,12 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**       blocks,
         }
     }
 
-    if (rope_base) {
-        float base = rope_base[batch_idx];
+    if (rope_param.type != RopeType::kNull) {
+        FastRoPE rope(rope_param, batch_idx, std::integral_constant<int, kVecSize>{});
         PRAGMA_UNROLL
         for (int c = 0; c < ITER_C; ++c) {
             const int di = offset.x + c * Map::kDeltaC;
-            FastRoPE  rope(di,
-                          rope_dim,
-                          base,
-                          rope_ti_scale,
-                          rope_scaling_factor,
-                          llama3_inv_scaling_factor,
-                          llama3_alpha,
-                          llama3_beta,
-                          yarn_ramp_inv_factor_div_2,
-                          yarn_ramp_inv_factor_mul_min,
-                          yarn_inv_scaling_factor,
-                          attention_scaling,
-                          std::integral_constant<int, kVecSize>{});
+            rope.fill(di);
             PRAGMA_UNROLL
             for (int s = 0; s < ITER_S; ++s) {
                 const int ti = history_len + offset.y + s * Map::kDeltaS + token_idx;  // sequence local
@@ -203,37 +181,27 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**       blocks,
 }
 
 template<class T>
-void invokeProcessKV_v2(char**       blocks,
-                        const T*     k,
-                        const T*     v,
-                        const T*     k_bias,
-                        const T*     v_bias,
-                        const int*   cu_q_len,
-                        const int*   cu_k_len,
-                        const int*   cu_block_num,
-                        const float* rope_base,
-                        int          rope_dim,
-                        float        rope_ti_scale,
-                        float        rope_scaling_factor,
-                        float        llama3_inv_scaling_factor,
-                        float        llama3_1_alpha,
-                        float        llama3_1_beta,
-                        float        yarn_ramp_inv_factor_div_2,
-                        float        yarn_ramp_inv_factor_mul_min,
-                        float        yarn_inv_scaling_factor,
-                        float        attention_scaling,
-                        int64_t      stride_b,
-                        int64_t      stride_c,
-                        int64_t      stride_h,
-                        int64_t      stride_s,
-                        int          block_seq_len,
-                        int          layer_id,
-                        int          max_q_len,
-                        int          head_num,
-                        int          head_dim,
-                        int          batch_size,
-                        int          quant_policy,
-                        cudaStream_t stream)
+void invokeProcessKV_v2(char**                blocks,
+                        const T*              k,
+                        const T*              v,
+                        const T*              k_bias,
+                        const T*              v_bias,
+                        const int*            cu_q_len,
+                        const int*            cu_k_len,
+                        const int*            cu_block_num,
+                        const InnerRopeParam& rope_param,
+                        int64_t               stride_b,
+                        int64_t               stride_c,
+                        int64_t               stride_h,
+                        int64_t               stride_s,
+                        int                   block_seq_len,
+                        int                   layer_id,
+                        int                   max_q_len,
+                        int                   head_num,
+                        int                   head_dim,
+                        int                   batch_size,
+                        int                   quant_policy,
+                        cudaStream_t          stream)
 {
     constexpr int WARPS = 4;
     constexpr int CTA_S = 64;
@@ -257,17 +225,7 @@ void invokeProcessKV_v2(char**       blocks,
                                                                               cu_q_len,
                                                                               cu_k_len,
                                                                               cu_block_num,
-                                                                              rope_base,
-                                                                              rope_dim,
-                                                                              rope_ti_scale,
-                                                                              rope_scaling_factor,
-                                                                              llama3_inv_scaling_factor,
-                                                                              llama3_1_alpha,
-                                                                              llama3_1_beta,
-                                                                              yarn_ramp_inv_factor_div_2,
-                                                                              yarn_ramp_inv_factor_mul_min,
-                                                                              yarn_inv_scaling_factor,
-                                                                              attention_scaling,
+                                                                              rope_param,
                                                                               stride_b,
                                                                               stride_c,
                                                                               stride_h,
@@ -301,37 +259,27 @@ void invokeProcessKV_v2(char**       blocks,
 }
 
 #define INSTANTIATE_invokeProcessKV_v2(type)                                                                           \
-    template void invokeProcessKV_v2(char**       blocks,                                                              \
-                                     const type*  k,                                                                   \
-                                     const type*  v,                                                                   \
-                                     const type*  k_bias,                                                              \
-                                     const type*  v_bias,                                                              \
-                                     const int*   cu_q_len,                                                            \
-                                     const int*   cu_k_len,                                                            \
-                                     const int*   cu_block_num,                                                        \
-                                     const float* rope_base,                                                           \
-                                     int          rope_dim,                                                            \
-                                     float        rope_ti_scale,                                                       \
-                                     float        rope_scaling_factor,                                                 \
-                                     float        llama3_inv_scaling_factor,                                           \
-                                     float        llama3_1_alpha,                                                      \
-                                     float        llama3_1_beta,                                                       \
-                                     float        yarn_ramp_inv_factor_div_2,                                          \
-                                     float        yarn_ramp_inv_factor_mul_min,                                        \
-                                     float        yarn_inv_scaling_factor,                                             \
-                                     float        attention_scaling,                                                   \
-                                     int64_t      stride_b,                                                            \
-                                     int64_t      stride_c,                                                            \
-                                     int64_t      stride_h,                                                            \
-                                     int64_t      stride_s,                                                            \
-                                     int          block_seq_len,                                                       \
-                                     int          layer_id,                                                            \
-                                     int          max_q_len,                                                           \
-                                     int          head_num,                                                            \
-                                     int          head_dim,                                                            \
-                                     int          batch_size,                                                          \
-                                     int          quant_policy,                                                        \
-                                     cudaStream_t stream);
+    template void invokeProcessKV_v2(char**                blocks,                                                     \
+                                     const type*           k,                                                          \
+                                     const type*           v,                                                          \
+                                     const type*           k_bias,                                                     \
+                                     const type*           v_bias,                                                     \
+                                     const int*            cu_q_len,                                                   \
+                                     const int*            cu_k_len,                                                   \
+                                     const int*            cu_block_num,                                               \
+                                     const InnerRopeParam& rope_param,                                                 \
+                                     int64_t               stride_b,                                                   \
+                                     int64_t               stride_c,                                                   \
+                                     int64_t               stride_h,                                                   \
+                                     int64_t               stride_s,                                                   \
+                                     int                   block_seq_len,                                              \
+                                     int                   layer_id,                                                   \
+                                     int                   max_q_len,                                                  \
+                                     int                   head_num,                                                   \
+                                     int                   head_dim,                                                   \
+                                     int                   batch_size,                                                 \
+                                     int                   quant_policy,                                               \
+                                     cudaStream_t          stream);
 
 INSTANTIATE_invokeProcessKV_v2(half);
 #if ENABLE_BF16
@@ -339,28 +287,18 @@ INSTANTIATE_invokeProcessKV_v2(nv_bfloat16);
 #endif
 
 template<int CTA_S, int HeadDim, int WarpCnt, class T, class Tkv, class BlockLayout>
-__global__ void __launch_bounds__(128) flattenKV_v2(T*           k,
-                                                    T*           v,
-                                                    const Tkv**  blocks,
-                                                    const int*   cu_k_len,
-                                                    const int*   cu_block_num,
-                                                    const float* rope_base,
-                                                    int          rope_dim,
-                                                    float        rope_ti_scale,
-                                                    float        rope_scaling_factor,
-                                                    float        llama3_inv_scaling_factor,
-                                                    float        llama3_alpha,
-                                                    float        llama3_beta,
-                                                    float        yarn_ramp_inv_factor_div_2,
-                                                    float        yarn_ramp_inv_factor_mul_min,
-                                                    float        yarn_inv_scaling_factor,
-                                                    float        attention_scaling,
-                                                    int64_t      stride_b,
-                                                    int64_t      stride_c,
-                                                    int64_t      stride_h,
-                                                    int64_t      stride_s,
-                                                    int          layer_id,
-                                                    BlockLayout  block_layout)
+__global__ void __launch_bounds__(128) flattenKV_v2(T*             k,
+                                                    T*             v,
+                                                    const Tkv**    blocks,
+                                                    const int*     cu_k_len,
+                                                    const int*     cu_block_num,
+                                                    InnerRopeParam rope_param,
+                                                    int64_t        stride_b,
+                                                    int64_t        stride_c,
+                                                    int64_t        stride_h,
+                                                    int64_t        stride_s,
+                                                    int            layer_id,
+                                                    BlockLayout    block_layout)
 {
     constexpr int kVecSize = sizeof(uint4) / sizeof(T);
 
@@ -431,24 +369,12 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*           k,
         }
     }
 
-    if (rope_base) {
-        float base = rope_base[batch_idx];
+    if (rope_param.type != RopeType::kNull) {
+        FastRoPE rope(rope_param, batch_idx, std::integral_constant<int, kVecSize>{});
         PRAGMA_UNROLL
         for (int c = 0; c < ITER_C; ++c) {
             const int di = offset.x + c * Map::kDeltaC;
-            FastRoPE  rope(di,
-                          rope_dim,
-                          base,
-                          rope_ti_scale,
-                          rope_scaling_factor,
-                          llama3_inv_scaling_factor,
-                          llama3_alpha,
-                          llama3_beta,
-                          yarn_ramp_inv_factor_div_2,
-                          yarn_ramp_inv_factor_mul_min,
-                          yarn_inv_scaling_factor,
-                          attention_scaling,
-                          std::integral_constant<int, kVecSize>{});
+            rope.fill(di);
             PRAGMA_UNROLL
             for (int s = 0; s < ITER_S; ++s) {
                 const int ti = offset.y + s * Map::kDeltaS + token_idx;  // sequence local
@@ -474,34 +400,24 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*           k,
 }
 
 template<class T>
-void invokeFlattenKV_v2(T*           k,
-                        T*           v,
-                        char**       blocks,
-                        const int*   cu_k_len,
-                        const int*   cu_block_num,
-                        const float* rope_base,
-                        int          rope_dim,
-                        float        rope_ti_scale,
-                        float        rope_scaling_factor,
-                        float        llama3_inv_scaling_factor,
-                        float        llama3_alpha,
-                        float        llama3_beta,
-                        float        yarn_ramp_inv_factor_div_2,
-                        float        yarn_ramp_inv_factor_mul_min,
-                        float        yarn_inv_scaling_factor,
-                        float        attention_scaling,
-                        int64_t      stride_b,
-                        int64_t      stride_c,
-                        int64_t      stride_h,
-                        int64_t      stride_s,
-                        int          block_seq_len,
-                        int          layer_id,
-                        int          max_seq_len,
-                        int          head_num,
-                        int          head_dim,
-                        int          batch_size,
-                        int          quant_policy,
-                        cudaStream_t stream)
+void invokeFlattenKV_v2(T*                    k,
+                        T*                    v,
+                        char**                blocks,
+                        const int*            cu_k_len,
+                        const int*            cu_block_num,
+                        const InnerRopeParam& rope_param,
+                        int64_t               stride_b,
+                        int64_t               stride_c,
+                        int64_t               stride_h,
+                        int64_t               stride_s,
+                        int                   block_seq_len,
+                        int                   layer_id,
+                        int                   max_seq_len,
+                        int                   head_num,
+                        int                   head_dim,
+                        int                   batch_size,
+                        int                   quant_policy,
+                        cudaStream_t          stream)
 {
     constexpr int kWarpCnt = 4;
     constexpr int CTA_S    = 64;
@@ -522,17 +438,7 @@ void invokeFlattenKV_v2(T*           k,
                                                                             (const Tkv**)blocks,
                                                                             cu_k_len,
                                                                             cu_block_num,
-                                                                            rope_base,
-                                                                            rope_dim,
-                                                                            rope_ti_scale,
-                                                                            rope_scaling_factor,
-                                                                            llama3_inv_scaling_factor,
-                                                                            llama3_alpha,
-                                                                            llama3_beta,
-                                                                            yarn_ramp_inv_factor_div_2,
-                                                                            yarn_ramp_inv_factor_mul_min,
-                                                                            yarn_inv_scaling_factor,
-                                                                            attention_scaling,
+                                                                            rope_param,
                                                                             stride_b,
                                                                             stride_c,
                                                                             stride_h,
@@ -566,34 +472,24 @@ void invokeFlattenKV_v2(T*           k,
 }
 
 #define INSTANTIATE_invokeFlattenKV_v2(type)                                                                           \
-    template void invokeFlattenKV_v2(type*        k,                                                                   \
-                                     type*        v,                                                                   \
-                                     char**       blocks,                                                              \
-                                     const int*   cu_k_len,                                                            \
-                                     const int*   cu_block_num,                                                        \
-                                     const float* rope_base,                                                           \
-                                     int          rope_dim,                                                            \
-                                     float        rope_ti_scale,                                                       \
-                                     float        rope_scaling_factor,                                                 \
-                                     float        llama3_inv_scaling_factor,                                           \
-                                     float        llama3_alpha,                                                        \
-                                     float        llama3_beta,                                                         \
-                                     float        yarn_ramp_inv_factor_div_2,                                          \
-                                     float        yarn_ramp_inv_factor_mul_min,                                        \
-                                     float        yarn_inv_scaling_factor,                                             \
-                                     float        attention_scaling,                                                   \
-                                     int64_t      stride_b,                                                            \
-                                     int64_t      stride_c,                                                            \
-                                     int64_t      stride_h,                                                            \
-                                     int64_t      stride_s,                                                            \
-                                     int          block_seq_len,                                                       \
-                                     int          layer_id,                                                            \
-                                     int          max_seq_len,                                                         \
-                                     int          head_num,                                                            \
-                                     int          head_dim,                                                            \
-                                     int          batch_size,                                                          \
-                                     int          quant_policy,                                                        \
-                                     cudaStream_t stream);
+    template void invokeFlattenKV_v2(type*                 k,                                                          \
+                                     type*                 v,                                                          \
+                                     char**                blocks,                                                     \
+                                     const int*            cu_k_len,                                                   \
+                                     const int*            cu_block_num,                                               \
+                                     const InnerRopeParam& rope_param,                                                 \
+                                     int64_t               stride_b,                                                   \
+                                     int64_t               stride_c,                                                   \
+                                     int64_t               stride_h,                                                   \
+                                     int64_t               stride_s,                                                   \
+                                     int                   block_seq_len,                                              \
+                                     int                   layer_id,                                                   \
+                                     int                   max_seq_len,                                                \
+                                     int                   head_num,                                                   \
+                                     int                   head_dim,                                                   \
+                                     int                   batch_size,                                                 \
+                                     int                   quant_policy,                                               \
+                                     cudaStream_t          stream);
 
 INSTANTIATE_invokeFlattenKV_v2(half);
 #if ENABLE_BF16
