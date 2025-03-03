@@ -90,3 +90,13 @@ class OpsBackend(ABC):
         """build graph runner."""
         from .graph_runner import GraphRunner
         return GraphRunner(model, model_config, cache_config, backend_config, device)
+
+    @staticmethod
+    def device_count():
+        """get num available devices."""
+        return None
+
+    @staticmethod
+    def support_ray():
+        """support ray."""
+        return False

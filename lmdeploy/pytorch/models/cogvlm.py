@@ -4,11 +4,11 @@ from argparse import Namespace
 from typing import Any, Iterable, List, Optional, Tuple
 
 import torch
-import torch.distributed as dist
 import torch.nn.functional as F
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
+import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.distributed import get_world_rank
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager

@@ -6,8 +6,6 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cuda_runtime.h>
-#include <driver_types.h>
 #include <functional>
 #include <iomanip>
 #include <memory>
@@ -19,6 +17,9 @@
 #include <unordered_map>
 #include <utility>
 
+#include <cuda_runtime.h>
+
+#include "src/turbomind/comm/comm.h"
 #include "src/turbomind/macro.h"
 
 #include "src/turbomind/engine/gateway.h"
@@ -31,7 +32,6 @@
 
 #include "src/turbomind/models/llama/BlockManager.h"
 #include "src/turbomind/models/llama/LlamaBatch.h"
-#include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/models/llama/LlamaV2.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/models/llama/copy.h"
@@ -44,7 +44,6 @@
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/debug_utils.h"
 #include "src/turbomind/utils/logger.h"
-#include "src/turbomind/utils/nccl_utils.h"
 
 namespace turbomind {
 
@@ -699,16 +698,6 @@ void LlamaBatch<T>::AllocateBuffer(size_t batch_size, size_t session_len, int ca
     const size_t max_batch_block_count =
         batch_size * ((session_len + cache_block_seq_len - 1) / cache_block_seq_len) + 1;
 
-    if (model_->lora_param_.policy == LoraPolicy::kPlora) {
-        lora_mask_buf_  = (int*)allocator_->reMalloc(lora_mask_buf_, sizeof(int) * max_forward_token_num_, false);
-        const size_t sz = sizeof(T) * max_forward_token_num_ * (hidden_units + model_->lora_param_.max_wo_r);
-        context_decoder_output_buf_ = (T*)peer_allocator_->reMalloc(context_decoder_output_buf_, sz, false);
-    }
-    else {
-        context_decoder_output_buf_ = (T*)peer_allocator_->reMalloc(
-            context_decoder_output_buf_, sizeof(T) * max_forward_token_num_ * hidden_units, false);
-    }
-
     context_decoder_input_buf_ =
         (T*)allocator_->reMalloc(context_decoder_input_buf_, sizeof(T) * max_forward_token_num_ * hidden_units, false);
     context_decoder_ids_buf_ =
@@ -727,9 +716,9 @@ void LlamaBatch<T>::AllocateBuffer(size_t batch_size, size_t session_len, int ca
     cu_block_counts_ = (int*)allocator_->reMalloc(cu_block_counts_, sizeof(int) * (batch_size + 1));
     block_ptrs_      = (uintptr_t*)allocator_->reMalloc(block_ptrs_, sizeof(uintptr_t) * max_batch_block_count);
 
-    logits_buf_ = (float*)allocator_->reMalloc(logits_buf_, sizeof(float) * batchxbeam * vocab_size, false);
-    local_logits_buf_ =
-        (float*)peer_allocator_->reMalloc(local_logits_buf_, sizeof(float) * batchxbeam * vocab_size, false);
+    if (!logits_buf_) {  // may be alias of local_logits_buf_
+        logits_buf_ = (float*)allocator_->reMalloc(logits_buf_, sizeof(float) * batchxbeam * vocab_size, false);
+    }
 
     sampled_logprobs_ =
         (float*)allocator_->reMalloc(sampled_logprobs_, sizeof(float) * batchxbeam * kMaxLogProb, false);
@@ -791,7 +780,6 @@ void LlamaBatch<T>::AllocatePersistantBuffer(size_t max_batch_size, int cache_bl
         max_batch_size * ((session_len_ + cache_block_seq_len - 1) / cache_block_seq_len);
 
     {
-        NcclGuard barrier(model_->tensor_para_, stream_, true);
         h_input_ids_buf_ =
             (int*)allocator_->reMalloc(h_input_ids_buf_, sizeof(int) * max_batch_size * session_len_, false, true);
         h_input_length_buf_ =
@@ -827,13 +815,51 @@ void LlamaBatch<T>::AllocatePersistantBuffer(size_t max_batch_size, int cache_bl
     is_allocate_persistant_buffer_ = true;
 }
 
+template<class T>
+void LlamaBatch<T>::AllocCommBuffers()
+{
+    const size_t hidden_units      = model_->hidden_units_;
+    const size_t vocab_size_padded = model_->vocab_size_padded_;
+
+    // Native comm fuses allreduce & rmsnorm in token granularity
+    const size_t max_fwd_token_num = ((size_t)max_forward_token_num_ + tp_size_ - 1) / tp_size_ * tp_size_;
+
+    // TODO: rename this to hidden_states
+    context_decoder_output_buf_ = (T*)CommBufAlloc(sizeof(T) * max_fwd_token_num * hidden_units, true);
+
+    local_logits_buf_ = (float*)CommBufAlloc(sizeof(float) * max_batch_size_ * vocab_size_padded, true);
+    if (model_->use_allgather_2d_) {
+        logits_buf_ = local_logits_buf_;
+    }
+}
+
+template<class T>
+void LlamaBatch<T>::FreeCommBuffers()
+{
+    CommBufFree((void**)&context_decoder_output_buf_, true);
+
+    if (local_logits_buf_) {
+        if (logits_buf_ == local_logits_buf_) {
+            logits_buf_ = {};
+        }
+        CommBufFree((void**)&local_logits_buf_, true);
+    }
+
+    if (local_context_logits_buf_) {
+        if (context_logits_buf_ == local_context_logits_buf_) {
+            context_logits_buf_ = {};
+        }
+        CommBufFree((void**)&local_context_logits_buf_, true);
+    }
+}
+
 template<typename T>
 void LlamaBatch<T>::FreeBuffer()
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (is_allocate_buffer_) {
         allocator_->free((void**)&context_decoder_input_buf_);
-        peer_allocator_->free((void**)&context_decoder_output_buf_);
+
         allocator_->free((void**)&context_decoder_ids_buf_);
         allocator_->free((void**)&lora_mask_buf_);
 
@@ -850,11 +876,8 @@ void LlamaBatch<T>::FreeBuffer()
         allocator_->free((void**)&cu_block_counts_);
         allocator_->free((void**)&block_ptrs_);
 
-        allocator_->free((void**)&logits_buf_);
-        peer_allocator_->free((void**)&local_logits_buf_);
-
-        if (local_context_logits_buf_) {
-            peer_allocator_->free((void**)&local_context_logits_buf_);
+        if (logits_buf_) {
+            allocator_->free((void**)&logits_buf_);
         }
         if (context_logits_buf_) {
             allocator_->free((void**)&context_logits_buf_);
@@ -919,8 +942,8 @@ LlamaBatch<T>::~LlamaBatch()
     internal_thread_.join();
 
     // The dtor maybe called from unknown thread, set device id before CUDA calls
-    check_cuda_error(cudaSetDevice(device_id_));
-    check_cuda_error(cudaStreamSynchronize(stream_));
+    cudaSetDevice(device_id_);
+    cudaStreamSynchronize(stream_);
 
     FreeBuffer();
 
@@ -945,12 +968,12 @@ LlamaBatch<T>::LlamaBatch(const EngineParam&           param,
     num_tokens_per_iter_(param.num_tokens_per_iter),
     max_prefill_iters_(param.max_prefill_iters),
     device_id_(device_id),
-    rank_(model->tensor_para_.rank_),
+    tp_size_(model->tp_size_),
+    rank_(model->tp_rank_),
     data_type_(getTensorType<T>()),
     debug_(isDebug()),
     stream_(ctx->stream),
     allocator_(ctx->allocator.get()),
-    peer_allocator_(ctx->peer_allocator.get()),
     cublas_wrapper_(ctx->cublas_wrapper.get()),
     context_(std::move(ctx)),
     model_(std::move(model)),
@@ -978,7 +1001,7 @@ LlamaBatch<T>::LlamaBatch(const EngineParam&           param,
                                                 param.cache_max_block_count,
                                                 param.cache_chunk_size,
                                                 param.enable_prefix_caching,
-                                                model_->tensor_para_.rank_,
+                                                rank_,
                                                 allocator_,
                                                 get_free_size});
 
@@ -1005,6 +1028,8 @@ LlamaBatch<T>::LlamaBatch(const EngineParam&           param,
     state_    = &states_[0];
     back_     = &states_[1];
     incoming_ = &states_[2];
+
+    AllocCommBuffers();
 
     AllocateBuffer(max_batch_size_, session_len_, cache_block_seq_len);
     AllocatePersistantBuffer(max_batch_size_, cache_block_seq_len);
@@ -1208,16 +1233,30 @@ void LlamaBatch<T>::ComputeAndOutputLogits(T* hidden_states, int first, int last
         return;
     }
 
-    context_logits_buf_ = (float*)allocator_->reMalloc(
-        context_logits_buf_, sizeof(float) * model_->vocab_size_padded_ * token_num, false);
-    const auto tp = model_->tensor_para_.world_size_;
+    if (tp_size_ > 1) {
+        FT_CHECK(model_->vocab_size_padded_ % tp_size_ == 0);
+        const size_t byte_size = sizeof(float) * model_->vocab_size_padded_ * token_num;
 
-    if (tp > 1) {
-        NcclGuard guard(model_->tensor_para_, stream_, true);
-        FT_CHECK(model_->vocab_size_padded_ % tp == 0);
-        const auto local_vocab_size = model_->vocab_size_padded_ / tp;
-        local_context_logits_buf_   = (float*)peer_allocator_->reMalloc(
-            local_context_logits_buf_, sizeof(float) * model_->vocab_size_padded_ * token_num, false);
+        if (local_context_logits_buf_size_ < byte_size) {
+            check_cuda_error(cudaStreamSynchronize(stream_));
+            shared_state_->barrier->wait();
+
+            CommBufFree((void**)&local_context_logits_buf_, true);
+            local_context_logits_buf_      = (float*)CommBufAlloc(byte_size, true);
+            local_context_logits_buf_size_ = byte_size;
+
+            check_cuda_error(cudaStreamSynchronize(stream_));
+            shared_state_->barrier->wait();
+        }
+    }
+
+    if (model_->use_allgather_2d_) {
+        // No intermediate transpose needed
+        context_logits_buf_ = local_context_logits_buf_;
+    }
+    else {
+        context_logits_buf_ = (float*)allocator_->reMalloc(
+            context_logits_buf_, sizeof(float) * model_->vocab_size_padded_ * token_num, false);
     }
 
     model_->postDecodeEmbedding(context_logits_buf_, local_context_logits_buf_, hidden_states, token_num);
@@ -1603,7 +1642,7 @@ void LlamaBatch<T>::InternalThreadEntry()
 
         if (shared_state_->abort) {
             TM_LOG_INFO("[InternalThreadEntry] stop requested.");
-            return;
+            break;
         }
 
         std::vector<Signal> signals;
@@ -1649,15 +1688,23 @@ void LlamaBatch<T>::InternalThreadEntry()
         }
     }
 
-    // Unreachable
-    FT_CHECK(0);
+    // barrier synchronization inside
+    DestroyCommunicators();
 }
 
 template<typename T>
 void LlamaBatch<T>::Start()
 {
     TM_LOG_INFO("LlamaBatch<T>::Start()");
-    internal_thread_ = std::thread(&LlamaBatch::InternalThreadEntry, this);
+    internal_thread_ = std::thread([this] {
+        try {
+            InternalThreadEntry();
+        }
+        catch (const std::exception& e) {
+            TM_LOG_ERROR("[TM][Engine] %s", e.what());
+            std::abort();
+        }
+    });
 }
 
 template<typename T>
@@ -1880,15 +1927,13 @@ struct TuningContext {
     {
         linear_.set_measure(false);
         isTuning() = false;
-        // This will catch async errors during tuning
-        check_cuda_error(cudaStreamSynchronize(stream_));
     }
 };
 
 }  // namespace
 
 template<class T>
-void LlamaBatch<T>::tune()
+void LlamaBatch<T>::Warmup()
 {
     auto& linear = *context_->linear;
     if (auto str = std::getenv("TM_GEMM_IMPORT")) {
@@ -1949,8 +1994,6 @@ void LlamaBatch<T>::tune()
                                    1,
                                    nullptr,
                                    nullptr);
-            // implicit barrier for TP
-            ftNcclStreamSynchronize(model_->tensor_para_, {}, stream_);
         }
 
         auto tock = std::chrono::steady_clock::now();
@@ -1961,6 +2004,9 @@ void LlamaBatch<T>::tune()
         }
     }
 
+    // This will catch async errors during tuning
+    check_cuda_error(cudaStreamSynchronize(stream_));
+
     // Only rank-0 exports the dispatch cache
     if (rank_ == 0) {
         if (auto path = std::getenv("TM_GEMM_EXPORT")) {
@@ -1968,6 +2014,57 @@ void LlamaBatch<T>::tune()
             const auto    n_records = context_->linear->Export(ofs);
             TM_LOG_INFO("[Gemm2] %d records exported.", n_records);
         }
+    }
+}
+
+template<class T>
+void* LlamaBatch<T>::CommBufAlloc(size_t size, bool register_)
+{
+    if (auto& tp = model_->comm_->tp) {
+        auto ptr = tp->Allocate(size);
+        if (register_) {
+            tp->Register(ptr, size);
+        }
+        return ptr;
+    }
+    else {
+        return allocator_->malloc(size);
+    }
+}
+
+template<class T>
+void LlamaBatch<T>::CommBufFree(void** ptr, bool deregister)
+{
+    if (!ptr) {
+        return;
+    }
+    if (auto& tp = model_->comm_->tp) {
+        if (deregister) {
+            tp->Deregister(*ptr);
+        }
+        tp->Free(*ptr);
+        *ptr = {};
+    }
+    else {
+        return allocator_->free(ptr);
+    }
+}
+
+template<class T>
+void LlamaBatch<T>::DestroyCommunicators()
+{
+    if (context_->comm.tp) {
+        cudaStreamSynchronize(stream_);
+        shared_state_->barrier->wait();
+
+        FreeCommBuffers();
+
+        shared_state_->barrier->wait();
+
+        context_->comm.tp.reset();
+
+        cudaStreamSynchronize(stream_);
+        shared_state_->barrier->wait();
     }
 }
 
