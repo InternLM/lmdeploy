@@ -278,6 +278,8 @@ class PytorchEngineConfig:
             If unspecified, will use the default version.
         quant_policy (int): default to 0. When k/v is quantized into 4 or 8
             bit, set it to 4 or 8, respectively
+        distributed_executor_backend (str): backend of distributed backend,
+            options: ['uni', 'mp', 'ray']
     """
     dtype: str = 'auto'
     tp: int = 1
@@ -298,6 +300,7 @@ class PytorchEngineConfig:
     download_dir: str = None
     revision: str = None
     quant_policy: Literal[0, 4, 8] = 0
+    distributed_executor_backend: str = None
 
     def __post_init__(self):
         """Check input validation."""

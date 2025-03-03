@@ -156,7 +156,7 @@ class ModelWeightLoader:
             weights_iterator = self._get_weights_iterator(path)
             model.load_weights(weights_iterator)
         if device is not None:
-            device = model.to(device)
+            model.to(device)
 
 
 @torch.inference_mode()
