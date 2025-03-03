@@ -1253,7 +1253,7 @@ void LlamaBatch<T>::ComputeAndOutputLogits(T* hidden_states, int first, int last
         }
     }
 
-    if (!context_logits_buf_) {
+    if (!model_->use_allgather_2d_) {
         context_logits_buf_ = (float*)allocator_->reMalloc(
             context_logits_buf_, sizeof(float) * model_->vocab_size_padded_ * token_num, false);
     }
