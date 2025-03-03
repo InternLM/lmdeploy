@@ -71,6 +71,9 @@ class UniExecutor(ExecutorBase):
         """build cache engine."""
         self.model_agent.build_cache_engine()
 
+    def warmup(self):
+        self.model_agent.warmup()
+
     def start(self, forward_event: asyncio.Event):
         """start engine loop."""
         self.model_agent.start(forward_event)

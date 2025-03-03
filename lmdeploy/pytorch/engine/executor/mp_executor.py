@@ -369,6 +369,10 @@ class MPExecutor(ExecutorBase):
         """build cache engine."""
         self.collective_rpc('build_cache_engine')
 
+    def warmup(self):
+        """build cache engine."""
+        self.collective_rpc('warmup')
+
     async def _prefetch_outputs(self):
         while True:
             outs = (await self.collective_rpc_async('get_outputs', receiver_mask=1, return_mask=1))[0]

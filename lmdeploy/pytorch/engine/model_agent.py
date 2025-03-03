@@ -134,6 +134,9 @@ class AutoModelAgent:
         with device_mgr.context(self.device_ctx), dist_mgr.context(self.dist_ctx):
             yield
 
+    def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
+        raise NotImplementedError('NotImplemented.')
+
     async def async_forward(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
         """model forward.
 
@@ -182,6 +185,15 @@ class AutoModelAgent:
             torch.cuda.empty_cache()
             gpu_mem_physical_free, _ = get_gpu_memory()
             return gpu_mem_physical_free
+
+    def warmup(self):
+        """warmup."""
+        # warmup prefill
+        with self.all_context():
+            inputs = ModelInputs.make_dummy(1, False, device='cuda')
+            self._forward_impl(inputs, swap_in_map=dict(), swap_out_map=dict())
+            inputs = ModelInputs.make_dummy(1, True, device='cuda')
+            self._forward_impl(inputs, swap_in_map=dict(), swap_out_map=dict())
 
     async def _async_model_forward(
         self,

@@ -274,6 +274,10 @@ class RayExecutor(ExecutorBase):
         """build cache engine."""
         self.collective_rpc('build_cache_engine')
 
+    def warmup(self):
+        """build cache engine."""
+        self.collective_rpc('warmup')
+
     def get_input_processor(self):
         """build cache engine."""
         return ray.get(self.workers[0].get_input_processor.remote())

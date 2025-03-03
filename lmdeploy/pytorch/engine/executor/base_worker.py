@@ -114,6 +114,10 @@ class WorkerWrapperBase:
         """build cache engine."""
         self.model_agent.build_cache_engine()
 
+    def warmup(self):
+        """warmup."""
+        self.model_agent.warmup()
+
     def get_input_processor(self):
         """build cache engine."""
         return self.model_agent.get_input_processor()
