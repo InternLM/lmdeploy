@@ -14,4 +14,5 @@ Vision-Language Models
    phi3.md
    mllama.md
    qwen2_vl.md
+   qwen2_5_vl.md
    molmo.md
