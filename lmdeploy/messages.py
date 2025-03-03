@@ -227,7 +227,6 @@ class TurbomindEngineConfig:
     communicator: str = 'nccl'
     devices: List[int] = None
 
-
     def __post_init__(self):
         """Check input validation."""
         assert self.dtype in ['auto', 'float16', 'bfloat16']
