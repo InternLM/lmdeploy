@@ -99,6 +99,10 @@ class TurboMind:
             f' greater than 0, but got {_engine_config.max_batch_size}'
 
         self.gpu_count = _engine_config.tp
+        if _engine_config.devices is None:
+            self.devices = list(range(_engine_config.tp))
+        else:
+            self.devices = _engine_config.devices
 
         self.tokenizer = tokenizer
         if model_source == ModelSource.WORKSPACE:
@@ -205,6 +209,7 @@ class TurboMind:
         model_comm = _tm.AbstractTransformerModel.create_llama_model(model_dir='',
                                                                      config=yaml.safe_dump(self.config_dict),
                                                                      tensor_para_size=self.gpu_count,
+                                                                     devices=self.devices,
                                                                      data_type=self.config.model_config.weight_type)
 
         # create empty weight

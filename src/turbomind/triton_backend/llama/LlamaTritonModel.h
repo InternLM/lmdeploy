@@ -38,6 +38,7 @@ struct LlamaTritonModel: public AbstractTransformerModel {
                      int                                    enable_custom_all_reduce,
                      std::string                            model_dir,
                      std::string                            config,
+                     std::vector<int>                       devices,
                      std::function<std::shared_ptr<void>()> ffi_ctx_factory);
 
     ~LlamaTritonModel() override;
@@ -64,6 +65,8 @@ struct LlamaTritonModel: public AbstractTransformerModel {
     int         getTensorParaSize() override;
     int         getPipelineParaSize() override;
 
+    const std::vector<int>& getDevices() const override;
+
 private:
     std::unique_ptr<Engine<T>>
     createSharedModelInstance(int                                                       deviceId,
@@ -85,6 +88,8 @@ private:
     // Weights & engine instances for the ranks
     std::vector<std::shared_ptr<LlamaWeight<T>>> weights_;
     std::vector<std::shared_ptr<Engine<T>>>      engines_;
+    // device map for the ranks
+    std::vector<int> devices_;
 
     bool is_fp16_;
     int  enable_custom_all_reduce_ = 0;

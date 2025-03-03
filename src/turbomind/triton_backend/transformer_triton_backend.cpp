@@ -26,7 +26,9 @@ namespace turbomind {
 std::pair<std::vector<NcclParam>, std::vector<NcclParam>>
 AbstractTransformerModel::createNcclParams(const int node_id, const int device_id_start, const bool multi_node)
 {
-    const int gpu_count          = getDeviceCount();
+    const auto& devices = getDevices();
+
+    const int gpu_count          = devices.size();
     const int tensor_para_size   = getTensorParaSize();
     const int pipeline_para_size = getPipelineParaSize();
     const int local_comm_size    = multi_node ? gpu_count : tensor_para_size * pipeline_para_size;
@@ -53,9 +55,10 @@ AbstractTransformerModel::createNcclParams(const int node_id, const int device_i
             int rank               = node_id * gpu_count + gid - device_id_start;
             int tensor_para_rank   = rank % tensor_para_size;
             int pipeline_para_rank = rank / tensor_para_size;
+            int used_device_id     = devices[gid];
 
             NcclUid tensor_para_nccl_uid = nccl_ids[pipeline_para_rank];
-            check_cuda_error(cudaSetDevice(gid));
+            check_cuda_error(cudaSetDevice(used_device_id));
             ftNcclCommInitRank(
                 tensor_para_params[gid - device_id_start], tensor_para_rank, tensor_para_size, tensor_para_nccl_uid);
             tensor_para_params[gid - device_id_start].group_id_ = group_id;
@@ -69,9 +72,10 @@ AbstractTransformerModel::createNcclParams(const int node_id, const int device_i
             int rank               = node_id * gpu_count + gid - device_id_start;
             int tensor_para_rank   = rank % tensor_para_size;
             int pipeline_para_rank = rank / tensor_para_size;
+            int used_device_id     = devices[gid];
 
             NcclUid pipeline_para_nccl_uid = nccl_ids[pipeline_para_size + tensor_para_rank];
-            check_cuda_error(cudaSetDevice(gid));
+            check_cuda_error(cudaSetDevice(used_device_id));
             ftNcclCommInitRank(pipeline_para_params[gid - device_id_start],
                                pipeline_para_rank,
                                pipeline_para_size,
