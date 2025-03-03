@@ -2,28 +2,32 @@
 
 #pragma once
 
+#include <memory>
+
+#include <cuda_runtime.h>
+
+#include <cublasLt.h>
+#include <cublas_v2.h>
+
+#include "src/turbomind/comm/comm.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
-#include <cublasLt.h>
-#include <cublas_v2.h>
-#include <cuda_runtime.h>
-#include <cuda_runtime_api.h>
-#include <memory>
 
 namespace turbomind {
 
+// Execution context for the model
 template<class T>
 struct Context {
     cudaStream_t                                    stream;
     std::unique_ptr<Allocator<AllocatorType::CUDA>> allocator;
-    std::unique_ptr<Allocator<AllocatorType::CUDA>> peer_allocator;
     cublasHandle_t                                  cublas_handle;
     cublasLtHandle_t                                cublasLt_handle;
     std::unique_ptr<cublasAlgoMap>                  cublas_algo_map;
     std::unique_ptr<std::mutex>                     cublas_wrapper_mutex;
     std::unique_ptr<cublasMMWrapper>                cublas_wrapper;
     std::unique_ptr<LlamaLinear<T>>                 linear;
+    comm::Splits                                    comm;
     cudaDeviceProp                                  cuda_device_prop;
 
     Context(int device_id)
@@ -32,9 +36,6 @@ struct Context {
 
         allocator = std::make_unique<Allocator<AllocatorType::CUDA>>(device_id, false);
         allocator->setStream(stream);
-
-        peer_allocator = std::make_unique<Allocator<AllocatorType::CUDA>>(device_id, true);
-        peer_allocator->setStream(stream);
 
         cublasCreate(&cublas_handle);
         cublasLtCreate(&cublasLt_handle);
@@ -80,8 +81,9 @@ struct Context {
         cublasLtDestroy(cublasLt_handle);
         cublasLt_handle = {};
 
-        peer_allocator.reset();
         allocator.reset();
+
+        // `comm` destroyed by infer threads collectively
 
         cudaStreamDestroy(stream);
         stream = {};

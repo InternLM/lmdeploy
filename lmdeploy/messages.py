@@ -224,7 +224,9 @@ class TurbomindEngineConfig:
     max_prefill_token_num: int = 8192
     num_tokens_per_iter: int = 0
     max_prefill_iters: int = 1
+    communicator: str = 'nccl'
     devices: List[int] = None
+
 
     def __post_init__(self):
         """Check input validation."""
@@ -281,6 +283,8 @@ class PytorchEngineConfig:
             If unspecified, will use the default version.
         quant_policy (int): default to 0. When k/v is quantized into 4 or 8
             bit, set it to 4 or 8, respectively
+        distributed_executor_backend (str): backend of distributed backend,
+            options: ['uni', 'mp', 'ray']
     """
     dtype: str = 'auto'
     tp: int = 1
@@ -301,6 +305,7 @@ class PytorchEngineConfig:
     download_dir: str = None
     revision: str = None
     quant_policy: Literal[0, 4, 8] = 0
+    distributed_executor_backend: str = None
 
     def __post_init__(self):
         """Check input validation."""

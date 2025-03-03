@@ -25,14 +25,15 @@
 #include "src/turbomind/models/llama/LlamaWeight.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
-#include "src/turbomind/utils/custom_ar_comm.h"
-#include "src/turbomind/utils/nccl_utils.h"
 #include <cuda_fp16.h>
+
+#include "src/turbomind/comm/comm.h"
 
 namespace turbomind {
 
 template<typename T>
-struct LlamaTritonModel: public AbstractTransformerModel {
+class LlamaTritonModel: public AbstractTransformerModel {
+public:
     LlamaTritonModel(size_t                                 tensor_para_size,
                      size_t                                 pipeline_para_size,
                      int                                    enable_custom_all_reduce,
@@ -45,21 +46,13 @@ struct LlamaTritonModel: public AbstractTransformerModel {
 
     std::unique_ptr<ModelRequest> createModelInstance(int deviceId) override;
 
-    void createSharedWeights(int deviceId, int rank) override;
+    void createSharedWeights(int deviceId, int rank) noexcept override;
 
-    std::unordered_map<std::string, Tensor> getParams(int deviceId, int rank) override;
+    std::unordered_map<std::string, Tensor> getParams(int deviceId, int rank) noexcept override;
 
-    void processWeights(int deviceId, int rank) override;
+    void processWeights(int deviceId, int rank) noexcept override;
 
-    void createEngine(int                                                       device_id,
-                      int                                                       rank,
-                      std::pair<std::vector<NcclParam>, std::vector<NcclParam>> nccl_params,
-                      std::shared_ptr<AbstractCustomComm>) override;
-
-    void createCustomComms(std::vector<std::shared_ptr<AbstractCustomComm>>* custom_all_reduce_comms,
-                           int                                               world_size) override;
-
-    void handleMissingParams();
+    void createEngine(int device_id, int rank) noexcept override;
 
     std::string toString() override;
     int         getTensorParaSize() override;
@@ -68,12 +61,11 @@ struct LlamaTritonModel: public AbstractTransformerModel {
     const std::vector<int>& getDevices() const override;
 
 private:
-    std::unique_ptr<Engine<T>>
-    createSharedModelInstance(int                                                       deviceId,
-                              int                                                       rank,
-                              std::pair<std::vector<NcclParam>, std::vector<NcclParam>> nccl_params,
-                              std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm = nullptr);
+    void handleMissingParams();
 
+    comm::Splits createCommSplits(int global_rank);
+
+private:
     ModelParam     model_param_;
     AttentionParam attn_param_;
     MoeParam       moe_param_;
@@ -81,6 +73,8 @@ private:
     EngineParam    engine_param_;
     size_t         tensor_para_size_;
     size_t         pipeline_para_size_;
+
+    std::unique_ptr<comm::GroupId> group_id_;
 
     std::shared_ptr<SharedState> shared_state_;
     std::shared_ptr<Gateway>     gateway_;
