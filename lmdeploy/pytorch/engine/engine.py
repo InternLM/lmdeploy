@@ -723,7 +723,6 @@ class Engine:
                                                      return_logits=return_logits)
             logits = output['logits']
             logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
-
             # sampling
             next_token_ids = await self.async_sampling_logits(logits, all_ids, guided_input_ids, sampling_inputs,
                                                               inputs, num_ignore_eos > 0)
