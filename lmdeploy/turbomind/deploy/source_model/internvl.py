@@ -79,12 +79,13 @@ class InternVLModel(LlamaModel):
             attn_bias = 1 if model_arg['architectures'][0] == 'Qwen2ForCausalLM' else 0
             rotary_embedding = hidden_units // attn_head_num
             if use_dynamic_ntk:
-                rope_param = RopeParam.create_dynamic(base=rope_theta,
-                                                      dim=rotary_embedding,
-                                                      max_position_embeddings=max_position_embeddings,
-                                                      factor=scaling_factor)
+                rope_param = RopeParam.create('dynamic',
+                                              base=rope_theta,
+                                              dim=rotary_embedding,
+                                              max_position_embeddings=max_position_embeddings,
+                                              factor=scaling_factor)
             else:
-                rope_param = RopeParam.create_default(base=rope_theta, dim=rotary_embedding)
+                rope_param = RopeParam.create('default', base=rope_theta, dim=rotary_embedding)
 
         return dict(num_layer=num_layer,
                     size_per_head=hidden_units // attn_head_num,

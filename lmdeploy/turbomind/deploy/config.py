@@ -117,9 +117,22 @@ class RopeParam:
     type: str
     param: Union[DefaultRopeParam, LinearRopeParam, DynamicRopeParam, YarnRopeParam, Llama3RopeParam]
 
-    @classmethod
-    def create_default(cls, *args, **kwargs):
-        return RopeParam(type='default', param=DefaultRopeParam(*args, **kwargs))
+    def __init__(self, type, *args, **kwargs):
+        assert type in ['default', 'linear', 'dynamic', 'yarn', 'llama3']
+        self.type = type
+        self.param = RopeParam.create(type, *args, **kwargs)
+
+    @staticmethod
+    def create(type, *args, **kwargs):
+        cerator = {
+            'default': DefaultRopeParam,
+            'linear': LinearRopeParam,
+            'dynamic': DynamicRopeParam,
+            'yarn': YarnRopeParam,
+            'llama3': Llama3RopeParam
+        }
+
+        return cerator[type](*args, **kwargs)
 
     @classmethod
     def create_dynamic(cls, *args, **kwargs):
