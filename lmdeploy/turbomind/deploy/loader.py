@@ -6,7 +6,9 @@ from abc import ABC, abstractmethod
 from collections import defaultdict
 from functools import partial
 from glob import glob
-from typing import Iterator, Tuple
+from multiprocessing.queues import Queue as MpQueue
+from queue import Queue
+from typing import Iterator, Tuple, Union
 
 import torch
 from safetensors import safe_open
@@ -144,8 +146,43 @@ class PytorchLoader(BaseLoader):
             yield (idx, params.pop(idx))
 
 
+class QueueLoader:
+
+    def __init__(self, queue: Union[Queue, MpQueue], pattern: str):
+        self.que = queue
+        self.pattern = pattern
+        self.item_count = defaultdict(int)
+
+    def items(self):
+        params = defaultdict(dict)
+        # the first item should be all keys of weight
+        keys = self.que.get()
+        for k in keys:
+            match = re.findall(self.pattern, k)
+            if match:
+                self.item_count[int(match[0])] += 1
+        # load weights from queue
+        for state_dict in iter(self.que.get, None):
+            misc = []
+            for k, v in state_dict.items():
+                match = re.findall(self.pattern, k)
+                if not match:
+                    misc.append((k, v))
+                else:
+                    idx = int(match[0])
+                    param = params[idx]
+                    param[k] = v
+                    if len(param) == self.item_count[idx]:
+                        yield (idx, params.pop(idx))
+            if misc:
+                yield (-1, {k: v for k, v in misc})
+
+
 def create_loader(model_path: str, pattern: str) -> BaseLoader:
     args = (model_path, pattern)
+
+    if isinstance(model_path, Queue) or isinstance(model_path, MpQueue):
+        return QueueLoader(*args)
 
     if osp.exists(osp.join(model_path, SAFE_WEIGHT_INDEX_NAME)):
         return SafetensorsLoader(*args, index_name=SAFE_WEIGHT_INDEX_NAME)
