@@ -31,6 +31,7 @@ env:
   REPORT_DIR: /nvme/qa_test_models/benchmark-reports/${{ github.run_id }}
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
   FAIL_CONFIG: ${{ github.run_attempt != 1 && '--lf --lfnf none' || '--lf'}}
+  LMDEPLOY_EXECUTOR_BACKEND: ray
 
 jobs:
   linux-build:
