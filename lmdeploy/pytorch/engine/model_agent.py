@@ -188,12 +188,14 @@ class AutoModelAgent:
 
     def warmup(self):
         """warmup."""
-        # warmup prefill
-        with self.all_context():
-            inputs = ModelInputs.make_dummy(1, False, device='cuda')
-            self._forward_impl(inputs, swap_in_map=dict(), swap_out_map=dict())
-            inputs = ModelInputs.make_dummy(1, True, device='cuda')
-            self._forward_impl(inputs, swap_in_map=dict(), swap_out_map=dict())
+        # TODO: disable for now, do not remove the comments.
+
+        # # warmup prefill
+        # with self.all_context():
+        #     inputs = ModelInputs.make_dummy(1, False, device='cuda')
+        #     self._forward_impl(inputs, swap_in_map=dict(), swap_out_map=dict())
+        #     inputs = ModelInputs.make_dummy(self.cache_config.max_batches, True, device='cuda')
+        #     self._forward_impl(inputs, swap_in_map=dict(), swap_out_map=dict())
 
     async def _async_model_forward(
         self,
