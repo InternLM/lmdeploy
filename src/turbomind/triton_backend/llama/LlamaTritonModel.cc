@@ -70,17 +70,14 @@ static void parse_default_rope_param(const YAML::Node& node, RopeParam& param)
 
 static void parse_linear_rope_param(const YAML::Node& node, RopeParam& param)
 {
-    param.base   = node["base"].as<float>();
-    param.dim    = node["dim"].as<int>();
+    parse_default_rope_param(node, param);
     param.factor = node["factor"].as<float>();
 }
 
 static void parse_dynamic_rope_param(const YAML::Node& node, RopeParam& param)
 {
-    param.base                    = node["base"].as<float>();
-    param.dim                     = node["dim"].as<int>();
+    parse_linear_rope_param(node, param);
     param.max_position_embeddings = node["max_position_embeddings"].as<int>();
-    param.factor                  = node["factor"].as<float>();
 }
 
 static void parse_yarn_rope_param(const YAML::Node& node, RopeParam& param)
@@ -93,9 +90,7 @@ static void parse_yarn_rope_param(const YAML::Node& node, RopeParam& param)
 
 static void parse_llama3_rope_param(const YAML::Node& node, RopeParam& param)
 {
-    param.base                                    = node["base"].as<float>();
-    param.dim                                     = node["dim"].as<int>();
-    param.factor                                  = node["factor"].as<float>();
+    parse_linear_rope_param(node, param);
     param.llama3.low_freq_factor                  = node["low_freq_factor"].as<float>();
     param.llama3.high_freq_factor                 = node["high_freq_factor"].as<float>();
     param.llama3.original_max_position_embeddings = node["original_max_position_embeddings"].as<int>();
