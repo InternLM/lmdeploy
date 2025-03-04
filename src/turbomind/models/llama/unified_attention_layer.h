@@ -21,6 +21,8 @@
 
 #pragma once
 
+#include <cuda_runtime.h>
+
 #include "src/turbomind/kernels/gemm/test/test_utils.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
@@ -28,8 +30,6 @@
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
-#include "src/turbomind/utils/nccl_utils.h"
-#include <cuda_runtime_api.h>
 
 namespace turbomind {
 
@@ -67,7 +67,7 @@ public:
     UnifiedAttentionLayer(const ModelParam&     model,
                           const AttentionParam& attn,
                           const LoraParam&      lora,
-                          const NcclParam&      tp,
+                          size_t                tp_size,
                           const Context<T>&     context);
 
     void forward(TensorMap* outputs, const TensorMap* inputs, const WeightType* weights);
@@ -121,7 +121,6 @@ private:
     const AttentionParam param_;
     const ModelParam     model_param_;
     const LoraParam      lora_param_;
-    const NcclParam      tensor_para_;
     const Context<T>&    context_;
 
     cudaStream_t const    stream_;
@@ -151,6 +150,7 @@ private:
     float* qk_buf_float_{};
     T*     qkv_buf_2_{};
     T*     qkv_buf_3_{};
+    T*     lora_buf_{};
 
     float* partial_M_{};
     float* partial_L_{};

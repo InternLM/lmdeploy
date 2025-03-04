@@ -4,10 +4,10 @@ import math
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import torch
-import torch.distributed as dist
 import torch.nn.functional as F
 from torch import nn
 
+import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.distributed import get_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
@@ -455,7 +455,7 @@ class DeepseekV2DecoderLayer(nn.Module):
         quantization_config = None
 
         # build attention layer
-        if config.use_mla:
+        if getattr(config, 'use_mla', True):
             self.self_attn = DeepseekV2Attention(config, dtype=dtype, device=device)
         else:
             # deepseek-vl2-tiny uses MHA LlamaAttention structure
@@ -530,7 +530,8 @@ class DeepseekV2Model(nn.Module):
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, quant_config=None, dtype=dtype, device=device)
 
         emb_type = RopeType.LinearScaling
-        rope_dim = config.qk_rope_head_dim if config.use_mla else (config.hidden_size // config.num_attention_heads)
+        rope_dim = config.qk_rope_head_dim if getattr(config, 'use_mla', True) else (config.hidden_size //
+                                                                                     config.num_attention_heads)
         rope_max_pos_emb = config.max_position_embeddings
         rope_base = config.rope_theta
         scaling_factor = 1.0
@@ -791,7 +792,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
         config = self.config
 
         update_pe_mapping = []
-        if config.use_mla:
+        if getattr(config, 'use_mla', True):
             qk_rope_head_dim = config.qk_rope_head_dim
             kv_lora_rank = config.kv_lora_rank
             qk_nope_head_dim = config.qk_nope_head_dim
@@ -837,7 +838,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                 name = name[:-len(scale_suffix)] + '.scale'
             if '.experts' in name:
                 self._load_weight_experts(name, loaded_weight, params_dict, expert_params_mapping=expert_params_mapping)
-            elif config.use_mla and '.self_attn' in name:
+            elif '.self_attn' in name and getattr(config, 'use_mla', True):
                 # attention
                 self._load_weight_attention(name, loaded_weight, params_dict, update_pe_mapping)
             else:

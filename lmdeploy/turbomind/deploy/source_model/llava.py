@@ -71,12 +71,13 @@ class LlavaModel(LlamaModel):
                 if scaling_type == 'dynamic':
                     use_dynamic_ntk = 1
             if use_dynamic_ntk:
-                rope_param = RopeParam.create_dynamic(base=rope_theta,
-                                                      dim=hidden_units // attn_head_num,
-                                                      max_position_embeddings=max_position_embeddings,
-                                                      factor=scaling_factor)
+                rope_param = RopeParam.create('dynamic',
+                                              base=rope_theta,
+                                              dim=hidden_units // attn_head_num,
+                                              max_position_embeddings=max_position_embeddings,
+                                              factor=scaling_factor)
             else:
-                rope_param = RopeParam.create_default(base=rope_theta, dim=hidden_units)
+                rope_param = RopeParam.create('default', base=rope_theta, dim=hidden_units // attn_head_num)
 
         return dict(num_layer=num_layer,
                     norm_eps=norm_eps,

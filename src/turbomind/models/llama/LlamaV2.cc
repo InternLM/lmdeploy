@@ -23,11 +23,11 @@
 #include <algorithm>
 #include <memory>
 
+#include "src/turbomind/comm/comm.h"
 #include "src/turbomind/macro.h"
 
 #include "src/turbomind/models/llama/LlamaBatch.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
-#include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/models/llama/LlamaV2.h"
 #include "src/turbomind/models/llama/LlamaWeight.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
@@ -58,35 +58,39 @@ LlamaV2<T>::LlamaV2(const ModelParam&               model,
                     const AttentionParam&           attn,
                     const MoeParam&                 moe,
                     const LoraParam&                lora,
-                    const NcclParam&                tp,
                     const Context<T>&               ctx,
                     int                             max_batch_size,
                     std::shared_ptr<LlamaWeight<T>> weights):
     param_(model),
     attn_param_(attn),
     lora_param_(lora),
+    comm_(&ctx.comm),
+    tp_size_(comm_->tp ? comm_->tp->world_size() : 1),
+    tp_rank_(comm_->tp ? comm_->tp->rank() : 0),
     head_num_(model.head_num),
     size_per_head_(model.head_dim),
     hidden_units_(model.hidden_units),
     layer_num_(model.layer_num),
     vocab_size_(model.vocab_size),
-    vocab_size_padded_(pad_vocab_size(model.vocab_size, tp.world_size_)),
+    vocab_size_padded_(pad_vocab_size(model.vocab_size, tp_size_)),
     rmsnorm_eps_(model.norm_eps),
-    tensor_para_(tp),
-    local_head_num_(model.head_num / tp.world_size_),
-    local_kv_head_num_(model.kv_head_num / tp.world_size_),
+    local_head_num_(model.head_num / tp_size_),
+    local_kv_head_num_(model.kv_head_num / tp_size_),
     weights_(std::move(weights)),
     stream_(ctx.stream),
     cublas_wrapper_(ctx.cublas_wrapper.get()),
     allocator_(ctx.allocator.get()),
-    peer_allcator_(ctx.peer_allocator.get()),
     linear_(ctx.linear.get()),
     is_free_buffer_after_forward_(false),
     debug_(isDebug())
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
-    unified_decoder_ = std::make_unique<UnifiedDecoder<T>>(model, attn, moe, lora, tp, ctx);
+    if (comm_->tp && comm_->tp->Query(comm::kHasAllGather2D)) {
+        use_allgather_2d_ = true;
+    }
+
+    unified_decoder_ = std::make_unique<UnifiedDecoder<T>>(model, attn, moe, lora, ctx);
 
     dynamic_decode_layer_ = std::make_unique<DynamicDecodeLayer<float>>(vocab_size_,
                                                                         vocab_size_padded_,
@@ -209,7 +213,7 @@ void LlamaV2<T>::forwardUnified(T*               out,
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
-    if (tensor_para_.world_size_ == 1) {
+    if (tp_size_ == 1) {
         invokeInputIdsEmbeddingLookupPosEncoding(decoder_input,
                                                  nullptr,  // processed somewhere else
                                                  weights_->pre_decoder_embedding_table,
@@ -225,8 +229,9 @@ void LlamaV2<T>::forwardUnified(T*               out,
         sync_check_cuda_error();
     }
     else {
-        const size_t local_hidden_units = hidden_units_ / tensor_para_.world_size_;
-        invokeInputIdsEmbeddingLookupPosEncoding(decoder_output + tensor_para_.rank_ * token_num * local_hidden_units,
+        const size_t local_hidden_units = hidden_units_ / tp_size_;
+        const size_t slice              = token_num * local_hidden_units;
+        invokeInputIdsEmbeddingLookupPosEncoding(decoder_output + tp_rank_ * slice,
                                                  nullptr,  // processed somewhere else
                                                  weights_->pre_decoder_embedding_table,
                                                  static_cast<T*>(nullptr),
@@ -240,20 +245,11 @@ void LlamaV2<T>::forwardUnified(T*               out,
                                                  stream_);
         sync_check_cuda_error();
 
-        {
-            NcclGuard nccl_guard(tensor_para_, stream_);
-            ftNcclAllGather(decoder_output,                                        // send_buf
-                            decoder_output,                                        // recv_buf
-                            token_num * hidden_units_ / tensor_para_.world_size_,  // data_size
-                            tensor_para_.rank_,
-                            tensor_para_,
-                            stream_);
-
-            sync_check_cuda_error();
-        }
+        comm_->tp->AllGather(decoder_output + tp_rank_ * slice, decoder_output, slice, stream_);
+        sync_check_cuda_error();
 
         invokeInPlaceTranspose102(
-            decoder_input, decoder_output, tensor_para_.world_size_, token_num, local_hidden_units, false, stream_);
+            decoder_input, decoder_output, tp_size_, token_num, local_hidden_units, false, stream_);
 
         sync_check_cuda_error();
     }
@@ -307,62 +303,83 @@ void LlamaV2<T>::postDecodeEmbedding(float* logits, float* local_logits, const T
 {
     NvtxScope scope("postDecodeEmbedding");
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
+
     cudaDataType_t data_type = getCudaDataType<T>();
     float          alpha     = 1.f;
     float          beta      = 0.f;
-    if (tensor_para_.world_size_ == 1) {
+    FT_CHECK(vocab_size_padded_ % tp_size_ == 0);
+    const size_t local_vocab_size = vocab_size_padded_ / tp_size_;
+
+    auto invoke_gemm = [&](int first, int n, auto C, size_t batch_stride_C, size_t rank_stride_C) {
         cublas_wrapper_->Gemm(CUBLAS_OP_T,
                               CUBLAS_OP_N,
-                              vocab_size_,  // n
-                              batch_size,
+                              local_vocab_size,  // m
+                              n,
                               hidden_units_,  // k
                               &alpha,
                               weights_->post_decoder_embedding_kernel,
                               data_type,
                               hidden_units_,  // k
-                              decoder_output,
+                              decoder_output + first * hidden_units_,
                               data_type,
                               hidden_units_,  // k
                               &beta,
-                              logits,
+                              C + first * batch_stride_C + tp_rank_ * rank_stride_C,
                               CUDA_R_32F,
-                              vocab_size_,  // n
+                              batch_stride_C,  // ldc
                               CUDA_R_32F,
                               cublasGemmAlgo_t(-1));
+    };
+
+    if (tp_size_ == 1) {
+        invoke_gemm(0, batch_size, logits, vocab_size_padded_, 0);
+        sync_check_cuda_error();
+    }
+    else if (use_allgather_2d_ == false) {
+        FT_CHECK(logits != local_logits);
+        const size_t slice = batch_size * local_vocab_size;
+        invoke_gemm(0, batch_size, local_logits, local_vocab_size, slice);
+        sync_check_cuda_error();
+        comm_->tp->AllGather(local_logits + tp_rank_ * slice, local_logits, slice, stream_);
+        sync_check_cuda_error();
+        invokeTransposeAxis01(logits, local_logits, tp_size_, batch_size, local_vocab_size, stream_);
+        sync_check_cuda_error();
     }
     else {
-        FT_CHECK(vocab_size_padded_ % tensor_para_.world_size_ == 0);
-        const size_t local_vocab_size = vocab_size_padded_ / tensor_para_.world_size_;
-        cublas_wrapper_->Gemm(CUBLAS_OP_T,
-                              CUBLAS_OP_N,
-                              local_vocab_size,  // n
-                              batch_size,
-                              hidden_units_,  // k
-                              &alpha,
-                              weights_->post_decoder_embedding_kernel,
-                              data_type,
-                              hidden_units_,  // k
-                              decoder_output,
-                              data_type,
-                              hidden_units_,  // k
-                              &beta,
-                              local_logits + tensor_para_.rank_ * batch_size * local_vocab_size,
-                              CUDA_R_32F,
-                              local_vocab_size,  // n
-                              CUDA_R_32F,
-                              cublasGemmAlgo_t(-1));
-        {
-            NcclGuard nccl_guard(tensor_para_, stream_);
-            ftNcclAllGather(local_logits,                   // send_buf
-                            local_logits,                   // recv_buf
-                            batch_size * local_vocab_size,  // data_size
-                            tensor_para_.rank_,
-                            tensor_para_,
-                            stream_);
+        FT_CHECK(logits == local_logits);
+        const int max_stages       = 1;
+        const int min_stage_tokens = 512;
+        const int step = std::max(std::min(batch_size, min_stage_tokens), (batch_size + max_stages - 1) / max_stages);
+        cudaStream_t comm_stream = stream_;
+        cudaEvent_t  comm_event{};
+        if (step < batch_size) {
+            check_cuda_error(cudaStreamCreateWithFlags(&comm_stream, cudaStreamNonBlocking));
+            check_cuda_error(cudaEventCreateWithFlags(&comm_event, cudaEventDisableTiming));
+        }
+        for (int first = 0; first < batch_size; first += step) {
+            const int n = std::min(first + step, batch_size) - first;
+            invoke_gemm(first, n, local_logits, vocab_size_padded_, local_vocab_size);
+            sync_check_cuda_error();
+            if (comm_stream != stream_) {
+                check_cuda_error(cudaEventRecord(comm_event, stream_));
+                check_cuda_error(cudaStreamWaitEvent(comm_stream, comm_event));
+            }
+            comm_->tp->AllGather2D(local_logits + first * vocab_size_padded_ + tp_rank_ * local_vocab_size,
+                                   local_logits + first * vocab_size_padded_,
+                                   vocab_size_padded_,
+                                   local_vocab_size,
+                                   local_vocab_size,
+                                   n,
+                                   {first == 0, first + n == batch_size},
+                                   comm_stream);
             sync_check_cuda_error();
         }
-        invokeTransposeAxis01(logits, local_logits, tensor_para_.world_size_, batch_size, local_vocab_size, stream_);
-        sync_check_cuda_error();
+        if (comm_stream != stream_) {
+            check_cuda_error(cudaEventRecord(comm_event, comm_stream));
+            check_cuda_error(cudaStreamWaitEvent(stream_, comm_event));
+            check_cuda_error(cudaEventDestroy(comm_event));
+            check_cuda_error(cudaStreamDestroy(comm_stream));
+        }
     }
 }
 

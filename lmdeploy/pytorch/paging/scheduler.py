@@ -66,6 +66,12 @@ class Scheduler:
         seq_map = self.seq_manager.get_sequences(MessageStatus.STOPPED)
         return list(seq_map.values())
 
+    @property
+    def locked(self):
+        """get waiting sequence."""
+        seq_map = self.seq_manager.get_sequences(MessageStatus.LOCKED)
+        return list(seq_map.values())
+
     def build_eviction_helper(self, eviction_type: str):
         if eviction_type == 'copy':
             logger.warning('`copy` eviction has been deprecated, '
@@ -112,8 +118,7 @@ class Scheduler:
     def _schedule_prefill(self):
         """Schedule for prefilling."""
 
-        current_running = self.running
-        max_batches = self.scheduler_config.max_batches - len(current_running)
+        max_batches = self.scheduler_config.max_batches - self.num_running() - self.num_locked()
         eviction_helper = self.eviction_helper
         swap_out_map: Dict[int, int] = dict()
         swap_in_map: Dict[int, int] = dict()
@@ -279,3 +284,18 @@ class Scheduler:
     def num_waiting(self):
         """num waiting."""
         return self.seq_manager.num_sequences(MessageStatus.WAITING)
+
+    def num_locked(self):
+        """num locked."""
+        return self.seq_manager.num_sequences(MessageStatus.LOCKED)
+
+    def lock_running(self, running: SeqList):
+        """lock running sequence."""
+        for seq in running:
+            if seq.status == MessageStatus.RUNNING:
+                self._set_message_status(seq, MessageStatus.LOCKED)
+
+    def unlock_running(self, locked: SeqList):
+        for seq in locked:
+            if seq.status == MessageStatus.LOCKED:
+                self._set_message_status(seq, MessageStatus.RUNNING)

@@ -67,23 +67,12 @@ class RequestSender:
     sender_id: int
     manager: 'RequestManager'
     resp_dict: Dict[int, List[Response]] = field(default_factory=dict)
-    _resp_que: asyncio.Queue = None
 
     @classmethod
     def new(cls, sender_id: int, manager: 'RequestManager'):
         """new."""
         obj = cls(sender_id=sender_id, manager=manager)
         return obj
-
-    @property
-    def resp_que(self):
-        """response queue."""
-        if self._resp_que is not None:
-            return self._resp_que
-        if self.manager._loop_task is None:
-            self.manager.create_loop_task()
-        self._resp_que = asyncio.Queue()
-        return self._resp_que
 
     @property
     def req_que(self):
@@ -165,10 +154,6 @@ class RequestSender:
         """send and receive synchronize."""
         resp = self.send_async(req_type, data)
         return self.recv(resp)
-
-    def response_callback(self, resp: Response):
-        """response callback."""
-        self.resp_que.put_nowait(resp)
 
 
 class RequestManager:
