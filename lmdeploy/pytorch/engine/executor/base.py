@@ -61,6 +61,10 @@ class ExecutorBase:
         """build cache engine."""
         raise NotImplementedError('Not Implemented.')
 
+    def warmup(self):
+        """warmup."""
+        raise NotImplementedError('Not Implemented.')
+
     def get_input_processor(self):
         """get input processor."""
         raise NotImplementedError('Not Implemented.')
@@ -77,11 +81,11 @@ class ExecutorBase:
         """release resources."""
         raise NotImplementedError('Not Implemented.')
 
-    async def forward_async(self, inputs):
+    async def forward_async(self, inputs, dp_ranks=None):
         """start forward."""
         raise NotImplementedError('Not Implemented')
 
-    async def get_output_async(self):
+    async def get_output_async(self, dp_rank: int = 0):
         """get output async."""
         raise NotImplementedError('Not Implemented')
 
@@ -146,3 +150,5 @@ class ExecutorBase:
         self.build_graph_runner()
         logger.info(f'Building CacheEngine with config:\n{self.cache_config}.')
         self.build_cache_engine()
+        logger.info('Warming up model.')
+        self.warmup()

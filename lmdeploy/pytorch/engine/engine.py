@@ -81,6 +81,314 @@ def _build_backend_config(engine_config: PytorchEngineConfig):
     return backend_config
 
 
+class RunableEventBase:
+    """runable event base."""
+
+    async def wait(self, idx: int):
+        """wait event."""
+        raise NotImplementedError('Not implemented.')
+
+    def set(self, idx: int = None):
+        """set event."""
+        raise NotImplementedError('Not implemented.')
+
+
+class RunableEventSync(RunableEventBase):
+    """awaitable sync runable event."""
+
+    def __init__(self, schedulers: List[Scheduler]):
+        self.schedulers = schedulers
+        self.size = len(schedulers)
+        self.event = asyncio.Event()
+        self.has_unfinished = [scheduler.has_unfinished() for scheduler in self.schedulers]
+
+    async def wait(self, idx: int):
+        """wait event."""
+        await self.event.wait()
+
+    def set(self, idx: int = None):
+        """set event."""
+        if idx is None:
+            self.has_unfinished = [scheduler.has_unfinished() for scheduler in self.schedulers]
+        else:
+            self.has_unfinished[idx] = self.schedulers[idx].has_unfinished()
+        if any(self.has_unfinished):
+            self.event.set()
+        else:
+            self.event.clear()
+
+
+class RunableEventAsnyc(RunableEventBase):
+    """awaitable async runable event."""
+
+    def __init__(self, schedulers: List[Scheduler]):
+        self.schedulers = schedulers
+        self.size = len(schedulers)
+        self.events = [asyncio.Event() for _ in range(self.size)]
+
+    async def wait(self, idx: int):
+        """wait event."""
+        await self.events[idx].wait()
+
+    def set_single(self, idx: int):
+        """set single."""
+        if self.schedulers[idx].has_unfinished():
+            self.events[idx].set()
+        else:
+            self.events[idx].clear()
+
+    def set(self, idx: int = None):
+        """set event."""
+        if idx is None:
+            for i in range(self.size):
+                self.set_single(i)
+        else:
+            self.set_single(idx)
+
+
+def build_runable_event(schedulers: List[Scheduler], sync: bool):
+    """build runable event."""
+    if sync:
+        return RunableEventSync(schedulers)
+    else:
+        return RunableEventAsnyc(schedulers)
+
+
+class InputsMakerBase:
+
+    def __init__(self, engine: 'Engine', dp_rank: int):
+        self.engine = engine
+        self.scheduler_config = engine.scheduler_config
+        self.executor = engine.executor
+        self.dp_rank = dp_rank
+
+    def _make_forward_inputs(self, *args, **kwargs):
+        """make forward inputs."""
+        return self.engine._make_forward_inputs(*args, **kwargs)
+
+    async def send_next_inputs(self):
+        """send next input."""
+        raise NotImplementedError('Not implemented.')
+
+    async def prefetch_next_inputs(self):
+        """prefetch."""
+        raise NotImplementedError('Not implemented.')
+
+
+class InputsMakerAsync(InputsMakerBase):
+
+    def __init__(self, engine: 'Engine', dp_rank: int):
+        super().__init__(engine, dp_rank)
+        self.scheduler = self.engine._get_scheduler_by_dp_rank(dp_rank)
+        self.forward_inputs = None
+
+    def do_prefill(self):
+        # decoding if no waiting
+        scheduler = self.scheduler
+        if not scheduler.has_waiting():
+            return False
+        num_running = scheduler.num_running()
+        num_waiting = scheduler.num_waiting()
+        max_batches = self.scheduler_config.max_batches
+        # prefill if too much waiting
+        if num_waiting >= 4:
+            return True
+        # prefill if no enough running
+        if num_running < max_batches * 0.5:
+            return True
+        # decoding
+        return False
+
+    async def _send_next_inputs_impl(self, prefill: bool = None):
+        dp_rank = self.dp_rank
+        scheduler = self.scheduler
+        forward_inputs = self._make_forward_inputs(prefill, scheduler)
+        next_running = forward_inputs.pop('running')
+        await self.executor.forward_async(forward_inputs, (dp_rank, ))
+        self.forward_inputs = forward_inputs
+        return forward_inputs, next_running
+
+    async def send_next_inputs(self):
+        prefill = self.do_prefill()
+        return await self._send_next_inputs_impl(prefill)
+
+    async def prefetch_next_inputs(self):
+        enable = False
+        scheduler = self.scheduler
+        prefill = self.do_prefill()
+        if prefill:
+            enable = True
+        else:
+            num_running = scheduler.num_running()
+            is_decoding = self.forward_inputs['inputs'].is_decoding
+            running_threshold = (self.scheduler_config.max_batches // 4) if is_decoding else 0
+
+            if num_running > running_threshold:
+                enable = True
+
+        if enable:
+            # send next forward
+            return await self._send_next_inputs_impl(prefill)
+        else:
+            return None, None
+
+
+class IMSyncBarrier:
+
+    def __init__(self, dp: int):
+        self.dp = dp
+        # asyncio does not have barrier before 3.11
+        self.wait_count = 0
+        self.wait_event = asyncio.Event()
+        self.clear_count = 0
+        self.clear_event = asyncio.Event()
+        self.clear_event.set()
+
+    def set(self):
+        """set event."""
+        self.wait_event.set()
+        self.clear_event.clear()
+        self.wait_count = 0
+        self.clear_count = 0
+
+    async def wait(self):
+        """wait."""
+        await self.clear_event.wait()
+        self.wait_count += 1
+        if self.wait_count >= self.dp:
+            self.set()
+            return True
+        else:
+            await self.wait_event.wait()
+            return False
+
+    def clear(self):
+        """clear."""
+        self.clear_count += 1
+        if self.clear_count >= self.dp:
+            self.wait_event.clear()
+            self.clear_event.set()
+
+    async def __aenter__(self):
+        return await self.wait()
+
+    async def __aexit__(self, type, value, trace):
+        return self.clear()
+
+
+class IMSyncMeta:
+
+    def __init__(self, dp: int):
+        self.dp = dp
+        self.bar = IMSyncBarrier(dp)
+        self.all_forward_inputs = [None for _ in range(dp)]
+        self.all_running = [None for _ in range(dp)]
+
+    def clear(self):
+        dp = self.dp
+        self.all_forward_inputs = [None for _ in range(dp)]
+        self.all_running = [None for _ in range(dp)]
+
+
+class InputsMakerSync(InputsMakerBase):
+    """inputs maker synchronize."""
+
+    def __init__(self, engine: 'Engine', dp_rank: int, meta: IMSyncMeta):
+        super().__init__(engine, dp_rank)
+        self.schedulers = self.engine.schedulers
+        self.dp = engine.dp
+        self.meta = meta
+        self.bar = meta.bar
+
+    @property
+    def all_forward_inputs(self):
+        return self.meta.all_forward_inputs
+
+    @property
+    def all_running(self):
+        return self.meta.all_running
+
+    def do_prefill(self):
+        # decoding if no waiting
+        num_runnings = [scheduler.num_running() for scheduler in self.schedulers]
+        num_waitings = [scheduler.num_waiting() for scheduler in self.schedulers]
+        if sum(num_waitings) == 0:
+            return False
+
+        if max(num_waitings) >= 4:
+            return True
+
+        max_batches = self.scheduler_config.max_batches
+        if max(num_runnings) < max_batches * 0.5:
+            return True
+
+        return False
+
+    async def _send_next_inputs_impl(self, prefill: bool):
+        """send next input."""
+        self.meta.clear()
+        for dp_rank in range(self.dp):
+            scheduler = self.engine._get_scheduler_by_dp_rank(dp_rank)
+            forward_inputs = self._make_forward_inputs(prefill, scheduler)
+            running = forward_inputs.pop('running')
+            self.all_forward_inputs[dp_rank] = forward_inputs
+            self.all_running[dp_rank] = running
+
+        sync_long_context = any([inputs['sync_long_context'] for inputs in self.all_forward_inputs])
+        for inputs in self.all_forward_inputs:
+            inputs['sync_long_context'] = sync_long_context
+        await self.executor.forward_async(self.all_forward_inputs, list(range(self.dp)))
+
+    async def send_next_inputs(self):
+        """send next input."""
+
+        async def __do_send():
+            prefill = self.do_prefill()
+            await self._send_next_inputs_impl(prefill)
+
+        async with self.bar as do_send:
+            if do_send:
+                await __do_send()
+        return self.all_forward_inputs[self.dp_rank], self.all_running[self.dp_rank]
+
+    async def prefetch_next_inputs(self):
+        """prefetch."""
+
+        async def __do_send():
+            enable = False
+            prefill = self.do_prefill()
+            if prefill:
+                enable = True
+            else:
+                is_decoding = self.all_forward_inputs[0]['inputs'].is_decoding
+                running_threshold = (self.scheduler_config.max_batches // 4) if is_decoding else 0
+                num_runnings = [scheduler.num_running() for scheduler in self.schedulers]
+                if max(num_runnings) > running_threshold:
+                    enable = True
+
+            if enable:
+                # send next forward
+                await self._send_next_inputs_impl(prefill)
+            else:
+                self.meta.clear()
+
+        async with self.bar as do_send:
+            if do_send:
+                await __do_send()
+        return self.all_forward_inputs[self.dp_rank], self.all_running[self.dp_rank]
+
+
+def build_inputs_makers(engine: 'Engine'):
+    """build inputs makers."""
+    dp = engine.dp
+
+    if engine.should_execute_dummy_batch:
+        meta = IMSyncMeta(dp)
+        return [InputsMakerSync(engine, dp_rank, meta) for dp_rank in range(dp)]
+    else:
+        return [InputsMakerAsync(engine, dp_rank) for dp_rank in range(dp)]
+
+
 class Engine:
     """The inference engine of lmdeploy pytorch.
 
@@ -105,11 +413,12 @@ class Engine:
             engine_config.max_batch_size = get_max_batch_size(engine_config.device_type)
 
         tp = engine_config.tp
-        dp = 1
+        dp = engine_config.dp
 
         self.tokenizer = tokenizer
         self.tp = tp
         self.dp = dp
+        self.should_execute_dummy_batch = engine_config.should_execute_dummy_batch
 
         # download models and adapters
         if not os.path.exists(model_path):
@@ -150,7 +459,8 @@ class Engine:
         self.input_processor = self.executor.get_input_processor()
         cache_config = self.executor.cache_config
         self.adapter_manager = self._build_adapter_manager(adapters)
-        self.scheduler = Scheduler(scheduler_config, cache_config)
+        self.schedulers = [Scheduler(scheduler_config, cache_config) for _ in range(dp)]
+        self.session_dp_map: Dict[int, int] = dict()
 
         # engine args
         self.model_path = model_path
@@ -249,15 +559,54 @@ class Engine:
             session_len = min(max_tokens, session_len)
         return session_len
 
+    def _get_scheduler_by_dp_rank(self, dp_rank: int):
+        """get scheduler by dp rank."""
+        return self.schedulers[dp_rank]
+
+    def _get_scheduler_by_session_id(self, session_id: int):
+        """get scheduler by session id."""
+        if session_id not in self.session_dp_map:
+            return None
+        else:
+            dp_rank = self.session_dp_map[session_id]
+            return self.schedulers[dp_rank]
+
+    def _add_session(self, session_id: int):
+        """add session."""
+        # find candidate scheduler
+        seq_count = self.schedulers[0].seq_count
+        session_count = self.schedulers[0].session_count
+        dp_rank = 0
+        for idx, scheduler in enumerate(self.schedulers[1:], 1):
+            new_seq_count = scheduler.seq_count
+            new_session_count = scheduler.session_count
+            if new_seq_count < seq_count:
+                update = True
+            elif new_seq_count == seq_count and new_session_count < session_count:
+                update = True
+            else:
+                update = False
+            if update:
+                seq_count = new_seq_count
+                session_count = new_session_count
+                dp_rank = idx
+        scheduler = self.schedulers[dp_rank]
+
+        # add session
+        scheduler.add_session(session_id)
+        resp_type = ResponseType.SUCCESS
+        self.session_dp_map[session_id] = dp_rank
+        return resp_type
+
     def _on_add_session(self, reqs: List[Request], **kwargs):
         """on add session callback."""
         for req in reqs:
             session_id = req.data['session_id']
             resp = req.data.get('response', True)
             resp_type = ResponseType.SESSION_REPEAT
-            if session_id not in self.scheduler.sessions:
-                self.scheduler.add_session(session_id)
-                resp_type = ResponseType.SUCCESS
+
+            if session_id not in self.session_dp_map:
+                resp_type = self._add_session(session_id)
             if resp:
                 self._response(req.resp, resp_type)
 
@@ -267,9 +616,11 @@ class Engine:
             session_id = req.data['session_id']
             resp = req.data.get('response', True)
             resp_type = ResponseType.SESSION_NOT_EXIST
-            if session_id in self.scheduler.sessions:
-                self.scheduler.stop_session(session_id)
-                session = self.scheduler.sessions[session_id]
+
+            scheduler = self._get_scheduler_by_session_id(session_id)
+            if scheduler is not None:
+                scheduler.stop_session(session_id)
+                session = scheduler.sessions[session_id]
                 for seq in session.sequences.values():
                     resp: Response = getattr(seq, 'resp', None)
                     if resp is not None:
@@ -285,9 +636,11 @@ class Engine:
             session_id = req.data['session_id']
             resp = req.data.get('response', True)
             resp_type = ResponseType.SESSION_NOT_EXIST
-            if session_id in self.scheduler.sessions:
-                self.scheduler.end_session(session_id)
+            scheduler = self._get_scheduler_by_session_id(session_id)
+            if scheduler is not None:
+                scheduler.end_session(session_id)
                 resp_type = ResponseType.SUCCESS
+                self.session_dp_map.pop(session_id)
             if resp:
                 self._response(req.resp, resp_type)
 
@@ -326,11 +679,12 @@ class Engine:
 
         for req in reqs:
             session_id = req.data['session_id']
-            if session_id not in self.scheduler.sessions:
+            scheduler = self._get_scheduler_by_session_id(session_id)
+            if scheduler is None:
                 self._response(req.resp, ResponseType.SESSION_NOT_EXIST)
                 continue
             session_id = req.data['session_id']
-            sess = self.scheduler.sessions[session_id]
+            sess = scheduler.sessions[session_id]
             # TODO: support 1 session n sequence
             sampling_param = req.data['sampling_param']
             return_logits = sampling_param.out_logits
@@ -346,7 +700,7 @@ class Engine:
                 )
                 msg = next(iter(sess.sequences.values()))
                 __update_max_new_tokens(msg)
-                self.scheduler.add_sequence(msg)
+                scheduler.add_sequence(msg)
             else:
                 msg = next(iter(sess.sequences.values()))
                 msg.update_token_ids(
@@ -397,7 +751,9 @@ class Engine:
             seq_length = torch.ones(batch_size, dtype=torch.long)
         max_q_seq_length = seq_length.max().item()
 
-        block_offsets = self.scheduler.get_block_tables(messages)
+        session_id = messages[0].session_id
+        scheduler = self._get_scheduler_by_session_id(session_id)
+        block_offsets = scheduler.get_block_tables(messages)
         block_offsets = _tensorlize_block_offsets(block_offsets)
 
         local_adapter_ids = None
@@ -507,12 +863,12 @@ class Engine:
             if stop:
                 msg.status = MessageStatus.STOPPED
 
-    def _do_prefill(self):
+    def _do_prefill(self, scheduler: Scheduler):
         # decoding if no waiting
-        if not self.scheduler.has_waiting():
+        if not scheduler.has_waiting():
             return False
-        num_running = self.scheduler.num_running()
-        num_waiting = self.scheduler.num_waiting()
+        num_running = scheduler.num_running()
+        num_waiting = scheduler.num_waiting()
         max_batches = self.scheduler_config.max_batches
         # prefill if too much waiting
         if num_waiting >= 4:
@@ -554,7 +910,7 @@ class Engine:
                 outputs[session_id].logits = logits.split(seq_length)[idx]
         return outputs
 
-    def _make_forward_inputs(self, prefill: bool = None):
+    def _make_forward_inputs(self, prefill: bool, scheduler: Scheduler):
         """make forward inputs."""
         prefill_interval = self.scheduler_config.prefill_interval
 
@@ -606,17 +962,39 @@ class Engine:
             """need logits."""
             return any(seq.return_logits for seq in seqs)
 
-        if prefill is None:
-            prefill = self._do_prefill()
-        scheduler_output = self.scheduler.schedule(is_prefill=prefill, prealloc_size=prefill_interval)
-        # schedule decoding if no valid prefill reqs.
-        if prefill and len(scheduler_output.running) == 0:
-            prefill = False
-            scheduler_output = self.scheduler.schedule(is_prefill=prefill, prealloc_size=prefill_interval)
+        def __make_dummy_inputs():
+            """make dummy inputs."""
+            num_loops = 1 if prefill else prefill_interval
+            return dict(
+                running=[],
+                inputs=ModelInputs.make_dummy(1, is_decoding=not prefill),
+                swap_in_map=dict(),
+                swap_out_map=dict(),
+                loop_count=num_loops,
+                is_dummy=True,
+                sync_long_context=False,
+            )
 
+        if self.should_execute_dummy_batch:
+            if prefill and scheduler.num_waiting() == 0:
+                return __make_dummy_inputs()
+            if not prefill and scheduler.num_running() == 0:
+                return __make_dummy_inputs()
+
+        scheduler_output = scheduler.schedule(is_prefill=prefill, prealloc_size=prefill_interval)
+        # schedule decoding if no valid prefill reqs.
+        if prefill and len(scheduler_output.running) == 0 and not self.should_execute_dummy_batch:
+            prefill = False
+            scheduler_output = scheduler.schedule(is_prefill=prefill, prealloc_size=prefill_interval)
+
+        num_loops = 1 if prefill else prefill_interval
         running = scheduler_output.running
         swap_in_map = scheduler_output.swap_in_map
         swap_out_map = scheduler_output.swap_out_map
+
+        if self.should_execute_dummy_batch and len(running) == 0:
+            return __make_dummy_inputs()
+
         assert len(running) > 0
 
         # create inputs
@@ -628,52 +1006,35 @@ class Engine:
         num_ignore_eos = __get_num_ignore_eos(running)
         return_logits = __need_logits(running)
 
-        num_loops = 1 if prefill else prefill_interval
-
-        return dict(running=running,
-                    inputs=inputs,
-                    swap_in_map=swap_in_map,
-                    swap_out_map=swap_out_map,
-                    all_ids=all_ids,
-                    guided_input_ids=guided_input_ids,
-                    sampling_inputs=sampling_inputs,
-                    num_appendable_ids=num_appendable_ids,
-                    num_ignore_eos=num_ignore_eos,
-                    loop_count=num_loops,
-                    return_logits=return_logits)
-
-    def _set_has_runable_event(self, has_runable_event: asyncio.Event):
-        """set has runable event."""
-        if self.scheduler.has_unfinished():
-            has_runable_event.set()
-        else:
-            has_runable_event.clear()
+        sync_long_context = inputs.input_ids.numel() > self.cache_config.max_prefill_token_num
+        return dict(
+            running=running,
+            inputs=inputs,
+            swap_in_map=swap_in_map,
+            swap_out_map=swap_out_map,
+            loop_count=num_loops,
+            all_ids=all_ids,
+            guided_input_ids=guided_input_ids,
+            sampling_inputs=sampling_inputs,
+            num_appendable_ids=num_appendable_ids,
+            num_ignore_eos=num_ignore_eos,
+            return_logits=return_logits,
+            is_dummy=False,
+            sync_long_context=sync_long_context,
+        )
 
     async def _await_forward_event(self, forward_event: asyncio.Event):
         """await forward event."""
-        if self.scheduler.has_unfinished():
+        if any(scheduler.has_unfinished() for scheduler in self.schedulers):
             await forward_event.wait()
 
     @torch.inference_mode()
-    async def _async_loop_preprocess_message(self, forward_event: asyncio.Event, has_runable_event: asyncio.Event):
+    async def _async_loop_preprocess_message(self, forward_event: asyncio.Event, has_runable_event: RunableEventBase):
         """preprocess msg."""
         while True:
             await self._await_forward_event(forward_event)
             await self.req_manager.step()
-            self._set_has_runable_event(has_runable_event)
-
-    @torch.inference_mode()
-    async def _async_loop_background(self, in_que: asyncio.Queue, out_que: asyncio.Queue, forward_event: asyncio.Event):
-        """async loop background."""
-        while True:
-            forward_inputs = await in_que.get()
-
-            forward_event.clear()
-            await self.model_agent._async_step_background(
-                **forward_inputs,
-                output_que=out_que,
-            )
-            forward_event.set()
+            has_runable_event.set()
 
     async def _async_loop_send_responses(self, que: asyncio.Queue, forward_event: asyncio.Event):
         """send responses."""
@@ -700,54 +1061,39 @@ class Engine:
             __send_resps(resps)
 
     @torch.inference_mode()
-    async def _async_loop_main(self, resp_que: asyncio.Queue, has_runable_event: asyncio.Event):
+    async def _async_loop_main(
+        self,
+        dp_rank: int,
+        resp_que: asyncio.Queue,
+        has_runable_event: RunableEventBase,
+        inputs_maker: InputsMakerBase,
+    ):
         """Main loop of the engine.
 
         Each engine instance would communicate with the engine by queue.
         """
-
+        scheduler = self._get_scheduler_by_dp_rank(dp_rank)
         forward_inputs = None
         next_running = None
 
-        async def _send_next_inputs(prefill: bool = None):
-            nonlocal forward_inputs, next_running
-            forward_inputs = self._make_forward_inputs(prefill)
-            next_running = forward_inputs.pop('running')
-            await self.executor.forward_async(forward_inputs)
-
-        async def _prefetch_next_inputs():
-            enable = False
-            prefill = self._do_prefill()
-            if prefill:
-                enable = True
-            else:
-                num_running = self.scheduler.num_running()
-                is_decoding = forward_inputs['inputs'].is_decoding
-                running_threshold = (self.scheduler_config.max_batches // 4) if is_decoding else 0
-
-                if num_running > running_threshold:
-                    enable = True
-
-            if enable:
-                # send next forward
-                await _send_next_inputs(prefill)
-
         while True:
             if next_running is None:
-                await has_runable_event.wait()
-                await _send_next_inputs()
+                await has_runable_event.wait(dp_rank)
+                forward_inputs, next_running = await inputs_maker.send_next_inputs()
             num_loops = forward_inputs['loop_count']
+            is_dummy = forward_inputs['is_dummy']
             running = next_running
             next_running = None
-            self.scheduler.lock_running(running)
+            scheduler.lock_running(running)
             for idx in range(num_loops):
                 if idx >= num_loops - 1:
-                    await _prefetch_next_inputs()
-                out = await self.executor.get_output_async()
-                step_outputs = self._make_infer_outputs(**out, running=running)
-                resp_que.put_nowait(step_outputs)
-            self.scheduler.unlock_running(running)
-            self._set_has_runable_event(has_runable_event)
+                    forward_inputs, next_running = await inputs_maker.prefetch_next_inputs()
+                if not is_dummy:
+                    out = await self.executor.get_output_async(dp_rank)
+                    step_outputs = self._make_infer_outputs(**out, running=running)
+                    resp_que.put_nowait(step_outputs)
+            scheduler.unlock_running(running)
+            has_runable_event.set(dp_rank)
 
     @staticmethod
     def _add_loop_tasks_done_callback(tasks: List[asyncio.Task]):
@@ -789,7 +1135,7 @@ class Engine:
 
             # preprocess task
             logger.debug('Starting async task MainLoopPreprocessMessage.')
-            has_runable_event = asyncio.Event()
+            has_runable_event = build_runable_event(self.schedulers, self.should_execute_dummy_batch)
             loop_msg_proc = event_loop.create_task(self._async_loop_preprocess_message(
                 forward_event, has_runable_event),
                                                    name='MainLoopPreprocessMessage')
@@ -808,7 +1154,12 @@ class Engine:
 
             # main loop
             logger.debug('Starting async task MainLoop.')
-            await self._async_loop_main(resp_que=resp_que, has_runable_event=has_runable_event)
+            inputs_makers = build_inputs_makers(self)
+            await asyncio.gather(*[
+                self._async_loop_main(
+                    dp_rank, resp_que=resp_que, has_runable_event=has_runable_event, inputs_maker=inputs_maker)
+                for dp_rank, inputs_maker in enumerate(inputs_makers)
+            ])
         finally:
             self._loop_finally()
 

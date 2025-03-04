@@ -2,6 +2,7 @@
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
+from typing import List
 
 from torch import distributed as dist
 from torch.distributed import ReduceOp
@@ -14,9 +15,11 @@ class DistContext:
     tp: int = 1
     dp: int = 1
     tp_rank: int = 0
+    dp_rank: int = 0
     world_cpu_group: dist.ProcessGroup = None
     tp_cpu_group: dist.ProcessGroup = None
     tp_gpu_group: dist.ProcessGroup = None
+    tp_gpu_groups: List[dist.ProcessGroup] = None
     dp_cpu_group: dist.ProcessGroup = None
     dp_gpu_group: dist.ProcessGroup = None
 
@@ -39,19 +42,21 @@ class DistContext:
         # world(assume world group is gloo)
         world_cpu_group = dist.GroupMember.WORLD
 
+        tp_rank = rank % tp
+        dp_rank = rank // tp
+
         # tp
         tp_gpu_group = None
-        tp_rank = rank % tp
+        tp_gpu_groups = None
         if tp > 1:
-            tp_rank0 = rank // tp
-            tp_ranks = list(range(tp_rank0, tp_rank0 + tp))
-            tp_gpu_group = dist.new_group(ranks=tp_ranks, timeout=timeout, backend=gpu_backend)
-
-        # dp
-        dp_gpu_group = None
-        if dp > 1 and rank % tp == 0:
-            dp_ranks = list(range(0, world_size, tp))
-            dp_gpu_group = dist.new_group(ranks=dp_ranks, timeout=timeout, backend=gpu_backend)
+            # all tp groups should be created in all procs
+            ranks = range(world_size)
+            tp_gpu_groups = []
+            for start in range(0, world_size, tp):
+                tp_ranks = ranks[start:start + tp]
+                group = dist.new_group(ranks=tp_ranks, timeout=timeout, backend=gpu_backend)
+                tp_gpu_groups.append(group)
+            tp_gpu_group = tp_gpu_groups[dp_rank]
 
         context = DistContext(
             rank=rank,
@@ -59,13 +64,23 @@ class DistContext:
             tp=tp,
             dp=dp,
             tp_rank=tp_rank,
+            dp_rank=dp_rank,
             world_cpu_group=world_cpu_group,
             tp_cpu_group=None,
             tp_gpu_group=tp_gpu_group,
+            tp_gpu_groups=tp_gpu_groups,
             dp_cpu_group=None,
-            dp_gpu_group=dp_gpu_group,
+            dp_gpu_group=None,
         )
         return context
+
+    def close(self):
+        """close groups."""
+        if not dist.is_initialized():
+            return
+        if self.tp_gpu_groups is not None:
+            for group in self.tp_gpu_groups:
+                dist.destroy_process_group(group)
 
 
 DefaultContext = DistContext.build()
@@ -113,6 +128,11 @@ def get_world_rank():
     rank = ctx.rank
 
     return world_size, rank
+
+
+def get_tp_world_rank():
+    ctx = get_dist_manager().current_context()
+    return ctx.tp, ctx.tp_rank
 
 
 def _check_group_device(device: str):

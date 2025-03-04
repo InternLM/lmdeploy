@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from torch import nn
 
 import lmdeploy.pytorch.distributed as dist
-from lmdeploy.pytorch.distributed import get_world_rank
+from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
 from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_merged_colwise_linear, build_rowwise_linear
@@ -45,7 +45,7 @@ class DeepseekV2BMM(nn.Module):
 
     def _update_batch(self, batch: int):
         """update out features."""
-        world_size, _ = get_world_rank()
+        world_size, _ = get_tp_world_rank()
         batch = batch // world_size
         return batch
 
@@ -55,7 +55,7 @@ class DeepseekV2BMM(nn.Module):
 
     def weight_loader(self, param: nn.Parameter, weight: torch.Tensor):
         """weight loader."""
-        world_size, rank = get_world_rank()
+        world_size, rank = get_tp_world_rank()
         weight = weight.chunk(world_size, 0)[rank]
         param.data.copy_(weight)
 
@@ -212,7 +212,7 @@ class DeepseekV2Attention(nn.Module):
         attn_metadata: Any = None,
     ):
         """Rewrite of LlamaAttention.forward."""
-        world_size, _ = get_world_rank()
+        world_size, _ = get_tp_world_rank()
         num_heads = self.num_heads // world_size
         nope_size = self.kv_lora_rank
         q_len = hidden_states.size(1)
@@ -370,7 +370,7 @@ class DeepseekV2MoE(nn.Module):
                 is_tp=True,
                 all_reduce=False,
             )
-        world_size, _ = get_world_rank()
+        world_size, _ = get_tp_world_rank()
         if world_size > 1:
             self._all_reduce = True
         else:

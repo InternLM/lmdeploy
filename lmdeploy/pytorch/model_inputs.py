@@ -253,6 +253,27 @@ class ModelInputs:
 
         return ModelInputs(**out_dict)
 
+    @classmethod
+    def make_dummy(cls, batch_size: int, is_decoding: bool, device: str = 'cpu', dummy_block_id: int = 0):
+        """make dummy inputs."""
+        input_ids = torch.zeros((
+            1,
+            batch_size,
+        ), dtype=torch.long, device=device)
+        seq_length = torch.ones((batch_size, ), dtype=torch.long, device=device)
+        history_lengths = torch.zeros((batch_size, ), dtype=torch.long, device=device)
+        block_offsets = torch.full((batch_size, 1), dummy_block_id, dtype=torch.long, device=device)
+        num_ignored_history = torch.zeros((batch_size, ), dtype=torch.long, device=device)
+
+        return cls(
+            input_ids=input_ids,
+            seq_length=seq_length,
+            history_lengths=history_lengths,
+            block_offsets=block_offsets,
+            is_decoding=is_decoding,
+            num_ignored_history=num_ignored_history,
+        )
+
 
 @dataclass
 class StepContext:

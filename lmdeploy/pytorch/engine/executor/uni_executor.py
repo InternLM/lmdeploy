@@ -71,6 +71,9 @@ class UniExecutor(ExecutorBase):
         """build cache engine."""
         self.model_agent.build_cache_engine()
 
+    def warmup(self):
+        self.model_agent.warmup()
+
     def start(self, forward_event: asyncio.Event):
         """start engine loop."""
         self.model_agent.start(forward_event)
@@ -83,12 +86,15 @@ class UniExecutor(ExecutorBase):
         """release resources."""
         self.model_agent.release()
 
-    async def forward_async(self, inputs):
+    async def forward_async(self, inputs, dp_ranks=None):
         """start forward."""
+        if dp_ranks is not None:
+            assert len(dp_ranks) == 1 and dp_ranks[0] == 0
         self.model_agent.set_forward_inputs(inputs)
 
-    async def get_output_async(self):
+    async def get_output_async(self, dp_rank: int = 0):
         """get output async."""
+        assert dp_rank == 0
         return await self.model_agent.get_output_async()
 
     def get_input_processor(self):

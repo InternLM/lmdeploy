@@ -2,7 +2,7 @@
 import torch
 from torch import nn
 
-from lmdeploy.pytorch.distributed import get_world_rank
+from lmdeploy.pytorch.distributed import get_tp_world_rank
 
 from ..backends import OpType, get_backend
 from ..backends.attention import AttentionMetadata
@@ -11,7 +11,7 @@ from .utils import get_distribute_size
 
 def _update_num_heads(num_heads: int, num_kv_heads: int):
     """update heads."""
-    world_size, rank = get_world_rank()
+    world_size, rank = get_tp_world_rank()
     num_heads = get_distribute_size(num_heads, world_size, rank)
     num_kv_heads = get_distribute_size(num_kv_heads, world_size, rank)
     return num_heads, num_kv_heads
