@@ -124,7 +124,7 @@ class RopeParam:
 
     @classmethod
     def create(cls, type, *args, **kwargs):
-        assert type in ['default', 'linear', 'dynamic', 'yarn', 'llama3']
+        assert type in ['default', 'linear', 'dynamic', 'yarn', 'llama3', 'multimodal']
         cerator = {
             'default': DefaultRopeParam,
             'linear': LinearRopeParam,
