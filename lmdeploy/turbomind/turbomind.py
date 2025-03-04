@@ -162,7 +162,7 @@ class TurboMind:
                     tm_params[k] = []
                 tm_params[k].append(v)
 
-    def _postprocess_config(self, tm_config, engine_config):
+    def _postprocess_config(self, tm_config: TurbomindModelConfig, engine_config: TurbomindEngineConfig):
         """postprocess turbomind config by."""
         import copy
         self.config = copy.deepcopy(tm_config)
