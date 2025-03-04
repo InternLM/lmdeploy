@@ -2,7 +2,7 @@
 import json
 import os.path as osp
 
-from ..config import DefaultRopeParam, DynamicRopeParam, RopeParam
+from ..config import RopeParam
 from .base import INPUT_MODELS
 from .llama import LlamaModel, LlamaReader
 
@@ -64,14 +64,13 @@ class DeepSeekVLModel(LlamaModel):
                     use_dynamic_ntk = 1
             head_dim = model_arg.get('head_dim', hidden_units // attn_head_num)
             if use_dynamic_ntk:
-                dynamic_rope_param = DynamicRopeParam(base=rope_theta,
-                                                      dim=head_dim,
-                                                      max_position_embeddings=max_position_embeddings,
-                                                      factor=scaling_factor)
-                rope_param = RopeParam(type='dynamic', param=dynamic_rope_param)
+                rope_param = RopeParam.create('dynamic',
+                                              base=rope_theta,
+                                              dim=head_dim,
+                                              max_position_embeddings=max_position_embeddings,
+                                              factor=scaling_factor)
             else:
-                default_rope_param = DefaultRopeParam(base=rope_theta, dim=head_dim)
-                rope_param = RopeParam(type='default', param=default_rope_param)
+                rope_param = RopeParam.create('default', base=rope_theta, dim=head_dim)
 
         return dict(num_layer=num_layer,
                     norm_eps=norm_eps,
