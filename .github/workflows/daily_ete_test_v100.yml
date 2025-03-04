@@ -52,6 +52,7 @@ env:
   TEST_CODE_PATH: /nvme/qa_test_models/test_pkg/lmdeploy
   OFFLINE_CODE_PATH: /nvme/qa_test_models/offline_pkg/lmdeploy
   OFFLINE_REQUIREMENTS: /nvme/qa_test_models/offline_pkg/requirements.txt
+  LMDEPLOY_EXECUTOR_BACKEND: ray
 
 jobs:
   linux-build:

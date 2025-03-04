@@ -25,6 +25,7 @@ env:
   HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
   PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
+  LMDEPLOY_EXECUTOR_BACKEND: ray
 
 
 jobs:
