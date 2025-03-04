@@ -4,7 +4,7 @@ import os.path as osp
 
 import torch
 
-from ..config import DefaultRopeParam, DynamicRopeParam, RopeParam
+from ..config import RopeParam
 from .base import INPUT_MODELS
 from .llama import LlamaModel, LlamaReader
 
@@ -79,13 +79,13 @@ class QwenModel(LlamaModel):
             inter_size = config['intermediate_size']
             if use_dynamic_ntk:
                 # need setting rope_scaling_factor in TurbomindEngineConfig
-                dynamic_rope_param = DynamicRopeParam(base=rope_theta,
-                                                      dim=kv_channels,
-                                                      max_position_embeddings=seq_length,
-                                                      factor=0)
-                rope_param = RopeParam('dynamic', param=dynamic_rope_param)
+                rope_param = RopeParam.create('dynamic',
+                                              base=rope_theta,
+                                              dim=kv_channels,
+                                              max_position_embeddings=seq_length,
+                                              factor=0)
             else:
-                rope_param = RopeParam('default', param=DefaultRopeParam(base=rope_theta, dim=kv_channels))
+                rope_param = RopeParam.create('default', base=rope_theta, dim=kv_channels)
 
         return dict(size_per_head=kv_channels,
                     num_layer=num_layer,
