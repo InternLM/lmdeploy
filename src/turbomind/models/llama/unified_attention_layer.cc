@@ -27,7 +27,6 @@
 #include "src/turbomind/kernels/attention/kv_cache_utils_v2.h"
 #include "src/turbomind/kernels/norm/rms_norm.h"
 #include "src/turbomind/macro.h"
-#include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/llama/mla_utils.h"
@@ -41,21 +40,17 @@
 namespace turbomind {
 
 template<class T>
-UnifiedAttentionLayer<T>::UnifiedAttentionLayer(const ModelParam&     model,
-                                                const AttentionParam& attn,
-                                                const LoraParam&      lora,
-                                                const NcclParam&      tp,
-                                                const Context<T>&     ctx):
+UnifiedAttentionLayer<T>::UnifiedAttentionLayer(
+    const ModelParam& model, const AttentionParam& attn, const LoraParam& lora, size_t tp_size, const Context<T>& ctx):
     head_num_(model.head_num),
     kv_head_num_(model.kv_head_num),
     size_per_head_(model.head_dim),
     hidden_units_(model.hidden_units),
-    local_head_num_(head_num_ / tp.world_size_),
-    local_kv_head_num_(model.kv_head_num / tp.world_size_),
+    local_head_num_(head_num_ / tp_size),
+    local_kv_head_num_(model.kv_head_num / tp_size),
     param_(attn),
     model_param_(model),
     lora_param_(lora),
-    tensor_para_(tp),
     context_(ctx),
     stream_(ctx.stream),
     linear_(ctx.linear.get()),
@@ -75,20 +70,17 @@ UnifiedAttentionLayer<T>::UnifiedAttentionLayer(const ModelParam&     model,
 }
 
 template<typename T>
-void UnifiedAttentionLayer<T>::allocateBuffer(size_t q_count, size_t k_count, size_t batch_size, size_t qkv_lora_rank)
+void UnifiedAttentionLayer<T>::allocateBuffer(size_t q_count, size_t k_count, size_t batch_size, size_t max_lora_rank)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
+    if (max_lora_rank) {
+        lora_buf_ = (T*)allocator_->reMalloc(lora_buf_, sizeof(T) * q_count * max_lora_rank);
+    }
+
     const int local_q_kv_head_num = local_head_num_ + 2 * local_kv_head_num_;
 
-    if (qkv_lora_rank) {
-        size_t sz = sizeof(T) * q_count * (local_q_kv_head_num * size_per_head_ + qkv_lora_rank);
-        qkv_buf_  = (T*)allocator_->reMalloc(qkv_buf_, sz, false);
-    }
-    else {
-        qkv_buf_ =
-            (T*)allocator_->reMalloc(qkv_buf_, sizeof(T) * q_count * local_q_kv_head_num * size_per_head_, false);
-    }
+    qkv_buf_ = (T*)allocator_->reMalloc(qkv_buf_, sizeof(T) * q_count * local_q_kv_head_num * size_per_head_, false);
 
     qkv_buf_3_ = (T*)allocator_->reMalloc(qkv_buf_3_, sizeof(T) * q_count * local_head_num_ * size_per_head_, false);
 
@@ -137,6 +129,7 @@ void UnifiedAttentionLayer<T>::freeBuffer()
         allocator_->free((void**)&qkv_buf_);
         allocator_->free((void**)&qkv_buf_3_);
         allocator_->free((void**)&tmp_kv_buf_);
+        allocator_->free((void**)&lora_buf_);
 
         is_allocate_buffer_ = false;
     }
@@ -198,7 +191,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     allocateBuffer(token_num,                                           // shared
                    h_cu_k_len[batch_size] - h_cu_k_len[dc_batch_size],  // prefill
                    batch_size,
-                   weights->qkv.lora.r);
+                   std::max(weights->qkv.lora.r, weights->output.lora.r));
 
     // [L, 2, H, s, D]
     const size_t layer_offset = layer_id * 2 * local_kv_head_num_ * param_.cache_block_seq_len * size_per_head_;
@@ -215,7 +208,8 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         //////////////////////////////////////////////
         /// qkv gemm
         // [token_num, hidden_dim] -> [token_num, 3, local_hidden_dim]
-        linear_->forward(qkv_buf_, attention_input, token_num, weights->qkv, LlamaLinear<T>::kGemm, lora_mask);
+        linear_->forward(
+            qkv_buf_, attention_input, token_num, weights->qkv, LlamaLinear<T>::kGemm, lora_buf_, lora_mask);
         sync_check_cuda_error();
     }
     else {
@@ -430,16 +424,11 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
 
     //////////////////////////////////////////////
     /// output gemm <Bs,HD> -> <Bs,HD>
-    linear_->forward(attention_out, qkv_buf_3_, token_num, weights->output, LlamaLinear<T>::kGemm, lora_mask);
+    linear_->forward(
+        attention_out, qkv_buf_3_, token_num, weights->output, LlamaLinear<T>::kGemm, lora_buf_, lora_mask);
     sync_check_cuda_error();
 
     count_and_fix(attention_out, token_num * weights->output.output_dims, Concat("wo", layer_id), 3);
-
-    if (tensor_para_.world_size_ > 1) {
-        NcclGuard nccl_guard(tensor_para_, stream_);
-        ftNcclAllReduceSum(attention_out, attention_out, token_num * hidden_units_, tensor_para_, stream_);
-        sync_check_cuda_error();
-    }
 
     // if (tensor_para_.rank_ == 0) {
     //     Compare(attention_out, token_num * hidden_units_, Concat("attn_out", layer_id), compare_mode, stream_);
