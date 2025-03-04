@@ -1,29 +1,6 @@
 # PyTorchEngine 多线程推理
 
-自 [PR2907](https://github.com/InternLM/lmdeploy/pull/2907) 起，我们废除了 PytorchEngine 的 thread_safe 模式以保证引擎能够更高效的运行。我们鼓励用户尽可能使用**服务接口**或**协程**来实现高并发，比如：
-
-```python
-import asyncio
-from lmdeploy import pipeline, PytorchEngineConfig
-
-event_loop = asyncio.new_event_loop()
-asyncio.set_event_loop(event_loop)
-
-model_path = 'Llama-3.2-1B-Instruct'
-pipe = pipeline(model_path, backend_config=PytorchEngineConfig())
-
-async def _gather_output():
-    tasks = [
-        pipe.async_batch_infer('Hakuna Matata'),
-        pipe.async_batch_infer('giraffes are heartless creatures'),
-    ]
-    return await asyncio.gather(*tasks)
-
-output = asyncio.run(_gather_output())
-print(output[0].text)
-print(output[1].text)
-```
-
+自 [PR2907](https://github.com/InternLM/lmdeploy/pull/2907) 起，我们废除了 PytorchEngine 的 thread_safe 模式以保证引擎能够更高效的运行。我们鼓励用户尽可能使用**服务接口**或**协程**来实现高并发,
 如果你确实有多线程推理的需求，那么可以进行简单的封装，来实现类似的效果。
 
 ```python

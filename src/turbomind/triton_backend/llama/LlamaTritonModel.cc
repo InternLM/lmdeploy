@@ -24,6 +24,7 @@
 #include <cuda_runtime.h>
 #include <yaml-cpp/yaml.h>
 
+#include "src/turbomind/comm/comm.h"
 #include "src/turbomind/engine/gateway.h"
 #include "src/turbomind/engine/model_request.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
@@ -320,6 +321,8 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t                                 ten
     engine_param_.num_tokens_per_iter = engine_reader["num_tokens_per_iter"].as<int>(0);
     engine_param_.max_prefill_iters   = engine_reader["max_prefill_iters"].as<int>(1);
 
+    const auto communicator = engine_reader["communicator"].as<std::string>();
+
     lora_param_.policy        = getLoraPolicy(reader["lora_config"]["lora_policy"].as<std::string>(""));
     lora_param_.r             = lora_reader["lora_r"].as<int>(0);
     lora_param_.scale         = lora_reader["lora_scale"].as<float>(0);
@@ -380,54 +383,13 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t                                 ten
         moe_param_.method = MoeParam::kFused;
     }
 
+    // NOTE: This runs on Python main thread
+    if (tensor_para_size > 1) {
+        group_id_ = comm::CreateGroupId(communicator);
+        group_id_->Initialize();
+    }
+
     TM_LOG_INFO("%s", toString().c_str());
-}
-
-template<typename T>
-std::unique_ptr<Engine<T>>
-LlamaTritonModel<T>::createSharedModelInstance(int                                                       device_id,
-                                               int                                                       rank,
-                                               std::pair<std::vector<NcclParam>, std::vector<NcclParam>> nccl_params,
-                                               std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm)
-{
-    check_cuda_error(cudaSetDevice(device_id));
-    const int comms_rank = device_id % (tensor_para_size_ * pipeline_para_size_);
-
-    auto ctx = std::make_unique<Context<T>>(device_id);
-
-    NcclParam tensor_para   = nccl_params.first[comms_rank];
-    NcclParam pipeline_para = nccl_params.second[comms_rank];
-
-    FT_CHECK(tensor_para.world_size_ == tensor_para_size_);
-    FT_CHECK(pipeline_para.world_size_ == pipeline_para_size_);
-
-    shared_state_->barrier->wait();
-
-    auto model = std::make_unique<LlamaV2<T>>(model_param_,  //
-                                              attn_param_,
-                                              moe_param_,
-                                              lora_param_,
-                                              tensor_para,
-                                              *ctx,
-                                              engine_param_.max_batch_size,
-                                              weights_[device_id]);
-
-    shared_state_->barrier->wait();
-
-    auto engine = std::make_unique<Engine<T>>(engine_param_,  //
-                                              std::move(model),
-                                              std::move(ctx),
-                                              shared_state_,
-                                              gateway_,
-                                              device_id);
-
-    // Wait for pinned buffers to be allocated for all ranks, otherwise tuning will hang
-    // due to concurrent kernel launch & cudaMallocHost
-    shared_state_->barrier->wait();
-
-    engine->Start();
-
-    return engine;
 }
 
 template<typename T>
@@ -445,7 +407,7 @@ std::unique_ptr<ModelRequest> LlamaTritonModel<T>::createModelInstance(int devic
 }
 
 template<typename T>
-void LlamaTritonModel<T>::createSharedWeights(int device_id, int rank)
+void LlamaTritonModel<T>::createSharedWeights(int device_id, int rank) noexcept
 {
     check_cuda_error(cudaSetDevice(device_id));
     const int tensor_para_rank   = rank % tensor_para_size_;
@@ -461,7 +423,7 @@ void LlamaTritonModel<T>::createSharedWeights(int device_id, int rank)
 }
 
 template<typename T>
-std::unordered_map<std::string, Tensor> LlamaTritonModel<T>::getParams(int deviceId, int rank)
+std::unordered_map<std::string, Tensor> LlamaTritonModel<T>::getParams(int deviceId, int rank) noexcept
 {
     check_cuda_error(cudaSetDevice(deviceId));
 
@@ -479,7 +441,7 @@ std::unordered_map<std::string, Tensor> LlamaTritonModel<T>::getParams(int devic
 }
 
 template<typename T>
-void LlamaTritonModel<T>::processWeights(int device_id, int rank)
+void LlamaTritonModel<T>::processWeights(int device_id, int rank) noexcept
 {
     check_cuda_error(cudaSetDevice(device_id));
     FT_CHECK(weights_[device_id] != nullptr);
@@ -491,18 +453,67 @@ void LlamaTritonModel<T>::processWeights(int device_id, int rank)
     sync_check_cuda_error();
 }
 
-template<typename T>
-void LlamaTritonModel<T>::createEngine(int                                                       device_id,
-                                       int                                                       rank,
-                                       std::pair<std::vector<NcclParam>, std::vector<NcclParam>> nccl_params,
-                                       std::shared_ptr<AbstractCustomComm>                       custom_all_reduce_comm)
+template<class T>
+comm::Splits LlamaTritonModel<T>::createCommSplits(int global_rank)
 {
+    comm::Splits comm;
+    if (tensor_para_size_ > 1) {
+        comm.tp = group_id_->CreateCommunicator(global_rank, tensor_para_size_);
+    }
+    return comm;
+}
 
-    auto engine = createSharedModelInstance(device_id, rank, nccl_params, custom_all_reduce_comm);
+template<typename T>
+void LlamaTritonModel<T>::createEngine(int device_id, int global_rank) noexcept
+{
+    check_cuda_error(cudaSetDevice(device_id));
 
-    engine->tune();
+    auto ctx = std::make_unique<Context<T>>(device_id);
 
-    engines_[device_id] = std::move(engine);
+    ctx->comm = createCommSplits(global_rank);
+
+    shared_state_->barrier->wait();
+
+    auto model = std::make_unique<LlamaV2<T>>(model_param_,  //
+                                              attn_param_,
+                                              moe_param_,
+                                              lora_param_,
+                                              *ctx,
+                                              engine_param_.max_batch_size,
+                                              weights_[device_id]);
+
+    shared_state_->barrier->wait();
+
+    try {
+        engines_[device_id] = std::make_unique<Engine<T>>(engine_param_,  //
+                                                          std::move(model),
+                                                          std::move(ctx),
+                                                          shared_state_,
+                                                          gateway_,
+                                                          device_id);
+    }
+    catch (const std::exception& e) {
+        TM_LOG_ERROR("[TM][Engine][Init] %s", e.what());
+        std::abort();
+    }
+
+    // Wait for pinned buffers to be allocated for all ranks, otherwise tuning will hang
+    // due to concurrent kernel launch & cudaMallocHost
+    shared_state_->barrier->wait();
+
+    auto& engine = *engines_[device_id];
+
+    try {
+        engine.Warmup();
+    }
+    catch (const std::exception& e) {
+        TM_LOG_ERROR("[TM][Engine][Warmup] %s", e.what());
+        std::abort();
+    }
+
+    shared_state_->barrier->wait();
+
+    engine.Start();
 }
 
 template<typename T>
@@ -532,14 +543,6 @@ std::string LlamaTritonModel<T>::toString()
        << "\nexpert_per_token: " << moe_param_.experts_per_token << "\nmoe_method: " << moe_param_.method << std::endl;
 
     return ss.str();
-}
-
-template<typename T>
-void LlamaTritonModel<T>::createCustomComms(std::vector<std::shared_ptr<AbstractCustomComm>>* custom_all_reduce_comms,
-                                            int                                               world_size)
-{
-    using commDataType = typename CustomARCommTypeConverter<T>::Type;
-    initCustomAllReduceComm<commDataType>(custom_all_reduce_comms, enable_custom_all_reduce_, world_size);
 }
 
 template<typename T>

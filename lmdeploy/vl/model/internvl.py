@@ -196,7 +196,10 @@ class InternVLVisionModel(VisonModel):
             pixel_values = self.processor(image, params)
             image_tokens = (pixel_values.shape[0] * self.image_tokens_per_patch)
             outputs.append(
-                dict(pixel_values=pixel_values, image_tokens=image_tokens, image_token_id=0, image_size=image.size))
+                dict(pixel_values=pixel_values,
+                     image_tokens=image_tokens,
+                     image_token_id=self.image_token_id,
+                     image_size=image.size))
         messages.append(dict(role='preprocess', content=outputs))
         return messages
 
@@ -245,18 +248,8 @@ class InternVLVisionModel(VisonModel):
         prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
         return prompt, IMAGE_TOKEN
 
-    @staticmethod
-    def _update_image_token_id(messages, tokenizer):
-        """update image_token_id."""
-        pad_token_id = getattr(tokenizer.model.model, 'pad_token_id', 0)
-        preps = [x['content'] for x in messages if x['role'] == 'preprocess']
-        for prep in preps:
-            for pp in prep:
-                pp['image_token_id'] = pad_token_id
-
     def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
         prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, sequence_start)
-        self._update_image_token_id(messages, tokenizer)
         return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start)
 
     def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):

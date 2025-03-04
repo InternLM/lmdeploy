@@ -543,7 +543,11 @@ class InternLM2Chat7B(InternLMChat7B):
             if role == 'assistant' and message.get('tool_calls', None) is not None:
                 for tool_call in message['tool_calls']:
                     function = tool_call.get('function', {})
-                    function['arguments'] = function.pop('parameters', {})
+                    function['name'] = function.get('name', '')
+                    function['parameters'] = function.get('parameters', function.get('arguments', ''))
+                    function.pop('arguments')
+                    if isinstance(function['parameters'], str):
+                        function['parameters'] = json.loads(function['parameters'])
                     content += f'<|action_start|><|plugin|>\n{json.dumps(function, ensure_ascii=False)}<|action_end|>'
             if 'name' in message and message['name'] in name_map:
                 begin = box_map[role].strip() + f" name={name_map[message['name']]}\n"
@@ -1043,6 +1047,8 @@ class Qwen2d5Chat(Qwen7BChat):
                     for tool_call in tool_calls:
                         if tool_call.get('function') is not None:
                             tool_call = tool_call['function']
+                        if isinstance(tool_call['arguments'], str):
+                            tool_call['arguments'] = json.loads(tool_call['arguments'])
                         ret += f'{self.separator}<tool_call>{self.separator}{{"name": "{tool_call["name"]}", "arguments": {json.dumps(tool_call["arguments"], ensure_ascii=False)}}}{self.separator}</tool_call>'
                 ret += self.eosys
             if message['role'] == 'tool':
@@ -1450,6 +1456,45 @@ class DeepseekVL(BaseChatTemplate):
         path = model_path.lower()
         if 'deepseek-vl' in path and 'chat' in path:
             return 'deepseek-vl'
+
+
+@MODELS.register_module(name=['deepseek-vl2'])
+class DeepseekVL2(BaseChatTemplate):
+
+    def __init__(self,
+                 meta_instruction='',
+                 eosys='',
+                 user='<|User|>: ',
+                 eoh='\n\n',
+                 assistant='<|Assistant|>: ',
+                 eoa='<｜end▁of▁sentence｜>',
+                 **kwargs):
+        super().__init__(meta_instruction=meta_instruction,
+                         eosys=eosys,
+                         user=user,
+                         eoh=eoh,
+                         assistant=assistant,
+                         eoa=eoa,
+                         **kwargs)
+
+    def get_prompt(self, prompt, sequence_start=True):
+        return super().get_prompt(prompt, sequence_start)[:-1]
+
+    def messages2prompt(self, messages, sequence_start=True, **kwargs):
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        return super().messages2prompt(messages, sequence_start, **kwargs)[:-1]
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'deepseek-vl2' in path:
+            return 'deepseek-vl2'
 
 
 @MODELS.register_module(name='deepseek-coder')

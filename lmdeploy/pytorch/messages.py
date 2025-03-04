@@ -89,8 +89,9 @@ class SamplingParam:
                            f' but is {min_p}')
             min_p = 0.0
         if temperature == 0:
-            logger.warning('`temperature` is 0, set to 1e-6')
-            temperature = 1e-6
+            logger.warning('`temperature` is 0, set top_k=1.')
+            temperature = 1.0
+            top_k = 1
         if temperature < 0:
             logger.warning('`temperature` has to be a strictly'
                            f' positive value, but is {temperature}')
@@ -132,6 +133,7 @@ class MessageStatus(enum.Enum):
     STOPPED = enum.auto()
     ENDED = enum.auto()
     ABORTED = enum.auto()
+    LOCKED = enum.auto()
 
 
 _SEQ_COUNT = 0

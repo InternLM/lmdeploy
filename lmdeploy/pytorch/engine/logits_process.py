@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass, fields
 from typing import Dict, List, Optional, Tuple
 
 import torch
@@ -251,13 +251,14 @@ class SamplingInputs:
         )
         return sampling_input
 
-    def to_device(self, device: str):
+    def to_device(self, device: str, non_blocking: bool = False):
         """to device."""
-        input_dict = asdict(self)
         out_dict = dict()
-        for k, v in input_dict.items():
+        for f in fields(self):
+            k = f.name
+            v = getattr(self, k)
             if isinstance(v, torch.Tensor):
-                v = v.to(device)
+                v = v.to(device, non_blocking=non_blocking)
             out_dict[k] = v
 
         return SamplingInputs(**out_dict)

@@ -110,12 +110,17 @@ def check_vl_llm(config: dict) -> bool:
             if 'InternLMXComposer2ForCausalLM' in v:
                 return True
 
+    if 'language_config' in config and 'vision_config' in config and config['language_config'].get(
+            'architectures', [None])[0] == 'DeepseekV2ForCausalLM':
+        return True
+
     arch = config['architectures'][0]
     supported_archs = set([
         'LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM', 'CogVLMForCausalLM', 'InternLMXComposer2ForCausalLM',
         'InternVLChatModel', 'MiniGeminiLlamaForCausalLM', 'MGMLlamaForCausalLM', 'MiniCPMV',
         'LlavaForConditionalGeneration', 'LlavaNextForConditionalGeneration', 'Phi3VForCausalLM',
-        'Qwen2VLForConditionalGeneration', 'MllamaForConditionalGeneration', 'MolmoForCausalLM'
+        'Qwen2VLForConditionalGeneration', 'Qwen2_5_VLForConditionalGeneration', 'MllamaForConditionalGeneration',
+        'MolmoForCausalLM'
     ])
     if arch == 'QWenLMHeadModel' and 'visual' in config:
         return True
@@ -178,6 +183,9 @@ def get_model_arch(model_path: str):
                         arch = 'InternLMXComposer2ForCausalLM'
         elif _cfg.get('auto_map', None) and 'AutoModelForCausalLM' in _cfg['auto_map']:
             arch = _cfg['auto_map']['AutoModelForCausalLM'].split('.')[-1]
+        elif _cfg.get('language_config', None) and _cfg['language_config'].get(
+                'auto_map', None) and 'AutoModelForCausalLM' in _cfg['language_config']['auto_map']:
+            arch = _cfg['language_config']['auto_map']['AutoModelForCausalLM'].split('.')[-1]
         else:
             raise RuntimeError(f'Could not find model architecture from config: {_cfg}')
         return arch, cfg
