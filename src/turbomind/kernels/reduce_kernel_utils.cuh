@@ -23,8 +23,8 @@
 #endif
 #include "src/turbomind/utils/cuda_bf16_wrapper.h"
 #include "src/turbomind/utils/cuda_type_utils.cuh"
+#include <cuda_bf16.h>
 #include <cuda_fp16.h>
-#include <cuda_fp16.hpp>
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
 #include <float.h>
