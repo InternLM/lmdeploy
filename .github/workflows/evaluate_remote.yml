@@ -33,6 +33,11 @@ on:
         description: 'regression functions'
         type: string
         default: "['chat_models','base_models']"
+      backend:
+        required: true
+        description: 'Set backend testcase filter: turbomind or pytorch or turbomind, pytorch. Default is "["turbomind", "pytorch"]"'
+        type: string
+        default: "['turbomind', 'pytorch']"
 
 env:
   HF_DATASETS_OFFLINE: 1
@@ -175,9 +180,12 @@ jobs:
       fail-fast: false
       matrix:
         regression_func: ${{fromJSON(github.event.inputs.regression_func_volc || '["chat_models","base_models"]')}}
+        backend: ${{ fromJSON(github.event.inputs.backend || '["turbomind", "pytorch"]')}}
     runs-on: volc_cu12_daily
     environment: 'prod'
     timeout-minutes: 180 #3hours
+    env:
+      TEST_BACKEND: ${{ matrix.backend }}
     steps:
       - name: Clone repository
         uses: actions/checkout@v2
