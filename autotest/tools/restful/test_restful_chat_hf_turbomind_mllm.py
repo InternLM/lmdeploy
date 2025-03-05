@@ -1,5 +1,5 @@
 import pytest
-from utils.config_utils import get_all_model_list, get_workerid
+from utils.config_utils import get_communicator_list, get_turbomind_model_list, get_workerid
 from utils.run_restful_chat import run_vl_testcase, start_restful_api, stop_restful_api
 
 BASE_HTTP_URL = 'http://localhost'
@@ -18,11 +18,14 @@ def prepare_environment(request, config, worker_id):
 
 
 def getModelList(tp_num):
-    return [{
-        'model': item,
-        'cuda_prefix': None,
-        'tp_num': tp_num,
-    } for item in get_all_model_list(tp_num, model_type='vl_model')]
+    model_list = []
+    for communicator in get_communicator_list():
+        model_list += [{
+            'model': item,
+            'cuda_prefix': None,
+            'tp_num': tp_num,
+            'extra': f'--communicator {communicator}'
+        } for item in get_turbomind_model_list(tp_num, model_type='vl_model')]
 
 
 @pytest.mark.order(7)
@@ -59,12 +62,15 @@ def test_restful_chat_tp4(config, worker_id):
 
 
 def getKvintModelList(tp_num, quant_policy: int = None):
-    return [{
-        'model': item,
-        'cuda_prefix': None,
-        'tp_num': tp_num,
-        'extra': f'--quant-policy {quant_policy}'
-    } for item in get_all_model_list(tp_num, quant_policy=quant_policy, model_type='vl_model')]
+    model_list = []
+    for communicator in get_communicator_list():
+        model_list += [{
+            'model': item,
+            'cuda_prefix': None,
+            'tp_num': tp_num,
+            'extra': f'--quant-policy {quant_policy} --communicator {communicator}'
+        } for item in get_turbomind_model_list(tp_num, quant_policy=quant_policy, model_type='vl_model')]
+    return model_list
 
 
 @pytest.mark.order(7)

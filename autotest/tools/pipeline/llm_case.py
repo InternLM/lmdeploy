@@ -21,6 +21,8 @@ def run_pipeline_chat_test(model_path, cases_path, tp, backend_type, is_pr_test,
         backend_config.adapters = extra.get('adapters')
     if 'kvint' in backend_type:
         backend_config.quant_policy = extra.get('quant_policy')
+    if 'turbomind' in backend_type and extra is not None and 'communicator' in extra:
+        backend_config.communicator = extra.get('communicator')
 
     if 'w4' in model_path or ('4bits' in model_path or 'awq' in model_path.lower()):
         backend_config.model_format = 'awq'
