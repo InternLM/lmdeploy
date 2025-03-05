@@ -7,6 +7,7 @@
 #include <regex>
 #include <string>
 
+#include "src/turbomind/models/llama/llama_rope.h"
 #include "src/turbomind/models/llama/weight_type.h"
 
 namespace turbomind {
@@ -58,21 +59,13 @@ struct MoeParam {
 };
 
 struct AttentionParam {
-    int         rotary_embedding_dim;
-    float       rotary_embedding_base;
-    int         max_position_embeddings;
-    float       softmax_scale;
-    std::string rope_scaling_type;
-    int         original_max_position_embeddings;
-    float       rope_scaling_factor;
-    float       low_freq_factor;
-    float       high_freq_factor;
-    float       attention_factor;
-    float       beta_fast;
-    float       beta_slow;
-    bool        use_dynamic_ntk;
-    bool        use_logn_attn;
-    int         cache_block_seq_len;
+    float softmax_scale;
+    int   cache_block_seq_len;
+    // logn attention
+    bool use_logn_attn;
+    int  max_position_embeddings;
+    // rotary embedding
+    RopeParam rope;
 };
 
 struct EngineParam {
