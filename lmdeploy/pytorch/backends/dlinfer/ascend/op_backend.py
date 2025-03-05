@@ -246,11 +246,13 @@ class AscendOpsBackend(DlinferOpsBackend):
     def init():
         """Initialize Ascend backend."""
         try:
-            from torch_npu.contrib import transfer_to_npu
+            from torch_npu.contrib import transfer_to_npu  # noqa: F401
         except ImportError:
-            logger.warning("Failed to import torch_npu. Ascend initialization skipped.")
+            logger.warning('Failed to import torch_npu. Please make sure torch_npu is installed correctly. '
+                           'Ascend initialization skipped.')
         except Exception as e:
-            logger.warning(f"Error during Ascend initialization: {e}")
+            logger.warning(f'Error during Ascend initialization: {str(e)}. '
+                           'Please check your Ascend environment configuration.')
 
     @staticmethod
     def ccl_backend():
