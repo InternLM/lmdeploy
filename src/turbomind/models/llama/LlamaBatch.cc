@@ -717,11 +717,10 @@ void LlamaBatch<T>::AllocateBuffer(size_t batch_size, size_t session_len, int ca
     block_ptrs_      = (uintptr_t*)allocator_->reMalloc(block_ptrs_, sizeof(uintptr_t) * max_batch_block_count);
 
     if (!logits_buf_) {  // may be alias of local_logits_buf_
-        logits_buf_ = (float*)allocator_->reMalloc(logits_buf_, sizeof(float) * batchxbeam * vocab_size, false);
+        logits_buf_ = (T*)allocator_->reMalloc(logits_buf_, sizeof(T) * batchxbeam * vocab_size, false);
     }
 
-    sampled_logprobs_ =
-        (float*)allocator_->reMalloc(sampled_logprobs_, sizeof(float) * batchxbeam * kMaxLogProb, false);
+    sampled_logprobs_ = (T*)allocator_->reMalloc(sampled_logprobs_, sizeof(T) * batchxbeam * kMaxLogProb, false);
     sampled_indexes_ =
         (uint32_t*)allocator_->reMalloc(sampled_indexes_, sizeof(uint32_t) * batchxbeam * kMaxLogProb, false);
     sampled_nums_ = (uint32_t*)allocator_->reMalloc(sampled_nums_, sizeof(uint32_t) * batchxbeam, false);
@@ -807,7 +806,7 @@ void LlamaBatch<T>::AllocatePersistantBuffer(size_t max_batch_size, int cache_bl
     }
 
     h_sampled_logprobs_ =
-        (float*)allocator_->reMalloc(h_sampled_logprobs_, sizeof(float) * max_batch_size * kMaxLogProb, false, true);
+        (T*)allocator_->reMalloc(h_sampled_logprobs_, sizeof(T) * max_batch_size * kMaxLogProb, false, true);
     h_sampled_indexes_ = (uint32_t*)allocator_->reMalloc(
         h_sampled_indexes_, sizeof(uint32_t) * max_batch_size * kMaxLogProb, false, true);
     h_sampled_nums_ = (uint32_t*)allocator_->reMalloc(h_sampled_nums_, sizeof(uint32_t) * max_batch_size, false, true);
@@ -827,7 +826,7 @@ void LlamaBatch<T>::AllocCommBuffers()
     // TODO: rename this to hidden_states
     context_decoder_output_buf_ = (T*)CommBufAlloc(sizeof(T) * max_fwd_token_num * hidden_units, true);
 
-    local_logits_buf_ = (float*)CommBufAlloc(sizeof(float) * max_batch_size_ * vocab_size_padded, true);
+    local_logits_buf_ = (T*)CommBufAlloc(sizeof(T) * max_batch_size_ * vocab_size_padded, true);
     if (model_->use_allgather_2d_) {
         logits_buf_ = local_logits_buf_;
     }
@@ -1200,8 +1199,8 @@ void LlamaBatch<T>::InitializeSampling(const GenerationState& g)
     TensorMap outputs;
     for (int i = 0; i < batch_size; i++) {
         if (state_->requests[i]->gen_cfg.output_logprobs) {
-            outputs.insert(
-                {"sampled_logprobs", {MEMORY_GPU, TYPE_FP32, {(size_t)batch_size, 1, kMaxLogProb}, sampled_logprobs_}});
+            outputs.insert({"sampled_logprobs",
+                            {MEMORY_GPU, getTensorType<T>(), {(size_t)batch_size, 1, kMaxLogProb}, sampled_logprobs_}});
             outputs.insert(
                 {"sampled_indexes", {MEMORY_GPU, TYPE_UINT32, {(size_t)batch_size, 1, kMaxLogProb}, sampled_indexes_}});
             outputs.insert({"sampled_nums", {MEMORY_GPU, TYPE_UINT32, {(size_t)batch_size, 1}, sampled_nums_}});
@@ -1235,14 +1234,14 @@ void LlamaBatch<T>::ComputeAndOutputLogits(T* hidden_states, int first, int last
 
     if (tp_size_ > 1) {
         FT_CHECK(model_->vocab_size_padded_ % tp_size_ == 0);
-        const size_t byte_size = sizeof(float) * model_->vocab_size_padded_ * token_num;
+        const size_t byte_size = sizeof(T) * model_->vocab_size_padded_ * token_num;
 
         if (local_context_logits_buf_size_ < byte_size) {
             check_cuda_error(cudaStreamSynchronize(stream_));
             shared_state_->barrier->wait();
 
             CommBufFree((void**)&local_context_logits_buf_, true);
-            local_context_logits_buf_      = (float*)CommBufAlloc(byte_size, true);
+            local_context_logits_buf_      = (T*)CommBufAlloc(byte_size, true);
             local_context_logits_buf_size_ = byte_size;
 
             check_cuda_error(cudaStreamSynchronize(stream_));
@@ -1255,8 +1254,8 @@ void LlamaBatch<T>::ComputeAndOutputLogits(T* hidden_states, int first, int last
         context_logits_buf_ = local_context_logits_buf_;
     }
     else {
-        context_logits_buf_ = (float*)allocator_->reMalloc(
-            context_logits_buf_, sizeof(float) * model_->vocab_size_padded_ * token_num, false);
+        context_logits_buf_ =
+            (T*)allocator_->reMalloc(context_logits_buf_, sizeof(T) * model_->vocab_size_padded_ * token_num, false);
     }
 
     model_->postDecodeEmbedding(context_logits_buf_, local_context_logits_buf_, hidden_states, token_num);
@@ -1269,21 +1268,21 @@ void LlamaBatch<T>::ComputeAndOutputLogits(T* hidden_states, int first, int last
 }
 
 template<typename T>
-void LlamaBatch<T>::OutputLogits(const float* logits, int first, int last, GenerationConfig::OutType out_type)
+void LlamaBatch<T>::OutputLogits(const T* logits, int first, int last, GenerationConfig::OutType out_type)
 {
     // when `is_all` is true, logits only contains last token of the sequences
     const bool is_all = out_type == GenerationConfig::kAll;
 
     for (int i = first; i < last; ++i) {
 
-        const int    input_len = h_input_length_buf_[i];  // input lenght for this iter
-        const float* src_ptr   = logits;
+        const int input_len = h_input_length_buf_[i];  // input lenght for this iter
+        const T*  src_ptr   = logits;
 
         logits += (is_all ? input_len : 1) * model_->vocab_size_padded_;
 
         if (state_->requests[i]->gen_cfg.output_logits == out_type) {
 
-            auto dst_ptr = state_->requests[i]->outputs.getPtr<float>("logits");
+            auto dst_ptr = state_->requests[i]->outputs.getPtr<T>("logits");
 
             const int cache_len   = state_->sequences[i]->cache_len;
             const int history_len = state_->sequences[i]->tokens.size();
@@ -1319,10 +1318,10 @@ void LlamaBatch<T>::OutputLogits(const float* logits, int first, int last, Gener
             dst_ptr += std::max(0, cache_len - (history_len + offset)) * model_->vocab_size_;
 
             check_cuda_error(cudaMemcpy2DAsync(dst_ptr,
-                                               sizeof(float) * model_->vocab_size_,
+                                               sizeof(T) * model_->vocab_size_,
                                                src_ptr,
-                                               sizeof(float) * model_->vocab_size_padded_,
-                                               sizeof(float) * model_->vocab_size_,
+                                               sizeof(T) * model_->vocab_size_padded_,
+                                               sizeof(T) * model_->vocab_size_,
                                                valid_len,
                                                cudaMemcpyDefault,
                                                stream_));
@@ -1422,12 +1421,12 @@ void LlamaBatch<T>::Finish(GenerationState& g, std::vector<Signal>& signals)
     if (rank_ == 0 && output_logprobs) {
         NvtxScope scope("logprobs");
         // output logprobs, should be set before sequence_length
-        float*    sampled_logprobs_ptr = h_sampled_logprobs_;
+        T*        sampled_logprobs_ptr = h_sampled_logprobs_;
         uint32_t* sampled_indexes_ptr  = h_sampled_indexes_;
         uint32_t* sampled_nums_ptr     = h_sampled_nums_;
         for (int i = 0; i < batch_size - g.partial; ++i) {
             if (state_->requests[i] && state_->requests[i]->gen_cfg.output_logprobs) {
-                auto logprob_vals    = state_->requests[i]->outputs.getPtr<float>("logprob_vals");
+                auto logprob_vals    = state_->requests[i]->outputs.getPtr<T>("logprob_vals");
                 auto logprob_indexes = state_->requests[i]->outputs.getPtr<uint32_t>("logprob_indexes");
                 auto logprob_nums    = state_->requests[i]->outputs.getPtr<uint32_t>("logprob_nums");
 
