@@ -138,7 +138,7 @@ private:
 
     RNG rng_;
 
-    InnerRopeParam rope_param_{};
+    RopeKernelParam rope_param_{};
 
     T*     qkv_buf_{};
     T*     q_buf_2_{};

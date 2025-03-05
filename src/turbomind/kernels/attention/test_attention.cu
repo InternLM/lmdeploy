@@ -146,7 +146,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
                            cu_seq_lens.data().get(),
                            cu_seq_lens.data().get(),
                            cu_block_cnts.data().get(),
-                           InnerRopeParam{},
+                           RopeKernelParam{},
                            2 * head_num * seq_len,
                            0,
                            seq_len,
@@ -170,7 +170,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
                            k_ptrs.data().get(),
                            cu_seq_lens.data().get(),
                            cu_block_cnts.data().get(),
-                           InnerRopeParam{},
+                           RopeKernelParam{},
                            2 * head_num * seq_len,
                            0,
                            seq_len,
@@ -416,7 +416,7 @@ int test_attention()
     params.inv_sqrt_dh   = (float)std::log2(expf(1.)) / std::sqrt((float)params.size_per_head);
 
     float scale_factor = -std::log2f(kRoPEBase) / kRoPEDim;
-    params.rope_param  = InnerRopeParam{RopeType::kDefault, nullptr, kRoPEDim, scale_factor, 1.f};
+    params.rope_param  = RopeKernelParam{RopeType::kDefault, nullptr, kRoPEDim, scale_factor, 1.f};
 
     params.split_cnt = split_cnt.data().get();
     params.partial_L = partial_L.data().get();
@@ -523,7 +523,7 @@ int test_attention()
                        k_ptrs.data().get(),
                        cu_kv_lens.data().get(),
                        cu_block_cnts.data().get(),
-                       InnerRopeParam{},  // DECODING ? nullptr : params.rope_theta,
+                       RopeKernelParam{},  // DECODING ? nullptr : params.rope_theta,
                        KvHeadNum * kContextLen,
                        0,
                        kContextLen,

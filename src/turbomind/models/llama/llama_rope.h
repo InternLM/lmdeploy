@@ -67,7 +67,7 @@ struct InnerLlama3RopeParam {
     float beta;
 };
 
-struct InnerRopeParam {
+struct RopeKernelParam {
     RopeType type;
 
     float* base{};  // for dynamic ntk
@@ -79,7 +79,7 @@ struct InnerRopeParam {
     InnerLlama3RopeParam llama3;
 };
 
-inline void init_inner_rope_param(const RopeParam& rope, InnerRopeParam& inner_rope)
+inline void init_inner_rope_param(const RopeParam& rope, RopeKernelParam& inner_rope)
 {
     inner_rope.type         = rope.type;
     inner_rope.dim          = rope.dim;

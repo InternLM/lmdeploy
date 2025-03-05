@@ -8,7 +8,7 @@
 namespace turbomind {
 
 template<int N>
-__device__ void fill_default(Array<float, N / 2>& inv_freq, int idx, InnerRopeParam& param)
+__device__ void init_default(Array<float, N / 2>& inv_freq, int idx, RopeKernelParam& param)
 {
     auto scale_factor = param.scale_factor;
     auto inv_factor   = param.inv_factor;
@@ -19,7 +19,7 @@ __device__ void fill_default(Array<float, N / 2>& inv_freq, int idx, InnerRopePa
 }
 
 template<int N>
-__device__ void fill_yarn(Array<float, N / 2>& inv_freq, int idx, InnerRopeParam& param)
+__device__ void init_yarn(Array<float, N / 2>& inv_freq, int idx, RopeKernelParam& param)
 {
     auto scale_factor            = param.scale_factor;
     auto inv_factor              = param.inv_factor;
@@ -36,7 +36,7 @@ __device__ void fill_yarn(Array<float, N / 2>& inv_freq, int idx, InnerRopeParam
 }
 
 template<int N>
-__device__ void fill_llama3(Array<float, N / 2>& inv_freq, int idx, InnerRopeParam& param)
+__device__ void init_llama3(Array<float, N / 2>& inv_freq, int idx, RopeKernelParam& param)
 {
     auto scale_factor = param.scale_factor;
     auto inv_factor   = param.inv_factor;
@@ -56,15 +56,15 @@ struct FastRoPE {
 
     static_assert(N % 2 == 0);
 
-    InnerRopeParam      param_;
+    RopeKernelParam     param_;
     Array<float, N / 2> inv_freq_;
     bool                is_valid_;
     float               attention_scaling_{1.f};
 
-    typedef void (*Func)(Array<float, N / 2>&, int, InnerRopeParam&);
+    typedef void (*Func)(Array<float, N / 2>&, int, RopeKernelParam&);
     Func fill_func_;
 
-    __device__ FastRoPE(const InnerRopeParam& param, int batch_idx, std::integral_constant<int, N>): param_(param)
+    __device__ FastRoPE(const RopeKernelParam& param, int batch_idx, std::integral_constant<int, N>): param_(param)
     {
 
         if (param_.type == RopeType::kDynamic) {
@@ -74,28 +74,23 @@ struct FastRoPE {
         else if (param_.type == RopeType::kYarn) {
             attention_scaling_ = param_.yarn.attention_factor;
         }
-
-        get_fill_function();
     }
 
-    __device__ void get_fill_function()
+    __device__ void init(int idx)
     {
-        static __constant__ Func funcs[] = {
-            {},
-            fill_default<N>,
-            fill_default<N>,
-            fill_default<N>,
-            fill_yarn<N>,
-            fill_llama3<N>,
-        };
-
-        fill_func_ = funcs[(int)param_.type];
-    }
-
-    __device__ void fill(int idx)
-    {
-        if (is_valid_ = (idx < param_.dim) && (param_.type != RopeType::kNull); is_valid_) {
-            fill_func_(inv_freq_, idx, param_);
+        is_valid_ = idx < param_.dim;
+        switch (param_.type) {
+            case RopeType::kDefault:
+            case RopeType::kLinear:
+            case RopeType::kDynamic:
+                init_default<N>(inv_freq_, idx, param_);
+                break;
+            case RopeType::kYarn:
+                init_yarn<N>(inv_freq_, idx, param_);
+                break;
+            case RopeType::kLlama3:
+                init_llama3<N>(inv_freq_, idx, param_);
+                break;
         }
     }
 

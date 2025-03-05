@@ -60,7 +60,7 @@ struct AttentionParams {
     float inv_sqrt_dh;
 
     // rotary embedding
-    InnerRopeParam rope_param;
+    RopeKernelParam rope_param;
 
     // log(n) attention
     bool use_logn_attn;

@@ -227,7 +227,7 @@ struct AttentionUniversal {
         PRAGMA_UNROLL
         for (int c = 0; c < ITER_C; ++c) {
             const int di = offset.x + c * Map::kDeltaC;
-            rope.fill(di);
+            rope.init(di);
             PRAGMA_UNROLL
             for (int s = 0; s < ITER_S; ++s) {
                 const int ti = (offset.y + s * Map::kDeltaS) / CTA_H + query_idx + history_len;
