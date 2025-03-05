@@ -133,6 +133,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         if not self.alibi:
             if is_decoding:
                 if self.use_flash_mla:
+                    # init kv_seqlens and block_offsets with int32 in the future
                     kv_seqlens = kv_seqlens.to(torch.int32)
                     block_offsets = block_offsets.to(torch.int32)
                     query = query.unsqueeze(1)
