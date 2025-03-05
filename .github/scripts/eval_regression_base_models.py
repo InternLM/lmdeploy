@@ -71,6 +71,7 @@ for model in [v for k, v in locals().items() if k.startswith('lmdeploy_')]:
     model['batch_size'] = 5000
 
 for model in [v for k, v in locals().items() if k.startswith('pytorch_')]:
+    model['abbr'] = model['abbr'].replace('turbomind', 'pytorch').replace('lmdeploy', 'pytorch')
     model['engine_config']['max_batch_size'] = 512
     model['backend'] = 'pytorch'
     model['batch_size'] = 5000
