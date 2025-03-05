@@ -119,11 +119,13 @@ for model in [v for k, v in locals().items() if k.startswith('lmdeploy_')]:
     model['batch_size'] = 5000
 
 for model in [v for k, v in locals().items() if k.startswith('pytorch_')]:
+    model['abbr'] = model['abbr'].replace('turbomind', 'pytorch').replace('lmdeploy', 'pytorch')
     model['engine_config']['max_batch_size'] = 512
     model['backend'] = 'pytorch'
     model['batch_size'] = 5000
 
 for model in [v for k, v in locals().items() if k.endswith('_native')]:
+    model['abbr'] = model['abbr'] + '_native'
     model['engine_config']['communicator'] = 'native'
 
 if os['TEST_BACKEND'] is not None or os['TEST_BACKEND'] == 'pytorch':
