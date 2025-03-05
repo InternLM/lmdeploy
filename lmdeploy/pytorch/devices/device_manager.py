@@ -15,9 +15,9 @@ DefaultContext = DeviceContext()
 
 class DeviceManager:
 
-    def __init__(self):
+    def __init__(self, device_context: DeviceContext = None):
         self.t_local = threading.local()
-        self.t_local.device_context = DefaultContext
+        self.t_local.device_context = DefaultContext if device_context is None else device_context
         self._context_callback: dict[int, Callable] = dict()
         self._next_cb_handle = 0
 
@@ -54,9 +54,9 @@ class DeviceManager:
 _DEVICE_MANAGER: DeviceManager = None
 
 
-def get_device_manager():
+def get_device_manager(device_context: DeviceContext = None):
     """get device manager."""
     global _DEVICE_MANAGER
     if _DEVICE_MANAGER is None:
-        _DEVICE_MANAGER = DeviceManager()
+        _DEVICE_MANAGER = DeviceManager(device_context)
     return _DEVICE_MANAGER

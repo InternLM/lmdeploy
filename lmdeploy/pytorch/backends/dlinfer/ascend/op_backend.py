@@ -241,3 +241,17 @@ class AscendOpsBackend(DlinferOpsBackend):
         ascend_graph_runner = AscendGraphRunner(model, model_config, cache_config, backend_config, device)
         AscendOpsBackend.enable_graph = ascend_graph_runner.enable_graph
         return ascend_graph_runner
+
+    @staticmethod
+    def init():
+        """Initialize Ascend backend."""
+        try:
+            from torch_npu.contrib import transfer_to_npu
+        except ImportError:
+            logger.warning("Failed to import torch_npu. Ascend initialization skipped.")
+        except Exception as e:
+            logger.warning(f"Error during Ascend initialization: {e}")
+
+    @staticmethod
+    def ccl_backend():
+        return 'hccl'
