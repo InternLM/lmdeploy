@@ -554,7 +554,7 @@ class Engine:
                 outputs[session_id].logits = logits.split(seq_length)[idx]
         return outputs
 
-    def _make_forward_inputs(self, prefill: bool = None):
+    def _make_forward_inputs(self, prefill: bool = None, enable_empty: bool = False):
         """make forward inputs."""
         prefill_interval = self.scheduler_config.prefill_interval
 
@@ -609,6 +609,10 @@ class Engine:
         if prefill is None:
             prefill = self._do_prefill()
         scheduler_output = self.scheduler.schedule(is_prefill=prefill, prealloc_size=prefill_interval)
+
+        if enable_empty and len(scheduler_output.running) == 0:
+            return None
+
         # schedule decoding if no valid prefill reqs.
         if prefill and len(scheduler_output.running) == 0:
             prefill = False
@@ -709,9 +713,13 @@ class Engine:
         forward_inputs = None
         next_running = None
 
-        async def _send_next_inputs(prefill: bool = None):
+        async def _send_next_inputs(prefill: bool = None, enable_empty: bool = False):
             nonlocal forward_inputs, next_running
-            forward_inputs = self._make_forward_inputs(prefill)
+            forward_inputs = self._make_forward_inputs(prefill, enable_empty)
+            if forward_inputs is None:
+                forward_inputs = None
+                next_running = None
+                return
             next_running = forward_inputs.pop('running')
             await self.executor.forward_async(forward_inputs)
 
@@ -730,7 +738,7 @@ class Engine:
 
             if enable:
                 # send next forward
-                await _send_next_inputs(prefill)
+                await _send_next_inputs(prefill, True)
 
         while True:
             if next_running is None:
