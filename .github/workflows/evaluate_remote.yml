@@ -113,7 +113,7 @@ jobs:
   prepare_env:
     if: ${{!cancelled()}}
     needs: ['build-pypi', 'build-pypi-lmdeploy']
-    runs-on: lmdeploy_volc
+    runs-on: lmdeploy-volc
     environment: 'prod'
     timeout-minutes: 120 #2hours
     steps:
