@@ -31,6 +31,7 @@ def run_pipeline_chat_test(model_path, cases_path, tp, backend_type, is_pr_test,
     if not is_bf16_supported():
         backend_config.dtype = 'float16'
 
+    print('backend_config config: ' + str(backend_config))
     pipe = pipeline(model_path, backend_config=backend_config)
 
     cases_path = os.path.join(cases_path)

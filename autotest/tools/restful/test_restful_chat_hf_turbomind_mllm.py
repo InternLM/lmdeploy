@@ -26,6 +26,7 @@ def getModelList(tp_num):
             'tp_num': tp_num,
             'extra': f'--communicator {communicator}'
         } for item in get_turbomind_model_list(tp_num, model_type='vl_model')]
+    return model_list
 
 
 @pytest.mark.order(7)

@@ -38,6 +38,7 @@ def run_pipeline_mllm_test(model_path, resource_path, tp, backend_type, is_pr_te
     if not is_bf16_supported():
         backend_config.dtype = 'float16'
 
+    print('backend_config config: ' + str(backend_config))
     pipe = pipeline(model_path, backend_config=backend_config)
 
     image = load_image(f'{resource_path}/{PIC1}')
