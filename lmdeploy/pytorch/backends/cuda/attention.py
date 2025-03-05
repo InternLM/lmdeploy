@@ -43,6 +43,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         sliding_window: int = None,
         logit_softcapping: float = None,
         causal: bool = True,
+        use_flash_mal: bool = False,
         **kwargs,
     ):
         super().__init__(
@@ -60,13 +61,14 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         assert not (alibi and not causal)
 
         from lmdeploy.pytorch.kernels.cuda import (alibi_paged_attention_fwd, fill_kv_cache, flash_attention_fwd,
-                                                   flatten_kv_cache, paged_attention_fwd)
+                                                   flash_mla_fwd, flatten_kv_cache, paged_attention_fwd)
 
         self.fill_kv_cache = fill_kv_cache
         self.paged_attention_fwd = paged_attention_fwd
         self.alibi_paged_attention_fwd = alibi_paged_attention_fwd
         self.flatten_kv_cache = flatten_kv_cache
         self.flash_attention_fwd = flash_attention_fwd
+        self.flash_mla_fwd = flash_mla_fwd
 
         # for alibi attention
         world_size, rank = get_world_rank()
@@ -130,20 +132,32 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         is_decoding = attn_metadata.is_decoding
         if not self.alibi:
             if is_decoding:
-                self.paged_attention_fwd(
-                    query,
-                    k_cache,
-                    v_cache,
-                    attn_output,
-                    block_offsets,
-                    kv_seqlens=kv_seqlens,
-                    k_scales_zeros=k_scales_zeros,
-                    v_scales_zeros=v_scales_zeros,
-                    quant_policy=quant_policy,
-                    window_size=self.sliding_window,
-                    sm_scale=self.scale,
-                    logit_softcapping=self.logit_softcapping,
-                )
+                if self.use_flash_mla:
+                    kv_seqlens = kv_seqlens.to(torch.int32)
+                    block_offsets = block_offsets.to(torch.int32)
+                    query = query.unsqueeze(1)
+                    attn_output = self.flash_mla_fwd(query,
+                                                     k_cache=k_cache,
+                                                     block_table=block_offsets,
+                                                     cache_seqlens=kv_seqlens,
+                                                     head_dim_v=self.v_head_size,
+                                                     softmax_scale=self.scale,
+                                                     causal=True)
+                else:
+                    self.paged_attention_fwd(
+                        query,
+                        k_cache,
+                        v_cache,
+                        attn_output,
+                        block_offsets,
+                        kv_seqlens=kv_seqlens,
+                        k_scales_zeros=k_scales_zeros,
+                        v_scales_zeros=v_scales_zeros,
+                        quant_policy=quant_policy,
+                        window_size=self.sliding_window,
+                        sm_scale=self.scale,
+                        logit_softcapping=self.logit_softcapping,
+                    )
             else:
                 BLOCK_BS = k_cache.size(1)
                 # pad one more block to avoid invalid kv visit
@@ -210,6 +224,7 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
         sliding_window: int = None,
         logical_softcapping: float = None,
         causal: bool = True,
+        use_flash_mla: bool = False,
         **kwargs,
     ) -> TritonAttentionImpl:
         """build."""
@@ -222,4 +237,5 @@ class TritonAttentionBuilder(AttentionBuilder[TritonAttentionMetadata]):
                                    sliding_window=sliding_window,
                                    logical_softcapping=logical_softcapping,
                                    causal=causal,
+                                   use_flash_mla=use_flash_mla,
                                    **kwargs)
