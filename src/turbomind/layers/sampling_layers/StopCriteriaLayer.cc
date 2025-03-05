@@ -103,5 +103,9 @@ void StopCriteriaLayer<T>::setup(const size_t batch_size, const size_t beam_widt
 }
 
 template class StopCriteriaLayer<float>;
+template class StopCriteriaLayer<half>;
+#ifdef ENABLE_BF16
+template class StopCriteriaLayer<nv_bfloat16>;
+#endif
 
 }  // namespace turbomind

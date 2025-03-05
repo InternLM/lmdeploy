@@ -225,4 +225,8 @@ void LogitsProcessorLayer<T>::setup(const size_t batch_size, const size_t beam_w
 }
 
 template class LogitsProcessorLayer<float>;
+template class LogitsProcessorLayer<half>;
+#ifdef ENABLE_BF16
+template class LogitsProcessorLayer<__nv_bfloat16>;
+#endif
 }  // namespace turbomind
