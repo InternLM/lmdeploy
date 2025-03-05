@@ -23,7 +23,6 @@
 #endif
 #include "src/turbomind/utils/cuda_bf16_wrapper.h"
 #include "src/turbomind/utils/cuda_type_utils.cuh"
-#include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
@@ -73,7 +72,9 @@ __device__ inline half getMaxValue<half>()
 template<>
 __device__ inline __nv_bfloat16 getMaxValue<__nv_bfloat16>()
 {
+#if __CUDA_ARCH__ >= 800
     return __ushort_as_bfloat16((unsigned short)0x7F7FU);
+#endif
 }
 #endif
 

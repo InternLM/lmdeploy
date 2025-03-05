@@ -267,7 +267,7 @@ __global__ void batchApplyTemperaturePenalty_v2(T*           logits,
         PRAGMA_UNROLL
         for (int c = 0; c < vec_size; ++c) {
             if (i + c < vocab_size) {
-                vec[c] *= scale;
+                vec[c] = (float)vec[c] * scale;
             }
             else {
                 vec[c] = -getMaxValue<T>();

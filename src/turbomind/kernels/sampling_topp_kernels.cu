@@ -384,7 +384,7 @@ __global__ void topPMinPFilter(T*           sorted_logits,
         }
         // norm
         for (int i = tid; i < n; i += BLOCK_SIZE) {
-            sorted_logits[i] /= sum_logits;
+            sorted_logits[i] = (float)sorted_logits[i] / sum_logits;
         }
     }
 }
