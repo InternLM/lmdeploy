@@ -23,7 +23,6 @@ class DlinferLinearImpl(LinearImpl):
                 weight: torch.Tensor,
                 bias: Optional[torch.Tensor] = None,
                 all_reduce: bool = False,
-                scatter: bool = False,
                 rank: int = 0,
                 scatter_size: List[int] = None):
         """forward."""

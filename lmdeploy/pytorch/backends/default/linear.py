@@ -26,13 +26,12 @@ class DefaultLinearImpl(LinearImpl):
                 weight: torch.Tensor,
                 bias: Optional[torch.Tensor] = None,
                 all_reduce: bool = False,
-                scatter: bool = False,
                 rank: int = 0,
                 scatter_size: List[int] = None):
         """forward."""
         out = F.linear(x, weight, bias)
         if all_reduce:
-            if scatter:
+            if scatter_size is not None:
                 out = _reduce_scatter_input(out, rank, scatter_size)
             else:
                 dist.all_reduce(out)

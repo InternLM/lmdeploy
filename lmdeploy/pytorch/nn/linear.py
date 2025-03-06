@@ -1148,7 +1148,7 @@ class BaseLinear(nn.Module):
         if len(self.lora_adapters) == 0:
             if self.dp_scatter:
                 _, rank = get_tp_world_rank()
-                return self.impl.forward(x, self.weight, self.bias, all_reduce, self.dp_scatter, rank, tp_sizes)
+                return self.impl.forward(x, self.weight, self.bias, all_reduce, rank, tp_sizes)
             else:
                 return self.impl.forward(x, self.weight, self.bias, all_reduce)
 
