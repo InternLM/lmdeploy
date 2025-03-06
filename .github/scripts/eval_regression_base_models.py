@@ -64,24 +64,27 @@ pytorch_lmdeploy_qwen2_5_72b_model = deepcopy(*lmdeploy_qwen2_5_72b_model)
 pytorch_lmdeploy_qwen2_7b_model = deepcopy(*lmdeploy_qwen2_7b_model)
 pytorch_lmdeploy_yi_1_5_9b_model = deepcopy(*lmdeploy_yi_1_5_9b_model)
 
-for model in [v for k, v in locals().items() if k.startswith('lmdeploy_')]:
+for model in [v for k, v in locals().items() if k.startswith('lmdeploy_') or k.startswith('pytorch_')]:
     if isinstance(model, list):
         for m in model:
             m['engine_config']['max_batch_size'] = 512
-            m['backend'] = 'turbomind'
             m['gen_config']['do_sample'] = False
             m['batch_size'] = 5000
     else:
         model['engine_config']['max_batch_size'] = 512
-        model['backend'] = 'turbomind'
         model['gen_config']['do_sample'] = False
         model['batch_size'] = 5000
 
+for model in [v for k, v in locals().items() if k.startswith('lmdeploy_')]:
+    if isinstance(model, list):
+        for m in model:
+            m['backend'] = 'turbomind'
+    else:
+        model['backend'] = 'turbomind'
+
 for model in [v for k, v in locals().items() if k.startswith('pytorch_')]:
     model['abbr'] = model['abbr'].replace('turbomind', 'pytorch').replace('lmdeploy', 'pytorch')
-    model['engine_config']['max_batch_size'] = 512
     model['backend'] = 'pytorch'
-    model['batch_size'] = 5000
 
 if os['TEST_BACKEND'] is not None or os['TEST_BACKEND'] == 'pytorch':
     models = [v for k, v in locals().items() if k.startswith('pytorch_')]

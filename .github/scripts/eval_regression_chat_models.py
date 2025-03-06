@@ -112,25 +112,30 @@ lmdeploy_qwen2_7b_instruct_model_native = deepcopy(*lmdeploy_qwen2_7b_instruct_m
 lmdeploy_yi_1_5_6b_chat_model_native = deepcopy(*lmdeploy_yi_1_5_6b_chat_model)
 lmdeploy_yi_1_5_34b_chat_model_native = deepcopy(*lmdeploy_yi_1_5_34b_chat_model)
 
-for model in [v for k, v in locals().items() if k.startswith('lmdeploy_')]:
+for model in [v for k, v in locals().items() if k.startswith('lmdeploy_') or k.startswith('pytorch_')]:
     if isinstance(model, list):
         for m in model:
             m['engine_config']['max_batch_size'] = 512
-            m['backend'] = 'turbomind'
             m['gen_config']['do_sample'] = False
             m['batch_size'] = 5000
     else:
         model['engine_config']['max_batch_size'] = 512
-        model['backend'] = 'turbomind'
         model['gen_config']['do_sample'] = False
         model['batch_size'] = 5000
 
+for model in [v for k, v in locals().items() if k.startswith('lmdeploy_')]:
+    if isinstance(model, list):
+        for m in model:
+            m['backend'] = 'turbomind'
+    else:
+        model['backend'] = 'turbomind'
+
 for model in [v for k, v in locals().items() if k.startswith('pytorch_')]:
-    model['engine_config']['max_batch_size'] = 512
+    model['abbr'] = model['abbr'].replace('turbomind', 'pytorch').replace('lmdeploy', 'pytorch')
     model['backend'] = 'pytorch'
-    model['batch_size'] = 5000
 
 for model in [v for k, v in locals().items() if k.endswith('_native')]:
+    model['abbr'] = model['abbr'] + '_nativa'
     model['engine_config']['communicator'] = 'native'
 
 if os['TEST_BACKEND'] is not None or os['TEST_BACKEND'] == 'pytorch':
