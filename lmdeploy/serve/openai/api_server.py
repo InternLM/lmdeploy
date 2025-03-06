@@ -6,6 +6,8 @@ import os
 import time
 from functools import partial
 from http import HTTPStatus
+from multiprocessing.queues import Queue as MpQueue
+from queue import Queue
 from typing import AsyncGenerator, Dict, List, Literal, Optional, Union
 
 import uvicorn
@@ -925,6 +927,7 @@ def serve(model_path: str,
           model_name: Optional[str] = None,
           backend: Literal['turbomind', 'pytorch'] = 'turbomind',
           backend_config: Optional[Union[PytorchEngineConfig, TurbomindEngineConfig]] = None,
+          model_params_que: Optional[Union[Queue, MpQueue]] = None,
           chat_template_config: Optional[ChatTemplateConfig] = None,
           server_name: str = '0.0.0.0',
           server_port: int = 23333,
@@ -1032,6 +1035,7 @@ def serve(model_path: str,
                                                     model_name=model_name,
                                                     backend=backend,
                                                     backend_config=backend_config,
+                                                    model_params_que=model_params_que,
                                                     chat_template_config=chat_template_config,
                                                     max_log_len=max_log_len,
                                                     **kwargs)

@@ -146,7 +146,7 @@ class PytorchLoader(BaseLoader):
             yield (idx, params.pop(idx))
 
 
-class QueueLoader:
+class StateDictLoader:
 
     def __init__(self, queue: Union[Queue, MpQueue], pattern: str):
         self.que = queue
@@ -182,7 +182,7 @@ def create_loader(model_path: str, pattern: str) -> BaseLoader:
     args = (model_path, pattern)
 
     if isinstance(model_path, Queue) or isinstance(model_path, MpQueue):
-        return QueueLoader(*args)
+        return StateDictLoader(*args)
 
     if osp.exists(osp.join(model_path, SAFE_WEIGHT_INDEX_NAME)):
         return SafetensorsLoader(*args, index_name=SAFE_WEIGHT_INDEX_NAME)

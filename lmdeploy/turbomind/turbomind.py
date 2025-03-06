@@ -9,8 +9,9 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from functools import partial
+from multiprocessing.queues import Queue as MpQueue
 from queue import Queue
-from typing import Dict, List
+from typing import Dict, List, Optional, Union
 
 import numpy as np
 import torch
@@ -76,6 +77,10 @@ class TurboMind:
             engine
         model_source (int): the source of the model, which is either
             turbomind model, or a transformers model
+        model_params_que (queue.Queue | multiprocessing.queues.Queue): model parameters.
+            The first item should be list of all names of a model (state_dict().keys()),
+            the following item should be part of state_dict(), and the last item should
+            be None, indicating the end of the queue.
     """
 
     def __init__(self,
@@ -85,6 +90,7 @@ class TurboMind:
                  chat_template_name: str = None,
                  engine_config: TurbomindEngineConfig = None,
                  model_source: ModelSource = ModelSource.WORKSPACE,
+                 model_params_que: Optional[Union[Queue, MpQueue]] = None,
                  **kwargs):
         self.model_name = model_name
         self.chat_template_name = chat_template_name
@@ -107,7 +113,8 @@ class TurboMind:
                 model_path = get_model(model_path, _engine_config.download_dir, _engine_config.revision)
             self.model_comm = self._from_hf(model_source=model_source,
                                             model_path=model_path,
-                                            engine_config=_engine_config)
+                                            engine_config=_engine_config,
+                                            model_params_que=model_params_que)
 
         with ThreadPoolExecutor(max_workers=self.gpu_count) as e:
             ranks = [self.node_id * self.gpu_count + device_id for device_id in range(self.gpu_count)]
@@ -187,7 +194,11 @@ class TurboMind:
         logger.info(f'turbomind model config:\n\n'
                     f'{json.dumps(self.config_dict, indent=2)}')
 
-    def _from_hf(self, model_source: ModelSource, model_path: str, engine_config: TurbomindEngineConfig):
+    def _from_hf(self,
+                 model_source: ModelSource,
+                 model_path: str,
+                 engine_config: TurbomindEngineConfig,
+                 model_params_que: Optional[Union[Queue, MpQueue]] = None):
         """Load model which is in hf format."""
         assert model_source == ModelSource.HF_MODEL, \
             f'{model_source} is not supported'
@@ -197,10 +208,6 @@ class TurboMind:
         # convert transformers model into turbomind model
         from .deploy.converter import get_tm_model
         tm_model = get_tm_model(model_path, self.model_name, self.chat_template_name, engine_config)
-
-        # get model_params_que
-        model_params_que = engine_config.model_params_que
-        engine_config.model_params_que = None
 
         self._postprocess_config(tm_model.tm_config, engine_config)
 
