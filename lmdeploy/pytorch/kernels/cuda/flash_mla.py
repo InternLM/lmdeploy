@@ -29,6 +29,8 @@ def flash_mla_fwd(
     block_table: torch.Tensor,
     cache_seqlens: torch.Tensor,
     head_dim_v: int,
+    tile_scheduler_metadata: torch.Tensor,
+    num_splits: torch.Tensor,
     softmax_scale: Optional[float] = None,
     causal: bool = False,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -48,11 +50,6 @@ def flash_mla_fwd(
         out: (batch_size, num_heads_q, head_dim_v).
     """
     import flash_mla_cuda
-    batch_size, seq_len_q, num_heads_q, head_dim = q.shape
-    num_heads_k = k_cache.shape[-2]
-    tile_scheduler_metadata, num_splits = flash_mla_cuda.get_mla_metadata(cache_seqlens,
-                                                                          seq_len_q * num_heads_q // num_heads_k,
-                                                                          num_heads_k)
     if softmax_scale is None:
         softmax_scale = q.shape[-1]**(-0.5)
     out, softmax_lse = flash_mla_cuda.fwd_kvcache_mla(

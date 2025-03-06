@@ -22,6 +22,9 @@ class TritonAttentionMetadata(AttentionMetadata):
     fill_seqlens: torch.Tensor = None
     quant_policy: Literal[0, 4, 8] = 0
     kv_flatten_size: int = None
+    # flash mla
+    tile_scheduler_metadata: torch.Tensor = None
+    num_splits: torch.Tensor = None
 
 
 def _cdiv(a, b):
@@ -133,9 +136,6 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         if not self.alibi:
             if is_decoding:
                 if self.use_flash_mla:
-                    # init kv_seqlens and block_offsets with int32 in the future
-                    kv_seqlens = kv_seqlens.to(torch.int32)
-                    block_offsets = block_offsets.to(torch.int32)
                     query = query.unsqueeze(1)
                     attn_output = self.flash_mla_fwd(query,
                                                      k_cache=k_cache,
@@ -143,6 +143,8 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
                                                      cache_seqlens=kv_seqlens,
                                                      head_dim_v=self.v_head_size,
                                                      softmax_scale=self.scale,
+                                                     tile_scheduler_metadata=attn_metadata.tile_scheduler_metadata,
+                                                     num_splits=attn_metadata.num_splits,
                                                      causal=True)
                 else:
                     self.paged_attention_fwd(

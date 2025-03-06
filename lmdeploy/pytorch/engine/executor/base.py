@@ -102,6 +102,8 @@ class ExecutorBase:
     def _adjust_block_size(self):
         """adjust block_size."""
         if self.model_config.use_flash_mla is True:
+            if self.cache_config.block_size != 64:
+                raise ValueError('Please set block_size to 64 for flash_mla.')
             return
         # TODO: support kernel with both large head dim and large block size.
         if self.model_config.k_head_dim >= 512 and self.cache_config.block_size > 32:
