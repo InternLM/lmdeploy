@@ -121,7 +121,7 @@ class CudaGraphMixin:
             tile_scheduler_metadata, num_splits = flash_mla_cuda.get_mla_metadata(
                 attn_metadata.kv_seqlens.to(torch.int32), self.config.num_attention_heads, 1)
             # here we use copy_ instead of = since to avoid using new allocated mem for cuda graph
-            input_buffers['tile_scheduler_metadata'][:].copy_(tile_scheduler_metadata)
+            input_buffers['tile_scheduler_metadata'].copy_(tile_scheduler_metadata)
             input_buffers['num_splits'][:batch_size + 1].copy_(num_splits[:batch_size + 1])
             attn_metadata.tile_scheduler_metadata = input_buffers['tile_scheduler_metadata']
             attn_metadata.num_splits = input_buffers['num_splits']
