@@ -264,6 +264,7 @@ def generate_csv_from_profile_result(file_path: str, out_path: str):
             writer.writerow(['request_rate', 'completed', 'RPM', 'median_ttft_ms', 'output_throughput'])
             writer.writerows(data_csv)
 
+
 def generate_output_for_evaluation(result_dir: str):
     # find latest result
     latest_csv_file = find_csv_files(result_dir)
