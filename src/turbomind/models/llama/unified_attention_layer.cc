@@ -66,7 +66,7 @@ UnifiedAttentionLayer<T>::UnifiedAttentionLayer(
     streams_[0] = stream_;
     streams_[1] = aux_stream_;
 
-    init_inner_rope_param(param_.rope, rope_param_);
+    init_rope_kernel_param(param_.rope, rope_param_);
 
     allocateWorkspace();
 }
