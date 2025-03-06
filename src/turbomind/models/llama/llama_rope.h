@@ -83,7 +83,7 @@ struct InnerMultimodalRopeParam {
     int* length{};
 };
 
-struct InnerRopeParam {
+struct RopeKernelParam {
     RopeType type;
 
     float* base{};  // for dynamic ntk
@@ -96,7 +96,7 @@ struct InnerRopeParam {
     InnerMultimodalRopeParam multimodal;
 };
 
-inline void init_inner_rope_param(const RopeParam& rope, InnerRopeParam& inner_rope)
+inline void init_inner_rope_param(const RopeParam& rope, RopeKernelParam& inner_rope)
 {
     inner_rope.type         = rope.type;
     inner_rope.dim          = rope.dim;
