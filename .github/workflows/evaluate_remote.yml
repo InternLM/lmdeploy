@@ -43,7 +43,6 @@ env:
   HF_DATASETS_OFFLINE: 1
   HF_EVALUATE_OFFLINE: 1
   TRANSFORMERS_OFFLINE: 1
-  VLLM_USE_MODELSCOPE: false
   LMDEPLOY_USE_MODELSCOPE: false
   HF_HUB_OFFLINE: 1
   OUTPUT_FOLDER: cuda12.1_dist_${{ github.run_id }}
@@ -212,4 +211,4 @@ jobs:
             conda activate ${{env.CONDA_ENV}}
             conda info --envs
             opencompass .github/scripts/eval_regression_${{matrix.regression_func}}.py --work-dir ${{env.REPORT_ROOT}}/${{ github.run_id }}/${{matrix.regression_func}} --reuse --dump-eval-details
-            
+            python .github/scripts/action_tools.py generate_output_for_evaluation.py ${{env.REPORT_ROOT}}/${{ github.run_id }}/${{matrix.regression_func}}

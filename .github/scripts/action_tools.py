@@ -264,6 +264,28 @@ def generate_csv_from_profile_result(file_path: str, out_path: str):
             writer.writerow(['request_rate', 'completed', 'RPM', 'median_ttft_ms', 'output_throughput'])
             writer.writerows(data_csv)
 
+def generate_output_for_evaluation(result_dir: str):
+    # find latest result
+    latest_csv_file = find_csv_files(result_dir)
+    df = pd.read_csv(latest_csv_file)
+    transposed_df = df.T
+    transposed_df.to_csv('transposed_output.csv', index=False)
+    # output to github action summary
+    add_summary('transposed_output.csv')
+
+
+def find_csv_files(directory):
+    csv_files = []
+    for root, dirs, files in os.walk(directory):
+        for file in files:
+            if file.endswith('.csv') and file.startswith('summary'):
+                csv_files.append(os.path.join(root, file))
+
+    csv_files_with_time = {f: os.path.getctime(f) for f in csv_files}
+    sorted_csv_files = sorted(csv_files_with_time.items(), key=lambda x: x[1])
+    latest_csv_file = sorted_csv_files[-1][0]
+    return latest_csv_file
+
 
 if __name__ == '__main__':
     fire.Fire()
