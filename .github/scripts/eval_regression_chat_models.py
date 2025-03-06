@@ -131,8 +131,13 @@ for model in [v for k, v in locals().items() if k.startswith('lmdeploy_')]:
         model['backend'] = 'turbomind'
 
 for model in [v for k, v in locals().items() if k.startswith('pytorch_')]:
-    model['abbr'] = model['abbr'].replace('turbomind', 'pytorch').replace('lmdeploy', 'pytorch')
-    model['backend'] = 'pytorch'
+    if isinstance(model, list):
+        for m in model:
+            m['abbr'] = m['abbr'].replace('turbomind', 'pytorch').replace('lmdeploy', 'pytorch')
+            m['backend'] = 'pytorch'
+    else:
+        model['abbr'] = model['abbr'].replace('turbomind', 'pytorch').replace('lmdeploy', 'pytorch')
+        model['backend'] = 'pytorch'
 
 for model in [v for k, v in locals().items() if k.endswith('_native')]:
     model['abbr'] = model['abbr'] + '_nativa'
