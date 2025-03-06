@@ -1,4 +1,3 @@
-import os
 from copy import deepcopy
 
 from mmengine.config import read_base
@@ -91,12 +90,8 @@ for model in [v for k, v in locals().items() if k.startswith('pytorch_')]:
         model['abbr'] = model['abbr'].replace('turbomind', 'pytorch').replace('lmdeploy', 'pytorch')
         model['backend'] = 'pytorch'
 
-if os['TEST_BACKEND'] is not None or os['TEST_BACKEND'] == 'pytorch':
-    models = [v for k, v in locals().items() if k.startswith('pytorch_')]
-else:
-    models = [v for k, v in locals().items() if k.startswith('lmdeploy_')]
-
-models = sorted(models, key=lambda x: x['run_cfg']['num_gpus'])
+# models = [v for k, v in locals().items() if k.startswith('lmdeploy_')]
+# models = sorted(models, key=lambda x: x['run_cfg']['num_gpus'])
 
 summarizer = dict(
     dataset_abbrs=[
