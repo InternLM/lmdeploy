@@ -113,64 +113,6 @@ jobs:
           retention-days: 1
           name: my-artifact-${{ github.run_id }}-${{ matrix.pyver }}
 
-
-  prepare_env:
-    if: ${{!cancelled()}}
-    needs: ['build-pypi', 'build-pypi-lmdeploy']
-    runs-on: lmdeploy-volc
-    environment: 'prod'
-    timeout-minutes: 120 #2hours
-    steps:
-      - name: Clone repository
-        uses: actions/checkout@v2
-        with:
-          repository: ${{ github.event.inputs.repo_org || 'open-compass/opencompass' }}
-          ref: ${{github.event.inputs.repo_ref || 'main'}}
-      - name: Download Artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: my-artifact-${{ github.run_id }}
-      - name:  Remove Conda Env
-        if: always()
-        run: |
-          . /fs-computility/llm/qa-llm-cicd/miniconda3/bin/activate
-          conda env remove -y --name ${{env.CONDA_ENV}}
-          conda info --envs
-      - name: Prepare - create conda env and install torch - cu12
-        uses: nick-fields/retry@v3
-        with:
-          max_attempts: 1
-          timeout_minutes: 120
-          command: |
-            . ${{env.CONDA_PATH}}/bin/activate
-            conda create -y --name ${{env.CONDA_ENV}} python=3.10
-            conda activate ${{env.CONDA_ENV}}
-            pip install -r /fs-computility/llm/qa-llm-cicd/config/requirements.txt --cache-dir ${{env.PIP_CACHE_PATH}}
-            pip install opencompass*.whl --cache-dir ${{env.PIP_CACHE_PATH}}
-            pip install opencompass[lmdeploy] --cache-dir ${{env.PIP_CACHE_PATH}}
-            pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --cache-dir ${{env.PIP_CACHE_PATH}}
-            FLASH_ATTENTION_FORCE_BUILD=TRUE pip install /fs-computility/llm/qa-llm-cicd/packages/flash_attn-2.7.0.post2+cu12torch2.5cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
-            pip install xformers --index-url https://download.pytorch.org/whl/cu121 --cache-dir ${{env.PIP_CACHE_PATH}}
-            cp -r /root/nltk_data ${{env.CONDA_PATH}}/envs/${{env.CONDA_ENV}}/nltk_data
-      - name: Prepare - reinstall lmdeploy - cu12
-        if: ${{github.event_name == 'schedule' || inputs.build_lmdeploy}}
-        uses: actions/download-artifact@v4
-        with:
-          name: my-artifact-${{ github.run_id }}-py310
-      - name: Prepare - reinstall lmdeploy - cu12
-        if: ${{github.event_name == 'schedule' || inputs.build_lmdeploy}}
-        run: |
-          . ${{env.CONDA_PATH}}/bin/activate
-          conda activate ${{env.CONDA_ENV}}
-          pip uninstall -y lmdeploy
-          pip install lmdeploy-*.whl --no-deps
-      - name: conda env
-        run: |
-          . ${{env.CONDA_PATH}}/bin/activate
-          conda activate ${{env.CONDA_ENV}}
-          conda info --envs
-          pip list
-
   run_test_volc:
     if: ${{!cancelled()}}
     needs: prepare_env
