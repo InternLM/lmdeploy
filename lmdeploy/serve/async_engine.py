@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager, closing
 from copy import deepcopy
 from functools import partial
 from itertools import count
+from multiprocessing.queues import Queue as MpQueue
 from queue import Queue
 from threading import Thread
 from typing import Any, AsyncIterator, Dict, Iterator, List, Literal, Optional, Tuple, Union
@@ -244,6 +245,10 @@ class AsyncEngine(LogitsMixin):
             `turbomind` backend.
         backend_config (TurbomindEngineConfig | PytorchEngineConfig): beckend
             config instance. Default to none.
+        model_params_que (queue.Queue | multiprocessing.queues.Queue): model parameters.
+            The first item should be list of all names of a model (state_dict().keys()),
+            the following item should be part of state_dict(), and the last item should
+            be None, indicating the end of the queue.
         chat_template_config (ChatTemplateConfig): chat template configuration.
             Default to None.
         max_log_len (int): Max number of prompt characters or prompt tokens
@@ -255,6 +260,7 @@ class AsyncEngine(LogitsMixin):
                  model_name: Optional[str] = None,
                  backend: Literal['turbomind', 'pytorch'] = 'turbomind',
                  backend_config: Optional[Union[TurbomindEngineConfig, PytorchEngineConfig]] = None,
+                 model_params_que: Optional[Union[Queue, MpQueue]] = None,
                  chat_template_config: Optional[ChatTemplateConfig] = None,
                  max_log_len: int = None,
                  **kwargs) -> None:
@@ -275,6 +281,8 @@ class AsyncEngine(LogitsMixin):
         self.arch, _ = get_model_arch(model_path)
 
         # build backend engine
+        assert model_params_que is None or backend == 'turbomind', 'only support turbomind backend'
+        kwargs.update(model_params_que=model_params_que)
         if backend == 'turbomind':
             self._build_turbomind(model_path=model_path, backend_config=backend_config, **kwargs)
         elif backend == 'pytorch':
