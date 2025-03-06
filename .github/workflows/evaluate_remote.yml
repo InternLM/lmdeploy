@@ -202,11 +202,11 @@ jobs:
       - name:  modify config - models filter
         if: matrix.backend == 'turbomind'
         run: |
-          echo "models = [v for k, v in locals().items() if k.startswith('lmdeploy_')]" >> .github/scripts/eval_regression_${{matrix.regression_func}}.py
+          echo "models = sum([v for k, v in locals().items() if  k.startswith('lmdeploy_')], [])" >> .github/scripts/eval_regression_${{matrix.regression_func}}.py
       - name:  modify config - models filter
         if: matrix.backend == 'pytorch'
         run: |
-          echo "models = [v for k, v in locals().items() if k.startswith('pytorch_')]" >> .github/scripts/eval_regression_${{matrix.regression_func}}.py
+          echo "models = sum([v for k, v in locals().items() if  k.startswith('pytorch_')], [])" >> .github/scripts/eval_regression_${{matrix.regression_func}}.py
       - name:  Run test
         uses: nick-fields/retry@v3
         with:
