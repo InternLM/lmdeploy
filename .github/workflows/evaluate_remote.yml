@@ -149,7 +149,6 @@ jobs:
             pip install -r /fs-computility/llm/qa-llm-cicd/config/requirements.txt --cache-dir ${{env.PIP_CACHE_PATH}}
             pip install opencompass*.whl --cache-dir ${{env.PIP_CACHE_PATH}}
             pip install opencompass[lmdeploy] --cache-dir ${{env.PIP_CACHE_PATH}}
-            pip install opencompass[vllm] --cache-dir ${{env.PIP_CACHE_PATH}}
             pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --cache-dir ${{env.PIP_CACHE_PATH}}
             FLASH_ATTENTION_FORCE_BUILD=TRUE pip install /fs-computility/llm/qa-llm-cicd/packages/flash_attn-2.7.0.post2+cu12torch2.5cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
             pip install xformers --index-url https://download.pytorch.org/whl/cu121 --cache-dir ${{env.PIP_CACHE_PATH}}
@@ -187,11 +186,11 @@ jobs:
     env:
       TEST_BACKEND: ${{ matrix.backend }}
     steps:
-      - name: Clone repository
-        uses: actions/checkout@v2
+      - name: Checkout repository
+        uses: actions/checkout@v3
         with:
-          repository: ${{ github.event.inputs.repo_org || 'open-compass/opencompass' }}
-          ref: ${{github.event.inputs.repo_ref || 'main'}}
+          repository: ${{ github.event.inputs.repo_org_lmdeploy || 'InternLM/lmdeploy' }}
+          ref: ${{github.event.inputs.repo_ref_lmdeploy || 'main'}}
       - name: conda env
         run: |
           . ${{env.CONDA_PATH}}/bin/activate
