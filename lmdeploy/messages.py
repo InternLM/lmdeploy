@@ -249,6 +249,7 @@ class PytorchEngineConfig:
             models, and BF16 precision for BF16 models.
         tp (int): Tensor Parallelism. default 1.
         dp (int): Data Parallelism. default 1.
+        dp_rank (int): rank of dp.
         session_len (int): Max session length. Default None.
         max_batch_size (int): Max batch size. If it is not specified,
             the engine will automatically set it according to the device
@@ -287,6 +288,7 @@ class PytorchEngineConfig:
     dtype: str = 'auto'
     tp: int = 1
     dp: int = 1
+    dp_rank: int = 0
     session_len: int = None
     max_batch_size: int = None
     cache_max_entry_count: float = 0.8

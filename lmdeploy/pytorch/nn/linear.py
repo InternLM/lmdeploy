@@ -5,7 +5,8 @@ import torch
 from torch import nn
 
 import lmdeploy.pytorch.distributed as dist
-from lmdeploy.pytorch.distributed import get_tp_world_rank
+from lmdeploy.pytorch.distributed import get_dist_manager, get_dp_world_rank, get_tp_world_rank
+from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader
 from lmdeploy.utils import get_logger
 
@@ -27,6 +28,31 @@ def _check_qkv_split_layout(layout: str):
 _chunk_align = chunk_aligned
 
 
+def _is_dp_enabled():
+    """is dp."""
+    return get_dp_world_rank()[0] > 1
+
+
+def _gather_input(x: torch.Tensor, tp_sizes: List[int]):
+    """gather input."""
+    shape0 = x.shape[:-2]
+    shape1 = x.shape[-1:]
+    shapes = [shape0 + (size, ) + shape1 for size in tp_sizes]
+    new_x = [x.new_empty(shape) for shape in shapes]
+    dist.all_gather(new_x, x)
+    x = torch.cat(new_x, dim=-2)
+    return x
+
+
+def _reduce_scatter_input(out: torch.Tensor, tp_sizes: List[int]):
+    """reduce scatter."""
+    _, rank = get_tp_world_rank()
+    outs = out.split(tp_sizes, -2)
+    out = outs[rank]
+    dist.reduce_scatter(out, outs)
+    return out
+
+
 class QKVMixin:
     """qkv mixin."""
 
@@ -43,6 +69,9 @@ class QKVMixin:
 
     def _update_num_heads(self, num_q_heads: int, num_kv_heads: int):
         """update num heads."""
+        is_tp = getattr(self, 'is_tp', False)
+        if not is_tp:
+            return num_q_heads, num_kv_heads
         world_size, rank = get_tp_world_rank()
         num_q_heads = get_distribute_size(num_q_heads, world_size, rank)
         num_kv_heads = get_distribute_size(num_kv_heads, world_size, rank)
@@ -62,6 +91,14 @@ class QKVMixin:
         k = k.unflatten(-1, (num_kv_heads, head_size))
         v = v.unflatten(-1, (num_kv_heads, head_size_v))
         return q, k, v
+
+
+def _get_tp_world_rank(is_tp: bool):
+    """get tp world size."""
+    if is_tp:
+        return get_tp_world_rank()
+    else:
+        return 1, 0
 
 
 class LoRA(nn.Module):
@@ -164,6 +201,7 @@ class BlockedF8Linear(nn.Module):
         all_reduce: bool = True,
     ):
         super().__init__()
+        self.is_tp = is_tp
         if device is None:
             device = torch.device('cpu')
         if dtype is None:
@@ -226,7 +264,7 @@ class BlockedF8Linear(nn.Module):
         if not self.is_tp:
             return default_weight_loader(param, loaded_weight)
 
-        world_size, rank = get_tp_world_rank()
+        world_size, rank = _get_tp_world_rank(self.is_tp)
         if self.colwise:
             return self._weight_loader_tp_colwise(param, loaded_weight, rank, world_size)
         else:
@@ -290,6 +328,7 @@ class MergedBlockedF8Linear(BlockedF8Linear):
             replicate = tuple(False for _ in all_out_features)
         self.block_size = 128
         self.split_section = all_out_features
+        self.is_tp = is_tp
         self.scale_split_section = [section // self.block_size for section in self.split_section]
         all_out_features = self._update_all_out_features(all_out_features, replicate)
         self.all_out_features = all_out_features
@@ -314,7 +353,7 @@ class MergedBlockedF8Linear(BlockedF8Linear):
 
     def _update_all_out_features(self, all_out_features: List[int], replicate: Optional[List[bool]]):
         """update all out features."""
-        world_size, rank = get_tp_world_rank()
+        world_size, rank = _get_tp_world_rank(self.is_tp)
         new_all_out_features = []
         for out_feat, rep in zip(all_out_features, replicate):
             if rep:
@@ -325,7 +364,7 @@ class MergedBlockedF8Linear(BlockedF8Linear):
 
     def weight_loader(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, shard_id: Any):
         """weight loader."""
-        world_size, rank = get_tp_world_rank()
+        world_size, rank = _get_tp_world_rank(self.is_tp)
         shard_idx = self.out_names_map[shard_id]
         if loaded_weight.dim() == 2 and loaded_weight.dtype == torch.float32:
             all_out_features = [feats // self.block_size for feats in self.all_out_features]
@@ -362,6 +401,7 @@ class AwqLinear(nn.Module):
         all_reduce: bool = True,
     ):
         super().__init__()
+        self.is_tp = is_tp
         if device is None:
             device = torch.device('cpu')
         dtype = torch.float16
@@ -400,14 +440,13 @@ class AwqLinear(nn.Module):
         self.group_size = group_size
         self.elem_per_int = 32 // w_bit
         self.lora_adapters = nn.ModuleDict()
-        self.is_tp = is_tp
         self.colwise = colwise
         self.all_reduce = all_reduce
 
     def _get_io_features(self, in_features: int, out_features: int, w_bit: int, group_size: int, colwise: bool):
         """get io features."""
         align = max(32 // w_bit, group_size)
-        world_size, rank = get_tp_world_rank()
+        world_size, rank = _get_tp_world_rank(self.is_tp)
         if colwise:
             out_features = get_distribute_size(out_features, world_size, rank, align=align)
         else:
@@ -457,7 +496,7 @@ class AwqLinear(nn.Module):
         if not self.is_tp:
             return default_weight_loader(param, loaded_weight)
 
-        world_size, rank = get_tp_world_rank()
+        world_size, rank = _get_tp_world_rank(self.is_tp)
         if self.colwise:
             return self._weight_loader_tp_colwise(param, loaded_weight, rank, world_size)
         else:
@@ -532,6 +571,7 @@ class MergedAwqLinear(AwqLinear):
                  out_names: Optional[List[int]] = None):
 
         self.split_section_s = all_out_features
+        self.is_tp = is_tp
         elem_per_int = 32 // w_bit
         self.split_section_wz = [size // elem_per_int for size in all_out_features]
 
@@ -563,7 +603,7 @@ class MergedAwqLinear(AwqLinear):
 
     def _update_all_out_features(self, all_out_features: List[int], w_bit: int, group_size: int):
         """update all out features."""
-        world_size, rank = get_tp_world_rank()
+        world_size, rank = _get_tp_world_rank(self.is_tp)
         new_all_out_features = []
         align = max(32 // w_bit, group_size)
         for out_feat in all_out_features:
@@ -573,7 +613,7 @@ class MergedAwqLinear(AwqLinear):
 
     def weight_loader(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, shard_id: Any):
         """weight loader."""
-        world_size, rank = get_tp_world_rank()
+        world_size, rank = _get_tp_world_rank(self.is_tp)
         shard_idx = self.out_names_map[shard_id]
         if loaded_weight.dim() == 1:
             # bias
@@ -649,7 +689,7 @@ class QKVAwqLinear(MergedAwqLinear, QKVMixin):
 
     def weight_loader(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, shard_id: Any):
         """weight loader."""
-        world_size, rank = get_tp_world_rank()
+        world_size, rank = _get_tp_world_rank(self.is_tp)
         chunk_size, chunk_idx = world_size, rank
         shard_idx = self.out_names_map[shard_id]
 
@@ -731,6 +771,7 @@ class W8A8Linear(nn.Module):
                  all_reduce: bool = True,
                  quant_dtype: Optional[torch.dtype] = torch.int8):
         super().__init__()
+        self.is_tp = is_tp
         if device is None:
             device = torch.device('cpu')
         if dtype is None:
@@ -765,7 +806,7 @@ class W8A8Linear(nn.Module):
 
     def _get_io_features(self, in_features: int, out_features: int, colwise: bool):
         """get io features."""
-        world_size, rank = get_tp_world_rank()
+        world_size, rank = _get_tp_world_rank(self.is_tp)
         if colwise:
             out_features = get_distribute_size(out_features, world_size, rank)
         else:
@@ -799,7 +840,7 @@ class W8A8Linear(nn.Module):
         if not self.is_tp:
             return default_weight_loader(param, loaded_weight)
 
-        world_size, rank = get_tp_world_rank()
+        world_size, rank = _get_tp_world_rank(self.is_tp)
         if self.colwise:
             return self._weight_loader_tp_colwise(param, loaded_weight, rank, world_size)
         else:
@@ -857,6 +898,7 @@ class MergedW8A8Linear(W8A8Linear):
                  out_names: Optional[List[int]] = None,
                  quant_dtype: torch.dtype = torch.int8):
         self.split_section = all_out_features
+        self.is_tp = is_tp
         all_out_features = self._update_all_out_features(all_out_features)
         self.all_out_features = all_out_features
         if out_names is None:
@@ -886,7 +928,7 @@ class MergedW8A8Linear(W8A8Linear):
 
     def _update_all_out_features(self, all_out_features: List[int]):
         """update all out features."""
-        world_size, rank = get_tp_world_rank()
+        world_size, rank = _get_tp_world_rank(self.is_tp)
         new_all_out_features = []
         for out_feat in all_out_features:
             new_out_feat = get_distribute_size(out_feat, world_size, rank)
@@ -895,7 +937,7 @@ class MergedW8A8Linear(W8A8Linear):
 
     def weight_loader(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, shard_id: Any):
         """weight loader."""
-        world_size, rank = get_tp_world_rank()
+        world_size, rank = _get_tp_world_rank(self.is_tp)
         shard_idx = self.out_names_map[shard_id]
         param_w = param.data.split(self.all_out_features, 0)[shard_idx]
         loaded_weight = loaded_weight.chunk(world_size, 0)[rank]
@@ -925,6 +967,7 @@ class QKVW8A8Linear(MergedW8A8Linear, QKVMixin):
                  num_replicate_kv_heads: int = 1,
                  quant_dtype: torch.dtype = torch.int8):
 
+        self.is_tp = is_tp
         self.qkv_split_section = self._get_qkv_out_features(num_q_heads, num_kv_heads, head_size, head_size_v,
                                                             num_replicate_kv_heads)
         num_q_heads, num_kv_heads = self._update_num_heads(num_q_heads, num_kv_heads)
@@ -950,7 +993,7 @@ class QKVW8A8Linear(MergedW8A8Linear, QKVMixin):
 
     def weight_loader(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, shard_id: Any):
         """weight loader."""
-        _, rank = get_tp_world_rank()
+        _, rank = _get_tp_world_rank(self.is_tp)
         shard_idx = self.out_names_map[shard_id]
         param_w = param.data.split(self.all_out_features, 0)[shard_idx]
         num_head = self.num_q_heads if shard_id == 'q' \
@@ -1000,9 +1043,14 @@ class BaseLinear(nn.Module):
         is_tp: bool = False,
         all_reduce: bool = True,
         tp_align_size: int = 1,
+        dp_gather: bool = False,
+        dp_scatter: bool = False,
     ):
         super().__init__()
         self.tp_align_size = tp_align_size
+        self.is_tp = is_tp
+        self.dp_gather = dp_gather
+        self.dp_scatter = dp_scatter
         if device is None:
             device = torch.device('cpu')
         if dtype is None:
@@ -1023,13 +1071,12 @@ class BaseLinear(nn.Module):
         self.in_features = in_features
         self.out_features = out_features
         self.lora_adapters = nn.ModuleDict()
-        self.is_tp = is_tp
         self.colwise = colwise
         self.all_reduce = all_reduce
 
     def _get_io_features(self, in_features: int, out_features: int, colwise: bool):
         """get io features."""
-        world_size, rank = get_tp_world_rank()
+        world_size, rank = _get_tp_world_rank(self.is_tp)
         if colwise:
             out_features = get_distribute_size(out_features, world_size, rank, align=self.tp_align_size)
         else:
@@ -1060,7 +1107,7 @@ class BaseLinear(nn.Module):
         if not self.is_tp:
             return default_weight_loader(param, loaded_weight)
 
-        world_size, rank = get_tp_world_rank()
+        world_size, rank = _get_tp_world_rank(self.is_tp)
         if self.colwise:
             return self._weight_loader_tp_colwise(param, loaded_weight, rank, world_size)
         else:
@@ -1088,16 +1135,31 @@ class BaseLinear(nn.Module):
 
     def forward(self, x):
         """forward of linear layer."""
+        if self.dp_gather or self.dp_scatter:
+            step_ctx = get_step_ctx_manager().current_context()
+            dp_meta = step_ctx.dp_meta
+            tp_sizes = dp_meta.tp_sizes
+
+        if self.dp_gather:
+            x = _gather_input(x, tp_sizes)
+
         all_reduce = False if self.colwise else self.is_tp
         all_reduce = all_reduce and self.all_reduce
         if len(self.lora_adapters) == 0:
-            return self.impl.forward(x, self.weight, self.bias, all_reduce)
+            if self.dp_scatter:
+                _, rank = get_tp_world_rank()
+                return self.impl.forward(x, self.weight, self.bias, all_reduce, self.dp_scatter, rank, tp_sizes)
+            else:
+                return self.impl.forward(x, self.weight, self.bias, all_reduce)
 
         out = self.impl.forward(x, self.weight, self.bias, False)
         for lora_adapter in self.lora_adapters.values():
             out = lora_adapter(x, out)
         if all_reduce:
-            dist.all_reduce(out)
+            if self.dp_scatter:
+                out = _reduce_scatter_input(out, tp_sizes)
+            else:
+                dist.all_reduce(out)
         return out
 
 
@@ -1111,8 +1173,10 @@ class MergedBaseLinear(BaseLinear):
                  dtype: Optional[torch.dtype] = None,
                  device: Optional[torch.device] = None,
                  is_tp: bool = True,
-                 out_names: Optional[List[int]] = None):
+                 out_names: Optional[List[int]] = None,
+                 dp_gather: bool = False):
         self.split_section = all_out_features
+        self.is_tp = is_tp
         all_out_features = self._update_all_out_features(all_out_features)
         self.all_out_features = all_out_features
         if out_names is None:
@@ -1120,7 +1184,7 @@ class MergedBaseLinear(BaseLinear):
         assert len(out_names) == len(self.all_out_features)
         self.out_names_map = dict((name, idx) for idx, name in enumerate(out_names))
         out_features = sum(all_out_features)
-        super().__init__(in_features, out_features, bias, dtype, device, colwise=True, is_tp=is_tp)
+        super().__init__(in_features, out_features, bias, dtype, device, colwise=True, is_tp=is_tp, dp_gather=dp_gather)
         self.weight.weight_loader = self.weight_loader
         self.weight.weight_spliter = self.weight_spliter
         if self.bias is not None:
@@ -1133,7 +1197,7 @@ class MergedBaseLinear(BaseLinear):
 
     def _update_all_out_features(self, all_out_features: List[int]):
         """update all out features."""
-        world_size, rank = get_tp_world_rank()
+        world_size, rank = _get_tp_world_rank(self.is_tp)
         new_all_out_features = []
         for out_feat in all_out_features:
             new_out_feat = get_distribute_size(out_feat, world_size, rank)
@@ -1142,7 +1206,7 @@ class MergedBaseLinear(BaseLinear):
 
     def weight_loader(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, shard_id: Any):
         """weight loader."""
-        world_size, rank = get_tp_world_rank()
+        world_size, rank = _get_tp_world_rank(self.is_tp)
         shard_idx = self.out_names_map[shard_id]
         param_w = param.data.split(self.all_out_features, 0)[shard_idx]
         loaded_weight = loaded_weight.chunk(world_size, 0)[rank]
@@ -1170,6 +1234,7 @@ class QKVBaseLinear(MergedBaseLinear, QKVMixin):
                  device: Optional[torch.device] = None,
                  is_tp: bool = True,
                  num_replicate_kv_heads: int = 1):
+        self.is_tp = is_tp
 
         self.qkv_split_section = self._get_qkv_out_features(num_q_heads, num_kv_heads, head_size, head_size_v,
                                                             num_replicate_kv_heads)
@@ -1196,7 +1261,7 @@ class QKVBaseLinear(MergedBaseLinear, QKVMixin):
 
     def weight_loader(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, shard_id: Any):
         """weight loader."""
-        world_size, rank = get_tp_world_rank()
+        world_size, rank = _get_tp_world_rank(self.is_tp)
         chunk_size, chunk_idx = world_size, rank
         shard_idx = self.out_names_map[shard_id]
         param_w = param.data.split(self.all_out_features, 0)[shard_idx]
@@ -1241,10 +1306,16 @@ def build_linear(in_features: int,
                  is_tp: bool = False,
                  quant_config: Any = None,
                  all_reduce: bool = True,
-                 tp_align_size: int = 1) -> nn.Module:
+                 tp_align_size: int = 1,
+                 dp_scatter: bool = False) -> nn.Module:
     """build linear."""
     if is_tp:
         is_tp = get_tp_world_rank()[0] > 1
+    if not is_tp:
+        all_reduce = False
+
+    if dp_scatter:
+        assert quant_config is None, ('Do not support DP+Quant')
 
     if quant_config is None:
         return BaseLinear(
@@ -1257,6 +1328,7 @@ def build_linear(in_features: int,
             is_tp=is_tp,
             all_reduce=all_reduce,
             tp_align_size=tp_align_size,
+            dp_scatter=dp_scatter,
         )
 
     quant_method = quant_config['quant_method']
@@ -1340,18 +1412,22 @@ def build_rowwise_linear(in_features: int,
                          is_tp: bool = False,
                          tp_align_size: int = 1,
                          quant_config: Any = None,
-                         all_reduce: bool = True) -> nn.Module:
+                         all_reduce: bool = True,
+                         dp_scatter: bool = False) -> nn.Module:
     """build rowwise parallel linear layer."""
-    return build_linear(in_features=in_features,
-                        out_features=out_features,
-                        bias=bias,
-                        dtype=dtype,
-                        device=device,
-                        colwise=False,
-                        is_tp=is_tp,
-                        quant_config=quant_config,
-                        all_reduce=all_reduce,
-                        tp_align_size=tp_align_size)
+    return build_linear(
+        in_features=in_features,
+        out_features=out_features,
+        bias=bias,
+        dtype=dtype,
+        device=device,
+        colwise=False,
+        is_tp=is_tp,
+        quant_config=quant_config,
+        all_reduce=all_reduce,
+        tp_align_size=tp_align_size,
+        dp_scatter=dp_scatter,
+    )
 
 
 def build_merged_colwise_linear(
@@ -1363,21 +1439,24 @@ def build_merged_colwise_linear(
     quant_config: Any = None,
     is_tp: bool = True,
     out_names: List[Any] = None,
+    dp_gather: bool = False,
 ):
     """merge linear."""
     if is_tp:
         is_tp = get_tp_world_rank()[0] > 1
 
+    if dp_gather:
+        assert quant_config is None, ('Do not support Quant + DP for now.')
+
     if quant_config is None:
-        return MergedBaseLinear(
-            in_features=in_features,
-            all_out_features=all_out_features,
-            bias=bias,
-            dtype=dtype,
-            device=device,
-            is_tp=is_tp,
-            out_names=out_names,
-        )
+        return MergedBaseLinear(in_features=in_features,
+                                all_out_features=all_out_features,
+                                bias=bias,
+                                dtype=dtype,
+                                device=device,
+                                is_tp=is_tp,
+                                out_names=out_names,
+                                dp_gather=dp_gather)
 
     quant_method = quant_config['quant_method']
     quant_dtype = torch.int8
@@ -1440,7 +1519,15 @@ def build_qkv_proj(in_features: int,
                    num_replicate_kv_heads: int = 1):
     """build qkv proj."""
     if is_tp:
-        is_tp = get_tp_world_rank()[0] > 1
+        dist_ctx = get_dist_manager().current_context()
+        dp = dist_ctx.dp
+        tp = dist_ctx.tp
+        if dp > 1:
+            # disable tp when dp > 1
+            is_tp = False
+        elif tp <= 1:
+            # disable tp when tp == 1
+            is_tp = False
 
     if head_size_v is None:
         head_size_v = head_size
@@ -1490,3 +1577,105 @@ def build_qkv_proj(in_features: int,
                              quant_dtype=quant_dtype)
     else:
         raise RuntimeError(f'Unsupported quant method: {quant_method}')
+
+
+def build_o_proj(in_features: int,
+                 out_features: int,
+                 bias: bool,
+                 dtype: Optional[torch.dtype] = None,
+                 device: Optional[torch.device] = None,
+                 is_tp: bool = False,
+                 tp_align_size: int = 1,
+                 quant_config: Any = None,
+                 all_reduce: bool = True) -> nn.Module:
+    """build down linear."""
+    if is_tp:
+        dist_ctx = get_dist_manager().current_context()
+        dp = dist_ctx.dp
+        tp = dist_ctx.tp
+        if dp > 1:
+            # disable tp when dp > 1
+            is_tp = False
+            all_reduce = False
+        elif tp <= 1:
+            # disable tp when tp == 1
+            is_tp = False
+            all_reduce = False
+
+    return build_rowwise_linear(
+        in_features=in_features,
+        out_features=out_features,
+        bias=bias,
+        dtype=dtype,
+        device=device,
+        is_tp=is_tp,
+        tp_align_size=tp_align_size,
+        quant_config=quant_config,
+        all_reduce=all_reduce,
+    )
+
+
+def build_gateup_linear(in_features: int,
+                        all_out_features: List[int],
+                        bias: bool,
+                        dtype: Optional[torch.dtype] = None,
+                        device: Optional[torch.device] = None,
+                        quant_config: Any = None,
+                        is_tp: bool = True,
+                        out_names: List[Any] = None,
+                        dp_gather: bool = True):
+    """build gate up linear."""
+    if is_tp:
+        is_tp = get_tp_world_rank()[0] > 1
+    if dp_gather:
+        if not _is_dp_enabled():
+            # disable if not dp
+            dp_gather = False
+        if not is_tp:
+            dp_gather = False
+
+    return build_merged_colwise_linear(
+        in_features=in_features,
+        all_out_features=all_out_features,
+        bias=bias,
+        dtype=dtype,
+        device=device,
+        quant_config=quant_config,
+        is_tp=is_tp,
+        out_names=out_names,
+        dp_gather=dp_gather,
+    )
+
+
+def build_down_linear(in_features: int,
+                      out_features: int,
+                      bias: bool,
+                      dtype: Optional[torch.dtype] = None,
+                      device: Optional[torch.device] = None,
+                      is_tp: bool = False,
+                      tp_align_size: int = 1,
+                      quant_config: Any = None,
+                      all_reduce: bool = True,
+                      dp_scatter: bool = True) -> nn.Module:
+    """build down linear."""
+    if is_tp:
+        is_tp = get_tp_world_rank()[0] > 1
+    if dp_scatter:
+        if not _is_dp_enabled():
+            # disable if not dp
+            dp_scatter = False
+        if not is_tp:
+            dp_scatter = False
+
+    return build_rowwise_linear(
+        in_features=in_features,
+        out_features=out_features,
+        bias=bias,
+        dtype=dtype,
+        device=device,
+        is_tp=is_tp,
+        tp_align_size=tp_align_size,
+        quant_config=quant_config,
+        all_reduce=all_reduce,
+        dp_scatter=dp_scatter,
+    )

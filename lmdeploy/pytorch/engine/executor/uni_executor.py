@@ -2,7 +2,7 @@
 import asyncio
 from typing import Any, Dict
 
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, ModelConfig
 from lmdeploy.pytorch.devices import DeviceContext
 from lmdeploy.pytorch.engine.model_agent import build_model_agent
 from lmdeploy.utils import get_logger
@@ -28,9 +28,8 @@ class UniExecutor(ExecutorBase):
                          model_config=model_config,
                          cache_config=cache_config,
                          backend_config=backend_config,
+                         dist_config=DistConfig(),
                          tokenizer=tokenizer,
-                         dp=1,
-                         tp=1,
                          adapters=adapters,
                          device_type=device_type)
 
@@ -86,10 +85,8 @@ class UniExecutor(ExecutorBase):
         """release resources."""
         self.model_agent.release()
 
-    async def forward_async(self, inputs, dp_ranks=None):
+    async def forward_async(self, inputs):
         """start forward."""
-        if dp_ranks is not None:
-            assert len(dp_ranks) == 1 and dp_ranks[0] == 0
         self.model_agent.set_forward_inputs(inputs)
 
     async def get_output_async(self, dp_rank: int = 0):

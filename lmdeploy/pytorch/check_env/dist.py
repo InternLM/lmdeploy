@@ -1,5 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+from lmdeploy.pytorch.config import DistConfig
+
 from .base import BaseChecker
 
 
@@ -10,7 +12,8 @@ class DistChecker(BaseChecker):
         super().__init__(logger)
         self.tp = tp
         self.dp = dp
-        self.world_size = tp * dp
+        self.dist_config = DistConfig(dp=dp, tp=tp)
+        self.world_size = self.dist_config.world_size
         self.distributed_executor_backend = distributed_executor_backend
         self.device_type = device_type
 

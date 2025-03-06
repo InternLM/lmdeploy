@@ -2,7 +2,7 @@
 import asyncio
 from typing import Any, Dict
 
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, ModelConfig
 from lmdeploy.pytorch.devices import DeviceContext
 from lmdeploy.pytorch.distributed import DistContext
 from lmdeploy.pytorch.engine.model_agent import build_model_agent
@@ -22,8 +22,7 @@ class WorkerWrapperBase:
         cache_config: CacheConfig,
         backend_config: BackendConfig,
         model_config: ModelConfig,
-        dp: int,
-        tp: int,
+        dist_config: DistConfig,
         adapters: Dict[str, str] = None,
         device_type: str = 'cuda',
         tokenizer: Any = None,
@@ -33,13 +32,14 @@ class WorkerWrapperBase:
         self.model_config = model_config
         self.cache_config = cache_config
         self.backend_config = backend_config
+        self.dist_config = dist_config
         self.tokenizer = tokenizer
         self.adapters = adapters
         self.device_type = device_type
         self.log_level = log_level
-        self.dp = dp
-        self.tp = tp
-        self.world_size = tp * dp
+        self.dp = dist_config.dp
+        self.tp = dist_config.tp
+        self.world_size = dist_config.world_size
         self.device_type = device_type
 
         logger.setLevel(log_level)
@@ -54,7 +54,7 @@ class WorkerWrapperBase:
                 setup_master_addr(master_addr, master_port)
 
             init_process_group(rank, self.world_size)
-        self.dist_ctx = DistContext.build(self.rank, self.tp, self.dp)
+        self.dist_ctx = DistContext.build(rank, self.dist_config)
 
     def pack_output(self, output: Dict):
         """pack output."""
@@ -134,6 +134,15 @@ class WorkerWrapperBase:
         self.model_agent.stop()
         if self._output_loop is not None:
             self._output_loop.cancel()
+
+    async def stop_async(self):
+        await self.model_agent.stop_async()
+        if self._output_loop is not None:
+            self._output_loop.cancel()
+            try:
+                await self._output_loop
+            except asyncio.CancelledError:
+                logger.debug('worker output loop cancelled.')
 
     async def forward_async(self, inputs):
         """start forward."""

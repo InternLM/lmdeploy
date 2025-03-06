@@ -14,7 +14,7 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, ModelConfig
 from lmdeploy.utils import get_logger
 
 from .base import ExecutorBase
@@ -221,9 +221,8 @@ class MPExecutor(ExecutorBase):
                  model_config: ModelConfig,
                  cache_config: CacheConfig,
                  backend_config: BackendConfig,
+                 dist_config: DistConfig,
                  tokenizer: Any,
-                 dp: int,
-                 tp: int,
                  adapters: Dict[str, str] = None,
                  device_type: str = 'cuda'):
         """initialize Executor."""
@@ -232,14 +231,12 @@ class MPExecutor(ExecutorBase):
                          cache_config=cache_config,
                          backend_config=backend_config,
                          tokenizer=tokenizer,
-                         dp=dp,
-                         tp=tp,
+                         dist_config=dist_config,
                          adapters=adapters,
                          device_type=device_type)
 
         # initialize processes.
         self.setup_master_addr()
-        self.world_size = tp * dp
         mp_ctx = mp.get_context('spawn')
         self.mp_ctx = mp_ctx
         self.comm_notifier = Notifier(self.world_size, mp_ctx)
@@ -264,9 +261,8 @@ class MPExecutor(ExecutorBase):
                        model_config=model_config,
                        cache_config=cache_config,
                        backend_config=backend_config,
+                       dist_config=dist_config,
                        tokenizer=tokenizer,
-                       dp=dp,
-                       tp=tp,
                        adapters=adapters,
                        device_type=device_type,
                        log_level=logger.level)
@@ -387,15 +383,12 @@ class MPExecutor(ExecutorBase):
         event_loop = asyncio.get_event_loop()
         self._prefetch_task = event_loop.create_task(self._prefetch_outputs())
 
-    async def forward_async(self, inputs, dp_ranks=None):
+    async def forward_async(self, inputs):
         """start forward."""
-        if dp_ranks is not None:
-            assert len(dp_ranks) == 1 and dp_ranks[0] == 0
         await self.collective_rpc_async('forward_async', args=(inputs, ), return_mask=0)
 
-    async def get_output_async(self, dp_rank: int = 0):
+    async def get_output_async(self):
         """get output async."""
-        assert dp_rank == 0
         return await self.remote_outs.get()
 
     def get_input_processor(self):
@@ -429,8 +422,7 @@ class MPWorkerWrapper(WorkerWrapperBase):
         cache_config: CacheConfig,
         backend_config: BackendConfig,
         model_config: ModelConfig,
-        dp: int,
-        tp: int,
+        dist_config: DistConfig,
         adapters: Dict[str, str] = None,
         device_type: str = 'cuda',
         tokenizer: Any = None,
@@ -441,8 +433,7 @@ class MPWorkerWrapper(WorkerWrapperBase):
             cache_config=cache_config,
             backend_config=backend_config,
             model_config=model_config,
-            dp=dp,
-            tp=tp,
+            dist_config=dist_config,
             adapters=adapters,
             device_type=device_type,
             tokenizer=tokenizer,
@@ -492,9 +483,8 @@ class ExecutorProc:
         model_config: ModelConfig,
         cache_config: CacheConfig,
         backend_config: BackendConfig,
+        dist_config: DistConfig,
         tokenizer: Any,
-        dp: int,
-        tp: int,
         adapters: Dict[str, str] = None,
         device_type: str = 'cuda',
         log_level: int = 30,
@@ -513,8 +503,7 @@ class ExecutorProc:
                                  cache_config=cache_config,
                                  backend_config=backend_config,
                                  model_config=model_config,
-                                 dp=dp,
-                                 tp=tp,
+                                 dist_config=dist_config,
                                  adapters=adapters,
                                  device_type=device_type,
                                  tokenizer=tokenizer,

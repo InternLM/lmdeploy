@@ -13,7 +13,7 @@ from ..backends import get_backend
 from ..config import BackendConfig, CacheConfig, ModelConfig
 from ..devices import DeviceContext, get_device_manager
 from ..distributed import DistContext, get_dist_manager
-from ..model_inputs import ModelInputs
+from ..model_inputs import ModelInputs, step_ctx_manager
 from ..models.patch import add_adapters, build_patched_model, update_custom_module_map
 from ..utils import get_gpu_memory
 from ..weight_loader.model_weight_loader import load_model_weights
@@ -47,18 +47,16 @@ def model_forward(
     model: torch.nn.Module,
     inputs: ModelInputs,
     cache_engine: CacheEngine,
-    world_size: int = 1,
     stream: torch.cuda.Stream = None,
 ):
     """perform model forward."""
     stream = stream or torch.cuda.current_stream()
-    with torch.cuda.stream(stream):
+    with torch.cuda.stream(stream), step_ctx_manager(model.ctx_mgr):
         # forward
         ctx_mgr = model.ctx_mgr
         context = ctx_mgr.build_context(
             inputs=inputs,
             model_config=cache_engine.model_config,
-            world_size=world_size,
             kv_caches=cache_engine.gpu_cache,
             kv_quant_policy=cache_engine.cache_config.quant_policy,
         )
@@ -252,9 +250,13 @@ class AutoModelAgent:
 
         async def __long_context_single_forward(new_inputs, max_seqlen: int):
             """one large sequence."""
+            dist_ctx = get_dist_manager().current_context()
+            dp = dist_ctx.dp
             model_metas = new_inputs[0].model_metas
             output_gather = _OutputGather(max_seqlen)
             for inp in new_inputs:
+                if dp > 1:
+                    inp.build_dp_meta()
                 inp.model_metas = model_metas
                 tmp_out = await __forward(inp)
                 model_metas = tmp_out.get('model_metas')
@@ -374,6 +376,12 @@ class AutoModelAgent:
         dist_ctx = get_dist_manager().current_context()
         rank = dist_ctx.rank
         tp = dist_ctx.tp
+        dp = dist_ctx.dp
+
+        if dp > 1 and not sync_long_context:
+            inputs.build_dp_meta()
+
+        need_output = dp > 1 or rank % tp == 0
 
         for idx in range(loop_count):
             # inference
@@ -388,9 +396,11 @@ class AutoModelAgent:
             logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
 
             if is_dummy:
+                self._out_que.put_nowait(None)
                 continue
 
-            if rank % tp == 0:
+            need_broadcast_next = (dp == 1 and tp > 1 and idx < loop_count - 1)
+            if need_output:
                 # sampling
                 next_token_ids = await self.async_sampling_logits(logits, all_ids, guided_input_ids, sampling_inputs,
                                                                   inputs, num_ignore_eos > 0)
@@ -403,13 +413,13 @@ class AutoModelAgent:
                 next_token_ids = torch.empty_like(num_ignore_eos)
                 stopped = None
 
-            if tp > 1 and idx < loop_count - 1:
+            if need_broadcast_next:
                 tp_gpu_group = dist_ctx.tp_gpu_group
                 dist.broadcast(next_token_ids, src=rank // tp * tp, group=tp_gpu_group)
 
             # send output
             model_metas = output.get('model_metas')
-            if rank % tp == 0:
+            if need_output:
                 event = torch.cuda.Event()
                 event.record()
                 output = dict(next_token_ids=next_token_ids,
@@ -472,6 +482,15 @@ class AutoModelAgent:
             if not self._background_task.done():
                 self._background_task.cancel()
 
+    async def stop_async(self):
+        if self._background_task is not None:
+            if not self._background_task.done():
+                self._background_task.cancel()
+                try:
+                    await self._background_task
+                except asyncio.CancelledError:
+                    logger.debug('ModelAgent background task cancelled.')
+
     def set_forward_inputs(self, inputs):
         """set forward inputs."""
         assert self._in_que is not None, ('Please start backendground task before forward.')
@@ -481,6 +500,9 @@ class AutoModelAgent:
         """async get output."""
         assert self._out_que is not None, ('Please start backendground task before forward.')
         out = await self._out_que.get()
+        if out is None:
+            return dict()
+
         event = out.pop('event')
         while not event.query():
             await asyncio.sleep(0.001)
@@ -575,7 +597,11 @@ class BaseModelAgent(AutoModelAgent):
     def build_cache_engine(self):
         """build cache engine."""
         with self.all_context():
-            self.cache_engine = CacheEngine(self.cache_config, self.model_config, self.tp_rank, world_size=self.tp)
+            dist_ctx = self.dist_ctx
+            attn_dist_cfg = dist_ctx.dist_config.attn_config
+            tp = attn_dist_cfg.tp
+
+            self.cache_engine = CacheEngine(self.cache_config, self.model_config, world_size=tp)
 
     def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
         cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
@@ -583,7 +609,6 @@ class BaseModelAgent(AutoModelAgent):
             self.patched_model,
             inputs,
             self.cache_engine,
-            world_size=1,
             stream=self.stream,
         )
         return output

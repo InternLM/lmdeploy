@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import os
 import time
 from typing import Any, Dict, List, Tuple
 
@@ -10,13 +11,13 @@ import torch
 from ray.util.placement_group import PlacementGroup
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, ModelConfig
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.utils import get_logger
 
 from .base import ExecutorBase
 from .base_worker import WorkerWrapperBase
-from .dist_utils import find_available_port, setup_master_addr
+from .dist_utils import find_available_port
 
 logger = get_logger('lmdeploy')
 
@@ -107,9 +108,19 @@ def init_ray_cluster(world_size: int, ray_address: str = None):
 
 
 def _get_master_addr():
+    """get master addr."""
+    if 'MASTER_ADDR' in os.environ:
+        return os.environ['MASTER_ADDR']
     gcs_addr = ray.get_runtime_context().gcs_address
     master_addr = gcs_addr.split(':')[0]
     return master_addr
+
+
+def _get_master_port():
+    """get master port."""
+    if 'MASTER_PORT' in os.environ:
+        return os.environ['MASTER_PORT']
+    return find_available_port()
 
 
 class RayWorkerWrapper(WorkerWrapperBase):
@@ -120,8 +131,7 @@ class RayWorkerWrapper(WorkerWrapperBase):
         model_path: str,
         cache_config: CacheConfig,
         backend_config: BackendConfig,
-        dp: int,
-        tp: int,
+        dist_config: DistConfig,
         adapters: Dict[str, str] = None,
         device_type: str = 'cuda',
         dtype: str = 'auto',
@@ -129,14 +139,13 @@ class RayWorkerWrapper(WorkerWrapperBase):
     ):
         from lmdeploy.tokenizer import Tokenizer
         tokenizer = Tokenizer(model_path).model.model
-        model_config = ModelConfig.from_pretrained(model_path, dtype=dtype, tp=tp)
+        model_config = ModelConfig.from_pretrained(model_path, dtype=dtype, dist_config=dist_config)
         super().__init__(
             model_path=model_path,
             cache_config=cache_config,
             backend_config=backend_config,
             model_config=model_config,
-            dp=dp,
-            tp=tp,
+            dist_config=dist_config,
             adapters=adapters,
             device_type=device_type,
             tokenizer=tokenizer,
@@ -179,9 +188,8 @@ class RayExecutor(ExecutorBase):
                  model_config: ModelConfig,
                  cache_config: CacheConfig,
                  backend_config: BackendConfig,
+                 dist_config: DistConfig,
                  tokenizer: Any,
-                 dp: int,
-                 tp: int,
                  adapters: Dict[str, str] = None,
                  device_type: str = 'cuda',
                  dtype: str = 'auto'):
@@ -190,29 +198,30 @@ class RayExecutor(ExecutorBase):
                          model_config=model_config,
                          cache_config=cache_config,
                          backend_config=backend_config,
+                         dist_config=dist_config,
                          tokenizer=tokenizer,
-                         dp=dp,
-                         tp=tp,
                          adapters=adapters,
                          device_type=device_type)
 
-        self.world_size = tp * dp
+        self.dp_rank = dist_config.dp_rank
         device_ctx = DeviceContext(device_type)
         with get_device_manager().context(device_ctx):
             logger.info('Init ray cluster.')
-            placement_group = init_ray_cluster(self.world_size)
+            ray_world_size = self.world_size
+            if self.dp > 1:
+                ray_world_size = 1
+            placement_group = init_ray_cluster(ray_world_size)
         self.placement_group = placement_group
         self.master_addr = _get_master_addr()
-        self.master_port = find_available_port()
-        setup_master_addr(self.master_addr, self.master_port)
+        self.master_port = _get_master_port()
+        # setup_master_addr(self.master_addr, self.master_port)
 
         # create workerwrapper actors
         worker_kwargs = dict(
             model_path=model_path,
             cache_config=cache_config,
             backend_config=backend_config,
-            dp=dp,
-            tp=tp,
+            dist_config=dist_config,
             adapters=adapters,
             device_type=device_type,
             dtype=dtype,
@@ -221,24 +230,20 @@ class RayExecutor(ExecutorBase):
 
         logger.info('Init ray workers.')
         self.workers = self._init_workers_ray(placement_group, worker_kwargs)
-
-        self.workers_by_dp: List[List[RayWorkerWrapper]] = []
-        for dp_rank in range(dp):
-            start_id = dp_rank * tp
-            end_id = start_id + tp
-            self.workers_by_dp.append(self.workers[start_id:end_id])
-
-        self.dags = dict()
-        self._prefetch_tasks: List[asyncio.Task] = None
-        self.remote_outs: List[asyncio.Queue] = []
+        self.dag = None
+        self._prefetch_task: asyncio.Task = None
+        self.remote_outs: asyncio.Queue = None
 
         logger.info('Init distributed process group.')
-        ray.get([
-            worker.init_process_group.remote(rank, self.master_addr, self.master_port)
-            for rank, worker in enumerate(self.workers)
-        ])
+        if self.dp == 1:
+            ray.get([
+                worker.init_process_group.remote(rank, self.master_addr, self.master_port)
+                for rank, worker in enumerate(self.workers)
+            ])
+        else:
+            ray.get(self.workers[0].init_process_group.remote(self.dp_rank, self.master_addr, self.master_port))
 
-        if self.tp > 1:
+        if self.dist_config.world_size > 1:
             logger.info('Warming up distribute environment, this might take long time, please waiting...')
             ray.get([worker.warmup_dist.remote() for worker in self.workers])
 
@@ -282,18 +287,15 @@ class RayExecutor(ExecutorBase):
         """build cache engine."""
         return ray.get(self.workers[0].get_input_processor.remote())
 
-    async def _prefetch_outputs(self, dp_rank: int):
-        """prefetch outputs."""
-        worker = self.workers_by_dp[dp_rank][0]
-        que = self.remote_outs[dp_rank]
+    async def _prefetch_outputs(self):
         while True:
-            outs = await worker.get_outputs.remote()
+            outs = await self.workers[0].get_outputs.remote()
             for out in outs:
                 # pack pytorch
                 for k, v in out.items():
                     if isinstance(v, np.ndarray):
                         out[k] = torch.from_numpy(v)
-                que.put_nowait(out)
+                self.remote_outs.put_nowait(out)
 
     def _prefetch_task_callback(self, task: asyncio.Task):
         try:
@@ -308,16 +310,15 @@ class RayExecutor(ExecutorBase):
         self.forward_event = forward_event
         self.collective_rpc('start')
 
-        self.remote_outs = [asyncio.Queue() for _ in range(self.dp)]
+        self.remote_outs = asyncio.Queue()
         event_loop = asyncio.get_event_loop()
-        self._prefetch_tasks = [event_loop.create_task(self._prefetch_outputs(dp_rank)) for dp_rank in range(self.dp)]
+        self._prefetch_task = event_loop.create_task(self._prefetch_outputs())
 
     def stop(self):
         """stop engine loop."""
-        self.collective_rpc('stop')
-        if self._prefetch_tasks is not None:
-            for task in self._prefetch_tasks:
-                task.cancel()
+        self.collective_rpc('stop_async')
+        if self._prefetch_task is not None:
+            self._prefetch_task.cancel()
 
     def release(self):
         """release."""
@@ -326,53 +327,32 @@ class RayExecutor(ExecutorBase):
             self.collective_rpc('exit')
         except ray.exceptions.RayActorError as e:
             logger.debug(f'ray actor exit: {e}')
-        # for worker in self.workers:
-        #     ray.kill(worker)
-        # # sleep to prevent crash
-        # import time
-        # time.sleep(1)
+
         ray.util.remove_placement_group(self.placement_group)
 
-    def _compile_dag(self, dp_ranks: List[int]):
+    def _compile_dag(self):
         """compile dag."""
         from ray.dag.input_node import InputNode
         from ray.dag.output_node import MultiOutputNode
-
-        outputs = []
         with InputNode() as input_data:
-            if len(dp_ranks) == 1:
-                workers = self.workers_by_dp[dp_ranks[0]]
-                outputs += [worker.forward_async.bind(input_data) for worker in workers]
-            else:
-                for idx, dp_rank in enumerate(dp_ranks):
-                    workers = self.workers_by_dp[dp_rank]
-                    outputs += [worker.forward_async.bind(input_data[idx]) for worker in workers]
-        output = MultiOutputNode(outputs)
+            outputs = [worker.forward_async.bind(input_data) for worker in self.workers]
+            output = MultiOutputNode(outputs)
 
         return output
 
-    async def forward_async(self, inputs, dp_ranks=None):
+    async def forward_async(self, inputs):
         """start forward."""
-        if dp_ranks is None:
-            dp_ranks = (0, )
-        dp_ranks = tuple(sorted(dp_ranks))
         # we don't need return of forward async
-        if dp_ranks not in self.dags:
-            dag = self._compile_dag(dp_ranks)
-            self.dags[dp_ranks] = dag
-        dag = self.dags[dp_ranks]
+        if self.dag is None:
+            self.dag = self._compile_dag()
+        inputs = ray.put(inputs)
+        self.dag.execute(inputs)
 
-        if len(dp_ranks) == 1 and not isinstance(inputs, List):
-            dag.execute(inputs)
-        else:
-            dag.execute(*inputs)
-
-    async def get_output_async(self, dp_rank: int = 0):
+    async def get_output_async(self):
         """get output async."""
-        que = self.remote_outs[dp_rank]
-        if que.qsize() > 0:
-            return que.get_nowait()
-        return await que.get()
+        if self.remote_outs.qsize() > 0:
+            return self.remote_outs.get_nowait()
+        return await self.remote_outs.get()
 
     def _sort_workers(self, driver_ip: str, workers: List[RayWorkerWrapper]):
         """sort workers by ip."""

@@ -7,6 +7,8 @@ from typing import List
 from torch import distributed as dist
 from torch.distributed import ReduceOp
 
+from .config import DistConfig
+
 
 @dataclass
 class DistContext:
@@ -22,41 +24,50 @@ class DistContext:
     tp_gpu_groups: List[dist.ProcessGroup] = None
     dp_cpu_group: dist.ProcessGroup = None
     dp_gpu_group: dist.ProcessGroup = None
+    dist_config: DistConfig = None
 
     @classmethod
-    def get_world_size(cls, tp: int, dp: int):
-        return tp * dp
-
-    @classmethod
-    def build(cls, rank: int = 0, tp: int = 1, dp: int = 1):
+    def build(cls, rank: int = 0, dist_config: DistConfig = None):
         """build dist context."""
         from datetime import timedelta
         gpu_backend = 'nccl'
+        cpu_backend = 'gloo'
         timeout = timedelta(days=35600)
 
-        world_size = cls.get_world_size(tp, dp)
+        if dist_config is None:
+            dist_config = DistConfig()
+        tp = dist_config.tp
+        dp = dist_config.dp
+        world_size = dist_config.world_size
+        dp_rank = dist_config.dp_rank
+
         if world_size == 1:
-            return DistContext()
+            return DistContext(dist_config=dist_config)
 
         assert dist.is_initialized()
         # world(assume world group is gloo)
         world_cpu_group = dist.GroupMember.WORLD
 
         tp_rank = rank % tp
-        dp_rank = rank // tp
 
         # tp
         tp_gpu_group = None
         tp_gpu_groups = None
+        tp_cpu_group = None
+        tp_group_id = dp_rank // tp
         if tp > 1:
             # all tp groups should be created in all procs
             ranks = range(world_size)
             tp_gpu_groups = []
+            tp_cpu_groups = []
             for start in range(0, world_size, tp):
                 tp_ranks = ranks[start:start + tp]
                 group = dist.new_group(ranks=tp_ranks, timeout=timeout, backend=gpu_backend)
                 tp_gpu_groups.append(group)
-            tp_gpu_group = tp_gpu_groups[dp_rank]
+                cpu_group = dist.new_group(ranks=tp_ranks, timeout=timeout, backend=cpu_backend)
+                tp_cpu_groups.append(cpu_group)
+            tp_gpu_group = tp_gpu_groups[tp_group_id]
+            tp_cpu_group = tp_cpu_groups[tp_group_id]
 
         context = DistContext(
             rank=rank,
@@ -66,11 +77,12 @@ class DistContext:
             tp_rank=tp_rank,
             dp_rank=dp_rank,
             world_cpu_group=world_cpu_group,
-            tp_cpu_group=None,
+            tp_cpu_group=tp_cpu_group,
             tp_gpu_group=tp_gpu_group,
             tp_gpu_groups=tp_gpu_groups,
             dp_cpu_group=None,
             dp_gpu_group=None,
+            dist_config=dist_config,
         )
         return context
 
@@ -133,6 +145,11 @@ def get_world_rank():
 def get_tp_world_rank():
     ctx = get_dist_manager().current_context()
     return ctx.tp, ctx.tp_rank
+
+
+def get_dp_world_rank():
+    ctx = get_dist_manager().current_context()
+    return ctx.dp, ctx.dp_rank
 
 
 def _check_group_device(device: str):
@@ -203,3 +220,28 @@ def broadcast(tensor, src, group='tp', async_op=False):
     if isinstance(group, str):
         group = get_group(group, 'gpu')
     dist.broadcast(tensor, src, group, async_op)
+
+
+def all_gather_object(object_list, obj, group='tp'):
+    if isinstance(group, str):
+        group = get_group(group, 'cpu')
+    dist.all_gather_object(object_list, obj, group=group)
+
+
+def all_gather(tensor_list, tensor, group='tp', async_op=False):
+    if isinstance(group, str):
+        group = get_group(group, 'gpu')
+    dist.all_gather(tensor_list, tensor, group=group, async_op=async_op)
+
+
+def all_gather_into_tensor(output_tensor, input_tensor, group='tp', async_op=False):
+    if isinstance(group, str):
+        group = get_group(group, 'gpu')
+    dist.all_gather_into_tensor(output_tensor, input_tensor, group=group, async_op=async_op)
+
+
+def reduce_scatter(output, input_list, op=ReduceOp.SUM, group='tp', async_op=False):
+    """reduce scatter."""
+    if isinstance(group, str):
+        group = get_group(group, 'gpu')
+    dist.reduce_scatter(output, input_list, op=op, group=group, async_op=async_op)
