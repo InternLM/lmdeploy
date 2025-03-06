@@ -56,7 +56,15 @@ def load_vl_model(model_path: str,
         max_memory = {i: torch.cuda.mem_get_info(i)[0] for i in range(tp)}
 
     _, hf_config = get_model_arch(model_path)
-    kwargs = dict(model_path=model_path, with_llm=with_llm, max_memory=max_memory, hf_config=hf_config, backend=backend)
+
+    enable_prefix_caching = getattr(backend_config, 'enable_prefix_caching', False)
+
+    kwargs = dict(model_path=model_path,
+                  with_llm=with_llm,
+                  max_memory=max_memory,
+                  hf_config=hf_config,
+                  backend=backend,
+                  enable_prefix_caching=enable_prefix_caching)
 
     for name, module in VISION_MODELS.module_dict.items():
         try:

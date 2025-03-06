@@ -4,7 +4,10 @@ import os
 from io import BytesIO
 from typing import Union
 
+import numpy as np
 import requests
+import torch
+from blake3 import blake3
 from PIL import Image, ImageFile
 
 from lmdeploy.utils import get_logger
@@ -81,3 +84,45 @@ def load_image(image_url: Union[str, Image.Image]) -> Image.Image:
         img = Image.new('RGB', (32, 32))
 
     return img
+
+
+def hash_image_data(**kwargs: object) -> str:
+    """hash image related data."""
+
+    def _convert_to_bytes(key: str, value: object):
+        """recursively convert object to bytes."""
+        if isinstance(value, (list, tuple)):
+            for idx, obj in enumerate(value):
+                yield from _convert_to_bytes(f'{key}.{idx}', obj)
+        elif isinstance(value, dict):
+            for k, v in value.items():
+                yield from _convert_to_bytes(f'{key}.{k}', v)
+        else:
+            key_bytes = key.encode('utf-8')
+            if isinstance(value, str):
+                value_bytes = value.encode('utf-8')
+            elif isinstance(value, bytes):
+                value_bytes = value
+            elif isinstance(value, Image.Image):
+                value_bytes = value.tobytes()
+            else:
+                if isinstance(value, torch.Tensor):
+                    value = value.cpu().numpy()
+                elif isinstance(value, (int, float)):
+                    value = np.array(value)
+
+                if isinstance(value, np.ndarray):
+                    value_bytes = value.tobytes()
+                else:
+                    import pickle
+                    value_bytes = pickle.dumps(value)
+            yield key_bytes, value_bytes
+
+    hasher = blake3()
+    for k, v in kwargs.items():
+        for k_bytes, v_bytes in _convert_to_bytes(k, v):
+            hasher.update(k_bytes)
+            hasher.update(v_bytes)
+
+    hash_value = hasher.hexdigest()
+    return hash_value

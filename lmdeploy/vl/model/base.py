@@ -20,7 +20,8 @@ class VisonModel(ABC):
                  with_llm: bool = False,
                  max_memory: Dict[int, int] = None,
                  hf_config: AutoConfig = None,
-                 backend: str = ''):
+                 backend: str = '',
+                 enable_prefix_caching: bool = False):
         """init."""
         self.model_path = model_path
         self.with_llm = with_llm
@@ -30,6 +31,7 @@ class VisonModel(ABC):
             _, hf_config = get_model_arch(model_path)
         self.hf_config = hf_config
         self.image_token_id = self.get_pad_token_id(model_path, hf_config) or 0
+        self.enable_prefix_caching = enable_prefix_caching
 
     def get_pad_token_id(self, model_path, hf_config):
         """get pad_token_id from hf_config or tokenizer."""
