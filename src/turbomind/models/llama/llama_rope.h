@@ -54,14 +54,14 @@ struct RopeParam {
     };
 };
 
-struct InnerYarnRopeParam {
+struct YarnRopeKernelParam {
     float scale_factor;
     float attention_factor;
     float ramp_inv_factor_div_2;
     float ramp_inv_factor_mul_min;
 };
 
-struct InnerLlama3RopeParam {
+struct Llama3RopeKernelParam {
     float scale_factor;
     float alpha;
     float beta;
@@ -75,20 +75,20 @@ struct RopeKernelParam {
     float  scale_factor;
     float  inv_factor;
 
-    InnerYarnRopeParam   yarn;
-    InnerLlama3RopeParam llama3;
+    YarnRopeKernelParam   yarn;
+    Llama3RopeKernelParam llama3;
 };
 
-inline void init_inner_rope_param(const RopeParam& rope, RopeKernelParam& inner_rope)
+inline void init_rope_kernel_param(const RopeParam& rope, RopeKernelParam& rope_kernel)
 {
-    inner_rope.type         = rope.type;
-    inner_rope.dim          = rope.dim;
-    inner_rope.scale_factor = -std::log2f(rope.base) / rope.dim;
-    inner_rope.inv_factor   = (rope.factor != 0.f) ? 1.0 / rope.factor : 1.f;
+    rope_kernel.type         = rope.type;
+    rope_kernel.dim          = rope.dim;
+    rope_kernel.scale_factor = -std::log2f(rope.base) / rope.dim;
+    rope_kernel.inv_factor   = (rope.factor != 0.f) ? 1.0 / rope.factor : 1.f;
 
     if (rope.type == RopeType::kYarn) {
         auto&        src = rope.yarn;
-        auto&        dst = inner_rope.yarn;
+        auto&        dst = rope_kernel.yarn;
         const double PI  = 3.14159265358979323846;
 
         auto find_correction_dim = [&](float num_rotations) {
@@ -115,7 +115,7 @@ inline void init_inner_rope_param(const RopeParam& rope, RopeKernelParam& inner_
     }
     else if (rope.type == RopeType::kLlama3) {
         auto& src = rope.llama3;
-        auto& dst = inner_rope.llama3;
+        auto& dst = rope_kernel.llama3;
 
         const double PI                   = 3.14159265358979323846;
         float        inv_diff_freq_factor = 1.0 / (src.high_freq_factor - src.low_freq_factor);
