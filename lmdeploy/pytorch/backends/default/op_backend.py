@@ -75,3 +75,11 @@ class DefaultOpsBackend(OpsBackend):
             num_heads,
             head_size,
         )
+
+    @staticmethod
+    def init():
+        pass
+
+    @staticmethod
+    def ccl_backend() -> str:
+        return 'nccl'

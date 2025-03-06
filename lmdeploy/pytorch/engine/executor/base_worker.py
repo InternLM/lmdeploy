@@ -2,6 +2,7 @@
 import asyncio
 from typing import Any, Dict
 
+from lmdeploy.pytorch.backends.selector import get_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.pytorch.devices import DeviceContext
 from lmdeploy.pytorch.distributed import DistContext
@@ -54,7 +55,9 @@ class WorkerWrapperBase:
                 setup_master_addr(master_addr, master_port)
 
             init_process_group(rank, self.world_size)
-        self.dist_ctx = DistContext.build(self.rank, self.tp, self.dp)
+
+        ccl_backend = get_backend(self.device_type).ccl_backend()
+        self.dist_ctx = DistContext.build(self.rank, self.tp, self.dp, ccl_backend)
 
     def pack_output(self, output: Dict):
         """pack output."""
