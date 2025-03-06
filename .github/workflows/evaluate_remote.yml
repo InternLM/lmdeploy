@@ -152,7 +152,7 @@ jobs:
             FLASH_ATTENTION_FORCE_BUILD=TRUE pip install /fs-computility/llm/qa-llm-cicd/packages/flash_attn-2.7.0.post2+cu12torch2.5cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
             pip install xformers --index-url https://download.pytorch.org/whl/cu121 --cache-dir ${{env.PIP_CACHE_PATH}}
             cp -r /root/nltk_data ${{env.CONDA_PATH}}/envs/${{env.CONDA_ENV}}/nltk_data
-      - name: Prepare - reinstall lmdeploy - cu12
+      - name: Prepare - download lmdeploy - cu12
         if: ${{github.event_name == 'schedule' || inputs.build_lmdeploy}}
         uses: actions/download-artifact@v4
         with:
@@ -211,4 +211,4 @@ jobs:
             conda activate ${{env.CONDA_ENV}}
             conda info --envs
             opencompass .github/scripts/eval_regression_${{matrix.regression_func}}.py --work-dir ${{env.REPORT_ROOT}}/${{ github.run_id }}/${{matrix.regression_func}} --reuse --dump-eval-details
-            python .github/scripts/action_tools.py generate_output_for_evaluation.py ${{env.REPORT_ROOT}}/${{ github.run_id }}/${{matrix.regression_func}}
+            python .github/scripts/action_tools.py generate_output_for_evaluation ${{env.REPORT_ROOT}}/${{ github.run_id }}/${{matrix.regression_func}}
