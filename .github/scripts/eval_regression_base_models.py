@@ -50,25 +50,32 @@ with read_base():
 race_datasets = [race_datasets[1]]
 datasets = sum([v for k, v in locals().items() if k.endswith('_datasets')], [])
 
-pytorch_lmdeploy_glm4_9b_model = deepcopy(lmdeploy_glm4_9b_model[0])
-pytorch_lmdeploy_deepseek_7b_base_model = deepcopy(lmdeploy_deepseek_7b_base_model[0])
-pytorch_lmdeploy_deepseek_67b_base_model = deepcopy(lmdeploy_deepseek_67b_base_model[0])
-pytorch_lmdeploy_deepseek_v2_model = deepcopy(lmdeploy_deepseek_v2_model[0])
-pytorch_lmdeploy_internlm2_5_7b_model = deepcopy(lmdeploy_internlm2_5_7b_model[0])
-pytorch_lmdeploy_internlm2_20b_model = deepcopy(lmdeploy_internlm2_20b_model[0])
-pytorch_lmdeploy_internlm2_base_7b_model = deepcopy(lmdeploy_internlm2_base_7b_model[0])
-pytorch_lmdeploy_llama3_1_8b_model = deepcopy(lmdeploy_llama3_1_8b_model[0])
-pytorch_lmdeploy_llama3_70b_model = deepcopy(lmdeploy_llama3_70b_model[0])
-pytorch_lmdeploy_qwen2_5_1_5b_model = deepcopy(lmdeploy_qwen2_5_1_5b_model[0])
-pytorch_lmdeploy_qwen2_5_72b_model = deepcopy(lmdeploy_qwen2_5_72b_model[0])
-pytorch_lmdeploy_qwen2_7b_model = deepcopy(lmdeploy_qwen2_7b_model[0])
-pytorch_lmdeploy_yi_1_5_9b_model = deepcopy(lmdeploy_yi_1_5_9b_model[0])
+pytorch_lmdeploy_glm4_9b_model = deepcopy(*lmdeploy_glm4_9b_model)
+pytorch_lmdeploy_deepseek_7b_base_model = deepcopy(*lmdeploy_deepseek_7b_base_model)
+pytorch_lmdeploy_deepseek_67b_base_model = deepcopy(*lmdeploy_deepseek_67b_base_model)
+pytorch_lmdeploy_deepseek_v2_model = deepcopy(*lmdeploy_deepseek_v2_model)
+pytorch_lmdeploy_internlm2_5_7b_model = deepcopy(*lmdeploy_internlm2_5_7b_model)
+pytorch_lmdeploy_internlm2_20b_model = deepcopy(*lmdeploy_internlm2_20b_model)
+pytorch_lmdeploy_internlm2_base_7b_model = deepcopy(*lmdeploy_internlm2_base_7b_model)
+pytorch_lmdeploy_llama3_1_8b_model = deepcopy(*lmdeploy_llama3_1_8b_model)
+pytorch_lmdeploy_llama3_70b_model = deepcopy(*lmdeploy_llama3_70b_model)
+pytorch_lmdeploy_qwen2_5_1_5b_model = deepcopy(*lmdeploy_qwen2_5_1_5b_model)
+pytorch_lmdeploy_qwen2_5_72b_model = deepcopy(*lmdeploy_qwen2_5_72b_model)
+pytorch_lmdeploy_qwen2_7b_model = deepcopy(*lmdeploy_qwen2_7b_model)
+pytorch_lmdeploy_yi_1_5_9b_model = deepcopy(*lmdeploy_yi_1_5_9b_model)
 
 for model in [v for k, v in locals().items() if k.startswith('lmdeploy_')]:
-    model['engine_config']['max_batch_size'] = 512
-    model['backend'] = 'turbomind'
-    model['gen_config']['do_sample'] = False
-    model['batch_size'] = 5000
+    if isinstance(model, list):
+        for m in model:
+            m['engine_config']['max_batch_size'] = 512
+            m['backend'] = 'turbomind'
+            m['gen_config']['do_sample'] = False
+            m['batch_size'] = 5000
+    else:
+        model['engine_config']['max_batch_size'] = 512
+        model['backend'] = 'turbomind'
+        model['gen_config']['do_sample'] = False
+        model['batch_size'] = 5000
 
 for model in [v for k, v in locals().items() if k.startswith('pytorch_')]:
     model['abbr'] = model['abbr'].replace('turbomind', 'pytorch').replace('lmdeploy', 'pytorch')
