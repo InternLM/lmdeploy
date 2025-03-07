@@ -57,13 +57,6 @@ class AttentionImpl(ABC, Generic[T]):
         self.logit_softcapping = logit_softcapping
         self.causal = causal
         self.use_flash_mla = use_flash_mla
-        if use_flash_mla is True:
-            assert num_kv_heads == 1, 'MLA requires num kv heads equal to 1'
-            try:
-                import flash_mla_cuda  # noqa
-            except ImportError:
-                raise ImportError(
-                    'To enable flash mla, please install flash_mla through https://github.com/deepseek-ai/FlashMLA')
 
     @abstractmethod
     def forward(

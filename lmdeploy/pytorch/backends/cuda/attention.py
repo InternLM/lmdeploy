@@ -46,7 +46,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         sliding_window: int = None,
         logit_softcapping: float = None,
         causal: bool = True,
-        use_flash_mal: bool = False,
+        use_flash_mla: bool = False,
         **kwargs,
     ):
         super().__init__(
@@ -59,6 +59,7 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
             sliding_window=sliding_window,
             logit_softcapping=logit_softcapping,
             causal=causal,
+            use_flash_mla=use_flash_mla,
             **kwargs,
         )
         assert not (alibi and not causal)
@@ -71,7 +72,15 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         self.alibi_paged_attention_fwd = alibi_paged_attention_fwd
         self.flatten_kv_cache = flatten_kv_cache
         self.flash_attention_fwd = flash_attention_fwd
+        # for flash mla
         self.flash_mla_fwd = flash_mla_fwd
+        if use_flash_mla is True:
+            assert num_kv_heads == 1, 'MLA requires num kv heads equal to 1'
+            try:
+                import flash_mla_cuda  # noqa
+            except ImportError:
+                raise ImportError(
+                    'To enable flash mla, please install flash_mla through https://github.com/deepseek-ai/FlashMLA')
 
         # for alibi attention
         world_size, rank = get_world_rank()
@@ -136,6 +145,8 @@ class TritonAttentionImpl(AttentionImpl[TritonAttentionMetadata]):
         if not self.alibi:
             if is_decoding:
                 if self.use_flash_mla:
+                    block_offsets = block_offsets.to(torch.int32)
+                    kv_seqlens = kv_seqlens.to(torch.int32)
                     query = query.unsqueeze(1)
                     attn_output = self.flash_mla_fwd(query,
                                                      k_cache=k_cache,

@@ -165,6 +165,3 @@ class CudaGraphMixin:
         context.q_seqlens = input_buffers['q_seqlens']
         context.kv_seqlens = input_buffers['kv_seqlens']
         context.q_start_loc = input_buffers['q_start_loc']
-        # if getattr(self.config, 'use_flash_mla', False) is True:
-        #     context.tile_scheduler_metadata = input_buffers['tile_scheduler_metadata']
-        #     context.num_splits = input_buffers['num_splits']
