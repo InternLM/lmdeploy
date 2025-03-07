@@ -1,10 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from lmdeploy.pytorch.config import ModelConfig
-from lmdeploy.utils import get_logger
 
 from .builder import AutoModelConfigBuilder
-
-logger = get_logger('lmdeploy')
+from .utils import flash_mla_available
 
 
 class DeepseekV2ModelConfigBuilder(AutoModelConfigBuilder):
@@ -26,14 +24,7 @@ class DeepseekV2ModelConfigBuilder(AutoModelConfigBuilder):
         tp = kwargs.get('tp', 1)
         # update num_kv_heads for tp mode
         num_key_value_heads = cls.update_num_kv_heads(hf_config, tp, num_key_value_heads)
-        # use flash_mla by default if it is installed
-        use_flash_mla = False
-        try:
-            import flash_mla_cuda  # noqa
-            use_flash_mla = True
-        except ImportError:
-            logger.warning('For higher performance, please install flash_mla https://github.com/deepseek-ai/FlashMLA')
-        hf_config.use_flash_mla = use_flash_mla
+        hf_config.use_flash_mla = flash_mla_available()
 
         return ModelConfig(hidden_size=hf_config.hidden_size,
                            num_layers=hf_config.num_hidden_layers,
@@ -45,4 +36,4 @@ class DeepseekV2ModelConfigBuilder(AutoModelConfigBuilder):
                            k_head_dim=k_head_dim,
                            v_head_dim=v_head_dim,
                            vocab_size=hf_config.vocab_size,
-                           use_flash_mla=use_flash_mla)
+                           use_flash_mla=hf_config.use_flash_mla)
