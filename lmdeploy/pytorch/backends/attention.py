@@ -87,6 +87,7 @@ class AttentionBuilder(ABC, Generic[T]):
         sliding_window: int = None,
         logical_softcapping: float = None,
         causal: bool = True,
+        use_flash_mla: bool = False,
         **kwargs,
     ) -> AttentionImpl[T]:
         """build."""

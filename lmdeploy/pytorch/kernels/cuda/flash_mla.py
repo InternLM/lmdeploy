@@ -4,25 +4,6 @@ from typing import Optional, Tuple
 import torch
 
 
-def get_mla_metadata(
-    cache_seqlens: torch.Tensor,
-    num_heads_per_head_k: int,
-    num_heads_k: int,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    Arguments:
-        cache_seqlens: (batch_size), dtype torch.int32.
-        num_heads_per_head_k: Equals to seq_len_q * num_heads_q // num_heads_k.
-        num_heads_k: num_heads_k.
-
-    Return:
-        tile_scheduler_metadata: (num_sm_parts, TileSchedulerMetaDataSize), dtype torch.int32.
-        num_splits: (batch_size + 1), dtype torch.int32.
-    """
-    import flash_mla_cuda
-    return flash_mla_cuda.get_mla_metadata(cache_seqlens, num_heads_per_head_k, num_heads_k)
-
-
 def flash_mla_fwd(
     q: torch.Tensor,
     k_cache: torch.Tensor,

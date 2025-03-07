@@ -658,13 +658,6 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
         input_ids = context.input_ids
         position_ids = context.position_ids
         attn_metadata = context.attn_metadata
-        if context.is_decoding is True:
-            if attn_metadata.tile_scheduler_metadata is None and self.config.use_flash_mla is True:
-                import flash_mla_cuda
-                tile_scheduler_metadata, num_splits = flash_mla_cuda.get_mla_metadata(
-                    attn_metadata.kv_seqlens.to(torch.int32), self.config.num_attention_heads, 1)
-                attn_metadata.tile_scheduler_metadata = tile_scheduler_metadata
-                attn_metadata.num_splits = num_splits
 
         return dict(
             input_ids=input_ids,
