@@ -84,7 +84,12 @@ inline void init_rope_kernel_param(const RopeParam& rope, RopeKernelParam& rope_
     rope_kernel.type         = rope.type;
     rope_kernel.dim          = rope.dim;
     rope_kernel.scale_factor = -std::log2f(rope.base) / rope.dim;
-    rope_kernel.inv_factor   = (rope.factor != 0.f) ? 1.0 / rope.factor : 1.f;
+    if (rope.type == RopeType::kDynamic) {
+        rope_kernel.inv_factor = 1.f;
+    }
+    else {
+        rope_kernel.inv_factor = (rope.factor != 0.f) ? 1.0 / rope.factor : 1.f;
+    }
 
     if (rope.type == RopeType::kYarn) {
         auto&        src = rope.yarn;
