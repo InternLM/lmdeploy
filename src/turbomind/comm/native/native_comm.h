@@ -5,7 +5,7 @@
 #include <unordered_map>
 
 #include "src/turbomind/comm/comm.h"
-#include "src/turbomind/comm/native/bootstrap.h"
+#include "src/turbomind/comm/host.h"
 #include "src/turbomind/comm/native/mscclpp.h"
 
 #include "src/turbomind/kernels/core/array.h"
@@ -25,7 +25,7 @@ public:
 
     ~NativeComm() override;
 
-    NativeComm(std::shared_ptr<LocalBootstrap> bootstrap);
+    NativeComm(std::shared_ptr<HostComm> bootstrap);
 
     void Initialize();
 
@@ -78,7 +78,7 @@ private:
     Array<void*, kMaxNearPeers> get_near_impl(void* ptr);
 
 private:
-    std::shared_ptr<LocalBootstrap> bootstrap_;
+    std::shared_ptr<HostComm> bootstrap_;
 
     std::vector<int> ordinals_;
 

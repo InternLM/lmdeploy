@@ -34,12 +34,7 @@ namespace turbomind {
 template<typename T>
 class LlamaTritonModel: public AbstractTransformerModel {
 public:
-    LlamaTritonModel(size_t                                 tensor_para_size,
-                     size_t                                 pipeline_para_size,
-                     int                                    enable_custom_all_reduce,
-                     std::string                            model_dir,
-                     std::string                            config,
-                     std::function<std::shared_ptr<void>()> ffi_ctx_factory);
+    LlamaTritonModel(std::string model_dir, std::string config, std::function<std::shared_ptr<void>()> ffi_ctx_factory);
 
     ~LlamaTritonModel() override;
 
@@ -68,12 +63,12 @@ private:
     MoeParam       moe_param_;
     LoraParam      lora_param_;
     EngineParam    engine_param_;
-    size_t         tensor_para_size_;
-    size_t         pipeline_para_size_;
-    size_t         dp_size_;
+    size_t         comm_size_;
 
-    std::vector<std::unique_ptr<comm::GroupId>> group_ids_;
-    std::vector<std::shared_ptr<SharedState>>   shared_states_;
+    std::vector<EngineParam> engine_params_;
+
+    std::string communicator_;
+    std::vector<std::unique_ptr<comm::HostGroupId>> group_ids_;
 
     std::shared_ptr<Gateway> gateway_;
 

@@ -7,13 +7,23 @@
 
 namespace turbomind {
 
-Gateway::Gateway(int n_ranks, std::function<std::shared_ptr<void>()> ctx_factory):
-    n_ranks_{n_ranks}, queues_{}, ctx_factory_{ctx_factory}
+Gateway::Gateway(int groups, int group_size, std::function<std::shared_ptr<void>()> ctx_factory):
+    size_{groups * group_size},
+    group_size_{group_size},
+    queues_(size_),
+    flags_(groups),
+    ctx_factory_{ctx_factory},
+    next_{0}
 {
-    queues_.reserve(n_ranks);
-    for (int i = 0; i < n_ranks; ++i) {
-        queues_.push_back(std::make_unique<RequestQueueV2>(this));
+    for (int i = 0; i < groups; ++i) {
+        flags_[i] = std::make_unique<std::atomic<uint64_t>>(0);
     }
+
+    for (int i = 0; i < size_; ++i) {
+        const int group_id = i / group_size;
+        queues_[i] = std::make_unique<RequestQueue>(flags_[group_id].get());
+    }
+
     signal_thread_ = std::thread(&Gateway::signal_thread_entry, this);
 }
 

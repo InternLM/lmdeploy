@@ -7,7 +7,7 @@
 #include <cuda.h>
 
 #include "src/turbomind/comm/comm.h"
-#include "src/turbomind/comm/native/bootstrap.h"
+#include "src/turbomind/comm/host.h"
 #include "src/turbomind/comm/native/native_comm.h"
 
 #include "src/turbomind/utils/cuda_utils.h"
@@ -15,14 +15,14 @@
 
 namespace turbomind::comm {
 
-NativeComm::NativeComm(std::shared_ptr<LocalBootstrap> bootstrap): Comm{bootstrap->getNranks(), bootstrap->getRank()}
+NativeComm::NativeComm(std::shared_ptr<HostComm> bootstrap): Comm{bootstrap->n_ranks(), bootstrap->rank()}
 {
     bootstrap_ = bootstrap;
 
     // Exchange device ordinals
     ordinals_.resize(world_size_);
     check_cuda_error(cudaGetDevice(&ordinals_[rank_]));
-    bootstrap_->allGather(ordinals_.data(), sizeof(int));
+    Allgather(*bootstrap_, ordinals_.data(), 1);
 
     // Prepare allocation properties & granularity
     alloc_prop_.type          = CU_MEM_ALLOCATION_TYPE_PINNED;
@@ -71,7 +71,7 @@ void NativeComm::Initialize()
 
     std::vector<uint64_t*> all_flags(world_size_);
     all_flags[rank_] = flags;
-    bootstrap_->allGather(all_flags.data(), sizeof(uint64_t*));
+    Allgather(*bootstrap_, all_flags.data(), 1);
 
     const int peers = world_size_ - 1;
 
@@ -148,7 +148,7 @@ void NativeComm::Register(void* ptr, size_t size)
 
         std::vector<Buffer> buffers(world_size_);
         buffers[rank_] = {ptr, size};
-        bootstrap_->allGather(buffers.data(), sizeof(Buffer));
+        Allgather(*bootstrap_, buffers.data(), 1);
 
         std::vector<Buffer> bufs;
         for (int i = 0; i < world_size_; ++i) {
@@ -190,46 +190,16 @@ Array<void*, kMaxNearPeers> NativeComm::get_near_impl(void* ptr)
     return ret;
 }
 
+#if 0
 class LocalGroupId: public GroupId {
 public:
-    void Initialize() override
+    void Initialize() override {}
+    void Export(std::ostream& os) override {}
+    void Import(std::istream& is) override {}
+
+    std::unique_ptr<Comm> CreateCommunicator(int rank, int world_size, std::shared_ptr<HostComm> host_comm) override
     {
-        internal_ = std::make_shared<Internal>();
-    }
-
-    void Export(std::ostream& os) override
-    {
-        FT_CHECK((bool)internal_);  // `Initialize` must come befor `Export`
-
-        const void* ptr = this;
-        os.write((const char*)&ptr, sizeof(ptr));
-    }
-
-    void Import(std::istream& is) override
-    {
-        void* ptr{};
-        is.read((char*)&ptr, sizeof(ptr));
-        internal_ = reinterpret_cast<LocalGroupId*>(ptr)->internal_;
-
-        FT_CHECK((bool)internal_);
-    }
-
-    std::unique_ptr<Comm> CreateCommunicator(int rank, int world_size) override
-    {
-        auto init_shared_state = [&] {  //
-            internal_->state = std::make_shared<LocalBootstrap::State>(world_size);
-        };
-
-        FT_CHECK((bool)internal_);
-
-        // One of the rank initialize the shared state
-        std::call_once(internal_->flag, init_shared_state);
-
-        FT_CHECK((bool)internal_->state);
-
-        auto bootstrap = std::make_shared<LocalBootstrap>(world_size, rank, internal_->state);
-
-        auto comm = std::make_unique<NativeComm>(bootstrap);
+        auto comm = std::make_unique<NativeComm>(host_comm);
 
         comm->Initialize();
 
@@ -238,8 +208,8 @@ public:
 
 private:
     struct Internal {
-        std::once_flag                         flag;
-        std::shared_ptr<LocalBootstrap::State> state;
+        std::once_flag                   flag;
+        std::shared_ptr<HostComm::State> state;
     };
 
 private:
@@ -249,6 +219,16 @@ private:
 std::unique_ptr<GroupId> CreateNativeGroupId()
 {
     return std::make_unique<LocalGroupId>();
+}
+#endif
+
+std::unique_ptr<Comm> CreateNativeCommunicator(int rank, int world_size, std::shared_ptr<HostComm> host_comm)
+{
+    auto comm = std::make_unique<NativeComm>(host_comm);
+
+    comm->Initialize();
+
+    return comm;
 }
 
 }  // namespace turbomind::comm

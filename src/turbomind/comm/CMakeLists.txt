@@ -2,19 +2,22 @@
 
 cmake_minimum_required(VERSION 3.8)
 
+add_library(host STATIC host.cc)
+set_property(TARGET host PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET host PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+
 add_library(comm STATIC comm.cc)
 target_link_libraries(comm PRIVATE logger)
-
 set_property(TARGET comm PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET comm PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 
 if (BUILD_MULTI_GPU)
     add_subdirectory(native)
-    target_link_libraries(comm PRIVATE native_comm)
+    target_link_libraries(comm INTERFACE native_comm)
 
     if (USE_NCCL)
         add_subdirectory(nccl)
-        target_link_libraries(comm PRIVATE nccl_comm)
+        target_link_libraries(comm INTERFACE nccl_comm)
     endif ()
 
     add_executable(test_comm test_comm.cu)

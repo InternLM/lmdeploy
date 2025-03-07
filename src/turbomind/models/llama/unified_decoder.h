@@ -17,8 +17,16 @@ class UnifiedDecoder {
 private:
     void freeBuffer();
 
-    const size_t       layer_num_;
-    const size_t       hidden_units_;
+    const size_t layer_num_;
+    const size_t hidden_units_;
+
+    const int attn_tp_size_;
+    const int attn_dp_size_;
+    const int attn_dp_rank_;
+    const int mlp_tp_size_;
+
+    std::array<int, 2> tp_size_;
+
     const float        rmsnorm_eps_;
     cudaStream_t const stream_;
     IAllocator* const  allocator_;
@@ -51,10 +59,18 @@ private:
                          int               layer_id,
                          const WeightType* weight);
 
-    void ReduceResidualBiasRMSnorm(T* hidden_states, T* residual, const T* bias, const T* weight, int token_num);
+    void AllreduceResidualRMSnorm(T*         hidden_states,
+                                  T*         residual,
+                                  const T*   bias,
+                                  const T*   weight,
+                                  int        token_num,
+                                  int        t0,
+                                  int        t1,
+                                  const int* local_token_nums);
 
 public:
     UnifiedDecoder(const ModelParam&     model,
+                   const EngineParam&    engine,
                    const AttentionParam& attn,
                    const MoeParam&       moe,
                    const LoraParam&      lora,

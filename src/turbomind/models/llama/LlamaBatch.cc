@@ -20,6 +20,7 @@
 #include <cuda_runtime.h>
 
 #include "src/turbomind/comm/comm.h"
+#include "src/turbomind/comm/host.h"
 #include "src/turbomind/macro.h"
 
 #include "src/turbomind/engine/gateway.h"
@@ -93,9 +94,9 @@ void DropEmbeddings(const Sequence& seq)
 }
 
 template<typename T>
-void LlamaBatch<T>::DisableConflictRequests(Requests& infer_reqs, Requests& kill_reqs)
+void LlamaBatch<T>::DisableInvalidRequests(Requests& infer_reqs, Requests& kill_reqs)
 {
-    NvtxScope _("disable conflict");
+    NvtxScope _("disable invalid");
 
     std::pmr::monotonic_buffer_resource    mbr;
     std::pmr::unordered_map<uint64_t, int> occur(&mbr);
@@ -115,6 +116,7 @@ void LlamaBatch<T>::DisableConflictRequests(Requests& infer_reqs, Requests& kill
         }
     };
 
+    // Current batch
     for (int i = 0; i < state_->size; ++i) {
         if (state_->requests[i]) {
             ++occur[state_->requests[i]->id];
@@ -126,33 +128,42 @@ void LlamaBatch<T>::DisableConflictRequests(Requests& infer_reqs, Requests& kill
 
     validate(kill_reqs, "kill");
     validate(infer_reqs, "infer");
-}
 
-template<class T>
-void LlamaBatch<T>::BroadcastCancelFlags()
-{
-    for (int i = 0; i < state_->size; ++i) {
-        const auto& r = state_->requests[i];
+    // New requests that never get a chance to start
+    for (auto& r : infer_reqs) {
         if (r && r->cancel_flag.load(std::memory_order_acquire) == -1) {
-            r->is_canceled = true;
+            r->ec = Request::kCancel;
         }
     }
 }
 
 template<class T>
-void LlamaBatch<T>::ProcessCancelRequests(std::vector<Signal>& signals)
+void LlamaBatch<T>::FindCanceledIndices(std::vector<int>& indices)
+{
+    for (int i = 0; i < state_->size; ++i) {  // current batch
+        const auto& r = state_->requests[i];
+        if (r && r->cancel_flag.load(std::memory_order_acquire) == -1) {
+            indices.push_back(i);
+        }
+    }
+}
+
+template<class T>
+void LlamaBatch<T>::ProcessCancelRequests(std::vector<int>& indices, std::vector<Signal>& signals)
 {
     int count = 0;
-    for (int i = 0; i < state_->size; ++i) {
-        const auto& r = state_->requests[i];
-        if (r && r->is_canceled) {
+
+    for (const auto& i : indices) {
+        if (auto& r = state_->requests[i]) {
             ++count;
             signals.push_back(Interrupt(i, true));
             // Interrupt should reset r
             FT_CHECK(!r);
         }
     }
+
     if (count) {
+        // Still need this sync after `Interrupt`?
         check_cuda_error(cudaStreamSynchronize(stream_));
     }
 }
@@ -191,7 +202,7 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& reqs, std::vector<Signa
     int idx = 0;
     for (const auto& r : reqs) {
 
-        if (rank_ == 0) {
+        if (tp_rank_ == 0) {
             TM_LOG_INFO("[ProcessInferRequests] Request for %ld received.", (long)r->id);
         }
 
@@ -219,7 +230,7 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& reqs, std::vector<Signa
                 s = ptr->tokens.size();
             }
             else if (s > ptr->tokens.size()) {
-                if (rank_ == 0) {
+                if (tp_rank_ == 0) {
                     TM_LOG_WARNING("[ProcessInferRequests] Skipping invalid step (%d) setting for ID %lu", s, ptr->id);
                 }
                 s = ptr->tokens.size();
@@ -337,7 +348,7 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& reqs, std::vector<Signa
         // the actual sequence length is seq_limit_len + 1, hence seq_limit_len must truncated to session_len - 1
         if (state.seq_len_limit[idx] >= session_len_) {
             state.seq_len_limit[idx] = session_len_ - 1;
-            if (rank_ == 0) {
+            if (tp_rank_ == 0) {
                 const int trunc_output_len = state.seq_len_limit[idx] - state.h_context_length[idx];
                 TM_LOG_WARNING(
                     "[ProcessInferRequests] [%ld] total sequence length (%d + %d) exceeds `session_len` (%d), `max_new_tokens` is truncated to %d",
@@ -379,12 +390,6 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& reqs, std::vector<Signa
             // Recover device states if not a new sequence
             h_curand_state_[existing_idx.size()] = *(curandState_t*)seq.random_state.data();
             existing_idx.push_back(idx);
-        }
-
-        // ! SHARED STATE IS MODIFIED, BARRIER SYNCHRONIZATION REQUIRED
-        // assign priority based on arrival time
-        if (rank_ == 0) {
-            r->unique_id = request_count_++;
         }
 
         // increment pointer
@@ -822,7 +827,8 @@ void LlamaBatch<T>::AllocCommBuffers()
     const size_t vocab_size_padded = model_->vocab_size_padded_;
 
     // TODO: rename this to hidden_states
-    context_decoder_output_buf_ = (T*)CommBufAlloc(sizeof(T) * max_forward_token_num_ * hidden_units, true);
+    context_decoder_output_buf_ =
+        (T*)CommBufAlloc(sizeof(T) * param_.attn_dp_size * max_forward_token_num_ * hidden_units, true);
 
     local_logits_buf_ = (float*)CommBufAlloc(sizeof(float) * max_batch_size_ * vocab_size_padded, true);
     if (model_->use_allgather_2d_) {
@@ -950,16 +956,14 @@ LlamaBatch<T>::~LlamaBatch()
 }
 
 template<typename T>
-LlamaBatch<T>::LlamaBatch(const EngineParam&           param,
-                          std::unique_ptr<LlamaV2<T>>  model,  // ! This is moved
-                          std::unique_ptr<Context<T>>  ctx,    // ! This is moved
-                          std::shared_ptr<SharedState> state,
-                          std::shared_ptr<Gateway>     gateway,
-                          int                          device_id,
-                          int                          dp_rank):
+LlamaBatch<T>::LlamaBatch(const EngineParam&          param,
+                          std::unique_ptr<LlamaV2<T>> model,  // ! This is moved
+                          std::unique_ptr<Context<T>> ctx,    // ! This is moved
+                          std::shared_ptr<Gateway>    gateway,
+                          int                         device_id,
+                          int                         dp_rank):
     param_(param),
     gateway_(gateway),
-    shared_state_(state),
     max_batch_size_(param.max_batch_size),
     max_forward_token_num_(param.max_prefill_token_num + param.max_batch_size),
     max_context_token_num_(param.max_context_token_num),
@@ -968,7 +972,7 @@ LlamaBatch<T>::LlamaBatch(const EngineParam&           param,
     device_id_(device_id),
     dp_rank_(dp_rank),
     tp_size_(model->tp_size_),
-    rank_(model->tp_rank_),
+    tp_rank_(model->tp_rank_),
     data_type_(getTensorType<T>()),
     debug_(isDebug()),
     stream_(ctx->stream),
@@ -992,7 +996,9 @@ LlamaBatch<T>::LlamaBatch(const EngineParam&           param,
     };
 
     const auto get_free_size = [&] {  //
-        return GetSyncFreeMemSize(*shared_state_->barrier, shared_state_->free_size);
+        size_t free{}, total{};
+        check_cuda_error(cudaMemGetInfo(&free, &total));
+        return Allreduce(*model_->comm_->h_comm, free, comm::RedOp::kMin, model_->comm_->h_comm_tp_group);
     };
 
     sequence_manager_.reset(new SequenceManager{model_->layer_num_,
@@ -1000,13 +1006,13 @@ LlamaBatch<T>::LlamaBatch(const EngineParam&           param,
                                                 param.cache_max_block_count,
                                                 param.cache_chunk_size,
                                                 param.enable_prefix_caching,
-                                                rank_,
+                                                tp_rank_,
                                                 allocator_,
                                                 get_free_size});
 
     const size_t max_session_len = sequence_manager_->max_block_count() * cache_block_seq_len;
     if (max_session_len < session_len_) {
-        if (rank_ == 0) {
+        if (tp_rank_ == 0) {
             TM_LOG_WARNING("No enough blocks for `session_len` (%d), `session_len` truncated to %d.",
                            session_len_,
                            max_session_len);
@@ -1238,7 +1244,8 @@ void LlamaBatch<T>::ComputeAndOutputLogits(T* hidden_states, int first, int last
 
         if (local_context_logits_buf_size_ < byte_size) {
             check_cuda_error(cudaStreamSynchronize(stream_));
-            shared_state_->barrier->wait();
+
+            context_->comm.h_comm->Sync(context_->comm.h_comm_tp_group);
 
             CommBufFree((void**)&local_context_logits_buf_, true);
             local_context_logits_buf_      = (float*)CommBufAlloc(byte_size, true);
@@ -1248,7 +1255,8 @@ void LlamaBatch<T>::ComputeAndOutputLogits(T* hidden_states, int first, int last
             }
 
             check_cuda_error(cudaStreamSynchronize(stream_));
-            shared_state_->barrier->wait();
+
+            context_->comm.h_comm->Sync(context_->comm.h_comm_tp_group);
         }
     }
 
@@ -1259,7 +1267,7 @@ void LlamaBatch<T>::ComputeAndOutputLogits(T* hidden_states, int first, int last
 
     model_->postDecodeEmbedding(context_logits_buf_, local_context_logits_buf_, hidden_states, token_num);
 
-    if (rank_ != 0) {
+    if (tp_rank_ != 0) {
         return;
     }
 
@@ -1417,7 +1425,7 @@ void LlamaBatch<T>::Finish(GenerationState& g, std::vector<Signal>& signals)
     }
 
     // ! Only rank-0 writes to output
-    if (rank_ == 0 && output_logprobs) {
+    if (tp_rank_ == 0 && output_logprobs) {
         NvtxScope scope("logprobs");
         // output logprobs, should be set before sequence_length
         float*    sampled_logprobs_ptr = h_sampled_logprobs_;
@@ -1445,7 +1453,7 @@ void LlamaBatch<T>::Finish(GenerationState& g, std::vector<Signal>& signals)
     }
 
     // ! Only rank-0 writes to output
-    if (rank_ == 0) {
+    if (tp_rank_ == 0) {
         NvtxScope scope("output_ids");
         if constexpr (0) {
             // set output tokens ids and sequence length
@@ -1483,7 +1491,7 @@ void LlamaBatch<T>::Finish(GenerationState& g, std::vector<Signal>& signals)
     // Cache computed blocks to block trie
     sequence_manager_->CacheIfEnabled(state_->sequences, batch_size);
 
-    if (debug_ && rank_ == 0) {
+    if (debug_ && tp_rank_ == 0) {
         for (int i = 0; i < batch_size; ++i) {
             // ss << (i ? ", " : "") << "(" << state_->h_context_length[i] << "," << state_->h_finished[i] << ")";
             std::vector<int> tokens(state_->h_context_length[i]);
@@ -1510,7 +1518,7 @@ void LlamaBatch<T>::Finish(GenerationState& g, std::vector<Signal>& signals)
         }
         if (need_sync) {
             // Release updates on request output buffers to all ranks (`Interrupt` will use it)
-            shared_state_->barrier->wait();
+            context_->comm.h_comm->Sync(context_->comm.h_comm_tp_group);
         }
     }
 
@@ -1524,7 +1532,7 @@ void LlamaBatch<T>::Finish(GenerationState& g, std::vector<Signal>& signals)
                 // Interrupt should reset r
                 FT_CHECK(!r);
             }
-            else if (r->stream_output && rank_ == 0) {
+            else if (r->stream_output && tp_rank_ == 0) {
                 const auto seq_len = r->sequence_length.getVal<int>();
                 // Create signals by copying the request handles for non-finished streaming requests
                 signals.push_back([this, r, seq_len] {  //
@@ -1549,7 +1557,7 @@ void LlamaBatch<T>::Finish(GenerationState& g, std::vector<Signal>& signals)
 template<typename T>
 auto LlamaBatch<T>::Interrupt(int index, bool force_stop, bool force_end) -> Signal
 {
-    if (rank_ == 0) {
+    if (tp_rank_ == 0) {
         TM_LOG_INFO("[Interrupt] slot %d, request %lu, stop %d, end %d",
                     index,
                     (long)state_->requests[index]->id,
@@ -1557,7 +1565,7 @@ auto LlamaBatch<T>::Interrupt(int index, bool force_stop, bool force_end) -> Sig
                     force_end);
     }
 
-    if (debug_ && rank_ == 0) {
+    if (debug_ && tp_rank_ == 0) {
         std::vector<int> tokens(state_->h_context_length[index]);
         Copy(state_->output_ids + index * session_len_, tokens.size(), tokens.data());
         cudaStreamSynchronize(stream_);
@@ -1603,6 +1611,18 @@ auto LlamaBatch<T>::Interrupt(int index, bool force_stop, bool force_end) -> Sig
     };
 }
 
+namespace {
+
+struct RequestData {
+    std::vector<std::shared_ptr<Request>> infer;  // incoming inference request
+    std::vector<std::shared_ptr<Request>> kill;   // incoming kill request
+
+    std::vector<int> cancel;  // canceled indices in current batch
+    bool             abort;
+};
+
+}  // namespace
+
 template<typename T>
 void LlamaBatch<T>::InternalThreadEntry()
 {
@@ -1610,64 +1630,67 @@ void LlamaBatch<T>::InternalThreadEntry()
     check_cuda_error(cudaSetDevice(device_id_));
 
     // Initialize `AnomalyHandler`
-    AnomalyHandler::instance().Init(rank_, model_->vocab_size_padded_, 0, max_batch_size_, stream_);
-
-    // auto& request_queue = shared_state_->request_queue;
-    auto& infer_reqs = shared_state_->infer_reqs;
-    auto& kill_reqs  = shared_state_->kill_reqs;
+    AnomalyHandler::instance().Init(tp_rank_, model_->vocab_size_padded_, 0, max_batch_size_, stream_);
 
     GenerationState g{};
 
     while (1) {
 
-        if (rank_ == 0) {
+        std::shared_ptr<RequestData> req;
+
+        if (tp_rank_ == 0) {
+            req = std::make_shared<RequestData>();
             {
                 NvtxScope  _("pop");
                 const int  free_slot_count = max_batch_size_ - state_->size + g.finished_count;
                 const bool is_empty        = (free_slot_count == max_batch_size_);
-                // Block if batch is empty
-                gateway_->pop(infer_reqs, kill_reqs, free_slot_count, is_empty, shared_state_->abort, dp_rank_);
+                // Block if batch is empty AND no silbings are ready
+                gateway_->pop(req->infer, req->kill, free_slot_count, is_empty, req->abort, dp_rank_);
             }
             // Mark reqs to the same session_id as invalid (which are dangerous to the engine)
-            DisableConflictRequests(infer_reqs, kill_reqs);
+            DisableInvalidRequests(req->infer, req->kill);
+            FindCanceledIndices(req->cancel);
         }
 
         NvtxScope scope("mainloop");
 
         // 1. Wait while rank-0 is dequeueing
         // 2. Broadcast `ec` from rank-0
-        shared_state_->barrier->wait();
+        // shared_state_->barrier->wait();
+        // context_->comm.h_comm->Sync(context_->comm.h_comm_tp_group);
 
-        if (shared_state_->abort) {
+        Broadcast(*context_->comm.h_comm, req, 0, context_->comm.h_comm_tp_group);
+
+        // Broadcast(Signals, )
+
+        if (req->abort) {
             TM_LOG_INFO("[InternalThreadEntry] stop requested.");
             break;
         }
 
         std::vector<Signal> signals;
 
-        ProcessKillRequests(kill_reqs, signals);
+        ProcessKillRequests(req->kill, signals);
 
         // Shared `priority` field will be assigned by rank-0
-        ProcessInferRequests(infer_reqs, signals);
-
-        // is_canceled <- cancel_flag.load()
-        if (rank_ == 0) {
-            BroadcastCancelFlags();
-        }
+        ProcessInferRequests(req->infer, signals);
 
         // 1. Wait while shared `requests` is being used
         // 2. Broadcast modifcations from rank-0
-        shared_state_->barrier->wait();
+        // context_->comm.h_comm->Sync(context_->comm.h_comm_tp_group);
 
-        ProcessCancelRequests(signals);
+        ProcessCancelRequests(req->cancel, signals);
 
-        if (rank_ == 0) {
+        if (tp_rank_ == 0) {
             gateway_->notify(std::move(signals));
         }
 
         Initialize(g);
 
-        if (state_->active_size) {
+        const int n_active =
+            Allreduce(*context_->comm.h_comm, state_->active_size, comm::RedOp::kSum, context_->comm.h_comm_dp_group);
+
+        if (n_active) {
             //
             Forward(g);
 
@@ -1677,10 +1700,10 @@ void LlamaBatch<T>::InternalThreadEntry()
                 // Finished requests and corresponding output tensors will be released when notified
                 // wait for all ranks to ensure no rank (except for output thread) will access related
                 // resources
-                shared_state_->barrier->wait();
+                context_->comm.h_comm->Sync(context_->comm.h_comm_tp_group);
             }
 
-            if (rank_ == 0) {
+            if (tp_rank_ == 0) {
                 gateway_->notify(std::move(signals));
             }
         }
@@ -1699,7 +1722,7 @@ void LlamaBatch<T>::Start()
             InternalThreadEntry();
         }
         catch (const std::exception& e) {
-            TM_LOG_ERROR("[TM][Engine] %s", e.what());
+            TM_LOG_ERROR("[Engine] %s", e.what());
             std::abort();
         }
     });
@@ -1715,7 +1738,7 @@ bool LlamaBatch<T>::Forward(GenerationState& g)
     const int active_size = state_->active_size;
 
     constexpr int kLogInterval = 10;
-    if (rank_ == 0 && (g.step - 1) % kLogInterval == 0) {
+    if (tp_rank_ == 0 && (g.step - 1) % kLogInterval == 0) {
         TM_LOG_INFO("------------------------- step = %d -------------------------", g.step - 1);
     }
 
@@ -1765,6 +1788,15 @@ bool LlamaBatch<T>::Forward(GenerationState& g)
     }
     offsets.push_back(active_size);
 
+    // Synchronize mini batch count with sync DP ranks
+    const int n_batches = Allreduce(*context_->comm.h_comm,  //
+                                    (int)offsets.size(),
+                                    comm::RedOp::kMax,
+                                    context_->comm.h_comm_dp_group);
+    while (offsets.size() < n_batches) {  // populate empty batches
+        offsets.push_back(offsets.back());
+    }
+
     // forward on mini-batches
     for (int p = 0; p < (int)offsets.size() - 1; ++p) {
         const int first           = offsets[p];
@@ -1787,7 +1819,7 @@ bool LlamaBatch<T>::Forward(GenerationState& g)
         const int dc_batch_size = p ? 0 : pf_offset;
         const int pf_batch_size = mini_batch_size - dc_batch_size;
 
-        if (rank_ == 0) {
+        if (tp_rank_ == 0) {
             if (pf_batch_size) {
                 const auto max_q = *std::max_element(h_input_length_buf_ + first, h_input_length_buf_ + last);
                 const auto max_k = *std::max_element(state_->h_context_length + first, state_->h_context_length + last);
@@ -1803,6 +1835,19 @@ bool LlamaBatch<T>::Forward(GenerationState& g)
             }
         }
 
+        // Synchronize batch token num with sync DP ranks
+        const auto local_token_nums = Allgather(*context_->comm.h_comm,  //
+                                                sum_q,
+                                                context_->comm.h_comm_dp_group);
+
+        // if (context_->comm.h_comm->rank() == 0) {
+        //     std::stringstream ss;
+        //     for (auto x : local_token_nums) {
+        //         ss << x << " ";
+        //     }
+        //     TM_LOG_ERROR("%s", ss.str().c_str());
+        // }
+
         model_->forwardUnified(decoder_output_buf_ + first * model_->hidden_units_,
                                context_decoder_output_buf_,  // temp
                                context_decoder_input_buf_,   // temp
@@ -1814,6 +1859,7 @@ bool LlamaBatch<T>::Forward(GenerationState& g)
                                rope_theta_ + first,
                                finished_buf_ + first,
                                sum_q,
+                               local_token_nums.data(),
                                dc_batch_size,
                                pf_batch_size,
                                lora_mask_buf_,
@@ -1874,7 +1920,7 @@ bool LlamaBatch<T>::Forward(GenerationState& g)
     });
     AnomalyHandler::instance().Reset();
 
-    if (debug_ && rank_ == 0) {
+    if (debug_ && tp_rank_ == 0) {
         std::vector<int> curr(active_size);
         Copy(token_ids_buf_ + g.step * active_size, active_size, curr.data());
         cudaStreamSynchronize(stream_);
@@ -1937,7 +1983,7 @@ void LlamaBatch<T>::Warmup()
     if (auto str = std::getenv("TM_GEMM_IMPORT")) {
         std::ifstream ifs(str);
         const int     n_imported = linear.Import(ifs);
-        if (rank_ == 0) {
+        if (tp_rank_ == 0) {
             TM_LOG_INFO("[Gemm2] %d records imported", n_imported);
         }
         return;
@@ -1951,7 +1997,7 @@ void LlamaBatch<T>::Warmup()
     // remove bs that is too large
     bss.erase(std::remove_if(bss.begin(), bss.end(), [&](auto x) { return x > max_forward_token_num_; }), bss.end());
 
-    if (rank_ == 0) {
+    if (tp_rank_ == 0) {
         auto str = Join(bss.begin(), bss.end(), ", ");
         TM_LOG_INFO("[Gemm2] Tuning sequence: %s", str.c_str());
     }
@@ -1973,10 +2019,12 @@ void LlamaBatch<T>::Warmup()
 
         /// NOTE: No explicit barrier can be used here as internal threads are waiting on it now
         for (auto bs : bss) {
-            if (rank_ == 0) {
+            if (tp_rank_ == 0) {
                 TM_LOG_INFO("[Gemm2] %d", bs);
             }
-            const int input_length = bs;
+            const int input_length     = bs;
+            auto      local_token_nums = Allgather(*context_->comm.h_comm, bs, context_->comm.h_comm_dp_group);
+
             model_->forwardUnified(decoder_output_buf_,
                                    context_decoder_output_buf_,
                                    context_decoder_input_buf_,
@@ -1988,6 +2036,7 @@ void LlamaBatch<T>::Warmup()
                                    rope_theta_,    // invalid data
                                    finished_buf_,  // invalid data
                                    bs,
+                                   local_token_nums.data(),
                                    0,
                                    1,
                                    nullptr,
@@ -1996,7 +2045,7 @@ void LlamaBatch<T>::Warmup()
 
         auto tock = std::chrono::steady_clock::now();
 
-        if (rank_ == 0) {
+        if (tp_rank_ == 0) {
             TM_LOG_INFO("[Gemm2] Tuning finished in %.2f seconds.",
                         std::chrono::duration<float, std::ratio<1, 1>>(tock - tick).count());
         }
@@ -2006,7 +2055,7 @@ void LlamaBatch<T>::Warmup()
     check_cuda_error(cudaStreamSynchronize(stream_));
 
     // Only rank-0 exports the dispatch cache
-    if (rank_ == 0) {
+    if (tp_rank_ == 0) {
         if (auto path = std::getenv("TM_GEMM_EXPORT")) {
             std::ofstream ofs(path);
             const auto    n_records = context_->linear->Export(ofs);
@@ -2053,16 +2102,19 @@ void LlamaBatch<T>::DestroyCommunicators()
 {
     if (context_->comm.tp) {
         cudaStreamSynchronize(stream_);
-        shared_state_->barrier->wait();
+        // shared_state_->barrier->wait();
+        context_->comm.h_comm->Sync(context_->comm.h_comm_tp_group);
 
         FreeCommBuffers();
 
-        shared_state_->barrier->wait();
+        // shared_state_->barrier->wait();
+        context_->comm.h_comm->Sync(context_->comm.h_comm_tp_group);
 
         context_->comm.tp.reset();
 
         cudaStreamSynchronize(stream_);
-        shared_state_->barrier->wait();
+        // shared_state_->barrier->wait();
+        context_->comm.h_comm->Sync(context_->comm.h_comm_tp_group);
     }
 }
 

@@ -31,16 +31,15 @@ struct LlamaDecoderLayerWeight {
 public:
     LlamaDecoderLayerWeight() = delete;
 
-    LlamaDecoderLayerWeight(int               layer_id,
-                            const ModelParam& model,
-                            const LoraParam&  lora_param,
-                            const MoeParam&   moe_param,
-                            size_t            tp_size,
-                            size_t            tp_rank);
+    LlamaDecoderLayerWeight(int                layer_id,
+                            const ModelParam&  model,
+                            const EngineParam& engine,
+                            const LoraParam&   lora_param,
+                            const MoeParam&    moe_param);
 
     ~LlamaDecoderLayerWeight();
-    LlamaDecoderLayerWeight(const LlamaDecoderLayerWeight& other) = delete;
-    LlamaDecoderLayerWeight& operator=(const LlamaDecoderLayerWeight& other) = delete;
+    LlamaDecoderLayerWeight(const LlamaDecoderLayerWeight&)            = delete;
+    LlamaDecoderLayerWeight& operator=(const LlamaDecoderLayerWeight&) = delete;
 
     void loadModel(std::string dir_path, FtCudaDataType model_file_type);
 
@@ -71,8 +70,10 @@ private:
     WeightType weight_type_;
     size_t     bit_size_;
     bool       attn_bias_;
-    size_t     tensor_para_size_;
-    size_t     tensor_para_rank_;
+    size_t     attn_tp_size_;
+    size_t     attn_tp_rank_;
+    size_t     mlp_tp_size_;
+    size_t     mlp_tp_rank_;
     bool       is_maintain_buffer_ = false;
     bool       fused_up_and_gate_;
 };

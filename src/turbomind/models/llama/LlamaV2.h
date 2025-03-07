@@ -39,6 +39,7 @@ public:
     ~LlamaV2();
 
     LlamaV2(const ModelParam&               model,
+            const EngineParam&              engine,
             const AttentionParam&           attn,
             const MoeParam&                 moe,
             const LoraParam&                lora,
@@ -52,8 +53,6 @@ public:
     }
 
 private:
-    void embeddingLookup(T* embeddings, const int* token_ids_buf, int batch_size, int step);
-
     void updateEmbedding(T*               decoder_input,
                          const int        bsz,
                          const int*       h_input_length,
@@ -73,6 +72,7 @@ private:
                         const float*     rope_theta,
                         const bool*      finished,
                         size_t           token_num,
+                        const int*       local_token_nums,
                         int              dc_batch_size,
                         int              pf_batch_size,
                         int*             lora_mask,

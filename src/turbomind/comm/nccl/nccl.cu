@@ -2,12 +2,16 @@
 
 #include <cstdint>
 #include <memory>
+#include <numeric>
+#include <type_traits>
 #include <unordered_map>
 
 #include <nccl.h>
 
 #include "src/turbomind/comm/comm.h"
+#include "src/turbomind/comm/host.h"
 #include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/logger.h"
 #include "src/turbomind/utils/string_utils.h"
 
@@ -187,6 +191,106 @@ public:
         }
     }
 
+    void AllGatherAsym(
+        const void* sendbuff, void* recvbuff, const size_t* sendcount, DataType type, cudaStream_t stream) override
+    {
+        const size_t elem_size = get_elem_size(type);
+
+        const char* sendbuf = (const char*)sendbuff;
+        char*       recvbuf = (char*)recvbuff;
+
+        NCCLCHECK(ncclGroupStart());
+        for (int i = 0; i < world_size_; ++i) {
+            NCCLCHECK(ncclBroadcast(sendbuf, recvbuf, sendcount[i], getNcclDataType(type), i, comm_, stream));
+            sendbuf += elem_size * sendcount[i];
+            recvbuf += elem_size * sendcount[i];
+        }
+        NCCLCHECK(ncclGroupEnd());
+    }
+
+    void ReduceScatterAsym(
+        const void* sendbuff, void* recvbuff, const size_t* recvcount, DataType type, cudaStream_t stream) override
+    {
+        const size_t elem_size = get_elem_size(type);
+
+        const char* sendbuf = (const char*)sendbuff;
+        char*       recvbuf = (char*)recvbuff;
+
+        NCCLCHECK(ncclGroupStart());
+        for (int i = 0; i < world_size_; ++i) {
+            NCCLCHECK(ncclReduce(sendbuf, recvbuf, recvcount[i], getNcclDataType(type), ncclSum, i, comm_, stream));
+            sendbuf += elem_size * recvcount[i];
+            recvbuf += elem_size * recvcount[i];
+        }
+        NCCLCHECK(ncclGroupEnd());
+    }
+
+    void AllreduceResidualBiasRMSnormEx(void*        hidden,  // offset by caller
+                                        void*        residual,
+                                        const void*  bias,
+                                        const void*  weights,
+                                        float        eps,
+                                        int          dim,
+                                        const int    token_num,
+                                        DataType     type,
+                                        int          tp0,
+                                        int          tp1,
+                                        const int*   local_token_nums,
+                                        cudaStream_t stream) override
+    {
+
+        const size_t         elem_size = get_elem_size(type);
+        const ncclDataType_t nccl_type = getNcclDataType(type);
+
+        // const int inner_tp = std::min(tp0, tp1);
+        // FT_CHECK(tp0 % inner_tp == 0 && tp1 % inner_tp == 0);
+        // const int slice = (token_num + inner_tp - 1) / inner_tp;  // slice aligned to token boundary
+        // token_num' root comm_split
+
+        if (tp0 > 1) {
+            FT_CHECK(tp0 == world_size_);
+            char* buff = (char*)hidden;
+            NCCLCHECK(ncclGroupStart());
+            for (int i = 0; i < world_size_; ++i) {
+                if (int slice = local_token_nums[i]) {
+                    NCCLCHECK(ncclReduce(buff, buff, (size_t)slice * dim, nccl_type, ncclSum, i, comm_, stream));
+                    buff += elem_size * slice * dim;
+                }
+            }
+            NCCLCHECK(ncclGroupEnd());
+            sync_check_cuda_error();
+        }
+
+        if (1) {
+            const int slice  = local_token_nums[rank_];
+            const int offset = std::accumulate(local_token_nums, local_token_nums + rank_, 0);
+            invokeResidualBiasRMSNorm((char*)hidden + elem_size * offset * dim,
+                                      (char*)residual,
+                                      weights,
+                                      bias,
+                                      type,
+                                      dim,
+                                      slice,
+                                      eps,
+                                      stream);
+            sync_check_cuda_error();
+        }
+
+        if (tp1 > 1) {
+            FT_CHECK(tp1 == world_size_);
+            char* buff = (char*)hidden;
+            NCCLCHECK(ncclGroupStart());
+            for (int i = 0; i < world_size_; ++i) {
+                if (int slice = local_token_nums[i]) {
+                    NCCLCHECK(ncclBroadcast(buff, buff, (size_t)slice * dim, nccl_type, i, comm_, stream));
+                    buff += elem_size * slice * dim;
+                }
+            }
+            NCCLCHECK(ncclGroupEnd());
+            sync_check_cuda_error();
+        }
+    }
+
 private:
     ncclComm_t comm_;
 
@@ -194,37 +298,51 @@ private:
     std::unordered_map<void*, size_t> buffers_;
 };
 
+#if 0
 class NcclGroupId: public GroupId {
 public:
-    void Initialize() override
-    {
-        NCCLCHECK(ncclGetUniqueId(&uid_));
-    }
+    void Initialize() override {}
+    void Export(std::ostream& os) override {}
+    void Import(std::istream& is) override {}
 
-    void Export(std::ostream& os) override
+    std::unique_ptr<Comm> CreateCommunicator(int rank, int world_size, std::shared_ptr<HostComm> host_comm) override
     {
-        os.write((const char*)&uid_, sizeof(uid_));
-    }
+        ncclUniqueId uid{};
+        if (rank == 0) {
+            NCCLCHECK(ncclGetUniqueId(&uid));
+        }
 
-    void Import(std::istream& is) override
-    {
-        is.read((char*)&uid_, sizeof(uid_));
-    }
+        static_assert(std::is_trivially_copyable_v<ncclUniqueId>);
+        Broadcast(*host_comm, uid, 0);
 
-    std::unique_ptr<Comm> CreateCommunicator(int rank, int world_size) override
-    {
         ncclComm_t comm{};
-        NCCLCHECK(ncclCommInitRank(&comm, world_size, uid_, rank));
+        NCCLCHECK(ncclCommInitRank(&comm, world_size, uid, rank));
         return std::make_unique<NcclComm>(comm, world_size, rank);
     }
 
 private:
-    ncclUniqueId uid_{};
+    // ncclUniqueId uid_{};
 };
 
 std::unique_ptr<GroupId> CreateNcclGroupId()
 {
     return std::make_unique<NcclGroupId>();
+}
+#endif
+
+std::unique_ptr<Comm> CreateNcclCommunicator(int rank, int world_size, std::shared_ptr<HostComm> host_comm)
+{
+    ncclUniqueId uid{};
+    if (rank == 0) {
+        NCCLCHECK(ncclGetUniqueId(&uid));
+    }
+
+    static_assert(std::is_trivially_copyable_v<ncclUniqueId>);
+    Broadcast(*host_comm, uid, 0);
+
+    ncclComm_t comm{};
+    NCCLCHECK(ncclCommInitRank(&comm, world_size, uid, rank));
+    return std::make_unique<NcclComm>(comm, world_size, rank);
 }
 
 }  // namespace turbomind::comm

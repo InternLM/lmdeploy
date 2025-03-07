@@ -1,8 +1,10 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <numeric>
 #include <optional>
 #include <ostream>
@@ -15,6 +17,8 @@
 
 #include "src/turbomind/comm/barrier.h"
 #include "src/turbomind/comm/comm.h"
+#include "src/turbomind/comm/host.h"
+#include "src/turbomind/utils/Tensor.h"
 
 using namespace turbomind::comm;
 
@@ -82,34 +86,39 @@ struct Context {
 
 struct TestComm {
 
-    std::vector<std::unique_ptr<Comm>> comm_;
+    std::vector<std::unique_ptr<Comm>>     comm_;
+    std::vector<std::shared_ptr<HostComm>> host_comm_;
 
     int              warmup_;
     int              iters_;
     std::vector<int> tokens_;
     size_t           max_tokens_;
 
-    std::optional<Barrier> barrier_;
-
-    static auto Init(int world_size, const std::string& backend) -> std::vector<std::unique_ptr<Comm>>
+    static auto Init(int world_size, const std::string& backend)
     {
-        std::unique_ptr<GroupId> group_id = CreateGroupId(backend);
-        std::string              group_id_str;
+
+        std::unique_ptr<HostGroupId> group_id = CreateHostGroupId({});
+        std::string                  group_id_data;
         if (1) {  // master
             group_id->Initialize();
             std::stringstream ss;
             group_id->Export(ss);
-            group_id_str = ss.str();
+            group_id_data = ss.str();
         }
 
-        std::vector<std::unique_ptr<Comm>> comm(world_size);
+        std::vector<std::unique_ptr<Comm>>     comm(world_size);
+        std::vector<std::shared_ptr<HostComm>> host_comm(world_size);
 
         auto init = [&](int rank) {
+            // initialize host communicators
+            std::stringstream            ss(group_id_data);
+            std::unique_ptr<HostGroupId> host_id = CreateHostGroupId({});
+            host_id->Import(ss);
+            host_comm[rank] = host_id->CreateHostCommunicator(rank, world_size);
+
+            // initialize device communicators
             cudaSetDevice(rank);
-            std::stringstream        ss(group_id_str);
-            std::unique_ptr<GroupId> group_id = CreateGroupId(backend);
-            group_id->Import(ss);
-            comm[rank] = group_id->CreateCommunicator(rank, world_size);
+            comm[rank] = CreateCommunicator(backend, rank, world_size, host_comm[rank]);
         };
 
         std::vector<std::thread> threads;
@@ -120,7 +129,7 @@ struct TestComm {
             t.join();
         }
 
-        return comm;
+        return std::make_pair(host_comm, std::move(comm));
     }
 
     void Run(int hidden_dim, int vocab_size, int tp, int warmup, int iters, std::vector<int> tokens)
@@ -134,9 +143,9 @@ struct TestComm {
             tp = device_num;
         }
 
-        barrier_.emplace(device_num);
+        // barrier_.emplace(device_num);
 
-        comm_ = Init(device_num, "native");
+        std::tie(host_comm_, comm_) = Init(device_num, "native");
 
         warmup_ = warmup;
         iters_  = iters;
@@ -147,7 +156,7 @@ struct TestComm {
         TestAllReduce<half>(hidden_dim);
         TestAllreduceResidualBiasRMSnorm<half>(hidden_dim);
         TestAllGather<half>(hidden_dim / tp);  // tp embedding
-        TestAllGather<float>(vocab_size / tp);
+        // TestAllGather<float>(vocab_size / tp);
     }
 
     template<class T>
@@ -170,7 +179,7 @@ struct TestComm {
 
         std::cout << "done.\n";
 
-        auto func = [&](Comm& comm) {
+        auto func = [&](Comm& comm, HostComm& h_comm) {
             const int    rank = comm.rank();
             Context      ctx{rank};
             const size_t max_count   = ref_data.size();
@@ -202,27 +211,38 @@ struct TestComm {
                 const size_t count = (size_t)n * dim;
                 auto&        delta = deltas.emplace_back();
 
-                barrier_->arrive_and_wait();
+                // barrier_->arrive_and_wait();
+                h_comm.Sync();
+
+                const std::vector<size_t> counts(comm.world_size(), count / comm.world_size());
 
                 for (int i = 0; i < warmup_ + iters_; ++i) {
                     ctx.copy_n(d_rank_data, count, d_tmp);
                     auto ms = ctx.exec([&](auto stream) {  //
                         if (is_ncu && i == warmup_) {
-                            barrier_->arrive_and_wait();
+                            h_comm.Sync();
+                            // barrier_->arrive_and_wait();
                             if (rank == 0) {
                                 cudaProfilerStart();
                             }
-                            barrier_->arrive_and_wait();
+                            h_comm.Sync();
+                            // barrier_->arrive_and_wait();
                         }
 
                         comm.AllReduceSum(d_tmp, d_tmp, count, stream);
 
+                        // const auto type = turbomind::getTensorType<T>();
+                        // comm.ReduceScatterAsym(d_tmp, d_tmp, counts.data(), type, stream);
+                        // comm.AllGatherAsym(d_tmp, d_tmp, counts.data(), type, stream);
+
                         if (is_ncu && i == warmup_) {
-                            barrier_->arrive_and_wait();
+                            h_comm.Sync();
+                            // barrier_->arrive_and_wait();
                             if (rank == 0) {
                                 cudaProfilerStop();
                             }
-                            barrier_->arrive_and_wait();
+                            h_comm.Sync();
+                            // barrier_->arrive_and_wait();
                         }
                     });
                     if (i >= warmup_) {
@@ -249,8 +269,8 @@ struct TestComm {
         };
 
         std::vector<std::thread> threads;
-        for (auto& comm : comm_) {
-            threads.emplace_back(func, std::ref(*comm));
+        for (size_t i = 0; i < comm_.size(); ++i) {
+            threads.emplace_back(func, std::ref(*comm_[i]), std::ref(*host_comm_[i]));
         }
         for (auto& t : threads) {
             t.join();
@@ -309,7 +329,7 @@ struct TestComm {
 
         std::cout << "done.\n";
 
-        auto func = [&](Comm& comm) noexcept {
+        auto func = [&](Comm& comm, HostComm& h_comm) {
             const int    rank = comm.rank();
             Context      ctx{rank};
             const size_t max_count   = ref_data.size();
@@ -374,7 +394,7 @@ struct TestComm {
             for (const auto& n : tokens_) {
                 const size_t count = (size_t)n * dim;
                 auto&        delta = deltas.emplace_back();
-                barrier_->arrive_and_wait();
+                h_comm.Sync();
                 for (int i = 0; i < warmup_ + iters_; ++i) {
 
                     ctx.copy_n(d_rank_data, count, d_tmp_data);
@@ -382,21 +402,31 @@ struct TestComm {
 
                     auto ms = ctx.exec([&](auto stream) {  //
                         if (is_ncu && i == warmup_) {
-                            barrier_->arrive_and_wait();
+                            h_comm.Sync();
                             if (rank == 0) {
                                 cudaProfilerStart();
                             }
-                            barrier_->arrive_and_wait();
+                            h_comm.Sync();
                         }
                         comm.AllreduceResidualBiasRMSnorm(
                             d_tmp_data, d_tmp_res, has_bias ? d_bias : nullptr, d_weight, eps, dim, n, stream);
-
+                        // comm.AllreduceResidualBiasRMSnormEx(d_tmp_data,
+                        //                                     d_tmp_res,
+                        //                                     has_bias ? d_bias : nullptr,
+                        //                                     d_weight,
+                        //                                     eps,
+                        //                                     dim,
+                        //                                     n,
+                        //                                     turbomind::getTensorType<T>(),
+                        //                                     comm.world_size(),
+                        //                                     comm.world_size(),
+                        //                                     stream);
                         if (is_ncu && i == warmup_) {
-                            barrier_->arrive_and_wait();
+                            h_comm.Sync();
                             if (rank == 0) {
                                 cudaProfilerStop();
                             }
-                            barrier_->arrive_and_wait();
+                            h_comm.Sync();
                         }
                     });
                     if (i >= warmup_) {
@@ -423,8 +453,8 @@ struct TestComm {
         };
 
         std::vector<std::thread> threads;
-        for (auto& comm : comm_) {
-            threads.emplace_back(func, std::ref(*comm));
+        for (size_t i = 0; i < comm_.size(); ++i) {
+            threads.emplace_back(func, std::ref(*comm_[i]), std::ref(*host_comm_[i]));
         }
         for (auto& t : threads) {
             t.join();
@@ -449,7 +479,7 @@ struct TestComm {
 
         std::cout << "done.\n";
 
-        auto func = [&](Comm& comm) {
+        auto func = [&](Comm& comm, HostComm& h_comm) {
             const int    rank       = comm.rank();
             const int    world_size = comm.world_size();
             Context      ctx{rank};
@@ -484,7 +514,10 @@ struct TestComm {
                 const size_t count = (size_t)n * dim;  // dim = hidden_dim / tp
                 auto&        delta = deltas.emplace_back();
 
-                barrier_->arrive_and_wait();
+                // barrier_->arrive_and_wait();
+                h_comm.Sync();
+
+                const std::vector<size_t> counts(world_size, count);
 
                 for (int i = 0; i < warmup_ + iters_; ++i) {
                     cudaMemsetAsync(d_tmp, 0, sizeof(T) * count * comm.world_size(), ctx.stream);
@@ -495,6 +528,7 @@ struct TestComm {
                         }
                         else {
                             comm.AllGather(d_tmp + rank * count, d_tmp, count, stream);
+                            // comm.AllGatherAsym(d_tmp, d_tmp, counts.data(), turbomind::getTensorType<T>(), stream);
                         }
                     });
                     if (i >= warmup_) {
@@ -522,8 +556,8 @@ struct TestComm {
         };
 
         std::vector<std::thread> threads;
-        for (auto& comm : comm_) {
-            threads.emplace_back(func, std::ref(*comm));
+        for (size_t i = 0; i < comm_.size(); ++i) {
+            threads.emplace_back(func, std::ref(*comm_[i]), std::ref(*host_comm_[i]));
         }
         for (auto& t : threads) {
             t.join();
@@ -546,6 +580,47 @@ struct TestComm {
 
 int main(int argc, char* argv[])
 {
+#if 0
+    const int                N     = 8;
+    auto                     state = std::make_shared<HostComm::State>(N);
+    std::vector<std::thread> threads;
+    for (int r = 0; r < N; ++r) {
+        threads.emplace_back([&, r] {
+            HostComm comm(N, r, state);
+            int      group    = 0;
+            // group             = comm.Split(r / (N / 2), 0);
+            group             = comm.Split(r % 4, 0);
+            auto         tick = std::chrono::steady_clock::now();
+            volatile int a;
+            volatile int b;
+            for (int i = 0; i < 1; ++i) {
+                a      = Allreduce<RedOp::kSum>(comm, r, group);
+                auto v = Allgather(comm, r, group);
+                b      = std::accumulate(v.begin(), v.end(), 0);
+                for (int j = 0; j < N; ++j) {
+                    comm.Sync();
+                    if (j == r) {
+                        std::cout << a << " " << b << std::endl;
+                    }
+                }
+            }
+            auto tock = std::chrono::steady_clock::now();
+
+            for (int i = 0; i < N; ++i) {
+                comm.Sync();
+                if (i == r) {
+                    std::cout << std::chrono::duration<float, std::milli>(tock - tick).count() << std::endl;
+                }
+            }
+        });
+    }
+    std::cout << "main thread waiting.\n";
+    for (auto& t : threads) {
+        t.join();
+    }
+    return 0;
+#endif
+
     TestComm test;
 
     test.Run(8192,  //
@@ -553,7 +628,7 @@ int main(int argc, char* argv[])
              -1,
              10,
              100,
-             //  {1024});
+             //   {1024, 2048, 4096, 8192});
              // {512});
              //  {1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 24, 32, 48, 64, 96, 128});
              //  {128, 256, 512, 1024, 2048, 4096, 8192});

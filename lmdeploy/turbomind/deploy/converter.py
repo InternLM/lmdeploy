@@ -17,7 +17,7 @@ from .config import TurbomindModelConfig
 from .module import Transformer
 from .policy import get_input_policy
 from .source_model.base import INPUT_MODELS
-from .target_model.base import OUTPUT_MODELS
+from .target_model.base import OUTPUT_MODELS, BaseOutputModel
 
 SUPPORTED_FORMATS = ['hf', 'awq', 'gptq', None]
 logger = get_logger('lmdeploy')
@@ -158,7 +158,7 @@ def get_tm_model(model_path,
                  chat_template_name,
                  engine_config: TurbomindEngineConfig,
                  group_size: int = None,
-                 out_dir: str = None):
+                 out_dir: str = None) -> BaseOutputModel:
     """Create turbomind model.
 
     Args:
@@ -226,7 +226,9 @@ def get_tm_model(model_path,
 
     tm_cfg.model_config.chat_template = chat_template_name
     tm_cfg.model_config.model_name = model_name
-    tm_cfg.model_config.tp = engine_config.tp
+
+    tm_cfg.model_config.attn_tp_size = engine_config.attn_tp_size
+    tm_cfg.model_config.mlp_tp_size = engine_config.mlp_tp_size
 
     output_model = OUTPUT_MODELS.get(output_model_name)(input_model=input_model,
                                                         cfg=tm_cfg,

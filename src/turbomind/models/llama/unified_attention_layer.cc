@@ -185,6 +185,10 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     T* attention_input = inputs->getPtr<T>("input_query");
     T* attention_out   = outputs->getPtr<T>("hidden_features");
 
+    if (token_num == 0) {
+        return;
+    }
+
     /////////////////////////////////////////////
     /// allocate buffers
     allocateBuffer(token_num,                                           // shared

@@ -282,10 +282,10 @@ static void safe_memcpy(void* dst, const void* src, size_t size)
 namespace {
 
 struct ScopedGIL {
-    ScopedGIL(const ScopedGIL&) = delete;
+    ScopedGIL(const ScopedGIL&)            = delete;
     ScopedGIL& operator=(const ScopedGIL&) = delete;
     ScopedGIL(ScopedGIL&&)                 = delete;
-    ScopedGIL& operator=(ScopedGIL&&) = delete;
+    ScopedGIL& operator=(ScopedGIL&&)      = delete;
     ScopedGIL()
     {
         state = PyGILState_Ensure();
@@ -514,9 +514,6 @@ PYBIND11_MODULE(_turbomind, m)
             "create_llama_model",
             [](std::string model_dir,
                std::string config,
-               size_t      tensor_para_size,
-               size_t      pipeline_para_size,
-               int         enable_custom_all_reduce,
                std::string data_type) -> std::shared_ptr<AbstractTransformerModel> {
                 auto gil_factory = [] {  //
                     // erase the type
@@ -528,25 +525,14 @@ PYBIND11_MODULE(_turbomind, m)
                 };
 
                 if (data_type == "half" || data_type == "fp16" || data_type == "float16" || data_type == "int4") {
-                    std::shared_ptr<LlamaTritonModel<half>> model(new LlamaTritonModel<half>(tensor_para_size,
-                                                                                             pipeline_para_size,
-                                                                                             enable_custom_all_reduce,
-                                                                                             model_dir,
-                                                                                             config,
-                                                                                             gil_factory),
-                                                                  no_gil_deleter);
+                    std::shared_ptr<LlamaTritonModel<half>> model(
+                        new LlamaTritonModel<half>(model_dir, config, gil_factory), no_gil_deleter);
                     return model;
                 }
                 else if (data_type == "bf16" || data_type == "bfloat16") {
 #ifdef ENABLE_BF16
                     std::shared_ptr<LlamaTritonModel<__nv_bfloat16>> model(
-                        new LlamaTritonModel<__nv_bfloat16>(tensor_para_size,
-                                                            pipeline_para_size,
-                                                            enable_custom_all_reduce,
-                                                            model_dir,
-                                                            config,
-                                                            gil_factory),
-                        no_gil_deleter);
+                        new LlamaTritonModel<__nv_bfloat16>(model_dir, config, gil_factory), no_gil_deleter);
                     return model;
 #else
                     throw std::runtime_error("Error: turbomind has not been built with bf16 support.");
@@ -554,8 +540,7 @@ PYBIND11_MODULE(_turbomind, m)
                 }
                 else {
 #ifdef ENABLE_FP32
-                    auto model = std::make_shared<LlamaTritonModel<float>>(
-                        tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir, config, gil_factory);
+                    auto model = std::make_shared<LlamaTritonModel<float>>(model_dir, config, gil_factory);
                     return model;
 #else
                     throw std::runtime_error("Error: turbomind has not been built with fp32 support.");
@@ -563,11 +548,8 @@ PYBIND11_MODULE(_turbomind, m)
                 }
             },
             "model_dir"_a,
-            "config"_a                   = "",
-            "tensor_para_size"_a         = 1,
-            "pipeline_para_size"_a       = 1,
-            "enable_custom_all_reduce"_a = 0,
-            "data_type"_a                = "half")
+            "config"_a    = "",
+            "data_type"_a = "half")
         .def(
             "create_model_instance",
             [](AbstractTransformerModel* model, int deviceId) { return model->createModelInstance(deviceId); },

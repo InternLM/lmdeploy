@@ -38,8 +38,7 @@ struct ModelParam {
 };
 
 struct MoeParam {
-    enum Method
-    {
+    enum Method {
         kNaive,
         kFused
     } method;
@@ -91,10 +90,19 @@ struct EngineParam {
     int max_context_token_num;
     int num_tokens_per_iter;
     int max_prefill_iters;
+
+    // parallel params
+    int outer_dp_size;
+    int outer_dp_rank;
+    int attn_dp_size;
+    int attn_dp_rank;
+    int attn_tp_size;
+    int attn_tp_rank;
+    int mlp_tp_size;
+    int mlp_tp_rank;
 };
 
-enum class LoraPolicy : int
-{
+enum class LoraPolicy : int {
     kNull,
     kPlora,
 };

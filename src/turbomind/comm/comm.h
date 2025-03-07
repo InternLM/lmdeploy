@@ -10,6 +10,7 @@
 
 #include <cuda_runtime.h>
 
+#include "src/turbomind/comm/host.h"
 #include "src/turbomind/utils/Tensor.h"
 
 namespace turbomind::comm {
@@ -88,6 +89,22 @@ public:
         throw std::runtime_error("not implemented");
     }
 
+    virtual void AllreduceResidualBiasRMSnormEx(void*        hidden,  // offset by caller
+                                                void*        residual,
+                                                const void*  bias,
+                                                const void*  weights,
+                                                float        eps,
+                                                int          dim,
+                                                const int    token_num,
+                                                DataType     type,
+                                                int          tp0,
+                                                int          tp1,
+                                                const int*   local_token_nums,
+                                                cudaStream_t stream)
+    {
+        throw std::runtime_error("not implemented");
+    }
+
     template<class T>
     void AllreduceResidualBiasRMSnorm(
         T* hidden, T* residual, const T* bias, const T* weights, float eps, int dim, int token_num, cudaStream_t stream)
@@ -121,31 +138,32 @@ public:
         AllGather2D(sendbuff, recvbuff, pitch, stride, width, height, getTensorType<T>(), flags, stream);
     }
 
+    virtual void
+    AllGatherAsym(const void* sendbuff, void* recvbuff, const size_t* sendcount, DataType type, cudaStream_t stream)
+    {
+        throw std::runtime_error("not implemented");
+    }
+
+    virtual void
+    ReduceScatterAsym(const void* sendbuff, void* recvbuff, const size_t* recvcount, DataType type, cudaStream_t stream)
+    {
+        throw std::runtime_error("not implemented");
+    }
+
 protected:
     int world_size_;
     int rank_;
 };
 
-std::vector<std::unique_ptr<Comm>> CreateNcclComm(const std::vector<int>& devices);
-
-std::vector<std::unique_ptr<Comm>> CreateNativeComm(const std::vector<int>& devices);
-
-// GroupId
-class GroupId {
-public:
-    virtual ~GroupId() = default;
-
-    virtual void Initialize()             = 0;
-    virtual void Export(std::ostream& os) = 0;
-    virtual void Import(std::istream& is) = 0;
-
-    virtual std::unique_ptr<Comm> CreateCommunicator(int rank, int world_size) = 0;
-};
-
-std::unique_ptr<GroupId> CreateGroupId(const std::string& backend);
+std::unique_ptr<Comm>
+CreateCommunicator(const std::string& backend, int rank, int n_ranks, std::shared_ptr<HostComm> host_comm);
 
 struct Splits {
-    std::unique_ptr<Comm> tp;  //
+    std::unique_ptr<Comm> tp;
+
+    std::shared_ptr<HostComm> h_comm;
+    int                       h_comm_tp_group;
+    int                       h_comm_dp_group;
 };
 
 }  // namespace turbomind::comm

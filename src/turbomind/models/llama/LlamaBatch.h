@@ -19,14 +19,6 @@
 
 namespace turbomind {
 
-struct SharedState {
-    std::vector<std::shared_ptr<Request>> infer_reqs;
-    std::vector<std::shared_ptr<Request>> kill_reqs;
-    std::shared_ptr<Barrier>              barrier;
-    bool                                  abort;
-    std::atomic<size_t>                   free_size{std::numeric_limits<size_t>::max()};
-};
-
 struct BatchState {
     int*  h_prompt_length;  // history + input, ignore generated
     int*  h_context_length;
@@ -84,7 +76,7 @@ public:
     using Requests = std::vector<std::shared_ptr<Request>>;
     using Signal   = std::function<void()>;
 
-    void DisableConflictRequests(Requests& infer_reqs, Requests& kill_reqs);
+    void DisableInvalidRequests(Requests& infer_reqs, Requests& kill_reqs);
 
     void ProcessKillRequests(const Requests& reqs, std::vector<Signal>& signals);
 
@@ -110,13 +102,12 @@ public:
 
     void OutputLastHiddenState(const T* hidden_states, int first, int last);
 
-    explicit LlamaBatch(const EngineParam&           param,
-                        std::unique_ptr<LlamaV2<T>>  model,
-                        std::unique_ptr<Context<T>>  ctx,
-                        std::shared_ptr<SharedState> state,
-                        std::shared_ptr<Gateway>     gateway,
-                        int                          device_id,
-                        int                          dp_rank);
+    explicit LlamaBatch(const EngineParam&          param,
+                        std::unique_ptr<LlamaV2<T>> model,
+                        std::unique_ptr<Context<T>> ctx,
+                        std::shared_ptr<Gateway>    gateway,
+                        int                         device_id,
+                        int                         dp_rank);
 
     ~LlamaBatch();
 
@@ -135,9 +126,9 @@ public:
     void Warmup();
 
 private:
-    void BroadcastCancelFlags();
+    void FindCanceledIndices(std::vector<int>& indices);
 
-    void ProcessCancelRequests(std::vector<Signal>& signals);
+    void ProcessCancelRequests(std::vector<int>& indices, std::vector<Signal>& signals);
 
     void InternalThreadEntry();
 
@@ -210,8 +201,7 @@ private:
 private:
     const EngineParam param_;
 
-    const std::shared_ptr<Gateway>     gateway_;
-    const std::shared_ptr<SharedState> shared_state_;
+    const std::shared_ptr<Gateway> gateway_;
 
     const int      max_batch_size_;
     const int      max_forward_token_num_;
@@ -221,7 +211,7 @@ private:
     const int      device_id_;
     const int      dp_rank_;
     const int      tp_size_;
-    const int      rank_;  //  tp rank
+    const int      tp_rank_;
     const DataType data_type_;
     const bool     debug_;
 
@@ -310,8 +300,6 @@ private:
     BatchState* state_{};
     BatchState* back_{};
     BatchState* incoming_{};
-
-    uint64_t request_count_{0};
 
     // hard limits for persistent buffers
     static constexpr int kMaxStopBadWordsLen = 32;
