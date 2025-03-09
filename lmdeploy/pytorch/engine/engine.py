@@ -8,7 +8,7 @@ from typing import Any, Dict, List
 import numpy as np
 import torch
 
-from lmdeploy.messages import PytorchEngineConfig, ResponseType
+from lmdeploy.messages import EngineRole, PytorchEngineConfig, ResponseType
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model, logging_timer
 
 from ..adapter.adapter import AdapterManager
@@ -38,6 +38,7 @@ class InferOutput:
     meta: Any = None
     finish: bool = False
     logits: torch.Tensor = None
+    cache_block_ids: List[int] = None
 
 
 def _tensorlize_block_offsets(block_offsets):
@@ -95,7 +96,7 @@ class Engine:
                  model_path: str,
                  tokenizer: object,
                  engine_config: PytorchEngineConfig = None,
-                 trust_remote_code: bool = True) -> None:
+                 trust_remote_code: bool = True) -> None: 
         # make sure engine exits
         if engine_config is None:
             engine_config = PytorchEngineConfig()
@@ -103,6 +104,7 @@ class Engine:
             engine_config = copy.deepcopy(engine_config)
         if engine_config.max_batch_size is None:
             engine_config.max_batch_size = get_max_batch_size(engine_config.device_type)
+
 
         tp = engine_config.tp
         dp = 1
@@ -130,6 +132,7 @@ class Engine:
         scheduler_config = _build_scheduler_config(engine_config)
         cache_config = _build_cache_config(engine_config)
         backend_config = _build_backend_config(engine_config)
+        setattr(cache_config, "role", engine_config.role)
 
         # build model agent
         raw_tokenizer = None
@@ -286,7 +289,11 @@ class Engine:
             resp = req.data.get('response', True)
             resp_type = ResponseType.SESSION_NOT_EXIST
             if session_id in self.scheduler.sessions:
-                self.scheduler.end_session(session_id)
+                if self.engine_config.role == EngineRole.Prefill:
+                    free_cache = False
+                else:
+                    free_cache = True
+                self.scheduler.end_session(session_id, free_cache)
                 resp_type = ResponseType.SUCCESS
             if resp:
                 self._response(req.resp, resp_type)
@@ -343,6 +350,8 @@ class Engine:
                     return_logits=return_logits,
                     multimodals=req.data.get('input_multimodals'),
                     input_embeddings=req.data.get('input_embeddings'),
+                    block_ids=req.data['block_ids'],
+                    remote_token_ids=req.data['remote_token_ids']
                 )
                 msg = next(iter(sess.sequences.values()))
                 __update_max_new_tokens(msg)
@@ -473,6 +482,13 @@ class Engine:
         if (cross_length + history_cross_length).max().item() == 0:
             cross_length = None
             history_cross_length = None
+        if not is_decoding and self.cache_config.role == EngineRole.Decode: 
+            remote_token_ids = [seq.remote_token_ids[0] for seq in messages]
+        else:
+            remote_token_ids = None
+        session_ids = [seq.session_id for seq in messages]
+        prefill_engine_block_ids = [seq.block_ids for seq in messages]
+        decode_engine_block_ids = [self.scheduler.block_manager.get_block_table(seq) for seq in messages]
 
         return ModelInputs(
             input_ids=input_ids,
@@ -486,6 +502,10 @@ class Engine:
             cross_length=cross_length,
             history_cross_length=history_cross_length,
             model_metas=model_metas,
+            session_ids=session_ids,
+            prefill_engine_block_ids=prefill_engine_block_ids,
+            decode_engine_block_ids=decode_engine_block_ids,
+            remote_token_ids=remote_token_ids
         )
 
     @logging_timer('UpdateRunning', logger)
@@ -547,6 +567,7 @@ class Engine:
                 resp=msg.resp,
                 finish=finish,
                 token_ids=token_ids,
+                cache_block_ids=self.scheduler.block_manager.get_block_table(msg)
             )
             outputs[session_id] = out
 
@@ -681,7 +702,13 @@ class Engine:
         def __send_resp(out: InferOutput):
             """send response."""
             resp_type = (ResponseType.FINISH if out.finish else ResponseType.SUCCESS)
-            self._response(out.resp, resp_type, data=dict(token_ids=out.token_ids, logits=out.logits))
+            self._response(
+                out.resp, resp_type, 
+                data=dict(
+                    token_ids=out.token_ids,
+                    logits=out.logits,
+                    cache_block_ids=out.cache_block_ids
+                ))
 
         def __send_resps(step_outputs: List[InferOutput]):
             """send response callback."""

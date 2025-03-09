@@ -7,6 +7,8 @@ import torch
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.utils import get_logger
 
+from lmdeploy.pytorch import _C
+
 from ..config import CacheConfig, ModelConfig
 
 KVCache = Tuple[torch.Tensor, torch.Tensor]
@@ -49,6 +51,14 @@ class CacheEngine:
             else:
                 raise ValueError(f'unsupported device_type {self.cache_config.device_type}')
 
+        # for pd disaggregation
+        self.ipc_handler_k = None
+        self.ipc_handler_v = None
+        self.migration_ptr_k: int = None
+        self.migration_ptr_v: int = None
+        self._C_handlers_k = None
+        self._C_handlers_v = None
+
         # Initialize the cache.
         self.local_gpu_cache = self.allocate_gpu_cache()
         self.local_cpu_cache = self.allocate_cpu_cache()
@@ -58,7 +68,6 @@ class CacheEngine:
         assert self.cache_stream != torch.cuda.current_stream()
         # Initialize the events for stream synchronization.
         self.events = torch.cuda.Event()
-
         logger.debug(f'Initialize cache engine with {cache_config.num_gpu_blocks}'
                      f' gpu blocks and {cache_config.num_cpu_blocks} cpu blocks.')
 
@@ -192,11 +201,56 @@ class CacheEngine:
 
         return output
 
+    def init_migration(self, config):
+        self.engine_id = config["engine_id"]
+        handler_config = config["handler_config"]
+
+        self._C_handlers_k = {}
+        self._C_handlers_v = {}
+        for key, value in handler_config.items():
+            if key == self.engine_id:
+                _C_handle_k = _C.KVCacheHandlerConfig(*value[0:4])
+                _C_handle_v = _C.KVCacheHandlerConfig(*value[0:4])
+            else:
+                _C_handle_k = _C.KVCacheHandlerConfig(*value[0:6])
+                _C_handle_v = _C.KVCacheHandlerConfig(*(value[0:4] + value[-2:]))
+            self._C_handlers_k[key] = _C_handle_k
+            self._C_handlers_v[key] = _C_handle_v
+        
+        self.migration_ptr_k = _C.ops.init_migration_manager(
+            self.engine_id,
+            self.model_config.dtype.itemsize,
+            32, self.model_config.num_key_value_heads, self.model_config.get_head_size(), self._C_handlers_k)
+
+        self.migration_ptr_v = _C.ops.init_migration_manager(
+            self.engine_id,
+            self.model_config.dtype.itemsize,
+            32, self.model_config.num_key_value_heads, self.model_config.get_head_size(), self._C_handlers_v)
+
+    def migrate(self, blocks_to_migration):
+        _C.ops.migrate(
+            self.migration_ptr_k,
+            [self.full_gpu_cache[0]],
+            blocks_to_migration,
+            0
+        )
+
+        _C.ops.migrate(
+            self.migration_ptr_v,
+            [self.full_gpu_cache[1]],
+            blocks_to_migration,
+            0
+        )
+
+
     def allocate_gpu_cache(self):
         """allocate caches on GPU."""
         caches = self._allocate_cache(self.num_gpu_blocks, 'cuda')
         self.full_gpu_cache = caches
         self.local_gpu_cache = list(zip(*caches))
+
+        self.ipc_handler_k = _C.ops.get_ipc_handle(self.full_gpu_cache[0])
+        self.ipc_handler_v = _C.ops.get_ipc_handle(self.full_gpu_cache[1])
         return self.local_gpu_cache
 
     def allocate_cpu_cache(self):

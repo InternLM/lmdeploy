@@ -1,0 +1,165 @@
+import asyncio
+
+import uvloop
+import uvicorn
+
+import requests
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import StreamingResponse
+import httpx
+import json
+
+from typing import List
+from dataclasses import dataclass
+
+import argparse
+
+asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+
+app = FastAPI()
+
+
+def get_url(endpoint, name):
+    return f"{endpoint}/{name}"
+
+
+@dataclass
+class EngineSnapshot:
+    prefill_endpoints: List[str]
+    decode_endpoints: List[str]
+
+    @property
+    def endpoints(self):
+        return self.prefill_endpoints + self.decode_endpoints
+
+engine_snapshot: EngineSnapshot = None
+
+@app.post("/generate")
+async def generate(request: Request):
+    client_data = await request.json()
+    session_id = None
+
+    async with httpx.AsyncClient() as client:
+        try:
+            # Prefill阶段
+            prefill_url = get_url(engine_snapshot.prefill_endpoints[0], "v1/completions")
+            prefill_resp = await client.post(prefill_url, json=client_data, timeout=30.0)
+            prefill_resp.raise_for_status()
+
+            # 解析首行响应
+            first_line = await prefill_resp.aiter_lines().__anext__()
+            prefill_info = json.loads(first_line[5:])
+            session_id = prefill_info["id"]
+            block_ids = prefill_info["cache_block_ids"]
+            remote_token_ids = prefill_info["choices"][0]["remote_token_ids"]
+
+            # 构建Decode请求
+            decode_data = client_data.copy()
+            decode_data.update({
+                "block_ids": block_ids,
+                "remote_token_ids": remote_token_ids,
+                "session_id": -1,
+                "max_tokens": decode_data.get("max_tokens", 16)  # 确保max_tokens存在
+            })
+
+            # Decode阶段
+            decode_url = get_url(engine_snapshot.decode_endpoints[0], "v1/completions")
+            decode_resp = await client.post(decode_url, json=decode_data, timeout=30.0)
+            decode_resp.raise_for_status()
+
+            # 流式响应生成器
+            async def stream_generator():
+                free_flags = False
+                async for line in decode_resp.aiter_lines():
+                    if not free_flags:
+                        free_url = get_url(engine_snapshot.prefill_endpoints[0], "distserve/free_cache")
+                        requests.post(free_url, json={"session_id": session_id})
+                        free_flags = True
+                    if line:
+                        yield line + '\n'
+
+            return StreamingResponse(
+                stream_generator(),
+                media_type="text/event-stream",
+                headers={"X-Accel-Buffering": "no"}  # 禁用代理缓冲
+            )
+
+        except Exception as e:
+            # 异常时尝试释放资源
+            if session_id:
+                free_url = get_url(engine_snapshot.prefill_endpoints[0], "distserve/free_cache")
+                await client.post(free_url, json={"session_id": session_id})
+            raise HTTPException(status_code=500, detail=str(e))
+
+
+def parse_args():
+    # 创建 ArgumentParser 对象
+    parser = argparse.ArgumentParser(description="处理 prefill 和 decode 的 endpoint 参数")
+
+    parser.add_argument(
+        "--host",
+        type=str,
+        required=True,  # 必须提供该参数
+    )
+
+    parser.add_argument(
+        "--port",
+        type=int,
+        required=True,  # 必须提供该参数
+    )
+
+    # 添加 prefill-endpoint 参数，类型为字符串列表
+    parser.add_argument(
+        "--prefill-endpoint",
+        nargs="+",  # 表示接受一个或多个值，形成列表
+        type=str,
+        required=True,  # 必须提供该参数
+        help="指定 prefill 的 endpoint 列表，例如 --prefill-endpoint http://example1.com http://example2.com"
+    )
+
+    # 添加 decode-endpoint 参数，类型为字符串列表
+    parser.add_argument(
+        "--decode-endpoint",
+        nargs="+",  # 同样表示接受一个或多个值，形成列表
+        type=str,
+        required=True,  # 必须提供该参数
+        help="指定 decode 的 endpoint 列表，例如 --decode-endpoint http://example3.com http://example4.com"
+    )
+
+    args = parser.parse_args()
+    return args
+
+def init_migration(args):
+    global engine_snapshot
+    engine_snapshot = EngineSnapshot(prefill_endpoints=args.prefill_endpoint, decode_endpoints=args.decode_endpoint)
+
+    # Step 1. get cache information
+    total_blocks = []
+    ipc_handlers_k = []
+    ipc_handlers_v = []
+    for endpoint in engine_snapshot.endpoints:
+        cache_info = requests.get(get_url(endpoint, "cache_info")).json()
+        total_blocks.append(cache_info["total"])
+        ipc_handler = requests.get(get_url(endpoint, "distserve/get_ipc_handler")).json()
+        ipc_handlers_k.append(eval(ipc_handler["ipc_k"]))
+        ipc_handlers_v.append(eval(ipc_handler["ipc_v"]))
+    
+    # Step 2. init migration
+    handler_config = {
+        i: (1, 1, total_block, 64, [[[ipc_handler_k]]], [[[offset_k]]], [[[ipc_handler_v]]], [[[offset_v]]])
+        for i, (total_block, (ipc_handler_k, offset_k), (ipc_handler_v, offset_v)) in enumerate(zip(total_blocks, ipc_handlers_k, ipc_handlers_k))
+    }
+
+    for idx, endpoint in enumerate(engine_snapshot.endpoints):
+        engine_handler_config = {
+            "engine_id": idx,
+            "handler_config": handler_config
+        }
+        requests.post(get_url(endpoint, "distserve/init_migration"), json={"config": str(engine_handler_config)}).json()
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    init_migration(args)
+    uvicorn.run(app, host=args.host, port=args.port)
+

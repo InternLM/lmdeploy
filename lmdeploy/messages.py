@@ -107,6 +107,10 @@ class GenerationConfig:
     output_logits: Literal['all', 'generation'] = None
     output_last_hidden_state: Literal['all', 'generation'] = None
 
+    # for disaggregation
+    block_ids: Optional[List[int]] = None
+    remote_token_ids: Optional[List[int]] = None
+
     def convert_stop_bad_words_to_ids(self, tokenizer: Tokenizer):
         """convert stop_words/bad_sords to ids and append the ids to
         stop_token_ids/bad_token_ids."""
@@ -238,6 +242,12 @@ class TurbomindEngineConfig:
         assert self.num_tokens_per_iter >= 0, 'invalid num_tokens_per_iter'
 
 
+class EngineRole(enum.Enum):
+    Hybrid = enum.auto()
+    Prefill = enum.auto()
+    Decode = enum.auto()
+
+
 @dataclass
 class PytorchEngineConfig:
     """PyTorch Engine Config.
@@ -301,6 +311,8 @@ class PytorchEngineConfig:
     revision: str = None
     quant_policy: Literal[0, 4, 8] = 0
     distributed_executor_backend: str = None
+
+    role: EngineRole = EngineRole.Hybrid
 
     def __post_init__(self):
         """Check input validation."""
@@ -387,6 +399,8 @@ class EngineOutput:
     logprobs: List[Dict[int, float]] = None
     logits: torch.Tensor = None
     last_hidden_state: torch.Tensor = None
+
+    cache_block_ids: List[int] = None
 
 
 @dataclass

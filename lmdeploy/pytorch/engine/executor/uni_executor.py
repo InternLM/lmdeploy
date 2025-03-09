@@ -70,6 +70,12 @@ class UniExecutor(ExecutorBase):
     def build_cache_engine(self):
         """build cache engine."""
         self.model_agent.build_cache_engine()
+    
+    def init_migration(self, config):
+        return self.model_agent.init_migration(config)
+
+    def get_ipc_handler(self):
+        return self.model_agent.cache_engine.ipc_handler_k, self.model_agent.cache_engine.ipc_handler_v
 
     def start(self, forward_event: asyncio.Event):
         """start engine loop."""

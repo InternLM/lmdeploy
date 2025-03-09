@@ -20,6 +20,10 @@ class RequestType(enum.Enum):
     STOP_ENGINE = enum.auto()
     RESUME_ENGINE = enum.auto()
 
+    # PD Disaggregation
+    END_PREFILL = enum.auto()
+    END_MIGRATION = enum.auto()
+
 
 @dataclass
 class Response:

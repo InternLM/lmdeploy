@@ -52,6 +52,14 @@ class ExecutorBase:
     def set_model_config(self, model_config: ModelConfig):
         """set all model config."""
         raise NotImplementedError('Not Implemented.')
+    
+    def init_migration(self):
+        """ init migration """
+        raise NotImplementedError('Not Implemented')
+
+    def get_ipc_handler(self):
+        """get ipc handler."""
+        raise NotImplementedError('Not Implemented')
 
     def build_graph_runner(self):
         """build graph runner."""

@@ -250,6 +250,10 @@ class CompletionRequest(BaseModel):
     top_k: Optional[int] = 40  # for opencompass
     seed: Optional[int] = None
 
+    # For Disaggregation
+    remote_token_ids: Optional[List[int]] = None
+    block_ids: Optional[List[int]] = None
+
 
 class CompletionResponseChoice(BaseModel):
     """Completion response choices."""
@@ -275,6 +279,7 @@ class CompletionResponseStreamChoice(BaseModel):
     text: str
     logprobs: Optional[LogProbs] = None
     finish_reason: Optional[Literal['stop', 'length']] = None
+    remote_token_ids: Optional[List[int]] = None
 
 
 class CompletionStreamResponse(BaseModel):
@@ -285,6 +290,10 @@ class CompletionStreamResponse(BaseModel):
     model: str
     choices: List[CompletionResponseStreamChoice]
     usage: Optional[UsageInfo] = None
+    
+    # for disaggregation
+    cache_block_ids: Optional[List[int]] = None
+    remote_token_ids: Optional[List[int]] = None
 
 
 class EmbeddingsRequest(BaseModel):

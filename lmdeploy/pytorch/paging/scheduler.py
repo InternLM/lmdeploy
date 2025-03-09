@@ -40,6 +40,7 @@ class Scheduler:
         self.cache_config = cache_config
 
         self.sessions: Dict[int, SchedulerSession] = OrderedDict()
+        self.unfreed_sessions: Dict[int, SchedulerSession] = OrderedDict()
 
         self.block_manager = build_block_manager(cache_config)
         self.block_trie = BlockTrie(self.cache_config, self.block_manager)
@@ -251,16 +252,22 @@ class Scheduler:
         seq.set_step(0)
         seq.session.remove_sequence(seq)
 
-    def end_session(self, session_id: int):
+    def end_session(self, session_id: int, free_cache: bool=True):
         """End session.
 
         Args:
             session_id (int): The session id.
+            free_cache (bool): Whether to free KVCache
+        
+        Note: In the PD separation scenario, the KV Cache free is carried out after the migration of KVCache).
         """
         session = self.sessions[session_id]
         seqs = list(session.sequences.values())
-        for seq in seqs:
-            self._remove_sequence(seq)
+        if free_cache:
+            for seq in seqs:
+                self._remove_sequence(seq)
+        else:
+            self.unfreed_sessions[session_id] = self.sessions.get(session_id)
         self.sessions.pop(session_id)
 
     def has_unfinished(self):

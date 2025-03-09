@@ -507,6 +507,42 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     return response
 
 
+@router.get('/cache_info')
+async def cache_info() -> JSONResponse:
+    """
+    Step 1: Get cache information
+        - Total Cache
+        - Cache Used 
+    """
+    num_free, num_total = VariableInterface.async_engine.get_cache_info()
+    return JSONResponse({
+        "free": num_free,
+        "total": num_total,
+    })
+
+
+@router.post('/distserve/init_migration')
+async def init_migration(raw_request: Request) -> JSONResponse:
+    connect_config = await raw_request.json()
+    VariableInterface.async_engine.init_migration(eval(connect_config["config"]))
+
+
+@router.post('/distserve/free_cache')
+async def free_cache(raw_request: Request) -> JSONResponse:
+    config = await raw_request.json()
+    session_id = int(config["session_id"])
+    VariableInterface.async_engine.free_cache(session_id)
+
+
+@router.get('/distserve/get_ipc_handler')
+async def get_ipc_handler(raw_request: Request) -> JSONResponse:
+    ipc_k, ipc_v = VariableInterface.async_engine.get_ipc_handler()
+    return JSONResponse({
+        "ipc_k": str(ipc_k),
+        "ipc_v": str(ipc_v)
+    })
+
+
 @router.post('/v1/completions', dependencies=[Depends(check_api_key)])
 async def completions_v1(request: CompletionRequest, raw_request: Request = None):
     """Completion API similar to OpenAI's API.
@@ -581,7 +617,9 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
                                   stop_words=request.stop,
                                   skip_special_tokens=request.skip_special_tokens,
                                   random_seed=random_seed,
-                                  spaces_between_special_tokens=request.spaces_between_special_tokens)
+                                  spaces_between_special_tokens=request.spaces_between_special_tokens,
+                                  block_ids=request.block_ids,
+                                  remote_token_ids=request.remote_token_ids,)
     generators = []
     for i in range(len(request.prompt)):
         result_generator = VariableInterface.async_engine.generate(
@@ -599,17 +637,21 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
                                     text: str,
                                     finish_reason: Optional[str] = None,
                                     logprobs: Optional[LogProbs] = None,
-                                    usage: Optional[UsageInfo] = None) -> str:
+                                    usage: Optional[UsageInfo] = None,
+                                    cache_block_ids: Optional[List[int]] = None,
+                                    remote_token_ids: Optional[List[int]] = None) -> str:
         choice_data = CompletionResponseStreamChoice(index=index,
                                                      text=text,
                                                      finish_reason=finish_reason,
-                                                     logprobs=logprobs)
+                                                     logprobs=logprobs,
+                                                     remote_token_ids=remote_token_ids)
         response = CompletionStreamResponse(
             id=request_id,
             created=created_time,
             model=model_name,
             choices=[choice_data],
             usage=usage,
+            cache_block_ids=cache_block_ids
         )
         response_json = response.model_dump_json()
 
@@ -642,7 +684,9 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
                                                             text=res.response,
                                                             finish_reason=res.finish_reason,
                                                             logprobs=logprobs,
-                                                            usage=usage)
+                                                            usage=usage,
+                                                            cache_block_ids=res.cache_block_ids,
+                                                            remote_token_ids=res.token_ids)
                 yield f'data: {response_json}\n\n'
         yield 'data: [DONE]\n\n'
 
@@ -904,7 +948,6 @@ async def startup_event():
 
         if response.status_code != 200:
             raise HTTPException(status_code=400, detail='Service registration failed')
-        print(response.text)
     except Exception as e:
         print(f'Service registration failed: {e}')
 

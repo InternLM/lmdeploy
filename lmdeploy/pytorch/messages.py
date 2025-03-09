@@ -215,7 +215,9 @@ class SchedulerSession:
                      adapter_name: str = None,
                      return_logits: bool = False,
                      multimodals: MultiModalInputs = None,
-                     input_embeddings: List[InputEmbeddings] = None) -> 'SchedulerSequence':
+                     input_embeddings: List[InputEmbeddings] = None,
+                     block_ids: Optional[List[int]] = None,
+                     remote_token_ids: Optional[List[int]] = None) -> 'SchedulerSequence':
         """Add a new message."""
         if isinstance(token_ids, Tensor):
             token_ids = token_ids.numpy()
@@ -237,6 +239,8 @@ class SchedulerSession:
             history_embeddings=HistoryEmbeddings(input_embeddings),
             history_multimodals=HistoryMultiModals(multimodals),
             return_logits=return_logits,
+            block_ids=block_ids,
+            remote_token_ids=remote_token_ids,
         )
         self.sequences[seq.seq_id] = seq
         if self.seq_manager is not None:
@@ -442,6 +446,10 @@ class SchedulerSequence:
     _status: MessageStatus = field(default=MessageStatus.WAITING, init=False)
     num_ignored_history: int = 0
     model_meta: Dict[str, Any] = None
+
+    # for disaggregation
+    block_ids: Optional[List[int]] = None
+    remote_token_ids: Optional[List[int]] = None
 
     def __post_init__(self):
         """post init."""

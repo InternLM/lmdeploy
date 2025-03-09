@@ -130,6 +130,12 @@ class ModelInputs:
     history_cross_length: torch.LongTensor = None
     model_metas: List[Dict[str, Any]] = None
 
+    # for disaggregation
+    session_ids: List[int] = None
+    prefill_engine_block_ids: List[List[int]] = None
+    decode_engine_block_ids: List[List[int]] = None
+    remote_token_ids: List[int] = None
+
     def update(self, input_ids: torch.LongTensor):
         """update input ids."""
         assert self.is_decoding

@@ -61,6 +61,9 @@ class GenOut:
     logits: Any = None
     last_hidden_state: Any = None
 
+    # for dissaggregation
+    cache_block_ids: List[int] = None 
+
 
 def _gen_out_to_response(out: GenOut, index) -> Response:
     return Response(text=out.response,
@@ -312,6 +315,24 @@ class AsyncEngine(LogitsMixin):
 
     def __exit__(self, exc_type, exc_value, traceback):
         self.close()
+    
+    def get_cache_info(self):
+        num_free_gpu_blocks = self.engine.scheduler.block_manager.get_num_free_gpu_blocks()
+        num_total_gpu_blocks = self.engine.scheduler.block_manager.num_gpu_blocks
+        return (num_free_gpu_blocks, num_total_gpu_blocks)
+
+    def free_cache(self, session_id: int):
+        session = self.engine.scheduler.unfreed_sessions[session_id]
+        seqs = list(session.sequences.values())
+        for seq in seqs:
+            self.engine.scheduler._remove_sequence(seq)
+        self.engine.scheduler.unfreed_sessions.pop(session_id)
+
+    def init_migration(self, config):
+        return self.engine.executor.init_migration(config)
+
+    def get_ipc_handler(self):
+        return self.engine.executor.get_ipc_handler()
 
     def _get_free_insts(self):
         if self.free_insts is None:
@@ -759,7 +780,7 @@ class AsyncEngine(LogitsMixin):
                         spaces_between_special_tokens=gen_config.spaces_between_special_tokens)
                     res = token_ids[ids_offset:]
 
-                    out = GenOut(response, history_len, input_len, gen_len, finish_reason, res)
+                    out = GenOut(response, history_len, input_len, gen_len, finish_reason, res, cache_block_ids=outputs.cache_block_ids)
 
                     if outputs.logprobs is not None:
                         log_offset = ids_offset - start_ids_offset
@@ -788,7 +809,7 @@ class AsyncEngine(LogitsMixin):
                     logger.info(f'session {session_id} finished, reason '
                                 f'"{finish_reason}", input_tokens '
                                 f'{len(input_ids)}, outupt_tokens {gen_len}')
-                    yield GenOut(response, self.id2step[session_id], len(input_ids), gen_len, finish_reason)
+                    yield GenOut(response, self.id2step[session_id], len(input_ids), gen_len, finish_reason, outputs.cache_block_ids)
                 else:
                     logger.error(f'session {session_id} finished, '
                                  'reason "error"')
