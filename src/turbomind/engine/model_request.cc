@@ -124,7 +124,7 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
 
     if (param.gen_cfg.output_logits) {
         const int len = param.gen_cfg.output_logits == GenerationConfig::kAll ? max_in_out_len : max_out_len;
-        add(outputs_, "logits", TYPE_FP32, MEMORY_CPU, len, vocab_size_);
+        add(outputs_, "logits", data_type_, MEMORY_CPU, len, vocab_size_);
     }
 
     if (param.gen_cfg.output_last_hidden_state) {
@@ -133,7 +133,7 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
     }
 
     if (param.gen_cfg.output_logprobs) {
-        add(outputs_, "logprob_vals", TYPE_FP32, MEMORY_CPU, max_out_len, kMaxLogProb);
+        add(outputs_, "logprob_vals", data_type_, MEMORY_CPU, max_out_len, kMaxLogProb);
         add(outputs_, "logprob_indexes", TYPE_INT32, MEMORY_CPU, max_out_len, kMaxLogProb);
         add(outputs_, "logprob_nums", TYPE_INT32, MEMORY_CPU, max_out_len);
     }
