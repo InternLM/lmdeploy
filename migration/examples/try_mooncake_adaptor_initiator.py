@@ -12,8 +12,7 @@ print(data_ptr)
 a.register_local_memory(data_ptr, 0, x.numel() * x.dtype.itemsize + 2)
 
 begin = time.time()
-a.transport("10.130.8.139:8000", data_ptr, x.numel() * x.dtype.itemsize)
+a.transport_batch("10.130.8.139:8000", data_ptr, [0], [x.numel() * x.dtype.itemsize], [0])
 print(time.time() - begin)
 
-time.sleep(12)
 print(x.sum())

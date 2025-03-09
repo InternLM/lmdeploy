@@ -2,13 +2,16 @@
 # modify from: https://github.com/vllm-project/vllm
 from typing import Dict, List, Literal, Tuple
 
+import functools
+
 import torch
 
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.utils import get_logger
 
-# from lmdeploy.pytorch import _slime_C
-from sgir_distserve import _C as _slime_C
+
+from lmdeploy.pytorch.mooncake_lmdeploy_adaptor import mooncake_lmdeploy_adaptor
+from lmdeploy.pytorch import _slime_C
 
 from ..config import CacheConfig, ModelConfig
 
@@ -69,6 +72,10 @@ class CacheEngine:
         assert self.cache_stream != torch.cuda.current_stream()
         # Initialize the events for stream synchronization.
         self.events = torch.cuda.Event()
+
+        self.transfer_engine = mooncake_lmdeploy_adaptor()
+        self.segment_id: str = None
+
         logger.debug(f'Initialize cache engine with {cache_config.num_gpu_blocks}'
                      f' gpu blocks and {cache_config.num_cpu_blocks} cpu blocks.')
 
@@ -228,20 +235,50 @@ class CacheEngine:
             self.model_config.dtype.itemsize,
             self.model_config.num_layers, self.model_config.num_key_value_heads, self.model_config.get_head_size(), self._C_handlers_v)
 
-    def migrate(self, blocks_to_migration):
-        _slime_C.ops.migrate(
-            self.migration_ptr_k,
-            [self.full_gpu_cache[0]],
-            blocks_to_migration,
-            0
-        )
+        self.segment_id = config["segment_id"]
+        endpoint = config["endpoint"]
+        etcd_endpoint = config["etcd_endpoint"]
 
-        _slime_C.ops.migrate(
-            self.migration_ptr_v,
-            [self.full_gpu_cache[1]],
-            blocks_to_migration,
-            0
-        )
+        self.transfer_engine.initialize(etcd_endpoint, endpoint)
+
+        self.transfer_engine.register_local_memory(
+            self.full_gpu_cache[0].data_ptr(),
+            self.full_gpu_cache[0].storage_offset(),
+            self.full_gpu_cache[0].numel() * self.full_gpu_cache[0].dtype.itemsize)
+
+        self.transfer_engine.register_local_memory(
+            self.full_gpu_cache[1].data_ptr(),
+            self.full_gpu_cache[1].storage_offset(),
+            self.full_gpu_cache[1].numel() * self.full_gpu_cache[1].dtype.itemsize)
+
+    def migrate(self, blocks_to_migration):
+        head_dim = self.model_config.get_head_size()
+        num_heads = self.model_config.num_key_value_heads
+        block_size = self.cache_config.block_size
+        length = head_dim * num_heads * block_size * self.full_gpu_cache[1].dtype.itemsize
+        layer_stride = self.cache_config.num_gpu_blocks * length
+
+        target_offset = [[int(block_to_migration[3]) * length + layer * layer_stride for layer in range(self.model_config.num_layers)] for block_to_migration in blocks_to_migration]
+        target_offset = functools.reduce(lambda x, y: x + y, target_offset)
+        source_offset = [[int(block_to_migration[2]) * length + layer * layer_stride for layer in range(self.model_config.num_layers)] for block_to_migration in blocks_to_migration]
+        source_offset = functools.reduce(lambda x, y: x + y, source_offset)
+
+        self.transfer_engine.transport_batch(self.segment_id, self.full_cpu_cache[0].data_ptr(), target_offset, 0, [length] * len(target_offset), source_offset)
+        self.transfer_engine.transport_batch(self.segment_id, self.full_cpu_cache[1].data_ptr(), target_offset, 1, [length] * len(target_offset), source_offset)
+
+        # _slime_C.ops.migrate(
+        #     self.migration_ptr_k,
+        #     [self.full_gpu_cache[0]],
+        #     blocks_to_migration,
+        #     0
+        # )
+
+        # _slime_C.ops.migrate(
+        #     self.migration_ptr_v,
+        #     [self.full_gpu_cache[1]],
+        #     blocks_to_migration,
+        #     0
+        # )
 
 
     def allocate_gpu_cache(self):

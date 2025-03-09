@@ -1,6 +1,3 @@
 [submodule "migration/Mooncake"]
 	path = migration/Mooncake
-	url = https://github.com/kvcache-ai/Mooncake.git
-[submodule "migration/pybind11"]
-	path = migration/pybind11
-	url = https://github.com/pybind/pybind11.git
+	url = https://github.com/JimyMa/Mooncake.git

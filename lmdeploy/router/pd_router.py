@@ -62,7 +62,6 @@ async def generate(request: Request):
                 "session_id": session_id,
                 "max_tokens": decode_data.get("max_tokens", 16)  # 确保max_tokens存在
             })
-            print(decode_data)
 
             # Decode阶段
             decode_url = get_url(engine_snapshot.decode_endpoints[0], "v1/completions")
@@ -153,9 +152,15 @@ def init_migration(args):
     }
     print(handler_config)
 
+    segment_id = ["127.0.0.1:7001", "127.0.0.1:7000",]
+    endpoint_id = ["127.0.0.1:7000", "127.0.0.1:7001",]
+
     for idx, endpoint in enumerate(engine_snapshot.endpoints):
         engine_handler_config = {
             "engine_id": idx,
+            "segment_id": segment_id[idx],
+            "etcd_endpoint": "10.130.8.139:2379",
+            "endpoint": endpoint_id[idx],
             "handler_config": handler_config
         }
         requests.post(get_url(endpoint, "distserve/init_migration"), json={"config": str(engine_handler_config)}).json()
