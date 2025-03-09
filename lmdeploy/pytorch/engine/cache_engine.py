@@ -7,7 +7,8 @@ import torch
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.utils import get_logger
 
-from lmdeploy.pytorch import _C
+# from lmdeploy.pytorch import _slime_C
+from sgir_distserve import _C as _slime_C
 
 from ..config import CacheConfig, ModelConfig
 
@@ -209,33 +210,33 @@ class CacheEngine:
         self._C_handlers_v = {}
         for key, value in handler_config.items():
             if key == self.engine_id:
-                _C_handle_k = _C.KVCacheHandlerConfig(*value[0:4])
-                _C_handle_v = _C.KVCacheHandlerConfig(*value[0:4])
+                _C_handle_k = _slime_C.KVCacheHandlerConfig(*value[0:4])
+                _C_handle_v = _slime_C.KVCacheHandlerConfig(*value[0:4])
             else:
-                _C_handle_k = _C.KVCacheHandlerConfig(*value[0:6])
-                _C_handle_v = _C.KVCacheHandlerConfig(*(value[0:4] + value[-2:]))
+                _C_handle_k = _slime_C.KVCacheHandlerConfig(*value[0:6])
+                _C_handle_v = _slime_C.KVCacheHandlerConfig(*(value[0:4] + value[-2:]))
             self._C_handlers_k[key] = _C_handle_k
             self._C_handlers_v[key] = _C_handle_v
         
-        self.migration_ptr_k = _C.ops.init_migration_manager(
+        self.migration_ptr_k = _slime_C.ops.init_migration_manager(
             self.engine_id,
             self.model_config.dtype.itemsize,
-            32, self.model_config.num_key_value_heads, self.model_config.get_head_size(), self._C_handlers_k)
+            self.model_config.num_layers, self.model_config.num_key_value_heads, self.model_config.get_head_size(), self._C_handlers_k)
 
-        self.migration_ptr_v = _C.ops.init_migration_manager(
+        self.migration_ptr_v = _slime_C.ops.init_migration_manager(
             self.engine_id,
             self.model_config.dtype.itemsize,
-            32, self.model_config.num_key_value_heads, self.model_config.get_head_size(), self._C_handlers_v)
+            self.model_config.num_layers, self.model_config.num_key_value_heads, self.model_config.get_head_size(), self._C_handlers_v)
 
     def migrate(self, blocks_to_migration):
-        _C.ops.migrate(
+        _slime_C.ops.migrate(
             self.migration_ptr_k,
             [self.full_gpu_cache[0]],
             blocks_to_migration,
             0
         )
 
-        _C.ops.migrate(
+        _slime_C.ops.migrate(
             self.migration_ptr_v,
             [self.full_gpu_cache[1]],
             blocks_to_migration,
@@ -249,8 +250,8 @@ class CacheEngine:
         self.full_gpu_cache = caches
         self.local_gpu_cache = list(zip(*caches))
 
-        self.ipc_handler_k = _C.ops.get_ipc_handle(self.full_gpu_cache[0])
-        self.ipc_handler_v = _C.ops.get_ipc_handle(self.full_gpu_cache[1])
+        self.ipc_handler_k = _slime_C.ops.get_ipc_handle(self.full_gpu_cache[0])
+        self.ipc_handler_v = _slime_C.ops.get_ipc_handle(self.full_gpu_cache[1])
         return self.local_gpu_cache
 
     def allocate_cpu_cache(self):

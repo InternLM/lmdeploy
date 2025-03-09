@@ -23,8 +23,6 @@ from .logits_process import FusedLogitsProcessor, SamplingInputs
 from lmdeploy.messages import EngineRole
 
 
-from lmdeploy.pytorch import _C
-
 logger = get_logger('lmdeploy')
 
 

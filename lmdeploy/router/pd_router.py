@@ -52,15 +52,17 @@ async def generate(request: Request):
             session_id = prefill_info["id"]
             block_ids = prefill_info["cache_block_ids"]
             remote_token_ids = prefill_info["choices"][0]["remote_token_ids"]
+            print(f"prefill_info: {prefill_info}")
 
             # 构建Decode请求
             decode_data = client_data.copy()
             decode_data.update({
                 "block_ids": block_ids,
                 "remote_token_ids": remote_token_ids,
-                "session_id": -1,
+                "session_id": session_id,
                 "max_tokens": decode_data.get("max_tokens", 16)  # 确保max_tokens存在
             })
+            print(decode_data)
 
             # Decode阶段
             decode_url = get_url(engine_snapshot.decode_endpoints[0], "v1/completions")
@@ -147,8 +149,9 @@ def init_migration(args):
     # Step 2. init migration
     handler_config = {
         i: (1, 1, total_block, 64, [[[ipc_handler_k]]], [[[offset_k]]], [[[ipc_handler_v]]], [[[offset_v]]])
-        for i, (total_block, (ipc_handler_k, offset_k), (ipc_handler_v, offset_v)) in enumerate(zip(total_blocks, ipc_handlers_k, ipc_handlers_k))
+        for i, (total_block, (ipc_handler_k, offset_k), (ipc_handler_v, offset_v)) in enumerate(zip(total_blocks, ipc_handlers_k, ipc_handlers_v))
     }
+    print(handler_config)
 
     for idx, endpoint in enumerate(engine_snapshot.endpoints):
         engine_handler_config = {
@@ -156,6 +159,7 @@ def init_migration(args):
             "handler_config": handler_config
         }
         requests.post(get_url(endpoint, "distserve/init_migration"), json={"config": str(engine_handler_config)}).json()
+        print(engine_handler_config)
 
 
 if __name__ == "__main__":

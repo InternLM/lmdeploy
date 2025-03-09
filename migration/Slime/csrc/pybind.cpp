@@ -8,7 +8,6 @@
 #include <unistd.h>
 
 #include "cuda_common.h"
-#include "lmdeploy_adaptor.h"
 #include "migration_manager.cuh"
 
 #include <torch/extension.h>
@@ -42,16 +41,4 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
                       std::vector<std::vector<std::vector<int64_t>>>&>())
         .def(py::init<int, int, int, int>())
         .def(py::init<>());
-
-    py::class_<LMDeployAdaptor>(m, "mooncake_lmdeploy_adaptor")
-        .def(py::init<>())
-        .def("initialize", &LMDeployAdaptor::initialize);
-    // .def("initializeExt", &LMDeployAdaptor::initializeExt)
-    // .def("allocateManagedBuffer", &LMDeployAdaptor::allocateManagedBuffer)
-    // .def("freeManagedBuffer", &LMDeployAdaptor::freeManagedBuffer)
-    // .def("transferSync", &LMDeployAdaptor::transferSync)
-    // .def("writeBytesToBuffer", &LMDeployAdaptor::writeBytesToBuffer)
-    // .def("readBytesFromBuffer", &LMDeployAdaptor::readBytesFromBuffer)
-    // .def("expRegisterMemory", &LMDeployAdaptor::expRegisterMemory)
-    // .def("expUnregisterMemory", &LMDeployAdaptor::expUnregisterMemory);
 }
