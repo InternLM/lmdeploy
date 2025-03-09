@@ -53,6 +53,16 @@ def _reduce_scatter_input(out: torch.Tensor, tp_sizes: List[int]):
     return out
 
 
+def _get_dp_tp_meta(all_reduce: bool = True):
+    """get tp meta."""
+    dist_ctx = get_dist_manager().current_context()
+    dist_attn_cfg = dist_ctx.dist_config.attn_config
+    tp = dist_attn_cfg.tp
+    is_tp = tp > 1
+    all_reduce = all_reduce if is_tp else False
+    return is_tp, all_reduce
+
+
 class QKVMixin:
     """qkv mixin."""
 
@@ -199,9 +209,13 @@ class BlockedF8Linear(nn.Module):
         colwise: bool = True,
         is_tp: bool = False,
         all_reduce: bool = True,
+        dp_gather: bool = False,
+        dp_scatter: bool = False,
     ):
         super().__init__()
         self.is_tp = is_tp
+        self.dp_gather = dp_gather
+        self.dp_scatter = dp_scatter
         if device is None:
             device = torch.device('cpu')
         if dtype is None:
@@ -298,16 +312,31 @@ class BlockedF8Linear(nn.Module):
 
     def forward(self, x):
         """forward of blocked fp8 linear."""
+        if self.dp_gather or self.dp_scatter:
+            step_ctx = get_step_ctx_manager().current_context()
+            dp_meta = step_ctx.dp_meta
+            tp_sizes = dp_meta.tp_sizes
+
+        if self.dp_gather:
+            x = _gather_input(x, tp_sizes)
+
         all_reduce = False if self.colwise else self.is_tp
         all_reduce = all_reduce and self.all_reduce
         if len(self.lora_adapters) == 0:
-            return self.impl.forward(x, self.weight, self.scale, self.bias, all_reduce)
+            if self.dp_scatter:
+                _, rank = get_tp_world_rank()
+                return self.impl.forward(x, self.weight, self.scale, self.bias, all_reduce, rank, tp_sizes)
+            else:
+                return self.impl.forward(x, self.weight, self.scale, self.bias, all_reduce)
 
         out = self.impl.forward(x, self.weight, self.scale, self.bias, False)
         for lora_adapter in self.lora_adapters.values():
             out = lora_adapter(x, out)
         if all_reduce:
-            dist.all_reduce(out)
+            if self.dp_scatter:
+                out = _reduce_scatter_input(out, tp_sizes)
+            else:
+                dist.all_reduce(out)
         return out
 
 
@@ -323,7 +352,8 @@ class MergedBlockedF8Linear(BlockedF8Linear):
                  dtype: Optional[torch.dtype] = None,
                  device: Optional[torch.device] = None,
                  is_tp: bool = True,
-                 out_names: Optional[List[int]] = None):
+                 out_names: Optional[List[int]] = None,
+                 dp_gather: bool = False):
         if replicate is None:
             replicate = tuple(False for _ in all_out_features)
         self.block_size = 128
@@ -338,7 +368,15 @@ class MergedBlockedF8Linear(BlockedF8Linear):
         assert len(out_names) == len(self.all_out_features)
         self.out_names_map = dict((name, idx) for idx, name in enumerate(out_names))
         out_features = sum(all_out_features)
-        super().__init__(in_features, out_features, bias, dtype, device, fp8_dtype=fp8_dtype, colwise=True, is_tp=is_tp)
+        super().__init__(in_features,
+                         out_features,
+                         bias,
+                         dtype,
+                         device,
+                         fp8_dtype=fp8_dtype,
+                         colwise=True,
+                         is_tp=is_tp,
+                         dp_gather=dp_gather)
         self.weight.weight_loader = self.weight_loader
         self.scale.weight_loader = self.weight_loader
         self.weight.weight_spliter = self.weight_spliter
@@ -1314,8 +1352,9 @@ def build_linear(in_features: int,
     if not is_tp:
         all_reduce = False
 
-    if dp_scatter:
-        assert quant_config is None, ('Do not support DP+Quant')
+    if dp_scatter and quant_config is not None:
+        quant_method = quant_config['quant_method']
+        assert quant_method in ['fp8'], (f'Do not support dp_gather with quant_method={quant_method}')
 
     if quant_config is None:
         return BaseLinear(
@@ -1378,6 +1417,7 @@ def build_linear(in_features: int,
             colwise=colwise,
             is_tp=is_tp,
             all_reduce=all_reduce,
+            dp_scatter=dp_scatter,
         )
     else:
         raise RuntimeError(f'Unsupported quant method: {quant_method}')
@@ -1390,8 +1430,11 @@ def build_colwise_linear(in_features: int,
                          device: Optional[torch.device] = None,
                          is_tp: bool = False,
                          tp_align_size: int = 1,
-                         quant_config: Any = None) -> nn.Module:
+                         quant_config: Any = None,
+                         enable_dp: bool = False) -> nn.Module:
     """build columnwise parallel linear layer."""
+    if enable_dp and is_tp:
+        is_tp, _ = _get_dp_tp_meta()
     return build_linear(in_features=in_features,
                         out_features=out_features,
                         bias=bias,
@@ -1445,8 +1488,9 @@ def build_merged_colwise_linear(
     if is_tp:
         is_tp = get_tp_world_rank()[0] > 1
 
-    if dp_gather:
-        assert quant_config is None, ('Do not support Quant + DP for now.')
+    if dp_gather and quant_config is not None:
+        quant_method = quant_config['quant_method']
+        assert quant_method in ['fp8'], (f'Do not support dp_gather with quant_method={quant_method}')
 
     if quant_config is None:
         return MergedBaseLinear(in_features=in_features,
@@ -1501,6 +1545,7 @@ def build_merged_colwise_linear(
             device=device,
             is_tp=is_tp,
             out_names=out_names,
+            dp_gather=dp_gather,
         )
     else:
         raise RuntimeError(f'Unsupported quant method: {quant_method}')
@@ -1519,15 +1564,7 @@ def build_qkv_proj(in_features: int,
                    num_replicate_kv_heads: int = 1):
     """build qkv proj."""
     if is_tp:
-        dist_ctx = get_dist_manager().current_context()
-        dp = dist_ctx.dp
-        tp = dist_ctx.tp
-        if dp > 1:
-            # disable tp when dp > 1
-            is_tp = False
-        elif tp <= 1:
-            # disable tp when tp == 1
-            is_tp = False
+        is_tp, _ = _get_dp_tp_meta()
 
     if head_size_v is None:
         head_size_v = head_size
@@ -1590,17 +1627,7 @@ def build_o_proj(in_features: int,
                  all_reduce: bool = True) -> nn.Module:
     """build down linear."""
     if is_tp:
-        dist_ctx = get_dist_manager().current_context()
-        dp = dist_ctx.dp
-        tp = dist_ctx.tp
-        if dp > 1:
-            # disable tp when dp > 1
-            is_tp = False
-            all_reduce = False
-        elif tp <= 1:
-            # disable tp when tp == 1
-            is_tp = False
-            all_reduce = False
+        is_tp, all_reduce = _get_dp_tp_meta(all_reduce)
 
     return build_rowwise_linear(
         in_features=in_features,

@@ -11,7 +11,8 @@ import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
-from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_merged_colwise_linear, build_rowwise_linear
+from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_down_linear, build_gateup_linear, build_o_proj,
+                                        build_rowwise_linear)
 from lmdeploy.pytorch.nn.moe import SoftmaxTopK, build_fused_moe
 from lmdeploy.pytorch.nn.rotary_embedding import YarnParameters
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
@@ -43,9 +44,17 @@ class DeepseekV2BMM(nn.Module):
         self.dtype = dtype
         self.device = device
 
+    def _get_tp_world_rank(self):
+        """get tp world rank."""
+        from lmdeploy.pytorch.distributed import get_dist_manager
+        dist_ctx = get_dist_manager().current_context()
+        if dist_ctx.dp == 1:
+            return get_tp_world_rank()
+        return 1, 0
+
     def _update_batch(self, batch: int):
         """update out features."""
-        world_size, _ = get_tp_world_rank()
+        world_size, _ = self._get_tp_world_rank()
         batch = batch // world_size
         return batch
 
@@ -55,7 +64,7 @@ class DeepseekV2BMM(nn.Module):
 
     def weight_loader(self, param: nn.Parameter, weight: torch.Tensor):
         """weight loader."""
-        world_size, rank = get_tp_world_rank()
+        world_size, rank = self._get_tp_world_rank()
         weight = weight.chunk(world_size, 0)[rank]
         param.data.copy_(weight)
 
@@ -90,6 +99,7 @@ class DeepseekV2Attention(nn.Module):
                 device=device,
                 is_tp=True,
                 quant_config=quantization_config,
+                enable_dp=True,
             )
         else:
             self.q_a_proj = build_colwise_linear(
@@ -114,6 +124,7 @@ class DeepseekV2Attention(nn.Module):
                 device=device,
                 is_tp=True,
                 quant_config=quantization_config,
+                enable_dp=True,
             )
 
         self.kv_a_proj_with_mqa = build_colwise_linear(
@@ -155,7 +166,7 @@ class DeepseekV2Attention(nn.Module):
                                   num_replicate_kv_heads=num_replicate_kv_heads)
 
         self.vc = DeepseekV2BMM(self.num_heads, config.kv_lora_rank, self.v_head_dim, dtype=dtype, device=device)
-        self.o_proj = build_rowwise_linear(
+        self.o_proj = build_o_proj(
             self.num_heads * self.v_head_dim,
             self.hidden_size,
             bias=config.attention_bias,
@@ -414,7 +425,7 @@ class DeepseekV2MLP(nn.Module):
         # gate up
         if intermediate_size is None:
             intermediate_size = config.intermediate_size
-        self.gate_up_proj = build_merged_colwise_linear(
+        self.gate_up_proj = build_gateup_linear(
             config.hidden_size,
             [intermediate_size, intermediate_size],
             bias=False,
@@ -428,7 +439,7 @@ class DeepseekV2MLP(nn.Module):
         self.act_fn = SiluAndMul(inplace=True)
 
         # down
-        self.down_proj = build_rowwise_linear(
+        self.down_proj = build_down_linear(
             intermediate_size,
             config.hidden_size,
             bias=False,
