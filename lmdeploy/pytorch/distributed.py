@@ -27,7 +27,6 @@ class DistContext:
     dist_config: DistConfig = None
 
     @classmethod
-    @classmethod
     def build(cls, rank: int = 0, dist_config: DistConfig = None, ccl_backend: str = 'nccl'):
         """build dist context."""
         from datetime import timedelta
