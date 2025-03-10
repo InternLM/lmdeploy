@@ -238,6 +238,14 @@ class RayExecutor(ExecutorBase):
             kwargs = dict()
         return ray.get([getattr(worker, method).remote(*args, **kwargs) for worker in self.workers])
 
+    def get_ipc_handler(self):
+        """build ipc handler."""
+        return self.collective_rpc('get_ipc_handler')
+    
+    def init_migration(self, config):
+        """init migration."""
+        return self.collective_rpc('init_migration', (config, ))
+
     def build_model(self):
         """build model."""
         self.collective_rpc('build_model')

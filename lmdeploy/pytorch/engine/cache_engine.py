@@ -215,28 +215,30 @@ class CacheEngine:
 
         self._C_handlers_k = {}
         self._C_handlers_v = {}
-        for key, value in handler_config.items():
-            if key == self.engine_id:
-                _C_handle_k = _slime_C.KVCacheHandlerConfig(*value[0:4])
-                _C_handle_v = _slime_C.KVCacheHandlerConfig(*value[0:4])
-            else:
-                _C_handle_k = _slime_C.KVCacheHandlerConfig(*value[0:6])
-                _C_handle_v = _slime_C.KVCacheHandlerConfig(*(value[0:4] + value[-2:]))
-            self._C_handlers_k[key] = _C_handle_k
-            self._C_handlers_v[key] = _C_handle_v
+        # for key, value in handler_config.items():
+        #     if key == self.engine_id:
+        #         _C_handle_k = _slime_C.KVCacheHandlerConfig(*value[0:4])
+        #         _C_handle_v = _slime_C.KVCacheHandlerConfig(*value[0:4])
+        #     else:
+        #         _C_handle_k = _slime_C.KVCacheHandlerConfig(*value[0:6])
+        #         _C_handle_v = _slime_C.KVCacheHandlerConfig(*(value[0:4] + value[-2:]))
+        #     self._C_handlers_k[key] = _C_handle_k
+        #     self._C_handlers_v[key] = _C_handle_v
         
-        self.migration_ptr_k = _slime_C.ops.init_migration_manager(
-            self.engine_id,
-            self.model_config.dtype.itemsize,
-            self.model_config.num_layers, self.model_config.num_key_value_heads, self.model_config.get_head_size(), self._C_handlers_k)
+        # self.migration_ptr_k = _slime_C.ops.init_migration_manager(
+        #     self.engine_id,
+        #     self.model_config.dtype.itemsize,
+        #     self.model_config.num_layers, self.model_config.num_key_value_heads, self.model_config.get_head_size(), self._C_handlers_k)
 
-        self.migration_ptr_v = _slime_C.ops.init_migration_manager(
-            self.engine_id,
-            self.model_config.dtype.itemsize,
-            self.model_config.num_layers, self.model_config.num_key_value_heads, self.model_config.get_head_size(), self._C_handlers_v)
+        # self.migration_ptr_v = _slime_C.ops.init_migration_manager(
+        #     self.engine_id,
+        #     self.model_config.dtype.itemsize,
+        #     self.model_config.num_layers, self.model_config.num_key_value_heads, self.model_config.get_head_size(), self._C_handlers_v)
 
-        self.segment_id = config["segment_id"]
-        endpoint = config["endpoint"]
+        self.segment_id = config["segment_id"][self.rank]
+        self.remote_block_size = config["remote_block_size"]
+        print(self.segment_id)
+        endpoint = config["endpoint"][self.rank]
         etcd_endpoint = config["etcd_endpoint"]
 
         self.transfer_engine.initialize(etcd_endpoint, endpoint)
@@ -244,27 +246,35 @@ class CacheEngine:
         self.transfer_engine.register_local_memory(
             self.full_gpu_cache[0].data_ptr(),
             self.full_gpu_cache[0].storage_offset(),
-            self.full_gpu_cache[0].numel() * self.full_gpu_cache[0].dtype.itemsize)
+            self.full_gpu_cache[0].numel() * self.full_gpu_cache[0].dtype.itemsize, str(0))
 
         self.transfer_engine.register_local_memory(
             self.full_gpu_cache[1].data_ptr(),
             self.full_gpu_cache[1].storage_offset(),
-            self.full_gpu_cache[1].numel() * self.full_gpu_cache[1].dtype.itemsize)
+            self.full_gpu_cache[1].numel() * self.full_gpu_cache[1].dtype.itemsize, str(0))
 
     def migrate(self, blocks_to_migration):
         head_dim = self.model_config.get_head_size()
-        num_heads = self.model_config.num_key_value_heads
+        num_heads = self.model_config.num_key_value_heads // self.world_size
         block_size = self.cache_config.block_size
-        length = head_dim * num_heads * block_size * self.full_gpu_cache[1].dtype.itemsize
+        length = head_dim * num_heads * block_size * self.full_gpu_cache[0].dtype.itemsize
         layer_stride = self.cache_config.num_gpu_blocks * length
+        layer_stride_remote = self.remote_block_size * length
 
-        target_offset = [[int(block_to_migration[3]) * length + layer * layer_stride for layer in range(self.model_config.num_layers)] for block_to_migration in blocks_to_migration]
+        target_offset = [[int(block_to_migration[3]) * length + layer * layer_stride_remote for layer in range(self.model_config.num_layers)] for block_to_migration in blocks_to_migration]
         target_offset = functools.reduce(lambda x, y: x + y, target_offset)
         source_offset = [[int(block_to_migration[2]) * length + layer * layer_stride for layer in range(self.model_config.num_layers)] for block_to_migration in blocks_to_migration]
         source_offset = functools.reduce(lambda x, y: x + y, source_offset)
 
-        self.transfer_engine.transport_batch(self.segment_id, self.full_cpu_cache[0].data_ptr(), target_offset, 0, [length] * len(target_offset), source_offset)
-        self.transfer_engine.transport_batch(self.segment_id, self.full_cpu_cache[1].data_ptr(), target_offset, 1, [length] * len(target_offset), source_offset)
+        if 1:
+        # if self.rank == 1:
+            self.transfer_engine.transport_batch(self.segment_id, self.full_gpu_cache[0].data_ptr(), target_offset, 0, [length] * len(target_offset), source_offset)
+            self.transfer_engine.transport_batch(self.segment_id, self.full_gpu_cache[1].data_ptr(), target_offset, 1, [length] * len(target_offset), source_offset)
+        # if self.rank == 1:
+            print(f"segment_id: {self.segment_id}")
+            print(f"shape: {self.full_gpu_cache[0].shape}")
+            print(target_offset, source_offset, length, layer_stride, block_size)
+            print(head_dim, num_heads, self.world_size)
 
         # _slime_C.ops.migrate(
         #     self.migration_ptr_k,

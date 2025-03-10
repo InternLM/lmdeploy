@@ -53,7 +53,7 @@ class ExecutorBase:
         """set all model config."""
         raise NotImplementedError('Not Implemented.')
     
-    def init_migration(self):
+    def init_migration(self, config):
         """ init migration """
         raise NotImplementedError('Not Implemented')
 

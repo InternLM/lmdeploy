@@ -79,6 +79,12 @@ class WorkerWrapperBase:
             return outs
         else:
             return [await self.out_que.get()]
+    
+    def init_migration(self, config):
+        return self.model_agent.cache_engine.init_migration(config)
+
+    def get_ipc_handler(self):
+        return self.model_agent.cache_engine.ipc_handler_k, self.model_agent.cache_engine.ipc_handler_v
 
     def build_model(self):
         """build model."""

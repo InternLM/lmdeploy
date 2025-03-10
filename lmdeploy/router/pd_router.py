@@ -145,6 +145,8 @@ def init_migration(args):
         ipc_handlers_k.append(eval(ipc_handler["ipc_k"]))
         ipc_handlers_v.append(eval(ipc_handler["ipc_v"]))
     
+    print(ipc_handlers_k, ipc_handlers_v)
+    
     # Step 2. init migration
     handler_config = {
         i: (1, 1, total_block, 64, [[[ipc_handler_k]]], [[[offset_k]]], [[[ipc_handler_v]]], [[[offset_v]]])
@@ -152,12 +154,13 @@ def init_migration(args):
     }
     print(handler_config)
 
-    segment_id = ["127.0.0.1:7001", "127.0.0.1:7000",]
-    endpoint_id = ["127.0.0.1:7000", "127.0.0.1:7001",]
+    segment_id = [["127.0.0.1:7002", "127.0.0.1:7003"], ["127.0.0.1:7000","127.0.0.1:7001"]]
+    endpoint_id = [["127.0.0.1:7000","127.0.0.1:7001"], ["127.0.0.1:7002", "127.0.0.1:7003"]]
 
     for idx, endpoint in enumerate(engine_snapshot.endpoints):
         engine_handler_config = {
             "engine_id": idx,
+            "remote_block_size":total_blocks[1-idx],
             "segment_id": segment_id[idx],
             "etcd_endpoint": "10.130.8.139:2379",
             "endpoint": endpoint_id[idx],
