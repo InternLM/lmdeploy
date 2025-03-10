@@ -9,7 +9,8 @@ from transformers.configuration_utils import PretrainedConfig
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import (ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul, build_rotary_embedding,
                                  build_rotary_params)
-from lmdeploy.pytorch.nn.linear import build_merged_colwise_linear, build_qkv_proj, build_rowwise_linear
+from lmdeploy.pytorch.nn.linear import (build_down_linear, build_gateup_linear, build_o_proj, build_qkv_proj,
+                                        build_rowwise_linear)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
@@ -50,13 +51,13 @@ class Qwen2Attention(nn.Module):
         )
 
         # o_proj
-        self.o_proj = build_rowwise_linear(num_heads * head_dim,
-                                           hidden_size,
-                                           bias=False,
-                                           quant_config=quantization_config,
-                                           dtype=dtype,
-                                           device=device,
-                                           is_tp=True)
+        self.o_proj = build_o_proj(num_heads * head_dim,
+                                   hidden_size,
+                                   bias=False,
+                                   quant_config=quantization_config,
+                                   dtype=dtype,
+                                   device=device,
+                                   is_tp=True)
 
     def forward(
         self,
@@ -108,7 +109,7 @@ class Qwen2MLP(nn.Module):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         # gate up
-        self.gate_up_proj = build_merged_colwise_linear(
+        self.gate_up_proj = build_gateup_linear(
             config.hidden_size,
             [config.intermediate_size, config.intermediate_size],
             bias=False,
@@ -122,13 +123,13 @@ class Qwen2MLP(nn.Module):
         self.act_fn = SiluAndMul(inplace=True)
 
         # down
-        self.down_proj = build_rowwise_linear(config.intermediate_size,
-                                              config.hidden_size,
-                                              bias=False,
-                                              quant_config=quantization_config,
-                                              dtype=dtype,
-                                              device=device,
-                                              is_tp=True)
+        self.down_proj = build_down_linear(config.intermediate_size,
+                                           config.hidden_size,
+                                           bias=False,
+                                           quant_config=quantization_config,
+                                           dtype=dtype,
+                                           device=device,
+                                           is_tp=True)
 
     def forward(self, x):
         """forward."""

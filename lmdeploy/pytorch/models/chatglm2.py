@@ -11,8 +11,8 @@ from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, Prepr
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
-from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_merged_colwise_linear, build_qkv_proj,
-                                        build_rowwise_linear)
+from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_down_linear, build_gateup_linear, build_o_proj,
+                                        build_qkv_proj, build_rowwise_linear)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
@@ -58,13 +58,13 @@ class SelfAttention(torch.nn.Module):
         )
 
         # o_proj
-        self.dense = build_rowwise_linear(self.projection_size,
-                                          config.hidden_size,
-                                          bias=config.add_bias_linear,
-                                          quant_config=quantization_config,
-                                          dtype=dtype,
-                                          device=device,
-                                          is_tp=True)
+        self.dense = build_o_proj(self.projection_size,
+                                  config.hidden_size,
+                                  bias=config.add_bias_linear,
+                                  quant_config=quantization_config,
+                                  dtype=dtype,
+                                  device=device,
+                                  is_tp=True)
 
     @staticmethod
     def _extract_rope(states: torch.Tensor):
@@ -139,7 +139,7 @@ class MLP(nn.Module):
 
         self.add_bias = config.add_bias_linear
         # gate up
-        self.dense_h_to_4h = build_merged_colwise_linear(
+        self.dense_h_to_4h = build_gateup_linear(
             config.hidden_size,
             [config.ffn_hidden_size, config.ffn_hidden_size],
             bias=self.add_bias,
@@ -153,13 +153,13 @@ class MLP(nn.Module):
         self.act_fn = SiluAndMul(inplace=True)
 
         # down
-        self.dense_4h_to_h = build_rowwise_linear(config.ffn_hidden_size,
-                                                  config.hidden_size,
-                                                  bias=self.add_bias,
-                                                  quant_config=quantization_config,
-                                                  dtype=dtype,
-                                                  device=device,
-                                                  is_tp=True)
+        self.dense_4h_to_h = build_down_linear(config.ffn_hidden_size,
+                                               config.hidden_size,
+                                               bias=self.add_bias,
+                                               quant_config=quantization_config,
+                                               dtype=dtype,
+                                               device=device,
+                                               is_tp=True)
 
     def forward(self, x):
         """forward."""
