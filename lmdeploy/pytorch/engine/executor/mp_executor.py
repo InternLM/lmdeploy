@@ -14,6 +14,7 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 
+from lmdeploy.pytorch.backends.selector import init_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.utils import get_logger
 
@@ -493,6 +494,7 @@ class ExecutorProc:
         log_level: int = 30,
     ):
         """main loop."""
+        init_backend(device_type)
         torch.cuda.set_device(proc_id)
 
         # catch signal

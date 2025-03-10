@@ -97,6 +97,12 @@ def get_all_model_list(tp_num: int = None, quant_policy: int = None, model_type:
     return case_list
 
 
+def get_communicator_list():
+    if is_bf16_supported():
+        return ['native', 'nccl']
+    return ['nccl']
+
+
 def get_quantization_model_list(type):
     config = get_config()
     if type == 'awq':
