@@ -90,6 +90,10 @@ class HuggingFaceTokenizer:
                 f'which is lower than the required version transformers=={required_transformers_version}. '  # noqa: E501
                 'Please upgrade to the required version.')
 
+    def get_vocab(self):
+        """get vocab."""
+        return self.model.get_vocab()
+
     @property
     def vocab_size(self):
         """vocabulary size."""
@@ -407,6 +411,10 @@ class Tokenizer:
     def eos_token_id(self):
         """end of the sentence token id."""
         return self.model.eos_token_id
+
+    def get_vocab(self):
+        """get vocab."""
+        return self.model.get_vocab()
 
     def encode(self, s: str, add_bos: bool = True, add_special_tokens: bool = True, **kwargs):
         """Tokenize a prompt.
