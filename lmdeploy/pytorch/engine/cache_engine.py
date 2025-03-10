@@ -246,12 +246,12 @@ class CacheEngine:
         self.transfer_engine.register_local_memory(
             self.full_gpu_cache[0].data_ptr(),
             self.full_gpu_cache[0].storage_offset(),
-            self.full_gpu_cache[0].numel() * self.full_gpu_cache[0].dtype.itemsize, str(0))
+            self.full_gpu_cache[0].numel() * self.full_gpu_cache[0].dtype.itemsize)
 
         self.transfer_engine.register_local_memory(
             self.full_gpu_cache[1].data_ptr(),
             self.full_gpu_cache[1].storage_offset(),
-            self.full_gpu_cache[1].numel() * self.full_gpu_cache[1].dtype.itemsize, str(0))
+            self.full_gpu_cache[1].numel() * self.full_gpu_cache[1].dtype.itemsize)
 
     def migrate(self, blocks_to_migration):
         head_dim = self.model_config.get_head_size()
