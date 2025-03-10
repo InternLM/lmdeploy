@@ -316,17 +316,21 @@ class RayExecutor(ExecutorBase):
 
     def stop(self):
         """stop engine loop."""
-        self.collective_rpc('stop_async')
+        if self.dp == 1:
+            self.collective_rpc('stop_async')
         if self._prefetch_task is not None:
             self._prefetch_task.cancel()
 
     def release(self):
         """release."""
-        self.collective_rpc('release')
-        try:
-            self.collective_rpc('exit')
-        except ray.exceptions.RayActorError as e:
-            logger.debug(f'ray actor exit: {e}')
+        if self.dp == 1:
+            self.collective_rpc('release')
+            try:
+                self.collective_rpc('exit')
+            except ray.exceptions.RayActorError as e:
+                logger.debug(f'ray actor exit: {e}')
+        else:
+            [ray.kill(worker) for worker in self.workers]
 
         ray.util.remove_placement_group(self.placement_group)
 
