@@ -69,8 +69,7 @@ with read_base():
         models as lmdeploy_yi_1_5_9b_chat_model  # noqa: F401, E501
     from opencompass.configs.models.yi.lmdeploy_yi_1_5_34b_chat import \
         models as lmdeploy_yi_1_5_34b_chat_model  # noqa: F401, E501
-
-    from ..volc import infer as volc_infer  # noqa: F401, E501
+    from volc import infer as volc_infer  # noqa: F401, E501
 
 race_datasets = [race_datasets[1]]
 datasets = sum([v for k, v in locals().items() if k.endswith('_datasets')], [])

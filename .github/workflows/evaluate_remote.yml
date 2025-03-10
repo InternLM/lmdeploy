@@ -188,25 +188,24 @@ jobs:
         with:
           repository: ${{ github.event.inputs.repo_org_lmdeploy || 'InternLM/lmdeploy' }}
           ref: ${{github.event.inputs.repo_ref_lmdeploy || 'main'}}
-      - name: conda env
-        run: |
-          . ${{env.CONDA_PATH}}/bin/activate
-          conda activate ${{env.CONDA_ENV}}
-          conda info --envs
-          pip list
+      - name: Checkout opencompass
+        uses: actions/checkout@v3
+        with:
+          repository: ${{ github.event.inputs.repo_org || 'open-compass/opencompass' }}
+          ref: ${{github.event.inputs.repo_ref || 'main'}}
       - name:  modify config
-        if: matrix.regression_func != 'chat_sub_fullbench'
         run: |
-          cp -r /fs-computility/llm/qa-llm-cicd/ocplayground/template/configs_cluster/volc.py .
-          cat /fs-computility/llm/qa-llm-cicd/config/test_config.txt >> .github/scripts/eval_regression_${{matrix.regression_func}}.py
+          cp .github/scripts/eval_regression_${{matrix.regression_func}}.py opencompass/eval_regression_${{matrix.regression_func}}.py
+          cp -r /fs-computility/llm/qa-llm-cicd/ocplayground/template/configs_cluster/volc.py opencompass
+          cat /fs-computility/llm/qa-llm-cicd/config/lmdeploy_test_config.txt >> opencompass/eval_regression_${{matrix.regression_func}}.py
       - name:  modify config - models filter
         if: matrix.backend == 'turbomind'
         run: |
-          echo "models = sum([v for k, v in locals().items() if  k.startswith('lmdeploy_')], [])" >> .github/scripts/eval_regression_${{matrix.regression_func}}.py
+          echo "models = sum([v for k, v in locals().items() if  k.startswith('lmdeploy_')], [])" >> opencompass/eval_regression_${{matrix.regression_func}}.py
       - name:  modify config - models filter
         if: matrix.backend == 'pytorch'
         run: |
-          echo "models = sum([v for k, v in locals().items() if  k.startswith('pytorch_')], [])" >> .github/scripts/eval_regression_${{matrix.regression_func}}.py
+          echo "models = sum([v for k, v in locals().items() if  k.startswith('pytorch_')], [])" >> opencompass/eval_regression_${{matrix.regression_func}}.py
       - name:  Run test
         uses: nick-fields/retry@v3
         with:
@@ -216,6 +215,8 @@ jobs:
             . ${{env.CONDA_PATH}}/bin/activate
             conda activate ${{env.CONDA_ENV}}
             conda info --envs
-            echo "models = sorted(models, key=lambda x: x['run_cfg']['num_gpus'])" >> .github/scripts/eval_regression_${{matrix.regression_func}}.py
-            opencompass .github/scripts/eval_regression_${{matrix.regression_func}}.py --work-dir ${{env.REPORT_ROOT}}/${{ github.run_id }}/${{matrix.regression_func}} --reuse --dump-eval-details
+            echo "models = sorted(models, key=lambda x: x['run_cfg']['num_gpus'])" >> opencompass/eval_regression_${{matrix.regression_func}}.py
+            cd opencompass
+            opencompass eval_regression_${{matrix.regression_func}}.py --work-dir ${{env.REPORT_ROOT}}/${{ github.run_id }}/${{matrix.regression_func}} --reuse --dump-eval-details
+            cd ..
             python .github/scripts/action_tools.py generate_output_for_evaluation ${{env.REPORT_ROOT}}/${{ github.run_id }}/${{matrix.regression_func}}
