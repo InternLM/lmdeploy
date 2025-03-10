@@ -3,8 +3,116 @@
 #pragma once
 
 #include "src/turbomind/kernels/core/array_ops.h"
+#include "src/turbomind/models/llama/llama_rope.h"
 
 namespace turbomind {
+
+template<int N>
+__device__ void init_default(Array<float, N / 2>& inv_freq, int idx, RopeKernelParam& param)
+{
+    auto scale_factor = param.scale_factor;
+    auto inv_factor   = param.inv_factor;
+    PRAGMA_UNROLL
+    for (int i = 0; i < N; i += 2) {
+        inv_freq[i / 2] = inv_factor * exp2f((idx + i) * scale_factor);
+    }
+}
+
+template<int N>
+__device__ void init_yarn(Array<float, N / 2>& inv_freq, int idx, RopeKernelParam& param)
+{
+    auto scale_factor            = param.scale_factor;
+    auto inv_factor              = param.inv_factor;
+    auto ramp_inv_factor_div_2   = param.yarn.ramp_inv_factor_div_2;
+    auto ramp_inv_factor_mul_min = param.yarn.ramp_inv_factor_mul_min;
+
+    PRAGMA_UNROLL
+    for (int i = 0; i < N; i += 2) {
+        auto freq       = exp2f((idx + i) * scale_factor);
+        auto alpha      = (idx + i) * ramp_inv_factor_div_2 - ramp_inv_factor_mul_min;
+        alpha           = fmaxf(0.f, fminf(1.f, alpha));
+        inv_freq[i / 2] = freq - freq * alpha * (1.f - inv_factor);
+    }
+}
+
+template<int N>
+__device__ void init_llama3(Array<float, N / 2>& inv_freq, int idx, RopeKernelParam& param)
+{
+    auto scale_factor = param.scale_factor;
+    auto inv_factor   = param.inv_factor;
+    auto alpha        = param.llama3.alpha;
+    auto beta         = param.llama3.beta;
+
+    PRAGMA_UNROLL
+    for (int i = 0; i < N; i += 2) {
+        auto freq       = exp2f((idx + i) * scale_factor);
+        auto smooth     = fmaxf(0.f, fminf(1.f, alpha * freq - beta));
+        inv_freq[i / 2] = (1 - smooth) * freq * inv_factor + smooth * freq;
+    }
+}
+
+template<int N>
+struct FastRoPE {
+
+    static_assert(N % 2 == 0);
+
+    RopeKernelParam     param_;
+    Array<float, N / 2> inv_freq_;
+    bool                is_valid_;
+    float               attention_scaling_{1.f};
+
+    typedef void (*Func)(Array<float, N / 2>&, int, RopeKernelParam&);
+    Func fill_func_;
+
+    __device__ FastRoPE(const RopeKernelParam& param, int batch_idx, std::integral_constant<int, N>): param_(param)
+    {
+
+        if (param_.type == RopeType::kDynamic) {
+            float base          = param_.base[batch_idx];
+            param_.scale_factor = -log2f(base) / param_.dim;
+        }
+        else if (param_.type == RopeType::kYarn) {
+            attention_scaling_ = param_.yarn.attention_factor;
+        }
+    }
+
+    __device__ void init(int idx)
+    {
+        is_valid_ = idx < param_.dim;
+        switch (param_.type) {
+            case RopeType::kDefault:
+            case RopeType::kLinear:
+            case RopeType::kDynamic:
+                init_default<N>(inv_freq_, idx, param_);
+                break;
+            case RopeType::kYarn:
+                init_yarn<N>(inv_freq_, idx, param_);
+                break;
+            case RopeType::kLlama3:
+                init_llama3<N>(inv_freq_, idx, param_);
+                break;
+        }
+    }
+
+    template<typename T>
+    __device__ void apply(Array<T, N>& x, float timestep)
+    {
+        // Most models apply rotary embedding in half precision
+        PRAGMA_UNROLL
+        for (int i = 0; i < N; i += 2) {
+            float c, s;
+            sincosf(timestep * inv_freq_[i / 2], &s, &c);
+            s *= attention_scaling_;
+            c *= attention_scaling_;
+            T tmp0 = (T)c * x[i] - (T)s * x[i + 1];
+            T tmp1 = (T)c * x[i + 1] + (T)s * x[i];
+            if (is_valid_) {
+                x[i]     = tmp0;
+                x[i + 1] = tmp1;
+            }
+        }
+    }
+};
 
 template<int N>
 struct RotaryEmbedding {
@@ -66,103 +174,6 @@ __device__ void ApplyRotaryEmbedding(Array<T, 4>& x, float base, int dims, int t
         x[d1 * 2 + 1] = (T)x2;
     }
 }
-
-template<class D, int N>
-struct FastRoPE {
-
-    static_assert(N % 2 == 0);
-
-    Array<float, N / 2> inv_freq_;
-    bool                is_valid_;
-    float               attention_scaling_;
-
-    __device__ FastRoPE(int   idx,
-                        D     dims,
-                        float base,
-                        float ti_scale,
-                        float factor,
-                        float llama3_inv_scaling_factor,
-                        float llama3_alpha,
-                        float llama3_beta,
-                        float yarn_ramp_inv_factor_div_2,
-                        float yarn_ramp_inv_factor_mul_min,
-                        float yarn_inv_scaling_factor,
-                        float attention_scaling,
-                        std::integral_constant<int, N>)
-    {
-        is_valid_          = idx < dims;
-        attention_scaling_ = attention_scaling;
-        /// TODO: Take this away from device code
-        const float scale_factor = -log2f(base) / dims;
-        PRAGMA_UNROLL
-        for (int i = 0; i < N; i += 2) {
-            inv_freq_[i / 2] = ti_scale * exp2f((idx + i) * scale_factor);
-        }
-        // clang-format off
-        /* The [llama3 rope](https://github.com/huggingface/transformers/blob/5f4ee98a7ade33e1c54fdd6181d04ee7b426b392/src/transformers/modeling_rope_utils.py#L298)
-         * used by llama3.1 equals to the following equation, given the precommuted parameters as:
-        ```C++
-        inv_scaling_factor = 1 / factor;
-        inv_diff_freq_factor = 1 / (high_freq_factor - low_freq_factor);
-        alpha = old_context_len / (2 * PI) * inv_diff_freq_factor;
-        beta = low_freq_factor * inv_diff_freq_factor
-        ```
-        */
-        // clang-format on
-        if (llama3_inv_scaling_factor) {
-            PRAGMA_UNROLL
-            for (int i = 0; i < N; i += 2) {
-                auto freq        = inv_freq_[i / 2];
-                auto smooth      = fmaxf(0.f, fminf(1.f, llama3_alpha * freq - llama3_beta));
-                inv_freq_[i / 2] = (1 - smooth) * freq * llama3_inv_scaling_factor + smooth * freq;
-            }
-        }
-        if (yarn_ramp_inv_factor_div_2) {
-            PRAGMA_UNROLL
-            for (int i = 0; i < N; i += 2) {
-                auto  freq       = inv_freq_[i / 2];
-                float alpha      = (idx + i) * yarn_ramp_inv_factor_div_2 - yarn_ramp_inv_factor_mul_min;
-                alpha            = fmaxf(0.f, fminf(1.f, alpha));
-                inv_freq_[i / 2] = freq - freq * alpha * yarn_inv_scaling_factor;
-            }
-        }
-    }
-
-    template<typename T>
-    __device__ void apply(Array<T, N>& x, float timestep)
-    {
-#if 0
-        PRAGMA_UNROLL
-        for (int i = 0; i < N; i += 2) {
-            float c, s;
-            sincosf(timestep * inv_freq_[i / 2], &s, &c);
-            s *= attention_scaling_;
-            c *= attention_scaling_;
-            float tmp0 = c * (float)x[i] - s * (float)x[i + 1];
-            float tmp1 = c * (float)x[i + 1] + s * (float)x[i];
-            if (is_valid_) {
-                x[i]     = (T)tmp0;
-                x[i + 1] = (T)tmp1;
-            }
-        }
-#else
-        // Most models apply rotary embedding in half precision
-        PRAGMA_UNROLL
-        for (int i = 0; i < N; i += 2) {
-            float c, s;
-            sincosf(timestep * inv_freq_[i / 2], &s, &c);
-            s *= attention_scaling_;
-            c *= attention_scaling_;
-            T tmp0 = (T)c * x[i] - (T)s * x[i + 1];
-            T tmp1 = (T)c * x[i + 1] + (T)s * x[i];
-            if (is_valid_) {
-                x[i]     = tmp0;
-                x[i + 1] = tmp1;
-            }
-        }
-#endif
-    }
-};
 
 template<int N, int C = 8>
 struct RoPE {
