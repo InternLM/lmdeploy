@@ -31,6 +31,7 @@ class Attention(nn.Module):
         sliding_window: int = None,
         logit_softcapping: float = None,
         causal: bool = True,
+        use_flash_mla: bool = False,
         **kwargs,
     ):
         super().__init__()
@@ -53,6 +54,7 @@ class Attention(nn.Module):
             sliding_window=sliding_window,
             logit_softcapping=logit_softcapping,
             causal=causal,
+            use_flash_mla=use_flash_mla,
             **kwargs,
         )
 

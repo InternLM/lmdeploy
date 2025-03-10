@@ -35,6 +35,7 @@ class AttentionImpl(ABC, Generic[T]):
         sliding_window: int = None,
         logit_softcapping: float = None,
         causal: bool = True,
+        use_flash_mla: bool = False,
         **kwargs,
     ) -> None:
         if scale is None:
@@ -55,6 +56,7 @@ class AttentionImpl(ABC, Generic[T]):
         self.sliding_window = sliding_window
         self.logit_softcapping = logit_softcapping
         self.causal = causal
+        self.use_flash_mla = use_flash_mla
 
     @abstractmethod
     def forward(
@@ -85,6 +87,7 @@ class AttentionBuilder(ABC, Generic[T]):
         sliding_window: int = None,
         logical_softcapping: float = None,
         causal: bool = True,
+        use_flash_mla: bool = False,
         **kwargs,
     ) -> AttentionImpl[T]:
         """build."""
