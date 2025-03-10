@@ -270,7 +270,11 @@ def generate_output_for_evaluation(result_dir: str):
     latest_csv_file = find_csv_files(result_dir)
     df = pd.read_csv(latest_csv_file)
     transposed_df = df.T
-    transposed_df.to_csv('transposed_output.csv', index=False)
+    head_part = transposed_df.head(4)
+    tail_part = transposed_df[4:]
+    sorted_tail_part = tail_part.sort_index()
+    transposed_df = pd.concat([head_part, sorted_tail_part])
+    transposed_df.to_csv('transposed_output.csv', header=False, index=True)
     # output to github action summary
     add_summary('transposed_output.csv')
 
