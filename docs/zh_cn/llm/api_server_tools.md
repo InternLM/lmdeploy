@@ -1,6 +1,11 @@
 # Tools
 
-LMDeploy 支持 InternLM2, InternLM2.5, Llama3.1 和 Qwen2.5模型的工具调用。
+LMDeploy 支持 InternLM2, InternLM2.5, Llama3.1 和 Qwen2.5模型的工具调用。请在启动 api_server 的时候使用 `--tool-call-parser` 指定
+parser 名字。以下是支持的名字:
+
+1. internlm
+2. qwen
+3. llama3
 
 ## 单轮调用
 
