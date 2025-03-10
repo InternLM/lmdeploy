@@ -266,15 +266,12 @@ class CacheEngine:
         source_offset = [[int(block_to_migration[2]) * length + layer * layer_stride for layer in range(self.model_config.num_layers)] for block_to_migration in blocks_to_migration]
         source_offset = functools.reduce(lambda x, y: x + y, source_offset)
 
-        if 1:
-        # if self.rank == 1:
-            self.transfer_engine.transport_batch(self.segment_id, self.full_gpu_cache[0].data_ptr(), target_offset, 0, [length] * len(target_offset), source_offset)
-            self.transfer_engine.transport_batch(self.segment_id, self.full_gpu_cache[1].data_ptr(), target_offset, 1, [length] * len(target_offset), source_offset)
-        # if self.rank == 1:
-            print(f"segment_id: {self.segment_id}")
-            print(f"shape: {self.full_gpu_cache[0].shape}")
-            print(target_offset, source_offset, length, layer_stride, block_size)
-            print(head_dim, num_heads, self.world_size)
+        self.transfer_engine.transport_batch(self.segment_id, self.full_gpu_cache[0].data_ptr(), target_offset, 0, [length] * len(target_offset), source_offset)
+        self.transfer_engine.transport_batch(self.segment_id, self.full_gpu_cache[1].data_ptr(), target_offset, 1, [length] * len(target_offset), source_offset)
+        # print(f"segment_id: {self.segment_id}")
+        # print(f"shape: {self.full_gpu_cache[0].shape}")
+        # print(target_offset, source_offset, length, layer_stride, block_size)
+        # print(head_dim, num_heads, self.world_size)
 
         # _slime_C.ops.migrate(
         #     self.migration_ptr_k,
