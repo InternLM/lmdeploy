@@ -123,7 +123,7 @@ void HostComm::Broadcast(void* data, int count, DataType, int root, copy_fn copy
         for (const auto& r : g.ranks) {
             if (r != rank_) {
                 auto& c = channel(rank_, r);
-                while (!c.load(std::memory_order_relaxed)) {}
+                while (c.load(std::memory_order_relaxed)) {}
             }
         }
     }

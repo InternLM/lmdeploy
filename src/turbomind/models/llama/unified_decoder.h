@@ -25,6 +25,8 @@ private:
     const int attn_dp_rank_;
     const int mlp_tp_size_;
 
+    const int attn_tp_group_;
+
     std::array<int, 2> tp_size_;
 
     const float        rmsnorm_eps_;

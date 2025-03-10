@@ -41,7 +41,8 @@ public:
 
     void AllReduceSum(const void* sendbuff, void* recvbuff, size_t count, DataType type, cudaStream_t stream) override;
 
-    void AllGather(const void* sendbuff, void* recvbuff, size_t sendcount, DataType type, cudaStream_t stream) override;
+    void AllGather(
+        const void* sendbuff, void* recvbuff, size_t sendcount, DataType type, int tp, cudaStream_t stream) override;
 
     void AllreduceResidualBiasRMSnorm(void*        hidden,
                                       void*        residual,

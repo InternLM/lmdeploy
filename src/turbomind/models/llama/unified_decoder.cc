@@ -31,6 +31,7 @@ UnifiedDecoder<T>::UnifiedDecoder(const ModelParam&     model,
     attn_dp_size_(engine.attn_dp_size),
     attn_dp_rank_(engine.attn_dp_rank),
     mlp_tp_size_(engine.mlp_tp_size),
+    attn_tp_group_(ctx.comm.attn_tp_group),
     rmsnorm_eps_(model.norm_eps),
     stream_(ctx.stream),
     allocator_(ctx.allocator.get()),
@@ -105,22 +106,21 @@ void UnifiedDecoder<T>::AllreduceResidualRMSnorm(T*         hidden_states,
                                                  const T*   bias,
                                                  const T*   weight,
                                                  int        token_num,
-                                                 int        t0,
-                                                 int        t1,
+                                                 int        group0,
+                                                 int        group1,
                                                  const int* local_token_nums)
 {
     if (0) {}
-    else if (t0 != t1) {
+    else if (group0 || group1) {
         tp_->AllreduceResidualBiasRMSnormEx(hidden_states,
                                             residual,
                                             bias,
                                             weight,
                                             rmsnorm_eps_,
                                             hidden_units_,
-                                            token_num,
                                             dtype_,
-                                            t0,
-                                            t1,
+                                            group0,
+                                            group1,
                                             local_token_nums,
                                             stream_);
         sync_check_cuda_error();
@@ -245,8 +245,8 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
                                  weights->at(layer)->self_attn_weights.output.bias,
                                  weights->at(layer)->ffn_norm_weights,
                                  token_num,
-                                 attn_tp_size_,
-                                 mlp_tp_size_,
+                                 attn_tp_group_,
+                                 0,
                                  local_token_nums);
 
         count_and_fix(residual, token_num * hidden_units_, Concat("residual0", layer), 2);
@@ -294,8 +294,8 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
                                  weights->at(layer)->ffn_weights.output.bias,
                                  scale_weight,
                                  token_num,
-                                 mlp_tp_size_,
-                                 attn_tp_size_,
+                                 0,
+                                 attn_tp_group_,
                                  local_token_nums);
         sync_check_cuda_error();
 

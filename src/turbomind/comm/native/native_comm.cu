@@ -190,38 +190,6 @@ Array<void*, kMaxNearPeers> NativeComm::get_near_impl(void* ptr)
     return ret;
 }
 
-#if 0
-class LocalGroupId: public GroupId {
-public:
-    void Initialize() override {}
-    void Export(std::ostream& os) override {}
-    void Import(std::istream& is) override {}
-
-    std::unique_ptr<Comm> CreateCommunicator(int rank, int world_size, std::shared_ptr<HostComm> host_comm) override
-    {
-        auto comm = std::make_unique<NativeComm>(host_comm);
-
-        comm->Initialize();
-
-        return comm;
-    }
-
-private:
-    struct Internal {
-        std::once_flag                   flag;
-        std::shared_ptr<HostComm::State> state;
-    };
-
-private:
-    std::shared_ptr<Internal> internal_;
-};
-
-std::unique_ptr<GroupId> CreateNativeGroupId()
-{
-    return std::make_unique<LocalGroupId>();
-}
-#endif
-
 std::unique_ptr<Comm> CreateNativeCommunicator(int rank, int world_size, std::shared_ptr<HostComm> host_comm)
 {
     auto comm = std::make_unique<NativeComm>(host_comm);

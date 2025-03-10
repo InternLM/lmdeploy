@@ -15,8 +15,7 @@
 
 namespace turbomind::comm {
 
-enum QueryAttr
-{
+enum QueryAttr {
     kHasAllGather2D
 };
 
@@ -44,6 +43,11 @@ public:
 
     virtual void Deregister(void* ptr) = 0;
 
+    virtual int Split(int color, int key, int group)
+    {
+        return -1;
+    }
+
     virtual int Query(QueryAttr attr) const noexcept = 0;
 
     template<class T>
@@ -56,13 +60,13 @@ public:
     AllReduceSum(const void* sendbuff, void* recvbuff, size_t count, DataType type, cudaStream_t stream) = 0;
 
     template<class T>
-    void AllGather(const T* sendbuff, T* recvbuff, size_t sendcount, cudaStream_t stream)
+    void AllGather(const T* sendbuff, T* recvbuff, size_t sendcount, int group, cudaStream_t stream)
     {
-        return AllGather(sendbuff, recvbuff, sendcount, getTensorType<T>(), stream);
+        return AllGather(sendbuff, recvbuff, sendcount, getTensorType<T>(), group, stream);
     }
 
-    virtual void
-    AllGather(const void* sendbuff, void* recvbuff, size_t sendcount, DataType type, cudaStream_t stream) = 0;
+    virtual void AllGather(
+        const void* sendbuff, void* recvbuff, size_t sendcount, DataType type, int group, cudaStream_t stream) = 0;
 
     template<class T>
     void ReduceScatter(const T* sendbuff, T* recvbuff, size_t recvcount, cudaStream_t stream)
@@ -95,10 +99,9 @@ public:
                                                 const void*  weights,
                                                 float        eps,
                                                 int          dim,
-                                                const int    token_num,
                                                 DataType     type,
-                                                int          tp0,
-                                                int          tp1,
+                                                int          group0,
+                                                int          group1,
                                                 const int*   local_token_nums,
                                                 cudaStream_t stream)
     {
@@ -160,6 +163,7 @@ CreateCommunicator(const std::string& backend, int rank, int n_ranks, std::share
 
 struct Splits {
     std::unique_ptr<Comm> tp;
+    int                   attn_tp_group;
 
     std::shared_ptr<HostComm> h_comm;
     int                       h_comm_tp_group;

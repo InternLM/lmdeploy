@@ -221,7 +221,8 @@ void LlamaV2<T>::forwardUnified(T*               out,
                                                      stream_);
             sync_check_cuda_error();
 
-            comm_->tp->AllGather(decoder_output + tp_rank_ * slice, decoder_output, slice, stream_);
+            comm_->tp->AllGather(
+                decoder_output + tp_rank_ * slice, decoder_output, slice, comm_->attn_tp_group, stream_);
             sync_check_cuda_error();
 
             invokeInPlaceTranspose102(
@@ -314,7 +315,7 @@ void LlamaV2<T>::postDecodeEmbedding(float* logits, float* local_logits, const T
         const size_t slice = batch_size * local_vocab_size;
         invoke_gemm(0, batch_size, local_logits, local_vocab_size, slice);
         sync_check_cuda_error();
-        comm_->tp->AllGather(local_logits + tp_rank_ * slice, local_logits, slice, stream_);
+        comm_->tp->AllGather(local_logits + tp_rank_ * slice, local_logits, slice, comm_->attn_tp_group, stream_);
         sync_check_cuda_error();
         invokeTransposeAxis01(logits, local_logits, tp_size_, batch_size, local_vocab_size, stream_);
         sync_check_cuda_error();

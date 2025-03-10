@@ -423,6 +423,11 @@ comm::Splits LlamaTritonModel<T>::createCommSplits(int rank)
         comm.tp = comm::CreateCommunicator(communicator_, inner_rank, comm_size_, comm.h_comm);
     }
 
+    comm.attn_tp_group = 0;
+    if (engine_param_.attn_tp_size != comm_size_) {
+        comm.attn_tp_group = comm.tp->Split(inner_rank / engine_param_.attn_tp_size, 0, 0);
+    }
+
     return comm;
 }
 

@@ -527,7 +527,7 @@ struct TestComm {
                             comm.AllGather2D(d_tmp + rank * count, d_tmp, dim, count, dim, n, {1, 1}, stream);
                         }
                         else {
-                            comm.AllGather(d_tmp + rank * count, d_tmp, count, stream);
+                            comm.AllGather(d_tmp + rank * count, d_tmp, count, 0, stream);
                             // comm.AllGatherAsym(d_tmp, d_tmp, counts.data(), turbomind::getTensorType<T>(), stream);
                         }
                     });
