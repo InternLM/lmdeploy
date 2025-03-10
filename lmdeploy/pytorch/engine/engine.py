@@ -195,8 +195,10 @@ class InputsMakerAsync(InputsMakerBase):
         # decoding
         return False
 
-    async def _send_next_inputs_impl(self, prefill: bool = None):
-        forward_inputs = self._make_forward_inputs(prefill)
+    async def _send_next_inputs_impl(self, prefill: bool = None, enable_empty: bool = False):
+        forward_inputs = self._make_forward_inputs(prefill, enable_empty)
+        if forward_inputs is None:
+            return None, None
         next_running = forward_inputs.pop('running')
         await self.executor.forward_async(forward_inputs)
         self.forward_inputs = forward_inputs
@@ -222,7 +224,7 @@ class InputsMakerAsync(InputsMakerBase):
 
         if enable:
             # send next forward
-            return await self._send_next_inputs_impl(prefill)
+            return await self._send_next_inputs_impl(prefill, True)
         else:
             return None, None
 
@@ -723,7 +725,7 @@ class Engine:
                 outputs[session_id].logits = logits.split(seq_length)[idx]
         return outputs
 
-    def _make_forward_inputs(self, prefill: bool):
+    def _make_forward_inputs(self, prefill: bool, enable_empty: bool = False):
         """make forward inputs."""
         prefill_interval = self.scheduler_config.prefill_interval
 
@@ -797,6 +799,10 @@ class Engine:
                 return __make_dummy_inputs()
 
         scheduler_output = scheduler.schedule(is_prefill=prefill, prealloc_size=prefill_interval)
+
+        if enable_empty and len(scheduler_output.running) == 0:
+            return None
+
         # schedule decoding if no valid prefill reqs.
         if prefill and len(scheduler_output.running) == 0 and not self.should_execute_dummy_batch:
             prefill = False
