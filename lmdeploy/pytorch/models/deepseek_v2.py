@@ -99,7 +99,7 @@ class DeepseekV2Attention(nn.Module):
                 device=device,
                 is_tp=True,
                 quant_config=quantization_config,
-                enable_dp=True,
+                dp_disable_tp=True,
             )
         else:
             self.q_a_proj = build_colwise_linear(
@@ -124,7 +124,7 @@ class DeepseekV2Attention(nn.Module):
                 device=device,
                 is_tp=True,
                 quant_config=quantization_config,
-                enable_dp=True,
+                dp_disable_tp=True,
             )
 
         self.kv_a_proj_with_mqa = build_colwise_linear(

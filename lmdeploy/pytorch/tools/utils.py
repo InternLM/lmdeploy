@@ -131,6 +131,9 @@ def visualize_pipe_out(outputs, enable_meta: bool = True):
     import os
 
     from lmdeploy.messages import Response
+
+    if isinstance(outputs, Response):
+        outputs = [outputs]
     try:
         term_size = os.get_terminal_size().columns
     except Exception:

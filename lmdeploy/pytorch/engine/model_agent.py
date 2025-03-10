@@ -378,7 +378,11 @@ class AutoModelAgent:
         tp = dist_ctx.tp
         dp = dist_ctx.dp
 
-        if dp > 1 and not sync_long_context:
+        if dp > 1:
+            if not is_decoding:
+                all_sync_flags = [None] * dp
+                dist.all_gather_object(all_sync_flags, sync_long_context)
+                sync_long_context = any(all_sync_flags)
             inputs.build_dp_meta()
 
         need_output = dp > 1 or rank % tp == 0

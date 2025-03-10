@@ -33,6 +33,17 @@ def _is_dp_enabled():
     return get_dp_world_rank()[0] > 1
 
 
+def _get_dp_gather(is_tp: bool):
+    """get dp gather."""
+    dp_gather = True
+    if not _is_dp_enabled():
+        # disable if not dp
+        dp_gather = False
+    if not is_tp:
+        dp_gather = False
+    return dp_gather
+
+
 def _gather_input(x: torch.Tensor, tp_sizes: List[int]):
     """gather input."""
     shape0 = x.shape[:-2]
@@ -47,9 +58,13 @@ def _gather_input(x: torch.Tensor, tp_sizes: List[int]):
 def _reduce_scatter_input(out: torch.Tensor, tp_sizes: List[int]):
     """reduce scatter."""
     _, rank = get_tp_world_rank()
-    outs = out.split(tp_sizes, -2)
+    out = out.transpose(0, -2)
+    if not out.is_contiguous():
+        out = out.contiguous()
+    outs = out.split(tp_sizes, 0)
     out = outs[rank]
     dist.reduce_scatter(out, outs)
+    out = out.transpose(0, -2)
     return out
 
 
@@ -1345,6 +1360,7 @@ def build_linear(in_features: int,
                  quant_config: Any = None,
                  all_reduce: bool = True,
                  tp_align_size: int = 1,
+                 dp_gather: bool = False,
                  dp_scatter: bool = False) -> nn.Module:
     """build linear."""
     if is_tp:
@@ -1352,7 +1368,7 @@ def build_linear(in_features: int,
     if not is_tp:
         all_reduce = False
 
-    if dp_scatter and quant_config is not None:
+    if (dp_scatter or dp_gather) and quant_config is not None:
         quant_method = quant_config['quant_method']
         assert quant_method in ['fp8'], (f'Do not support dp_gather with quant_method={quant_method}')
 
@@ -1367,6 +1383,7 @@ def build_linear(in_features: int,
             is_tp=is_tp,
             all_reduce=all_reduce,
             tp_align_size=tp_align_size,
+            dp_gather=dp_gather,
             dp_scatter=dp_scatter,
         )
 
@@ -1417,6 +1434,7 @@ def build_linear(in_features: int,
             colwise=colwise,
             is_tp=is_tp,
             all_reduce=all_reduce,
+            dp_gather=dp_gather,
             dp_scatter=dp_scatter,
         )
     else:
@@ -1431,10 +1449,18 @@ def build_colwise_linear(in_features: int,
                          is_tp: bool = False,
                          tp_align_size: int = 1,
                          quant_config: Any = None,
-                         enable_dp: bool = False) -> nn.Module:
+                         dp_disable_tp: bool = False,
+                         dp_gather: bool = False) -> nn.Module:
     """build columnwise parallel linear layer."""
-    if enable_dp and is_tp:
+    if dp_disable_tp and is_tp:
         is_tp, _ = _get_dp_tp_meta()
+    elif is_tp:
+        is_tp = get_tp_world_rank()[0] > 1
+
+    if dp_gather:
+        assert not dp_disable_tp
+        dp_gather = _get_dp_gather(is_tp)
+
     return build_linear(in_features=in_features,
                         out_features=out_features,
                         bias=bias,
@@ -1444,7 +1470,8 @@ def build_colwise_linear(in_features: int,
                         is_tp=is_tp,
                         quant_config=quant_config,
                         all_reduce=False,
-                        tp_align_size=tp_align_size)
+                        tp_align_size=tp_align_size,
+                        dp_gather=dp_gather)
 
 
 def build_rowwise_linear(in_features: int,
@@ -1456,8 +1483,11 @@ def build_rowwise_linear(in_features: int,
                          tp_align_size: int = 1,
                          quant_config: Any = None,
                          all_reduce: bool = True,
+                         dp_disable_tp: bool = False,
                          dp_scatter: bool = False) -> nn.Module:
     """build rowwise parallel linear layer."""
+    if dp_disable_tp and is_tp:
+        is_tp, all_reduce = _get_dp_tp_meta(all_reduce)
     return build_linear(
         in_features=in_features,
         out_features=out_features,
@@ -1652,14 +1682,12 @@ def build_gateup_linear(in_features: int,
                         out_names: List[Any] = None,
                         dp_gather: bool = True):
     """build gate up linear."""
-    if is_tp:
-        is_tp = get_tp_world_rank()[0] > 1
     if dp_gather:
-        if not _is_dp_enabled():
-            # disable if not dp
-            dp_gather = False
-        if not is_tp:
-            dp_gather = False
+        if is_tp:
+            is_tp = get_tp_world_rank()[0] > 1
+        dp_gather = _get_dp_gather(is_tp)
+    elif is_tp:
+        is_tp, _ = _get_dp_tp_meta()
 
     return build_merged_colwise_linear(
         in_features=in_features,
@@ -1685,14 +1713,16 @@ def build_down_linear(in_features: int,
                       all_reduce: bool = True,
                       dp_scatter: bool = True) -> nn.Module:
     """build down linear."""
-    if is_tp:
-        is_tp = get_tp_world_rank()[0] > 1
     if dp_scatter:
+        if is_tp:
+            is_tp = get_tp_world_rank()[0] > 1
         if not _is_dp_enabled():
             # disable if not dp
             dp_scatter = False
         if not is_tp:
             dp_scatter = False
+    elif is_tp:
+        is_tp, all_reduce = _get_dp_tp_meta(all_reduce)
 
     return build_rowwise_linear(
         in_features=in_features,

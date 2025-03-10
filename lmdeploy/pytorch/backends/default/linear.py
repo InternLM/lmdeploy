@@ -11,10 +11,14 @@ from ..linear import LinearBuilder, LinearImpl
 
 def _reduce_scatter_input(out: torch.Tensor, rank: int, tp_sizes: List[int]):
     """reduce scatter."""
-    outs = out.split(tp_sizes, -2)
+    out = out.transpose(0, -2)
+    if not out.is_contiguous():
+        out = out.contiguous()
+    outs = out.split(tp_sizes, 0)
     out = outs[rank]
     outs = list(outs)
     dist.reduce_scatter(out, outs)
+    out = out.transpose(0, -2)
     return out
 
 
