@@ -70,15 +70,16 @@ UnifiedAttentionLayer<T>::UnifiedAttentionLayer(
 }
 
 template<typename T>
-void UnifiedAttentionLayer<T>::allocateBuffer(size_t q_count, size_t k_count, size_t batch_size, size_t qkv_lora_rank)
+void UnifiedAttentionLayer<T>::allocateBuffer(size_t q_count, size_t k_count, size_t batch_size, size_t max_lora_rank)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
-    if (qkv_lora_rank) {
-        lora_buf_ = (T*)allocator_->reMalloc(lora_buf_, sizeof(T) * q_count * qkv_lora_rank);
+    if (max_lora_rank) {
+        lora_buf_ = (T*)allocator_->reMalloc(lora_buf_, sizeof(T) * q_count * max_lora_rank);
     }
 
     const int local_q_kv_head_num = local_head_num_ + 2 * local_kv_head_num_;
+
     qkv_buf_ = (T*)allocator_->reMalloc(qkv_buf_, sizeof(T) * q_count * local_q_kv_head_num * size_per_head_, false);
 
     qkv_buf_3_ = (T*)allocator_->reMalloc(qkv_buf_3_, sizeof(T) * q_count * local_head_num_ * size_per_head_, false);
@@ -194,7 +195,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     allocateBuffer(token_num,                                           // shared
                    h_cu_k_len[batch_size] - h_cu_k_len[dc_batch_size],  // prefill
                    batch_size,
-                   weights->qkv.lora.r);
+                   std::max(weights->qkv.lora.r, weights->output.lora.r));
 
     // [L, 2, H, s, D]
     const size_t layer_offset = layer_id * 2 * local_kv_head_num_ * param_.cache_block_seq_len * size_per_head_;

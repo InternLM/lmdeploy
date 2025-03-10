@@ -3,10 +3,10 @@
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import torch
-import torch.distributed as dist
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
+import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.distributed import get_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding

@@ -365,7 +365,7 @@ std::unique_ptr<ModelRequest> LlamaTritonModel<T>::createModelInstance(int devic
 }
 
 template<typename T>
-void LlamaTritonModel<T>::createSharedWeights(int device_id, int rank)
+void LlamaTritonModel<T>::createSharedWeights(int device_id, int rank) noexcept
 {
     check_cuda_error(cudaSetDevice(device_id));
     weights_[rank] = std::make_shared<LlamaWeight<T>>(model_param_, engine_params_.at(rank), lora_param_, moe_param_);
@@ -376,7 +376,7 @@ void LlamaTritonModel<T>::createSharedWeights(int device_id, int rank)
 }
 
 template<typename T>
-std::unordered_map<std::string, Tensor> LlamaTritonModel<T>::getParams(int device_id, int rank)
+std::unordered_map<std::string, Tensor> LlamaTritonModel<T>::getParams(int device_id, int rank) noexcept
 {
     check_cuda_error(cudaSetDevice(device_id));
 
@@ -394,7 +394,7 @@ std::unordered_map<std::string, Tensor> LlamaTritonModel<T>::getParams(int devic
 }
 
 template<typename T>
-void LlamaTritonModel<T>::processWeights(int device_id, int rank)
+void LlamaTritonModel<T>::processWeights(int device_id, int rank) noexcept
 {
     check_cuda_error(cudaSetDevice(device_id));
     FT_CHECK(weights_[device_id] != nullptr);

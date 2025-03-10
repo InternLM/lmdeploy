@@ -826,9 +826,12 @@ void LlamaBatch<T>::AllocCommBuffers()
     const size_t hidden_units      = model_->hidden_units_;
     const size_t vocab_size_padded = model_->vocab_size_padded_;
 
+    // Native comm fuses allreduce & rmsnorm in token granularity
+    const size_t max_fwd_token_num = ((size_t)max_forward_token_num_ + tp_size_ - 1) / tp_size_ * tp_size_;
+
     // TODO: rename this to hidden_states
     context_decoder_output_buf_ =
-        (T*)CommBufAlloc(sizeof(T) * param_.attn_dp_size * max_forward_token_num_ * hidden_units, true);
+        (T*)CommBufAlloc(sizeof(T) * param_.attn_dp_size * max_fwd_token_num * hidden_units, true);
 
     local_logits_buf_ = (float*)CommBufAlloc(sizeof(float) * max_batch_size_ * vocab_size_padded, true);
     if (model_->use_allgather_2d_) {
@@ -1244,23 +1247,22 @@ void LlamaBatch<T>::ComputeAndOutputLogits(T* hidden_states, int first, int last
 
         if (local_context_logits_buf_size_ < byte_size) {
             check_cuda_error(cudaStreamSynchronize(stream_));
-
             context_->comm.h_comm->Sync(context_->comm.h_comm_tp_group);
 
             CommBufFree((void**)&local_context_logits_buf_, true);
             local_context_logits_buf_      = (float*)CommBufAlloc(byte_size, true);
             local_context_logits_buf_size_ = byte_size;
-            if (model_->use_allgather_2d_) {
-                context_logits_buf_ = local_context_logits_buf_;
-            }
 
             check_cuda_error(cudaStreamSynchronize(stream_));
-
             context_->comm.h_comm->Sync(context_->comm.h_comm_tp_group);
         }
     }
 
-    if (!context_logits_buf_) {
+    if (model_->use_allgather_2d_) {
+        // No intermediate transpose needed
+        context_logits_buf_ = local_context_logits_buf_;
+    }
+    else {
         context_logits_buf_ = (float*)allocator_->reMalloc(
             context_logits_buf_, sizeof(float) * model_->vocab_size_padded_ * token_num, false);
     }
@@ -2102,18 +2104,15 @@ void LlamaBatch<T>::DestroyCommunicators()
 {
     if (context_->comm.tp) {
         cudaStreamSynchronize(stream_);
-        // shared_state_->barrier->wait();
         context_->comm.h_comm->Sync(context_->comm.h_comm_tp_group);
 
         FreeCommBuffers();
 
-        // shared_state_->barrier->wait();
         context_->comm.h_comm->Sync(context_->comm.h_comm_tp_group);
 
         context_->comm.tp.reset();
 
         cudaStreamSynchronize(stream_);
-        // shared_state_->barrier->wait();
         context_->comm.h_comm->Sync(context_->comm.h_comm_tp_group);
     }
 }

@@ -29,6 +29,8 @@
 
 #include "src/turbomind/comm/comm.h"
 
+#include "src/turbomind/comm/comm.h"
+
 namespace turbomind {
 
 template<typename T>
@@ -40,11 +42,11 @@ public:
 
     std::unique_ptr<ModelRequest> createModelInstance(int deviceId) override;
 
-    void createSharedWeights(int deviceId, int rank) override;
+    void createSharedWeights(int deviceId, int rank) noexcept override;
 
-    std::unordered_map<std::string, Tensor> getParams(int deviceId, int rank) override;
+    std::unordered_map<std::string, Tensor> getParams(int deviceId, int rank) noexcept override;
 
-    void processWeights(int deviceId, int rank) override;
+    void processWeights(int deviceId, int rank) noexcept override;
 
     void createEngine(int device_id, int rank) override;
 

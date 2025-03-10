@@ -49,7 +49,7 @@ __global__ void __launch_bounds__(1024, 1)
     }
 }
 
-void NativeComm::AllGather(const void* sendbuff, void* recvbuff, size_t sendcount, DataType type, int size, cudaStream_t stream)
+void NativeComm::AllGather(const void* sendbuff, void* recvbuff, size_t sendcount, DataType type, int group, cudaStream_t stream)
 {
     const size_t bytesize = get_elem_size(type) * sendcount;
 

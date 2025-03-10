@@ -23,6 +23,10 @@ ______________________________________________________________________
 
 ## Latest News 🎉
 
+<details open>
+<summary><b>2025</b></summary>
+</details>
+
 <details close>
 <summary><b>2024</b></summary>
 
@@ -149,6 +153,7 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
   <li>InternLM-XComposer2.5 (7B)</li>
   <li>Qwen-VL (7B)</li>
   <li>Qwen2-VL (2B, 7B, 72B)</li>
+  <li>Qwen2.5-VL (3B, 7B, 72B)</li>
   <li>DeepSeek-VL (7B)</li>
   <li>DeepSeek-VL2 (3B, 16B, 27B)</li>
   <li>InternVL-Chat (v1.1-v1.5)</li>
@@ -195,9 +200,9 @@ For more information on installing on CUDA 11+ platform, or for instructions on 
 
 ```python
 import lmdeploy
-pipe = lmdeploy.pipeline("internlm/internlm3-8b-instruct")
-response = pipe(["Hi, pls intro yourself", "Shanghai is"])
-print(response)
+with lmdeploy.pipeline("internlm/internlm3-8b-instruct") as pipe:
+    response = pipe(["Hi, pls intro yourself", "Shanghai is"])
+    print(response)
 ```
 
 > \[!NOTE\]
