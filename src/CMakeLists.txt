@@ -13,4 +13,3 @@
 # limitations under the License.
 
 add_subdirectory(turbomind)
-add_subdirectory(migration)
