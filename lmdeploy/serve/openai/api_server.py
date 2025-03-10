@@ -536,10 +536,10 @@ async def free_cache(raw_request: Request) -> JSONResponse:
 
 @router.get('/distserve/get_ipc_handler')
 async def get_ipc_handler(raw_request: Request) -> JSONResponse:
-    ipc_k, ipc_v = VariableInterface.async_engine.get_ipc_handler()
+    ipc = VariableInterface.async_engine.get_ipc_handler()
     return JSONResponse({
-        "ipc_k": str(ipc_k),
-        "ipc_v": str(ipc_v)
+        "ipc_k": str(ipc[0]),
+        "ipc_v": str(ipc[1])
     })
 
 

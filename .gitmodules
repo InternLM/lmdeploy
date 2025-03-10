@@ -1,3 +1,6 @@
 [submodule "migration/Mooncake"]
 	path = migration/Mooncake
 	url = https://github.com/JimyMa/Mooncake.git
+[submodule "migration/Slime"]
+	path = migration/Slime
+	url = git@github.com:JimyMa/SlimeTransferEngine.git
