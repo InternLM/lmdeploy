@@ -193,6 +193,7 @@ jobs:
         with:
           repository: ${{ github.event.inputs.repo_org || 'open-compass/opencompass' }}
           ref: ${{github.event.inputs.repo_ref || 'main'}}
+          path: 'opencompass'
       - name:  modify config
         run: |
           cp .github/scripts/eval_regression_${{matrix.regression_func}}.py opencompass/eval_regression_${{matrix.regression_func}}.py
@@ -218,5 +219,4 @@ jobs:
             echo "models = sorted(models, key=lambda x: x['run_cfg']['num_gpus'])" >> opencompass/eval_regression_${{matrix.regression_func}}.py
             cd opencompass
             opencompass eval_regression_${{matrix.regression_func}}.py --work-dir ${{env.REPORT_ROOT}}/${{ github.run_id }}/${{matrix.regression_func}} --reuse --dump-eval-details
-            cd ..
             python .github/scripts/action_tools.py generate_output_for_evaluation ${{env.REPORT_ROOT}}/${{ github.run_id }}/${{matrix.regression_func}}

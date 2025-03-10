@@ -43,7 +43,8 @@ with read_base():
         models as lmdeploy_qwen2_1_5b_model  # noqa: F401, E501
     from opencompass.configs.models.qwen.lmdeploy_qwen2_7b import models as lmdeploy_qwen2_7b_model  # noqa: F401, E501
     from opencompass.configs.models.yi.lmdeploy_yi_1_5_9b import models as lmdeploy_yi_1_5_9b_model  # noqa: F401, E501
-    from volc import infer as volc_infer  # noqa: F401, E501
+
+    from .volc import infer as volc_infer  # noqa: F401, E501
 
 race_datasets = [race_datasets[1]]
 datasets = sum([v for k, v in locals().items() if k.endswith('_datasets')], [])
