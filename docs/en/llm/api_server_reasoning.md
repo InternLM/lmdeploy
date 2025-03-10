@@ -57,7 +57,7 @@ from lmdeploy.serve.openai.reasoning_parser import (
 from lmdeploy.serve.openai.protocol import (ChatCompletionRequest,
                                               DeltaMessage)
 
-# define a reasoning parser and register it to vllm
+# define a reasoning parser and register it to lmdeploy
 # the name list in register_module can be used
 # in --reasoning-parser.
 @ReasoningParserManager.register_module(["example"])

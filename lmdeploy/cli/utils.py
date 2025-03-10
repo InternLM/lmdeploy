@@ -370,20 +370,24 @@ class ArgumentHelper:
     @staticmethod
     def reasoning_parser(parser):
         """Add reasoning parser to parser."""
-
-        return parser.add_argument('--reasoning-parser',
-                                   type=str,
-                                   default=None,
-                                   help='The registered reasoning parser name. Default to None.')
+        from lmdeploy.serve.openai.reasoning_parser import ReasoningParserManager
+        return parser.add_argument(
+            '--reasoning-parser',
+            type=str,
+            default=None,
+            help=f'The registered reasoning parser name from {ReasoningParserManager.module_dict.keys()}. '
+            'Default to None.')
 
     @staticmethod
     def tool_call_parser(parser):
         """Add tool call parser to parser."""
+        from lmdeploy.serve.openai.tool_parser import ToolParserManager
 
-        return parser.add_argument('--tool-call-parser',
-                                   type=str,
-                                   default=None,
-                                   help='The registered tool parser name. Default to None.')
+        return parser.add_argument(
+            '--tool-call-parser',
+            type=str,
+            default=None,
+            help=f'The registered tool parser name {ToolParserManager.module_dict.keys()}. Default to None.')
 
     @staticmethod
     def cache_max_entry_count(parser):
