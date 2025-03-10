@@ -23,6 +23,7 @@ English | [简体中文](README_zh-CN.md) | [日本語](README_ja.md)
 ## distserve 安装方法
 
 ```
+git checkout distserve
 # 安装 submodule (SlimeTransferEngine: NVLink 传输，Mooncake：RDMA 传输)
 git submodule update --init
 # 安装 migration
