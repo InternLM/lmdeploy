@@ -5,7 +5,7 @@ import torch
 from torch import nn
 
 import lmdeploy.pytorch.distributed as dist
-from lmdeploy.pytorch.distributed import get_world_rank
+from lmdeploy.pytorch.distributed import get_tp_world_rank
 
 from ..backends import OpType, get_backend
 from .utils import div_up
@@ -34,7 +34,7 @@ def create_mlp_weights(hidden_dim: int, ffn_dim: int, num_experts: int, dtype: t
 
 def _update_args(hidden_dim: int, ffn_dim: int):
     """update args."""
-    world_size, _ = get_world_rank()
+    world_size, _ = get_tp_world_rank()
     assert ffn_dim % world_size == 0
     ffn_dim = ffn_dim // world_size
     return hidden_dim, ffn_dim
@@ -76,7 +76,7 @@ class LinearWeights(nn.Module):
 
     def weight_loader_tp(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, expert_id: int, shard_id: str):
         """weight loader."""
-        world_size, rank = get_world_rank()
+        world_size, rank = get_tp_world_rank()
         if shard_id == 'gate':
             param_data = param.data[expert_id, :self.half_out]
             weight = loaded_weight.chunk(world_size, dim=0)[rank]
@@ -135,7 +135,7 @@ class FusedMoE(nn.Module):
 
         enable_ep = enable_ep and self.impl.support_ep()
         if enable_ep:
-            world_size, rank = get_world_rank()
+            world_size, rank = get_tp_world_rank()
             expert_list = self.impl.ep_expert_list(world_size, rank)
             num_experts = len(expert_list)
         else:
@@ -166,7 +166,7 @@ class FusedMoE(nn.Module):
         self.num_experts = num_experts
         self.dtype = dtype
         self.device = device
-        world_size, _ = get_world_rank()
+        world_size, _ = get_tp_world_rank()
         if world_size == 1:
             all_reduce = False
         self.all_reduce = all_reduce
@@ -227,7 +227,7 @@ class LinearWeightsW8A8(LinearWeights):
     def weight_loader_scale_tp(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, expert_id: int,
                                shard_id: str):
         """weight loader scale tp."""
-        world_size, rank = get_world_rank()
+        world_size, rank = get_tp_world_rank()
         if shard_id == 'gate':
             param_data = param.data[expert_id, :self.half_out]
             weight = loaded_weight.chunk(world_size, dim=0)[rank]
@@ -267,7 +267,7 @@ class FusedMoEW8A8(nn.Module):
 
         enable_ep = enable_ep and self.impl.support_ep()
         if enable_ep:
-            world_size, rank = get_world_rank()
+            world_size, rank = get_tp_world_rank()
             expert_list = self.impl.ep_expert_list(world_size, rank)
             num_experts = len(expert_list)
         else:
@@ -297,7 +297,7 @@ class FusedMoEW8A8(nn.Module):
         self.num_experts = num_experts
         self.dtype = dtype
         self.device = device
-        world_size, _ = get_world_rank()
+        world_size, _ = get_tp_world_rank()
         if world_size == 1:
             all_reduce = False
         self.all_reduce = all_reduce
@@ -364,7 +364,7 @@ class LinearWeightsBlockedF8(LinearWeights):
     def weight_loader_scale_tp(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, expert_id: int,
                                shard_id: str):
         """weight loader scale tp."""
-        world_size, rank = get_world_rank()
+        world_size, rank = get_tp_world_rank()
         block_size = self.block_size
         half_out = self.half_out // block_size
         if shard_id == 'gate':
@@ -406,7 +406,7 @@ class FusedMoEBlockedF8(nn.Module):
 
         enable_ep = enable_ep and self.impl.support_ep()
         if enable_ep:
-            world_size, rank = get_world_rank()
+            world_size, rank = get_tp_world_rank()
             expert_list = self.impl.ep_expert_list(world_size, rank)
             num_experts = len(expert_list)
         else:
@@ -440,7 +440,7 @@ class FusedMoEBlockedF8(nn.Module):
         self.num_experts = num_experts
         self.dtype = dtype
         self.device = device
-        world_size, _ = get_world_rank()
+        world_size, _ = get_tp_world_rank()
         if world_size == 1:
             all_reduce = False
         self.all_reduce = all_reduce
