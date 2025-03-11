@@ -234,8 +234,8 @@ class BaseChatTemplate(BaseModel):
         return ret
 
 
-@MODELS.register_module(name=['deepseek-r1'])
-class Deepseek(BaseChatTemplate):
+@MODELS.register_module(name=['deepseek-v3'])
+class DeepseekV3(BaseChatTemplate):
 
     def __init__(self, user='<｜User｜>', assistant='<｜Assistant｜>', eoa='<｜end▁of▁sentence｜>', **kwargs):
         super().__init__(user=user, assistant=assistant, eoa=eoa, **kwargs)
@@ -258,7 +258,27 @@ class Deepseek(BaseChatTemplate):
             model_path (str): the model path used for matching.
         """
         path = model_path.lower()
-        if 'deepseek-r1' in path or 'deepseek-v3' in path:
+        if 'deepseek-v3' in path:
+            return 'deepseek-v3'
+
+
+@MODELS.register_module(name=['deepseek-r1'])
+class DeepseekR1(DeepseekV3):
+
+    def messages2prompt(self, messages, sequence_start=True, **kwargs):
+        if sequence_start and not isinstance(messages, str):
+            return super().messages2prompt(messages, sequence_start, **kwargs) + '<think>\n'
+        return super().messages2prompt(messages, sequence_start, **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'deepseek-r1' in path:
             return 'deepseek-r1'
 
 
