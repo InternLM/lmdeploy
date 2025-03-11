@@ -972,13 +972,14 @@ class ConcurrencyLimitMiddleware(BaseHTTPMiddleware):
 def set_parsers(reasoning_parser: Optional[str] = None, tool_parser: Optional[str] = None):
     """Set tool parser and reasoning parsers."""
     # set reasoning parser
-    if reasoning_parser in ReasoningParserManager.module_dict:
-        tokenizer = VariableInterface.async_engine.tokenizer
-        VariableInterface.reasoning_parser = ReasoningParserManager.get(reasoning_parser)(tokenizer)
-    else:
-        raise ValueError(
-            f'The reasoning parser {reasoning_parser} is not in the parser list: {ReasoningParserManager.module_dict.keys()}'  # noqa
-        )
+    if reasoning_parser is not None:
+        if reasoning_parser in ReasoningParserManager.module_dict:
+            tokenizer = VariableInterface.async_engine.tokenizer
+            VariableInterface.reasoning_parser = ReasoningParserManager.get(reasoning_parser)(tokenizer)
+        else:
+            raise ValueError(
+                f'The reasoning parser {reasoning_parser} is not in the parser list: {ReasoningParserManager.module_dict.keys()}'  # noqa
+            )
     # set tool parsers
     if tool_parser is not None:
         if tool_parser in ToolParserManager.module_dict:
