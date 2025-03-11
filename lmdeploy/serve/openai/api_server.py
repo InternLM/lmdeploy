@@ -48,7 +48,6 @@ class VariableInterface:
     proxy_url: Optional[str] = None
     api_server_url: Optional[str] = None
     # following are for reasoning parsers
-    enable_reasoning: bool = False
     reasoning_parser: Optional[ReasoningParser] = None
     # following is for tool parsers
     tool_parser: Optional[ToolParser] = None
@@ -460,7 +459,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                     delta_message.content = tool_delta.content
                 previous_text = current_text
                 previous_token_ids = current_token_ids
-            elif VariableInterface.enable_reasoning:
+            elif VariableInterface.reasoning_parser is not None:
                 current_text = current_text + res.response
                 delta_token_ids = res.token_ids if res.token_ids is not None else []
                 current_token_ids = current_token_ids + delta_token_ids
@@ -519,7 +518,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             logger.error(f'Failed to parse {text}. Exception: {e}.')
             return create_error_response(HTTPStatus.BAD_REQUEST, 'Failed to parse fc related info to json format!')
     # assume reasoning uncompatible with tool call
-    elif VariableInterface.enable_reasoning is True:
+    elif VariableInterface.reasoning_parser is not None:
         reasoning_content, text = VariableInterface.reasoning_parser.extract_reasoning_content(text, request)
     elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
         logger.error('Please lanuch the api_server with --tool-parser if you want to use tool.')
@@ -970,18 +969,16 @@ class ConcurrencyLimitMiddleware(BaseHTTPMiddleware):
             return response
 
 
-def set_parsers(enable_reasoning: bool, reasoning_parser: Optional[str] = None, tool_parser: Optional[str] = None):
+def set_parsers(reasoning_parser: Optional[str] = None, tool_parser: Optional[str] = None):
     """Set tool parser and reasoning parsers."""
     # set reasoning parser
-    if enable_reasoning:
-        if reasoning_parser in ReasoningParserManager.module_dict:
-            tokenizer = VariableInterface.async_engine.tokenizer
-            VariableInterface.reasoning_parser = ReasoningParserManager.get(reasoning_parser)(tokenizer)
-            VariableInterface.enable_reasoning = True
-        else:
-            raise ValueError(
-                f'The reasoning parser {reasoning_parser} is not in the parser list: {ReasoningParserManager.module_dict.keys()}'  # noqa
-            )
+    if reasoning_parser in ReasoningParserManager.module_dict:
+        tokenizer = VariableInterface.async_engine.tokenizer
+        VariableInterface.reasoning_parser = ReasoningParserManager.get(reasoning_parser)(tokenizer)
+    else:
+        raise ValueError(
+            f'The reasoning parser {reasoning_parser} is not in the parser list: {ReasoningParserManager.module_dict.keys()}'  # noqa
+        )
     # set tool parsers
     if tool_parser is not None:
         if tool_parser in ToolParserManager.module_dict:
@@ -1011,7 +1008,6 @@ def serve(model_path: str,
           max_log_len: int = None,
           disable_fastapi_docs: bool = False,
           max_concurrent_requests: Optional[int] = None,
-          enable_reasoning: bool = False,
           reasoning_parser: Optional[str] = None,
           tool_call_parser: Optional[str] = None,
           **kwargs):
@@ -1063,7 +1059,6 @@ def serve(model_path: str,
             process the engine’s tasks once the maximum number of concurrent
             requests is reached, regardless of any additional requests sent by
             clients concurrently during that time. Default to None.
-        enable_reasoning (str): Whether enable parsing reasoning content.
         reasoning_parser (str): The reasoning parser name.
         tool_call_parser (str): The tool call parser name.
     """
@@ -1115,7 +1110,7 @@ def serve(model_path: str,
                                                     max_log_len=max_log_len,
                                                     **kwargs)
     # set reasoning parser and tool parser
-    set_parsers(enable_reasoning, reasoning_parser, tool_call_parser)
+    set_parsers(reasoning_parser, tool_call_parser)
 
     if proxy_url is not None:
         VariableInterface.proxy_url = proxy_url

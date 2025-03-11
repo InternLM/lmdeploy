@@ -135,9 +135,11 @@ class SubCliServe:
 
         # chat template args
         ArgumentHelper.chat_template(parser)
-        ArgumentHelper.tool_call_parser(parser)
-        ArgumentHelper.enable_reasoning(parser)
-        ArgumentHelper.reasoning_parser(parser)
+
+        # parsers
+        parser_group = parser.add_mutually_exclusive_group()
+        ArgumentHelper.tool_call_parser(parser_group)
+        ArgumentHelper.reasoning_parser(parser_group)
 
         # model args
         ArgumentHelper.revision(parser)
@@ -332,7 +334,6 @@ class SubCliServe:
                        max_log_len=args.max_log_len,
                        disable_fastapi_docs=args.disable_fastapi_docs,
                        max_concurrent_requests=args.max_concurrent_requests,
-                       enable_reasoning=args.enable_reasoning,
                        reasoning_parser=args.reasoning_parser,
                        tool_call_parser=args.tool_call_parser)
 

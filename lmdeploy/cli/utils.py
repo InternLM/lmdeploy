@@ -359,15 +359,6 @@ class ArgumentHelper:
         )
 
     @staticmethod
-    def enable_reasoning(parser):
-        """Add argument enable_reasoning to parser."""
-
-        return parser.add_argument('--enable-reasoning',
-                                   action='store_true',
-                                   default=False,
-                                   help='Whether to enable reasoning extraction. Default to disable.')
-
-    @staticmethod
     def reasoning_parser(parser):
         """Add reasoning parser to parser."""
         from lmdeploy.serve.openai.reasoning_parser import ReasoningParserManager

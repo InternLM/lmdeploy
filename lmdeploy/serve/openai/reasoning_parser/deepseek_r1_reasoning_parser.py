@@ -66,7 +66,6 @@ class DeepSeekR1ReasoningParser(ReasoningParser):
                 return DeltaMessage(reasoning_content=reasoning_content, content=content if content else None)
             elif self.think_end_token_id in previous_token_ids:
                 # <think> in previous, </think> in previous,
-                # reasoning content continues
                 return DeltaMessage(content=delta_text)
             else:
                 # <think> in previous, no </think> in previous or delta,

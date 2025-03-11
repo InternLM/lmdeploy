@@ -6,12 +6,10 @@ For models that support reasoning capabilities, such as [DeepSeek R1](https://hu
 
 ### DeepSeek R1
 
-We can start the DeepSeek R1 model's api_server service just like launching other models. The difference is that we need to specify `--enable-reasoning` and `--reasoning-parser` parameters.
-In the `--reasoning-parser` parameter, we need to specify the specific parser to use.
+We can start the DeepSeek R1 model's api_server service just like launching other models. The difference is that we need to specify --reasoning-parser\` parameter.
 
 ```
-lmdeploy serve api_server deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
-    --enable-reasoning --reasoning-parser deepseek-r1
+lmdeploy serve api_server deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B --reasoning-parser deepseek-r1
 ```
 
 Then, we can call the service's functionality from the client:
@@ -104,6 +102,5 @@ class ExampleParser(ReasoningParser):
 Similarly, the command to start the service becomes:
 
 ```
-lmdeploy serve api_server $model_path \
-    --enable-reasoning --reasoning-parser example
+lmdeploy serve api_server $model_path --reasoning-parser example
 ```

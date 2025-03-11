@@ -7,12 +7,11 @@ reasoning_content 记录推理内容。
 
 ### DeepSeek R1
 
-我们可以像启动其他模型的 api_server 服务一样启动 DeepSeek R1 的模型，只是不同的是，我们需要指定 `--enable-reasoning` 和 `--reasoning-parser`。
+我们可以像启动其他模型的 api_server 服务一样启动 DeepSeek R1 的模型，只是不同的是，我们需要指定 `--reasoning-parser`。
 在 `--reasoning-parser` 传参里，我们需要指定具体的 parser。
 
 ```
-lmdeploy serve api_server deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
-    --enable-reasoning --reasoning-parser deepseek-r1
+lmdeploy serve api_server deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B --reasoning-parser deepseek-r1
 ```
 
 然后，我们就可以在客户端调用这个服务的功能：
@@ -105,6 +104,5 @@ class ExampleParser(ReasoningParser):
 类似的，启动服务的命令就变成了：
 
 ```
-lmdeploy serve api_server $model_path \
-    --enable-reasoning --reasoning-parser example
+lmdeploy serve api_server $model_path --reasoning-parser example
 ```
