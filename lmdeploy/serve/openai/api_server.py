@@ -476,7 +476,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                     delta_message.content = reasoning_delta.content
                 previous_text = current_text
                 previous_token_ids = current_token_ids
-            elif request.tool_choice != 'none' and VariableInterface.tool_parser is None:
+            elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
                 logger.error('Please lanuch the api_server with --tool-parser if you want to use tool.')
             response_json = create_stream_response_json(index=0,
                                                         delta_message=delta_message,
@@ -521,7 +521,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     # assume reasoning uncompatible with tool call
     elif VariableInterface.enable_reasoning is True:
         reasoning_content, text = VariableInterface.reasoning_parser.extract_reasoning_content(text, request)
-    elif request.tool_choice != 'none' and VariableInterface.tool_parser is None:
+    elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
         logger.error('Please lanuch the api_server with --tool-parser if you want to use tool.')
 
     logprobs = None

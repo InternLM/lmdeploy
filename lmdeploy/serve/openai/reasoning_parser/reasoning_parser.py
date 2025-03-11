@@ -48,16 +48,13 @@ class ReasoningParser:
         Used for non-streaming responses where we have the entire model response
         available before sending to the client.
 
-        Parameters:
-        model_output: str
-            The model-generated string to extract reasoning content from.
-
-        request: ChatCompletionRequest
-            The request object that was used to generate the model_output.
+        Args:
+            model_output (str): The model-generated string to extract reasoning content from.
+            request (ChatCompletionRequest): he request object that was used to generate the model_output.
 
         Returns:
-        Tuple[Optional[str], Optional[str]]
-            A tuple containing the reasoning content and the content.
+            reasoning_content (str | None): The reasoning content.
+            final_output (str | None): The content.
         """
         raise NotImplementedError('ReasoningParser.extract_reasoning_content '
                                   'has not been implemented!')
