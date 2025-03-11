@@ -227,7 +227,7 @@ class RayExecutor(ExecutorBase):
             adapters=adapters,
             device_type=device_type,
             dtype=dtype,
-            log_level=30,
+            log_level=logger.level,
         )
 
         logger.info('Init ray workers.')
