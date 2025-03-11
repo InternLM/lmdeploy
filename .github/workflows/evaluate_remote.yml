@@ -66,7 +66,7 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
-      - name: Build lagent
+      - name: Build Opencompass
         run: |
           pip install wheel setuptools
           python setup.py sdist bdist_wheel

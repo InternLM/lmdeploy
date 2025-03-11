@@ -4,8 +4,9 @@ from mmengine.config import read_base
 
 with read_base():
     # choose a list of datasets
-    from opencompass.configs.datasets.gsm8k.gsm8k_gen import gsm8k_datasets  # noqa: F401, E501
-    from opencompass.configs.datasets.race.race_gen import race_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.gpqa.gpqa_openai_simple_evals_gen_5aeece import gpqa_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.IFEval.IFEval_gen_353ae7 import ifeval_datasets  # noqa: F401, E501
+    from opencompass.configs.datasets.math.math_0shot_gen_11c4b5 import math_datasets  # noqa: F401, E501
     # read hf models - chat models
     from opencompass.configs.models.chatglm.lmdeploy_glm4_9b_chat import \
         models as lmdeploy_glm4_9b_chat_model  # noqa: F401, E501
@@ -72,7 +73,6 @@ with read_base():
 
     from .volc import infer as volc_infer  # noqa: F401, E501
 
-race_datasets = [race_datasets[1]]
 datasets = sum([v for k, v in locals().items() if k.endswith('_datasets')], [])
 
 pytorch_glm4_9b_chat_model = deepcopy(lmdeploy_glm4_9b_chat_model)
@@ -83,7 +83,6 @@ pytorch_internlm2_5_7b_chat_model = deepcopy(lmdeploy_internlm2_5_7b_chat_model)
 pytorch_internlm2_5_20b_chat_model = deepcopy(lmdeploy_internlm2_5_20b_chat_model)
 pytorch_llama3_2_3b_instruct_model = deepcopy(lmdeploy_llama3_2_3b_instruct_model)
 pytorch_llama3_3_70b_instruct_model = deepcopy(lmdeploy_llama3_3_70b_instruct_model)
-pytorch_mistral_large_instruct_2411_model = deepcopy(lmdeploy_mistral_large_instruct_2411_model)
 pytorch_mistral_nemo_instruct_2407_model = deepcopy(lmdeploy_mistral_nemo_instruct_2407_model)
 pytorch_mistral_small_instruct_2409_model = deepcopy(lmdeploy_mistral_small_instruct_2409_model)
 pytorch_qwen2_5_72b_instruct_model = deepcopy(lmdeploy_qwen2_5_72b_instruct_model)
@@ -137,9 +136,9 @@ for model in [v for k, v in locals().items() if k.endswith('_native')]:
 
 summarizer = dict(
     dataset_abbrs=[
-        'gsm8k',
-        'race-middle',
-        'race-high',
+        ['GPQA_diamond', 'accuracy'],
+        ['math', 'accuracy'],
+        ['IFEval', 'Prompt-level-strict-accuracy'],
     ],
     summary_groups=sum([v for k, v in locals().items() if k.endswith('_summary_groups')], []),
 )
