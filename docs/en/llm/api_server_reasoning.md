@@ -11,7 +11,7 @@ In the `--reasoning-parser` parameter, we need to specify the specific parser to
 
 ```
 lmdeploy serve api_server deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
-    --enable-reasoning --reasoning-parser deepseek_r1
+    --enable-reasoning --reasoning-parser deepseek-r1
 ```
 
 Then, we can call the service's functionality from the client:

@@ -12,7 +12,7 @@ reasoning_content 记录推理内容。
 
 ```
 lmdeploy serve api_server deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
-    --enable-reasoning --reasoning-parser deepseek_r1
+    --enable-reasoning --reasoning-parser deepseek-r1
 ```
 
 然后，我们就可以在客户端调用这个服务的功能：
