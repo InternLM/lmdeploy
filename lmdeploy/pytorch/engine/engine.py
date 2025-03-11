@@ -40,10 +40,10 @@ class InferOutput:
     logits: torch.Tensor = None
 
 
-def _tensorlize_block_offsets(block_offsets):
+def _tensorlize_block_offsets(block_offsets, dtype=torch.int32):
     """tensorlize block_offsets."""
     from torch.nn.utils.rnn import pad_sequence
-    block_offsets = [torch.from_numpy(off) for off in block_offsets]
+    block_offsets = [torch.from_numpy(off).to(dtype) for off in block_offsets]
     block_offsets = pad_sequence(block_offsets, batch_first=True)
     return block_offsets
 
@@ -558,6 +558,13 @@ class Engine:
     def gpu_count(self):
         return self.tp * self.dp
 
+    @property
+    def torch_int_dtype(self):
+        """return int32 for cuda, int64 for others."""
+        if self.executor.device_type == 'cuda':
+            return torch.int32
+        return torch.int64
+
     @logging_timer('CreateModelInputs', logger)
     def create_model_inputs(self, messages: SeqList, is_prefill: bool):
         """create model inputs from messages.
@@ -585,7 +592,7 @@ class Engine:
         max_q_seq_length = seq_length.max().item()
 
         block_offsets = self.scheduler.get_block_tables(messages)
-        block_offsets = _tensorlize_block_offsets(block_offsets)
+        block_offsets = _tensorlize_block_offsets(block_offsets, dtype=self.torch_int_dtype)
 
         local_adapter_ids = None
         if self.adapter_manager.num_adapters() > 1:

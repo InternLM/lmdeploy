@@ -137,6 +137,7 @@ class ModelConfig:
     hf_config: Any = None
     cogvlm_style: bool = False
     custom_module_map: Dict[str, setattr] = None
+    use_flash_mla: bool = False
 
     def get_head_size(self):
         """get head size."""

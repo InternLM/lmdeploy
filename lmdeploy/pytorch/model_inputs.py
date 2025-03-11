@@ -309,11 +309,11 @@ class StepContext:
     """
     input_ids: torch.LongTensor
     model_config: ModelConfig
-    block_offsets: torch.LongTensor
+    block_offsets: torch.IntTensor
     position_ids: torch.LongTensor
     attention_mask: torch.LongTensor
     q_seqlens: torch.LongTensor
-    kv_seqlens: torch.LongTensor
+    kv_seqlens: torch.IntTensor
     q_start_loc: torch.LongTensor
     kv_caches: List
     is_decoding: bool
