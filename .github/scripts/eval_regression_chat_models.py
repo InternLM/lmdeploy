@@ -128,7 +128,7 @@ for model in [v for k, v in locals().items() if k.startswith('pytorch_')]:
 
 for model in [v for k, v in locals().items() if k.endswith('_native')]:
     for m in model:
-        m['abbr'] = m['abbr'] + '_nativa'
+        m['abbr'] = m['abbr'] + '_native'
         m['engine_config']['communicator'] = 'native'
 
 # models = sum([v for k, v in locals().items() if  k.startswith('lmdeploy_') or k.startswith('pytorch_')], [])
