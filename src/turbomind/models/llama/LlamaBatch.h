@@ -226,6 +226,8 @@ private:
     std::unique_ptr<LlamaV2<T>>      model_;
     std::unique_ptr<SequenceManager> sequence_manager_;
 
+    Communicators& comm_;
+
     ///////////////////////////////////////////////////////////////////
     // k/v cache block buffers
     int*       cu_block_counts_{};

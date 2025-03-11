@@ -983,6 +983,7 @@ LlamaBatch<T>::LlamaBatch(const EngineParam&          param,
     cublas_wrapper_(ctx->cublas_wrapper.get()),
     context_(std::move(ctx)),
     model_(std::move(model)),
+    comm_(context_->comm),
     session_len_(param.session_len)
 {
     const auto cache_block_seq_len = model_->attn_param_.cache_block_seq_len;
@@ -1001,7 +1002,7 @@ LlamaBatch<T>::LlamaBatch(const EngineParam&          param,
     const auto get_free_size = [&] {  //
         size_t free{}, total{};
         check_cuda_error(cudaMemGetInfo(&free, &total));
-        return Allreduce(*model_->comm_->h_comm, free, comm::RedOp::kMin, model_->comm_->h_comm_tp_group);
+        return AllReduce(model_->comm_->h_tp_group, free, comm::RedOp::kMin);
     };
 
     sequence_manager_.reset(new SequenceManager{model_->layer_num_,
@@ -1247,14 +1248,14 @@ void LlamaBatch<T>::ComputeAndOutputLogits(T* hidden_states, int first, int last
 
         if (local_context_logits_buf_size_ < byte_size) {
             check_cuda_error(cudaStreamSynchronize(stream_));
-            context_->comm.h_comm->Sync(context_->comm.h_comm_tp_group);
+            comm_.h_tp_group->Sync();
 
             CommBufFree((void**)&local_context_logits_buf_, true);
             local_context_logits_buf_      = (float*)CommBufAlloc(byte_size, true);
             local_context_logits_buf_size_ = byte_size;
 
             check_cuda_error(cudaStreamSynchronize(stream_));
-            context_->comm.h_comm->Sync(context_->comm.h_comm_tp_group);
+            comm_.h_tp_group->Sync();
         }
     }
 
@@ -1520,7 +1521,7 @@ void LlamaBatch<T>::Finish(GenerationState& g, std::vector<Signal>& signals)
         }
         if (need_sync) {
             // Release updates on request output buffers to all ranks (`Interrupt` will use it)
-            context_->comm.h_comm->Sync(context_->comm.h_comm_tp_group);
+            comm_.h_tp_group->Sync();
         }
     }
 
@@ -1659,11 +1660,9 @@ void LlamaBatch<T>::InternalThreadEntry()
         // 1. Wait while rank-0 is dequeueing
         // 2. Broadcast `ec` from rank-0
         // shared_state_->barrier->wait();
-        // context_->comm.h_comm->Sync(context_->comm.h_comm_tp_group);
+        // comm_.h_comm->Sync(comm_.h_comm_tp_group);
 
-        Broadcast(*context_->comm.h_comm, req, 0, context_->comm.h_comm_tp_group);
-
-        // Broadcast(Signals, )
+        Broadcast(comm_.h_tp_group, req, 0);
 
         if (req->abort) {
             TM_LOG_INFO("[InternalThreadEntry] stop requested.");
@@ -1679,7 +1678,7 @@ void LlamaBatch<T>::InternalThreadEntry()
 
         // 1. Wait while shared `requests` is being used
         // 2. Broadcast modifcations from rank-0
-        // context_->comm.h_comm->Sync(context_->comm.h_comm_tp_group);
+        // comm_.h_comm->Sync(comm_.h_comm_tp_group);
 
         ProcessCancelRequests(req->cancel, signals);
 
@@ -1689,8 +1688,7 @@ void LlamaBatch<T>::InternalThreadEntry()
 
         Initialize(g);
 
-        const int n_active =
-            Allreduce(*context_->comm.h_comm, state_->active_size, comm::RedOp::kSum, context_->comm.h_comm_dp_group);
+        const int n_active = AllReduce(comm_.h_dp_group, state_->active_size, comm::RedOp::kSum);
 
         if (n_active) {
             //
@@ -1702,7 +1700,7 @@ void LlamaBatch<T>::InternalThreadEntry()
                 // Finished requests and corresponding output tensors will be released when notified
                 // wait for all ranks to ensure no rank (except for output thread) will access related
                 // resources
-                context_->comm.h_comm->Sync(context_->comm.h_comm_tp_group);
+                comm_.h_tp_group->Sync();
             }
 
             if (tp_rank_ == 0) {
@@ -1791,11 +1789,10 @@ bool LlamaBatch<T>::Forward(GenerationState& g)
     offsets.push_back(active_size);
 
     // Synchronize mini batch count with sync DP ranks
-    const int n_batches = Allreduce(*context_->comm.h_comm,  //
-                                    (int)offsets.size(),
-                                    comm::RedOp::kMax,
-                                    context_->comm.h_comm_dp_group);
-    while (offsets.size() < n_batches) {  // populate empty batches
+    int n_batches = AllReduce(comm_.h_dp_group, (int)offsets.size(), comm::RedOp::kMax);
+
+    // Populate empty batches
+    while (offsets.size() < n_batches) {
         offsets.push_back(offsets.back());
     }
 
@@ -1838,11 +1835,9 @@ bool LlamaBatch<T>::Forward(GenerationState& g)
         }
 
         // Synchronize batch token num with sync DP ranks
-        const auto local_token_nums = Allgather(*context_->comm.h_comm,  //
-                                                sum_q,
-                                                context_->comm.h_comm_dp_group);
+        auto local_token_nums = AllGather(comm_.h_dp_group, sum_q);
 
-        // if (context_->comm.h_comm->rank() == 0) {
+        // if (comm_.h_comm->rank() == 0) {
         //     std::stringstream ss;
         //     for (auto x : local_token_nums) {
         //         ss << x << " ";
@@ -2025,7 +2020,7 @@ void LlamaBatch<T>::Warmup()
                 TM_LOG_INFO("[Gemm2] %d", bs);
             }
             const int input_length     = bs;
-            auto      local_token_nums = Allgather(*context_->comm.h_comm, bs, context_->comm.h_comm_dp_group);
+            auto      local_token_nums = AllGather(comm_.h_dp_group, bs);
 
             model_->forwardUnified(decoder_output_buf_,
                                    context_decoder_output_buf_,
@@ -2069,10 +2064,10 @@ void LlamaBatch<T>::Warmup()
 template<class T>
 void* LlamaBatch<T>::CommBufAlloc(size_t size, bool register_)
 {
-    if (auto& tp = model_->comm_->tp) {
-        auto ptr = tp->Allocate(size);
+    if (auto& comm = model_->comm_->d_comm) {
+        auto ptr = comm->Allocate(size);
         if (register_) {
-            tp->Register(ptr, size);
+            comm->Register(ptr, size);
         }
         return ptr;
     }
@@ -2087,11 +2082,11 @@ void LlamaBatch<T>::CommBufFree(void** ptr, bool deregister)
     if (!ptr) {
         return;
     }
-    if (auto& tp = model_->comm_->tp) {
+    if (auto& comm = model_->comm_->d_comm) {
         if (deregister) {
-            tp->Deregister(*ptr);
+            comm->Deregister(*ptr);
         }
-        tp->Free(*ptr);
+        comm->Free(*ptr);
         *ptr = {};
     }
     else {
@@ -2102,18 +2097,18 @@ void LlamaBatch<T>::CommBufFree(void** ptr, bool deregister)
 template<class T>
 void LlamaBatch<T>::DestroyCommunicators()
 {
-    if (context_->comm.tp) {
+    if (comm_.d_comm) {
         cudaStreamSynchronize(stream_);
-        context_->comm.h_comm->Sync(context_->comm.h_comm_tp_group);
+        comm_.h_comm->Sync();
 
         FreeCommBuffers();
+        comm_.h_comm->Sync();
 
-        context_->comm.h_comm->Sync(context_->comm.h_comm_tp_group);
-
-        context_->comm.tp.reset();
+        // Destroy device communicator
+        comm_.d_comm = {};
 
         cudaStreamSynchronize(stream_);
-        context_->comm.h_comm->Sync(context_->comm.h_comm_tp_group);
+        comm_.h_comm->Sync();
     }
 }
 

@@ -10,7 +10,6 @@
 #include <stdexcept>
 #include <type_traits>
 
-#include "src/turbomind/models/llama/Barrier.h"
 #include "src/turbomind/utils/Tensor.h"
 
 namespace turbomind::comm {
@@ -21,64 +20,49 @@ enum class RedOp {
     kMax,
 };
 
+typedef void (*copy_fn)(void* src, int n, void* dst, int offset);
+
+typedef void (*reduce_fn)(void* src, int n, void* dst, int offset);
+
+class HostCommImpl {
+public:
+    virtual ~HostCommImpl() = default;
+
+    virtual int rank() const = 0;
+
+    virtual int n_ranks() const = 0;
+
+    virtual bool is_same_process() const = 0;
+
+    virtual std::shared_ptr<HostCommImpl> Split(int color, int key) = 0;
+
+    virtual void Sync() = 0;
+
+    virtual void Broadcast(void* data, int count, DataType dtype, int root, copy_fn copy) = 0;
+
+    virtual void AllGather(void* data, int count, DataType dtype, copy_fn copy) = 0;
+
+    virtual void AllReduce(void* data, int count, DataType dtype, RedOp red_op) = 0;
+};
+
 class HostComm {
 public:
-    struct State {
-        explicit State(int n): channels(n * n), barrier(n) {}
-        std::deque<std::atomic<void*>> channels;
-        turbomind::Barrier             barrier;
-    };
+    HostComm() = default;
 
-    typedef void (*copy_fn)(void* src, int n, void* dst, int offset);
+    /* implicit */ HostComm(std::shared_ptr<HostCommImpl> impl): impl_{std::move(impl)} {}
 
-    typedef void (*reduce_fn)(void* src, int n, void* accum);
-
-    HostComm(int n_ranks, int rank, std::shared_ptr<State> state);
-
-    int rank(int group = 0) const
+    HostCommImpl* operator->() const noexcept
     {
-        return groups_.at(group).mapping.at(rank_);
+        return impl_.get();
     }
 
-    int n_ranks(int group = 0) const
+    operator HostCommImpl*() const noexcept
     {
-        return groups_.at(group).ranks.size();
-    }
-
-    bool is_same_process(int group = 0) const
-    {
-        return true;
-    }
-
-    int Split(const std::vector<int>& ranks, int parent_group = 0);
-
-    int Split(int color, int key, int parent_group = 0);
-
-    void Sync(int group = 0);
-
-    void Broadcast(void* data, int count, DataType dtype, int root, copy_fn copy_fn, int group);
-
-    void Allgather(void* all_data, int count, DataType dtype, copy_fn copy_fn, int group);
-
-    void Allreduce(const void* src, void* dst, int count, DataType dtype, RedOp red_op, int group);
-
-private:
-    struct Group {
-        std::vector<int> ranks;    // group rank -> global rank
-        std::vector<int> mapping;  // global rank -> group rank
-    };
-
-    std::atomic<void*>& channel(int from, int to)
-    {
-        return state_->channels[from * n_ranks_ + to];
+        return impl_.get();
     }
 
 private:
-    int n_ranks_;
-    int rank_;
-
-    std::shared_ptr<State> state_;
-    std::vector<Group>     groups_;
+    std::shared_ptr<HostCommImpl> impl_;
 };
 
 namespace detail {
@@ -91,15 +75,35 @@ void copy_fn(void* src, int n, void* dst, int offset)
 
 }  // namespace detail
 
+//////////////////////////////////////////////////////////////////////////////////
+// Typed array interface
 template<class T>
-void Broadcast(HostComm& comm, T* data, int n, int root, int group = 0)
+void Broadcast(HostCommImpl* comm, T* data, int n, int root)
 {
     if constexpr (std::is_trivially_copyable_v<T>) {
-        comm.Broadcast((char*)data, sizeof(T) * n, TYPE_INT8, root, detail::copy_fn<char>, group);
+        comm->Broadcast((char*)data, sizeof(T) * n, TYPE_INT8, root, detail::copy_fn<char>);
     }
     else {
-        if (comm.is_same_process(group)) {
-            comm.Broadcast(data, n, TYPE_INVALID, root, detail::copy_fn<T>, group);
+        if (comm->is_same_process()) {
+            /// TODO: Constness should be considered
+            comm->Broadcast(data, n, TYPE_INVALID, root, detail::copy_fn<T>);
+        }
+        else {
+            throw std::runtime_error("not implemented");
+        }
+    }
+}
+
+template<class T>
+void AllGather(HostCommImpl* comm, T* data, int n)
+{
+    if constexpr (std::is_trivially_copyable_v<T>) {
+        comm->AllGather(data, sizeof(T) * n, TYPE_INT8, detail::copy_fn<char>);
+    }
+    else {
+        if (comm->is_same_process()) {
+            /// TODO: Constness should be considered
+            comm->AllGather(data, n, TYPE_INVALID, detail::copy_fn<T>);
         }
         else {
             /// serialize data
@@ -109,49 +113,34 @@ void Broadcast(HostComm& comm, T* data, int n, int root, int group = 0)
 }
 
 template<class T>
-void Allgather(HostComm& comm, T* all_data, int n, int group = 0)
+void AllReduce(HostCommImpl* comm, T* data, int n, RedOp red_op)
 {
-    if constexpr (std::is_trivially_copyable_v<T>) {
-        comm.Allgather(all_data, sizeof(T) * n, TYPE_INT8, detail::copy_fn<char>, group);
-    }
-    else {
-        if (comm.is_same_process(group)) {
-            comm.Allgather(all_data, n, TYPE_INVALID, detail::copy_fn<T>, group);
-        }
-        else {
-            /// serialize data
-            throw std::runtime_error("not implemented");
-        }
-    }
+    comm->AllReduce(data, n, getTensorType<T>(), red_op);
+}
+
+//////////////////////////////////////////////////////////////////////////////////
+// Typed value interface
+template<class T>
+void Broadcast(HostCommImpl* comm, T& value, int root)
+{
+    Broadcast(comm, &value, 1, root);
 }
 
 template<class T>
-void Allreduce(HostComm& comm, const T* src, T* dst, int n, RedOp red_op, int group = 0)
+std::vector<T> AllGather(HostCommImpl* comm, const T& value)
 {
-    comm.Allreduce(src, dst, n, getTensorType<T>(), red_op, group);
-}
-
-template<class T>
-void Broadcast(HostComm& comm, T& value, int root, int group = 0)
-{
-    Broadcast(comm, &value, 1, root, group);
-}
-
-template<class T>
-std::vector<T> Allgather(HostComm& comm, const T& value, int group = 0)
-{
-    std::vector<T> ret(comm.n_ranks(group));
-    ret[comm.rank(group)] = value;
-    Allgather(comm, ret.data(), 1, group);
+    std::vector<T> ret(comm->n_ranks());
+    ret.at(comm->rank()) = value;
+    AllGather(comm, ret.data(), 1);
     return ret;
 }
 
 template<class T>
-T Allreduce(HostComm& comm, const T& value, RedOp red_op, int group = 0)
+T AllReduce(HostCommImpl* comm, const T& value, RedOp red_op)
 {
-    T dst{};
-    Allreduce(comm, &value, &dst, 1, red_op, group);
-    return dst;
+    T tmp = value;
+    AllReduce(comm, &tmp, 1, red_op);
+    return tmp;
 }
 
 class HostGroupId {
@@ -162,7 +151,7 @@ public:
     virtual void Export(std::ostream& os) = 0;
     virtual void Import(std::istream& is) = 0;
 
-    virtual std::unique_ptr<HostComm> CreateHostCommunicator(int rank, int n_ranks) = 0;
+    virtual HostComm CreateCommunicator(int n_ranks, int rank) = 0;
 };
 
 std::unique_ptr<HostGroupId> CreateHostGroupId(const std::string& backend);

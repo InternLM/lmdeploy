@@ -355,29 +355,35 @@ __global__ void Allreduce_Simple_Push_v2(T*                                     
     }
 }
 
-void NativeComm::AllReduceSum(const void* sendbuff, void* recvbuff, size_t count, DataType type, cudaStream_t stream)
+void NativeCommImpl::AllReduceSum(
+    const void* sendbuff, void* recvbuff, size_t count, DataType type, int group, cudaStream_t stream)
 {
     FT_CHECK(sendbuff == recvbuff);
 
     void* data = recvbuff;
+
+    const int n_ranks = this->n_ranks(group);
+    const int rank    = this->rank(group);
+
+    auto semaphores = groups_.at(group).d2d_semaphores;
 
     auto invoke = [&](auto t) {
         using T               = decltype(t);
         const size_t bytesize = sizeof(T) * count;
         if (bytesize <= 1 << 20) {
             constexpr int vec_size      = sizeof(uint2) / sizeof(T);
-            const int     slice         = (count / vec_size + world_size_ - 1) / world_size_;
+            const int     slice         = (count / vec_size + n_ranks - 1) / n_ranks;
             constexpr int ctas_per_peer = 4;
             constexpr int threads       = 1024;
-            const int     blocks        = (world_size_ - 1) * ctas_per_peer;
+            const int     blocks        = (n_ranks - 1) * ctas_per_peer;
             auto          incoming      = (LLPacket*)packet_buff_;
             auto          outgoing      = get_near(incoming);
             AllreduceKernel_LL<<<blocks, threads, 0, stream>>>((T*)data,  //
                                                                (T*)data,
                                                                incoming,
                                                                outgoing,
-                                                               rank_,
-                                                               world_size_ - 1,
+                                                               rank,
+                                                               n_ranks - 1,
                                                                slice,
                                                                count / vec_size,
                                                                flag_++,
@@ -385,7 +391,7 @@ void NativeComm::AllReduceSum(const void* sendbuff, void* recvbuff, size_t count
         }
         else {
             constexpr int vec_size = sizeof(uint4) / sizeof(T);
-            const int     slice    = (count / vec_size + world_size_ - 1) / world_size_;
+            const int     slice    = (count / vec_size + n_ranks - 1) / n_ranks;
             if (bytesize <= kScratchBuffSize && bytesize <= 6 << 20) {
                 constexpr int threads = 1024;
                 const int     blocks  = std::min(48, (slice + threads - 1) / threads);
@@ -393,9 +399,9 @@ void NativeComm::AllReduceSum(const void* sendbuff, void* recvbuff, size_t count
                                                                          (T*)scratch_buff_,
                                                                          get_near((T*)data),
                                                                          get_near((T*)scratch_buff_),
-                                                                         device_semaphores_,
-                                                                         rank_,
-                                                                         world_size_ - 1,
+                                                                         semaphores,
+                                                                         rank,
+                                                                         n_ranks - 1,
                                                                          slice,
                                                                          count / vec_size,
                                                                          constant<vec_size>{},
@@ -406,9 +412,9 @@ void NativeComm::AllReduceSum(const void* sendbuff, void* recvbuff, size_t count
                 const int     blocks  = std::min(48, (slice + threads - 1) / threads);
                 Allreduce_Simple_Pull<<<blocks, threads, 0, stream>>>((T*)data,
                                                                       get_near((T*)data),
-                                                                      device_semaphores_,
-                                                                      rank_,
-                                                                      world_size_ - 1,
+                                                                      semaphores,
+                                                                      rank,
+                                                                      n_ranks - 1,
                                                                       slice,
                                                                       count / vec_size,
                                                                       constant<vec_size>{},

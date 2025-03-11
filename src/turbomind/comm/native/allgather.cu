@@ -49,9 +49,15 @@ __global__ void __launch_bounds__(1024, 1)
     }
 }
 
-void NativeComm::AllGather(const void* sendbuff, void* recvbuff, size_t sendcount, DataType type, int group, cudaStream_t stream)
+void NativeCommImpl::AllGather(
+    const void* sendbuff, void* recvbuff, size_t sendcount, DataType type, int group, cudaStream_t stream)
 {
     const size_t bytesize = get_elem_size(type) * sendcount;
+
+    const int peers = this->n_ranks(group) - 1;
+    const int rank  = this->rank(group);
+
+    auto semaphores = groups_.at(group).d2d_semaphores;
 
     auto invoke = [&](auto t) {
         using T              = decltype(t);
@@ -61,9 +67,9 @@ void NativeComm::AllGather(const void* sendbuff, void* recvbuff, size_t sendcoun
         const int    blocks  = std::min<int>(32, (slice + threads - 1) / threads);
         Allgather_Simple_Pull<T><<<blocks, threads, 0, stream>>>((T*)recvbuff,  //
                                                                  near,
-                                                                 device_semaphores_,
-                                                                 rank_,
-                                                                 world_size_ - 1,
+                                                                 semaphores,
+                                                                 rank,
+                                                                 peers,
                                                                  slice,
                                                                  std::false_type{});
     };
@@ -150,15 +156,16 @@ __global__ void Barrier(mscclpp::SmDevice2DeviceSemaphoreDeviceHandle* semaphore
     }
 }
 
-void NativeComm::AllGather2D(const void*  sendbuff,
-                             void*        recvbuff,
-                             size_t       pitch,
-                             size_t       stride,
-                             int          width,
-                             int          height,
-                             DataType     type,
-                             int2         flags,
-                             cudaStream_t stream)
+void NativeCommImpl::AllGather2D(const void*  sendbuff,
+                                 void*        recvbuff,
+                                 size_t       pitch,
+                                 size_t       stride,
+                                 int          width,
+                                 int          height,
+                                 DataType     type,
+                                 int2         flags,
+                                 int          group,
+                                 cudaStream_t stream)
 {
     const size_t byte_width  = get_elem_size(type) * width;
     const size_t byte_pitch  = get_elem_size(type) * pitch;
@@ -173,6 +180,11 @@ void NativeComm::AllGather2D(const void*  sendbuff,
         }
     }
     FT_CHECK(base);
+
+    const int peers = this->n_ranks(group) - 1;
+    const int rank  = this->rank(group);
+
+    auto semaphores = groups_.at(group).d2d_semaphores;
 
 #if 1
     auto invoke = [&](auto t) {
@@ -192,9 +204,9 @@ void NativeComm::AllGather2D(const void*  sendbuff,
         const int blocks = std::min<int>(48, (height + groups - 1) >> log2_groups);
         Allgather2D_Simple_Pull<T><<<blocks, threads, 0, stream>>>((T*)recvbuff,  //
                                                                    near,
-                                                                   device_semaphores_,
-                                                                   rank_,
-                                                                   world_size_ - 1,
+                                                                   semaphores,
+                                                                   rank,
+                                                                   peers,
                                                                    byte_pitch / sizeof(T),
                                                                    byte_stride / sizeof(T),
                                                                    byte_width / sizeof(T),

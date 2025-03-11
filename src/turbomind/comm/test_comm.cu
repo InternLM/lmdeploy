@@ -12,15 +12,15 @@
 #include <sstream>
 #include <thread>
 
-#include <cuda_profiler_api.h>
+// #include <cuda_profiler_api.h>
 #include <cuda_runtime.h>
 
-#include "src/turbomind/comm/barrier.h"
 #include "src/turbomind/comm/comm.h"
 #include "src/turbomind/comm/host.h"
 #include "src/turbomind/utils/Tensor.h"
 
 using namespace turbomind::comm;
+using turbomind::getTensorType;
 
 [[maybe_unused]] static constexpr bool is_ncu = 0;
 
@@ -86,8 +86,8 @@ struct Context {
 
 struct TestComm {
 
-    std::vector<std::unique_ptr<Comm>>     comm_;
-    std::vector<std::shared_ptr<HostComm>> host_comm_;
+    std::vector<DeviceComm> d_comm_;
+    std::vector<HostComm>   h_comm_;
 
     int              warmup_;
     int              iters_;
@@ -106,19 +106,19 @@ struct TestComm {
             group_id_data = ss.str();
         }
 
-        std::vector<std::unique_ptr<Comm>>     comm(world_size);
-        std::vector<std::shared_ptr<HostComm>> host_comm(world_size);
+        std::vector<DeviceComm> d_comm(world_size);
+        std::vector<HostComm>   h_comm(world_size);
 
         auto init = [&](int rank) {
             // initialize host communicators
             std::stringstream            ss(group_id_data);
             std::unique_ptr<HostGroupId> host_id = CreateHostGroupId({});
             host_id->Import(ss);
-            host_comm[rank] = host_id->CreateHostCommunicator(rank, world_size);
+            h_comm[rank] = host_id->CreateCommunicator(world_size, rank);
 
             // initialize device communicators
             cudaSetDevice(rank);
-            comm[rank] = CreateCommunicator(backend, rank, world_size, host_comm[rank]);
+            d_comm[rank] = CreateDeviceCommunicator(backend, world_size, rank, h_comm[rank]);
         };
 
         std::vector<std::thread> threads;
@@ -129,7 +129,7 @@ struct TestComm {
             t.join();
         }
 
-        return std::make_pair(host_comm, std::move(comm));
+        return std::make_pair(h_comm, std::move(d_comm));
     }
 
     void Run(int hidden_dim, int vocab_size, int tp, int warmup, int iters, std::vector<int> tokens)
@@ -143,9 +143,7 @@ struct TestComm {
             tp = device_num;
         }
 
-        // barrier_.emplace(device_num);
-
-        std::tie(host_comm_, comm_) = Init(device_num, "native");
+        std::tie(h_comm_, d_comm_) = Init(device_num, "native");
 
         warmup_ = warmup;
         iters_  = iters;
@@ -162,30 +160,43 @@ struct TestComm {
     template<class T>
     void TestAllReduce(size_t dim)
     {
-        std::mt19937                       gen{};
-        std::uniform_int_distribution<int> dist{0, 31};  // 5 mantissa bits
-        std::vector<std::vector<T>>        data;
-        std::vector<T>                     ref_data(max_tokens_ * dim);
+        std::vector<std::vector<T>> data(d_comm_.size());
+        std::vector<T>              ref_data(max_tokens_ * dim);
 
-        std::cout << "preparing data ... " << std::flush;
+        auto func = [&](int index, DeviceComm& d_comm, HostComm& h_comm) {
+            const int rank    = d_comm->rank(0);
+            const int n_ranks = d_comm->n_ranks(0);
 
-        for (int i = 0; i < (int)comm_.size(); ++i) {
-            auto& rank_data = data.emplace_back(ref_data.size());
-            for (size_t j = 0; j < rank_data.size(); ++j) {
-                rank_data[j] = T(dist(gen));
-                ref_data[j] += rank_data[j];
+            const size_t max_count = ref_data.size();
+
+            std::mt19937                       gen{(unsigned)index};
+            std::uniform_int_distribution<int> dist{0, 31};  // 5 mantissa bits
+            if (rank == 0) {
+                std::cout << "preparing data ... " << std::flush;
             }
-        }
+            data[index].resize(max_count);
+            for (size_t i = 0; i < max_count; ++i) {
+                data[index][i] = T(dist(gen));
+            }
+            h_comm->Sync();
+            const size_t slice = (max_count + n_ranks - 1) / n_ranks;
+            for (int r = 0; r < n_ranks; ++r) {
+                for (size_t i = rank * slice; i < (rank + 1) * slice && i < max_count; ++i) {
+                    ref_data[i] += data[r][i];
+                }
+            }
+            h_comm->Sync();
+            if (rank == 0) {
+                std::cout << "done.\n";
+            }
 
-        std::cout << "done.\n";
+            Context ctx{rank};
 
-        auto func = [&](Comm& comm, HostComm& h_comm) {
-            const int    rank = comm.rank();
-            Context      ctx{rank};
-            const size_t max_count   = ref_data.size();
-            T*           d_rank_data = ctx.malloc<T>(max_count);
-            T*           d_tmp       = (T*)comm.Allocate(sizeof(T) * max_count);
-            comm.Register(d_tmp, sizeof(T) * max_count);
+            T* d_rank_data = ctx.malloc<T>(max_count);
+
+            T* d_tmp = (T*)d_comm->Allocate(sizeof(T) * max_count);
+            d_comm->Register(d_tmp, sizeof(T) * max_count);
+
             ctx.copy_n(data[rank].data(), max_count, d_rank_data);
 
             [[maybe_unused]] auto verify = [&](auto count) {
@@ -210,40 +221,11 @@ struct TestComm {
             for (const auto& n : tokens_) {
                 const size_t count = (size_t)n * dim;
                 auto&        delta = deltas.emplace_back();
-
-                // barrier_->arrive_and_wait();
-                h_comm.Sync();
-
-                const std::vector<size_t> counts(comm.world_size(), count / comm.world_size());
-
+                h_comm->Sync();
                 for (int i = 0; i < warmup_ + iters_; ++i) {
                     ctx.copy_n(d_rank_data, count, d_tmp);
                     auto ms = ctx.exec([&](auto stream) {  //
-                        if (is_ncu && i == warmup_) {
-                            h_comm.Sync();
-                            // barrier_->arrive_and_wait();
-                            if (rank == 0) {
-                                cudaProfilerStart();
-                            }
-                            h_comm.Sync();
-                            // barrier_->arrive_and_wait();
-                        }
-
-                        comm.AllReduceSum(d_tmp, d_tmp, count, stream);
-
-                        // const auto type = turbomind::getTensorType<T>();
-                        // comm.ReduceScatterAsym(d_tmp, d_tmp, counts.data(), type, stream);
-                        // comm.AllGatherAsym(d_tmp, d_tmp, counts.data(), type, stream);
-
-                        if (is_ncu && i == warmup_) {
-                            h_comm.Sync();
-                            // barrier_->arrive_and_wait();
-                            if (rank == 0) {
-                                cudaProfilerStop();
-                            }
-                            h_comm.Sync();
-                            // barrier_->arrive_and_wait();
-                        }
+                        d_comm->AllReduceSum(d_tmp, d_tmp, count, getTensorType<T>(), 0, stream);
                     });
                     if (i >= warmup_) {
                         delta += ms;
@@ -254,23 +236,23 @@ struct TestComm {
             }
 
             if (rank == 0) {
-                SummaryHeader("allreduce", dim, comm.world_size());
+                SummaryHeader("allreduce", dim, n_ranks);
                 for (size_t i = 0; i < tokens_.size(); ++i) {
                     const float  avg   = deltas[i] / iters_;
                     const size_t count = tokens_[i] * dim;
                     const float  algbw = sizeof(T) * count / 1e9f / avg * 1000.f;
-                    const float  busbw = algbw * (2 * (comm.world_size() - 1)) / comm.world_size();
+                    const float  busbw = algbw * (2 * (n_ranks - 1)) / n_ranks;
                     SummaryEntry(tokens_[i], count, sizeof(T), avg, algbw, busbw);
                 }
             }
 
-            comm.Deregister(d_tmp);
-            comm.Free(d_tmp);
+            d_comm->Deregister(d_tmp);
+            d_comm->Free(d_tmp);
         };
 
         std::vector<std::thread> threads;
-        for (size_t i = 0; i < comm_.size(); ++i) {
-            threads.emplace_back(func, std::ref(*comm_[i]), std::ref(*host_comm_[i]));
+        for (size_t i = 0; i < d_comm_.size(); ++i) {
+            threads.emplace_back(func, i, std::ref(d_comm_[i]), std::ref(h_comm_[i]));
         }
         for (auto& t : threads) {
             t.join();
@@ -282,7 +264,7 @@ struct TestComm {
     {
         std::mt19937                       gen{};
         std::uniform_int_distribution<int> dist{0, 31};  // 5 mantissa bits
-        std::vector<std::vector<T>>        data;
+        std::vector<std::vector<T>>        data(d_comm_.size());
         std::vector<T>                     ref_data(max_tokens_ * dim);
         std::vector<T>                     residual(max_tokens_ * dim);
         std::vector<T>                     ref_residual(max_tokens_ * dim);
@@ -303,44 +285,55 @@ struct TestComm {
             }
         }
 
-        for (int i = 0; i < (int)comm_.size(); ++i) {
-            auto& rank_data = data.emplace_back(ref_data.size());
-            for (size_t j = 0; j < rank_data.size(); ++j) {
-                rank_data[j] = T(dist(gen));
-                ref_data[j] += rank_data[j];  // sum over all ranks
+        auto func = [&](int index, DeviceComm& d_comm, HostComm& h_comm) {
+            const int rank    = d_comm->rank(0);
+            const int n_ranks = d_comm->n_ranks(0);
+
+            const size_t max_count = ref_data.size();
+
+            std::mt19937                       gen{(unsigned)index};
+            std::uniform_int_distribution<int> dist{0, 31};  // 5 mantissa bits
+
+            data[index].resize(max_count);
+            for (size_t i = 0; i < max_count; ++i) {
+                data[index][i] = T(dist(gen));
             }
-        }
-
-        for (size_t i = 0; i < max_tokens_; ++i) {
-            float sum = 0.f;
-            for (size_t d = 0; d < dim; ++d) {
-                const size_t index  = i * dim + d;
-                residual[index]     = T(dist(gen));
-                ref_residual[index] = residual[index] + ref_data[index] + bias[d];  // r' <- r + (h + b)
-                sum += (float)ref_residual[index] * (float)ref_residual[index];
+            h_comm->Sync();
+            const size_t slice = (max_tokens_ + n_ranks - 1) / n_ranks;
+            for (size_t i = rank * slice; i < (rank + 1) * slice && i < max_tokens_; ++i) {
+                for (int r = 0; r < n_ranks; ++r) {
+                    for (size_t d = 0; d < dim; ++d) {
+                        ref_data[i * dim + d] += data[r][i * dim + d];
+                    }
+                }
+                float sum = 0.f;
+                for (size_t d = 0; d < dim; ++d) {
+                    const size_t index  = i * dim + d;
+                    residual[index]     = T(dist(gen));
+                    ref_residual[index] = residual[index] + ref_data[index] + bias[d];  // r' <- r + (h + b)
+                    sum += (float)ref_residual[index] * (float)ref_residual[index];
+                }
+                sum = rsqrtf(sum / dim + eps);
+                for (size_t d = 0; d < dim; ++d) {
+                    const size_t index = i * dim + d;
+                    float        tmp   = (float)ref_residual[index];
+                    ref_data[index]    = tmp * sum * (float)weight[d];  // h' <- norm(r) * w
+                }
             }
-            sum = rsqrtf(sum / dim + eps);
-            for (size_t d = 0; d < dim; ++d) {
-                const size_t index = i * dim + d;
-                float        tmp   = (float)ref_residual[index];
-                ref_data[index]    = tmp * sum * (float)weight[d];  // h' <- norm(r) * w
+            if (rank == 0) {
+                std::cout << "done.\n";
             }
-        }
 
-        std::cout << "done.\n";
+            Context ctx{rank};
 
-        auto func = [&](Comm& comm, HostComm& h_comm) {
-            const int    rank = comm.rank();
-            Context      ctx{rank};
-            const size_t max_count   = ref_data.size();
-            T*           d_rank_data = ctx.malloc<T>(max_count);
-            T*           d_residual  = ctx.malloc<T>(max_count);
-            T*           d_bias      = ctx.malloc<T>(dim);
-            T*           d_weight    = ctx.malloc<T>(dim);
-            T*           d_tmp_res   = ctx.malloc<T>(max_count);
-            T*           d_tmp_data  = (T*)comm.Allocate(sizeof(T) * max_count);
+            T* d_rank_data = ctx.malloc<T>(max_count);
+            T* d_residual  = ctx.malloc<T>(max_count);
+            T* d_bias      = ctx.malloc<T>(dim);
+            T* d_weight    = ctx.malloc<T>(dim);
+            T* d_tmp_res   = ctx.malloc<T>(max_count);
 
-            comm.Register(d_tmp_data, sizeof(T) * max_count);
+            T* d_tmp_data = (T*)d_comm->Allocate(sizeof(T) * max_count);
+            d_comm->Register(d_tmp_data, sizeof(T) * max_count);
 
             ctx.copy_n(data[rank].data(), max_count, d_rank_data);
             ctx.copy_n(residual.data(), max_count, d_residual);
@@ -354,11 +347,10 @@ struct TestComm {
                 ctx.copy_n(d_tmp_data, count, h_data.data());
                 ctx.copy_n(d_tmp_res, count, h_res.data());
                 cudaStreamSynchronize(ctx.stream);
-                const int    world_size = comm.world_size();
-                const size_t slice      = (token_num + world_size - 1) / world_size * dim;
-                const size_t first      = rank * slice;
-                const size_t last       = std::min(first + slice, count);
-                size_t       res_diff   = 0;
+                const size_t slice    = (token_num + n_ranks - 1) / n_ranks * dim;
+                const size_t first    = rank * slice;
+                const size_t last     = std::min(first + slice, count);
+                size_t       res_diff = 0;
                 for (size_t i = first; i < last; ++i) {
                     int is_diff = !(h_res[i] == ref_residual[i]);
                     if (!res_diff && is_diff) {
@@ -394,22 +386,23 @@ struct TestComm {
             for (const auto& n : tokens_) {
                 const size_t count = (size_t)n * dim;
                 auto&        delta = deltas.emplace_back();
-                h_comm.Sync();
+                h_comm->Sync();
                 for (int i = 0; i < warmup_ + iters_; ++i) {
 
                     ctx.copy_n(d_rank_data, count, d_tmp_data);
                     ctx.copy_n(d_residual, count, d_tmp_res);
 
                     auto ms = ctx.exec([&](auto stream) {  //
-                        if (is_ncu && i == warmup_) {
-                            h_comm.Sync();
-                            if (rank == 0) {
-                                cudaProfilerStart();
-                            }
-                            h_comm.Sync();
-                        }
-                        comm.AllreduceResidualBiasRMSnorm(
-                            d_tmp_data, d_tmp_res, has_bias ? d_bias : nullptr, d_weight, eps, dim, n, stream);
+                        d_comm->AllreduceResidualBiasRMSnorm(d_tmp_data,
+                                                             d_tmp_res,
+                                                             has_bias ? d_bias : nullptr,
+                                                             d_weight,
+                                                             eps,
+                                                             dim,
+                                                             n,
+                                                             getTensorType<T>(),
+                                                             0,
+                                                             stream);
                         // comm.AllreduceResidualBiasRMSnormEx(d_tmp_data,
                         //                                     d_tmp_res,
                         //                                     has_bias ? d_bias : nullptr,
@@ -421,13 +414,6 @@ struct TestComm {
                         //                                     comm.world_size(),
                         //                                     comm.world_size(),
                         //                                     stream);
-                        if (is_ncu && i == warmup_) {
-                            h_comm.Sync();
-                            if (rank == 0) {
-                                cudaProfilerStop();
-                            }
-                            h_comm.Sync();
-                        }
                     });
                     if (i >= warmup_) {
                         delta += ms;
@@ -437,24 +423,24 @@ struct TestComm {
                 verify(n);
             }
 
-            comm.Deregister(d_tmp_data);
-            comm.Free(d_tmp_data);
+            d_comm->Deregister(d_tmp_data);
+            d_comm->Free(d_tmp_data);
 
             if (rank == 0) {
-                SummaryHeader("allreduce | rmsnorm", dim, comm.world_size());
+                SummaryHeader("allreduce | rmsnorm", dim, n_ranks);
                 for (size_t i = 0; i < tokens_.size(); ++i) {
                     const float  avg   = deltas[i] / iters_;
                     const size_t count = tokens_[i] * dim;
                     const float  algbw = sizeof(T) * count / 1e9f / avg * 1000.f;
-                    const float  busbw = algbw * (2 * (comm.world_size() - 1)) / comm.world_size();
+                    const float  busbw = algbw * (2 * (n_ranks - 1)) / n_ranks;
                     SummaryEntry(tokens_[i], count, sizeof(T), avg, algbw, busbw);
                 }
             }
         };
 
         std::vector<std::thread> threads;
-        for (size_t i = 0; i < comm_.size(); ++i) {
-            threads.emplace_back(func, std::ref(*comm_[i]), std::ref(*host_comm_[i]));
+        for (size_t i = 0; i < d_comm_.size(); ++i) {
+            threads.emplace_back(func, i, std::ref(d_comm_[i]), std::ref(h_comm_[i]));
         }
         for (auto& t : threads) {
             t.join();
@@ -464,37 +450,46 @@ struct TestComm {
     template<class T>
     void TestAllGather(size_t dim)
     {
-        std::mt19937                       gen{};
-        std::uniform_int_distribution<int> dist{0, 100};
-        std::vector<std::vector<T>>        data;
+        const auto dtype = getTensorType<T>();
 
-        std::cout << "preparing data ... " << std::flush;
+        std::vector<std::vector<T>> data(d_comm_.size());
 
-        for (int i = 0; i < (int)comm_.size(); ++i) {
-            auto& rank_data = data.emplace_back(max_tokens_ * dim);
-            for (size_t j = 0; j < rank_data.size(); ++j) {
-                rank_data[j] = T(dist(gen));
+        auto func = [&](int index, DeviceComm& d_comm, HostComm& h_comm) {
+            const int rank    = d_comm->rank(0);
+            const int n_ranks = d_comm->n_ranks(0);
+
+            const size_t max_count = max_tokens_ * dim;
+
+            if (h_comm->rank() == 0) {
+                std::cout << "preparing data ... " << std::flush;
             }
-        }
+            std::mt19937                       gen{(unsigned)index};
+            std::uniform_int_distribution<int> dist{0, 100};
+            data[index].resize(max_count);
+            for (size_t i = 0; i < max_count; ++i) {
+                data[index][i] = T(dist(gen));
+            }
+            h_comm->Sync();
+            if (h_comm->rank() == 0) {
+                std::cout << "done.\n";
+            }
 
-        std::cout << "done.\n";
+            Context ctx{rank};
 
-        auto func = [&](Comm& comm, HostComm& h_comm) {
-            const int    rank       = comm.rank();
-            const int    world_size = comm.world_size();
-            Context      ctx{rank};
-            const size_t max_count   = max_tokens_ * dim;
-            T*           d_rank_data = ctx.malloc<T>(max_count);
-            T*           d_tmp       = (T*)comm.Allocate(sizeof(T) * max_count * world_size);
-            comm.Register(d_tmp, sizeof(T) * max_count * world_size);
+            T* d_rank_data = ctx.malloc<T>(max_count);
+
+            T* d_tmp = (T*)d_comm->Allocate(sizeof(T) * max_count * n_ranks);
+            d_comm->Register(d_tmp, sizeof(T) * max_count * n_ranks);
+
             ctx.copy_n(data[rank].data(), max_count, d_rank_data);
+
             [[maybe_unused]] auto verify = [&](int64_t count) {
-                auto           total_count = count * world_size;
+                auto           total_count = count * n_ranks;
                 std::vector<T> res(total_count);
                 ctx.copy_n(d_tmp, total_count, res.data());
                 cudaStreamSynchronize(ctx.stream);
                 size_t diff = 0;
-                for (int r = 0; r < world_size; ++r) {
+                for (int r = 0; r < n_ranks; ++r) {
                     for (auto i = 0; i < count; ++i) {
                         diff += res[r * count + i] != data[r][i];
                         if (diff == 1) {
@@ -514,21 +509,20 @@ struct TestComm {
                 const size_t count = (size_t)n * dim;  // dim = hidden_dim / tp
                 auto&        delta = deltas.emplace_back();
 
-                // barrier_->arrive_and_wait();
-                h_comm.Sync();
+                h_comm->Sync();
 
-                const std::vector<size_t> counts(world_size, count);
+                const std::vector<size_t> counts(n_ranks, count);
 
                 for (int i = 0; i < warmup_ + iters_; ++i) {
-                    cudaMemsetAsync(d_tmp, 0, sizeof(T) * count * comm.world_size(), ctx.stream);
+                    cudaMemsetAsync(d_tmp, 0, sizeof(T) * count * n_ranks, ctx.stream);
                     ctx.copy_n(d_rank_data, count, d_tmp + rank * count);
                     auto ms = ctx.exec([&](auto stream) {  //
-                        if (comm.Query(kHasAllGather2D)) {
-                            comm.AllGather2D(d_tmp + rank * count, d_tmp, dim, count, dim, n, {1, 1}, stream);
+                        if (d_comm->Query(kHasAllGather2D)) {
+                            d_comm->AllGather2D(
+                                d_tmp + rank * count, d_tmp, dim, count, dim, n, dtype, {1, 1}, 0, stream);
                         }
                         else {
-                            comm.AllGather(d_tmp + rank * count, d_tmp, count, 0, stream);
-                            // comm.AllGatherAsym(d_tmp, d_tmp, counts.data(), turbomind::getTensorType<T>(), stream);
+                            d_comm->AllGather(d_tmp + rank * count, d_tmp, count, dtype, 0, stream);
                         }
                     });
                     if (i >= warmup_) {
@@ -541,23 +535,23 @@ struct TestComm {
             }
 
             if (rank == 0) {
-                SummaryHeader("allgather", dim, comm.world_size());
+                SummaryHeader("allgather", dim, n_ranks);
                 for (size_t i = 0; i < tokens_.size(); ++i) {
                     const float  avg   = deltas[i] / iters_;
-                    const size_t count = comm.world_size() * tokens_[i] * dim;
+                    const size_t count = n_ranks * tokens_[i] * dim;
                     const float  algbw = sizeof(T) * count / 1e9f / avg * 1000.f;
-                    const float  busbw = algbw * (comm.world_size() - 1) / comm.world_size();
+                    const float  busbw = algbw * (n_ranks - 1) / n_ranks;
                     SummaryEntry(tokens_[i], count, sizeof(T), avg, algbw, busbw);
                 }
             }
 
-            comm.Deregister(d_tmp);
-            comm.Free(d_tmp);
+            d_comm->Deregister(d_tmp);
+            d_comm->Free(d_tmp);
         };
 
         std::vector<std::thread> threads;
-        for (size_t i = 0; i < comm_.size(); ++i) {
-            threads.emplace_back(func, std::ref(*comm_[i]), std::ref(*host_comm_[i]));
+        for (size_t i = 0; i < d_comm_.size(); ++i) {
+            threads.emplace_back(func, i, std::ref(d_comm_[i]), std::ref(h_comm_[i]));
         }
         for (auto& t : threads) {
             t.join();

@@ -441,24 +441,30 @@ __global__ void AllreduceResidualBiasRMSnorm_Simple_Push(T*                     
     }
 }
 
-void NativeComm::AllreduceResidualBiasRMSnorm(void*        hidden,
-                                              void*        residual,
-                                              const void*  bias,
-                                              const void*  weights,
-                                              float        eps,
-                                              int          dim,
-                                              int          token_num,
-                                              DataType     dtype,
-                                              cudaStream_t stream)
+void NativeCommImpl::AllreduceResidualBiasRMSnorm(void*        hidden,
+                                                  void*        residual,
+                                                  const void*  bias,
+                                                  const void*  weights,
+                                                  float        eps,
+                                                  int          dim,
+                                                  int          token_num,
+                                                  DataType     dtype,
+                                                  int          group,
+                                                  cudaStream_t stream)
 {
 
     const size_t elemsize = get_elem_size(dtype);
     const size_t bytesize = elemsize * token_num * dim;
 
+    const int n_ranks = this->n_ranks(group);
+    const int rank    = this->rank(group);
+
+    auto semaphores = groups_.at(group).d2d_semaphores;
+
     auto invoke = [&](auto t, auto groups) {
         using T                 = decltype(t);
         constexpr int vec_size  = sizeof(uint4) / sizeof(T);
-        const int     slice     = (token_num + world_size_ - 1) / world_size_;
+        const int     slice     = (token_num + n_ranks - 1) / n_ranks;
         const int     count     = token_num;
         constexpr int block_dim = 1024;
         const int     max_ctas  = 48;
@@ -471,9 +477,9 @@ void NativeComm::AllreduceResidualBiasRMSnorm(void*        hidden,
                                                                                        (T*)scratch_buff_,
                                                                                        get_near((T*)hidden),
                                                                                        get_near((T*)scratch_buff_),
-                                                                                       device_semaphores_,
-                                                                                       rank_,
-                                                                                       world_size_ - 1,
+                                                                                       semaphores,
+                                                                                       rank,
+                                                                                       n_ranks - 1,
                                                                                        slice,
                                                                                        count,
                                                                                        dim / vec_size,
@@ -490,9 +496,9 @@ void NativeComm::AllreduceResidualBiasRMSnorm(void*        hidden,
                                                                                        (const T*)bias,
                                                                                        (const T*)weights,
                                                                                        get_near((T*)hidden),
-                                                                                       device_semaphores_,
-                                                                                       rank_,
-                                                                                       world_size_ - 1,
+                                                                                       semaphores,
+                                                                                       rank,
+                                                                                       n_ranks - 1,
                                                                                        slice,
                                                                                        count,
                                                                                        dim / vec_size,
@@ -544,7 +550,7 @@ void NativeComm::AllreduceResidualBiasRMSnorm(void*        hidden,
     }
 
     // fallback
-    AllReduceSum(hidden, hidden, token_num * dim, dtype, stream);
+    AllReduceSum(hidden, hidden, token_num * dim, dtype, group, stream);
     invokeResidualBiasRMSNorm(hidden, residual, weights, bias, dtype, dim, token_num, eps, stream);
 }
 

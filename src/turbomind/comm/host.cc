@@ -1,7 +1,10 @@
 
 
 #include <algorithm>
+#include <cstddef>
+#include <memory>
 #include <mutex>
+#include <new>
 
 #include "src/turbomind/comm/host.h"
 
@@ -10,108 +13,154 @@
 
 namespace turbomind::comm {
 
-HostComm::HostComm(int n_ranks, int rank, std::shared_ptr<State> state): n_ranks_{n_ranks}, rank_{rank}, state_{state}
-{
-    Group g;
-    g.ranks.resize(n_ranks);
-    std::iota(g.ranks.begin(), g.ranks.end(), 0);
-    g.mapping = g.ranks;  // identity mapping
-    groups_.push_back(g);
-}
+struct MultiThreadHostCommImpl: public HostCommImpl, std::enable_shared_from_this<MultiThreadHostCommImpl> {
 
-int HostComm::Split(const std::vector<int>& ranks, int parent_group)
-{
-    const int index = groups_.size();
+    class State {
+    public:
+        explicit State(int n): n_{n}, channels_(n * n) {}
+        std::atomic<void*>& channel(int from, int to)
+        {
+            return channels_[from * n_ + to];
+        }
 
-    auto& p = groups_.at(parent_group);
-    auto& g = groups_.emplace_back();
+    private:
+        int                            n_;
+        std::deque<std::atomic<void*>> channels_;
+    };
 
-    g.mapping.resize(n_ranks_, -1);
-    for (size_t i = 0; i < ranks.size(); ++i) {
-        int rank = p.ranks.at(ranks[i]);
-        g.ranks.push_back(rank);
-        g.mapping[rank] = i;
+    std::shared_ptr<State> state_;
+
+    int rank_;  // global rank
+
+    std::vector<int> l2g_;
+    std::vector<int> g2l_;
+
+    MultiThreadHostCommImpl(int n_ranks, std::shared_ptr<State> state, int rank): state_{std::move(state)}, rank_{rank}
+    {
+        l2g_.resize(n_ranks);
+        std::iota(l2g_.begin(), l2g_.end(), 0);
+        g2l_ = l2g_;
     }
 
-    return index;
-}
-
-int HostComm::Split(int color, int key, int parent_group)
-{
-    auto& t = groups_.at(parent_group);
-
-    FT_CHECK(color >= 0);
-    FT_CHECK(t.mapping[rank_] >= 0);
-
-    auto vec = comm::Allgather(*this, std::make_tuple(color, key, t.mapping[rank_]), parent_group);
-
-    auto last = std::stable_partition(vec.begin(), vec.end(), [&](auto x) {  //
-        return std::get<0>(x) == color;
-    });
-    vec.erase(last, vec.end());
-    std::stable_sort(vec.begin(), vec.end(), [](auto& a, auto& b) {  //
-        return a < b;
-    });
-
-    const int index = groups_.size();
-
-    auto& g = groups_.emplace_back();  // ! reference invalidation
-    auto& p = groups_.at(parent_group);
-
-    g.mapping.resize(n_ranks_, -1);
-
-    for (size_t i = 0; i < vec.size(); ++i) {
-        int rank = p.ranks.at(std::get<2>(vec[i]));
-        g.ranks.push_back(rank);
-        g.mapping[rank] = i;
+    MultiThreadHostCommImpl(std::vector<int> l2g, std::vector<int> g2l, std::shared_ptr<State> state, int rank):
+        state_{std::move(state)}, rank_{rank}, l2g_{std::move(l2g)}, g2l_{std::move(g2l)}
+    {
     }
 
-    return index;
-}
-
-void HostComm::Sync(int group)
-{
-    const auto& g = groups_[group];
-    if (g.ranks.size() == 1 || g.mapping[rank_] < 0) {
-        return;
+    int rank() const override
+    {
+        return g2l_.at(rank_);
     }
-    for (const auto& r : g.ranks) {
-        if (r != rank_) {
-            auto& c = channel(rank_, r);
-            void* expected{};
-            while (!c.compare_exchange_weak(expected, (void*)1, std::memory_order_release)) {
-                expected = {};
+
+    int n_ranks() const override
+    {
+        return l2g_.size();
+    }
+
+    bool is_same_process() const override
+    {
+        return true;
+    }
+
+    std::atomic<void*>& channel(int from, int to)
+    {
+        return state_->channel(from, to);
+    }
+
+    std::shared_ptr<HostCommImpl> Split(int color, int key) override
+    {
+        FT_CHECK(color >= 0);
+        FT_CHECK(g2l_[rank_] >= 0);
+
+        // `g2l_[rank_]` imposes proper ordering when keys are equal
+        auto vec = comm::AllGather(this, std::make_tuple(color, key, g2l_[rank_]));
+
+        auto last = std::stable_partition(vec.begin(), vec.end(), [&](auto x) {  //
+            return std::get<0>(x) == color;
+        });
+        vec.erase(last, vec.end());
+        std::stable_sort(vec.begin(), vec.end(), [](auto& a, auto& b) {  //
+            return a < b;
+        });
+
+        std::vector<int> l2g;
+        std::vector<int> g2l(g2l_.size(), -1);
+
+        for (size_t i = 0; i < vec.size(); ++i) {
+            int r = l2g_.at(std::get<2>(vec[i]));
+            l2g.push_back(r);
+            g2l[r] = i;
+        }
+
+        return std::make_shared<MultiThreadHostCommImpl>(std::move(l2g), std::move(g2l), state_, rank_);
+    }
+
+    void Sync() override
+    {
+        if (n_ranks() == 1) {
+            return;
+        }
+        for (const auto& r : l2g_) {
+            if (r != rank_) {
+                auto& c = channel(rank_, r);
+                void* expected{};
+                while (!c.compare_exchange_weak(expected, (void*)1, std::memory_order_release)) {
+                    expected = {};
+                }
+            }
+        }
+        for (const auto& r : l2g_) {
+            if (r != rank_) {
+                auto& c        = channel(r, rank_);
+                void* expected = (void*)1;
+                while (!c.compare_exchange_weak(expected, nullptr, std::memory_order_acquire)) {
+                    expected = (void*)1;
+                }
             }
         }
     }
-    for (const auto& r : g.ranks) {
-        if (r != rank_) {
-            auto& c        = channel(r, rank_);
-            void* expected = (void*)1;
-            while (!c.compare_exchange_weak(expected, nullptr, std::memory_order_acquire)) {
-                expected = (void*)1;
+
+    void Broadcast(void* data, int count, DataType dtype, int root, copy_fn copy) override
+    {
+        FT_CHECK(copy);
+        if (n_ranks() == 1) {
+            return;
+        }
+        // transform root to global rank
+        root = l2g_.at(root);
+        if (rank_ == root) {
+            for (const auto& r : l2g_) {
+                if (r != rank_) {
+                    auto& c = channel(rank_, r);
+                    void* expected{};
+                    while (!c.compare_exchange_weak(expected, data, std::memory_order_release)) {
+                        expected = {};
+                    }
+                }
+            }
+            for (const auto& r : l2g_) {
+                if (r != rank_) {
+                    auto& c = channel(rank_, r);
+                    while (c.load(std::memory_order_relaxed)) {}
+                }
             }
         }
+        else {
+            auto& c = channel(root, rank_);
+            void* incoming{};
+            while (!(incoming = c.load(std::memory_order_acquire))) {}
+            copy(incoming, count, data, 0);
+            c.store(nullptr, std::memory_order_relaxed);
+        }
     }
-    // for (const auto& r : g.ranks) {
-    //     if (r != rank_) {
-    //         auto& c = channel(rank_, r);
-    //         while (c.load(std::memory_order_relaxed)) {}
-    //     }
-    // }
-}
 
-void HostComm::Broadcast(void* data, int count, DataType, int root, copy_fn copy, int group)
-{
-    FT_CHECK(copy);
-    const auto& g = groups_.at(group);
-    if (g.ranks.size() == 1 || g.mapping[rank_] < 0) {
-        return;
-    }
-    // transform root to abs rank
-    root = g.ranks.at(root);
-    if (rank_ == root) {
-        for (const auto& r : g.ranks) {
+    void AllGather(void* data, int count, DataType dtype, copy_fn copy) override
+    {
+        FT_CHECK(copy);
+        if (n_ranks() == 1) {
+            return;
+        }
+        for (const auto& r : l2g_) {
             if (r != rank_) {
                 auto& c = channel(rank_, r);
                 void* expected{};
@@ -120,158 +169,119 @@ void HostComm::Broadcast(void* data, int count, DataType, int root, copy_fn copy
                 }
             }
         }
-        for (const auto& r : g.ranks) {
+        for (const auto& r : l2g_) {
+            if (r != rank_) {
+                auto& c = channel(r, rank_);
+                void* incoming{};
+                while (!(incoming = c.load(std::memory_order_acquire))) {}
+                copy(incoming, count, data, g2l_[r] * count);
+                c.store(nullptr, std::memory_order_relaxed);
+            }
+        }
+        for (const auto& r : l2g_) {
             if (r != rank_) {
                 auto& c = channel(rank_, r);
                 while (c.load(std::memory_order_relaxed)) {}
             }
         }
     }
-    else {
-        auto& c = channel(root, rank_);
-        void* incoming{};
-        while (!(incoming = c.load(std::memory_order_acquire))) {}
-        copy(incoming, count, data, 0);
-        c.store(nullptr, std::memory_order_relaxed);
-    }
-}
 
-void HostComm::Allgather(void* all_data, int count, DataType, copy_fn copy, int group)
-{
-    FT_CHECK(copy);
-    const auto& g = groups_.at(group);
-    if (g.ranks.size() == 1 || g.mapping[rank_] < 0) {
-        return;
-    }
-    for (const auto& r : g.ranks) {
-        if (r != rank_) {
-            auto& c = channel(rank_, r);
-            void* expected{};
-            while (!c.compare_exchange_weak(expected, all_data, std::memory_order_release)) {
-                expected = {};
+    template<class T, RedOp op>
+    static void reduce(void* src, int n, void* dst, int offset)
+    {
+        for (int i = 0; i < n; ++i) {
+            auto& s = *((T*)src + offset + i);
+            auto& a = *((T*)dst + offset + i);
+            if constexpr (op == RedOp::kSum) {
+                a += s;
+            }
+            else if constexpr (op == RedOp::kMin) {
+                a = std::min(a, s);
+            }
+            else if constexpr (op == RedOp::kMax) {
+                a = std::max(a, s);
+            }
+            else {
+                static_assert(sizeof(T) != sizeof(T), "not implemented");
             }
         }
     }
-    for (const auto& r : g.ranks) {
-        if (r != rank_) {
-            auto& c = channel(r, rank_);
-            void* incoming{};
-            while (!(incoming = c.load(std::memory_order_acquire))) {}
-            copy(incoming, count, all_data, g.mapping[r] * count);
-            c.store(nullptr, std::memory_order_relaxed);
-        }
-    }
-    for (const auto& r : g.ranks) {
-        if (r != rank_) {
-            auto& c = channel(rank_, r);
-            while (c.load(std::memory_order_relaxed)) {}
-        }
-    }
-}
 
-namespace {
-
-template<class T, RedOp op>
-void reduce_fn(void* src, int n, void* accum)
-{
-    for (int i = 0; i < n; ++i) {
-        auto& s = *((T*)src + i);
-        auto& a = *((T*)accum + i);
-        if constexpr (op == RedOp::kSum) {
-            a += s;
-        }
-        else if constexpr (op == RedOp::kMin) {
-            a = std::min(a, s);
-        }
-        else if constexpr (op == RedOp::kMax) {
-            a = std::max(a, s);
+    static reduce_fn get_reduce(DataType dtype, RedOp red_op)
+    {
+        auto dispatch_op = [&](auto t) -> reduce_fn {
+            using T = decltype(t);
+            switch (red_op) {
+                case RedOp::kSum:
+                    return reduce<T, RedOp::kSum>;
+                case RedOp::kMax:
+                    return reduce<T, RedOp::kMax>;
+                case RedOp::kMin:
+                    return reduce<T, RedOp::kMin>;
+                default:
+                    return {};
+            }
+        };
+        auto dispatch = [&]() -> reduce_fn {
+            switch (dtype) {
+                case DataType::TYPE_INT32:
+                    return dispatch_op(int32_t{});
+                case DataType::TYPE_INT64:
+                    return dispatch_op(int64_t{});
+                case DataType::TYPE_UINT32:
+                    return dispatch_op(uint32_t{});
+                case DataType::TYPE_UINT64:
+                    return dispatch_op(uint64_t{});
+                default:
+                    return {};
+            }
+        };
+        if (auto fn = dispatch()) {
+            return fn;
         }
         else {
-            static_assert(sizeof(T) != sizeof(T), "not implemented");
+            throw std::runtime_error("not implemented");
+            return {};
         }
     }
-}
 
-HostComm::reduce_fn get_reduce_fn(DataType dtype, RedOp red_op)
-{
-    auto dispatch_op = [&](auto t) -> HostComm::reduce_fn {
-        using T = decltype(t);
-        switch (red_op) {
-            case RedOp::kSum:
-                return reduce_fn<T, RedOp::kSum>;
-            case RedOp::kMax:
-                return reduce_fn<T, RedOp::kMax>;
-            case RedOp::kMin:
-                return reduce_fn<T, RedOp::kMin>;
-            default:
-                return {};
+    void AllReduce(void* data, int count, DataType dtype, RedOp red_op) override
+    {
+        const auto reduce    = get_reduce(dtype, red_op);
+        const auto elem_size = get_elem_size(dtype);
+        if (n_ranks() == 1) {
+            return;
         }
-    };
-    auto dispatch = [&]() -> HostComm::reduce_fn {
-        switch (dtype) {
-            case DataType::TYPE_INT32:
-                return dispatch_op(int32_t{});
-            case DataType::TYPE_INT64:
-                return dispatch_op(int64_t{});
-            case DataType::TYPE_UINT32:
-                return dispatch_op(uint32_t{});
-            case DataType::TYPE_UINT64:
-                return dispatch_op(uint64_t{});
-            default:
-                return {};
+        std::unique_ptr<char[]> tmp((char*)::operator new[](elem_size * count));
+        std::copy_n((char*)data, elem_size * count, tmp.get());
+        for (const auto& r : l2g_) {
+            if (r != rank_) {
+                auto& c = channel(rank_, r);
+                void* expected{};
+                while (!c.compare_exchange_weak(expected, (void*)tmp.get(), std::memory_order_release)) {
+                    expected = {};
+                }
+            }
         }
-    };
-    if (auto fn = dispatch()) {
-        return fn;
-    }
-    else {
-        throw std::runtime_error("not implemented");
-        return {};
-    }
-}
-
-}  // namespace
-
-void HostComm::Allreduce(const void* src, void* dst, int count, DataType dtype, RedOp red_op, int group)
-{
-    FT_CHECK(src != dst);
-    const auto  reduce_fn = get_reduce_fn(dtype, red_op);
-    const auto  elem_size = get_elem_size(dtype);
-    const auto& g         = groups_.at(group);
-    if (g.mapping[rank_] < 0) {
-        return;
-    }
-    std::copy_n((char*)src, elem_size * count, (char*)dst);
-    if (g.ranks.size() == 1) {
-        return;
-    }
-    for (const auto& r : g.ranks) {
-        if (r != rank_) {
-            auto& c = channel(rank_, r);
-            void* expected{};
-            while (!c.compare_exchange_weak(expected, (void*)src, std::memory_order_release)) {
-                expected = {};
+        for (const auto& r : l2g_) {
+            if (r != rank_) {
+                auto& c = channel(r, rank_);
+                void* incoming{};
+                while (!(incoming = c.load(std::memory_order_acquire))) {}
+                reduce(incoming, count, data, 0);
+                c.store(nullptr, std::memory_order_relaxed);
+            }
+        }
+        for (const auto& r : l2g_) {
+            if (r != rank_) {
+                auto& c = channel(rank_, r);
+                while (c.load(std::memory_order_relaxed)) {}
             }
         }
     }
-    for (const auto& r : g.ranks) {
-        if (r != rank_) {
-            auto& c = channel(r, rank_);
-            void* incoming{};
-            while (!(incoming = c.load(std::memory_order_acquire))) {}
-            reduce_fn(incoming, count, dst);
-            c.store(nullptr, std::memory_order_relaxed);
-        }
-    }
-    for (const auto& r : g.ranks) {
-        if (r != rank_) {
-            auto& c = channel(rank_, r);
-            while (c.load(std::memory_order_relaxed)) {}
-        }
-    }
-}
+};
 
-class ThreadGroupId: public HostGroupId {
+class MultiThreadGroupId: public HostGroupId {
 public:
     void Initialize() override
     {
@@ -290,15 +300,15 @@ public:
     {
         void* ptr{};
         is.read((char*)&ptr, sizeof(ptr));
-        internal_ = reinterpret_cast<ThreadGroupId*>(ptr)->internal_;
+        internal_ = reinterpret_cast<MultiThreadGroupId*>(ptr)->internal_;
 
         FT_CHECK((bool)internal_);
     }
 
-    std::unique_ptr<HostComm> CreateHostCommunicator(int rank, int n_ranks) override
+    HostComm CreateCommunicator(int n_ranks, int rank) override
     {
         auto init_shared_state = [&] {  //
-            internal_->state = std::make_shared<HostComm::State>(n_ranks);
+            internal_->state = std::make_shared<MultiThreadHostCommImpl::State>(n_ranks);
         };
 
         FT_CHECK((bool)internal_);
@@ -308,13 +318,15 @@ public:
 
         FT_CHECK((bool)internal_->state);
 
-        return std::make_unique<HostComm>(n_ranks, rank, internal_->state);
+        auto impl = std::make_shared<MultiThreadHostCommImpl>(n_ranks, internal_->state, rank);
+
+        return std::static_pointer_cast<HostCommImpl>(impl);
     }
 
 private:
     struct Internal {
-        std::once_flag                   flag;
-        std::shared_ptr<HostComm::State> state;
+        std::once_flag                                  flag;
+        std::shared_ptr<MultiThreadHostCommImpl::State> state;
     };
 
 private:
@@ -323,7 +335,7 @@ private:
 
 std::unique_ptr<HostGroupId> CreateHostGroupId(const std::string& backend)
 {
-    return std::make_unique<ThreadGroupId>();
+    return std::make_unique<MultiThreadGroupId>();
 }
 
 }  // namespace turbomind::comm

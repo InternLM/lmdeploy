@@ -20,16 +20,16 @@
 
 #pragma once
 
-#include "src/turbomind/engine/gateway.h"
-#include "src/turbomind/models/llama/LlamaBatch.h"
-#include "src/turbomind/models/llama/LlamaWeight.h"
-#include "src/turbomind/models/llama/llama_params.h"
-#include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
 #include <cuda_fp16.h>
 
 #include "src/turbomind/comm/comm.h"
+#include "src/turbomind/engine/gateway.h"
+#include "src/turbomind/models/llama/LlamaBatch.h"
+#include "src/turbomind/models/llama/LlamaWeight.h"
+#include "src/turbomind/models/llama/context.h"
+#include "src/turbomind/models/llama/llama_params.h"
 
-#include "src/turbomind/comm/comm.h"
+#include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
 
 namespace turbomind {
 
@@ -57,7 +57,7 @@ public:
 private:
     void handleMissingParams();
 
-    comm::Splits createCommSplits(int rank);
+    Communicators createCommSplits(int rank);
 
 private:
     ModelParam     model_param_;
@@ -69,7 +69,8 @@ private:
 
     std::vector<EngineParam> engine_params_;
 
-    std::string communicator_;
+    std::string communicator_;  // communicator backend
+
     std::vector<std::unique_ptr<comm::HostGroupId>> group_ids_;
 
     std::shared_ptr<Gateway> gateway_;

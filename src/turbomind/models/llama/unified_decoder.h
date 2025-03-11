@@ -27,13 +27,11 @@ private:
 
     const int attn_tp_group_;
 
-    std::array<int, 2> tp_size_;
-
     const float        rmsnorm_eps_;
     cudaStream_t const stream_;
     IAllocator* const  allocator_;
 
-    comm::Comm* const tp_;
+    comm::DeviceCommImpl* const d_comm_;
 
     const DataType dtype_;
     const int      tune_layer_num_;

@@ -16,6 +16,15 @@
 
 namespace turbomind {
 
+struct Communicators {
+    comm::HostComm h_comm;
+    comm::HostComm h_tp_group;
+    comm::HostComm h_dp_group;
+
+    comm::DeviceComm d_comm;
+    int              d_tp_group;
+};
+
 // Execution context for the model
 template<class T>
 struct Context {
@@ -27,7 +36,7 @@ struct Context {
     std::unique_ptr<std::mutex>                     cublas_wrapper_mutex;
     std::unique_ptr<cublasMMWrapper>                cublas_wrapper;
     std::unique_ptr<LlamaLinear<T>>                 linear;
-    comm::Splits                                    comm;
+    Communicators                                   comm;
     cudaDeviceProp                                  cuda_device_prop;
 
     Context(int device_id)

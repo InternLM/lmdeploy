@@ -84,7 +84,7 @@ LlamaV2<T>::LlamaV2(const ModelParam&               model,
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
-    if (comm_->tp && comm_->tp->Query(comm::kHasAllGather2D)) {
+    if (comm_->d_comm && comm_->d_comm->Query(comm::kHasAllGather2D)) {
         use_allgather_2d_ = true;
     }
 
@@ -221,8 +221,12 @@ void LlamaV2<T>::forwardUnified(T*               out,
                                                      stream_);
             sync_check_cuda_error();
 
-            comm_->tp->AllGather(
-                decoder_output + tp_rank_ * slice, decoder_output, slice, comm_->attn_tp_group, stream_);
+            comm_->d_comm->AllGather(decoder_output + tp_rank_ * slice,
+                                     decoder_output,
+                                     slice,
+                                     getTensorType<T>(),
+                                     comm_->d_tp_group,
+                                     stream_);
             sync_check_cuda_error();
 
             invokeInPlaceTranspose102(
@@ -315,7 +319,8 @@ void LlamaV2<T>::postDecodeEmbedding(float* logits, float* local_logits, const T
         const size_t slice = batch_size * local_vocab_size;
         invoke_gemm(0, batch_size, local_logits, local_vocab_size, slice);
         sync_check_cuda_error();
-        comm_->tp->AllGather(local_logits + tp_rank_ * slice, local_logits, slice, comm_->attn_tp_group, stream_);
+        comm_->d_comm->AllGather(
+            local_logits + tp_rank_ * slice, local_logits, slice, getTensorType<float>(), comm_->d_tp_group, stream_);
         sync_check_cuda_error();
         invokeTransposeAxis01(logits, local_logits, tp_size_, batch_size, local_vocab_size, stream_);
         sync_check_cuda_error();
@@ -339,14 +344,16 @@ void LlamaV2<T>::postDecodeEmbedding(float* logits, float* local_logits, const T
                 check_cuda_error(cudaEventRecord(comm_event, stream_));
                 check_cuda_error(cudaStreamWaitEvent(comm_stream, comm_event));
             }
-            comm_->tp->AllGather2D(local_logits + first * vocab_size_padded_ + tp_rank_ * local_vocab_size,
-                                   local_logits + first * vocab_size_padded_,
-                                   vocab_size_padded_,
-                                   local_vocab_size,
-                                   local_vocab_size,
-                                   n,
-                                   {first == 0, first + n == batch_size},
-                                   comm_stream);
+            comm_->d_comm->AllGather2D(local_logits + first * vocab_size_padded_ + tp_rank_ * local_vocab_size,
+                                       local_logits + first * vocab_size_padded_,
+                                       vocab_size_padded_,
+                                       local_vocab_size,
+                                       local_vocab_size,
+                                       n,
+                                       getTensorType<float>(),
+                                       {first == 0, first + n == batch_size},
+                                       comm_->d_tp_group,
+                                       comm_stream);
             sync_check_cuda_error();
         }
         if (comm_stream != stream_) {

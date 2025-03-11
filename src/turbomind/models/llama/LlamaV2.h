@@ -26,6 +26,7 @@
 #include "src/turbomind/models/llama/LlamaBatch.h"
 #include "src/turbomind/models/llama/LlamaWeight.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
+#include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/llama/unified_decoder.h"
 #include "src/turbomind/utils/allocator.h"
@@ -103,7 +104,7 @@ private:
     const AttentionParam attn_param_;
     const LoraParam      lora_param_;
 
-    const comm::Splits* const comm_;
+    const Communicators* const comm_;
 
     const int    tp_size_;
     const int    tp_rank_;

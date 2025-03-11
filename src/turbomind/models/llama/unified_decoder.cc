@@ -31,11 +31,11 @@ UnifiedDecoder<T>::UnifiedDecoder(const ModelParam&     model,
     attn_dp_size_(engine.attn_dp_size),
     attn_dp_rank_(engine.attn_dp_rank),
     mlp_tp_size_(engine.mlp_tp_size),
-    attn_tp_group_(ctx.comm.attn_tp_group),
+    attn_tp_group_(ctx.comm.d_tp_group),
     rmsnorm_eps_(model.norm_eps),
     stream_(ctx.stream),
     allocator_(ctx.allocator.get()),
-    tp_(ctx.comm.tp.get()),
+    d_comm_(ctx.comm.d_comm),
     dtype_(getTensorType<T>()),
     tune_layer_num_(model.tune_layer_num)
 {
@@ -112,22 +112,22 @@ void UnifiedDecoder<T>::AllreduceResidualRMSnorm(T*         hidden_states,
 {
     if (0) {}
     else if (group0 || group1) {
-        tp_->AllreduceResidualBiasRMSnormEx(hidden_states,
-                                            residual,
-                                            bias,
-                                            weight,
-                                            rmsnorm_eps_,
-                                            hidden_units_,
-                                            dtype_,
-                                            group0,
-                                            group1,
-                                            local_token_nums,
-                                            stream_);
+        d_comm_->AllreduceResidualBiasRMSnormEx(hidden_states,
+                                                residual,
+                                                bias,
+                                                weight,
+                                                rmsnorm_eps_,
+                                                hidden_units_,
+                                                dtype_,
+                                                group0,
+                                                group1,
+                                                local_token_nums,
+                                                stream_);
         sync_check_cuda_error();
     }
-    else if (tp_) {
-        tp_->AllreduceResidualBiasRMSnorm(
-            hidden_states, residual, bias, weight, rmsnorm_eps_, hidden_units_, token_num, stream_);
+    else if (d_comm_) {
+        d_comm_->AllreduceResidualBiasRMSnorm(
+            hidden_states, residual, bias, weight, rmsnorm_eps_, hidden_units_, token_num, dtype_, 0, stream_);
         sync_check_cuda_error();
     }
     else {

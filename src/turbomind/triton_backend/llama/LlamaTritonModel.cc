@@ -407,25 +407,25 @@ void LlamaTritonModel<T>::processWeights(int device_id, int rank) noexcept
 }
 
 template<class T>
-comm::Splits LlamaTritonModel<T>::createCommSplits(int rank)
+Communicators LlamaTritonModel<T>::createCommSplits(int rank)
 {
-    comm::Splits comm{};
+    Communicators comm{};
 
     const int outer_rank = rank / comm_size_;
     const int inner_rank = rank % comm_size_;
 
-    comm.h_comm = group_ids_[outer_rank]->CreateHostCommunicator(inner_rank, comm_size_);
+    comm.h_comm = group_ids_[outer_rank]->CreateCommunicator(comm_size_, inner_rank);
 
-    comm.h_comm_tp_group = comm.h_comm->Split(inner_rank / engine_param_.attn_tp_size, 0);
-    comm.h_comm_dp_group = comm.h_comm->Split(inner_rank % engine_param_.attn_tp_size, 0);
+    comm.h_tp_group = comm.h_comm->Split(inner_rank / engine_param_.attn_tp_size, 0);
+    comm.h_dp_group = comm.h_comm->Split(inner_rank % engine_param_.attn_tp_size, 0);
 
     if (comm_size_ > 1) {
-        comm.tp = comm::CreateCommunicator(communicator_, inner_rank, comm_size_, comm.h_comm);
-    }
-
-    comm.attn_tp_group = 0;
-    if (engine_param_.attn_tp_size != comm_size_) {
-        comm.attn_tp_group = comm.tp->Split(inner_rank / engine_param_.attn_tp_size, 0, 0);
+        comm.d_comm = CreateDeviceCommunicator(communicator_, comm_size_, inner_rank, comm.h_comm);
+        // 
+        comm.d_tp_group = 0;
+        if (engine_param_.attn_tp_size != comm_size_) {
+            comm.d_tp_group = comm.d_comm->Split(inner_rank / engine_param_.attn_tp_size, 0, 0);
+        }
     }
 
     return comm;
