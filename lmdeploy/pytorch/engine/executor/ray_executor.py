@@ -109,8 +109,6 @@ def init_ray_cluster(world_size: int, ray_address: str = None):
 
 def _get_master_addr():
     """get master addr."""
-    if 'MASTER_ADDR' in os.environ:
-        return os.environ['MASTER_ADDR']
     gcs_addr = ray.get_runtime_context().gcs_address
     master_addr = gcs_addr.split(':')[0]
     return master_addr
@@ -118,8 +116,6 @@ def _get_master_addr():
 
 def _get_master_port():
     """get master port."""
-    if 'MASTER_PORT' in os.environ:
-        return os.environ['MASTER_PORT']
     return find_available_port()
 
 
@@ -212,9 +208,15 @@ class RayExecutor(ExecutorBase):
                 ray_world_size = 1
             placement_group = init_ray_cluster(ray_world_size)
         self.placement_group = placement_group
-        self.master_addr = _get_master_addr()
-        self.master_port = _get_master_port()
-        # setup_master_addr(self.master_addr, self.master_port)
+
+        if self.dp == 1:
+            self.master_addr = _get_master_addr()
+            self.master_port = _get_master_port()
+        else:
+            self.master_addr = os.environ.get('LMDEPLOY_DP_MASTER_ADDR', None)
+            self.master_port = os.environ.get('LMDEPLOY_DP_MASTER_PORT', None)
+            if self.master_addr is None or self.master_port is None:
+                raise RuntimeError('DP > 1 requires "LMDEPLOY_DP_MASTER_ADDR" and "LMDEPLOY_DP_MASTER_PORT".')
 
         # create workerwrapper actors
         worker_kwargs = dict(
