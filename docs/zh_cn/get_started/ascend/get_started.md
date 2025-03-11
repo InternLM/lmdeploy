@@ -5,9 +5,9 @@
 支持的模型列表在[这里](../../supported_models/supported_models.md#PyTorchEngine-华为昇腾平台).
 
 > \[!IMPORTANT\]
-> 我们已经在阿里云上提供了构建完成的鲲鹏CPU版本的镜像(从lmdeploy 0.7.1 + dlinfer 0.1.6开始)。  
-> 请使用下面的命令来拉取镜像:  
-> `docker pull crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:latest`  
+> 我们已经在阿里云上提供了构建完成的鲲鹏CPU版本的镜像(从lmdeploy 0.7.1 + dlinfer 0.1.6开始)。
+> 请使用下面的命令来拉取镜像:
+> `docker pull crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:latest `
 > 下述的dockerfile依然是可以执行的，您可以直接拉取镜像，也可以使用dockerfile来自己构建。
 
 ## 安装
