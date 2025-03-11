@@ -36,6 +36,7 @@ def init_dist_environ(rank: int, world_size: int):
 def init_process_group(rank: int, world_size: int):
     """init process group."""
     DIST_TIMEOUT = timedelta(days=35600)
+    init_dist_environ(rank, world_size)
+    os.environ.pop('TORCHELASTIC_USE_AGENT_STORE', None)
     dist.init_process_group(backend='nccl', rank=rank, world_size=world_size, timeout=DIST_TIMEOUT)
     assert dist.is_initialized()
-    init_dist_environ(rank, world_size)
