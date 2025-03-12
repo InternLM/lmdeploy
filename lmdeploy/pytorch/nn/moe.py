@@ -146,6 +146,8 @@ def _moe_gather_inputs(hidden_states, topk_weights, topk_ids, enable_ep):
     step_ctx = get_step_ctx_manager().current_context()
     dp_meta = step_ctx.dp_meta
     if not enable_ep:
+        if dist_ctx.tp == 1:
+            return hidden_states, topk_weights, topk_ids
         tp_sizes = dp_meta.tp_sizes
         hidden_states = _gather_input(hidden_states, tp_sizes)
         topk_weights = _gather_input(topk_weights, tp_sizes)
@@ -162,6 +164,8 @@ def _moe_reduce(ret, enable_ep):
         step_ctx = get_step_ctx_manager().current_context()
         dp_meta = step_ctx.dp_meta
         if not enable_ep:
+            if dist_ctx.tp == 1:
+                return ret
             tp_sizes = dp_meta.tp_sizes
             ret = _reduce_scatter_input(ret, tp_sizes)
         else:
