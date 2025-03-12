@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from torch import nn
 
 import lmdeploy.pytorch.distributed as dist
-from lmdeploy.pytorch.distributed import get_tp_world_rank
+from lmdeploy.pytorch.distributed import get_dist_manager, get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
 from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_down_linear, build_gateup_linear, build_o_proj,
@@ -89,6 +89,7 @@ class DeepseekV2Attention(nn.Module):
         self.q_head_dim = config.qk_nope_head_dim + config.qk_rope_head_dim
         num_replicate_kv_heads = getattr(config, 'num_replicate_key_value_heads', 1)
         num_key_value_heads = getattr(config, 'num_key_value_heads', 1)
+        use_flash_mla = getattr(config, 'use_flash_mla', False)
 
         if self.q_lora_rank is None:
             self.q_proj = build_colwise_linear(
@@ -163,7 +164,8 @@ class DeepseekV2Attention(nn.Module):
                                   scale=self.softmax_scale,
                                   num_kv_heads=num_key_value_heads,
                                   v_head_size=config.kv_lora_rank,
-                                  num_replicate_kv_heads=num_replicate_kv_heads)
+                                  num_replicate_kv_heads=num_replicate_kv_heads,
+                                  use_flash_mla=use_flash_mla)
 
         self.vc = DeepseekV2BMM(self.num_heads, config.kv_lora_rank, self.v_head_dim, dtype=dtype, device=device)
         self.o_proj = build_o_proj(
@@ -223,8 +225,12 @@ class DeepseekV2Attention(nn.Module):
         attn_metadata: Any = None,
     ):
         """Rewrite of LlamaAttention.forward."""
-        world_size, _ = get_tp_world_rank()
-        num_heads = self.num_heads // world_size
+        dist_ctx = get_dist_manager().current_context()
+        if dist_ctx.dp > 1:
+            num_heads = self.num_heads
+        else:
+            world_size = dist_ctx.world_size
+            num_heads = self.num_heads // world_size
         nope_size = self.kv_lora_rank
         q_len = hidden_states.size(1)
 
@@ -358,6 +364,10 @@ class DeepseekV2MoE(nn.Module):
 
         self.gate = MoEGate(config, dtype=dtype, device=device)
 
+        dist_ctx = get_dist_manager().current_context()
+        dp = dist_ctx.dp
+        world_size = dist_ctx.world_size
+        moe_all_reduce = dp > 1 and dist_ctx.tp > 1
         self.experts = build_fused_moe(
             self.hidden_dim,
             self.ffn_dim,
@@ -366,7 +376,7 @@ class DeepseekV2MoE(nn.Module):
             renormalize=self.renormalize,
             dtype=dtype,
             device=device,
-            all_reduce=False,
+            all_reduce=moe_all_reduce,
             quant_config=quantization_config,
         )
 
@@ -378,11 +388,10 @@ class DeepseekV2MoE(nn.Module):
                 intermediate_size=intermediate_size,
                 dtype=dtype,
                 device=device,
-                is_tp=True,
-                all_reduce=False,
+                is_shared_expert=True,
             )
-        world_size, _ = get_tp_world_rank()
-        if world_size > 1:
+
+        if dp == 1 and world_size > 1:
             self._all_reduce = True
         else:
             self._all_reduce = False
@@ -418,10 +427,25 @@ class DeepseekV2MLP(nn.Module):
                  intermediate_size: int = None,
                  dtype: torch.dtype = None,
                  device: torch.device = None,
-                 is_tp: bool = True,
-                 all_reduce: bool = True):
+                 is_shared_expert: bool = False):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
+        if is_shared_expert:
+            dist_ctx = get_dist_manager().current_context()
+            dp = dist_ctx.dp
+            if dp == 1:
+                # split weight, do all reduce in moe
+                is_tp = True
+                all_reduce = False
+            else:
+                # do not split weight on dp
+                # TODO: support dp+tp?
+                is_tp = False
+                all_reduce = False
+        else:
+            all_reduce = True
+            is_tp = True
+
         # gate up
         if intermediate_size is None:
             intermediate_size = config.intermediate_size
