@@ -44,13 +44,13 @@ class TritonLinearBlockedF8Impl(LinearBlockedF8Impl):
         if bias is not None:
             out += bias
 
+        out = out.unflatten(0, x_shape[:-1])
+
         if all_reduce:
             if scatter_size is not None:
                 out = _reduce_scatter_input(out, rank, scatter_size)
             else:
                 dist.all_reduce(out)
-
-        out = out.unflatten(0, x_shape[:-1])
         return out
 
 
