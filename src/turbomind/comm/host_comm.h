@@ -3,10 +3,7 @@
 #pragma once
 
 #include <algorithm>
-#include <atomic>
-#include <deque>
 #include <memory>
-#include <numeric>
 #include <stdexcept>
 #include <type_traits>
 
@@ -14,7 +11,8 @@
 
 namespace turbomind::comm {
 
-enum class RedOp {
+enum class RedOp
+{
     kSum,
     kMin,
     kMax,
@@ -26,7 +24,7 @@ typedef void (*reduce_fn)(void* src, int n, void* dst, int offset);
 
 class HostCommImpl {
 public:
-    virtual ~HostCommImpl() = default;
+    virtual ~HostCommImpl();
 
     virtual int rank() const = 0;
 

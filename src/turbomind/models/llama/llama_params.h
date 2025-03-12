@@ -38,7 +38,8 @@ struct ModelParam {
 };
 
 struct MoeParam {
-    enum Method {
+    enum Method
+    {
         kNaive,
         kFused
     } method;
@@ -102,7 +103,8 @@ struct EngineParam {
     int mlp_tp_rank;
 };
 
-enum class LoraPolicy : int {
+enum class LoraPolicy : int
+{
     kNull,
     kPlora,
 };

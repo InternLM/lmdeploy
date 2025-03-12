@@ -24,8 +24,8 @@
 #include <cuda_runtime.h>
 #include <yaml-cpp/yaml.h>
 
-#include "src/turbomind/comm/comm.h"
-#include "src/turbomind/comm/host.h"
+#include "src/turbomind/comm/device_comm.h"
+#include "src/turbomind/comm/host_comm.h"
 #include "src/turbomind/engine/gateway.h"
 #include "src/turbomind/engine/model_request.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
@@ -421,7 +421,7 @@ Communicators LlamaTritonModel<T>::createCommSplits(int rank)
 
     if (comm_size_ > 1) {
         comm.d_comm = CreateDeviceCommunicator(communicator_, comm_size_, inner_rank, comm.h_comm);
-        // 
+        //
         comm.d_tp_group = 0;
         if (engine_param_.attn_tp_size != comm_size_) {
             comm.d_tp_group = comm.d_comm->Split(inner_rank / engine_param_.attn_tp_size, 0, 0);

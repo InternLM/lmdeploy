@@ -9,7 +9,7 @@
 #include <cublasLt.h>
 #include <cublas_v2.h>
 
-#include "src/turbomind/comm/comm.h"
+#include "src/turbomind/comm/device_comm.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"

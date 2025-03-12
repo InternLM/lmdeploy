@@ -21,7 +21,7 @@
 
 #pragma once
 
-#include "src/turbomind/comm/comm.h"
+#include "src/turbomind/comm/device_comm.h"
 #include "src/turbomind/layers/DynamicDecodeLayer.h"
 #include "src/turbomind/models/llama/LlamaBatch.h"
 #include "src/turbomind/models/llama/LlamaWeight.h"

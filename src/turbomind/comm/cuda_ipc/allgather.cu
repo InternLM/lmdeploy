@@ -1,7 +1,7 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
-#include "src/turbomind/comm/native/device_semaphore.h"
-#include "src/turbomind/comm/native/native_comm.h"
+#include "src/turbomind/comm/cuda_ipc/cuda_ipc_comm.h"
+#include "src/turbomind/comm/cuda_ipc/device_semaphore.h"
 
 #include "src/turbomind/kernels/core/meta.h"
 #include "src/turbomind/utils/Tensor.h"
@@ -49,7 +49,7 @@ __global__ void __launch_bounds__(1024, 1)
     }
 }
 
-void NativeCommImpl::AllGather(
+void CudaIpcCommImpl::AllGather(
     const void* sendbuff, void* recvbuff, size_t sendcount, DataType type, int group, cudaStream_t stream)
 {
     const size_t bytesize = get_elem_size(type) * sendcount;
@@ -156,16 +156,16 @@ __global__ void Barrier(mscclpp::SmDevice2DeviceSemaphoreDeviceHandle* semaphore
     }
 }
 
-void NativeCommImpl::AllGather2D(const void*  sendbuff,
-                                 void*        recvbuff,
-                                 size_t       pitch,
-                                 size_t       stride,
-                                 int          width,
-                                 int          height,
-                                 DataType     type,
-                                 int2         flags,
-                                 int          group,
-                                 cudaStream_t stream)
+void CudaIpcCommImpl::AllGather2D(const void*  sendbuff,
+                                  void*        recvbuff,
+                                  size_t       pitch,
+                                  size_t       stride,
+                                  int          width,
+                                  int          height,
+                                  DataType     type,
+                                  int2         flags,
+                                  int          group,
+                                  cudaStream_t stream)
 {
     const size_t byte_width  = get_elem_size(type) * width;
     const size_t byte_pitch  = get_elem_size(type) * pitch;

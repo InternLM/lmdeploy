@@ -7,16 +7,16 @@
 
 #include <cuda.h>
 
-#include "src/turbomind/comm/comm.h"
-#include "src/turbomind/comm/host.h"
-#include "src/turbomind/comm/native/native_comm.h"
+#include "src/turbomind/comm/cuda_ipc/cuda_ipc_comm.h"
+#include "src/turbomind/comm/device_comm.h"
+#include "src/turbomind/comm/host_comm.h"
 
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/logger.h"
 
 namespace turbomind::comm {
 
-int NativeCommImpl::Split(int color, int key, int group)
+int CudaIpcCommImpl::Split(int color, int key, int group)
 {
     FT_CHECK(color >= 0);
     FT_CHECK(rank(group) >= 0);
@@ -58,7 +58,7 @@ int NativeCommImpl::Split(int color, int key, int group)
     return index;
 };
 
-NativeCommImpl::NativeCommImpl(HostComm h_comm):
+CudaIpcCommImpl::CudaIpcCommImpl(HostComm h_comm):
     h_comm_{h_comm}, global_n_ranks_{h_comm->n_ranks()}, global_rank_{h_comm->rank()}
 {
     h_comm_ = h_comm;
@@ -111,7 +111,7 @@ NativeCommImpl::NativeCommImpl(HostComm h_comm):
     Register(scratch_buff_, kScratchBuffSize);
 }
 
-NativeCommImpl::~NativeCommImpl()
+CudaIpcCommImpl::~CudaIpcCommImpl()
 {
     Deregister(scratch_buff_);
     Deregister(packet_buff_);
@@ -139,7 +139,7 @@ NativeCommImpl::~NativeCommImpl()
     cudaStreamSynchronize(0);
 }
 
-void NativeCommImpl::Initialize()
+void CudaIpcCommImpl::Initialize()
 {
 #if 0
     const int flags_size = 3 * sizeof(uint64_t) * kChannelsPerConn * (n_ranks_ - 1);
@@ -176,7 +176,7 @@ void NativeCommImpl::Initialize()
 #endif
 }
 
-void* NativeCommImpl::Allocate(size_t size)
+void* CudaIpcCommImpl::Allocate(size_t size)
 {
     CUmemGenericAllocationHandle handle{};
     size = (size + alloc_granularity_ - 1) / alloc_granularity_ * alloc_granularity_;
@@ -190,7 +190,7 @@ void* NativeCommImpl::Allocate(size_t size)
     return ptr;
 }
 
-void NativeCommImpl::Free(void* ptr)
+void CudaIpcCommImpl::Free(void* ptr)
 {
     if (auto it = allocations_.find(ptr); it != allocations_.end()) {
         auto allocation = it->second;
@@ -205,7 +205,7 @@ void NativeCommImpl::Free(void* ptr)
     }
 }
 
-void NativeCommImpl::Register(void* ptr, size_t size)
+void CudaIpcCommImpl::Register(void* ptr, size_t size)
 {
     if (!registered_memories_.count(ptr)) {
         auto buffers = comm::AllGather(h_comm_, std::make_pair(ptr, size));
@@ -217,14 +217,14 @@ void NativeCommImpl::Register(void* ptr, size_t size)
     }
 }
 
-void NativeCommImpl::Deregister(void* ptr)
+void CudaIpcCommImpl::Deregister(void* ptr)
 {
     if (int erased = registered_memories_.erase(ptr); erased == 0) {
         TM_LOG_WARNING("[TM][COMM][%d] Deregistering non-registered address %p", global_rank_, ptr);
     }
 }
 
-int NativeCommImpl::Query(QueryAttr attr) const noexcept
+int CudaIpcCommImpl::Query(QueryAttr attr) const noexcept
 {
     if (attr == kHasAllGather2D) {
         return 1;
@@ -232,7 +232,7 @@ int NativeCommImpl::Query(QueryAttr attr) const noexcept
     return 0;
 }
 
-uint64_t* NativeCommImpl::create_semaphore_buffer()
+uint64_t* CudaIpcCommImpl::create_semaphore_buffer()
 {
     const int flags_size = 3 * sizeof(uint64_t) * kChannelsPerConn * (global_n_ranks_ - 1);
     uint64_t* flags      = (uint64_t*)Allocate(flags_size);
@@ -240,8 +240,8 @@ uint64_t* NativeCommImpl::create_semaphore_buffer()
     return flags;
 }
 
-mscclpp::SmDevice2DeviceSemaphoreDeviceHandle* NativeCommImpl::init_semaphores(const std::vector<uint64_t*>& buffers,
-                                                                               int                           group)
+mscclpp::SmDevice2DeviceSemaphoreDeviceHandle* CudaIpcCommImpl::init_semaphores(const std::vector<uint64_t*>& buffers,
+                                                                                int                           group)
 {
     const int n_ranks = this->n_ranks(group);
     const int rank    = this->rank(group);
@@ -278,7 +278,7 @@ mscclpp::SmDevice2DeviceSemaphoreDeviceHandle* NativeCommImpl::init_semaphores(c
     return d_semaphores;
 }
 
-Array<void*, kMaxNearPeers> NativeCommImpl::get_near_impl(void* ptr)
+Array<void*, kMaxNearPeers> CudaIpcCommImpl::get_near_impl(void* ptr)
 {
     auto& memories = registered_memories_.at(ptr);
     FT_CHECK(memories.size() <= kMaxNearPeers);
@@ -289,9 +289,9 @@ Array<void*, kMaxNearPeers> NativeCommImpl::get_near_impl(void* ptr)
     return ret;
 }
 
-DeviceComm CreateNativeCommunicator(int n_ranks, int rank, HostComm h_comm)
+DeviceComm CreateCudaIpcCommunicator(int n_ranks, int rank, HostComm h_comm)
 {
-    auto comm = std::make_unique<NativeCommImpl>(h_comm);
+    auto comm = std::make_unique<CudaIpcCommImpl>(h_comm);
 
     comm->Initialize();
 

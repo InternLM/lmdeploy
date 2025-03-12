@@ -23,7 +23,7 @@
 #include <algorithm>
 #include <memory>
 
-#include "src/turbomind/comm/comm.h"
+#include "src/turbomind/comm/device_comm.h"
 #include "src/turbomind/macro.h"
 
 #include "src/turbomind/models/llama/LlamaBatch.h"

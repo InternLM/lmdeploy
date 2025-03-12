@@ -38,7 +38,7 @@ public:
                             const MoeParam&    moe_param);
 
     ~LlamaDecoderLayerWeight();
-    LlamaDecoderLayerWeight(const LlamaDecoderLayerWeight&)            = delete;
+    LlamaDecoderLayerWeight(const LlamaDecoderLayerWeight&) = delete;
     LlamaDecoderLayerWeight& operator=(const LlamaDecoderLayerWeight&) = delete;
 
     void loadModel(std::string dir_path, FtCudaDataType model_file_type);

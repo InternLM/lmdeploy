@@ -1,19 +1,21 @@
 
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <new>
 
-#include "src/turbomind/comm/host.h"
+#include "src/turbomind/comm/host_comm.h"
 
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind::comm {
 
-struct MultiThreadHostCommImpl: public HostCommImpl, std::enable_shared_from_this<MultiThreadHostCommImpl> {
+struct ThreadCommImpl: public HostCommImpl {
 
     class State {
     public:
@@ -35,14 +37,14 @@ struct MultiThreadHostCommImpl: public HostCommImpl, std::enable_shared_from_thi
     std::vector<int> l2g_;
     std::vector<int> g2l_;
 
-    MultiThreadHostCommImpl(int n_ranks, std::shared_ptr<State> state, int rank): state_{std::move(state)}, rank_{rank}
+    ThreadCommImpl(int n_ranks, std::shared_ptr<State> state, int rank): state_{std::move(state)}, rank_{rank}
     {
         l2g_.resize(n_ranks);
         std::iota(l2g_.begin(), l2g_.end(), 0);
         g2l_ = l2g_;
     }
 
-    MultiThreadHostCommImpl(std::vector<int> l2g, std::vector<int> g2l, std::shared_ptr<State> state, int rank):
+    ThreadCommImpl(std::vector<int> l2g, std::vector<int> g2l, std::shared_ptr<State> state, int rank):
         state_{std::move(state)}, rank_{rank}, l2g_{std::move(l2g)}, g2l_{std::move(g2l)}
     {
     }
@@ -92,7 +94,7 @@ struct MultiThreadHostCommImpl: public HostCommImpl, std::enable_shared_from_thi
             g2l[r] = i;
         }
 
-        return std::make_shared<MultiThreadHostCommImpl>(std::move(l2g), std::move(g2l), state_, rank_);
+        return std::make_shared<ThreadCommImpl>(std::move(l2g), std::move(g2l), state_, rank_);
     }
 
     void Sync() override
@@ -252,7 +254,7 @@ struct MultiThreadHostCommImpl: public HostCommImpl, std::enable_shared_from_thi
         if (n_ranks() == 1) {
             return;
         }
-        std::unique_ptr<char[]> tmp((char*)::operator new[](elem_size * count));
+        std::unique_ptr<char[]> tmp((char*)::operator new[](elem_size* count));
         std::copy_n((char*)data, elem_size * count, tmp.get());
         for (const auto& r : l2g_) {
             if (r != rank_) {
@@ -281,7 +283,7 @@ struct MultiThreadHostCommImpl: public HostCommImpl, std::enable_shared_from_thi
     }
 };
 
-class MultiThreadGroupId: public HostGroupId {
+class ThreadGroupId: public HostGroupId {
 public:
     void Initialize() override
     {
@@ -300,7 +302,7 @@ public:
     {
         void* ptr{};
         is.read((char*)&ptr, sizeof(ptr));
-        internal_ = reinterpret_cast<MultiThreadGroupId*>(ptr)->internal_;
+        internal_ = reinterpret_cast<ThreadGroupId*>(ptr)->internal_;
 
         FT_CHECK((bool)internal_);
     }
@@ -308,7 +310,7 @@ public:
     HostComm CreateCommunicator(int n_ranks, int rank) override
     {
         auto init_shared_state = [&] {  //
-            internal_->state = std::make_shared<MultiThreadHostCommImpl::State>(n_ranks);
+            internal_->state = std::make_shared<ThreadCommImpl::State>(n_ranks);
         };
 
         FT_CHECK((bool)internal_);
@@ -318,24 +320,24 @@ public:
 
         FT_CHECK((bool)internal_->state);
 
-        auto impl = std::make_shared<MultiThreadHostCommImpl>(n_ranks, internal_->state, rank);
+        auto impl = std::make_shared<ThreadCommImpl>(n_ranks, internal_->state, rank);
 
         return std::static_pointer_cast<HostCommImpl>(impl);
     }
 
 private:
     struct Internal {
-        std::once_flag                                  flag;
-        std::shared_ptr<MultiThreadHostCommImpl::State> state;
+        std::once_flag                         flag;
+        std::shared_ptr<ThreadCommImpl::State> state;
     };
 
 private:
     std::shared_ptr<Internal> internal_;
 };
 
-std::unique_ptr<HostGroupId> CreateHostGroupId(const std::string& backend)
+std::unique_ptr<HostGroupId> CreateThreadGroupId()
 {
-    return std::make_unique<MultiThreadGroupId>();
+    return std::make_unique<ThreadGroupId>();
 }
 
 }  // namespace turbomind::comm

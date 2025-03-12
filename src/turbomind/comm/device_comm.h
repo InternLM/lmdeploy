@@ -8,18 +8,19 @@
 
 #include <cuda_runtime.h>
 
-#include "src/turbomind/comm/host.h"
+#include "src/turbomind/comm/host_comm.h"
 #include "src/turbomind/utils/Tensor.h"
 
 namespace turbomind::comm {
 
-enum QueryAttr {
+enum QueryAttr
+{
     kHasAllGather2D
 };
 
 class DeviceCommImpl {
 public:
-    virtual ~DeviceCommImpl() = default;
+    virtual ~DeviceCommImpl();
 
     virtual int n_ranks(int group) const = 0;
 

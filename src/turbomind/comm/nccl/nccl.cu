@@ -8,8 +8,8 @@
 
 #include <nccl.h>
 
-#include "src/turbomind/comm/comm.h"
-#include "src/turbomind/comm/host.h"
+#include "src/turbomind/comm/device_comm.h"
+#include "src/turbomind/comm/host_comm.h"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/logger.h"

@@ -3,8 +3,8 @@
 #include <atomic>
 #include <stdexcept>
 
-#include "src/turbomind/comm/native/device_semaphore.h"
-#include "src/turbomind/comm/native/native_comm.h"
+#include "src/turbomind/comm/cuda_ipc/cuda_ipc_comm.h"
+#include "src/turbomind/comm/cuda_ipc/device_semaphore.h"
 
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/meta.h"
@@ -355,7 +355,7 @@ __global__ void Allreduce_Simple_Push_v2(T*                                     
     }
 }
 
-void NativeCommImpl::AllReduceSum(
+void CudaIpcCommImpl::AllReduceSum(
     const void* sendbuff, void* recvbuff, size_t count, DataType type, int group, cudaStream_t stream)
 {
     FT_CHECK(sendbuff == recvbuff);

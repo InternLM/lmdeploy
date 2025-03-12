@@ -4,9 +4,9 @@
 
 #include <unordered_map>
 
-#include "src/turbomind/comm/comm.h"
-#include "src/turbomind/comm/host.h"
-#include "src/turbomind/comm/native/mscclpp.h"
+#include "src/turbomind/comm/cuda_ipc/mscclpp.h"
+#include "src/turbomind/comm/device_comm.h"
+#include "src/turbomind/comm/host_comm.h"
 
 #include "src/turbomind/kernels/core/array.h"
 
@@ -17,15 +17,15 @@ namespace turbomind::comm {
 
 static constexpr int kMaxNearPeers = 7;
 
-class NativeCommImpl: public DeviceCommImpl {
+class CudaIpcCommImpl: public DeviceCommImpl {
 public:
     static constexpr int kPacketBuffSize  = 8 << 20;  // 8 MB
     static constexpr int kScratchBuffSize = 8 << 20;  // 8 MB
     static constexpr int kChannelsPerConn = 64;
 
-    ~NativeCommImpl() override;
+    ~CudaIpcCommImpl() override;
 
-    explicit NativeCommImpl(HostComm h_comm);
+    explicit CudaIpcCommImpl(HostComm h_comm);
 
     void Initialize();
 

@@ -36,7 +36,7 @@ struct LlamaWeight {
 
     ~LlamaWeight();
 
-    LlamaWeight(const LlamaWeight&)            = delete;
+    LlamaWeight(const LlamaWeight&) = delete;
     LlamaWeight& operator=(const LlamaWeight&) = delete;
 
     void loadModel(std::string dir_path);

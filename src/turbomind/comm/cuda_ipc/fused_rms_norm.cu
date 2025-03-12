@@ -4,8 +4,8 @@
 
 #include "cub/block/block_reduce.cuh"
 
-#include "src/turbomind/comm/native/device_semaphore.h"
-#include "src/turbomind/comm/native/native_comm.h"
+#include "src/turbomind/comm/cuda_ipc/cuda_ipc_comm.h"
+#include "src/turbomind/comm/cuda_ipc/device_semaphore.h"
 
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
@@ -441,16 +441,16 @@ __global__ void AllreduceResidualBiasRMSnorm_Simple_Push(T*                     
     }
 }
 
-void NativeCommImpl::AllreduceResidualBiasRMSnorm(void*        hidden,
-                                                  void*        residual,
-                                                  const void*  bias,
-                                                  const void*  weights,
-                                                  float        eps,
-                                                  int          dim,
-                                                  int          token_num,
-                                                  DataType     dtype,
-                                                  int          group,
-                                                  cudaStream_t stream)
+void CudaIpcCommImpl::AllreduceResidualBiasRMSnorm(void*        hidden,
+                                                   void*        residual,
+                                                   const void*  bias,
+                                                   const void*  weights,
+                                                   float        eps,
+                                                   int          dim,
+                                                   int          token_num,
+                                                   DataType     dtype,
+                                                   int          group,
+                                                   cudaStream_t stream)
 {
 
     const size_t elemsize = get_elem_size(dtype);

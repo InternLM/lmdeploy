@@ -2,8 +2,8 @@
 
 #pragma once
 
-#include "src/turbomind/comm/native/mscclpp.h"
-#include "src/turbomind/comm/native/native_comm.h"
+#include "src/turbomind/comm/cuda_ipc/cuda_ipc_comm.h"
+#include "src/turbomind/comm/cuda_ipc/mscclpp.h"
 
 #include <cuda/atomic>
 
