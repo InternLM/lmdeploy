@@ -118,7 +118,7 @@ class DeepSeek2Model(LlamaModel):
             attention_factor, softmax_scale = get_yarn_params(rope_scaling)
             softmax_scale *= size_per_head**(-0.5)
             yarn_rope_param: YarnRopeParam = rope_param.param
-            yarn_rope_param.param.max_position_embeddings = rope_scaling['original_max_position_embeddings']
+            yarn_rope_param.max_position_embeddings = rope_scaling['original_max_position_embeddings']
             yarn_rope_param.attention_factor = attention_factor
             info.update(rope_param=rope_param, softmax_scale=softmax_scale)
         return info
