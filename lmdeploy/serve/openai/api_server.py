@@ -775,6 +775,9 @@ async def chat_interactive_v1(request: GenerateRequest, raw_request: Request = N
     - ignore_eos (bool): indicator for ignoring eos
     - skip_special_tokens (bool): Whether or not to remove special tokens
         in the decoding. Default to be True.
+    - spaces_between_special_tokens (bool): Whether or not to add spaces
+        around special tokens. The behavior of Fast tokenizers is to have
+        this to False. This is setup to True in slow tokenizers.
     - adapter_name (str): For slora inference. Choose which lora to do the
         inference.
     - min_new_tokens (int): To generate at least numbers of tokens.
@@ -819,6 +822,7 @@ async def chat_interactive_v1(request: GenerateRequest, raw_request: Request = N
                                   ignore_eos=request.ignore_eos,
                                   stop_words=request.stop,
                                   skip_special_tokens=request.skip_special_tokens,
+                                  spaces_between_special_tokens=request.spaces_between_special_tokens,
                                   min_new_tokens=request.min_new_tokens,
                                   min_p=request.min_p,
                                   random_seed=random_seed)
