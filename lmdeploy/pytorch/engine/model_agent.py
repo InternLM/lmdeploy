@@ -380,9 +380,9 @@ class AutoModelAgent:
 
         if dp > 1:
             if not is_decoding:
-                all_sync_flags = [None] * dp
-                dist.all_gather_object(all_sync_flags, sync_long_context)
-                sync_long_context = any(all_sync_flags)
+                all_sync_flags = torch.tensor([False] * dp, device='cuda')
+                dist.all_gather_into_tensor(all_sync_flags, torch.tensor(sync_long_context, device='cuda'))
+                sync_long_context = all_sync_flags.any()
             inputs.build_dp_meta()
 
         need_output = dp > 1 or rank % tp == 0
