@@ -161,6 +161,9 @@ def init_migration(args):
 
     # Step 1. get cache information
     total_blocks = []
+    for endpoint in engine_snapshot.endpoints:
+        cache_info = requests.get(get_url(endpoint, "distserve/get_engine_info")).json()
+        total_blocks.append(cache_info["total"])
 
     segment_id = [["10.130.8.138:7000", "10.130.8.138:7001", "10.130.8.138:7002", "10.130.8.138:7003",
                    "10.130.8.138:7004", "10.130.8.138:7005", "10.130.8.138:7006", "10.130.8.138:7007"], 
