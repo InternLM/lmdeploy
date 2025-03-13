@@ -139,7 +139,7 @@ def init_migration(args):
     ipc_handlers_k = []
     ipc_handlers_v = []
     for endpoint in engine_snapshot.endpoints:
-        cache_info = requests.get(get_url(endpoint, "cache_info")).json()
+        cache_info = requests.get(get_url(endpoint, "distserve/get_engine_info")).json()
         total_blocks.append(cache_info["total"])
         ipc_handler = requests.get(get_url(endpoint, "distserve/get_ipc_handler")).json()
         ipc_handlers_k.append(eval(ipc_handler["ipc_k"]))

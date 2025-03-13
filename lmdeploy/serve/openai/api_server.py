@@ -507,7 +507,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     return response
 
 
-@router.get('/cache_info')
+@router.get('/distserve/get_engine_info')
 async def cache_info() -> JSONResponse:
     """
     Step 1: Get cache information
@@ -525,6 +525,16 @@ async def cache_info() -> JSONResponse:
 async def init_migration(raw_request: Request) -> JSONResponse:
     connect_config = await raw_request.json()
     VariableInterface.async_engine.init_migration(eval(connect_config["config"]))
+
+
+@router.post('/distserve/prefill')
+async def prefill(raw_request: Request) -> JSONResponse:
+    raise NotImplementedError
+
+
+@router.post('distserve/migration')
+async def prefill(raw_request: Request) -> JSONResponse:
+    raise NotImplementedError
 
 
 @router.post('/distserve/free_cache')
