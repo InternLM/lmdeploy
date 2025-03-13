@@ -172,7 +172,7 @@ class TurboMind:
             cfg.mlp_tp_size = cfg.mlp_tp_size or 1
             cfg.outer_dp_size = cfg.outer_dp_size or 1
             gcd = math.gcd(cfg.mlp_dp_size, cfg.attn_dp_size)
-            cfg.attn_dp_size *= gcd
+            cfg.outer_dp_size *= gcd
             cfg.mlp_dp_size //= gcd
             cfg.attn_dp_size //= gcd
             return True

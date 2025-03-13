@@ -15,6 +15,7 @@
 
 namespace turbomind::comm {
 
+static constexpr int kMaxRanks     = 8;
 static constexpr int kMaxNearPeers = 7;
 
 class CudaIpcCommImpl: public DeviceCommImpl {
@@ -82,7 +83,7 @@ public:
 private:
     uint64_t* create_semaphore_buffer();
 
-    mscclpp::SmDevice2DeviceSemaphoreDeviceHandle* init_semaphores(const std::vector<uint64_t*>& buffers, int group);
+    mscclpp::D2DSemaphoreHandle* init_semaphores(const std::vector<uint64_t*>& buffers, int group);
 
     template<class T>
     inline Array<T*, kMaxNearPeers> get_near(T* ptr)
@@ -128,7 +129,7 @@ private:
 
         uint64_t* d2d_semaphore_data;
 
-        mscclpp::SmDevice2DeviceSemaphoreDeviceHandle* d2d_semaphores;
+        mscclpp::D2DSemaphoreHandle* d2d_semaphores;
     };
 
     std::vector<Group> groups_;

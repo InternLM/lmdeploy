@@ -252,45 +252,43 @@ public:
         std::vector<std::tuple<int, int, int>> tasks;
         tasks.reserve(global_n_ranks_);
 
-        for (int i = 0; i < global_n_ranks_; ++i) {
+        for (int i = 0, offset = 0; i < global_n_ranks_; ++i) {
             const int num   = local_token_nums[i / inner_tp];
             const int slice = (num + inner_tp - 1) / inner_tp;
-            const int first = i % inner_tp * slice;
-            const int last  = std::min(first + slice, num);
-            if (int step = last - first; step > 0) {
-                tasks.emplace_back(i, step, first);
+            const int first = std::min(num, i % inner_tp * slice);
+            const int last  = std::min(num, first + slice);
+            tasks.emplace_back(offset, first, last - first);
+            if ((i + 1) % inner_tp == 0) {
+                offset += num;
             }
         }
 
         if (tp0 > 1) {
-            char* buff = (char*)hidden;
             NCCLCHECK(ncclGroupStart());
-            for (const auto& [i, num, _] : tasks) {
-                NCCLCHECK(ncclReduce(buff, buff, (size_t)num * dim, nccl_type, ncclSum, i % tp0, comm0, stream));
-                buff += elem_size * num * dim;
+            for (int i = 0; i < global_n_ranks_; ++i) {
+                if (auto& [offset, first, num] = tasks[i]; num > 0) {
+                    char* buff = (char*)hidden + elem_size * (offset + first) * dim;
+                    NCCLCHECK(ncclReduce(buff, buff, (size_t)num * dim, nccl_type, ncclSum, i % tp0, comm0, stream));
+                }
             }
             NCCLCHECK(ncclGroupEnd());
             sync_check_cuda_error();
         }
 
-        {
-            char* buff = (char*)hidden;
-            for (const auto& [i, num, first] : tasks) {
-                if (i == global_rank_) {
-                    invokeResidualBiasRMSNorm(
-                        buff, (char*)residual + elem_size * first * dim, weights, bias, type, dim, num, eps, stream);
-                    sync_check_cuda_error();
-                }
-                buff += elem_size * num * dim;
-            }
+        if (auto& [offset, first, num] = tasks[global_rank_]; num > 0) {
+            char* buff = (char*)hidden + elem_size * (offset + first) * dim;
+            invokeResidualBiasRMSNorm(
+                buff, (char*)residual + elem_size * first * dim, weights, bias, type, dim, num, eps, stream);
+            sync_check_cuda_error();
         }
 
         if (tp1 > 1) {
-            char* buff = (char*)hidden;
             NCCLCHECK(ncclGroupStart());
-            for (const auto& [i, num, _] : tasks) {
-                NCCLCHECK(ncclBroadcast(buff, buff, (size_t)num * dim, nccl_type, i % tp1, comm1, stream));
-                buff += elem_size * num * dim;
+            for (int i = 0; i < global_n_ranks_; ++i) {
+                if (auto& [offset, first, num] = tasks[i]; num > 0) {
+                    char* buff = (char*)hidden + elem_size * (offset + first) * dim;
+                    NCCLCHECK(ncclBroadcast(buff, buff, (size_t)num * dim, nccl_type, i % tp1, comm1, stream));
+                }
             }
             NCCLCHECK(ncclGroupEnd());
             sync_check_cuda_error();

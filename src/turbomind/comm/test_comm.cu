@@ -18,9 +18,12 @@
 #include "src/turbomind/comm/device_comm.h"
 #include "src/turbomind/comm/host_comm.h"
 #include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 using namespace turbomind::comm;
 using turbomind::getTensorType;
+using turbomind::check;
+using turbomind::myAssert;
 
 [[maybe_unused]] static constexpr bool is_ncu = 0;
 
@@ -36,15 +39,15 @@ struct Context {
     template<class F>
     float exec(F func)
     {
-        cudaStreamSynchronize(stream);
-        cudaEventRecord(ev_start, stream);
+        check_cuda_error(cudaStreamSynchronize(stream));
+        check_cuda_error(cudaEventRecord(ev_start, stream));
 
         func(stream);
 
-        cudaEventRecord(ev_end, stream);
-        cudaEventSynchronize(ev_end);
+        check_cuda_error(cudaEventRecord(ev_end, stream));
+        check_cuda_error(cudaEventSynchronize(ev_end));
         float ms{};
-        cudaEventElapsedTime(&ms, ev_start, ev_end);
+        check_cuda_error(cudaEventElapsedTime(&ms, ev_start, ev_end));
         return ms;
     }
 
@@ -52,7 +55,7 @@ struct Context {
     T* malloc(size_t count)
     {
         T* data;
-        cudaMallocAsync(&data, sizeof(T) * count, stream);
+        check_cuda_error(cudaMallocAsync(&data, sizeof(T) * count, stream));
         buffers.push_back(data);
         return data;
     }
@@ -60,15 +63,20 @@ struct Context {
     template<class T>
     void copy_n(const T* src, size_t count, T* dst)
     {
-        cudaMemcpyAsync(dst, src, sizeof(T) * count, cudaMemcpyDefault, stream);
+        check_cuda_error(cudaMemcpyAsync(dst, src, sizeof(T) * count, cudaMemcpyDefault, stream));
+    }
+
+    void sync()
+    {
+        check_cuda_error(cudaStreamSynchronize(stream));
     }
 
     Context(int device_id)
     {
-        cudaSetDevice(device_id);
-        cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
-        cudaEventCreate(&ev_start);
-        cudaEventCreate(&ev_end);
+        check_cuda_error(cudaSetDevice(device_id));
+        check_cuda_error(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+        check_cuda_error(cudaEventCreate(&ev_start));
+        check_cuda_error(cudaEventCreate(&ev_end));
     }
     ~Context()
     {
@@ -77,7 +85,6 @@ struct Context {
             p = {};
         }
         cudaStreamSynchronize(stream);
-
         cudaEventDestroy(ev_end);
         cudaEventDestroy(ev_start);
         cudaStreamDestroy(stream);
@@ -85,16 +92,17 @@ struct Context {
 };
 
 struct TestComm {
-
-    std::vector<DeviceComm> d_comm_;
     std::vector<HostComm>   h_comm_;
+    std::vector<DeviceComm> d_comm_;
+    std::vector<HostComm>   h_split_;
+    std::vector<int>        d_split_;
 
     int              warmup_;
     int              iters_;
     std::vector<int> tokens_;
     size_t           max_tokens_;
 
-    static auto Init(int world_size, const std::string& backend)
+    static auto Init(int n_ranks, int split, const std::string& backend)
     {
 
         std::unique_ptr<HostGroupId> group_id = CreateHostGroupId({});
@@ -106,30 +114,42 @@ struct TestComm {
             group_id_data = ss.str();
         }
 
-        std::vector<DeviceComm> d_comm(world_size);
-        std::vector<HostComm>   h_comm(world_size);
+        std::vector<DeviceComm> d_comm(n_ranks);
+        std::vector<HostComm>   h_comm(n_ranks);
+        std::vector<int>        d_split(n_ranks);
+        std::vector<HostComm>   h_split(n_ranks);
 
         auto init = [&](int rank) {
             // initialize host communicators
             std::stringstream            ss(group_id_data);
             std::unique_ptr<HostGroupId> host_id = CreateHostGroupId({});
             host_id->Import(ss);
-            h_comm[rank] = host_id->CreateCommunicator(world_size, rank);
+            h_comm[rank] = host_id->CreateCommunicator(n_ranks, rank);
 
             // initialize device communicators
             cudaSetDevice(rank);
-            d_comm[rank] = CreateDeviceCommunicator(backend, world_size, rank, h_comm[rank]);
+            d_comm[rank] = CreateDeviceCommunicator(backend, n_ranks, rank, h_comm[rank]);
+
+            // split communicators
+            if (split) {
+                h_split[rank] = h_comm[rank]->Split(rank / split, 0);
+                d_split[rank] = d_comm[rank]->Split(rank / split, 0, 0);
+            }
+            else {
+                h_split[rank] = h_comm[rank];
+                d_split[rank] = 0;
+            }
         };
 
         std::vector<std::thread> threads;
-        for (int i = 0; i < world_size; ++i) {
+        for (int i = 0; i < n_ranks; ++i) {
             threads.emplace_back(init, i);
         }
         for (auto& t : threads) {
             t.join();
         }
 
-        return std::make_pair(h_comm, std::move(d_comm));
+        return std::make_tuple(h_comm, std::move(d_comm), h_split, d_split);
     }
 
     void Run(int hidden_dim, int vocab_size, int tp, int warmup, int iters, std::vector<int> tokens)
@@ -143,7 +163,7 @@ struct TestComm {
             tp = device_num;
         }
 
-        std::tie(h_comm_, d_comm_) = Init(device_num, "native");
+        std::tie(h_comm_, d_comm_, h_split_, d_split_) = Init(device_num, 4, "nccl");
 
         warmup_ = warmup;
         iters_  = iters;
@@ -151,9 +171,12 @@ struct TestComm {
 
         max_tokens_ = *std::max_element(tokens_.begin(), tokens_.end());
 
-        TestAllReduce<half>(hidden_dim);
-        TestAllreduceResidualBiasRMSnorm<half>(hidden_dim);
-        TestAllGather<half>(hidden_dim / tp);  // tp embedding
+        // TestAllReduce<half>(hidden_dim);
+        // TestAllreduceResidualBiasRMSnorm<half>(hidden_dim);
+        // TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 0, 0);
+        TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 1, 0);
+        TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 0, 1);
+        // TestAllGather<half>(hidden_dim / tp);  // tp embedding
         // TestAllGather<float>(vocab_size / tp);
     }
 
@@ -320,6 +343,7 @@ struct TestComm {
                     ref_data[index]    = tmp * sum * (float)weight[d];  // h' <- norm(r) * w
                 }
             }
+            h_comm->Sync();
             if (rank == 0) {
                 std::cout << "done.\n";
             }
@@ -388,10 +412,8 @@ struct TestComm {
                 auto&        delta = deltas.emplace_back();
                 h_comm->Sync();
                 for (int i = 0; i < warmup_ + iters_; ++i) {
-
                     ctx.copy_n(d_rank_data, count, d_tmp_data);
                     ctx.copy_n(d_residual, count, d_tmp_res);
-
                     auto ms = ctx.exec([&](auto stream) {  //
                         d_comm->AllreduceResidualBiasRMSnorm(d_tmp_data,
                                                              d_tmp_res,
@@ -403,17 +425,6 @@ struct TestComm {
                                                              getTensorType<T>(),
                                                              0,
                                                              stream);
-                        // comm.AllreduceResidualBiasRMSnormEx(d_tmp_data,
-                        //                                     d_tmp_res,
-                        //                                     has_bias ? d_bias : nullptr,
-                        //                                     d_weight,
-                        //                                     eps,
-                        //                                     dim,
-                        //                                     n,
-                        //                                     turbomind::getTensorType<T>(),
-                        //                                     comm.world_size(),
-                        //                                     comm.world_size(),
-                        //                                     stream);
                     });
                     if (i >= warmup_) {
                         delta += ms;
@@ -558,6 +569,230 @@ struct TestComm {
         }
     }
 
+    template<class T>
+    void TestAllreduceResidualBiasRMSnormEx(size_t dim, int group0, int group1)
+    {
+        const int tp_size_0 = d_comm_[0]->n_ranks(group0);
+        const int tp_size_1 = d_comm_[0]->n_ranks(group1);
+        const int dp_size_0 = d_comm_.size() / tp_size_0;
+        const int dp_size_1 = d_comm_.size() / tp_size_1;
+
+        const int inner_tp = std::gcd(tp_size_0, tp_size_1);
+
+        std::mt19937                  gen{};
+        std::uniform_int_distribution dist{0, 31};  // 5 mantissa bits
+
+        TM_LOG_INFO("dp_size_0 %d, tp_size_0 %d", dp_size_0, tp_size_0);
+        TM_LOG_INFO("dp_size_1 %d, tp_size_1 %d", dp_size_1, tp_size_1);
+        TM_LOG_INFO("inner_tp %d", inner_tp);
+
+        std::vector tokens = tokens_;
+        for (auto& x : tokens) {
+            x = (x + dp_size_0 - 1) / dp_size_0;
+        }
+        std::sort(tokens.begin(), tokens.end());
+        tokens.erase(std::unique(tokens.begin(), tokens.end()), tokens.end());
+        const size_t max_tokens = tokens.back();
+
+        std::vector<T> ref_data(dp_size_0 * max_tokens * dim);
+        std::vector<T> src_res(ref_data.size());
+        std::vector<T> ref_res(ref_data.size());
+
+        std::vector<T> weight(dim);
+        std::vector<T> bias(dim);
+
+        constexpr float eps      = 1e-5;
+        constexpr bool  has_bias = true;
+
+        std::cout << "preparing data ... " << std::flush;
+
+        for (size_t i = 0; i < dim; ++i) {
+            weight[i] = T(dist(gen));
+        }
+
+        if (has_bias) {
+            for (size_t i = 0; i < dim; ++i) {
+                bias[i] = T(dist(gen));
+            }
+        }
+
+        std::vector<std::vector<T>> src_data(tp_size_0);
+        for (int r = 0; r < tp_size_0; ++r) {
+            src_data[r].resize(ref_data.size());
+            for (size_t i = 0; i < ref_data.size(); ++i) {
+                src_data[r][i] = T(dist(gen));
+            }
+        }
+
+        for (size_t i = 0; i < src_res.size(); ++i) {
+            src_res[i] = T(dist(gen));
+        }
+
+        for (int r = 0; r < tp_size_0; ++r) {
+            for (size_t i = 0; i < ref_data.size(); ++i) {
+                ref_data[i] += src_data[r][i];
+            }
+        }
+
+        for (size_t i = 0; i < dp_size_0 * max_tokens; ++i) {
+            float sum = 0.f;
+            for (size_t d = 0; d < dim; ++d) {
+                size_t idx   = i * dim + d;
+                ref_res[idx] = src_res[idx] + ref_data[idx] + bias[d];  // r' <- r + (h + b)
+                sum += (float)ref_res[idx] * (float)ref_res[idx];
+            }
+            sum = rsqrtf(sum / dim + eps);
+            for (size_t d = 0; d < dim; ++d) {
+                size_t idx    = i * dim + d;
+                ref_data[idx] = (float)ref_res[idx] * sum * (float)weight[d];  // h' <- norm(r) * w
+            }
+        }
+
+        std::cout << "done" << std::endl;
+
+        auto func = [&](int index, DeviceComm& d_comm, HostComm& h_comm) {
+            const int g_rank    = d_comm->rank(0);
+            const int g_n_ranks = d_comm->n_ranks(0);
+            const int dp_rank_0 = g_rank / tp_size_0;
+            const int dp_rank_1 = g_rank / tp_size_1;
+            const int tp_rank_0 = d_comm->rank(group0);
+            const int tp_rank_1 = d_comm->rank(group1);
+            const int local_id  = g_rank / inner_tp;  // which local partition this rank belongs to
+
+            // TM_LOG_INFO("g_rank %d, dp_rank_0 %d, tp_rank_0 %d, dp_rank_1 %d, tp_rank_1 %d, local_id %d",
+            //             g_rank,
+            //             dp_rank_0,
+            //             tp_rank_0,
+            //             dp_rank_1,
+            //             tp_rank_1,
+            //             local_id);
+
+            const size_t max_count = max_tokens * dim;
+
+            Context ctx{g_rank};
+
+            T* d_bias    = ctx.malloc<T>(dim);
+            T* d_weight  = ctx.malloc<T>(dim);
+            T* d_data    = ctx.malloc<T>(max_count);
+            T* d_res     = ctx.malloc<T>(max_count);
+            T* d_tmp_res = ctx.malloc<T>(max_count);
+
+            T* d_tmp_data = (T*)d_comm->Allocate(sizeof(T) * dp_size_0 * max_count);
+            d_comm->Register(d_tmp_data, sizeof(T) * dp_size_0 * max_count);
+
+            ctx.copy_n(bias.data(), dim, d_bias);
+            ctx.copy_n(weight.data(), dim, d_weight);
+
+            [[maybe_unused]] auto verify = [&](auto n) {
+                const size_t   dst_tokens = n / dp_size_1 * dp_size_0;
+                const size_t   dst_count  = dst_tokens * dim;
+                std::vector<T> h_data(dst_count);
+                ctx.copy_n(d_tmp_data + dp_rank_1 * dst_count, dst_count, h_data.data());
+                const size_t   local_tokens = (size_t)n / dp_size_1;
+                const size_t   local_count  = local_tokens * dim;
+                const size_t   slice        = (local_tokens + inner_tp - 1) / inner_tp * dim;
+                const size_t   first        = std::min(local_count, g_rank % inner_tp * slice);
+                const size_t   last         = std::min(local_count, first + slice);
+                std::vector<T> h_res(last - first);
+                ctx.copy_n(d_tmp_res + first, h_res.size(), h_res.data());
+
+                ctx.sync();
+
+                size_t res_diff = 0;
+                for (size_t i = first; i < last; ++i) {
+                    auto& val  = h_res[i - first];
+                    auto& ref  = ref_res[local_id * local_count + i];
+                    int   diff = !(val == ref);
+                    if (res_diff < 5 && diff) {
+                        printf("[rank %d], %ld: %f vs %f\n", g_rank, i - first, (float)val, (float)ref);
+                    }
+                    res_diff += diff;
+                }
+                float data_diff = 0;
+
+                for (size_t i = 0; i < dst_count; ++i) {
+                    float diff = (float)h_data[i] - (float)ref_data[dp_rank_1 * dst_count + i];
+                    data_diff += std::abs(diff);
+                }
+                data_diff /= dst_count;
+                if (res_diff || data_diff > 0.1f || std::isnan(data_diff)) {
+                    printf(
+                        "[rank %d] count = %d, res_diff = %lu, data_diff = %f\n", g_rank, (int)n, res_diff, data_diff);
+                    std::this_thread::sleep_for(std::chrono::seconds(5));
+                    std::abort();
+                }
+                else if (tp_rank_1 == 0) {
+                    printf("[rank %d] count = %d, data_diff = %f\n", g_rank, (int)n, data_diff);
+                }
+            };
+
+            std::vector<std::pair<int, float>> stats;
+            for (const auto& n : tokens) {
+                if (n % dp_size_1) {
+                    if (g_rank == 0) {
+                        TM_LOG_INFO("Skipped %d", n);
+                    }
+                    continue;
+                }
+                // const int src_token_num = n;
+                // const int dst_token_num = n / dp_size_1 * dp_size_0;
+                const size_t count       = (size_t)n * dim;
+                const size_t local_count = count / dp_size_1;
+                std::vector  local_token_nums(dp_size_0 * dp_size_1, n / dp_size_1);
+                ctx.copy_n(src_data[tp_rank_0].data() + dp_rank_0 * count, count, d_data);
+                ctx.copy_n(src_res.data() + local_id * local_count, local_count, d_res);
+                h_comm->Sync();
+                auto& [_, delta] = stats.emplace_back(n * dp_size_0, 0.f);
+                for (int i = 0; i < warmup_ + iters_; ++i) {
+                    ctx.copy_n(d_data, count, d_tmp_data + dp_rank_0 * count);
+                    ctx.copy_n(d_res, local_count, d_tmp_res);
+                    auto ms = ctx.exec([&](auto stream) {  //
+                        d_comm->AllreduceResidualBiasRMSnormEx(d_tmp_data,
+                                                               d_tmp_res,
+                                                               has_bias ? d_bias : nullptr,
+                                                               d_weight,
+                                                               eps,
+                                                               dim,
+                                                               turbomind::getTensorType<T>(),
+                                                               group0,
+                                                               group1,
+                                                               local_token_nums.data(),
+                                                               stream);
+                    });
+                    if (i >= warmup_) {
+                        delta += ms;
+                    }
+                    // verify(n);
+                }
+                verify(n);
+            }
+
+            d_comm->Deregister(d_tmp_data);
+            d_comm->Free(d_tmp_data);
+
+            if (g_rank == 0) {
+                SummaryHeader("rs | rmsnorm | ag", dim, g_n_ranks);
+                for (const auto& [num, ms] : stats) {
+                    const float  avg    = ms / iters_;
+                    const size_t count  = num * dim;
+                    const float  algbw  = sizeof(T) * count / 1e9f / avg * 1000.f;
+                    const float  factor = (tp_size_0 - 1) / (float)tp_size_0 + (tp_size_1 - 1) / (float)tp_size_1;
+                    const float  busbw  = algbw * factor;
+                    // g_n_ranks;
+                    SummaryEntry(num, count, sizeof(T), avg, algbw, busbw);
+                }
+            }
+        };
+
+        std::vector<std::thread> threads;
+        for (size_t i = 0; i < d_comm_.size(); ++i) {
+            threads.emplace_back(func, i, std::ref(d_comm_[i]), std::ref(h_comm_[i]));
+        }
+        for (auto& t : threads) {
+            t.join();
+        }
+    }
+
     void SummaryHeader(const char* name, int dim, int world_size)
     {
         printf("[%s] dim %d tp %d warmup %d iters %d\n", name, dim, world_size, warmup_, iters_);
@@ -621,10 +856,12 @@ int main(int argc, char* argv[])
              128000,
              -1,
              10,
-             100,
+             10,
+             //  {1024});
              //   {1024, 2048, 4096, 8192});
              // {512});
              //  {1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 24, 32, 48, 64, 96, 128});
+             //  {2, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128});
              //  {128, 256, 512, 1024, 2048, 4096, 8192});
              //  {8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048, 4096, 6144, 8192});
              //   {8192, 16384, 32768});

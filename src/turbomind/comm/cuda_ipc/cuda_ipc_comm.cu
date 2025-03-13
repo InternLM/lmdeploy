@@ -240,7 +240,7 @@ uint64_t* CudaIpcCommImpl::create_semaphore_buffer()
     return flags;
 }
 
-mscclpp::SmDevice2DeviceSemaphoreDeviceHandle* CudaIpcCommImpl::init_semaphores(const std::vector<uint64_t*>& buffers,
+mscclpp::D2DSemaphoreHandle* CudaIpcCommImpl::init_semaphores(const std::vector<uint64_t*>& buffers,
                                                                                 int                           group)
 {
     const int n_ranks = this->n_ranks(group);
@@ -248,14 +248,14 @@ mscclpp::SmDevice2DeviceSemaphoreDeviceHandle* CudaIpcCommImpl::init_semaphores(
 
     const int peers = n_ranks - 1;
 
-    std::vector<mscclpp::SmDevice2DeviceSemaphoreDeviceHandle> h_semaphores;
+    std::vector<mscclpp::D2DSemaphoreHandle> h_semaphores;
     for (int c = 0; c < kChannelsPerConn; ++c) {
         for (int r = 0; r < n_ranks; ++r) {
             if (r != rank) {
                 const int p     = r < rank ? r : r - 1;
                 const int inv_p = Rank{rank, peers}.inverse_peer(p);
                 //
-                mscclpp::SmDevice2DeviceSemaphoreDeviceHandle handle{};
+                mscclpp::D2DSemaphoreHandle handle{};
                 handle.inboundSemaphoreId         = buffers[rank] + c * peers + p;                          // local
                 handle.outboundSemaphoreId        = handle.inboundSemaphoreId + kChannelsPerConn * peers;   // local
                 handle.expectedInboundSemaphoreId = handle.outboundSemaphoreId + kChannelsPerConn * peers;  // local
@@ -265,14 +265,14 @@ mscclpp::SmDevice2DeviceSemaphoreDeviceHandle* CudaIpcCommImpl::init_semaphores(
         }
     }
 
-    mscclpp::SmDevice2DeviceSemaphoreDeviceHandle* d_semaphores{};
+    mscclpp::D2DSemaphoreHandle* d_semaphores{};
 
     check_cuda_error(
-        cudaMallocAsync(&d_semaphores, sizeof(mscclpp::SmDevice2DeviceSemaphoreDeviceHandle) * h_semaphores.size(), 0));
+        cudaMallocAsync(&d_semaphores, sizeof(mscclpp::D2DSemaphoreHandle) * h_semaphores.size(), 0));
 
     check_cuda_error(cudaMemcpyAsync(d_semaphores,
                                      h_semaphores.data(),
-                                     sizeof(mscclpp::SmDevice2DeviceSemaphoreDeviceHandle) * h_semaphores.size(),
+                                     sizeof(mscclpp::D2DSemaphoreHandle) * h_semaphores.size(),
                                      cudaMemcpyHostToDevice));
 
     return d_semaphores;

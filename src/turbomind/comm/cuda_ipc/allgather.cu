@@ -15,7 +15,7 @@ template<class T, class Relaxed>
 __global__ void __launch_bounds__(1024, 1)
     Allgather_Simple_Pull(T*                                             local,
                           Array<T*, kMaxNearPeers>                       near,
-                          mscclpp::SmDevice2DeviceSemaphoreDeviceHandle* semaphores,
+                          mscclpp::D2DSemaphoreHandle* semaphores,
                           int                                            rank,
                           int                                            peers,
                           int64_t                                        slice,
@@ -92,7 +92,7 @@ template<class T, int log2_block_dim, class Relaxed>
 __global__ void __launch_bounds__(1024, 1)
     Allgather2D_Simple_Pull(T*                                             local,
                             Array<T*, kMaxNearPeers>                       near,
-                            mscclpp::SmDevice2DeviceSemaphoreDeviceHandle* semaphores,
+                            mscclpp::D2DSemaphoreHandle* semaphores,
                             int                                            rank,
                             int                                            peers,
                             int64_t                                        pitch,
@@ -143,7 +143,7 @@ __global__ void __launch_bounds__(1024, 1)
     }
 }
 
-__global__ void Barrier(mscclpp::SmDevice2DeviceSemaphoreDeviceHandle* semaphores, int peers)
+__global__ void Barrier(mscclpp::D2DSemaphoreHandle* semaphores, int peers)
 {
     const int sem_id = blockIdx.x * peers + threadIdx.x;
 

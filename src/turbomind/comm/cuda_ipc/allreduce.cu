@@ -145,7 +145,7 @@ __global__ void __launch_bounds__(1024, 1) AllreduceKernel_LL_WS(T*             
 template<class T, int vec_size, class Relaxed>
 __global__ void Allreduce_Simple_Pull(T*                                             buf,
                                       Array<T*, kMaxNearPeers>                       chns,
-                                      mscclpp::SmDevice2DeviceSemaphoreDeviceHandle* semaphores,
+                                      mscclpp::D2DSemaphoreHandle* semaphores,
                                       int                                            rank,
                                       int                                            peers,
                                       int                                            slice,
@@ -220,7 +220,7 @@ template<class T, int vec_size, class Relaxed>
 __global__ void Allreduce_Simple_Push(T*                                             buf,
                                       T*                                             scratch,
                                       Array<T*, kMaxNearPeers>                       near,
-                                      mscclpp::SmDevice2DeviceSemaphoreDeviceHandle* semaphores,
+                                      mscclpp::D2DSemaphoreHandle* semaphores,
                                       int                                            rank,
                                       int                                            peers,
                                       int                                            slice,  // in vec
@@ -295,7 +295,7 @@ __global__ void Allreduce_Simple_Push_v2(T*                                     
                                          T*                                             scratch,
                                          Array<T*, kMaxNearPeers>                       near_buf,
                                          Array<T*, kMaxNearPeers>                       near_scratch,
-                                         mscclpp::SmDevice2DeviceSemaphoreDeviceHandle* semaphores,
+                                         mscclpp::D2DSemaphoreHandle* semaphores,
                                          int                                            rank,
                                          int                                            peers,
                                          int                                            slice,  // in vec
