@@ -314,9 +314,7 @@ class Engine:
         cache_config = _build_cache_config(engine_config)
         backend_config = _build_backend_config(engine_config)
         dist_config = _build_dist_config(engine_config)
-        self.should_execute_dummy_batch = engine_config.should_execute_dummy_batch
-        if not self.should_execute_dummy_batch:
-            self.should_execute_dummy_batch = dist_config.need_dummy_batch()
+        self.should_execute_dummy_batch = dist_config.need_dummy_batch()
 
         # build model agent
         raw_tokenizer = None

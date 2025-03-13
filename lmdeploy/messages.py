@@ -282,8 +282,6 @@ class PytorchEngineConfig:
             bit, set it to 4 or 8, respectively
         distributed_executor_backend (str): backend of distributed backend,
             options: ['uni', 'mp', 'ray']
-        should_execute_dummy_batch (str): execute dummy batch when if dp rank
-            has no request.
     """
     dtype: str = 'auto'
     tp: int = 1
@@ -307,7 +305,6 @@ class PytorchEngineConfig:
     revision: str = None
     quant_policy: Literal[0, 4, 8] = 0
     distributed_executor_backend: str = None
-    should_execute_dummy_batch: bool = False
 
     def __post_init__(self):
         """Check input validation."""
