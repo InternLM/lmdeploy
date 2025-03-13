@@ -361,6 +361,18 @@ class AutoModelAgent:
         logger.debug('<ForwardTask>: '
                      f'batch_size={inputs.seq_length.size(0)} '
                      f'num_tokens={inputs.input_ids.size(-1)}')
+        # dist tools
+        dist_ctx = get_dist_manager().current_context()
+        rank = dist_ctx.rank
+        tp = dist_ctx.tp
+        dp = dist_ctx.dp
+        is_decoding = inputs.is_decoding
+        if dp > 1 and not is_decoding:
+            all_sync_flags = torch.tensor([False] * dp, device='cuda')
+            lc_handle = dist.all_gather_into_tensor(all_sync_flags,
+                                                    torch.tensor(sync_long_context, device='cuda'),
+                                                    async_op=True)
+
         non_blocking = True
         inputs = _try_to_cuda(inputs, non_blocking=non_blocking)
         all_ids = _try_to_cuda(all_ids, non_blocking=non_blocking)
@@ -368,20 +380,12 @@ class AutoModelAgent:
         sampling_inputs = _try_to_cuda(sampling_inputs, non_blocking=non_blocking)
         num_appendable_ids = _try_to_cuda(num_appendable_ids, non_blocking=non_blocking)
         num_ignore_eos = _try_to_cuda(num_ignore_eos, non_blocking=non_blocking)
-        is_decoding = inputs.is_decoding
 
         self.stream.synchronize()
 
-        # dist tools
-        dist_ctx = get_dist_manager().current_context()
-        rank = dist_ctx.rank
-        tp = dist_ctx.tp
-        dp = dist_ctx.dp
-
         if dp > 1:
             if not is_decoding:
-                all_sync_flags = torch.tensor([False] * dp, device='cuda')
-                dist.all_gather_into_tensor(all_sync_flags, torch.tensor(sync_long_context, device='cuda'))
+                lc_handle.wait()
                 sync_long_context = all_sync_flags.any()
             inputs.build_dp_meta()
 
