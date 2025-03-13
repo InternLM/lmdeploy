@@ -55,14 +55,6 @@ class CacheEngine:
             else:
                 raise ValueError(f'unsupported device_type {self.cache_config.device_type}')
 
-        # for pd disaggregation
-        self.ipc_handler_k = None
-        self.ipc_handler_v = None
-        self.migration_ptr_k: int = None
-        self.migration_ptr_v: int = None
-        self._C_handlers_k = None
-        self._C_handlers_v = None
-
         # Initialize the cache.
         self.local_gpu_cache = self.allocate_gpu_cache()
         self.local_cpu_cache = self.allocate_cpu_cache()
@@ -215,26 +207,6 @@ class CacheEngine:
 
         self._C_handlers_k = {}
         self._C_handlers_v = {}
-        # for key, value in handler_config.items():
-        #     if key == self.engine_id:
-        #         _C_handle_k = _slime_C.KVCacheHandlerConfig(*value[0:4])
-        #         _C_handle_v = _slime_C.KVCacheHandlerConfig(*value[0:4])
-        #     else:
-        #         _C_handle_k = _slime_C.KVCacheHandlerConfig(*value[0:6])
-        #         _C_handle_v = _slime_C.KVCacheHandlerConfig(*(value[0:4] + value[-2:]))
-        #     self._C_handlers_k[key] = _C_handle_k
-        #     self._C_handlers_v[key] = _C_handle_v
-        
-        # self.migration_ptr_k = _slime_C.ops.init_migration_manager(
-        #     self.engine_id,
-        #     self.model_config.dtype.itemsize,
-        #     self.model_config.num_layers, self.model_config.num_key_value_heads, self.model_config.get_head_size(), self._C_handlers_k)
-
-        # self.migration_ptr_v = _slime_C.ops.init_migration_manager(
-        #     self.engine_id,
-        #     self.model_config.dtype.itemsize,
-        #     self.model_config.num_layers, self.model_config.num_key_value_heads, self.model_config.get_head_size(), self._C_handlers_v)
-
         self.segment_id = config["segment_id"][self.rank]
         self.remote_block_size = config["remote_block_size"]
         print(self.segment_id)
@@ -268,34 +240,12 @@ class CacheEngine:
 
         self.transfer_engine.transport_batch(self.segment_id, self.full_gpu_cache[0].data_ptr(), target_offset, 0, [length] * len(target_offset), source_offset)
         self.transfer_engine.transport_batch(self.segment_id, self.full_gpu_cache[1].data_ptr(), target_offset, 1, [length] * len(target_offset), source_offset)
-        # print(f"segment_id: {self.segment_id}")
-        # print(f"shape: {self.full_gpu_cache[0].shape}")
-        # print(target_offset, source_offset, length, layer_stride, block_size)
-        # print(head_dim, num_heads, self.world_size)
-
-        # _slime_C.ops.migrate(
-        #     self.migration_ptr_k,
-        #     [self.full_gpu_cache[0]],
-        #     blocks_to_migration,
-        #     0
-        # )
-
-        # _slime_C.ops.migrate(
-        #     self.migration_ptr_v,
-        #     [self.full_gpu_cache[1]],
-        #     blocks_to_migration,
-        #     0
-        # )
-
 
     def allocate_gpu_cache(self):
         """allocate caches on GPU."""
         caches = self._allocate_cache(self.num_gpu_blocks, 'cuda')
         self.full_gpu_cache = caches
         self.local_gpu_cache = list(zip(*caches))
-
-        self.ipc_handler_k = _slime_C.ops.get_ipc_handle(self.full_gpu_cache[0])
-        self.ipc_handler_v = _slime_C.ops.get_ipc_handle(self.full_gpu_cache[1])
         return self.local_gpu_cache
 
     def allocate_cpu_cache(self):

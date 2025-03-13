@@ -510,9 +510,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
 @router.get('/distserve/get_engine_info')
 async def cache_info() -> JSONResponse:
     """
-    Step 1: Get cache information
-        - Total Cache
-        - Cache Used 
+    Step 1: Get engine information [EngineSnapshot]
     """
     num_free, num_total = VariableInterface.async_engine.get_cache_info()
     return JSONResponse({
@@ -533,7 +531,16 @@ async def prefill(raw_request: Request) -> JSONResponse:
 
 
 @router.post('distserve/migration')
-async def prefill(raw_request: Request) -> JSONResponse:
+async def migration(raw_request: Request) -> JSONResponse:
+    """
+    - prefill_engine_config: 
+    prefill_block_ids:
+    decode_block_ids:
+    """
+
+    migration_config = ...
+    VariableInterface.async_engine.migrate(migration_config)
+
     raise NotImplementedError
 
 
@@ -542,15 +549,6 @@ async def free_cache(raw_request: Request) -> JSONResponse:
     config = await raw_request.json()
     session_id = int(config["session_id"])
     VariableInterface.async_engine.free_cache(session_id)
-
-
-@router.get('/distserve/get_ipc_handler')
-async def get_ipc_handler(raw_request: Request) -> JSONResponse:
-    ipc = VariableInterface.async_engine.get_ipc_handler()
-    return JSONResponse({
-        "ipc_k": str(ipc[0]),
-        "ipc_v": str(ipc[1])
-    })
 
 
 @router.post('/v1/completions', dependencies=[Depends(check_api_key)])

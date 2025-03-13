@@ -34,6 +34,24 @@ class EngineSnapshot:
 
 engine_snapshot: EngineSnapshot = None
 
+
+"""
+TODO: router relay v1/completions, v1/chat/completions, v1/encode, v1/embedding ...
+"""
+async def relay(endpoint: str, service_name: str, raw_requests: Request):
+    raise NotImplementedError
+
+"""
+TODO: worker management
+"""
+@app.post("/router/add_worker")
+async def add_worker(request: Request):
+    raise NotImplementedError
+
+@app.post("/router/remove_worker")
+async def add_worker(request: Request):
+    raise NotImplementedError
+
 @app.post("/generate")
 async def generate(request: Request):
     client_data = await request.json()
@@ -43,6 +61,9 @@ async def generate(request: Request):
         try:
             # Prefill阶段
             prefill_url = get_url(engine_snapshot.prefill_endpoints[0], "v1/completions")
+            
+            # TODO (CJF): use new api "distserve/prefill" 
+            
             prefill_resp = await client.post(prefill_url, json=client_data, timeout=30.0)
             prefill_resp.raise_for_status()
 
@@ -54,7 +75,10 @@ async def generate(request: Request):
             remote_token_ids = prefill_info["choices"][0]["remote_token_ids"]
             print(f"prefill_info: {prefill_info}")
 
+            # TODO (CJF): invoke "distserve/migration" before decode pass
+
             # 构建Decode请求
+            # TODO (CJF): remove redundant parameter and invoke async relay
             decode_data = client_data.copy()
             decode_data.update({
                 "block_ids": block_ids,
@@ -64,6 +88,7 @@ async def generate(request: Request):
             })
 
             # Decode阶段
+            # TODO (CJF): directly relay
             decode_url = get_url(engine_snapshot.decode_endpoints[0], "v1/completions")
             decode_resp = await client.post(decode_url, json=decode_data, timeout=30.0)
             decode_resp.raise_for_status()
@@ -136,23 +161,6 @@ def init_migration(args):
 
     # Step 1. get cache information
     total_blocks = []
-    ipc_handlers_k = []
-    ipc_handlers_v = []
-    for endpoint in engine_snapshot.endpoints:
-        cache_info = requests.get(get_url(endpoint, "distserve/get_engine_info")).json()
-        total_blocks.append(cache_info["total"])
-        ipc_handler = requests.get(get_url(endpoint, "distserve/get_ipc_handler")).json()
-        ipc_handlers_k.append(eval(ipc_handler["ipc_k"]))
-        ipc_handlers_v.append(eval(ipc_handler["ipc_v"]))
-    
-    print(ipc_handlers_k, ipc_handlers_v)
-    
-    # Step 2. init migration
-    handler_config = {
-        i: (1, 1, total_block, 64, [[[ipc_handler_k]]], [[[offset_k]]], [[[ipc_handler_v]]], [[[offset_v]]])
-        for i, (total_block, (ipc_handler_k, offset_k), (ipc_handler_v, offset_v)) in enumerate(zip(total_blocks, ipc_handlers_k, ipc_handlers_v))
-    }
-    print(handler_config)
 
     segment_id = [["10.130.8.138:7000", "10.130.8.138:7001", "10.130.8.138:7002", "10.130.8.138:7003",
                    "10.130.8.138:7004", "10.130.8.138:7005", "10.130.8.138:7006", "10.130.8.138:7007"], 
@@ -169,8 +177,7 @@ def init_migration(args):
             "remote_block_size":total_blocks[1-idx],
             "segment_id": segment_id[idx],
             "etcd_endpoint": "10.130.8.139:2379",
-            "endpoint": endpoint_id[idx],
-            "handler_config": handler_config
+            "endpoint": endpoint_id[idx]
         }
         requests.post(get_url(endpoint, "distserve/init_migration"), json={"config": str(engine_handler_config)}).json()
         print(engine_handler_config)

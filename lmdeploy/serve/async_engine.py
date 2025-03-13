@@ -321,6 +321,16 @@ class AsyncEngine(LogitsMixin):
         num_total_gpu_blocks = self.engine.scheduler.block_manager.num_gpu_blocks
         return (num_free_gpu_blocks, num_total_gpu_blocks)
 
+    def migration(self, migration_request):
+        # Step 1.
+        # add request to scheduler
+        # page block allocation
+        # Step 2.
+        # waiting for migration
+        # Step 3.
+        # return status
+        raise NotImplementedError
+
     def free_cache(self, session_id: int):
         session = self.engine.scheduler.unfreed_sessions[session_id]
         seqs = list(session.sequences.values())
@@ -330,9 +340,6 @@ class AsyncEngine(LogitsMixin):
 
     def init_migration(self, config):
         return self.engine.executor.init_migration(config)
-
-    def get_ipc_handler(self):
-        return self.engine.executor.get_ipc_handler()
 
     def _get_free_insts(self):
         if self.free_insts is None:
