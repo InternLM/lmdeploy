@@ -431,7 +431,7 @@ class Qwen2_5_VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphM
                 pixel_values = pixel_values.to(dtype)
                 image_embeds = self.visual(pixel_values,
                                            cu_seqlens=vis_cu_seqlens,
-                                           rotary_pos_emb=vis_pos_emb,
+                                           rotary_pos_emb=vis_pos_emb.to(dtype),
                                            window_index=window_index,
                                            cu_window_seqlens=cu_window_seqlens)
                 inputs_embeds = inputs_embeds.masked_scatter(image_mask[..., None], image_embeds)
