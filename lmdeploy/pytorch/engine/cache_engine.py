@@ -203,7 +203,6 @@ class CacheEngine:
 
     def init_migration(self, config):
         self.engine_id = config["engine_id"]
-        handler_config = config["handler_config"]
 
         self._C_handlers_k = {}
         self._C_handlers_v = {}
