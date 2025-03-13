@@ -61,6 +61,11 @@ MODULE_MAP.update({
     'Gemma2ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.GemmaForCausalLM',
 })
 
+# gemma3 text
+MODULE_MAP.update({
+    'Gemma3ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.GemmaForCausalLM',
+})
+
 # deepseek
 MODULE_MAP.update({
     'DeepseekForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek.DeepseekForCausalLM',

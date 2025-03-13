@@ -44,12 +44,17 @@ class GemmaAttention(nn.Module):
 
         # rotary embedding
         self.apply_rotary_pos_emb = ApplyRotaryEmb()
+        self.model_type = config.model_type
 
         # attention
         self.scaling = 1 / math.sqrt(config.head_dim)
         if hasattr(config, 'query_pre_attn_scalar'):
             self.scaling = config.query_pre_attn_scalar**-0.5
-        self.sliding_window = (getattr(config, 'sliding_window', -1) if not bool(layer_idx % 2) else -1)
+        if self.model_type == 'gemma3_text':
+            is_sliding = bool((layer_idx + 1) % config.sliding_window_pattern)
+            self.sliding_window = (getattr(config, 'sliding_window', -1) if is_sliding else -1)
+        else:
+            self.sliding_window = (getattr(config, 'sliding_window', -1) if not bool(layer_idx % 2) else -1)
         logit_softcapping = getattr(config, 'attn_logit_softcapping', None)
         self.attn_fwd = Attention(num_heads,
                                   head_dim,
@@ -67,10 +72,23 @@ class GemmaAttention(nn.Module):
                                            device=device,
                                            is_tp=True)
 
+        if self.model_type == 'gemma3_text':
+            self.q_norm = RMSNorm(config.head_dim,
+                                  config.rms_norm_eps,
+                                  quant_config=quantization_config,
+                                  dtype=dtype,
+                                  device=device)
+            self.k_norm = RMSNorm(config.head_dim,
+                                  config.rms_norm_eps,
+                                  quant_config=quantization_config,
+                                  dtype=dtype,
+                                  device=device)
+
     def forward(
         self,
         hidden_states: torch.Tensor,
         rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
+        rotary_pos_emb_local: Optional[Tuple[torch.FloatTensor, torch.FloatTensor]] = None,
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
         attn_metadata: Any = None,
     ):
@@ -81,8 +99,15 @@ class GemmaAttention(nn.Module):
         qkv_states = qkv_states.flatten(0, -2)
         query_states, key_states, value_states = self.qkv_proj.split_qkv(qkv_states)
 
+        if self.model_type == 'gemma3_text':
+            query_states = self.q_norm(query_states)
+            key_states = self.k_norm(key_states)
+
         # apply rotary embedding
-        cos, sin = rotary_pos_emb
+        if rotary_pos_emb_local is not None and self.sliding_window != -1:
+            cos, sin = rotary_pos_emb_local
+        else:
+            cos, sin = rotary_pos_emb
         query_states, key_states = self.apply_rotary_pos_emb(
             query_states,
             key_states,
@@ -183,7 +208,7 @@ class GemmaDecoderLayer(nn.Module):
                                                 device=device)
 
         self.model_type = config.model_type
-        if self.model_type == 'gemma2':
+        if self.model_type in ('gemma2', 'gemma3_text'):
             self.pre_feedforward_layernorm = RMSNorm(config.hidden_size,
                                                      config.rms_norm_eps,
                                                      quant_config=quantization_config,
@@ -200,6 +225,7 @@ class GemmaDecoderLayer(nn.Module):
         hidden_states: torch.Tensor,
         rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
         past_key_value: Optional[List[torch.FloatTensor]],
+        rotary_pos_emb_local: Optional[Tuple[torch.FloatTensor, torch.FloatTensor]] = None,
         residual: Optional[torch.Tensor] = None,
         attn_metadata: Any = None,
     ):
@@ -214,13 +240,14 @@ class GemmaDecoderLayer(nn.Module):
         hidden_states = self.self_attn(
             hidden_states=hidden_states,
             rotary_pos_emb=rotary_pos_emb,
+            rotary_pos_emb_local=rotary_pos_emb_local,
             past_key_value=past_key_value,
             attn_metadata=attn_metadata,
         )
 
         # Fully Connected
 
-        if self.model_type == 'gemma2':
+        if self.model_type in ('gemma2', 'gemma3_text'):
             hidden_states = self.post_attention_layernorm(hidden_states)
             hidden_states, residual = self.pre_feedforward_layernorm(hidden_states, residual)
             hidden_states = self.mlp(hidden_states)
@@ -233,20 +260,45 @@ class GemmaDecoderLayer(nn.Module):
         return outputs
 
 
+class Gemma3TextScaledWordEmbedding(nn.Embedding):
+    """This module overrides nn.Embeddings' forward by multiplying with
+    embeddings scale."""
+
+    def __init__(self,
+                 num_embeddings: int,
+                 embedding_dim: int,
+                 padding_idx: int,
+                 dtype=torch.dtype,
+                 embed_scale: Optional[float] = 1.0):
+        super().__init__(num_embeddings, embedding_dim, padding_idx, dtype=dtype)
+        self.embed_scale = embed_scale
+
+    def forward(self, input_ids: torch.Tensor):
+        return super().forward(input_ids) * self.embed_scale
+
+
 class GemmaModel(nn.Module):
     """model."""
 
     def __init__(self, config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         self.config = config
+        self.model_type = config.model_type
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
 
-        self.embed_tokens = nn.Embedding(config.vocab_size,
-                                         config.hidden_size,
-                                         self.padding_idx,
-                                         dtype=dtype,
-                                         device=device)
+        if self.config.model_type == 'gemma3_text':
+            self.embed_tokens = Gemma3TextScaledWordEmbedding(config.vocab_size,
+                                                              config.hidden_size,
+                                                              self.padding_idx,
+                                                              dtype=dtype,
+                                                              embed_scale=config.hidden_size**0.5)
+        else:
+            self.embed_tokens = nn.Embedding(config.vocab_size,
+                                             config.hidden_size,
+                                             self.padding_idx,
+                                             dtype=dtype,
+                                             device=device)
 
         # build all decode layers
         self.layers = nn.ModuleList([
@@ -282,6 +334,15 @@ class GemmaModel(nn.Module):
             emb_type=emb_type,
         )
 
+        if self.model_type == 'gemma3_text':
+            self.rotary_emb_local = build_rotary_embedding(
+                rope_dim,
+                rope_max_pos_emb,
+                config.rope_local_base_freq,
+                scaling_factor,
+                emb_type=emb_type,
+            )
+
     def forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -297,12 +358,18 @@ class GemmaModel(nn.Module):
             inputs_embeds = self.embed_tokens(input_ids)
 
         hidden_states = inputs_embeds
-        hidden_states = hidden_states * (self.config.hidden_size**0.5)
+        if self.model_type != 'gemma3_text':
+            hidden_states = hidden_states * (self.config.hidden_size**0.5)
 
         # rotary embedding
         cos, sin = self.rotary_emb(hidden_states, position_ids)
         cos, sin = cos[0], sin[0]
         rotary_pos_emb = (cos, sin)
+        rotary_pos_emb_local = None
+        if self.model_type == 'gemma3_text':
+            cos_local, sin_local = self.rotary_emb_local(hidden_states, position_ids)
+            cos_local, sin_local = cos_local[0], sin_local[0]
+            rotary_pos_emb_local = (cos_local, sin_local)
 
         # decoding
         residual = None
@@ -311,6 +378,7 @@ class GemmaModel(nn.Module):
             hidden_states, residual = decoder_layer(
                 hidden_states,
                 rotary_pos_emb=rotary_pos_emb,
+                rotary_pos_emb_local=rotary_pos_emb_local,
                 past_key_value=past_key_value,
                 residual=residual,
                 attn_metadata=attn_metadata,
@@ -437,7 +505,7 @@ class GemmaForCausalLM(nn.Module, CudaGraphMixin):
         ]
         norm_layers = [
             '.norm', '.input_layernorm', '.post_attention_layernorm', 'pre_feedforward_layernorm',
-            'post_feedforward_layernorm'
+            'post_feedforward_layernorm', 'q_norm', 'k_norm'
         ]
 
         params_dict = dict(self.named_parameters())
