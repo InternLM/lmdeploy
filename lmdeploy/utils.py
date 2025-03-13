@@ -343,11 +343,11 @@ def get_max_batch_size(device_type: str):
         # the max_batch_size 128
         return 128
     elif device_type == 'ascend':
-        return 16
+        return 256
     elif device_type == 'maca':
         return 256
     elif device_type == 'camb':
-        return 128
+        return 256
 
 
 def is_bf16_supported(device_type: str = 'cuda'):
