@@ -14,7 +14,7 @@ from lmdeploy.utils import get_logger, get_max_batch_size, get_model, logging_ti
 from ..adapter.adapter import AdapterManager
 from ..config import BackendConfig, CacheConfig, ModelConfig, SchedulerConfig
 from ..messages import MessageStatus, SchedulerSequence
-from ..model_inputs import ModelInputs, VisionModelInputs
+from ..model_inputs import ModelInputs, VisionModelInputs, MigrationInputs
 from ..paging import Scheduler
 from .engine_checker import EngineChecker
 from .executor import build_executor
@@ -256,10 +256,13 @@ class Engine:
         """on add session callback."""
         for req in reqs:
             session_id = req.data['session_id']
+            migration = req.data.get('migration', False)
             resp = req.data.get('response', True)
             resp_type = ResponseType.SESSION_REPEAT
             if session_id not in self.scheduler.sessions:
-                self.scheduler.add_session(session_id)
+                sess = self.scheduler.add_session(session_id)
+                if migration:
+                    sess.status = MessageStatus.WAITING_MIGRATION
                 resp_type = ResponseType.SUCCESS
             if resp:
                 self._response(req.resp, resp_type)
@@ -337,13 +340,14 @@ class Engine:
                 self._response(req.resp, ResponseType.SESSION_NOT_EXIST)
                 continue
             session_id = req.data['session_id']
+            migration = req.data.get("migration", False)
             sess = self.scheduler.sessions[session_id]
             # TODO: support 1 session n sequence
             sampling_param = req.data['sampling_param']
             return_logits = sampling_param.out_logits
             if len(sess.sequences) == 0:
                 assert len(req.data['token_ids']) > 0, ('Empty input is not allowed.')
-                sess.add_sequence(
+                msg = sess.add_sequence(
                     req.data['token_ids'],
                     sampling_param=sampling_param,
                     adapter_name=req.data['adapter_name'],
@@ -355,7 +359,9 @@ class Engine:
                 )
                 msg = next(iter(sess.sequences.values()))
                 __update_max_new_tokens(msg)
-                self.scheduler.add_sequence(msg)
+                status = MessageStatus.WAITING if not migration else MessageStatus.WAITING_MIGRATION
+                self.scheduler.add_sequence(msg, status)
+                print(msg.status)
             else:
                 msg = next(iter(sess.sequences.values()))
                 msg.update_token_ids(
@@ -727,6 +733,36 @@ class Engine:
             __send_resps(resps)
 
     @torch.inference_mode()
+    async def _async_loop_migration(self, resp_que: asyncio.Queue):
+        """async loop migration."""
+        while True:
+            migration_running = self.scheduler._schedule_migration()
+
+            print("migration_running:", migration_running)
+
+            if migration_running:
+                await self.executor.migration_async({"inputs": MigrationInputs(prefill_engine_id=0, prefill_engine_config=dict(), prefill_block_ids=[0], decode_block_ids=[0])})
+                migration_outputs = await self.executor.get_migration_output_async()
+
+                for msg in migration_running:
+                    self.scheduler._set_message_status(msg, MessageStatus.FINISH_MIGRATION)
+
+                # generate output
+                outputs: Dict[int, InferOutput] = dict()
+                for _, msg in enumerate(migration_running):
+                    session_id = msg.session_id
+                    out = InferOutput(
+                        session_id=session_id,
+                        resp=msg.resp,
+                        finish=True,
+                        token_ids=[]
+                    )
+                    outputs[session_id] = out
+                resp_que.put_nowait(outputs)
+            else:
+                await asyncio.sleep(1)
+
+    @torch.inference_mode()
     async def _async_loop_main(self, resp_que: asyncio.Queue, has_runable_event: asyncio.Event):
         """Main loop of the engine.
 
@@ -826,10 +862,16 @@ class Engine:
             resp_que = asyncio.Queue()
             loop_send_resp = event_loop.create_task(self._async_loop_send_responses(resp_que, forward_event),
                                                     name='MainLoopResponse')
+            
+            # migration task
+            logger.debug('Starting async task Migration.')
+            loop_msg_migration = event_loop.create_task(
+                self._async_loop_migration(resp_que),
+                name='MainLoopMigration')
 
             # binding done callback
             loop_main = asyncio.current_task()
-            loop_tasks: List[asyncio.Task] = [loop_main, loop_msg_proc, loop_send_resp]
+            loop_tasks: List[asyncio.Task] = [loop_main, loop_msg_proc, loop_send_resp, loop_msg_migration]
             self._add_loop_tasks_done_callback(loop_tasks)
             self._loop_main = loop_main
 

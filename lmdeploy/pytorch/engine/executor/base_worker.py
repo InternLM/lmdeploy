@@ -46,6 +46,9 @@ class WorkerWrapperBase:
         self.out_que: asyncio.Queue = None
         self._output_loop: asyncio.Task = None
 
+        self.migration_out_que: asyncio.Queue = None
+        self._migration_output_loop: asyncio.Task = None
+
     def init_process_group(self, rank: int, master_addr: str = None, master_port: str = None):
         """initialize process group."""
         self.rank = rank
@@ -67,6 +70,16 @@ class WorkerWrapperBase:
             ret = await self.get_output_async()
             ret = self.pack_output(ret)
             self.out_que.put_nowait(ret)
+            await asyncio.sleep(0.000001)
+    
+    async def _get_migration_outputs_loop(self):
+        """get migration outputs loop."""
+        assert self.migration_out_que is not None
+        while True:
+            ret = await self.get_migration_output_async()
+            ret = self.pack_output(ret)
+            self.out_que.put_nowait(ret)
+            await asyncio.sleep(0.000001)
 
     async def get_outputs(self):
         """get outputs."""
@@ -79,6 +92,18 @@ class WorkerWrapperBase:
             return outs
         else:
             return [await self.out_que.get()]
+    
+    async def get_migration_outputs(self):
+        """get migration outputs."""
+        assert self.migration_out_que is not None
+        qsize = self.migration_out_que.qsize()
+        if qsize > 0:
+            outs = []
+            for _ in range(qsize):
+                outs.append(self.migration_out_que.get_nowait())
+            return outs
+        else:
+            return [await self.migration_out_que.get()]
     
     def init_migration(self, config):
         return self.model_agent.cache_engine.init_migration(config)
@@ -131,19 +156,34 @@ class WorkerWrapperBase:
         self.out_que = asyncio.Queue()
         self._output_loop = event_loop.create_task(self._get_outputs_loop(), name='GetOutputsLoop')
 
+        self.migration_out_que = asyncio.Queue()
+        self._migration_output_loop = event_loop.create_task(self._get_migration_outputs_loop(), name='GetMigrationoutputsLoop')
+
     def stop(self):
         """stop engine loop."""
         self.model_agent.stop()
         if self._output_loop is not None:
             self._output_loop.cancel()
+        
+        if self._migration_output_loop is not None:
+            self._migration_output_loop.cancel()
 
     async def forward_async(self, inputs):
         """start forward."""
         self.model_agent.set_forward_inputs(inputs)
 
+    async def migration_async(self, inputs):
+        """migration"""
+        self.model_agent.set_migration_inputs(inputs)
+
     async def get_output_async(self):
         """get output async."""
         ret = await self.model_agent.get_output_async()
+        return ret
+    
+    async def get_migration_output_async(self):
+        """get migration output async."""
+        ret = await self.model_agent.get_migration_output_async()
         return ret
 
     def release(self):

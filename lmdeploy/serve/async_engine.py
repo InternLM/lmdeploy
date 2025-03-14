@@ -321,15 +321,11 @@ class AsyncEngine(LogitsMixin):
         num_total_gpu_blocks = self.engine.scheduler.block_manager.num_gpu_blocks
         return (num_free_gpu_blocks, num_total_gpu_blocks)
 
-    def migration(self, migration_request):
-        # Step 1.
-        # add request to scheduler
-        # page block allocation
-        # Step 2.
-        # waiting for migration
-        # Step 3.
-        # return status
-        raise NotImplementedError
+    async def migrate(self, migration_request):
+        session_id = -1
+        async with self.model_inst(session_id) as inst:
+            await inst.async_migrate(session_id=session_id, input_ids=[1,2,31])
+            return
 
     def free_cache(self, session_id: int):
         session = self.engine.scheduler.unfreed_sessions[session_id]

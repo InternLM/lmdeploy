@@ -21,8 +21,7 @@ class RequestType(enum.Enum):
     RESUME_ENGINE = enum.auto()
 
     # PD Disaggregation
-    END_PREFILL = enum.auto()
-    END_MIGRATION = enum.auto()
+    MIGRATION = enum.auto()
 
 
 @dataclass
@@ -280,6 +279,13 @@ class RequestManager:
                 resp.err_msg = (f'callback for {req_type}'
                                 ' not exists.')
                 self.response(resp)
+
+    async def migration_step(self, **kwargs):
+        """handle migration requests.
+        
+        Should only be called in loop task.
+        """
+        raise NotImplementedError
 
     async def step(self, **kwargs):
         """handle requests.

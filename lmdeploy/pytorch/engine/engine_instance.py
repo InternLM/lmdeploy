@@ -185,6 +185,44 @@ class EngineInstance:
                 return outputs
 
         return outputs
+    
+    async def async_migrate(self,
+                              session_id: int,
+                              input_ids: List[int],
+                              gen_config: GenerationConfig = None,
+                              multimodal: InputMultiModalType = None,
+                              adapter_name: str = None,
+                              **kwargs):
+        print("?????")
+        """Send migration request.
+
+        Args:
+            migration_config: NotImplementedError
+        """
+        if len(input_ids) > self.max_input_len:
+            return EngineOutput(ResponseType.INPUT_LENGTH_ERROR, [], 0)
+        gen_config = gen_config or GenerationConfig()
+        sampling_param = SamplingParam.from_gen_config(gen_config=gen_config)
+        self.req_sender.send_async(RequestType.ADD_SESSION, dict(session_id=session_id, response=False, migration=True))
+        msg = dict(
+            token_ids=input_ids,
+            session_id=session_id,
+            sampling_param=sampling_param,
+            adapter_name=adapter_name,
+            input_multimodals=multimodal,
+            block_ids=gen_config.block_ids,
+            remote_token_ids=gen_config.remote_token_ids,
+            migration=True,
+        )
+
+        logger.info("migration msg: ", msg)
+
+        resp = self.req_sender.send_async(RequestType.ADD_MESSAGE, msg)
+        print(resp)
+        resp = await self.req_sender.async_recv(resp)
+        print(resp)
+        return
+
 
     def stream_infer(self,
                      session_id: int,

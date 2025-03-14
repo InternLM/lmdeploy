@@ -13,7 +13,7 @@ from ..backends import get_backend
 from ..config import BackendConfig, CacheConfig, ModelConfig
 from ..devices import DeviceContext, get_device_manager
 from ..distributed import DistContext, get_dist_manager
-from ..model_inputs import ModelInputs
+from ..model_inputs import ModelInputs, MigrationInputs
 from ..models.patch import add_adapters, build_patched_model, update_custom_module_map
 from ..utils import get_gpu_memory
 from ..weight_loader.model_weight_loader import load_model_weights
@@ -111,6 +111,7 @@ class AutoModelAgent:
 
         self._in_que = None
         self._out_que = None
+        self._migration_que = None
         self._background_task = None
 
         self.stream = torch.cuda.Stream()
@@ -118,6 +119,12 @@ class AutoModelAgent:
 
         self.dist_ctx = dist_ctx
         self.device_ctx = device_ctx
+
+        tp = dist_ctx.tp
+        tp_rank = dist_ctx.tp_rank
+        self.tp = tp
+        self.tp_rank = tp_rank
+        self.cache_engine = CacheEngine(self.cache_config, self.model_config, self.tp_rank, world_size=self.tp)
 
     @contextmanager
     def all_context(self):
@@ -322,12 +329,12 @@ class AutoModelAgent:
 
         for idx in range(loop_count):
             if not inputs.is_decoding and self.cache_config.role == EngineRole.Decode:
-                prefill_engine_block_ids = functools.reduce(lambda x, y: x + y, inputs.prefill_engine_block_ids)
-                decode_engine_block_ids = functools.reduce(lambda x, y: x + y, inputs.decode_engine_block_ids)
-                blocks_to_migrate = torch.tensor(
-                    [[0, 0, init_block_id, target_block_id]
-                    for (init_block_id, target_block_id) in zip(decode_engine_block_ids, prefill_engine_block_ids)])
-                self.cache_engine.migrate(blocks_to_migrate)
+                # prefill_engine_block_ids = functools.reduce(lambda x, y: x + y, inputs.prefill_engine_block_ids)
+                # decode_engine_block_ids = functools.reduce(lambda x, y: x + y, inputs.decode_engine_block_ids)
+                # blocks_to_migrate = torch.tensor(
+                #     [[0, 0, init_block_id, target_block_id]
+                #     for (init_block_id, target_block_id) in zip(decode_engine_block_ids, prefill_engine_block_ids)])
+                # self.cache_engine.migrate(blocks_to_migrate)
                 if rank % tp == 0:
                     event = torch.cuda.Event()
                     event.record()
@@ -399,6 +406,30 @@ class AutoModelAgent:
                 )
                 if forward_event is not None:
                     forward_event.set()
+    
+    async def _async_migration_step_background(self, inputs: MigrationInputs, output_que):
+        prefill_engine_block_ids = inputs.prefill_block_ids
+        decode_engine_block_ids = inputs.decode_block_ids
+        blocks_to_migrate = torch.tensor(
+            [[inputs.prefill_engine_id, inputs.prefill_engine_id, init_block_id, target_block_id]
+            for (init_block_id, target_block_id) in zip(decode_engine_block_ids, prefill_engine_block_ids)])
+        self.cache_engine.migrate(blocks_to_migrate)
+        if self.tp_rank % self.tp == 0:
+            output = dict()
+            output_que.put_nowait(output)
+
+    @torch.inference_mode()
+    async def _async_migration_loop_background(self, forward_event: asyncio.Event = None):
+        """async loop background."""
+        while True:
+            forward_inputs = await self._migration_in_que.get()
+            print(f"forward_inputs: {forward_inputs}")
+            if forward_inputs:
+                await self._async_migration_step_background(
+                    **forward_inputs,
+                    output_que=self._migration_out_que,
+                )
+            await asyncio.sleep(1)
 
     @staticmethod
     def _on_finish_callback(task: asyncio.Task, ptask: asyncio.Task) -> None:
@@ -427,6 +458,13 @@ class AutoModelAgent:
         done_callback = functools.partial(self._on_finish_callback, ptask=asyncio.current_task())
         self._background_task.add_done_callback(done_callback)
 
+        self._migration_in_que = asyncio.Queue()
+        self._migration_out_que = asyncio.Queue()
+        self._migration_background_task = event_loop.create_task(self._async_migration_loop_background(forward_event),
+                                                                 name='ModelAgentMigrationLoop')
+        done_callback = functools.partial(self._on_finish_callback, ptask=asyncio.current_task())
+        self._migration_background_task.add_done_callback(done_callback)
+
     def stop(self):
         """stop task."""
         if self._background_task is not None:
@@ -437,6 +475,10 @@ class AutoModelAgent:
         """set forward inputs."""
         assert self._in_que is not None, ('Please start backendground task before forward.')
         self._in_que.put_nowait(inputs)
+
+    def set_migration_inputs(self, inputs: MigrationInputs):
+        assert self._migration_in_que is not None, ('Please start backendground task before forward.')
+        self._migration_in_que.put_nowait(inputs)
 
     async def get_output_async(self):
         """async get output."""
@@ -450,6 +492,12 @@ class AutoModelAgent:
             out['stopped'] = out['stopped'].cpu()
             if out['logits'] is not None:
                 out['logits'] = out['logits'].cpu()
+        return out
+    
+    async def get_migration_output_async(self):
+        """async get migration output async."""
+        assert self._migration_out_que is not None, ('Please start backendground task before forward.')
+        out = await self._migration_out_que.get()
         return out
 
 

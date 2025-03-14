@@ -134,7 +134,10 @@ class MessageStatus(enum.Enum):
     ENDED = enum.auto()
     ABORTED = enum.auto()
     LOCKED = enum.auto()
-
+    # PD Disaggregation
+    WAITING_MIGRATION = enum.auto()
+    RUNNING_MIGRATION = enum.auto()
+    FINISH_MIGRATION = enum.auto()
 
 _SEQ_COUNT = 0
 

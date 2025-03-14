@@ -530,7 +530,7 @@ async def prefill(raw_request: Request) -> JSONResponse:
     raise NotImplementedError
 
 
-@router.post('distserve/migration')
+@router.post('/distserve/migration')
 async def migration(raw_request: Request) -> JSONResponse:
     """
     - prefill_engine_config: 
@@ -538,10 +538,8 @@ async def migration(raw_request: Request) -> JSONResponse:
     decode_block_ids:
     """
 
-    migration_config = ...
-    VariableInterface.async_engine.migrate(migration_config)
-
-    raise NotImplementedError
+    await VariableInterface.async_engine.migrate(None)
+    return {"status": True}
 
 
 @router.post('/distserve/free_cache')

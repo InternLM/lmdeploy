@@ -217,6 +217,8 @@ class RayExecutor(ExecutorBase):
         logger.info('Init ray workers.')
         self.workers = self._init_workers_ray(placement_group, worker_kwargs)
         self.dag = None
+        self.migration_dag = None
+        self.get_migration_outputs_dag = None
         self._prefetch_task: asyncio.Task = None
         self.remote_outs: asyncio.Queue = None
 
@@ -283,6 +285,13 @@ class RayExecutor(ExecutorBase):
                     if isinstance(v, np.ndarray):
                         out[k] = torch.from_numpy(v)
                 self.remote_outs.put_nowait(out)
+    
+    async def _prefetch_migration_outputs(self):
+        while True:
+            if not self.get_migration_outputs_dag:
+                self.get_migration_outputs_dag = self._compile_dag("get_migration_outputs")
+            out = self.get_migration_outputs_dag.execute()    
+            self.remote_migration_outs.put_nowait(out)
 
     def start(self, forward_event: asyncio.Event):
         """start engine loop."""
@@ -290,14 +299,17 @@ class RayExecutor(ExecutorBase):
         self.collective_rpc('start')
 
         self.remote_outs = asyncio.Queue()
+        self.remote_migration_outs = asyncio.Queue()
         event_loop = asyncio.get_event_loop()
         self._prefetch_task = event_loop.create_task(self._prefetch_outputs())
+        self._prefetch_migration_task = event_loop.create_task(self._prefetch_migration_outputs())
 
     def stop(self):
         """stop engine loop."""
         self.collective_rpc('stop')
         if self._prefetch_task is not None:
             self._prefetch_task.cancel()
+            self._prefetch_migration_task.cancel()
 
     def release(self):
         """release."""
@@ -306,12 +318,13 @@ class RayExecutor(ExecutorBase):
             ray.kill(worker)
         ray.util.remove_placement_group(self.placement_group)
 
-    def _compile_dag(self):
+    def _compile_dag(self, fn="forward_async"):
         """compile dag."""
         from ray.dag.input_node import InputNode
         from ray.dag.output_node import MultiOutputNode
         with InputNode() as input_data:
-            outputs = [worker.forward_async.bind(input_data) for worker in self.workers]
+            outputs = [getattr(worker, fn).bind(input_data) for worker in self.workers]
+            # outputs = [worker.forward_async.bind(input_data) for worker in self.workers]
             output = MultiOutputNode(outputs)
 
         return output
@@ -323,12 +336,24 @@ class RayExecutor(ExecutorBase):
             self.dag = self._compile_dag()
         inputs = ray.put(inputs)
         self.dag.execute(inputs)
+    
+    async def migration_async(self, inputs):
+        if self.migration_dag is None:
+            self.migration_dag = self._compile_dag("migration_async")
+        inputs = ray.put(inputs)
+        self.migration_dag.execute(inputs)
 
     async def get_output_async(self):
         """get output async."""
         if self.remote_outs.qsize() > 0:
             return self.remote_outs.get_nowait()
         return await self.remote_outs.get()
+    
+    async def get_migration_output_async(self):
+        """get migration output async."""
+        if self.remote_migration_outs.qsize() > 0:
+            return self.remote_migration_outs.get_nowait()
+        return await self.remote_migration_outs.get()
 
     def _sort_workers(self, driver_ip: str, workers: List[RayWorkerWrapper]):
         """sort workers by ip."""

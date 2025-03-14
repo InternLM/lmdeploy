@@ -86,6 +86,14 @@ class ExecutorBase:
         raise NotImplementedError('Not Implemented.')
 
     async def forward_async(self, inputs):
+        """start migration."""
+        raise NotImplementedError('Not Implemented')
+    
+    async def get_migration_output_async(self):
+        """receive migration."""
+        raise NotImplementedError('Not Implemented')
+    
+    async def migration_async(self, inputs):
         """start forward."""
         raise NotImplementedError('Not Implemented')
 

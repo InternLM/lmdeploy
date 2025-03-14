@@ -116,6 +116,18 @@ class VisionModelInputs:
 
 
 @dataclass
+class MigrationInputs:
+    """Input of the Migration."""
+    # prefill info
+    prefill_engine_id: int
+    prefill_engine_config: Dict[str, Any]
+
+    # block info
+    prefill_block_ids: List[int]
+    decode_block_ids: List[int]
+
+
+@dataclass
 class ModelInputs:
     """Input of the model."""
     input_ids: torch.LongTensor

@@ -40,7 +40,6 @@ class Scheduler:
         self.cache_config = cache_config
 
         self.sessions: Dict[int, SchedulerSession] = OrderedDict()
-        self.unfreed_sessions: Dict[int, SchedulerSession] = OrderedDict()
 
         self.block_manager = build_block_manager(cache_config)
         self.block_trie = BlockTrie(self.cache_config, self.block_manager)
@@ -48,6 +47,11 @@ class Scheduler:
         self.eviction_helper = self.build_eviction_helper(self.scheduler_config.eviction_type)
 
         self.seq_manager = SequenceManager()
+
+        # for PD Disaggregation
+        self.migration_sessions: Dict[int, SchedulerSession] = OrderedDict()
+        self.unfreed_sessions: Dict[int, SchedulerSession] = OrderedDict()
+
 
     @property
     def waiting(self):
@@ -72,6 +76,24 @@ class Scheduler:
         """get waiting sequence."""
         seq_map = self.seq_manager.get_sequences(MessageStatus.LOCKED)
         return list(seq_map.values())
+    
+    @property
+    def waiting_migration(self):
+        """get migration sequence"""
+        seq_map = self.seq_manager.get_sequences(MessageStatus.WAITING_MIGRATION)
+        return list(seq_map.values())
+    
+    @property
+    def running_migrating(self):
+        """get migration sequence"""
+        seq_map = self.seq_manager.get_sequences(MessageStatus.RUNNING_MIGRATION)
+        return list(seq_map.values())
+    
+    @property
+    def finish_migrating(self):
+        """get migration sequence"""
+        seq_map = self.seq_manager.get_sequences(MessageStatus.FINISH_MIGRATION)
+        return list(seq_map.values())
 
     def build_eviction_helper(self, eviction_type: str):
         if eviction_type == 'copy':
@@ -93,6 +115,18 @@ class Scheduler:
         """
         message.status = status
 
+    def add_migration(self, session_id: int):
+        """Add Migration session
+        
+        Args:
+            session_id (int): Migration session id.
+        """
+        assert session_id not in self.sessions
+        session = SchedulerSession(session_id, self.cache_config.block_size, seq_manager=self.seq_manager)
+        session.status = MessageStatus.WAITING_MIGRATION
+        self.sessions[session_id] = session
+        return session
+
     def add_session(self, session_id: int):
         """Add new session.
 
@@ -104,7 +138,7 @@ class Scheduler:
         self.sessions[session_id] = session
         return session
 
-    def add_sequence(self, seq: SchedulerSequence):
+    def add_sequence(self, seq: SchedulerSequence, status: MessageStatus=MessageStatus.WAITING):
         """Add sequence.
 
         Args:
@@ -113,7 +147,47 @@ class Scheduler:
         assert (seq.session_id in self.sessions), f'Unknown session id {seq.session_id}'
 
         # push message to waiting queue
-        self._set_message_status(seq, MessageStatus.WAITING)
+        self._set_message_status(seq, status)
+
+    @logging_timer('ScheduleMigration', logger)
+    def _schedule_migration(self):
+
+        running_migration: SeqList = []
+        migrating_token_count = 0
+
+        def _to_running(seq: SchedulerSequence):
+            """to running."""
+            seq.status = MessageStatus.RUNNING_MIGRATION
+            running_migration.append(seq)
+            nonlocal migrating_token_count
+            migrating_token_count += seq.num_token_ids
+
+        def __evict_for_seq(seq: SchedulerSequence, waiting):
+            """evict until can append."""
+            from itertools import chain
+            hanging = reversed(self.hanging)
+            waiting = reversed(waiting)
+            evictable = list(chain(hanging, waiting))
+            return self.eviction_helper.evict_for_seq(seq, evictable, 0)
+
+        def _reorder_migrating():
+            """reorder waiting."""
+            return sorted(self.waiting_migration, key=lambda seq: seq.arrive_time)
+
+        waiting = _reorder_migrating()
+                
+        while len(waiting) > 0:
+            seq = waiting.pop(0)
+
+            self.block_trie.match(waiting)
+            if not __evict_for_seq(seq, waiting):
+                break
+
+            # allocate session memory
+            self.block_manager.allocate(seq)
+            _to_running(seq)
+
+        return running_migration
 
     @logging_timer('SchedulePrefilling', logger)
     def _schedule_prefill(self):
