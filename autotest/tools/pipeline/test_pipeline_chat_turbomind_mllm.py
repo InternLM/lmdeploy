@@ -134,9 +134,34 @@ def test_pipeline_chat_kvint8_tp4(config, model, communicator, worker_id):
 @pytest.mark.order(6)
 @pytest.mark.pipeline_chat
 @pytest.mark.gpu_num_2
-@pytest.mark.parametrize(
-    'model',
-    ['deepseek-ai/deepseek-vl2', 'microsoft/Phi-3-mini-4k-instruct', 'microsoft/Phi-3-mini-4k-instruct-inner-4bits'])
+@pytest.mark.parametrize('model', ['microsoft/Phi-3-mini-4k-instruct', 'microsoft/Phi-3-mini-4k-instruct-inner-4bits'])
+@pytest.mark.parametrize('communicator', get_communicator_list())
+def test_pipeline_chat_fallback_backend_tp1(config, model, communicator, worker_id):
+    if 'gw' in worker_id:
+        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=1)
+        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
+    run_pipeline_vl_chat_test(config, model, BACKEND, worker_id, {'communicator': communicator})
+
+
+@pytest.mark.order(6)
+@pytest.mark.pipeline_chat
+@pytest.mark.gpu_num_2
+@pytest.mark.parametrize('model', ['microsoft/Phi-3-mini-4k-instruct', 'microsoft/Phi-3-mini-4k-instruct-inner-4bits'])
+@pytest.mark.parametrize('communicator', get_communicator_list())
+def test_pipeline_chat_fallback_backend_kvint4_tp1(config, model, communicator, worker_id):
+    if 'gw' in worker_id:
+        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=1)
+        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
+    run_pipeline_vl_chat_test(config, model, BACKEND_KVINT, worker_id, {
+        'quant_policy': 4,
+        'communicator': communicator
+    })
+
+
+@pytest.mark.order(6)
+@pytest.mark.pipeline_chat
+@pytest.mark.gpu_num_2
+@pytest.mark.parametrize('model', ['deepseek-ai/deepseek-vl2'])
 @pytest.mark.parametrize('communicator', get_communicator_list())
 def test_pipeline_chat_fallback_backend_tp2(config, model, communicator, worker_id):
     if 'gw' in worker_id:
@@ -148,9 +173,7 @@ def test_pipeline_chat_fallback_backend_tp2(config, model, communicator, worker_
 @pytest.mark.order(6)
 @pytest.mark.pipeline_chat
 @pytest.mark.gpu_num_2
-@pytest.mark.parametrize(
-    'model',
-    ['deepseek-ai/deepseek-vl2', 'microsoft/Phi-3-mini-4k-instruct', 'microsoft/Phi-3-mini-4k-instruct-inner-4bits'])
+@pytest.mark.parametrize('model', ['deepseek-ai/deepseek-vl2'])
 @pytest.mark.parametrize('communicator', get_communicator_list())
 def test_pipeline_chat_fallback_backend_kvint4_tp2(config, model, communicator, worker_id):
     if 'gw' in worker_id:
