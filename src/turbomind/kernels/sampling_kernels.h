@@ -31,7 +31,7 @@ struct SamplingParams {
     size_t         batch_size;
     int*           output_ids;
     int*           sequence_length;
-    float*         sampled_logprobs;
+    void*          sampled_logprobs;
     uint32_t*      sampled_indexes;
     uint32_t*      sampled_nums;
 };
