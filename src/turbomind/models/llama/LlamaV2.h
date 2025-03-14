@@ -21,11 +21,12 @@
 
 #pragma once
 
-#include "src/turbomind/comm/comm.h"
+#include "src/turbomind/comm/device_comm.h"
 #include "src/turbomind/layers/DynamicDecodeLayer.h"
 #include "src/turbomind/models/llama/LlamaBatch.h"
 #include "src/turbomind/models/llama/LlamaWeight.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
+#include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/llama/unified_decoder.h"
 #include "src/turbomind/utils/allocator.h"
@@ -39,6 +40,7 @@ public:
     ~LlamaV2();
 
     LlamaV2(const ModelParam&               model,
+            const EngineParam&              engine,
             const AttentionParam&           attn,
             const MoeParam&                 moe,
             const LoraParam&                lora,
@@ -52,8 +54,6 @@ public:
     }
 
 private:
-    void embeddingLookup(T* embeddings, const int* token_ids_buf, int batch_size, int step);
-
     void updateEmbedding(T*               decoder_input,
                          const int        bsz,
                          const int*       h_input_length,
@@ -73,6 +73,7 @@ private:
                         const float*     rope_theta,
                         const bool*      finished,
                         size_t           token_num,
+                        const int*       local_token_nums,
                         int              dc_batch_size,
                         int              pf_batch_size,
                         int*             lora_mask,
@@ -103,7 +104,7 @@ private:
     const AttentionParam attn_param_;
     const LoraParam      lora_param_;
 
-    const comm::Splits* const comm_;
+    const Communicators* const comm_;
 
     const int    tp_size_;
     const int    tp_rank_;

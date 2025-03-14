@@ -51,7 +51,8 @@ class ModelConfig:
     group_size: int = 64
     weight_type: str = None
     session_len: int = None
-    tp: int = 1
+    attn_tp_size: int = 1
+    mlp_tp_size: int = 1
     model_format: str = 'hf'
     expert_num: List[int] = ()
     expert_inter_size: int = 0
@@ -150,10 +151,6 @@ class TurbomindModelConfig:
     @property
     def session_len(self):
         return self.model_config.session_len
-
-    @property
-    def tensor_para_size(self):
-        return self.model_config.tp
 
     @property
     def weight_type(self):

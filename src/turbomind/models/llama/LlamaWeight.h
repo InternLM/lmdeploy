@@ -29,16 +29,15 @@ template<typename T>
 struct LlamaWeight {
     LlamaWeight() = default;
 
-    LlamaWeight(const ModelParam& model_param,
-                const LoraParam&  lora_param,
-                const MoeParam&   moe_param,
-                size_t            tp_size,
-                size_t            tp_rank);
+    LlamaWeight(const ModelParam&  model_param,
+                const EngineParam& engine_param,
+                const LoraParam&   lora_param,
+                const MoeParam&    moe_param);
 
     ~LlamaWeight();
 
-    LlamaWeight(const LlamaWeight& other) = delete;
-    LlamaWeight& operator=(const LlamaWeight& other) = delete;
+    LlamaWeight(const LlamaWeight&) = delete;
+    LlamaWeight& operator=(const LlamaWeight&) = delete;
 
     void loadModel(std::string dir_path);
 
@@ -59,8 +58,8 @@ private:
     size_t     embedding_size_;
     size_t     num_layer_;
     WeightType weight_type_;
-    size_t     tensor_para_size_;
-    size_t     tensor_para_rank_;
+    size_t     tp_size_;  // this will follow attn tp param
+    size_t     tp_rank_;
 
     std::vector<int> inter_size_;
 

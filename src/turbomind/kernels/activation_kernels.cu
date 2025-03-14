@@ -326,8 +326,8 @@ INSTANTIATE_GENERIC_ACTIVATION(SiluActivation, __nv_bfloat16, __nv_bfloat16);
 template<int VecSize, template<typename T> class Activation, typename T>
 __global__ void activation_kernel(T* inter_buf, const T* __restrict__ gate_buf, int64_t stride, int token_num, int dims)
 {
-    const int di = threadIdx.x + blockIdx.x * blockDim.x;
-    const int ti = blockIdx.y;
+    const int di = threadIdx.x + blockIdx.y * blockDim.x;
+    const int ti = blockIdx.x;
 
     dims /= VecSize;
 
@@ -360,8 +360,8 @@ void invokeGenericActivation_v2(
 {
     constexpr int kVecSize = 4;
 
-    constexpr int block = 256;
-    const dim3    grid(ceil_div(dims, block * kVecSize), token_num);
+    constexpr int block = 512;
+    const dim3    grid(token_num, ceil_div(dims, block * kVecSize));
 
     activation_kernel<kVecSize, Activation, T>
         <<<grid, block, 0, stream>>>(inter_buf, gate_buf, stride, token_num, dims);

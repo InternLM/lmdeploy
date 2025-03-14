@@ -128,7 +128,6 @@ struct Request {
     std::function<void(int)> end_cb;
 
     std::atomic<int> cancel_flag;
-    bool             is_canceled{};
 
     std::function<void()> forward_cb;
 

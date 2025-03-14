@@ -7,7 +7,7 @@
 #include <thread>
 
 #include "src/turbomind/comm/barrier.h"
-#include "src/turbomind/comm/comm.h"
+#include "src/turbomind/comm/device_comm.h"
 
 namespace turbomind::comm {
 
