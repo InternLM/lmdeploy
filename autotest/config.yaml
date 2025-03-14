@@ -120,6 +120,7 @@ pytorch_chat_model:
     - Qwen/Qwen2.5-0.5B-Instruct
     - Qwen/Qwen2.5-7B-Instruct
     - Qwen/Qwen2.5-72B-Instruct
+    - Qwen/Qwen2.5-VL-7B-Instruct
     - Qwen/Qwen1.5-7B-Chat
     - Qwen/Qwen1.5-MoE-A2.7B-Chat
     - Qwen/Qwen2-VL-2B-Instruct
