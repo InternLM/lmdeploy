@@ -24,6 +24,7 @@ using namespace turbomind::comm;
 using turbomind::getTensorType;
 using turbomind::check;
 using turbomind::myAssert;
+using std::vector;
 
 [[maybe_unused]] static constexpr bool is_ncu = 0;
 
@@ -163,7 +164,7 @@ struct TestComm {
             tp = device_num;
         }
 
-        std::tie(h_comm_, d_comm_, h_split_, d_split_) = Init(device_num, 4, "nccl");
+        std::tie(h_comm_, d_comm_, h_split_, d_split_) = Init(device_num, 4, "cuda_ipc");
 
         warmup_ = warmup;
         iters_  = iters;
@@ -171,70 +172,88 @@ struct TestComm {
 
         max_tokens_ = *std::max_element(tokens_.begin(), tokens_.end());
 
-        // TestAllReduce<half>(hidden_dim);
-        // TestAllreduceResidualBiasRMSnorm<half>(hidden_dim);
+        const int g = 0;
+
+        TestAllReduce<half>(hidden_dim, g);
+        TestAllreduceResidualBiasRMSnorm<half>(hidden_dim, g);
         // TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 0, 0);
-        TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 1, 0);
-        TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 0, 1);
-        // TestAllGather<half>(hidden_dim / tp);  // tp embedding
-        // TestAllGather<float>(vocab_size / tp);
+        // TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 1, 0);
+        // TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 0, 1);
+        TestAllGather<half>(hidden_dim / tp, g);  // tp embedding
+        TestAllGather<float>(vocab_size / tp, g);
     }
 
     template<class T>
-    void TestAllReduce(size_t dim)
+    void TestAllReduce(size_t dim, int group = 0)
     {
-        std::vector<std::vector<T>> data(d_comm_.size());
-        std::vector<T>              ref_data(max_tokens_ * dim);
+        const auto dtype = getTensorType<T>();
+
+        const int tp_size = d_comm_[0]->n_ranks(group);
+        const int dp_size = d_comm_.size() / tp_size;
+
+        //    dp         tp           dim
+        std::vector<std::vector<std::vector<T>>> data(dp_size);
+        //    dp         dim
+        std::vector<std::vector<T>> ref_data(dp_size);
+
+        for (int i = 0; i < dp_size; ++i) {
+            data[i].resize(tp_size);
+            ref_data[i].resize(max_tokens_ * dim);
+        }
 
         auto func = [&](int index, DeviceComm& d_comm, HostComm& h_comm) {
-            const int rank    = d_comm->rank(0);
-            const int n_ranks = d_comm->n_ranks(0);
+            const int rank    = d_comm->rank(group);
+            const int n_ranks = d_comm->n_ranks(group);
+            const int g_rank  = d_comm->rank(0);
+            const int d       = g_rank / n_ranks;
 
-            const size_t max_count = ref_data.size();
+            const size_t max_count = max_tokens_ * dim;
 
-            std::mt19937                       gen{(unsigned)index};
-            std::uniform_int_distribution<int> dist{0, 31};  // 5 mantissa bits
-            if (rank == 0) {
+            std::mt19937                  gen{(unsigned)index};
+            std::uniform_int_distribution dist{0, 31};  // 5 mantissa bits
+            if (g_rank == 0) {
                 std::cout << "preparing data ... " << std::flush;
             }
-            data[index].resize(max_count);
+            data[d][rank].resize(max_count);
             for (size_t i = 0; i < max_count; ++i) {
-                data[index][i] = T(dist(gen));
+                data[d][rank][i] = T(dist(gen));
             }
             h_comm->Sync();
             const size_t slice = (max_count + n_ranks - 1) / n_ranks;
             for (int r = 0; r < n_ranks; ++r) {
                 for (size_t i = rank * slice; i < (rank + 1) * slice && i < max_count; ++i) {
-                    ref_data[i] += data[r][i];
+                    ref_data[d][i] += data[d][r][i];
                 }
             }
             h_comm->Sync();
-            if (rank == 0) {
+            if (g_rank == 0) {
                 std::cout << "done.\n";
             }
 
-            Context ctx{rank};
+            Context ctx{g_rank};
 
-            T* d_rank_data = ctx.malloc<T>(max_count);
+            T* d_data = ctx.malloc<T>(max_count);
 
             T* d_tmp = (T*)d_comm->Allocate(sizeof(T) * max_count);
             d_comm->Register(d_tmp, sizeof(T) * max_count);
 
-            ctx.copy_n(data[rank].data(), max_count, d_rank_data);
+            ctx.copy_n(data[d][rank].data(), max_count, d_data);
 
             [[maybe_unused]] auto verify = [&](auto count) {
                 std::vector<T> res(count);
                 ctx.copy_n(d_tmp, count, res.data());
-                cudaStreamSynchronize(ctx.stream);
+                ctx.sync();
                 size_t diff = 0;
                 for (size_t i = 0; i < count; ++i) {
-                    diff += res[i] != ref_data[i];
+                    auto& x = res[i];
+                    auto& y = ref_data[d][i];
+                    diff += x != y;
                     if (diff == 1) {
-                        printf("%d: %f vs %f\n", (int)i, (float)res[i], (float)ref_data[i]);
+                        printf("%d: %f vs %f\n", (int)i, (float)x, (float)y);
                     }
                 }
                 if (diff) {
-                    printf("[rank %d] count = %d, diff = %lu\n", rank, (int)count, diff);
+                    printf("[rank %d] count = %d, diff = %lu\n", g_rank, (int)count, diff);
                     std::this_thread::sleep_for(std::chrono::seconds(1));
                     std::abort();
                 }
@@ -246,9 +265,9 @@ struct TestComm {
                 auto&        delta = deltas.emplace_back();
                 h_comm->Sync();
                 for (int i = 0; i < warmup_ + iters_; ++i) {
-                    ctx.copy_n(d_rank_data, count, d_tmp);
+                    ctx.copy_n(d_data, count, d_tmp);
                     auto ms = ctx.exec([&](auto stream) {  //
-                        d_comm->AllReduceSum(d_tmp, d_tmp, count, getTensorType<T>(), 0, stream);
+                        d_comm->AllReduceSum(d_tmp, d_tmp, count, dtype, group, stream);
                     });
                     if (i >= warmup_) {
                         delta += ms;
@@ -258,7 +277,7 @@ struct TestComm {
                 verify(count);
             }
 
-            if (rank == 0) {
+            if (g_rank == 0) {
                 SummaryHeader("allreduce", dim, n_ranks);
                 for (size_t i = 0; i < tokens_.size(); ++i) {
                     const float  avg   = deltas[i] / iters_;
@@ -283,137 +302,154 @@ struct TestComm {
     }
 
     template<class T>
-    void TestAllreduceResidualBiasRMSnorm(size_t dim)
+    void TestAllreduceResidualBiasRMSnorm(size_t dim, int group)
     {
-        std::mt19937                       gen{};
-        std::uniform_int_distribution<int> dist{0, 31};  // 5 mantissa bits
-        std::vector<std::vector<T>>        data(d_comm_.size());
-        std::vector<T>                     ref_data(max_tokens_ * dim);
-        std::vector<T>                     residual(max_tokens_ * dim);
-        std::vector<T>                     ref_residual(max_tokens_ * dim);
-        std::vector<T>                     weight(dim);
-        std::vector<T>                     bias(dim);
-        constexpr float                    eps      = 1e-5;
-        constexpr bool                     has_bias = true;
+        vector<T> weight(dim);
+        vector<T> bias(dim);
+
+        constexpr float eps      = 1e-5;
+        constexpr bool  has_bias = true;
 
         std::cout << "preparing data ... " << std::flush;
 
-        for (size_t i = 0; i < dim; ++i) {
-            weight[i] = T(dist(gen));
+        {
+            std::mt19937                  gen{};
+            std::uniform_int_distribution dist{0, 31};  // 5 mantissa bits
+            for (size_t i = 0; i < dim; ++i) {
+                weight[i] = T(dist(gen));
+            }
+            if (has_bias) {
+                for (size_t i = 0; i < dim; ++i) {
+                    bias[i] = T(dist(gen));
+                }
+            }
         }
 
-        if (has_bias) {
-            for (size_t i = 0; i < dim; ++i) {
-                bias[i] = T(dist(gen));
-            }
+        const auto dtype = getTensorType<T>();
+
+        const int tp_size = d_comm_[0]->n_ranks(group);
+        const int dp_size = d_comm_.size() / tp_size;
+        // dp    tp     dim
+        vector<vector<vector<T>>> src_data(dp_size);
+        // dp    dim
+        vector<vector<T>> ref_data(dp_size);
+        vector<vector<T>> src_res(dp_size);
+        vector<vector<T>> ref_res(dp_size);
+
+        for (int i = 0; i < dp_size; ++i) {
+            src_data[i].resize(tp_size);
+            ref_data[i].resize(max_tokens_ * dim);
+            src_res[i].resize(max_tokens_ * dim);
+            ref_res[i].resize(max_tokens_ * dim);
         }
 
         auto func = [&](int index, DeviceComm& d_comm, HostComm& h_comm) {
-            const int rank    = d_comm->rank(0);
-            const int n_ranks = d_comm->n_ranks(0);
+            const int rank    = d_comm->rank(group);
+            const int n_ranks = d_comm->n_ranks(group);
+            const int g_rank  = d_comm->rank(0);
+            const int d       = g_rank / n_ranks;
 
-            const size_t max_count = ref_data.size();
+            const size_t max_count = max_tokens_ * dim;
 
-            std::mt19937                       gen{(unsigned)index};
-            std::uniform_int_distribution<int> dist{0, 31};  // 5 mantissa bits
+            std::mt19937                  gen{(unsigned)index};
+            std::uniform_int_distribution dist{0, 31};  // 5 mantissa bits
 
-            data[index].resize(max_count);
+            src_data[d][rank].resize(max_count);
             for (size_t i = 0; i < max_count; ++i) {
-                data[index][i] = T(dist(gen));
+                src_data[d][rank][i] = T(dist(gen));
             }
             h_comm->Sync();
             const size_t slice = (max_tokens_ + n_ranks - 1) / n_ranks;
-            for (size_t i = rank * slice; i < (rank + 1) * slice && i < max_tokens_; ++i) {
+            for (size_t t = rank * slice; t < (rank + 1) * slice && t < max_tokens_; ++t) {
                 for (int r = 0; r < n_ranks; ++r) {
-                    for (size_t d = 0; d < dim; ++d) {
-                        ref_data[i * dim + d] += data[r][i * dim + d];
+                    for (size_t i = 0; i < dim; ++i) {
+                        ref_data[d][t * dim + i] += src_data[d][r][t * dim + i];
                     }
                 }
                 float sum = 0.f;
-                for (size_t d = 0; d < dim; ++d) {
-                    const size_t index  = i * dim + d;
-                    residual[index]     = T(dist(gen));
-                    ref_residual[index] = residual[index] + ref_data[index] + bias[d];  // r' <- r + (h + b)
-                    sum += (float)ref_residual[index] * (float)ref_residual[index];
+                for (size_t i = 0; i < dim; ++i) {
+                    const size_t idx = t * dim + i;
+                    src_res[d][idx]  = T(dist(gen));
+                    ref_res[d][idx]  = src_res[d][idx] + ref_data[d][idx] + bias[i];  // r' <- r + (h + b)
+                    sum += (float)ref_res[d][idx] * (float)ref_res[d][idx];
                 }
                 sum = rsqrtf(sum / dim + eps);
-                for (size_t d = 0; d < dim; ++d) {
-                    const size_t index = i * dim + d;
-                    float        tmp   = (float)ref_residual[index];
-                    ref_data[index]    = tmp * sum * (float)weight[d];  // h' <- norm(r) * w
+                for (size_t i = 0; i < dim; ++i) {
+                    const size_t idx = t * dim + i;
+                    float        tmp = (float)ref_res[d][idx];
+                    ref_data[d][idx] = tmp * sum * (float)weight[i];  // h' <- norm(r) * w
                 }
             }
             h_comm->Sync();
-            if (rank == 0) {
+            if (g_rank == 0) {
                 std::cout << "done.\n";
             }
 
-            Context ctx{rank};
+            Context ctx{g_rank};
 
-            T* d_rank_data = ctx.malloc<T>(max_count);
-            T* d_residual  = ctx.malloc<T>(max_count);
-            T* d_bias      = ctx.malloc<T>(dim);
-            T* d_weight    = ctx.malloc<T>(dim);
-            T* d_tmp_res   = ctx.malloc<T>(max_count);
+            T* d_bias   = ctx.malloc<T>(dim);
+            T* d_weight = ctx.malloc<T>(dim);
+
+            T* d_data    = ctx.malloc<T>(max_count);
+            T* d_res     = ctx.malloc<T>(max_count);
+            T* d_tmp_res = ctx.malloc<T>(max_count);
 
             T* d_tmp_data = (T*)d_comm->Allocate(sizeof(T) * max_count);
             d_comm->Register(d_tmp_data, sizeof(T) * max_count);
 
-            ctx.copy_n(data[rank].data(), max_count, d_rank_data);
-            ctx.copy_n(residual.data(), max_count, d_residual);
+            ctx.copy_n(src_data[d][rank].data(), max_count, d_data);
+            ctx.copy_n(src_res[d].data(), max_count, d_res);
             ctx.copy_n(bias.data(), dim, d_bias);
             ctx.copy_n(weight.data(), dim, d_weight);
 
             [[maybe_unused]] auto verify = [&](auto token_num) {
-                const size_t   count = (size_t)token_num * dim;
-                std::vector<T> h_data(count);
-                std::vector<T> h_res(count);
+                const size_t count = (size_t)token_num * dim;
+                vector<T>    h_data(count);
+                vector<T>    h_res(count);
                 ctx.copy_n(d_tmp_data, count, h_data.data());
                 ctx.copy_n(d_tmp_res, count, h_res.data());
-                cudaStreamSynchronize(ctx.stream);
+                ctx.sync();
                 const size_t slice    = (token_num + n_ranks - 1) / n_ranks * dim;
                 const size_t first    = rank * slice;
                 const size_t last     = std::min(first + slice, count);
                 size_t       res_diff = 0;
                 for (size_t i = first; i < last; ++i) {
-                    int is_diff = !(h_res[i] == ref_residual[i]);
+                    auto& x       = h_res[i];
+                    auto& y       = ref_res[d][i];
+                    int   is_diff = !(x == y);
                     if (!res_diff && is_diff) {
-                        printf("[rank %d], %d: %f vs %f\n",
-                               rank,
-                               (int)(i - first),
-                               (float)h_res[i],
-                               (float)ref_residual[i]);
+                        printf("[rank %d], %ld: %f vs %f\n", g_rank, i - first, (float)x, (float)y);
                     }
                     res_diff += is_diff;
                 }
                 float data_diff = 0;
                 for (size_t i = 0; i < count; ++i) {
-                    float diff = (float)h_data[i] - (float)ref_data[i];
+                    float diff = (float)h_data[i] - (float)ref_data[d][i];
                     data_diff += std::abs(diff);
                 }
                 data_diff /= count;
-                if (rank == 0) {
-                    printf("[rank %d] count = %d, data_diff = %f\n", rank, (int)token_num, data_diff);
-                }
                 if (res_diff || data_diff > 0.1f || std::isnan(data_diff)) {
                     printf("[rank %d] count = %d, res_diff = %lu, data_diff = %f\n",
-                           rank,
+                           g_rank,
                            (int)token_num,
                            res_diff,
                            data_diff);
                     std::this_thread::sleep_for(std::chrono::seconds(5));
                     std::abort();
                 }
+                else if (g_rank == 0) {
+                    printf("[rank %d] count = %d, data_diff = %f\n", g_rank, (int)token_num, data_diff);
+                }
             };
 
-            std::vector<float> deltas;
+            vector<float> deltas;
             for (const auto& n : tokens_) {
                 const size_t count = (size_t)n * dim;
                 auto&        delta = deltas.emplace_back();
                 h_comm->Sync();
                 for (int i = 0; i < warmup_ + iters_; ++i) {
-                    ctx.copy_n(d_rank_data, count, d_tmp_data);
-                    ctx.copy_n(d_residual, count, d_tmp_res);
+                    ctx.copy_n(d_data, count, d_tmp_data);
+                    ctx.copy_n(d_res, count, d_tmp_res);
                     auto ms = ctx.exec([&](auto stream) {  //
                         d_comm->AllreduceResidualBiasRMSnorm(d_tmp_data,
                                                              d_tmp_res,
@@ -422,8 +458,8 @@ struct TestComm {
                                                              eps,
                                                              dim,
                                                              n,
-                                                             getTensorType<T>(),
-                                                             0,
+                                                             dtype,
+                                                             group,
                                                              stream);
                     });
                     if (i >= warmup_) {
@@ -437,7 +473,7 @@ struct TestComm {
             d_comm->Deregister(d_tmp_data);
             d_comm->Free(d_tmp_data);
 
-            if (rank == 0) {
+            if (g_rank == 0) {
                 SummaryHeader("allreduce | rmsnorm", dim, n_ranks);
                 for (size_t i = 0; i < tokens_.size(); ++i) {
                     const float  avg   = deltas[i] / iters_;
@@ -459,57 +495,68 @@ struct TestComm {
     }
 
     template<class T>
-    void TestAllGather(size_t dim)
+    void TestAllGather(size_t dim, int group)
     {
         const auto dtype = getTensorType<T>();
 
-        std::vector<std::vector<T>> data(d_comm_.size());
+        const int tp_size = d_comm_[0]->n_ranks(group);
+        const int dp_size = d_comm_.size() / tp_size;
+
+        vector<vector<vector<T>>> data(dp_size);
+
+        for (int i = 0; i < dp_size; ++i) {
+            data[i].resize(tp_size);
+        }
 
         auto func = [&](int index, DeviceComm& d_comm, HostComm& h_comm) {
-            const int rank    = d_comm->rank(0);
-            const int n_ranks = d_comm->n_ranks(0);
+            const int rank    = d_comm->rank(group);
+            const int n_ranks = d_comm->n_ranks(group);
+            const int g_rank  = d_comm->rank(0);
+            const int d       = g_rank / n_ranks;
 
             const size_t max_count = max_tokens_ * dim;
 
             if (h_comm->rank() == 0) {
                 std::cout << "preparing data ... " << std::flush;
             }
-            std::mt19937                       gen{(unsigned)index};
-            std::uniform_int_distribution<int> dist{0, 100};
-            data[index].resize(max_count);
+            std::mt19937                  gen{(unsigned)index};
+            std::uniform_int_distribution dist{0, 100};
+            data[d][rank].resize(max_count);
             for (size_t i = 0; i < max_count; ++i) {
-                data[index][i] = T(dist(gen));
+                data[d][rank][i] = T(dist(gen));
             }
             h_comm->Sync();
             if (h_comm->rank() == 0) {
                 std::cout << "done.\n";
             }
 
-            Context ctx{rank};
+            Context ctx{g_rank};
 
-            T* d_rank_data = ctx.malloc<T>(max_count);
+            T* d_data = ctx.malloc<T>(max_count);
 
             T* d_tmp = (T*)d_comm->Allocate(sizeof(T) * max_count * n_ranks);
             d_comm->Register(d_tmp, sizeof(T) * max_count * n_ranks);
 
-            ctx.copy_n(data[rank].data(), max_count, d_rank_data);
+            ctx.copy_n(data[d][rank].data(), max_count, d_data);
 
             [[maybe_unused]] auto verify = [&](int64_t count) {
                 auto           total_count = count * n_ranks;
                 std::vector<T> res(total_count);
                 ctx.copy_n(d_tmp, total_count, res.data());
-                cudaStreamSynchronize(ctx.stream);
+                ctx.sync();
                 size_t diff = 0;
                 for (int r = 0; r < n_ranks; ++r) {
                     for (auto i = 0; i < count; ++i) {
-                        diff += res[r * count + i] != data[r][i];
+                        auto& x = res[r * count + i];
+                        auto& y = data[d][r][i];
+                        diff += (x != y);
                         if (diff == 1) {
-                            printf("%d: %f vs %f\n", (int)i, (float)res[r * count + i], (float)data[r][i]);
+                            printf("%d: %f vs %f\n", (int)i, (float)x, (float)y);
                         }
                     }
                 }
                 if (diff) {
-                    printf("[rank %d] count = %d, diff = %lu\n", rank, (int)count, diff);
+                    printf("[rank %d] count = %d, diff = %lu\n", g_rank, (int)count, diff);
                     std::this_thread::sleep_for(std::chrono::seconds(1));
                     std::abort();
                 }
@@ -519,21 +566,17 @@ struct TestComm {
             for (const auto& n : tokens_) {
                 const size_t count = (size_t)n * dim;  // dim = hidden_dim / tp
                 auto&        delta = deltas.emplace_back();
-
                 h_comm->Sync();
-
-                const std::vector<size_t> counts(n_ranks, count);
-
                 for (int i = 0; i < warmup_ + iters_; ++i) {
-                    cudaMemsetAsync(d_tmp, 0, sizeof(T) * count * n_ranks, ctx.stream);
-                    ctx.copy_n(d_rank_data, count, d_tmp + rank * count);
+                    check_cuda_error(cudaMemsetAsync(d_tmp, 0, sizeof(T) * count * n_ranks, ctx.stream));
+                    ctx.copy_n(d_data, count, d_tmp + rank * count);
                     auto ms = ctx.exec([&](auto stream) {  //
                         if (d_comm->Query(kHasAllGather2D)) {
                             d_comm->AllGather2D(
-                                d_tmp + rank * count, d_tmp, dim, count, dim, n, dtype, {1, 1}, 0, stream);
+                                d_tmp + rank * count, d_tmp, dim, count, dim, n, dtype, {1, 1}, group, stream);
                         }
                         else {
-                            d_comm->AllGather(d_tmp + rank * count, d_tmp, count, dtype, 0, stream);
+                            d_comm->AllGather(d_tmp + rank * count, d_tmp, count, dtype, group, stream);
                         }
                     });
                     if (i >= warmup_) {
@@ -541,11 +584,10 @@ struct TestComm {
                     }
                     // verify(count);
                 }
-
                 verify(count);
             }
 
-            if (rank == 0) {
+            if (g_rank == 0) {
                 SummaryHeader("allgather", dim, n_ranks);
                 for (size_t i = 0; i < tokens_.size(); ++i) {
                     const float  avg   = deltas[i] / iters_;
@@ -856,7 +898,7 @@ int main(int argc, char* argv[])
              128000,
              -1,
              10,
-             10,
+             100,
              //  {1024});
              //   {1024, 2048, 4096, 8192});
              // {512});

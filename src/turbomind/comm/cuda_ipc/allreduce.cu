@@ -143,13 +143,13 @@ __global__ void __launch_bounds__(1024, 1) AllreduceKernel_LL_WS(T*             
 // Modified from
 // https://github.com/microsoft/mscclpp/blob/591276f9d07d2df8e2a45a16738e27867e468ca3/test/mscclpp-test/allreduce_test.cu#L963
 template<class T, int vec_size, class Relaxed>
-__global__ void Allreduce_Simple_Pull(T*                                             buf,
-                                      Array<T*, kMaxNearPeers>                       chns,
+__global__ void Allreduce_Simple_Pull(T*                           buf,
+                                      Array<T*, kMaxNearPeers>     chns,
                                       mscclpp::D2DSemaphoreHandle* semaphores,
-                                      int                                            rank,
-                                      int                                            peers,
-                                      int                                            slice,
-                                      int                                            count,
+                                      int                          rank,
+                                      int                          peers,
+                                      int                          slice,
+                                      int                          count,
                                       constant<vec_size>,
                                       Relaxed relaxed)
 {
@@ -217,14 +217,14 @@ __global__ void Allreduce_Simple_Pull(T*                                        
 // ! slice <= grid size
 // Slightly lower latency
 template<class T, int vec_size, class Relaxed>
-__global__ void Allreduce_Simple_Push(T*                                             buf,
-                                      T*                                             scratch,
-                                      Array<T*, kMaxNearPeers>                       near,
+__global__ void Allreduce_Simple_Push(T*                           buf,
+                                      T*                           scratch,
+                                      Array<T*, kMaxNearPeers>     near,
                                       mscclpp::D2DSemaphoreHandle* semaphores,
-                                      int                                            rank,
-                                      int                                            peers,
-                                      int                                            slice,  // in vec
-                                      int                                            count,  // in vec
+                                      int                          rank,
+                                      int                          peers,
+                                      int                          slice,  // in vec
+                                      int                          count,  // in vec
                                       constant<vec_size>,
                                       Relaxed relaxed)
 {
@@ -291,15 +291,15 @@ __global__ void Allreduce_Simple_Push(T*                                        
 }
 
 template<class T, int vec_size, class Relaxed>
-__global__ void Allreduce_Simple_Push_v2(T*                                             buf,
-                                         T*                                             scratch,
-                                         Array<T*, kMaxNearPeers>                       near_buf,
-                                         Array<T*, kMaxNearPeers>                       near_scratch,
+__global__ void Allreduce_Simple_Push_v2(T*                           buf,
+                                         T*                           scratch,
+                                         Array<T*, kMaxNearPeers>     near_buf,
+                                         Array<T*, kMaxNearPeers>     near_scratch,
                                          mscclpp::D2DSemaphoreHandle* semaphores,
-                                         int                                            rank,
-                                         int                                            peers,
-                                         int                                            slice,  // in vec
-                                         int                                            count,  // in vec
+                                         int                          rank,
+                                         int                          peers,
+                                         int                          slice,  // in vec
+                                         int                          count,  // in vec
                                          constant<vec_size>,
                                          Relaxed relaxed)
 {
@@ -377,7 +377,7 @@ void CudaIpcCommImpl::AllReduceSum(
             constexpr int threads       = 1024;
             const int     blocks        = (n_ranks - 1) * ctas_per_peer;
             auto          incoming      = (LLPacket*)packet_buff_;
-            auto          outgoing      = get_near(incoming);
+            auto          outgoing      = get_symmetric(incoming, group);
             AllreduceKernel_LL<<<blocks, threads, 0, stream>>>((T*)data,  //
                                                                (T*)data,
                                                                incoming,
@@ -397,8 +397,8 @@ void CudaIpcCommImpl::AllReduceSum(
                 const int     blocks  = std::min(48, (slice + threads - 1) / threads);
                 Allreduce_Simple_Push_v2<<<blocks, threads, 0, stream>>>((T*)data,
                                                                          (T*)scratch_buff_,
-                                                                         get_near((T*)data),
-                                                                         get_near((T*)scratch_buff_),
+                                                                         get_symmetric((T*)data, group),
+                                                                         get_symmetric((T*)scratch_buff_, group),
                                                                          semaphores,
                                                                          rank,
                                                                          n_ranks - 1,
@@ -411,7 +411,7 @@ void CudaIpcCommImpl::AllReduceSum(
                 constexpr int threads = 1024;
                 const int     blocks  = std::min(48, (slice + threads - 1) / threads);
                 Allreduce_Simple_Pull<<<blocks, threads, 0, stream>>>((T*)data,
-                                                                      get_near((T*)data),
+                                                                      get_symmetric((T*)data, group),
                                                                       semaphores,
                                                                       rank,
                                                                       n_ranks - 1,

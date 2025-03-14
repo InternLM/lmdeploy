@@ -12,14 +12,13 @@ namespace turbomind::comm {
 // Modified from
 // https://github.com/microsoft/mscclpp/blob/591276f9d07d2df8e2a45a16738e27867e468ca3/test/mscclpp-test/allgather_test.cu#L294
 template<class T, class Relaxed>
-__global__ void __launch_bounds__(1024, 1)
-    Allgather_Simple_Pull(T*                                             local,
-                          Array<T*, kMaxNearPeers>                       near,
-                          mscclpp::D2DSemaphoreHandle* semaphores,
-                          int                                            rank,
-                          int                                            peers,
-                          int64_t                                        slice,
-                          Relaxed                                        relaxed)
+__global__ void __launch_bounds__(1024, 1) Allgather_Simple_Pull(T*                           local,
+                                                                 Array<T*, kMaxNearPeers>     near,
+                                                                 mscclpp::D2DSemaphoreHandle* semaphores,
+                                                                 int                          rank,
+                                                                 int                          peers,
+                                                                 int64_t                      slice,
+                                                                 Relaxed                      relaxed)
 {
     const int       sem_id = blockIdx.x * peers + threadIdx.x;
     DeviceSemaphore sem;
@@ -61,7 +60,7 @@ void CudaIpcCommImpl::AllGather(
 
     auto invoke = [&](auto t) {
         using T              = decltype(t);
-        const auto   near    = get_near((T*)recvbuff);
+        const auto   near    = get_symmetric((T*)recvbuff, group);
         const size_t slice   = bytesize / sizeof(T);
         const int    threads = 1024;
         const int    blocks  = std::min<int>(32, (slice + threads - 1) / threads);
@@ -89,19 +88,18 @@ void CudaIpcCommImpl::AllGather(
 }
 
 template<class T, int log2_block_dim, class Relaxed>
-__global__ void __launch_bounds__(1024, 1)
-    Allgather2D_Simple_Pull(T*                                             local,
-                            Array<T*, kMaxNearPeers>                       near,
-                            mscclpp::D2DSemaphoreHandle* semaphores,
-                            int                                            rank,
-                            int                                            peers,
-                            int64_t                                        pitch,
-                            int64_t                                        stride,
-                            int                                            width,
-                            int                                            height,
-                            int                                            log2_groups,
-                            constant<log2_block_dim>,
-                            Relaxed relaxed)
+__global__ void __launch_bounds__(1024, 1) Allgather2D_Simple_Pull(T*                           local,
+                                                                   Array<T*, kMaxNearPeers>     near,
+                                                                   mscclpp::D2DSemaphoreHandle* semaphores,
+                                                                   int                          rank,
+                                                                   int                          peers,
+                                                                   int64_t                      pitch,
+                                                                   int64_t                      stride,
+                                                                   int                          width,
+                                                                   int                          height,
+                                                                   int                          log2_groups,
+                                                                   constant<log2_block_dim>,
+                                                                   Relaxed relaxed)
 {
     const int       sem_id = blockIdx.x * peers + threadIdx.x;
     DeviceSemaphore sem;
@@ -189,7 +187,7 @@ void CudaIpcCommImpl::AllGather2D(const void*  sendbuff,
 #if 1
     auto invoke = [&](auto t) {
         using T   = decltype(t);
-        auto near = get_near((T*)base);
+        auto near = get_symmetric((T*)base, group);
         for (auto& p : near) {
             if (p) {
                 p += offset / sizeof(T);

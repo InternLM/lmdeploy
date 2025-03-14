@@ -86,9 +86,9 @@ private:
     mscclpp::D2DSemaphoreHandle* init_semaphores(const std::vector<uint64_t*>& buffers, int group);
 
     template<class T>
-    inline Array<T*, kMaxNearPeers> get_near(T* ptr)
+    inline Array<T*, kMaxNearPeers> get_symmetric(T* ptr, int group)
     {
-        auto                     src = get_near_impl(ptr);
+        auto                     src = get_symmetric_impl(ptr, group);
         Array<T*, kMaxNearPeers> dst;
         for (int i = 0; i < dst.size(); ++i) {
             dst[i] = static_cast<T*>(src[i]);
@@ -96,7 +96,7 @@ private:
         return dst;
     }
 
-    Array<void*, kMaxNearPeers> get_near_impl(void* ptr);
+    Array<void*, kMaxNearPeers> get_symmetric_impl(void* ptr, int group);
 
 private:
     HostComm h_comm_;

@@ -240,8 +240,7 @@ uint64_t* CudaIpcCommImpl::create_semaphore_buffer()
     return flags;
 }
 
-mscclpp::D2DSemaphoreHandle* CudaIpcCommImpl::init_semaphores(const std::vector<uint64_t*>& buffers,
-                                                                                int                           group)
+mscclpp::D2DSemaphoreHandle* CudaIpcCommImpl::init_semaphores(const std::vector<uint64_t*>& buffers, int group)
 {
     const int n_ranks = this->n_ranks(group);
     const int rank    = this->rank(group);
@@ -267,8 +266,7 @@ mscclpp::D2DSemaphoreHandle* CudaIpcCommImpl::init_semaphores(const std::vector<
 
     mscclpp::D2DSemaphoreHandle* d_semaphores{};
 
-    check_cuda_error(
-        cudaMallocAsync(&d_semaphores, sizeof(mscclpp::D2DSemaphoreHandle) * h_semaphores.size(), 0));
+    check_cuda_error(cudaMallocAsync(&d_semaphores, sizeof(mscclpp::D2DSemaphoreHandle) * h_semaphores.size(), 0));
 
     check_cuda_error(cudaMemcpyAsync(d_semaphores,
                                      h_semaphores.data(),
@@ -278,13 +276,23 @@ mscclpp::D2DSemaphoreHandle* CudaIpcCommImpl::init_semaphores(const std::vector<
     return d_semaphores;
 }
 
-Array<void*, kMaxNearPeers> CudaIpcCommImpl::get_near_impl(void* ptr)
+Array<void*, kMaxNearPeers> CudaIpcCommImpl::get_symmetric_impl(void* ptr, int group)
 {
     auto& memories = registered_memories_.at(ptr);
     FT_CHECK(memories.size() <= kMaxNearPeers);
-    Array<void*, kMaxNearPeers> ret{};
+    std::vector<void*> tmp(memories.size());
     for (size_t i = 0; i < memories.size(); ++i) {
-        ret[i] = memories[i].first;
+        tmp[i] = memories[i].first;
+    }
+    // Put current rank back
+    tmp.insert(tmp.begin() + global_rank_, ptr);
+    Array<void*, kMaxNearPeers> ret{};
+    // Indexed copy by l2g map
+    int p = 0;
+    for (const auto& r : groups_.at(group).l2g) {
+        if (r != global_rank_) {  // Skip current rank
+            ret[p++] = tmp[r];
+        }
     }
     return ret;
 }
