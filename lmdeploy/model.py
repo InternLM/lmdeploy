@@ -237,8 +237,13 @@ class BaseChatTemplate(BaseModel):
 @MODELS.register_module(name=['deepseek-v3'])
 class DeepseekV3(BaseChatTemplate):
 
-    def __init__(self, user='<｜User｜>', assistant='<｜Assistant｜>', eoa='<｜end▁of▁sentence｜>', **kwargs):
-        super().__init__(user=user, assistant=assistant, eoa=eoa, **kwargs)
+    def __init__(self,
+                 user='<｜User｜>',
+                 assistant='<｜Assistant｜>',
+                 eoa='<｜end▁of▁sentence｜>',
+                 stop_words=['<｜end▁of▁sentence｜>'],
+                 **kwargs):
+        super().__init__(user=user, assistant=assistant, eoa=eoa, stop_words=stop_words, **kwargs)
 
     def get_prompt(self, prompt, sequence_start=True):
         if sequence_start:
@@ -1428,8 +1433,9 @@ class Deepseek(BaseChatTemplate):
                  eoh='\n\n',
                  assistant='Assistant: ',
                  eoa='<｜end▁of▁sentence｜>',
+                 stop_words=['<｜end▁of▁sentence｜>'],
                  **kwargs):
-        super().__init__(eosys=eosys, user=user, eoh=eoh, assistant=assistant, eoa=eoa, **kwargs)
+        super().__init__(eosys=eosys, user=user, eoh=eoh, assistant=assistant, eoa=eoa, stop_words=stop_words, **kwargs)
 
     def get_prompt(self, prompt, sequence_start=True):
         if self.capability == 'chat':
@@ -1492,6 +1498,7 @@ class DeepseekVL(BaseChatTemplate):
             eoh='\n\n',
             assistant='Assistant: ',
             eoa='<｜end▁of▁sentence｜>',
+            stop_words=['<｜end▁of▁sentence｜>'],
             **kwargs):
         super().__init__(meta_instruction=meta_instruction,
                          eosys=eosys,
@@ -1499,6 +1506,7 @@ class DeepseekVL(BaseChatTemplate):
                          eoh=eoh,
                          assistant=assistant,
                          eoa=eoa,
+                         stop_words=stop_words,
                          **kwargs)
 
     def get_prompt(self, prompt, sequence_start=True):
@@ -1533,6 +1541,7 @@ class DeepseekVL2(BaseChatTemplate):
                  eoh='\n\n',
                  assistant='<|Assistant|>: ',
                  eoa='<｜end▁of▁sentence｜>',
+                 stop_words=['<｜end▁of▁sentence｜>'],
                  **kwargs):
         super().__init__(meta_instruction=meta_instruction,
                          eosys=eosys,
@@ -1540,6 +1549,7 @@ class DeepseekVL2(BaseChatTemplate):
                          eoh=eoh,
                          assistant=assistant,
                          eoa=eoa,
+                         stop_words=stop_words,
                          **kwargs)
 
     def get_prompt(self, prompt, sequence_start=True):
@@ -1667,6 +1677,7 @@ class DbrxInstruct(BaseChatTemplate):
                  assistant='<|im_start|>assistant\n',
                  eoa='<|im_end|>',
                  separator='\n',
+                 stop_words=['<|im_end|>'],
                  **kwargs):
         super().__init__(system,
                          meta_instruction=meta_instruction,
@@ -1676,6 +1687,7 @@ class DbrxInstruct(BaseChatTemplate):
                          assistant=assistant,
                          eoa=eoa,
                          separator=separator,
+                         stop_words=stop_words,
                          **kwargs)
 
     @classmethod
@@ -1702,6 +1714,7 @@ class ChatmlDirect(BaseChatTemplate):
                  assistant='<|im_start|>assistant\n',
                  eoa='<|im_end|>',
                  separator='',
+                 stop_words=['<|im_end|>', '</s>'],
                  **kwargs):
         super().__init__(system,
                          meta_instruction=meta_instruction,
@@ -1711,6 +1724,7 @@ class ChatmlDirect(BaseChatTemplate):
                          assistant=assistant,
                          eoa=eoa,
                          separator=separator,
+                         stop_words=stop_words,
                          **kwargs)
 
     @classmethod
