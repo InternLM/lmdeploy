@@ -221,7 +221,7 @@ public:
         }
     }
 
-    void AllreduceResidualBiasRMSnormEx(void*        hidden,  // offset by caller
+    void AllreduceResidualBiasRMSnormEx(void*        hidden,
                                         void*        residual,
                                         const void*  bias,
                                         const void*  weights,

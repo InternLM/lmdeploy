@@ -69,6 +69,18 @@ public:
                                       int          group,
                                       cudaStream_t stream) override;
 
+    void AllreduceResidualBiasRMSnormEx(void*        hidden,
+                                        void*        residual,
+                                        const void*  bias,
+                                        const void*  weights,
+                                        float        eps,
+                                        int          dim,
+                                        DataType     type,
+                                        int          group0,
+                                        int          group1,
+                                        const int*   local_token_nums,
+                                        cudaStream_t stream) override;
+
     void AllGather2D(const void*  sendbuff,
                      void*        recvbuff,
                      size_t       pitch,

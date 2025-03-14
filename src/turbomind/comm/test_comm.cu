@@ -164,7 +164,7 @@ struct TestComm {
             tp = device_num;
         }
 
-        std::tie(h_comm_, d_comm_, h_split_, d_split_) = Init(device_num, 4, "cuda_ipc");
+        std::tie(h_comm_, d_comm_, h_split_, d_split_) = Init(device_num, 4, "cudaipc");
 
         warmup_ = warmup;
         iters_  = iters;
@@ -174,13 +174,13 @@ struct TestComm {
 
         const int g = 0;
 
-        TestAllReduce<half>(hidden_dim, g);
+        // TestAllReduce<half>(hidden_dim, g);
         TestAllreduceResidualBiasRMSnorm<half>(hidden_dim, g);
-        // TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 0, 0);
-        // TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 1, 0);
-        // TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 0, 1);
-        TestAllGather<half>(hidden_dim / tp, g);  // tp embedding
-        TestAllGather<float>(vocab_size / tp, g);
+        TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 0, 0);
+        TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 1, 0);
+        TestAllreduceResidualBiasRMSnormEx<half>(hidden_dim, 0, 1);
+        // TestAllGather<half>(hidden_dim / tp, g);  // tp embedding
+        // TestAllGather<float>(vocab_size / tp, g);
     }
 
     template<class T>
@@ -621,6 +621,8 @@ struct TestComm {
 
         const int inner_tp = std::gcd(tp_size_0, tp_size_1);
 
+        const auto dtype = getTensorType<T>();
+
         std::mt19937                  gen{};
         std::uniform_int_distribution dist{0, 31};  // 5 mantissa bits
 
@@ -628,7 +630,7 @@ struct TestComm {
         TM_LOG_INFO("dp_size_1 %d, tp_size_1 %d", dp_size_1, tp_size_1);
         TM_LOG_INFO("inner_tp %d", inner_tp);
 
-        std::vector tokens = tokens_;
+        vector tokens = tokens_;
         for (auto& x : tokens) {
             x = (x + dp_size_0 - 1) / dp_size_0;
         }
@@ -636,12 +638,12 @@ struct TestComm {
         tokens.erase(std::unique(tokens.begin(), tokens.end()), tokens.end());
         const size_t max_tokens = tokens.back();
 
-        std::vector<T> ref_data(dp_size_0 * max_tokens * dim);
-        std::vector<T> src_res(ref_data.size());
-        std::vector<T> ref_res(ref_data.size());
+        vector<T> ref_data(dp_size_0 * max_tokens * dim);
+        vector<T> src_res(ref_data.size());
+        vector<T> ref_res(ref_data.size());
 
-        std::vector<T> weight(dim);
-        std::vector<T> bias(dim);
+        vector<T> weight(dim);
+        vector<T> bias(dim);
 
         constexpr float eps      = 1e-5;
         constexpr bool  has_bias = true;
@@ -726,20 +728,18 @@ struct TestComm {
             ctx.copy_n(weight.data(), dim, d_weight);
 
             [[maybe_unused]] auto verify = [&](auto n) {
-                const size_t   dst_tokens = n / dp_size_1 * dp_size_0;
-                const size_t   dst_count  = dst_tokens * dim;
-                std::vector<T> h_data(dst_count);
+                const size_t dst_tokens = n / dp_size_1 * dp_size_0;
+                const size_t dst_count  = dst_tokens * dim;
+                vector<T>    h_data(dst_count);
                 ctx.copy_n(d_tmp_data + dp_rank_1 * dst_count, dst_count, h_data.data());
-                const size_t   local_tokens = (size_t)n / dp_size_1;
-                const size_t   local_count  = local_tokens * dim;
-                const size_t   slice        = (local_tokens + inner_tp - 1) / inner_tp * dim;
-                const size_t   first        = std::min(local_count, g_rank % inner_tp * slice);
-                const size_t   last         = std::min(local_count, first + slice);
-                std::vector<T> h_res(last - first);
+                const size_t local_tokens = (size_t)n / dp_size_1;
+                const size_t local_count  = local_tokens * dim;
+                const size_t slice        = (local_tokens + inner_tp - 1) / inner_tp * dim;
+                const size_t first        = std::min(local_count, g_rank % inner_tp * slice);
+                const size_t last         = std::min(local_count, first + slice);
+                vector<T>    h_res(last - first);
                 ctx.copy_n(d_tmp_res + first, h_res.size(), h_res.data());
-
                 ctx.sync();
-
                 size_t res_diff = 0;
                 for (size_t i = first; i < last; ++i) {
                     auto& val  = h_res[i - first];
@@ -751,7 +751,6 @@ struct TestComm {
                     res_diff += diff;
                 }
                 float data_diff = 0;
-
                 for (size_t i = 0; i < dst_count; ++i) {
                     float diff = (float)h_data[i] - (float)ref_data[dp_rank_1 * dst_count + i];
                     data_diff += std::abs(diff);
@@ -783,8 +782,8 @@ struct TestComm {
                 std::vector  local_token_nums(dp_size_0 * dp_size_1, n / dp_size_1);
                 ctx.copy_n(src_data[tp_rank_0].data() + dp_rank_0 * count, count, d_data);
                 ctx.copy_n(src_res.data() + local_id * local_count, local_count, d_res);
-                h_comm->Sync();
                 auto& [_, delta] = stats.emplace_back(n * dp_size_0, 0.f);
+                h_comm->Sync();
                 for (int i = 0; i < warmup_ + iters_; ++i) {
                     ctx.copy_n(d_data, count, d_tmp_data + dp_rank_0 * count);
                     ctx.copy_n(d_res, local_count, d_tmp_res);
@@ -795,7 +794,7 @@ struct TestComm {
                                                                d_weight,
                                                                eps,
                                                                dim,
-                                                               turbomind::getTensorType<T>(),
+                                                               dtype,
                                                                group0,
                                                                group1,
                                                                local_token_nums.data(),
@@ -818,7 +817,7 @@ struct TestComm {
                     const float  avg    = ms / iters_;
                     const size_t count  = num * dim;
                     const float  algbw  = sizeof(T) * count / 1e9f / avg * 1000.f;
-                    const float  factor = (tp_size_0 - 1) / (float)tp_size_0 + (tp_size_1 - 1) / (float)tp_size_1;
+                    const float  factor = (tp_size_0 + tp_size_1 - 2) / (float)g_n_ranks;
                     const float  busbw  = algbw * factor;
                     // g_n_ranks;
                     SummaryEntry(num, count, sizeof(T), avg, algbw, busbw);
@@ -899,7 +898,7 @@ int main(int argc, char* argv[])
              -1,
              10,
              100,
-             //  {1024});
+             //   {1024});
              //   {1024, 2048, 4096, 8192});
              // {512});
              //  {1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 24, 32, 48, 64, 96, 128});
