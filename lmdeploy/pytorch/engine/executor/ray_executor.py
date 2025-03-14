@@ -352,7 +352,7 @@ class RayExecutor(ExecutorBase):
         if self.dag is None:
             self.dag = self._compile_dag()
         inputs = ray.put(inputs)
-        self.dag.execute(inputs)
+        ray.get(self.dag.execute(inputs))
 
     async def get_output_async(self):
         """get output async."""
