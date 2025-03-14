@@ -709,8 +709,8 @@ class Baichuan2(BaseChatTemplate):
     """Chat template and generation parameters of Baichuan2-7B-Base and
     Baichuan2-7B-Chat models."""
 
-    def __init__(self, user='<reserved_106>', assistant='<reserved_107>', **kwargs):
-        super().__init__(user=user, assistant=assistant, **kwargs)
+    def __init__(self, user='<reserved_106>', assistant='<reserved_107>', stop_words=['</s>'], **kwargs):
+        super().__init__(user=user, assistant=assistant, stop_words=stop_words, **kwargs)
 
     @classmethod
     def match(cls, model_path: str) -> Optional[str]:
@@ -776,6 +776,7 @@ If a question does not make any sense, or is not factually coherent, explain why
             eoa='</s>',
             separator='<s>[INST] ',
             session_len=4096,
+            stop_words=['</s>'],
             **kwargs):
         super().__init__(system=system,
                          meta_instruction=meta_instruction,
@@ -784,6 +785,7 @@ If a question does not make any sense, or is not factually coherent, explain why
                          eoa=eoa,
                          separator=separator,
                          session_len=session_len,
+                         stop_words=stop_words,
                          **kwargs)
 
     @classmethod
@@ -1207,13 +1209,14 @@ class Falcon(BaseModel):
 @MODELS.register_module(name='chatglm')
 class ChatGLM2(BaseModel):
 
-    def __init__(self, user='问：', eoh='\n\n', assistant='答：', eoa='\n\n', **kwargs):
+    def __init__(self, user='问：', eoh='\n\n', assistant='答：', eoa='\n\n', stop_words=['</s>'], **kwargs):
         super().__init__(**kwargs)
         self._user = user
         self._assistant = assistant
         self._eoh = eoh
         self._eoa = eoa
         self.count = 0
+        self.stop_words = stop_words
 
     def get_prompt(self, prompt, sequence_start=True):
         """get prompt."""
@@ -1270,6 +1273,7 @@ class SOLAR(BaseChatTemplate):
                  eoh='\n\n',
                  assistant='### Assistant:\n',
                  meta_instruction='',
+                 stop_words=['</s>'],
                  **kwargs):
         super().__init__(**kwargs)
         self.system = system
@@ -1278,6 +1282,7 @@ class SOLAR(BaseChatTemplate):
         self.eoh = eoh
         self.assistant = assistant
         self.meta_instruction = meta_instruction
+        self.stop_words = stop_words
 
     @classmethod
     def match(cls, model_path: str) -> Optional[str]:
@@ -1379,8 +1384,8 @@ class MistralChat(BaseChatTemplate):
     `https://huggingface.co/mistralai/Mixtral-8x7B-Instruct-v0.1`
     """
 
-    def __init__(self, user='[INST] ', eoh=' [/INST]', eoa='</s>', **kwargs):
-        super().__init__(user=user, eoh=eoh, eoa=eoa, **kwargs)
+    def __init__(self, user='[INST] ', eoh=' [/INST]', eoa='</s>', stop_words=['</s>'], **kwargs):
+        super().__init__(user=user, eoh=eoh, eoa=eoa, stop_words=stop_words, **kwargs)
 
     @classmethod
     def match(cls, model_path: str) -> Optional[str]:
@@ -1462,8 +1467,8 @@ class Deepseek(BaseChatTemplate):
 @MODELS.register_module(name=['internvl-zh'])
 class InternVLZH(BaseChatTemplate):
 
-    def __init__(self, user='<human>: ', eoh=' ', assistant='<bot>: ', eoa='</s>', **kwargs):
-        super().__init__(user=user, eoh=eoh, assistant=assistant, eoa=eoa, **kwargs)
+    def __init__(self, user='<human>: ', eoh=' ', assistant='<bot>: ', eoa='</s>', stop_words=['</s>'], **kwargs):
+        super().__init__(user=user, eoh=eoh, assistant=assistant, eoa=eoa, stop_words=stop_words, **kwargs)
 
     def get_prompt(self, prompt, sequence_start=True):
         if self.capability == 'chat':
@@ -1621,7 +1626,7 @@ class YiVL(BaseChatTemplate):
             eoh='\n',
             assistant='### Assistant:',
             eoa='\n',
-            stop_words=['###'],
+            stop_words=['<|endoftext|>', '<|im_end|>', '</s>'],
             **kwargs):
         super().__init__(meta_instruction=meta_instruction,
                          user=user,
