@@ -328,12 +328,10 @@ LlamaTritonModel<T>::LlamaTritonModel(std::string                            mod
     }
 
     // NOTE: This runs on Python main thread
-    if (comm_size_ > 1) {
-        group_ids_.resize(engine_param_.outer_dp_size);
-        for (size_t i = 0; i < group_ids_.size(); ++i) {
-            group_ids_[i] = comm::CreateHostGroupId("");
-            group_ids_[i]->Initialize();
-        }
+    group_ids_.resize(engine_param_.outer_dp_size);
+    for (size_t i = 0; i < group_ids_.size(); ++i) {
+        group_ids_[i] = comm::CreateHostGroupId("");
+        group_ids_[i]->Initialize();
     }
 
     const int device_num = engine_param_.outer_dp_size * comm_size_;
