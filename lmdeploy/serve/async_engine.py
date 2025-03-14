@@ -704,8 +704,6 @@ class AsyncEngine(LogitsMixin):
         stop_ids = []
         if skip_stop_tokens and not gen_config.ignore_eos:
             stop_ids = gen_config.stop_token_ids or []
-            if self.tokenizer.eos_token_id not in stop_ids:
-                stop_ids.append(self.tokenizer.eos_token_id)
 
         async with self.model_inst(session_id) as inst:
             token_ids = input_ids.copy()
