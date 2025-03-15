@@ -288,6 +288,7 @@ class PytorchEngineConfig:
     dtype: str = 'auto'
     tp: int = 1
     dp: int = 1
+    ep: int = 1
     dp_rank: int = 0
     session_len: int = None
     max_batch_size: int = None

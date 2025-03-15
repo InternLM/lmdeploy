@@ -403,7 +403,6 @@ class DeepseekVLV2ForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
             else:
                 param = params_dict[name]
                 load_weight(param, loaded_weight)
-
         self.language.load_weights(new_weights.items())
 
     def get_input_processor(self) -> BaseModelInputProcessor:
