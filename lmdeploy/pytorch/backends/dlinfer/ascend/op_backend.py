@@ -266,7 +266,7 @@ class AscendOpsBackend(DlinferOpsBackend):
     @staticmethod
     def support_ray():
         """support ray."""
-        rank_table_file = os.environ.get("ASCEND_RANK_TABLE_FILE_PATH", None)
+        rank_table_file = os.environ.get('ASCEND_RANK_TABLE_FILE_PATH', None)
         if rank_table_file:
             return True
         return False

@@ -3,11 +3,11 @@ import os
 from typing import Optional
 
 import torch
+
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.kernels.dlinfer import linear
 
 from ..linear import LinearBuilder, LinearImpl
-
 
 
 class DlinferLinearImpl(LinearImpl):
@@ -22,6 +22,7 @@ class DlinferLinearImpl(LinearImpl):
     def forward(self, x, weight: torch.Tensor, bias: Optional[torch.Tensor] = None, all_reduce: bool = False):
         """forward."""
         out = linear(x, weight, bias, False)
+
         if all_reduce:
             dist.all_reduce(out)
         return out
