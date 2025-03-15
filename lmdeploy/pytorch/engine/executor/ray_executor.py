@@ -289,7 +289,9 @@ class RayExecutor(ExecutorBase):
     
     async def _prefetch_migration_outputs(self):
         while True:
-            outs = await self.workers[0].get_migration_outputs.remote()
+            if not self.get_migration_outputs_dag:
+                self.get_migration_output_dag = self._compile_dag("get_migration_output", enable_asyncio=True)
+            outs = self.get_migration_output_dag.execute()
             self.remote_migration_outs.put_nowait(outs)
             await asyncio.sleep(0.00001)
 
@@ -320,7 +322,7 @@ class RayExecutor(ExecutorBase):
             ray.kill(worker)
         ray.util.remove_placement_group(self.placement_group)
 
-    def _compile_dag(self, fn="forward_async"):
+    def _compile_dag(self, fn="forward_async", enable_asyncio=False):
         """compile dag."""
         from ray.dag.input_node import InputNode
         from ray.dag.output_node import MultiOutputNode
@@ -328,8 +330,7 @@ class RayExecutor(ExecutorBase):
             outputs = [getattr(worker, fn).bind(input_data) for worker in self.workers]
             # outputs = [worker.forward_async.bind(input_data) for worker in self.workers]
             output = MultiOutputNode(outputs)
-
-        return output
+        return output.experimental_compile(enable_asyncio=True)
 
     async def forward_async(self, inputs):
         """start forward."""
