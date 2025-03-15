@@ -530,6 +530,12 @@ async def prefill(raw_request: Request) -> JSONResponse:
     raise NotImplementedError
 
 
+@router.post('/distserve/free_cache')
+async def free_cache(raw_request: Request) -> JSONResponse:
+    config = await raw_request.json()
+    session_id = int(config["session_id"])
+    VariableInterface.async_engine.free_cache(session_id)
+
 @router.post('/distserve/migration')
 async def migration(raw_request: Request) -> JSONResponse:
     """
@@ -537,17 +543,13 @@ async def migration(raw_request: Request) -> JSONResponse:
     prefill_block_ids:
     decode_block_ids:
     """
+    json_request = await raw_request.json()
+    if json_request["session_id"] == -1:
+        VariableInterface.session_id += 1
+        json_request["session_id"] = VariableInterface.session_id
 
-    await VariableInterface.async_engine.migrate(None)
+    await VariableInterface.async_engine.migrate(json_request)
     return {"status": True}
-
-
-@router.post('/distserve/free_cache')
-async def free_cache(raw_request: Request) -> JSONResponse:
-    config = await raw_request.json()
-    session_id = int(config["session_id"])
-    VariableInterface.async_engine.free_cache(session_id)
-
 
 @router.post('/v1/completions', dependencies=[Depends(check_api_key)])
 async def completions_v1(request: CompletionRequest, raw_request: Request = None):

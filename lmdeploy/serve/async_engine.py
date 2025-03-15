@@ -321,12 +321,6 @@ class AsyncEngine(LogitsMixin):
         num_total_gpu_blocks = self.engine.scheduler.block_manager.num_gpu_blocks
         return (num_free_gpu_blocks, num_total_gpu_blocks)
 
-    async def migrate(self, migration_request):
-        session_id = -1
-        async with self.model_inst(session_id) as inst:
-            await inst.async_migrate(session_id=session_id, input_ids=[1,2,31])
-            return
-
     def free_cache(self, session_id: int):
         session = self.engine.scheduler.unfreed_sessions[session_id]
         seqs = list(session.sequences.values())
@@ -432,6 +426,12 @@ class AsyncEngine(LogitsMixin):
         async for req in requests:
             gen = self.generate(**req, **kwargs)
             yield gen
+    
+    async def migrate(self, migration_request):
+        session_id = migration_request["session_id"]
+        async with self.model_inst(session_id) as inst:
+            await inst.async_migrate(session_id=session_id, input_ids=migration_request["input_ids"], block_ids=migration_request["block_ids"])
+            return
 
     def _infer(self, requests: Iterator[Dict], multiplex: bool, pbar=None, loop=None) -> Iterator[Iterator[Response]]:
 

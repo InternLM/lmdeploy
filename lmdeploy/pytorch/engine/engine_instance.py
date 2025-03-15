@@ -187,18 +187,15 @@ class EngineInstance:
         return outputs
     
     async def async_migrate(self,
-                              session_id: int,
-                              input_ids: List[int],
-                              gen_config: GenerationConfig = None,
-                              multimodal: InputMultiModalType = None,
-                              adapter_name: str = None,
-                              **kwargs):
-        print("?????")
-        """Send migration request.
-
-        Args:
-            migration_config: NotImplementedError
-        """
+                            session_id: int,
+                            input_ids: List[int],
+                            gen_config: GenerationConfig = None,
+                            block_ids=None,
+                            multimodal: InputMultiModalType = None,
+                            adapter_name: str = None,
+                            **kwargs):
+        """Send migration request."""
+        assert block_ids, "block ids must be set"
         if len(input_ids) > self.max_input_len:
             return EngineOutput(ResponseType.INPUT_LENGTH_ERROR, [], 0)
         gen_config = gen_config or GenerationConfig()
@@ -210,7 +207,7 @@ class EngineInstance:
             sampling_param=sampling_param,
             adapter_name=adapter_name,
             input_multimodals=multimodal,
-            block_ids=gen_config.block_ids,
+            block_ids=block_ids,
             remote_token_ids=gen_config.remote_token_ids,
             migration=True,
         )

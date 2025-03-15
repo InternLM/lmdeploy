@@ -411,14 +411,16 @@ class AutoModelAgent:
         prefill_engine_block_ids = inputs.prefill_block_ids
         decode_engine_block_ids = inputs.decode_block_ids
         blocks_to_migrate = torch.tensor(
-            [[inputs.prefill_engine_id, inputs.prefill_engine_id, init_block_id, target_block_id]
-            for (init_block_id, target_block_id) in zip(decode_engine_block_ids, prefill_engine_block_ids)])
+            [[prefill_engine_id, prefill_engine_id, init_block_id, target_block_id]
+            for (prefill_engine_id, init_block_id, target_block_id) in zip(inputs.prefill_engine_id, decode_engine_block_ids, prefill_engine_block_ids)])
+        print(inputs.prefill_engine_id, decode_engine_block_ids, prefill_engine_block_ids)
+        print(blocks_to_migrate)
         self.cache_engine.migrate(blocks_to_migrate)
 
         print("??SDSFSDFSF")
         # if self.tp_rank % self.tp == 0:
-        #     output = dict()
-        #     output_que.put_nowait(output)
+        output = dict()
+        output_que.put_nowait(output)
 
     @torch.inference_mode()
     async def _async_migration_loop_background(self, forward_event: asyncio.Event = None):
@@ -500,6 +502,7 @@ class AutoModelAgent:
         """async get migration output async."""
         assert self._migration_out_que is not None, ('Please start backendground task before forward.')
         out = await self._migration_out_que.get()
+        print("?????? get migration_output_async")
         return out
 
 

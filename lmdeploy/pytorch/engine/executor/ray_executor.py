@@ -230,7 +230,7 @@ class RayExecutor(ExecutorBase):
 
         if self.world_size > 1:
             logger.info('Warming up distribute environment, this might take long time, please waiting...')
-            ray.get([worker.warmup_dist.remote() for worker in self.workers])
+            ray.get([worker.warmup_dist.remote() for worker in self.workers])   
 
     def collective_rpc(self, method: str, args: Tuple[Any] = None, kwargs: Dict[str, Any] = None):
         """collective rpc."""
@@ -285,17 +285,14 @@ class RayExecutor(ExecutorBase):
                     if isinstance(v, np.ndarray):
                         out[k] = torch.from_numpy(v)
                 self.remote_outs.put_nowait(out)
-            print("???dddd")
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.00001)
     
     async def _prefetch_migration_outputs(self):
-        print("============sdfsdds")
         while True:
-            if not self.get_migration_outputs_dag:
-                self.get_migration_outputs_dag = self._compile_dag("get_migration_outputs")
-            print("============sdfsdds")
-            out = self.get_migration_outputs_dag.execute()    
-            self.remote_migration_outs.put_nowait(out)
+            outs = await self.workers[0].get_migration_outputs.remote()
+            self.remote_migration_outs.put_nowait(outs)
+            await asyncio.sleep(0.00001)
+
 
     def start(self, forward_event: asyncio.Event):
         """start engine loop."""
@@ -306,7 +303,8 @@ class RayExecutor(ExecutorBase):
         self.remote_migration_outs = asyncio.Queue()
         event_loop = asyncio.get_event_loop()
         self._prefetch_task = event_loop.create_task(self._prefetch_outputs())
-        self._prefetch_migration_task = event_loop.create_task(self._prefetch_migration_outputs())
+        for i in range(len(self.workers)):
+            self._prefetch_migration_task = event_loop.create_task(self._prefetch_migration_outputs())
 
     def stop(self):
         """stop engine loop."""
@@ -327,7 +325,6 @@ class RayExecutor(ExecutorBase):
         from ray.dag.input_node import InputNode
         from ray.dag.output_node import MultiOutputNode
         with InputNode() as input_data:
-             
             outputs = [getattr(worker, fn).bind(input_data) for worker in self.workers]
             # outputs = [worker.forward_async.bind(input_data) for worker in self.workers]
             output = MultiOutputNode(outputs)

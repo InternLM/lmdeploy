@@ -357,6 +357,7 @@ class Engine:
                     block_ids=req.data['block_ids'],
                     remote_token_ids=req.data['remote_token_ids']
                 )
+                print(req.data["block_ids"])
                 msg = next(iter(sess.sequences.values()))
                 __update_max_new_tokens(msg)
                 status = MessageStatus.WAITING if not migration else MessageStatus.WAITING_MIGRATION
@@ -741,7 +742,26 @@ class Engine:
             print("migration_running:", migration_running)
 
             if migration_running:
-                await self.executor.migration_async({"inputs": MigrationInputs(prefill_engine_id=0, prefill_engine_config=dict(), prefill_block_ids=[0], decode_block_ids=[0])})
+                total_prefill_block_ids = []
+                total_decode_block_ids = []
+                total_engine_ids = []
+                for msg in migration_running:
+                    prefill_block_ids = msg.block_ids
+                    decode_block_ids = list(self.scheduler.block_manager.get_block_table(msg=msg))
+                    assert len(prefill_block_ids) == len(decode_block_ids)
+                    engine_ids = [0] * len(prefill_block_ids)
+
+                    total_prefill_block_ids.extend(prefill_block_ids)
+                    total_decode_block_ids.extend(decode_block_ids)
+                    total_engine_ids.extend(engine_ids)
+
+                await self.executor.migration_async({
+                    "inputs": MigrationInputs(
+                        prefill_engine_id=total_engine_ids,
+                        prefill_engine_config=dict(),
+                        prefill_block_ids=total_prefill_block_ids,
+                        decode_block_ids=total_decode_block_ids)
+                })
                 migration_outputs = await self.executor.get_migration_output_async()
 
                 for msg in migration_running:

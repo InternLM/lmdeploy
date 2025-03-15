@@ -78,7 +78,8 @@ class WorkerWrapperBase:
         while True:
             ret = await self.get_migration_output_async()
             ret = self.pack_output(ret)
-            self.out_que.put_nowait(ret)
+            self.migration_out_que.put_nowait(ret)
+            print("base worker migration_out_que: ", ret)
             await asyncio.sleep(0.000001)
 
     async def get_outputs(self):
@@ -101,9 +102,12 @@ class WorkerWrapperBase:
             outs = []
             for _ in range(qsize):
                 outs.append(self.migration_out_que.get_nowait())
+            print(f"outs: {outs}")
             return outs
         else:
-            return [await self.migration_out_que.get()]
+            outs = [await self.migration_out_que.get()]
+            print(f"outs: {outs}")
+            return outs
     
     def init_migration(self, config):
         return self.model_agent.cache_engine.init_migration(config)
