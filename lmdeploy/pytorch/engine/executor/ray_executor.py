@@ -285,11 +285,15 @@ class RayExecutor(ExecutorBase):
                     if isinstance(v, np.ndarray):
                         out[k] = torch.from_numpy(v)
                 self.remote_outs.put_nowait(out)
+            print("???dddd")
+            await asyncio.sleep(1)
     
     async def _prefetch_migration_outputs(self):
+        print("============sdfsdds")
         while True:
             if not self.get_migration_outputs_dag:
                 self.get_migration_outputs_dag = self._compile_dag("get_migration_outputs")
+            print("============sdfsdds")
             out = self.get_migration_outputs_dag.execute()    
             self.remote_migration_outs.put_nowait(out)
 
@@ -323,6 +327,7 @@ class RayExecutor(ExecutorBase):
         from ray.dag.input_node import InputNode
         from ray.dag.output_node import MultiOutputNode
         with InputNode() as input_data:
+             
             outputs = [getattr(worker, fn).bind(input_data) for worker in self.workers]
             # outputs = [worker.forward_async.bind(input_data) for worker in self.workers]
             output = MultiOutputNode(outputs)

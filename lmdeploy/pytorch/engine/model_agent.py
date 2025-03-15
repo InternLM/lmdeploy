@@ -329,12 +329,12 @@ class AutoModelAgent:
 
         for idx in range(loop_count):
             if not inputs.is_decoding and self.cache_config.role == EngineRole.Decode:
-                # prefill_engine_block_ids = functools.reduce(lambda x, y: x + y, inputs.prefill_engine_block_ids)
-                # decode_engine_block_ids = functools.reduce(lambda x, y: x + y, inputs.decode_engine_block_ids)
-                # blocks_to_migrate = torch.tensor(
-                #     [[0, 0, init_block_id, target_block_id]
-                #     for (init_block_id, target_block_id) in zip(decode_engine_block_ids, prefill_engine_block_ids)])
-                # self.cache_engine.migrate(blocks_to_migrate)
+                prefill_engine_block_ids = functools.reduce(lambda x, y: x + y, inputs.prefill_engine_block_ids)
+                decode_engine_block_ids = functools.reduce(lambda x, y: x + y, inputs.decode_engine_block_ids)
+                blocks_to_migrate = torch.tensor(
+                    [[0, 0, init_block_id, target_block_id]
+                    for (init_block_id, target_block_id) in zip(decode_engine_block_ids, prefill_engine_block_ids)])
+                self.cache_engine.migrate(blocks_to_migrate)
                 if rank % tp == 0:
                     event = torch.cuda.Event()
                     event.record()
@@ -414,9 +414,11 @@ class AutoModelAgent:
             [[inputs.prefill_engine_id, inputs.prefill_engine_id, init_block_id, target_block_id]
             for (init_block_id, target_block_id) in zip(decode_engine_block_ids, prefill_engine_block_ids)])
         self.cache_engine.migrate(blocks_to_migrate)
-        if self.tp_rank % self.tp == 0:
-            output = dict()
-            output_que.put_nowait(output)
+
+        print("??SDSFSDFSF")
+        # if self.tp_rank % self.tp == 0:
+        #     output = dict()
+        #     output_que.put_nowait(output)
 
     @torch.inference_mode()
     async def _async_migration_loop_background(self, forward_event: asyncio.Event = None):
