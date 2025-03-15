@@ -14,24 +14,16 @@ def get_turbomind_model_list(tp_num: int = None,
     config = get_config()
 
     if quant_policy is None:
-        if is_converted:
-            case_list = [
-                x for x in copy.deepcopy(config.get('turbomind_' + model_type))
-                if x not in config.get('turbomind_quatization').get('no_converted')
-            ]
-        else:
-            case_list = copy.deepcopy(config.get('turbomind_' + model_type))
+        case_list_base = copy.deepcopy(config.get('turbomind_' + model_type))
     else:
-        if is_converted:
-            case_list = [
-                x for x in config.get('turbomind_' + model_type) if x not in config.get('turbomind_quatization').get(
-                    'no_kvint' + str(quant_policy) and x not in config.get('turbomind_quatization').get('no_converted'))
-            ]
-        else:
-            case_list = [
-                x for x in config.get('turbomind_' + model_type)
-                if x not in config.get('turbomind_quatization').get('no_kvint' + str(quant_policy))
-            ]
+        case_list_base = [
+            x for x in config.get('turbomind_' + model_type)
+            if x not in config.get('turbomind_quatization').get('no_kvint' + str(quant_policy))
+        ]
+    if is_converted:
+        case_list =  [x for x in case_list_base if x in config.get('turbomind_quatization').get('converted')]
+    else:
+        case_list = copy.deepcopy(case_list_base)
 
     quatization_case_config = config.get('turbomind_quatization')
     for key in config.get('turbomind_' + model_type):
