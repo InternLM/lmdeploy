@@ -200,9 +200,11 @@ class TurboMind:
 
         self._postprocess_config(tm_model.tm_config, engine_config)
 
+        devices: List[int] = engine_config.devices or list(range(self.gpu_count))
         model_comm = _tm.AbstractTransformerModel.create_llama_model(model_dir='',
                                                                      config=yaml.safe_dump(self.config_dict),
                                                                      tensor_para_size=self.gpu_count,
+                                                                     devices=devices,
                                                                      data_type=self.config.model_config.weight_type)
 
         # create empty weight
@@ -235,6 +237,7 @@ class TurboMind:
                            f'{cfg.tensor_para_size}, using tp={cfg.tensor_para_size}')
         self.gpu_count = cfg.tensor_para_size
         engine_config.tp = self.gpu_count
+        devices: List[int] = engine_config.devices or list(range(self.gpu_count))
 
         self._postprocess_config(cfg, engine_config)
 
@@ -242,6 +245,7 @@ class TurboMind:
         model_comm = _tm.AbstractTransformerModel.create_llama_model(model_dir=weight_dir,
                                                                      config=yaml.safe_dump(self.config_dict),
                                                                      tensor_para_size=self.gpu_count,
+                                                                     devices=devices,
                                                                      data_type=self.config.weight_type)
 
         # create weight and load params

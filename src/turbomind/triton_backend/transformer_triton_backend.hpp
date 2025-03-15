@@ -80,6 +80,8 @@ struct AbstractTransformerModel {
 
     virtual int getTensorParaSize()   = 0;
     virtual int getPipelineParaSize() = 0;
+
+    virtual const std::vector<int>& getDevices() const = 0;  // device map;
 };
 
 }  // namespace turbomind
