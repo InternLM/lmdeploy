@@ -22,7 +22,6 @@ class DlinferLinearImpl(LinearImpl):
     def forward(self, x, weight: torch.Tensor, bias: Optional[torch.Tensor] = None, all_reduce: bool = False):
         """forward."""
         out = linear(x, weight, bias, False)
-
         if all_reduce:
             dist.all_reduce(out)
         return out
