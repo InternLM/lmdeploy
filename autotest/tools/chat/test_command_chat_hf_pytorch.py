@@ -69,7 +69,7 @@ def test_hf_pytorch_chat_tp4(config, model, cli_case_config, worker_id):
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_pytorch_chat
 @pytest.mark.gpu_num_1
-@pytest.mark.parametrize('model', get_torch_model_list(tp_num=1))
+@pytest.mark.parametrize('model', get_torch_model_list(tp_num=1, quant_policy=4))
 def test_hf_pytorch_chat_kvin4_tp1(config, model, cli_case_config, worker_id):
     usercase = 'chat_testcase'
     if 'coder' in model:
@@ -91,7 +91,7 @@ def test_hf_pytorch_chat_kvin4_tp1(config, model, cli_case_config, worker_id):
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_pytorch_chat
 @pytest.mark.gpu_num_2
-@pytest.mark.parametrize('model', get_torch_model_list(tp_num=2))
+@pytest.mark.parametrize('model', get_torch_model_list(tp_num=2, quant_policy=4))
 def test_hf_pytorch_chat_kvin4_tp2(config, model, cli_case_config, worker_id):
     usercase = 'chat_testcase'
     result, chat_log, msg = hf_command_line_test(config,
@@ -111,7 +111,7 @@ def test_hf_pytorch_chat_kvin4_tp2(config, model, cli_case_config, worker_id):
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_pytorch_chat
 @pytest.mark.gpu_num_4
-@pytest.mark.parametrize('model', get_torch_model_list(tp_num=4))
+@pytest.mark.parametrize('model', get_torch_model_list(tp_num=4, quant_policy=4))
 def test_hf_pytorch_chat_kvin4_tp4(config, model, cli_case_config, worker_id):
     usercase = 'chat_testcase'
     result, chat_log, msg = hf_command_line_test(config,
@@ -126,6 +126,70 @@ def test_hf_pytorch_chat_kvin4_tp4(config, model, cli_case_config, worker_id):
 
     assert result, msg
 
+
+
+@pytest.mark.order(10)
+@pytest.mark.usefixtures('cli_case_config')
+@pytest.mark.hf_pytorch_chat
+@pytest.mark.gpu_num_1
+@pytest.mark.parametrize('model', get_torch_model_list(tp_num=1, quant_policy=8))
+def test_hf_pytorch_chat_kvin8_tp1(config, model, cli_case_config, worker_id):
+    usercase = 'chat_testcase'
+    if 'coder' in model:
+        usercase = 'code_testcase'
+    result, chat_log, msg = hf_command_line_test(config,
+                                                 usercase,
+                                                 cli_case_config.get(usercase),
+                                                 model,
+                                                 'pytorch',
+                                                 cuda_prefix=get_cuda_prefix_by_workerid(worker_id),
+                                                 extra='--quant_policy 8')
+    if chat_log is not None:
+        allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
+
+    assert result, msg
+
+
+@pytest.mark.order(10)
+@pytest.mark.usefixtures('cli_case_config')
+@pytest.mark.hf_pytorch_chat
+@pytest.mark.gpu_num_2
+@pytest.mark.parametrize('model', get_torch_model_list(tp_num=2, quant_policy=8))
+def test_hf_pytorch_chat_kvin8_tp2(config, model, cli_case_config, worker_id):
+    usercase = 'chat_testcase'
+    result, chat_log, msg = hf_command_line_test(config,
+                                                 usercase,
+                                                 cli_case_config.get(usercase),
+                                                 model,
+                                                 'pytorch',
+                                                 cuda_prefix=get_cuda_prefix_by_workerid(worker_id, tp_num=2),
+                                                 extra='--quant_policy 8')
+    if chat_log is not None:
+        allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
+
+    assert result, msg
+
+
+@pytest.mark.order(10)
+@pytest.mark.usefixtures('cli_case_config')
+@pytest.mark.hf_pytorch_chat
+@pytest.mark.gpu_num_4
+@pytest.mark.parametrize('model', get_torch_model_list(tp_num=4, quant_policy=8))
+def test_hf_pytorch_chat_kvin8_tp4(config, model, cli_case_config, worker_id):
+    usercase = 'chat_testcase'
+    result, chat_log, msg = hf_command_line_test(config,
+                                                 usercase,
+                                                 cli_case_config.get(usercase),
+                                                 model,
+                                                 'pytorch',
+                                                 cuda_prefix=get_cuda_prefix_by_workerid(worker_id, tp_num=4),
+                                                 extra='--quant_policy 8')
+    if chat_log is not None:
+        allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
+
+    assert result, msg
+    
+    
 @pytest.mark.order(10)
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_turbomind_chat
