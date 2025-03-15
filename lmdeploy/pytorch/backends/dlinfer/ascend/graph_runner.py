@@ -1,11 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import warnings
 from importlib import import_module
-from typing import List
+from typing import List, Optional, Sequence
 
 import torch
 import torch.distributed
 import torch_npu
+from torch import Tensor
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.pytorch.model_inputs import StepContext
@@ -77,11 +78,36 @@ class AscendGraphRunner(GraphRunner):
         dlinfer_backends_module = import_module('lmdeploy.pytorch.backends.dlinfer')
 
         # prefill_attention
+        def prefill_attention_abstract_impl(
+            query_states: Tensor,
+            key_states: Tensor,
+            value_states: Tensor,
+            attn_output: Tensor,
+            key_cache: Tensor,
+            value_cache: Tensor,
+            block_offsets: Tensor,
+            q_start_loc: Tensor,
+            q_seq_len: Tensor,
+            kv_seq_len: Tensor,
+            cu_seq_lens_kv: Tensor,
+            max_q_seq_len: int,
+            max_kv_seq_len: int,
+            block_size: int,
+            attn_mask: Sequence[Optional[Tensor]],
+            softmax_scale: Optional[float],
+            is_unpaged_prefill: Optional[bool],
+            kv_scales: Optional[Tensor],
+            kv_zeros: Optional[Tensor],
+            quant_bits: Optional[int],
+        ) -> Tensor:
+            return query_states.new_empty((query_states.shape[0], query_states.shape[1], value_states.shape[-1]))
+
         module_str = 'pagedattention'
         paged_attn_module = getattr(dlinfer_kernels_module, module_str)
         func_str = 'prefill_attention'
         prefill_attn_origin = getattr(paged_attn_module, func_str)
-        prefill_attn_registered = register_custom_op(f'lmdeploy::{func_str}', ['attn_output'])(prefill_attn_origin)
+        prefill_attn_registered = register_custom_op(
+            f'lmdeploy::{func_str}', impl_abstract_func=prefill_attention_abstract_impl)(prefill_attn_origin)
         setattr(paged_attn_module, func_str, prefill_attn_registered)
 
         # apply_rotary_pos_emb
