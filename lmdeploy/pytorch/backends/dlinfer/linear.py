@@ -28,7 +28,6 @@ class DlinferLinearImpl(LinearImpl):
                 scatter_size: List[int] = None):
         """forward."""
         out = linear(x, weight, bias, False)
-
         if all_reduce:
             dist.all_reduce(out)
         return out
