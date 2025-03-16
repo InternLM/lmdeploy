@@ -417,10 +417,14 @@ class AutoModelAgent:
         print(blocks_to_migrate)
         self.cache_engine.migrate(blocks_to_migrate)
 
-        print("??SDSFSDFSF")
-        # if self.tp_rank % self.tp == 0:
-        output = dict()
-        output_que.put_nowait(output)
+        output_tensors = [[torch.tensor(0), torch.tensor(0)]]
+        input_tensors = [torch.tensor(1)]
+        self.dist_ctx.world_cpu_group.gather(root=0, output_tensors=output_tensors, input_tensor=input_tensors)
+
+        if self.tp_rank % self.tp == 0:
+            output = dict()
+            output_que.put_nowait(output)
+            print(input_tensors, output_tensors)
 
     @torch.inference_mode()
     async def _async_migration_loop_background(self, forward_event: asyncio.Event = None):
