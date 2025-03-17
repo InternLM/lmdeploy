@@ -68,8 +68,6 @@ class LogitsMixin:
                                          sequence_start=sequence_start,
                                          sequence_end=sequence_end,
                                          step=steps[i] if steps else 0) as gen:
-                    logger.info(
-                        f'session {i}, sequence_start {sequence_start}, sequence_end {sequence_end}, step {steps}')
                     async for outputs in gen:
                         pass
                     logits[i] = outputs.logits[:input_len, :]
@@ -163,8 +161,6 @@ class LogitsMixin:
             step = [i]
             # shift token_ids by 1 to the left
             target_ids = input_ids[i + 1:i + 1 + max_input_len]
-            logger.info(
-                f'get long text ppl: token_ids size {len(token_ids)}, target_ids size {len(target_ids)}, step {i}')
             loss, session_ids = self._get_ppl(input_ids=[token_ids],
                                               max_input_len=len(token_ids),
                                               target_ids=[target_ids],
