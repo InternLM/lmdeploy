@@ -25,8 +25,10 @@
 
 #if NCCL_VERSION_CODE >= NCCL_VERSION(2, 19, 0)
 #define NCCL_BUFF_REG 1
-#else
-#define NCCL_BUFF_REG 0
+#endif
+
+#if NCCL_VERSION_CODE >= NCCL_VERSION(2, 18, 0)
+#define NCCL_COMM_SPLIT 1
 #endif
 
 namespace turbomind::comm {
@@ -142,11 +144,15 @@ public:
 
     int Split(int color, int key, int group) override
     {
+#if NCCL_COMM_SPLIT
         ncclComm_t comm{};
         NCCLCHECK(ncclCommSplit(groups_.at(group), color, key, &comm, nullptr));
         int index = groups_.size();
         groups_.push_back(comm);
         return index;
+#else
+        TM_LOG_ERROR("[NCCL] This ")
+#endif
     }
 
     int Query(QueryAttr attr) const noexcept override
