@@ -3,10 +3,11 @@
 import asyncio
 import copy
 import json
+import math
 import os.path as osp
 import sys
-from collections.abc import Sequence
 from collections import defaultdict
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from functools import partial
@@ -16,7 +17,6 @@ from typing import Dict, List
 import numpy as np
 import torch
 import yaml
-import math
 from torch.nn.utils.rnn import pad_sequence
 
 import lmdeploy
@@ -98,7 +98,7 @@ class TurboMind:
             _engine_config.max_batch_size = get_max_batch_size('cuda')
         assert _engine_config.max_batch_size > 0, 'max_batch_size should be' \
             f' greater than 0, but got {_engine_config.max_batch_size}'
-        
+
         self._update_parallel_config(_engine_config)
 
         self.gpu_count = _engine_config.device_num

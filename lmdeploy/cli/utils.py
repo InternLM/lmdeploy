@@ -151,13 +151,10 @@ class ArgumentHelper:
                                    type=int,
                                    default=1,
                                    help='GPU number used in tensor parallelism. Should be 2^n')
-    
+
     @staticmethod
     def dp(parser):
-        return parser.add_argument('--dp',
-                                   type=int,
-                                   default=1,
-                                   help='data parallel')
+        return parser.add_argument('--dp', type=int, default=1, help='data parallel')
 
     @staticmethod
     def session_id(parser):

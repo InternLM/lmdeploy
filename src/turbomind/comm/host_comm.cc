@@ -1,3 +1,5 @@
+// Copyright (c) OpenMMLab. All rights reserved.
+
 #include "src/turbomind/comm/host_comm.h"
 
 namespace turbomind::comm {

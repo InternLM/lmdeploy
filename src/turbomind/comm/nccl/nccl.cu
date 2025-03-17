@@ -151,7 +151,9 @@ public:
         groups_.push_back(comm);
         return index;
 #else
-        TM_LOG_ERROR("[NCCL] This ")
+        TM_LOG_ERROR("[NCCL] This binary is compiled with NCCL version < 2.18 that has no `ncclCommSplit` support");
+        FT_CHECK(0);
+        return {};
 #endif
     }
 

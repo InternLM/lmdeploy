@@ -2,8 +2,8 @@
 
 import os.path as osp
 from abc import ABC
-from collections.abc import Sequence
 from collections import defaultdict
+from collections.abc import Sequence
 
 import torch
 import tqdm

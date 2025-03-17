@@ -1,4 +1,4 @@
-
+// Copyright (c) OpenMMLab. All rights reserved.
 
 #include <algorithm>
 #include <atomic>
