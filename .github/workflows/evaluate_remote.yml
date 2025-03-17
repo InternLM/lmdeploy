@@ -150,7 +150,6 @@ jobs:
             pip install opencompass[lmdeploy] --cache-dir ${{env.PIP_CACHE_PATH}}
             pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --cache-dir ${{env.PIP_CACHE_PATH}}
             FLASH_ATTENTION_FORCE_BUILD=TRUE pip install /fs-computility/llm/qa-llm-cicd/packages/flash_attn-2.7.0.post2+cu12torch2.5cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
-            pip install xformers --index-url https://download.pytorch.org/whl/cu121 --cache-dir ${{env.PIP_CACHE_PATH}}
             cp -r /root/nltk_data ${{env.CONDA_PATH}}/envs/${{env.CONDA_ENV}}/nltk_data
       - name: Prepare - download lmdeploy - cu12
         if: ${{github.event_name == 'schedule' || inputs.build_lmdeploy}}
@@ -196,6 +195,7 @@ jobs:
           path: 'opencompass'
       - name:  modify config
         run: |
+          mkdir opencompass
           cp .github/scripts/eval_regression_${{matrix.regression_func}}.py opencompass/eval_regression_${{matrix.regression_func}}.py
           cp -r /fs-computility/llm/qa-llm-cicd/ocplayground/template/configs_cluster/volc.py opencompass
           cat /fs-computility/llm/qa-llm-cicd/config/lmdeploy_test_config.txt >> opencompass/eval_regression_${{matrix.regression_func}}.py
