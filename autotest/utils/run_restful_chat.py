@@ -289,6 +289,7 @@ def run_vl_testcase(config, port: int = DEFAULT_PORT):
     for item in api_client.chat_completions_v1(model=model_name, messages=prompt_messages):
         continue
     file.writelines(str(item) + '\n')
+    file.close()
 
     allure.attach.file(restful_log, attachment_type=allure.attachment_type.TEXT)
 

@@ -118,6 +118,7 @@ class CLI(object):
         tb_group._group_actions.append(quant_policy)
         ArgumentHelper.model_format(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
+        ArgumentHelper.communicator(tb_group)
 
     @staticmethod
     def add_parser_checkenv():

@@ -37,17 +37,20 @@ def get_distributed_executor_backend(world_size: int, dp: int, device_type: str,
     backend = get_backend(device_type)
     if not backend.support_ray():
         return _log_and_set_backend(f'device={device_type} does not support ray.', 'mp')
-
-    device_count = backend.device_count()
-    if device_count is None:
-        return _log_and_set_backend(f'device={device_type} can not get device_count.', 'mp')
-
-    if device_count < world_size:
-        executor_backend = 'ray'
-        return _log_and_set_backend(f'local device_count({device_count})<world_size({world_size}),', 'ray')
     else:
-        executor_backend = 'mp'
-        return _log_and_set_backend(f'local device_count({device_count})>=world_size({world_size}),', 'mp')
+        return 'ray'
+
+    # TODO: fix mp hanging, do not delete the comment.
+    # device_count = backend.device_count()
+    # if device_count is None:
+    #     return _log_and_set_backend(f'device={device_type} can not get device_count.', 'mp')
+
+    # if device_count < world_size:
+    #     executor_backend = 'ray'
+    #     return _log_and_set_backend(f'local device_count({device_count})<world_size({world_size}),', 'ray')
+    # else:
+    #     executor_backend = 'mp'
+    #     return _log_and_set_backend(f'local device_count({device_count})>=world_size({world_size}),', 'mp')
 
 
 def build_executor(model_path: str,

@@ -1,3 +1,4 @@
 gradio
+partial_json_parser
 protobuf
 tritonclient[grpc]

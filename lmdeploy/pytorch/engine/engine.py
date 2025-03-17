@@ -40,10 +40,10 @@ class InferOutput:
     logits: torch.Tensor = None
 
 
-def _tensorlize_block_offsets(block_offsets):
+def _tensorlize_block_offsets(block_offsets, dtype=torch.int32):
     """tensorlize block_offsets."""
     from torch.nn.utils.rnn import pad_sequence
-    block_offsets = [torch.from_numpy(off) for off in block_offsets]
+    block_offsets = [torch.from_numpy(off).to(dtype) for off in block_offsets]
     block_offsets = pad_sequence(block_offsets, batch_first=True)
     return block_offsets
 
@@ -371,6 +371,13 @@ class Engine:
     def gpu_count(self):
         return self.tp * self.dp
 
+    @property
+    def torch_int_dtype(self):
+        """return int32 for cuda, int64 for others."""
+        if self.executor.device_type == 'cuda':
+            return torch.int32
+        return torch.int64
+
     @logging_timer('CreateModelInputs', logger)
     def create_model_inputs(self, messages: SeqList, is_prefill: bool):
         """create model inputs from messages.
@@ -398,7 +405,7 @@ class Engine:
         max_q_seq_length = seq_length.max().item()
 
         block_offsets = self.scheduler.get_block_tables(messages)
-        block_offsets = _tensorlize_block_offsets(block_offsets)
+        block_offsets = _tensorlize_block_offsets(block_offsets, dtype=self.torch_int_dtype)
 
         local_adapter_ids = None
         if self.adapter_manager.num_adapters() > 1:
@@ -554,7 +561,7 @@ class Engine:
                 outputs[session_id].logits = logits.split(seq_length)[idx]
         return outputs
 
-    def _make_forward_inputs(self, prefill: bool = None):
+    def _make_forward_inputs(self, prefill: bool = None, enable_empty: bool = False):
         """make forward inputs."""
         prefill_interval = self.scheduler_config.prefill_interval
 
@@ -609,6 +616,10 @@ class Engine:
         if prefill is None:
             prefill = self._do_prefill()
         scheduler_output = self.scheduler.schedule(is_prefill=prefill, prealloc_size=prefill_interval)
+
+        if enable_empty and len(scheduler_output.running) == 0:
+            return None
+
         # schedule decoding if no valid prefill reqs.
         if prefill and len(scheduler_output.running) == 0:
             prefill = False
@@ -709,9 +720,13 @@ class Engine:
         forward_inputs = None
         next_running = None
 
-        async def _send_next_inputs(prefill: bool = None):
+        async def _send_next_inputs(prefill: bool = None, enable_empty: bool = False):
             nonlocal forward_inputs, next_running
-            forward_inputs = self._make_forward_inputs(prefill)
+            forward_inputs = self._make_forward_inputs(prefill, enable_empty)
+            if forward_inputs is None:
+                forward_inputs = None
+                next_running = None
+                return
             next_running = forward_inputs.pop('running')
             await self.executor.forward_async(forward_inputs)
 
@@ -730,7 +745,7 @@ class Engine:
 
             if enable:
                 # send next forward
-                await _send_next_inputs(prefill)
+                await _send_next_inputs(prefill, True)
 
         while True:
             if next_running is None:
