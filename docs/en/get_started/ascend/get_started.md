@@ -109,12 +109,24 @@ Add `--device ascend` in the serve command.
 lmdeploy serve api_server --backend pytorch --device ascend --eager-mode internlm/internlm2_5-7b-chat
 ```
 
+Run the following commands to launch docker container for lmdeploy LLM serving:
+```bash
+docker exec -it --net=host crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:latest \
+    bash -i -c "lmdeploy serve api_server --backend pytorch --device ascend --eager-mode internlm/internlm2_5-7b-chat"
+```
+
 ### Serve a VLM model
 
 Add `--device ascend` in the serve command
 
 ```bash
 lmdeploy serve api_server --backend pytorch --device ascend --eager-mode OpenGVLab/InternVL2-2B
+```
+
+Run the following commands to launch docker container for lmdeploy VLM serving:
+```bash
+docker exec -it --net=host crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:latest \
+    bash -i -c "lmdeploy serve api_server --backend pytorch --device ascend --eager-mode OpenGVLab/InternVL2-2B"
 ```
 
 ## Inference with Command line Interface
@@ -128,7 +140,7 @@ lmdeploy chat internlm/internlm2_5-7b-chat --backend pytorch --device ascend --e
 Run the following commands to launch lmdeploy chatting after starting container:
 
 ```bash
-docker exec -it lmdeploy_ascend_demo \
+docker exec -it crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:latest \
     bash -i -c "lmdeploy chat --backend pytorch --device ascend --eager-mode internlm/internlm2_5-7b-chat"
 ```
 
