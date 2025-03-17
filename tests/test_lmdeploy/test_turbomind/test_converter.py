@@ -62,7 +62,7 @@ def test_update_from_engine_config():
     engine_config = TurbomindEngineConfig()
     update_parallel_config(engine_config)
     config.update_from_engine_config(engine_config)
-    assert config.attn_tp_size == 1
+    assert config.model_config.attn_tp_size == 1
     assert config.session_len == 32768
 
     config = copy.deepcopy(_config)
@@ -80,7 +80,7 @@ def test_update_from_engine_config():
 
     config.update_from_engine_config(engine_config)
 
-    assert (config.attn_tp_size == engine_config.attn_tp_size)
+    assert (config.model_config.attn_tp_size == engine_config.attn_tp_size)
     assert (config.session_len == engine_config.session_len)
     assert (config.attention_config.rope_scaling_factor == engine_config.rope_scaling_factor)
     assert (config.attention_config.rope_scaling_factor == engine_config.rope_scaling_factor)
