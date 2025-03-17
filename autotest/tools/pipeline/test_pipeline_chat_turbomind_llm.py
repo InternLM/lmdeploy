@@ -160,7 +160,12 @@ def test_pipeline_chat_fallback_backend_tp1(config, common_case_config, model, c
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=1)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    run_pipeline_chat_test(config, common_case_config, model, 'turbomind', worker_id, {'communicator': communicator})
+    run_pipeline_chat_test(config,
+                           common_case_config,
+                           model,
+                           'turbomind',
+                           worker_id, {'communicator': communicator},
+                           is_smoke=True)
 
 
 @pytest.mark.order(6)
@@ -177,10 +182,15 @@ def test_pipeline_chat_fallback_backend_kvint8_tp1(config, common_case_config, m
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=1)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    run_pipeline_chat_test(config, common_case_config, model, 'turbomind-kvint', worker_id, {
-        'quant_policy': 8,
-        'communicator': communicator
-    })
+    run_pipeline_chat_test(config,
+                           common_case_config,
+                           model,
+                           'turbomind-kvint',
+                           worker_id, {
+                               'quant_policy': 8,
+                               'communicator': communicator
+                           },
+                           is_smoke=True)
 
 
 @pytest.mark.order(6)
@@ -195,7 +205,12 @@ def test_pipeline_chat_fallback_backend_tp2(config, common_case_config, model, c
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    run_pipeline_chat_test(config, common_case_config, model, 'turbomind', worker_id, {'communicator': communicator})
+    run_pipeline_chat_test(config,
+                           common_case_config,
+                           model,
+                           'turbomind',
+                           worker_id, {'communicator': communicator},
+                           is_smoke=True)
 
 
 @pytest.mark.order(6)
@@ -210,10 +225,15 @@ def test_pipeline_chat_fallback_backend_kvint8_tp2(config, common_case_config, m
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    run_pipeline_chat_test(config, common_case_config, model, 'turbomind-kvint', worker_id, {
-        'quant_policy': 8,
-        'communicator': communicator
-    })
+    run_pipeline_chat_test(config,
+                           common_case_config,
+                           model,
+                           'turbomind-kvint',
+                           worker_id, {
+                               'quant_policy': 8,
+                               'communicator': communicator
+                           },
+                           is_smoke=True)
 
 
 @pytest.mark.order(6)
@@ -233,7 +253,7 @@ def test_pipeline_chat_pr(config, common_case_config, model, communicator, worke
                            'turbomind',
                            worker_id,
                            extra={'communicator': communicator},
-                           is_pr_test=True)
+                           is_smoke=True)
 
 
 @pytest.mark.order(6)

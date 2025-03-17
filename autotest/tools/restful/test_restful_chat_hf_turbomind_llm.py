@@ -1,6 +1,6 @@
 import pytest
 from utils.config_utils import get_communicator_list, get_turbomind_model_list, get_workerid
-from utils.run_restful_chat import run_all_step, start_restful_api, stop_restful_api
+from utils.run_restful_chat import run_all_step, run_reasoning_case, start_restful_api, stop_restful_api
 
 DEFAULT_PORT = 23333
 
@@ -285,98 +285,6 @@ def test_restful_chat_fallback_backend_tp2(config, common_case_config, worker_id
 @pytest.mark.restful_api
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_2
-@pytest.mark.parametrize('prepare_environment', [
-    {
-        'model': 'internlm/internlm2_5-20b-chat',
-        'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6',
-        'tp_num': 2
-    },
-    {
-        'model': 'internlm/internlm2_5-20b-chat-inner-4bits',
-        'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6',
-        'tp_num': 2
-    },
-    {
-        'model': 'mistralai/Mixtral-8x7B-Instruct-v0.1',
-        'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6',
-        'tp_num': 2
-    },
-    {
-        'model': 'internlm/internlm2_5-20b-chat',
-        'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6',
-        'tp_num': 2,
-        'extra': ' --communicator native'
-    },
-    {
-        'model': 'internlm/internlm2_5-20b-chat-inner-4bits',
-        'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6',
-        'tp_num': 2,
-        'extra': ' --communicator native'
-    },
-    {
-        'model': 'mistralai/Mixtral-8x7B-Instruct-v0.1',
-        'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6',
-        'tp_num': 2,
-        'extra': ' --communicator native'
-    },
-],
-                         indirect=True)
-def test_restful_chat_fallback_tp1(config, common_case_config):
-    case_config = {k: v for k, v in common_case_config.items() if k == 'memory_test'}
-    run_all_step(config, {key: value for key, value in case_config.items() if key == 'memory_test'})
-
-
-@pytest.mark.order(7)
-@pytest.mark.usefixtures('common_case_config')
-@pytest.mark.restful_api
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.gpu_num_2
-@pytest.mark.parametrize('prepare_environment', [
-    {
-        'model': 'internlm/internlm2_5-20b-chat',
-        'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6',
-        'tp_num': 2
-    },
-    {
-        'model': 'internlm/internlm2_5-20b-chat-inner-4bits',
-        'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6',
-        'tp_num': 2
-    },
-    {
-        'model': 'mistralai/Mixtral-8x7B-Instruct-v0.1',
-        'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6',
-        'tp_num': 2
-    },
-    {
-        'model': 'internlm/internlm2_5-20b-chat',
-        'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6',
-        'tp_num': 2,
-        'extra': ' --communicator native'
-    },
-    {
-        'model': 'internlm/internlm2_5-20b-chat-inner-4bits',
-        'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6',
-        'tp_num': 2,
-        'extra': ' --communicator native'
-    },
-    {
-        'model': 'mistralai/Mixtral-8x7B-Instruct-v0.1',
-        'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6',
-        'tp_num': 2,
-        'extra': ' --communicator native'
-    },
-],
-                         indirect=True)
-def test_restful_chat_fallback_tp2(config, common_case_config):
-    case_config = {k: v for k, v in common_case_config.items() if k == 'memory_test'}
-    run_all_step(config, {key: value for key, value in case_config.items() if key == 'memory_test'})
-
-
-@pytest.mark.order(7)
-@pytest.mark.usefixtures('common_case_config')
-@pytest.mark.restful_api
-@pytest.mark.flaky(reruns=0)
-@pytest.mark.gpu_num_2
 @pytest.mark.pr_test
 @pytest.mark.parametrize('prepare_environment', [
     {
@@ -415,8 +323,7 @@ def test_restful_chat_fallback_tp2(config, common_case_config):
 ],
                          indirect=True)
 def test_restful_chat_pr(config, common_case_config):
-    case_config = {k: v for k, v in common_case_config.items() if k == 'memory_test'}
-    run_all_step(config, {key: value for key, value in case_config.items() if key == 'memory_test'})
+    run_all_step(config, {key: value for key, value in common_case_config.items() if key == 'memory_test'})
 
 
 @pytest.mark.order(7)
@@ -435,3 +342,87 @@ def test_modelscope_restful_chat_tp1(config, common_case_config, worker_id):
         run_all_step(config, common_case_config)
     else:
         run_all_step(config, common_case_config, worker_id=worker_id, port=DEFAULT_PORT + get_workerid(worker_id))
+
+
+@pytest.mark.order(7)
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.restful_api
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.gpu_num_2
+@pytest.mark.parametrize('prepare_environment', [
+    {
+        'model': 'deepseek-ai/DeepSeek-R1-Distill-Qwen-32B',
+        'cuda_prefix': None,
+        'tp_num': 1,
+        'extra': ' --reasoning-parser deepseek-r1'
+    },
+],
+                         indirect=True)
+def test_restful_chat_reasoning_tp1(config, worker_id):
+    if get_workerid(worker_id) is None:
+        run_reasoning_case(config)
+    else:
+        run_reasoning_case(config, port=DEFAULT_PORT + get_workerid(worker_id))
+
+
+@pytest.mark.order(7)
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.restful_api
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.gpu_num_2
+@pytest.mark.parametrize('prepare_environment', [
+    {
+        'model': 'deepseek-ai/DeepSeek-R1-Distill-Qwen-32B',
+        'cuda_prefix': None,
+        'tp_num': 2,
+        'extra': ' --reasoning-parser deepseek-r1'
+    },
+],
+                         indirect=True)
+def test_restful_chat_reasoning_tp2(config, worker_id):
+    if get_workerid(worker_id) is None:
+        run_reasoning_case(config)
+    else:
+        run_reasoning_case(config, port=DEFAULT_PORT + get_workerid(worker_id))
+
+
+@pytest.mark.order(7)
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.restful_api
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.gpu_num_2
+@pytest.mark.parametrize('prepare_environment', [
+    {
+        'model': 'deepseek-ai/DeepSeek-R1-Distill-Qwen-32B',
+        'cuda_prefix': None,
+        'tp_num': 1,
+        'extra': ' --reasoning-parser deepseek-r1'
+    },
+],
+                         indirect=True)
+def test_restful_chat_tools_tp1(config, worker_id):
+    if get_workerid(worker_id) is None:
+        run_reasoning_case(config)
+    else:
+        run_reasoning_case(config, port=DEFAULT_PORT + get_workerid(worker_id))
+
+
+@pytest.mark.order(7)
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.restful_api
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.gpu_num_2
+@pytest.mark.parametrize('prepare_environment', [
+    {
+        'model': 'deepseek-ai/DeepSeek-R1-Distill-Qwen-32B',
+        'cuda_prefix': None,
+        'tp_num': 2,
+        'extra': ' --reasoning-parser deepseek-r1'
+    },
+],
+                         indirect=True)
+def test_restful_chat_tools_tp2(config, worker_id):
+    if get_workerid(worker_id) is None:
+        run_reasoning_case(config)
+    else:
+        run_reasoning_case(config, port=DEFAULT_PORT + get_workerid(worker_id))
