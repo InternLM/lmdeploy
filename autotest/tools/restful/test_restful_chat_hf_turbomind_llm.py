@@ -1,6 +1,6 @@
 import pytest
 from utils.config_utils import get_communicator_list, get_turbomind_model_list, get_workerid
-from utils.run_restful_chat import run_all_step, start_restful_api, stop_restful_api, run_reasoning_case, run_tools_case
+from utils.run_restful_chat import run_all_step, run_reasoning_case, run_tools_case, start_restful_api, stop_restful_api
 
 DEFAULT_PORT = 23333
 
@@ -386,7 +386,6 @@ def test_restful_chat_reasoning_tp2(config, worker_id):
         run_reasoning_case(config, port=DEFAULT_PORT + get_workerid(worker_id))
 
 
-
 @pytest.mark.order(7)
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.restful_api
@@ -394,7 +393,7 @@ def test_restful_chat_reasoning_tp2(config, worker_id):
 @pytest.mark.gpu_num_1
 @pytest.mark.parametrize('prepare_environment', [
     {
-        'model': 'internlm/internlm2_5-7b',
+        'model': 'internlm/internlm2_5-7b-chat',
         'cuda_prefix': None,
         'tp_num': 1,
         'extra': ' --tool-call-parser internlm'
@@ -427,7 +426,7 @@ def test_restful_chat_tools_tp1(config, worker_id):
 @pytest.mark.gpu_num_2
 @pytest.mark.parametrize('prepare_environment', [
     {
-        'model': 'internlm/internlm2_5-20b',
+        'model': 'internlm/internlm2_5-20b-chat',
         'cuda_prefix': None,
         'tp_num': 2,
         'extra': ' --tool-call-parser internlm'
