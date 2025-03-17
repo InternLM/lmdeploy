@@ -5,11 +5,13 @@ fire
 mmengine-lite
 numpy<2.0.0
 openai
-outlines<0.1.0
+outlines
 peft<=0.14.0
 pillow
 protobuf
 pydantic>2.0.0
+pynvml
+ray
 safetensors
 sentencepiece
 shortuuid

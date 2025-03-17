@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include "src/turbomind/comm/comm.h"
 #include "src/turbomind/layers/DynamicDecodeLayer.h"
 #include "src/turbomind/models/llama/LlamaBatch.h"
 #include "src/turbomind/models/llama/LlamaWeight.h"
@@ -29,7 +30,6 @@
 #include "src/turbomind/models/llama/unified_decoder.h"
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
-#include "src/turbomind/utils/nccl_utils.h"
 
 namespace turbomind {
 
@@ -42,7 +42,6 @@ public:
             const AttentionParam&           attn,
             const MoeParam&                 moe,
             const LoraParam&                lora,
-            const NcclParam&                tp,
             const Context<T>&               ctx,
             int                             max_batch_size,
             std::shared_ptr<LlamaWeight<T>> weights);
@@ -104,16 +103,19 @@ private:
     const AttentionParam attn_param_;
     const LoraParam      lora_param_;
 
-    const size_t    head_num_;
-    const size_t    size_per_head_;
-    const size_t    hidden_units_;
-    const size_t    layer_num_;
-    const size_t    vocab_size_;
-    const size_t    vocab_size_padded_;
-    const float     rmsnorm_eps_;
-    const NcclParam tensor_para_;
-    const size_t    local_head_num_;
-    const size_t    local_kv_head_num_;
+    const comm::Splits* const comm_;
+
+    const int    tp_size_;
+    const int    tp_rank_;
+    const size_t head_num_;
+    const size_t size_per_head_;
+    const size_t hidden_units_;
+    const size_t layer_num_;
+    const size_t vocab_size_;
+    const size_t vocab_size_padded_;
+    const float  rmsnorm_eps_;
+    const size_t local_head_num_;
+    const size_t local_kv_head_num_;
 
     const std::shared_ptr<LlamaWeight<T>> weights_{};
 
@@ -121,8 +123,9 @@ private:
     cudaStream_t const     stream_;
     cublasMMWrapper* const cublas_wrapper_;
     IAllocator* const      allocator_;
-    IAllocator* const      peer_allcator_;
     LlamaLinear<T>* const  linear_;
+
+    bool use_allgather_2d_{false};
 
     const bool is_free_buffer_after_forward_;
     const bool debug_;

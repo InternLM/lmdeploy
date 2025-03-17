@@ -3,6 +3,7 @@
 from .alibi_pagedattention import alibi_paged_attention_fwd
 from .apply_rotary_pos_emb import apply_rotary_pos_emb
 from .fill_kv_cache import fill_kv_cache
+from .flash_mla import flash_mla_fwd
 from .flashattention import flash_attention_fwd
 from .flatten_kv_cache import flatten_kv_cache
 from .fused_moe import fused_moe
@@ -30,4 +31,5 @@ __all__ = [
     'flash_attention_fwd',
     'flatten_kv_cache',
     'fused_moe_w8a8',
+    'flash_mla_fwd',
 ]

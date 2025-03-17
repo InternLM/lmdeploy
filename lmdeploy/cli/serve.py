@@ -76,6 +76,7 @@ class SubCliServe:
         ArgumentHelper.model_format(tb_group)
         ArgumentHelper.quant_policy(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
+        ArgumentHelper.communicator(tb_group)
 
     @staticmethod
     def add_parser_api_server():
@@ -136,6 +137,11 @@ class SubCliServe:
         # chat template args
         ArgumentHelper.chat_template(parser)
 
+        # parsers
+        parser_group = parser.add_mutually_exclusive_group()
+        ArgumentHelper.tool_call_parser(parser_group)
+        ArgumentHelper.reasoning_parser(parser_group)
+
         # model args
         ArgumentHelper.revision(parser)
         ArgumentHelper.download_dir(parser)
@@ -173,6 +179,7 @@ class SubCliServe:
         ArgumentHelper.rope_scaling_factor(tb_group)
         ArgumentHelper.num_tokens_per_iter(tb_group)
         ArgumentHelper.max_prefill_iters(tb_group)
+        ArgumentHelper.communicator(tb_group)
 
         # vlm args
         vision_group = parser.add_argument_group('Vision model arguments')
@@ -255,7 +262,8 @@ class SubCliServe:
                                                    cache_max_entry_count=args.cache_max_entry_count,
                                                    cache_block_seq_len=args.cache_block_seq_len,
                                                    enable_prefix_caching=args.enable_prefix_caching,
-                                                   max_prefill_token_num=args.max_prefill_token_num)
+                                                   max_prefill_token_num=args.max_prefill_token_num,
+                                                   communicator=args.communicator)
         chat_template_config = get_chat_template(args.chat_template)
         run(args.model_path_or_server,
             server_name=args.server_name,
@@ -305,7 +313,8 @@ class SubCliServe:
                                                    cache_max_entry_count=args.cache_max_entry_count,
                                                    cache_block_seq_len=args.cache_block_seq_len,
                                                    enable_prefix_caching=args.enable_prefix_caching,
-                                                   max_prefill_token_num=args.max_prefill_token_num)
+                                                   max_prefill_token_num=args.max_prefill_token_num,
+                                                   communicator=args.communicator)
         chat_template_config = get_chat_template(args.chat_template)
 
         from lmdeploy.messages import VisionConfig
@@ -328,7 +337,9 @@ class SubCliServe:
                        proxy_url=args.proxy_url,
                        max_log_len=args.max_log_len,
                        disable_fastapi_docs=args.disable_fastapi_docs,
-                       max_concurrent_requests=args.max_concurrent_requests)
+                       max_concurrent_requests=args.max_concurrent_requests,
+                       reasoning_parser=args.reasoning_parser,
+                       tool_call_parser=args.tool_call_parser)
 
     @staticmethod
     def api_client(args):

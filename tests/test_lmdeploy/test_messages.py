@@ -1,6 +1,9 @@
 from typing import List
 
+import pytest
+
 from lmdeploy import GenerationConfig, Tokenizer
+from lmdeploy.utils import get_hf_gen_cfg
 
 
 def test_engine_generation_config():
@@ -11,3 +14,17 @@ def test_engine_generation_config():
     assert stop_token_ids == config.stop_token_ids
     assert isinstance(config.stop_token_ids, List) and \
         isinstance(config.stop_token_ids[0], int)
+
+
+@pytest.mark.parametrize('model_path', [
+    'deepseek-ai/DeepSeek-V3',
+    'Qwen/Qwen2.5-32B-Instruct',
+    'internlm/internlm3-8b-instruct',
+])
+def test_update_from_hf_gen_cfg(model_path):
+    tokenizer = Tokenizer(model_path)
+    model_cfg = get_hf_gen_cfg(model_path)
+
+    generation_config = GenerationConfig()
+    generation_config.update_from_hf_gen_cfg(model_cfg, tokenizer.eos_token_id)
+    assert generation_config.stop_token_ids is not None

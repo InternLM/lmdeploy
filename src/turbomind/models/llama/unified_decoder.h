@@ -1,5 +1,6 @@
 #pragma once
 
+#include "src/turbomind/comm/comm.h"
 #include "src/turbomind/models/llama/LlamaDecoderLayerWeight.h"
 #include "src/turbomind/models/llama/LlamaFfnLayer.h"
 #include "src/turbomind/models/llama/context.h"
@@ -8,7 +9,6 @@
 #include "src/turbomind/models/llama/unified_attention_layer.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
 #include "src/turbomind/utils/cuda_utils.h"
-#include "src/turbomind/utils/nccl_utils.h"
 
 namespace turbomind {
 
@@ -22,10 +22,12 @@ private:
     const float        rmsnorm_eps_;
     cudaStream_t const stream_;
     IAllocator* const  allocator_;
-    const NcclParam    tp_;
-    const DataType     dtype_;
-    const int          tune_layer_num_;
-    bool               is_free_buffer_after_forward_{};
+
+    comm::Comm* const tp_;
+
+    const DataType dtype_;
+    const int      tune_layer_num_;
+    bool           is_free_buffer_after_forward_{};
 
     int* cu_q_len_{};
     int* cu_k_len_{};
@@ -49,12 +51,13 @@ private:
                          int               layer_id,
                          const WeightType* weight);
 
+    void ReduceResidualBiasRMSnorm(T* hidden_states, T* residual, const T* bias, const T* weight, int token_num);
+
 public:
     UnifiedDecoder(const ModelParam&     model,
                    const AttentionParam& attn,
                    const MoeParam&       moe,
                    const LoraParam&      lora,
-                   const NcclParam&      tp,
                    const Context<T>&     ctx);
 
     void allocateBuffer(size_t max_batch_size);
