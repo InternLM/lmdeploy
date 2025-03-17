@@ -14,6 +14,14 @@ def config_from_dict(cls, env):
     """initiate an instance of a config class from a dict."""
     params = inspect.signature(cls).parameters
     used = {k: v for k, v in env.items() if k in params and v is not None}
+
+    def _remove_none(d: dict):
+        for k, v in d.items():
+            if isinstance(v, dict):
+                d[k] = _remove_none(v)
+        return {k: v for k, v in d.items() if v is not None}
+
+    used = _remove_none(used)
     return cls(**used)
 
 
