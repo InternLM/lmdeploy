@@ -131,15 +131,22 @@ class GenerationConfig:
 
     def update_from_hf_gen_cfg(self, generation_config, tokenizer_eos_token_id):
         """update the stop_token_ids."""
-        stop_token_ids = self.stop_token_ids or []
+        stop_token_ids = set(self.stop_token_ids or [])
+
+        # add tokenizer's eos_token_id
         if tokenizer_eos_token_id is not None:
-            stop_token_ids.append(tokenizer_eos_token_id)
+            stop_token_ids.add(tokenizer_eos_token_id)
+
+        # add eos_token_id from model's generation_config.json file if there
+        # is any.
         eos_token_id = generation_config.get('eos_token_id')
         if eos_token_id is not None:
-            eos_token_id = {eos_token_id} if isinstance(eos_token_id, int) else set(eos_token_id)
-            if stop_token_ids:
-                eos_token_id.update(stop_token_ids)
-            self.stop_token_ids = list(eos_token_id)
+            if isinstance(eos_token_id, int):
+                stop_token_ids.add(eos_token_id)
+            else:
+                stop_token_ids.update(eos_token_id)
+
+        self.stop_token_ids = list(stop_token_ids)
 
     def __post_init__(self):
         """Check input validation."""

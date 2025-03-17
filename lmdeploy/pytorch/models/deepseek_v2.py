@@ -340,7 +340,14 @@ class MoEGate(nn.Module):
             topk_weight = scores.gather(1, topk_idx)
         else:
             raise RuntimeError(f'Unsupported topk_method: {self.topk_method}')
-        if not self.renormalize:
+
+        if self.renormalize:
+            denominator = topk_weight.sum(dim=-1, keepdim=True) + 1e-20
+            topk_weight = topk_weight / denominator
+            if not topk_weight.is_contiguous():
+                topk_weight = topk_weight.contiguous()
+
+        if not self.renormalize or self.topk_method == 'noaux_tc':
             topk_weight = topk_weight * self.routed_scaling_factor
         return topk_weight, topk_idx
 
@@ -373,7 +380,7 @@ class DeepseekV2MoE(nn.Module):
             self.ffn_dim,
             self.num_experts,
             top_k=self.top_k,
-            renormalize=self.renormalize,
+            renormalize=False,
             dtype=dtype,
             device=device,
             all_reduce=moe_all_reduce,
