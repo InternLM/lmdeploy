@@ -110,6 +110,7 @@ lmdeploy serve api_server --backend pytorch --device ascend --eager-mode internl
 ```
 
 Run the following commands to launch docker container for lmdeploy LLM serving:
+
 ```bash
 docker exec -it --net=host crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:latest \
     bash -i -c "lmdeploy serve api_server --backend pytorch --device ascend --eager-mode internlm/internlm2_5-7b-chat"
@@ -124,6 +125,7 @@ lmdeploy serve api_server --backend pytorch --device ascend --eager-mode OpenGV
 ```
 
 Run the following commands to launch docker container for lmdeploy VLM serving:
+
 ```bash
 docker exec -it --net=host crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:latest \
     bash -i -c "lmdeploy serve api_server --backend pytorch --device ascend --eager-mode OpenGVLab/InternVL2-2B"
