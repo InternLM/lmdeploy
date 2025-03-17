@@ -1,6 +1,6 @@
 import pytest
 from utils.config_utils import get_communicator_list, get_turbomind_model_list, get_workerid
-from utils.run_restful_chat import run_all_step, run_reasoning_case, start_restful_api, stop_restful_api
+from utils.run_restful_chat import run_all_step, start_restful_api, stop_restful_api, run_reasoning_case, run_tools_case
 
 DEFAULT_PORT = 23333
 
@@ -348,7 +348,7 @@ def test_modelscope_restful_chat_tp1(config, common_case_config, worker_id):
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.restful_api
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.gpu_num_2
+@pytest.mark.gpu_num_1
 @pytest.mark.parametrize('prepare_environment', [
     {
         'model': 'deepseek-ai/DeepSeek-R1-Distill-Qwen-32B',
@@ -386,25 +386,38 @@ def test_restful_chat_reasoning_tp2(config, worker_id):
         run_reasoning_case(config, port=DEFAULT_PORT + get_workerid(worker_id))
 
 
+
 @pytest.mark.order(7)
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.restful_api
 @pytest.mark.flaky(reruns=0)
-@pytest.mark.gpu_num_2
+@pytest.mark.gpu_num_1
 @pytest.mark.parametrize('prepare_environment', [
     {
-        'model': 'deepseek-ai/DeepSeek-R1-Distill-Qwen-32B',
+        'model': 'internlm/internlm2_5-7b',
         'cuda_prefix': None,
         'tp_num': 1,
-        'extra': ' --reasoning-parser deepseek-r1'
+        'extra': ' --tool-call-parser internlm'
+    },
+    {
+        'model': 'Qwen/Qwen2.5-7B-Instruct',
+        'cuda_prefix': None,
+        'tp_num': 1,
+        'extra': ' --tool-call-parser qwen'
+    },
+    {
+        'model': 'meta-llama/Meta-Llama-3-1-8B-Instruct',
+        'cuda_prefix': None,
+        'tp_num': 1,
+        'extra': ' --tool-call-parser llama3'
     },
 ],
                          indirect=True)
 def test_restful_chat_tools_tp1(config, worker_id):
     if get_workerid(worker_id) is None:
-        run_reasoning_case(config)
+        run_tools_case(config)
     else:
-        run_reasoning_case(config, port=DEFAULT_PORT + get_workerid(worker_id))
+        run_tools_case(config, port=DEFAULT_PORT + get_workerid(worker_id))
 
 
 @pytest.mark.order(7)
@@ -414,15 +427,42 @@ def test_restful_chat_tools_tp1(config, worker_id):
 @pytest.mark.gpu_num_2
 @pytest.mark.parametrize('prepare_environment', [
     {
-        'model': 'deepseek-ai/DeepSeek-R1-Distill-Qwen-32B',
+        'model': 'internlm/internlm2_5-20b',
         'cuda_prefix': None,
         'tp_num': 2,
-        'extra': ' --reasoning-parser deepseek-r1'
+        'extra': ' --tool-call-parser internlm'
     },
 ],
                          indirect=True)
 def test_restful_chat_tools_tp2(config, worker_id):
     if get_workerid(worker_id) is None:
-        run_reasoning_case(config)
+        run_tools_case(config)
     else:
-        run_reasoning_case(config, port=DEFAULT_PORT + get_workerid(worker_id))
+        run_tools_case(config, port=DEFAULT_PORT + get_workerid(worker_id))
+
+
+@pytest.mark.order(7)
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.restful_api
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.gpu_num_4
+@pytest.mark.parametrize('prepare_environment', [
+    {
+        'model': 'meta-llama/Meta-Llama-3-1-70B-Instruct',
+        'cuda_prefix': None,
+        'tp_num': 4,
+        'extra': ' --tool-call-parser llama3'
+    },
+    {
+        'model': 'Qwen/Qwen2.5-72B-Instruct',
+        'cuda_prefix': None,
+        'tp_num': 4,
+        'extra': ' --tool-call-parser qwen'
+    },
+],
+                         indirect=True)
+def test_restful_chat_tools_tp4(config, worker_id):
+    if get_workerid(worker_id) is None:
+        run_tools_case(config)
+    else:
+        run_tools_case(config, port=DEFAULT_PORT + get_workerid(worker_id))
