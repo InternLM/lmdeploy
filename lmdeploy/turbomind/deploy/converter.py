@@ -304,7 +304,7 @@ def main(model_name: str,
 
     tm_weight_path, tm_tokenizer_path = create_workspace(dst_path)
     copy_tokenizer(model_path, tokenizer_path, tm_tokenizer_path)
-    engine_config = TurbomindEngineConfig(tp=tp, model_format=model_format, dtype=dtype)
+    engine_config = TurbomindEngineConfig(tp=tp, device_num=tp, model_format=model_format, dtype=dtype)
     update_parallel_config(engine_config)
     tm_model = get_tm_model(model_path, model_name, chat_template, engine_config, group_size, tm_weight_path)
     tm_model.export()
