@@ -40,7 +40,7 @@ class DistContext:
             dist_config = DistConfig()
         tp = dist_config.tp
         dp = dist_config.dp
-        ep = 2 #zcx dist_config.ep
+        ep = dist_config.ep
         world_size = dist_config.world_size
         dp_rank = dist_config.dp_rank
 

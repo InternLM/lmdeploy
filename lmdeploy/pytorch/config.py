@@ -115,7 +115,7 @@ class DistConfig:
         """need dummy batch."""
         if self.dp == 1:
             return False
-        return self.tp > 1 or self.ep > 1
+        return self.tp > 1 #or self.ep > 1
 
 
 @dataclass

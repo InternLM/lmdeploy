@@ -346,6 +346,7 @@ class MoEGate(nn.Module):
         return topk_weight, topk_idx
 
 
+
 class DeepseekV2MoE(nn.Module):
     """Deepseek v2 MoE."""
 
@@ -411,6 +412,9 @@ class DeepseekV2MoE(nn.Module):
         # print(f"zcx base in:{hidden_states}")
         if get_dist_manager().current_context().ep > 1:
             return self.forward_ep(hidden_states)
+        device = hidden_states.device
+        hidden_states = torch.load("/nvme1/zhaochaoxing/ep0_hidden_states.pt").to(device)
+
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
         topk_weights, topk_ids = self.gate(hidden_states)
@@ -428,21 +432,35 @@ class DeepseekV2MoE(nn.Module):
 
         if self._all_reduce:
             dist.all_reduce(out_states)
-        # print(f"zcx base out:{out_states}")
+        print(f"zcx noep out:{out_states}")
         raise RuntimeError()
         return out_states
     
 
     def forward_ep(self, hidden_states: torch.Tensor):
         """forward."""
+        # rank = get_dist_manager().current_context().ep_rank
+        # if rank == 0:
+        # device = hidden_states.device
+        # hidden_states = torch.load("/nvme1/zhaochaoxing/ep0_hidden_states.pt").to(device)
+        # raise RuntimeError()
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
         topk_weights, topk_ids = self.gate(hidden_states)
-        # print(f"zcx: topk_weights:{topk_weights.shape}, hidden_states:{hidden_states.shape}")
+        # print(f"zcx: topk_weights:{topk_weights}, topk_ids:{topk_ids}")
         # raise RuntimeError()
         if self.shared_experts is not None:
             shared_output = self.shared_experts(hidden_states)
-        
+
+        # if rank == 0:
+        #     torch.save(hidden_states, "/nvme1/zhaochaoxing/pt/hidden_states")
+        #     torch.save(topk_ids, "/nvme1/zhaochaoxing/pt/topk_ids")
+        #     torch.save(topk_weights, "/nvme1/zhaochaoxing/pt/topk_weights")
+        # raise RuntimeError()
+            # print(f"zcx lmdeploy hidden_states:{hidden_states},topk_ids:{topk_ids},topk_weights:{topk_weights}")
+        # hidden_states = torch.load("/nvme1/zhaochaoxing/pt/hidden_states").to(device)
+        # topk_ids = torch.load("/nvme1/zhaochaoxing/pt/topk_ids").to(device)
+        # topk_weights = torch.load("/nvme1/zhaochaoxing/pt/topk_weights").to(device)
         recv_hidden_states, recv_topk_ids, recv_topk_weights, tokens_per_expert = (
             self.deepep_dispatcher.token_permutation(
                 hidden_states,
@@ -453,8 +471,8 @@ class DeepseekV2MoE(nn.Module):
         )
         # print(f"[zcx] hidden_states:{hidden_states.shape}, recv_hidden_states:{recv_hidden_states.shape}, \
         #       tokens_per_expert:{tokens_per_expert.shape}")
-        # print(f"[zcx] hidden_states:{hidden_states}, recv_hidden_states:{recv_hidden_states}, \
-        #      tokens_per_expert:{tokens_per_expert}")
+        # if rank == 0:
+            # print(f"[zcx] recv_hidden_states:{recv_hidden_states},tokens_per_expert:{tokens_per_expert}")
         # raise RuntimeError()
         out_states = (
             self.experts(
@@ -464,14 +482,16 @@ class DeepseekV2MoE(nn.Module):
                 tokens_per_expert=tokens_per_expert,
             )
         )
-      
+        # if rank == 0:
+            # print(f"[zcx] after experts out_states:{out_states}")
         out_states = self.deepep_dispatcher.token_unpermutation(
             out_states
         )
-        # print(f"zcx ep after experts:{out_states}")
+        # if rank == 0:
+            # print(f"zcx ep after token_unpermutation:{out_states}")
         if shared_output is not None:
             out_states = out_states + shared_output
-        # print(f"zcx ep out:{hidden_states.view(batch_size, sequence_length, -1)}")
+        # print(f"zcx ep out:{out_states}")
         # raise RuntimeError()
         return out_states.view(batch_size, sequence_length, -1)
 
@@ -699,7 +719,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                  dtype: torch.dtype = None,
                  device: torch.device = None):
         super().__init__()
-        config.num_hidden_layers = 8 #zcx
+        config.num_hidden_layers = 5 #zcx
         self.config = config
         self.quantization_config = getattr(config, 'quantization_config', None)
         self.dtype = dtype
@@ -916,11 +936,13 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
 
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:
+            # zcx begin
             strs = name.split(".")
             if len(strs) >= 3 and str.isdigit(strs[2]):
                 layer_number = int(strs[2])
-                if layer_number >= 8:
+                if layer_number >= 5:
                     continue
+            # zcx end
             if 'rotary_emb.inv_freq' in name:
                 continue
             if ('rotary_emb.cos_cached' in name or 'rotary_emb.sin_cached' in name):

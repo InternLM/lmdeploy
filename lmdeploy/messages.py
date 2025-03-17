@@ -315,6 +315,7 @@ class PytorchEngineConfig:
         assert self.dtype in ['auto', 'float16', 'bfloat16']
         assert self.tp >= 1, 'invalid tp'
         assert self.dp >= 1, 'invalid dp'
+        assert self.ep >= 1, 'invalid ep'
         assert 0 < self.cache_max_entry_count < 1, \
             'invalid cache_max_entry_count'
         assert self.num_cpu_blocks >= 0, 'invalid num_cpu_blocks'

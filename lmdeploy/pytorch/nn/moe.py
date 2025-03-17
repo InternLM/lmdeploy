@@ -558,11 +558,6 @@ class FusedMoEBlockedF8(nn.Module):
     #         ret = _moe_reduce(ret, self.enable_ep)
     #     return ret
     def forward(self, hidden_states: torch.Tensor, tokens_per_expert:torch.Tensor):
-        # _, rank = get_ep_world_rank()
-        # if rank == 0:
-        #     torch.save(hidden_states, "/nvme1/zhaochaoxing/hidden_states.pt")
-        #     torch.save(tokens_per_expert, "/nvme1/zhaochaoxing/tokens_per_expert.pt")
-        # raise RuntimeError()
         return self.deepep_moe.forward(hidden_states, tokens_per_expert, self.gate_up.weight, self.gate_up.scale,
                                 self.down.weight, self.down.scale)
 
@@ -975,13 +970,6 @@ class DeepEPMoE:
             ]
         )
         reorder_topk_ids = torch.repeat_interleave(tokens_per_expert)
-        # if self.activation_scheme == "dynamic" and not self.use_block_quant:
-        #     max_value = (
-        #         torch.max(hidden_states)
-        #         .repeat(self.num_experts_per_partition)
-        #         .to(torch.float32)
-        #     )
-        #     self.w13_input_scale = max_value / torch.finfo(self.fp8_dtype).max
         weight_indices_cur_rank = torch.arange(
             0,
             self.num_experts_per_partition,
@@ -998,10 +986,6 @@ class DeepEPMoE:
             dtype=hidden_states.dtype,
         )
         if hidden_states.shape[0] > 0:
-            # hidden_states = hidden_states.flatten(0, -2)
-            # print(f"zcx:hidden_states:{hidden_states.shape}, hidden_states.flatten(0, -2):{hidden_states.flatten(0, -2).shape}")
-            # print(f"zcx:hidden_states.dtype:{hidden_states.dtype}, gate_up_weight:{gate_up_weight.dtype}")
-            # raise RuntimeError()
             input, input_scale = quant_fp8(hidden_states, 128, dtype=gate_up_weight.dtype)
             # input = input.unflatten(0, input_size[:-1])
             gateup_output = self.grouped_gemm_runner(
@@ -1035,14 +1019,6 @@ class DeepEPMoE:
                 #else hidden_states.dtype
             ),
         )
-        # if self.w2_input_scale is None and not self.use_block_quant:
-        #     self.w2_input_scale = torch.ones(
-        #         self.num_experts_per_partition,
-        #         dtype=torch.float32,
-        #         device=hidden_states.device,
-        #     )
-
-        # if self.activation == "silu":
         silu_and_mul_triton_kernel[(gateup_output.shape[0],)](
             gateup_output,
             down_input,
@@ -1054,11 +1030,7 @@ class DeepEPMoE:
             self.num_experts_per_partition - 1,
             BLOCK_SIZE=512,
         )
-        # else:
-        #     assert False
-            #raise ValueError(f"Unsupported activation: {self.activation=}")
-        # print(f"zcx:down_input:{down_input}, {down_input.shape},gate_down_scale:{gate_down_scale}")
-        # raise RuntimeError()
+        
         # GroupGemm-1
         down_output = torch.empty(
             down_input.shape[0],
@@ -1087,8 +1059,6 @@ class DeepEPMoE:
                 # ),
                 block_shape=self.block_shape,
             )
-        # print(f"zcx:down_output:{down_output.shape},{down_output}")
-        # raise RuntimeError()
         return down_output
 
 def build_fused_moe(

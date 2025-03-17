@@ -6,7 +6,7 @@ import torch.distributed as dist
 
 def main(rank: int):
     # model_path ='/nvme2/huggingface_hub_137_llm/hub/models--Qwen--Qwen2.5-7B-Instruct/snapshots/a09a35458c702b33eeacc393d103063234e8bc28'
-    model_path ='/mnt/huggingface_hub_137_llm/hub/models--deepseek-ai--DeepSeek-V3/snapshots/86518964eaef84e3fdd98e9861759a1384f9c29d'
+    model_path ='/nvme1/zhaochaoxing/hub/models--deepseek-ai--DeepSeek-V3/snapshots/86518964eaef84e3fdd98e9861759a1384f9c29d'
     # model_path = '/nvme2/huggingface_hub_137_llm/hub/models--deepseek-ai--DeepSeek-V2-Lite/snapshots/604d5664dddd88a0433dbae533b7fe9472482de0'
     log_level = 'WARNING'
     prompts = [
