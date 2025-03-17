@@ -77,7 +77,7 @@ def test_update_from_engine_config():
                                           use_logn_attn=True,
                                           max_prefill_iters=64,
                                           num_tokens_per_iter=256)
-
+    update_parallel_config(engine_config)
     config.update_from_engine_config(engine_config)
 
     assert (config.model_config.attn_tp_size == engine_config.attn_tp_size)
