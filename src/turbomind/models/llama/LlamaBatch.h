@@ -29,14 +29,15 @@ struct SharedState {
 
 struct BatchState {
     int*  h_prompt_length;  // history + input, ignore generated
-    int*  h_context_length;
+    int*  h_context_length; // history + input + generated
     bool* h_finished;
 
     curandState_t* curand_state;
     int*           output_ids;  // output ids in [B, S]
 
     float* h_rope_theta;
-
+    // [i]: the max length of the sequences[i], i.e.,
+    // min(session_len_, h_prompt_length[i] + requests[idx]->gen_cfg.max_new_tokens)
     std::vector<int> seq_len_limit;
 
     std::vector<const Sequence*>          sequences;
