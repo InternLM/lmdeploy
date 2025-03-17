@@ -2,7 +2,7 @@ import os
 
 import allure
 import pytest
-from utils.config_utils import get_cuda_prefix_by_workerid, get_turbomind_model_list, get_communicator_list
+from utils.config_utils import get_communicator_list, get_cuda_prefix_by_workerid, get_turbomind_model_list
 from utils.run_client_chat import hf_command_line_test
 
 
@@ -72,8 +72,8 @@ def test_hf_turbomind_chat_tp4(config, model, communicator, cli_case_config, wor
         allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
 
     assert result, msg
-    
-    
+
+
 @pytest.mark.order(10)
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_turbomind_chat
@@ -90,7 +90,7 @@ def test_hf_turbomind_chat_kvint4_tp1(config, model, communicator, cli_case_conf
                                                  model,
                                                  'turbomind',
                                                  cuda_prefix=get_cuda_prefix_by_workerid(worker_id),
-                                                 extra=f'--communicator {communicator} --quant_policy 4')
+                                                 extra=f'--communicator {communicator} --quant-policy 4')
 
     if chat_log is not None:
         allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
@@ -112,7 +112,7 @@ def test_hf_turbomind_chat_kvint4_tp2(config, model, communicator, cli_case_conf
                                                  model,
                                                  'turbomind',
                                                  cuda_prefix=get_cuda_prefix_by_workerid(worker_id, tp_num=2),
-                                                 extra=f'--communicator {communicator} --quant_policy 4')
+                                                 extra=f'--communicator {communicator} --quant-policy 4')
 
     if chat_log is not None:
         allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
@@ -134,13 +134,14 @@ def test_hf_turbomind_chat_kvint4_tp4(config, model, communicator, cli_case_conf
                                                  model,
                                                  'turbomind',
                                                  cuda_prefix=get_cuda_prefix_by_workerid(worker_id, tp_num=4),
-                                                 extra=f'--communicator {communicator} --quant_policy 4')
+                                                 extra=f'--communicator {communicator} --quant-policy 4')
 
     if chat_log is not None:
         allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
 
     assert result, msg
-    
+
+
 @pytest.mark.order(10)
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_turbomind_chat
@@ -157,7 +158,7 @@ def test_hf_turbomind_chat_kvint8_tp1(config, model, communicator, cli_case_conf
                                                  model,
                                                  'turbomind',
                                                  cuda_prefix=get_cuda_prefix_by_workerid(worker_id),
-                                                 extra=f'--communicator {communicator} --quant_policy 8')
+                                                 extra=f'--communicator {communicator} --quant-policy 8')
 
     if chat_log is not None:
         allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
@@ -179,7 +180,7 @@ def test_hf_turbomind_chat_kvint8_tp2(config, model, communicator, cli_case_conf
                                                  model,
                                                  'turbomind',
                                                  cuda_prefix=get_cuda_prefix_by_workerid(worker_id, tp_num=2),
-                                                 extra=f'--communicator {communicator} --quant_policy 8')
+                                                 extra=f'--communicator {communicator} --quant-policy 8')
 
     if chat_log is not None:
         allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
@@ -201,20 +202,22 @@ def test_hf_turbomind_chat_kvint4_tp8(config, model, communicator, cli_case_conf
                                                  model,
                                                  'turbomind',
                                                  cuda_prefix=get_cuda_prefix_by_workerid(worker_id, tp_num=4),
-                                                 extra=f'--communicator {communicator} --quant_policy 8')
+                                                 extra=f'--communicator {communicator} --quant-policy 8')
 
     if chat_log is not None:
         allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
 
     assert result, msg
-    
-    
+
+
 @pytest.mark.order(10)
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_turbomind_chat
 @pytest.mark.gpu_num_1
-@pytest.mark.parametrize('model', ['microsoft/Phi-3-mini-4k-instruct'
-                                   'microsoft/Phi-3-mini-4k-instruct-inner-4bits'])
+@pytest.mark.parametrize('model', [
+    'microsoft/Phi-3-mini-4k-instruct', 'microsoft/Phi-3-mini-4k-instruct-inner-4bits',
+    'microsoft/Phi-3-mini-4k-instruct-inner-w8a8'
+])
 @pytest.mark.parametrize('communicator', get_communicator_list())
 def test_hf_turbomind_chat_fallback_backend_tp1(config, model, communicator, cli_case_config, worker_id):
     usercase = 'chat_testcase'
@@ -237,9 +240,36 @@ def test_hf_turbomind_chat_fallback_backend_tp1(config, model, communicator, cli
 @pytest.mark.order(10)
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_turbomind_chat
+@pytest.mark.gpu_num_1
+@pytest.mark.parametrize('model', [
+    'microsoft/Phi-3-mini-4k-instruct', 'microsoft/Phi-3-mini-4k-instruct-inner-4bits',
+    'microsoft/Phi-3-mini-4k-instruct-inner-w8a8'
+])
+@pytest.mark.parametrize('communicator', get_communicator_list())
+def test_hf_turbomind_chat_fallback_backend_kvint8_tp1(config, model, communicator, cli_case_config, worker_id):
+    usercase = 'chat_testcase'
+    if 'coder' in model:
+        usercase = 'code_testcase'
+    result, chat_log, msg = hf_command_line_test(config,
+                                                 usercase,
+                                                 cli_case_config.get(usercase),
+                                                 model,
+                                                 'turbomind',
+                                                 cuda_prefix=get_cuda_prefix_by_workerid(worker_id),
+                                                 extra=f'--communicator {communicator} --quant-policy 8')
+
+    if chat_log is not None:
+        allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
+
+    assert result, msg
+
+
+@pytest.mark.order(10)
+@pytest.mark.usefixtures('cli_case_config')
+@pytest.mark.hf_turbomind_chat
 @pytest.mark.gpu_num_2
-@pytest.mark.parametrize('model',
-                         ['google/gemma-2-27b-it', 'deepseek-ai/deepseek-moe-16b-chat', 'deepseek-ai/deepseek-vl2'])
+@pytest.mark.parametrize(
+    'model', ['google/gemma-2-27b-it', 'deepseek-ai/deepseek-moe-16b-chat', 'meta-llama/Llama-3.2-11B-Vision-Instruct'])
 @pytest.mark.parametrize('communicator', get_communicator_list())
 def test_hf_turbomind_chat_fallback_backend_tp2(config, model, communicator, cli_case_config, worker_id):
     usercase = 'chat_testcase'
@@ -250,6 +280,29 @@ def test_hf_turbomind_chat_fallback_backend_tp2(config, model, communicator, cli
                                                  'turbomind',
                                                  cuda_prefix=get_cuda_prefix_by_workerid(worker_id, tp_num=2),
                                                  extra=f'--communicator {communicator}')
+
+    if chat_log is not None:
+        allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
+
+    assert result, msg
+
+
+@pytest.mark.order(10)
+@pytest.mark.usefixtures('cli_case_config')
+@pytest.mark.hf_turbomind_chat
+@pytest.mark.gpu_num_2
+@pytest.mark.parametrize(
+    'model', ['google/gemma-2-27b-it', 'deepseek-ai/deepseek-moe-16b-chat', 'meta-llama/Llama-3.2-11B-Vision-Instruct'])
+@pytest.mark.parametrize('communicator', get_communicator_list())
+def test_hf_turbomind_chat_fallback_backend_kvint8_tp2(config, model, communicator, cli_case_config, worker_id):
+    usercase = 'chat_testcase'
+    result, chat_log, msg = hf_command_line_test(config,
+                                                 usercase,
+                                                 cli_case_config.get(usercase),
+                                                 model,
+                                                 'turbomind',
+                                                 cuda_prefix=get_cuda_prefix_by_workerid(worker_id, tp_num=2),
+                                                 extra=f'--communicator {communicator} --quant-policy 8')
 
     if chat_log is not None:
         allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)

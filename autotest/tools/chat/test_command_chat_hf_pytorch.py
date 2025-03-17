@@ -80,7 +80,7 @@ def test_hf_pytorch_chat_kvin4_tp1(config, model, cli_case_config, worker_id):
                                                  model,
                                                  'pytorch',
                                                  cuda_prefix=get_cuda_prefix_by_workerid(worker_id),
-                                                 extra='--quant_policy 4')
+                                                 extra='--quant-policy 4')
     if chat_log is not None:
         allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
 
@@ -100,7 +100,7 @@ def test_hf_pytorch_chat_kvin4_tp2(config, model, cli_case_config, worker_id):
                                                  model,
                                                  'pytorch',
                                                  cuda_prefix=get_cuda_prefix_by_workerid(worker_id, tp_num=2),
-                                                 extra='--quant_policy 4')
+                                                 extra='--quant-policy 4')
     if chat_log is not None:
         allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
 
@@ -120,12 +120,11 @@ def test_hf_pytorch_chat_kvin4_tp4(config, model, cli_case_config, worker_id):
                                                  model,
                                                  'pytorch',
                                                  cuda_prefix=get_cuda_prefix_by_workerid(worker_id, tp_num=4),
-                                                 extra='--quant_policy 4')
+                                                 extra='--quant-policy 4')
     if chat_log is not None:
         allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
 
     assert result, msg
-
 
 
 @pytest.mark.order(10)
@@ -143,7 +142,7 @@ def test_hf_pytorch_chat_kvin8_tp1(config, model, cli_case_config, worker_id):
                                                  model,
                                                  'pytorch',
                                                  cuda_prefix=get_cuda_prefix_by_workerid(worker_id),
-                                                 extra='--quant_policy 8')
+                                                 extra='--quant-policy 8')
     if chat_log is not None:
         allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
 
@@ -163,7 +162,7 @@ def test_hf_pytorch_chat_kvin8_tp2(config, model, cli_case_config, worker_id):
                                                  model,
                                                  'pytorch',
                                                  cuda_prefix=get_cuda_prefix_by_workerid(worker_id, tp_num=2),
-                                                 extra='--quant_policy 8')
+                                                 extra='--quant-policy 8')
     if chat_log is not None:
         allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
 
@@ -183,13 +182,13 @@ def test_hf_pytorch_chat_kvin8_tp4(config, model, cli_case_config, worker_id):
                                                  model,
                                                  'pytorch',
                                                  cuda_prefix=get_cuda_prefix_by_workerid(worker_id, tp_num=4),
-                                                 extra='--quant_policy 8')
+                                                 extra='--quant-policy 8')
     if chat_log is not None:
         allure.attach.file(chat_log, attachment_type=allure.attachment_type.TEXT)
 
     assert result, msg
-    
-    
+
+
 @pytest.mark.order(10)
 @pytest.mark.usefixtures('cli_case_config')
 @pytest.mark.hf_turbomind_chat

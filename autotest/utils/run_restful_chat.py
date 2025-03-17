@@ -39,6 +39,9 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
     if cuda_prefix is None:
         cuda_prefix = get_cuda_prefix_by_workerid(worker_id, tp_num=tp_num)
 
+    if tp_num > 1 and 'gw' in worker_id:
+        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
+
     worker_num = get_workerid(worker_id)
     if worker_num is None:
         port = DEFAULT_PORT
@@ -111,6 +114,8 @@ def stop_restful_api(pid, startRes, param):
         modelscope = param['modelscope']
         if modelscope:
             del os.environ['LMDEPLOY_USE_MODELSCOPE']
+    if 'MASTER_PORT' in os.environ:
+        del os.environ['MASTER_PORT']
 
 
 def run_all_step(config, cases_info, worker_id: str = '', port: int = DEFAULT_PORT):
