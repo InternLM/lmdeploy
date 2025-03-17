@@ -379,6 +379,7 @@ class DeepseekV2MoE(nn.Module):
             dtype=dtype,
             device=device,
             all_reduce=moe_all_reduce,
+            enable_ep=dist_ctx.ep > 1,
             quant_config=quantization_config,
         )
         if dist_ctx.ep > 1:
@@ -412,8 +413,8 @@ class DeepseekV2MoE(nn.Module):
         # print(f"zcx base in:{hidden_states}")
         if get_dist_manager().current_context().ep > 1:
             return self.forward_ep(hidden_states)
-        device = hidden_states.device
-        hidden_states = torch.load("/nvme1/zhaochaoxing/ep0_hidden_states.pt").to(device)
+        # device = hidden_states.device
+        # hidden_states = torch.load("/nvme1/zhaochaoxing/ep0_hidden_states.pt").to(device)
 
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
@@ -432,8 +433,8 @@ class DeepseekV2MoE(nn.Module):
 
         if self._all_reduce:
             dist.all_reduce(out_states)
-        print(f"zcx noep out:{out_states}")
-        raise RuntimeError()
+        # print(f"zcx noep out:{out_states}")
+        # raise RuntimeError()
         return out_states
     
 

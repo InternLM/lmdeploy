@@ -62,7 +62,7 @@ class LinearWeights(nn.Module):
         self.weight_type = weight_type
         self.half_out = out_features // 2
 
-        if False: # zcx self.ep:
+        if True: # zcx self.ep:
             self.expert_map = dict((eid, idx) for idx, eid in enumerate(expert_list))
             self.weight.weight_loader = self.weight_loader_ep
         else:
@@ -426,10 +426,11 @@ class LinearWeightsBlockedF8(LinearWeights):
         scale = torch.nn.Parameter(scale, requires_grad=False)
         self.register_parameter('scale', scale)
 
-        if False:#zcx self.ep:
-            self.scale.weight_loader = self.weight_loader_ep
-        else:
-            self.scale.weight_loader = self.weight_loader_scale_tp
+        if self.ep:
+            self.expert_map = dict((eid, idx) for idx, eid in enumerate(expert_list))
+            #self.scale.weight_loader = self.weight_loader_ep
+        #else:
+        self.scale.weight_loader = self.weight_loader_scale_tp
 
     def update_weight(self, weight: torch.Tensor, scale: torch.Tensor):
         """update weight."""
@@ -442,12 +443,11 @@ class LinearWeightsBlockedF8(LinearWeights):
     def weight_loader_scale_tp(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, expert_id: int,
                                shard_id: str):
         # zcx begin
-        expert_list = self.expert_list
-        if expert_id not in expert_list:
-            return
-
-        expert_map = dict((eid, idx) for idx, eid in enumerate(expert_list))
-        expert_id = expert_map[expert_id]
+        if self.ep == True:
+            expert_list = self.expert_list
+            if expert_id not in expert_list:
+                return
+            expert_id = self.expert_map[expert_id]
         # zcx end
         """weight loader scale tp."""
         world_size, rank = get_tp_world_rank()
@@ -467,6 +467,7 @@ class LinearWeightsBlockedF8(LinearWeights):
             raise RuntimeError(f'Unknown shard_id: {shard_id}')
         param_data.copy_(weight)
 
+# class FusedDeepEpMoEBlockedF8(nn.Module):
 
 class FusedMoEBlockedF8(nn.Module):
     """fused moe blocked f8."""
@@ -489,22 +490,18 @@ class FusedMoEBlockedF8(nn.Module):
         self.block_size = 128
         impl_builder = get_backend().get_layer_impl_builder(OpType.FusedMoEBlockedF8)
         self.impl = impl_builder.build(top_k, num_experts, renormalize, block_size=self.block_size, out_dtype=dtype)
-
-        enable_ep = enable_ep and self.impl.support_ep()
-        # zcx
         self.ep_size, rank = get_ep_world_rank()
-        self.deepep_moe = DeepEPMoE(num_experts, self.ep_size)
-        expert_list = self.impl.ep_expert_list(self.ep_size, rank)
-        num_experts = len(expert_list)
+        enable_ep = self.ep_size > 1 #enable_ep and self.impl.support_ep()
         
-        # print(f"zcx:ep_rank={rank}, expert_list={expert_list}")
-        # if enable_ep:
-        #     world_size, rank = get_tp_world_rank()
-        #     expert_list = self.impl.ep_expert_list(world_size, rank)
-        #     num_experts = len(expert_list)
-        # else:
-        #     hidden_dim, ffn_dim = _update_args(hidden_dim, ffn_dim)
-        #     expert_list = None
+        if enable_ep:
+            # zcx
+            self.deepep_moe = DeepEPMoE(num_experts, self.ep_size)
+            world_size, rank = get_tp_world_rank()
+            expert_list = self.impl.ep_expert_list(world_size, rank)
+            num_experts = len(expert_list)
+        else:
+            hidden_dim, ffn_dim = _update_args(hidden_dim, ffn_dim)
+            expert_list = None
         self.expert_list = expert_list
 
         self.gate_up = LinearWeightsBlockedF8(num_experts,
@@ -515,7 +512,7 @@ class FusedMoEBlockedF8(nn.Module):
                                               dtype=fp8_dtype,
                                               device=device,
                                               expert_list=expert_list,
-                                              ep=False)# zcx
+                                              ep=enable_ep)# zcx
         self.down = LinearWeightsBlockedF8(
             num_experts,
             ffn_dim,
@@ -525,7 +522,7 @@ class FusedMoEBlockedF8(nn.Module):
             dtype=fp8_dtype,
             device=device,
             expert_list=expert_list,
-            ep=False,#zcx
+            ep=enable_ep,#zcx
         )
 
         self.hidden_dim = hidden_dim
