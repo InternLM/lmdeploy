@@ -13,6 +13,7 @@ from lmdeploy.utils import get_logger, get_model
 
 from ...utils import _get_and_verify_max_len, is_bf16_supported
 from ..supported_models import SUPPORTED_ARCHS, is_supported
+from ..turbomind import update_parallel_config
 from .config import TurbomindModelConfig
 from .module import Transformer
 from .policy import get_input_policy
@@ -304,6 +305,7 @@ def main(model_name: str,
     tm_weight_path, tm_tokenizer_path = create_workspace(dst_path)
     copy_tokenizer(model_path, tokenizer_path, tm_tokenizer_path)
     engine_config = TurbomindEngineConfig(tp=tp, model_format=model_format, dtype=dtype)
+    update_parallel_config(engine_config)
     tm_model = get_tm_model(model_path, model_name, chat_template, engine_config, group_size, tm_weight_path)
     tm_model.export()
 
