@@ -73,8 +73,6 @@ class LogitsMixin:
                     async for outputs in gen:
                         pass
                     logits[i] = outputs.logits[:input_len, :]
-                # if sequence_end and self.backend == 'pytorch':
-                #     await inst.async_end(session_id=i)
 
         session_ids = list(range(len(input_ids)))
         tasks = [_proc(i) for i in range(len(input_ids))]
