@@ -54,7 +54,7 @@ class LlavaModel(LlamaModel):
             max_position_embeddings = int(model_arg.get('max_position_embeddings', 0))
             rope_scaling = model_arg.get('rope_scaling', None)
             scaling_factor = 0.0
-            use_dynamic_ntk = 0
+            scaling_type = 'default'
 
             # special for the model: llava-hf/llava-interleave-qwen-7b-hf
             hidden_units = model_arg.get('hidden_size', 4096)
@@ -68,16 +68,12 @@ class LlavaModel(LlamaModel):
             if isinstance(rope_scaling, dict):
                 scaling_type = model_arg['rope_scaling'].get('type', '')
                 scaling_factor = model_arg['rope_scaling'].get('factor', '')
-                if scaling_type == 'dynamic':
-                    use_dynamic_ntk = 1
-            if use_dynamic_ntk:
-                rope_param = RopeParam.create('dynamic',
-                                              base=rope_theta,
-                                              dim=hidden_units // attn_head_num,
-                                              max_position_embeddings=max_position_embeddings,
-                                              factor=scaling_factor)
-            else:
-                rope_param = RopeParam.create('default', base=rope_theta, dim=hidden_units // attn_head_num)
+
+            rope_param = RopeParam(type=scaling_type,
+                                   base=rope_theta,
+                                   dim=hidden_units // attn_head_num,
+                                   max_position_embeddings=max_position_embeddings,
+                                   factor=scaling_factor)
 
         return dict(num_layer=num_layer,
                     norm_eps=norm_eps,

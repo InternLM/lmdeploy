@@ -66,6 +66,10 @@ static void parse_default_rope_param(const YAML::Node& node, RopeParam& param)
 {
     param.base = node["base"].as<float>();
     param.dim  = node["dim"].as<int>();
+    if (param.base == 0.f || param.dim == 0) {
+        TM_LOG_ERROR("invalid rope param: base = %f, dim = %d", param.base, param.dim);
+        FT_CHECK(0);
+    }
 }
 
 static void parse_linear_rope_param(const YAML::Node& node, RopeParam& param)
@@ -98,23 +102,22 @@ static void parse_llama3_rope_param(const YAML::Node& node, RopeParam& param)
 
 static void parse_rope_param(const YAML::Node& node, RopeParam& rope)
 {
-    rope.type               = GetRoPEType(node["type"].as<std::string>());
-    const YAML::Node& param = node["param"];
+    rope.type = GetRoPEType(node["type"].as<std::string>());
     switch (rope.type) {
         case RopeType::kDefault:
-            parse_default_rope_param(param, rope);
+            parse_default_rope_param(node, rope);
             break;
         case RopeType::kLinear:
-            parse_linear_rope_param(param, rope);
+            parse_linear_rope_param(node, rope);
             break;
         case RopeType::kDynamic:
-            parse_dynamic_rope_param(param, rope);
+            parse_dynamic_rope_param(node, rope);
             break;
         case RopeType::kYarn:
-            parse_yarn_rope_param(param, rope);
+            parse_yarn_rope_param(node, rope);
             break;
         case RopeType::kLlama3:
-            parse_llama3_rope_param(param, rope);
+            parse_llama3_rope_param(node, rope);
             break;
         default:
             FT_CHECK(0);

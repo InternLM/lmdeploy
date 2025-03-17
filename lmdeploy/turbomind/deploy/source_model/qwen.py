@@ -77,15 +77,13 @@ class QwenModel(LlamaModel):
             use_logn_attn = int(config['use_logn_attn'])
             vocab_size = config['vocab_size']
             inter_size = config['intermediate_size']
-            if use_dynamic_ntk:
-                # need setting rope_scaling_factor in TurbomindEngineConfig
-                rope_param = RopeParam.create('dynamic',
-                                              base=rope_theta,
-                                              dim=kv_channels,
-                                              max_position_embeddings=seq_length,
-                                              factor=0)
-            else:
-                rope_param = RopeParam.create('default', base=rope_theta, dim=kv_channels)
+            scaling_type = 'dynamic' if use_dynamic_ntk else 'default'
+            # need setting rope_scaling_factor in TurbomindEngineConfig if scaling_type is dynamic
+            rope_param = RopeParam(type=scaling_type,
+                                   base=rope_theta,
+                                   dim=kv_channels,
+                                   max_position_embeddings=seq_length,
+                                   factor=0)
 
         return dict(size_per_head=kv_channels,
                     num_layer=num_layer,

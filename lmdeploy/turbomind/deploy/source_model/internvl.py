@@ -70,22 +70,17 @@ class InternVLModel(LlamaModel):
             max_position_embeddings = int(model_arg.get('max_position_embeddings', 0))
             rope_scaling = model_arg.get('rope_scaling', None)
             scaling_factor = 0.0
-            use_dynamic_ntk = 0
+            scaling_type = 'default'
             if isinstance(rope_scaling, dict):
-                scaling_type = model_arg['rope_scaling'].get('type', '')
+                scaling_type = model_arg['rope_scaling'].get('type', 'default')
                 scaling_factor = model_arg['rope_scaling'].get('factor', '')
-                if scaling_type == 'dynamic':
-                    use_dynamic_ntk = 1
             attn_bias = 1 if model_arg['architectures'][0] == 'Qwen2ForCausalLM' else 0
             rotary_embedding = hidden_units // attn_head_num
-            if use_dynamic_ntk:
-                rope_param = RopeParam.create('dynamic',
-                                              base=rope_theta,
-                                              dim=rotary_embedding,
-                                              max_position_embeddings=max_position_embeddings,
-                                              factor=scaling_factor)
-            else:
-                rope_param = RopeParam.create('default', base=rope_theta, dim=rotary_embedding)
+            rope_param = RopeParam(type=scaling_type,
+                                   base=rope_theta,
+                                   dim=rotary_embedding,
+                                   max_position_embeddings=max_position_embeddings,
+                                   factor=scaling_factor)
 
         return dict(num_layer=num_layer,
                     size_per_head=hidden_units // attn_head_num,

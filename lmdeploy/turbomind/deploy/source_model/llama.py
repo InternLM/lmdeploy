@@ -134,53 +134,47 @@ class LlamaModel(BaseInputModel):
             # compute rope param
             rope_theta = float(model_arg.get('rope_theta', 10000.0))
             max_position_embeddings = int(model_arg.get('max_position_embeddings', 0))
+            rope_param = RopeParam(type='default', base=rope_theta, dim=head_dim)
             rope_scaling = model_arg.get('rope_scaling', None)
             if isinstance(rope_scaling, dict):
                 llama2_scaling_type = rope_scaling.get('type', '')
                 llama3_scaling_type = rope_scaling.get('rope_type', '')
-                if llama2_scaling_type and llama3_scaling_type:
+                if llama2_scaling_type and llama3_scaling_type \
+                        and llama2_scaling_type != llama3_scaling_type:
                     raise ValueError(f'Ambiguous rope_scaling in config: {model_arg}')
                 scaling_type = llama2_scaling_type if llama2_scaling_type \
                     else llama3_scaling_type
                 scaling_factor = rope_scaling.get('factor', 0.0)
                 if scaling_type == 'dynamic':
-                    rope_param = RopeParam.create('dynamic',
-                                                  base=rope_theta,
-                                                  dim=head_dim,
-                                                  max_position_embeddings=max_position_embeddings,
-                                                  factor=scaling_factor)
+                    rope_param.__dict__.update(type='dynamic',
+                                               factor=scaling_factor,
+                                               max_position_embeddings=max_position_embeddings)
                 elif scaling_type == 'linear':
-                    rope_param = RopeParam.create('linear', base=rope_theta, dim=head_dim, factor=scaling_factor)
+                    rope_param.__dict__.update(type='linear', factor=scaling_factor)
                 elif scaling_type == 'llama3':
                     low_freq_factor = rope_scaling.get('low_freq_factor', 1.0)
                     high_freq_factor = rope_scaling.get('high_freq_factor', 1.0)
                     original_max_position_embeddings = model_arg['rope_scaling'].get(
                         'original_max_position_embeddings', 0)
-                    rope_param = RopeParam.create('llama3',
-                                                  base=rope_theta,
-                                                  dim=head_dim,
-                                                  factor=scaling_factor,
-                                                  low_freq_factor=low_freq_factor,
-                                                  high_freq_factor=high_freq_factor,
-                                                  original_max_position_embeddings=original_max_position_embeddings)
+                    rope_param.__dict__.update(type='llama3',
+                                               factor=scaling_factor,
+                                               low_freq_factor=low_freq_factor,
+                                               high_freq_factor=high_freq_factor,
+                                               original_max_position_embeddings=original_max_position_embeddings)
                 elif scaling_type == 'yarn':
                     attention_factor = rope_scaling.get('attention_factor', None)
                     if attention_factor is None:
                         attention_factor = 0.1 * math.log(scaling_factor) + 1.0
                     beta_fast = rope_scaling.get('beta_fast', 32.0)
                     beta_slow = rope_scaling.get('beta_slow', 1.0)
-                    rope_param = RopeParam.create('yarn',
-                                                  base=rope_theta,
-                                                  dim=head_dim,
-                                                  max_position_embeddings=max_position_embeddings,
-                                                  factor=scaling_factor,
-                                                  attention_factor=attention_factor,
-                                                  beta_fast=beta_fast,
-                                                  beta_slow=beta_slow)
+                    rope_param.__dict__.update(type='yarn',
+                                               factor=scaling_factor,
+                                               max_position_embeddings=max_position_embeddings,
+                                               attention_factor=attention_factor,
+                                               beta_fast=beta_fast,
+                                               beta_slow=beta_slow)
                 else:
                     raise RuntimeError(f'Unsupported rope type: {scaling_type}')
-            else:
-                rope_param = RopeParam.create('default', base=rope_theta, dim=head_dim)
 
         return dict(size_per_head=head_dim,
                     num_layer=num_layer,
