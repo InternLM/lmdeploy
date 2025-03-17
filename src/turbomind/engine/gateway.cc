@@ -21,7 +21,7 @@ Gateway::Gateway(int groups, int group_size, std::function<std::shared_ptr<void>
 
     for (int i = 0; i < size_; ++i) {
         const int group_id = i / group_size;
-        queues_[i] = std::make_unique<RequestQueue>(flags_[group_id].get());
+        queues_[i]         = std::make_unique<RequestQueue>(flags_[group_id].get());
     }
 
     signal_thread_ = std::thread(&Gateway::signal_thread_entry, this);

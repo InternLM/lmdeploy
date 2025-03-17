@@ -20,7 +20,7 @@ DeviceComm CreateDeviceCommunicator(const std::string& backend, int n_ranks, int
 #endif
 
 #if BUILD_MULTI_GPU
-    if (backend == "native" || backend == "cudaipc") {
+    if (backend == "native" || backend == "cuda-ipc") {
         return CreateCudaIpcCommunicator(n_ranks, rank, h_comm);
     }
 #endif

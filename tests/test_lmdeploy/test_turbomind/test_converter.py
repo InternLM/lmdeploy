@@ -1,5 +1,6 @@
 # yapf: disable
 from lmdeploy import TurbomindEngineConfig
+from lmdeploy.turbomind import update_parallel_config
 from lmdeploy.turbomind.deploy.converter import (get_input_model_registered_name,
                                                  get_output_model_registered_name_and_config)
 from lmdeploy.turbomind.deploy.source_model.base import INPUT_MODELS
@@ -58,13 +59,16 @@ def test_update_from_engine_config():
     assert (config == _config)
 
     config = copy.deepcopy(_config)
-    config.update_from_engine_config(TurbomindEngineConfig())
-    assert config.tensor_para_size == 1
+    engine_config = TurbomindEngineConfig()
+    update_parallel_config(engine_config)
+    config.update_from_engine_config(engine_config)
+    assert config.attn_tp_size == 1
     assert config.session_len == 32768
 
     config = copy.deepcopy(_config)
     engine_config = TurbomindEngineConfig(model_format='hf',
                                           tp=2,
+                                          device_num=2,
                                           session_len=4000,
                                           max_batch_size=100,
                                           cache_max_entry_count=0.5,
@@ -76,7 +80,7 @@ def test_update_from_engine_config():
 
     config.update_from_engine_config(engine_config)
 
-    assert (config.tensor_para_size == engine_config.tp)
+    assert (config.attn_tp_size == engine_config.attn_tp_size)
     assert (config.session_len == engine_config.session_len)
     assert (config.attention_config.rope_scaling_factor == engine_config.rope_scaling_factor)
     assert (config.attention_config.rope_scaling_factor == engine_config.rope_scaling_factor)

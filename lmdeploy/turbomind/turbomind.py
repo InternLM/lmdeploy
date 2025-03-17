@@ -65,6 +65,43 @@ def _tm_dict_to_torch_dict(tm_dict: _tm.TensorMap):
     return ret
 
 
+def complete_parallel_config(cfg: TurbomindEngineConfig):
+    if any((cfg.attn_dp_size, cfg.attn_tp_size, cfg.mlp_dp_size, cfg.mlp_tp_size, cfg.outer_dp_size)):
+        cfg.attn_dp_size = cfg.attn_dp_size or 1
+        cfg.attn_tp_size = cfg.attn_tp_size or 1
+        cfg.mlp_dp_size = cfg.mlp_dp_size or 1
+        cfg.mlp_tp_size = cfg.mlp_tp_size or 1
+        cfg.outer_dp_size = cfg.outer_dp_size or 1
+        gcd = math.gcd(cfg.mlp_dp_size, cfg.attn_dp_size)
+        cfg.outer_dp_size *= gcd
+        cfg.mlp_dp_size //= gcd
+        cfg.attn_dp_size //= gcd
+        return True
+    return False
+
+
+def update_parallel_config(cfg: TurbomindEngineConfig):
+    if not complete_parallel_config(cfg):
+        total = cfg.dp * cfg.tp
+        if not cfg.device_num:
+            count = torch.cuda.device_count()
+            if total < count:
+                count = total
+            cfg.device_num = count
+        assert total % cfg.device_num == 0
+        overlap = total // cfg.device_num
+        attn_dp_size = overlap
+        mlp_tp_size = overlap
+        inner_tp_size = cfg.tp // mlp_tp_size
+        cfg.outer_dp_size = cfg.dp // attn_dp_size
+        cfg.attn_dp_size = attn_dp_size
+        cfg.attn_tp_size = inner_tp_size
+        cfg.mlp_dp_size = 1
+        cfg.mlp_tp_size = mlp_tp_size * inner_tp_size
+    assert cfg.attn_dp_size * cfg.attn_tp_size == cfg.mlp_dp_size * cfg.mlp_tp_size
+    assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.outer_dp_size == cfg.device_num
+
+
 class TurboMind:
     """LMDeploy's inference engine.
 
@@ -99,7 +136,7 @@ class TurboMind:
         assert _engine_config.max_batch_size > 0, 'max_batch_size should be' \
             f' greater than 0, but got {_engine_config.max_batch_size}'
 
-        self._update_parallel_config(_engine_config)
+        update_parallel_config(_engine_config)
 
         self.gpu_count = _engine_config.device_num
 
@@ -163,41 +200,6 @@ class TurboMind:
             tensor_map = que.get()
             for k, v in tensor_map.items():
                 tm_params[k].append(v)
-
-    def _complete_parallel_config(self, cfg: TurbomindEngineConfig):
-        if any((cfg.attn_dp_size, cfg.attn_tp_size, cfg.mlp_dp_size, cfg.mlp_tp_size, cfg.outer_dp_size)):
-            cfg.attn_dp_size = cfg.attn_dp_size or 1
-            cfg.attn_tp_size = cfg.attn_tp_size or 1
-            cfg.mlp_dp_size = cfg.mlp_dp_size or 1
-            cfg.mlp_tp_size = cfg.mlp_tp_size or 1
-            cfg.outer_dp_size = cfg.outer_dp_size or 1
-            gcd = math.gcd(cfg.mlp_dp_size, cfg.attn_dp_size)
-            cfg.outer_dp_size *= gcd
-            cfg.mlp_dp_size //= gcd
-            cfg.attn_dp_size //= gcd
-            return True
-        return False
-
-    def _update_parallel_config(self, cfg: TurbomindEngineConfig):
-        if not self._complete_parallel_config(cfg):
-            total = cfg.dp * cfg.tp
-            if not cfg.device_num:
-                count = torch.cuda.device_count()
-                if total < count:
-                    count = total
-                cfg.device_num = count
-            assert total % cfg.device_num == 0
-            overlap = total // cfg.device_num
-            attn_dp_size = overlap
-            mlp_tp_size = overlap
-            inner_tp_size = cfg.tp // mlp_tp_size
-            cfg.outer_dp_size = cfg.dp // attn_dp_size
-            cfg.attn_dp_size = attn_dp_size
-            cfg.attn_tp_size = inner_tp_size
-            cfg.mlp_dp_size = 1
-            cfg.mlp_tp_size = mlp_tp_size * inner_tp_size
-        assert cfg.attn_dp_size * cfg.attn_tp_size == cfg.mlp_dp_size * cfg.mlp_tp_size
-        assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.outer_dp_size == cfg.device_num
 
     def _postprocess_config(self, tm_config: TurbomindModelConfig, engine_config: TurbomindEngineConfig):
         """postprocess turbomind config by."""
@@ -265,10 +267,10 @@ class TurboMind:
         cfg = TurbomindModelConfig.from_dict(_cfg)
 
         # always use tp in converted model (config.yaml)
-        if cfg.tensor_para_size != engine_config.tp:
+        if cfg.attn_tp_size != engine_config.attn_tp_size:
             logger.warning('tp in engine_config is different from in config.yaml'
-                           f'({config_path}), {engine_config.tp} vs '
-                           f'{cfg.tensor_para_size}, using tp={cfg.tensor_para_size}')
+                           f'({config_path}), {engine_config.attn_tp_size} vs '
+                           f'{cfg.attn_tp_size}, using tp={cfg.attn_tp_size}')
 
         self._postprocess_config(cfg, engine_config)
 
