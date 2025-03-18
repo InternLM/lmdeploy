@@ -3,8 +3,8 @@ import os
 from typing import Optional
 
 import torch
-import torch.distributed as dist
 
+import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.kernels.dlinfer.w8a8_kernels import dynamic_quant, linear_w8a8, rms_norm_w8a8
 from lmdeploy.pytorch.models.q_modules import QTensor
 
