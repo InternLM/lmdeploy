@@ -1162,7 +1162,7 @@ class MllamaForConditionalGeneration(nn.Module, CudaGraphMixin, DeployModelMixin
             pixel_values = []
             aspect_ratio_ids = []
             aspect_ratio_mask = []
-            batched_image_data = [input_mm['image'] for input_mm in context.input_multimodals]
+            batched_image_data = [input_mm.get('image', []) for input_mm in context.input_multimodals]
             for image_data in batched_image_data:
                 for data in image_data:
                     pixel_values.append(data.data)
@@ -1311,7 +1311,7 @@ class MllamaForConditionalGeneration(nn.Module, CudaGraphMixin, DeployModelMixin
         for idx, input_mm in enumerate(input_mms):
             if input_mm is None:
                 new_model_metas.append(model_metas[idx])
-            images = input_mm['image']
+            images = input_mm.get('image', [])
             num_img = len(images)
 
             cross_kv_len = 0
