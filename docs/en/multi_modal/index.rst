@@ -15,3 +15,4 @@ Vision-Language Models
    mllama.md
    qwen2_vl.md
    molmo.md
+   gemma3.md

@@ -98,6 +98,7 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 | Mono-InternVL<sup>\[1\]</sup>  |     2B      | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
 |            ChemVLM             |   8B-26B    | MLLM |    Yes    |   Yes   |   No    |  -   |   -   |
 |             Gemma2             |   9B-27B    | LLM  |    Yes    |   Yes   |   Yes   |  -   |   -   |
+|             Gemma3             |   1B-12B    | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
 |              GLM4              |     9B      | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 |             GLM-4V             |     9B      | MLLM |    Yes    |   Yes   |   Yes   |  No  |  Yes  |
 |           CodeGeeX4            |     9B      | LLM  |    Yes    |   Yes   |   Yes   |  -   |   -   |
