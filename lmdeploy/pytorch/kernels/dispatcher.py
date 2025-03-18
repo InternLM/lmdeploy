@@ -3,6 +3,8 @@ import importlib
 import inspect
 from typing import Callable
 
+from torch import Tensor
+
 from lmdeploy.utils import get_logger
 
 from ..devices import DeviceContext, get_device_manager
@@ -64,6 +66,8 @@ class FunctionDispatcher:
         self.func_name = func_name
         self.dispatched_func = self.load_and_call
         self.device_manager.register_context_callback(self.device_callback)
+        self.device_type = None
+        self.device_map = {'cuda': 'cuda', 'npu': 'dlinfer', 'maca': 'dlinfer', 'camb': 'dlinfer'}
 
     def device_callback(self, context: DeviceContext):
         """device context callback."""
@@ -88,7 +92,11 @@ class FunctionDispatcher:
 
     def load_and_call(self, *args, **kwargs):
         """load and call."""
-        device = self.device_manager.current_context().device_type
+        if self.device_type is None:
+            device_type = self.device_manager.current_context().device_type
+            self.device_type = next(
+                (arg.device.type for arg in args if isinstance(arg, Tensor) and arg.device.type != 'cpu'), device_type)
+        device = self.device_map[self.device_type]
         if device not in self.impl_map:
             self.load_func(device)
         self.dispatched_func = self.impl_map[device]
