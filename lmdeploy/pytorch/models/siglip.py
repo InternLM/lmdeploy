@@ -138,9 +138,9 @@ class SiglipAttention(nn.Module):
         batch_size, q_len, _ = hidden_states.size()
         qkv_states = self.qkv_proj(hidden_states)
         query_states, key_states, value_states = qkv_states.chunk(3, dim=-1)
-        query_states = query_states.view(batch_size, q_len, self.num_heads, self.head_dim).transpose(1, 2)
-        key_states = key_states.view(batch_size, q_len, self.num_heads, self.head_dim).transpose(1, 2)
-        value_states = value_states.view(batch_size, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+        query_states = query_states.view(batch_size, q_len, -1, self.head_dim).transpose(1, 2)
+        key_states = key_states.view(batch_size, q_len, -1, self.head_dim).transpose(1, 2)
+        value_states = value_states.view(batch_size, q_len, -1, self.head_dim).transpose(1, 2)
 
         out = nn.functional.scaled_dot_product_attention(query_states, key_states, value_states, scale=self.scale)
         out = out.transpose(1, 2).contiguous().view(batch_size, q_len, -1)

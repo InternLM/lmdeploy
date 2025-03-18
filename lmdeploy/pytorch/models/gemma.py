@@ -163,12 +163,13 @@ class GemmaAttention(nn.Module):
         attn_masks: torch.Tensor,
         seq_lens: torch.Tensor,
     ) -> torch.Tensor:
-        q = q.view(-1, self.num_heads, self.head_dim)
+        q_len = q.shape[0]
+        q = q.view(q_len, -1, self.head_dim)
         # Expand the key and value to handle GQA.
         num_queries_per_kv = self.num_heads // self.num_kv_heads
-        k = k.view(-1, self.num_kv_heads, self.head_dim)
+        k = k.view(q_len, -1, self.head_dim)
         k = k.repeat_interleave(num_queries_per_kv, dim=-2)
-        v = v.view(-1, self.num_kv_heads, self.head_dim)
+        v = v.view(q_len, -1, self.head_dim)
         v = v.repeat_interleave(num_queries_per_kv, dim=-2)
 
         start_idx = 0

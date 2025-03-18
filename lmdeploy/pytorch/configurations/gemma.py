@@ -23,7 +23,8 @@ class GemmaVLModelConfigBuilder(AutoModelConfigBuilder):
     @classmethod
     def condition(cls, hf_config):
         """config."""
-        return hf_config.architectures[0] == 'Gemma3ForConditionalGeneration'
+        model_arch = hf_config.architectures[0] if hf_config.architectures else None
+        return model_arch == 'Gemma3ForConditionalGeneration'
 
     @classmethod
     def build(cls, hf_config, model_path: str = None, **kwargs):
