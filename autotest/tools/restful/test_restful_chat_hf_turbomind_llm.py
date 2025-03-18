@@ -351,7 +351,7 @@ def test_modelscope_restful_chat_tp1(config, common_case_config, worker_id):
 @pytest.mark.gpu_num_1
 @pytest.mark.parametrize('prepare_environment', [
     {
-        'model': 'deepseek-ai/DeepSeek-R1-Distill-Qwen-32B',
+        'model': 'deepseek-ai/DeepSeek-R1-Distill-Llama-8B',
         'cuda_prefix': None,
         'tp_num': 1,
         'extra': ' --reasoning-parser deepseek-r1'
