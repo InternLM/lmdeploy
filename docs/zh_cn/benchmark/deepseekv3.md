@@ -28,14 +28,6 @@ ______________________________________________________________________
 我们强烈建议用户采用官方 Docker 镜像，以避免因环境差异而导致的潜在问题。请在主节点和从节点上执行以下命令来创建 Docker 容器。
 
 ```bash
-# Get all RDMA devices
-devices=$(ls /dev/infiniband)
-# Build --device parameters
-device_args=""
-for dev in $devices; do
-    device_args+="--device=/dev/infiniband/$dev "
-done
-
 docker run -it \
     --gpus all \
     --network host \
@@ -43,11 +35,10 @@ docker run -it \
     --name lmdeploy \
     --privileged \
     -v "/path/to/the/huggingface/home/in/this/node":"root/.cache/huggingface" \
-    $device_args \
     openmmlab/lmdeploy:latest-cu12
 ```
 
-注意 `--ipc host` 和 `$device_args` 会影响推理效率。在创建容器时请确保没有遗漏
+其中 `--privileged` 是开启 RDMA 必需的参数。
 
 ### 用Ray构建多节点集群
 

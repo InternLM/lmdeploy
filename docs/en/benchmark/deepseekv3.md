@@ -28,14 +28,6 @@ In this document, we will provide step-by-step guidance on how to set up DeepSee
 We highly recommend that users adopt our official docker image to avoid potential errors caused by environmental differences. Execute the following commands on both head and slave nodes to create docker containers.
 
 ```bash
-# Get all RDMA devices
-devices=$(ls /dev/infiniband)
-# Build --device parameters
-device_args=""
-for dev in $devices; do
-    device_args+="--device=/dev/infiniband/$dev "
-done
-
 docker run -it \
     --gpus all \
     --network host \
@@ -43,11 +35,10 @@ docker run -it \
     --name lmdeploy \
     --privileged \
     -v "/path/to/the/huggingface/home/in/this/node":"root/.cache/huggingface" \
-    $device_args \
     openmmlab/lmdeploy:latest-cu12
 ```
 
-Note that `--ipc host` and `$device_args` will impact inference efficiency. Ensure that they are not omitted.
+`--privileged` is required for enabling RDMA.
 
 ### Build a multi-node cluster using Ray
 
