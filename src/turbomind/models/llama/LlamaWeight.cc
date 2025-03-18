@@ -100,14 +100,14 @@ void LlamaWeight<T>::loadModel(std::string dir_path)
 
     loadWeightFromBin((T*)pre_decoder_embedding_table,
                       {embedding_size_ * hidden_units_ / tp_size_},
-                      dir_path + "tok_embeddings." + std::to_string(tp_size_) + ".weight",
+                      dir_path + "tok_embeddings." + std::to_string(tp_rank_) + ".weight",
                       model_file_type);
 
     loadWeightFromBin((T*)output_norm_weight, {hidden_units_}, dir_path + "norm.weight", model_file_type);
 
     loadWeightFromBin((T*)post_decoder_embedding_kernel,
                       {hidden_units_ * vocab_size_padded_ / tp_size_},
-                      dir_path + "output." + std::to_string(tp_size_) + ".weight",
+                      dir_path + "output." + std::to_string(tp_rank_) + ".weight",
                       model_file_type);
 
     for (unsigned layer = 0; layer < num_layer_; ++layer) {
