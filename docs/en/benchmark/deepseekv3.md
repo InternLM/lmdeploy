@@ -4,7 +4,7 @@
 
 ______________________________________________________________________
 
-### 1. LMDeploy v0.7.1
+### v0.7.1 + `9528a74`
 
 | max bsz | prompt no | input-len | output-len | input token throughput (tok/s) | output token throughput (tok/s) |
 | ------- | :-------: | :-------: | :--------: | :----------------------------: | :-----------------------------: |
@@ -21,7 +21,7 @@ For output lengths of 16k and 32k, we decrease the total prompt numbers to short
 
 ______________________________________________________________________
 
-### 1. Installation
+### Installation
 
 In this document, we will provide step-by-step guidance on how to set up DeepSeekV3 inference with LMDeploy on a multi-node cluster.
 
@@ -49,7 +49,7 @@ docker run -it \
 
 Note that `--ipc host` and `$device_args` will impact inference efficiency. Ensure that they are not omitted.
 
-### 2. Build a multi-node cluster using Ray
+### Build a multi-node cluster using Ray
 
 > :warning: The following operations are all assumed to be performed within the Docker container.
 > We will build a Ray cluster consisting of docker containers, therefore commands executed on the host machine terminal won't be able to access this cluster.
@@ -74,7 +74,7 @@ Use the following commands to check the ray cluster status on both head and slav
 ray status
 ```
 
-### 3. Launch service
+### Launch service
 
 Use the following commands to launch the LMDeploy DeepSeekV3 API service. We currently support TP16 deployment.
 
@@ -82,7 +82,7 @@ Use the following commands to launch the LMDeploy DeepSeekV3 API service. We cur
 lmdeploy serve api_server deepseek-ai/DeepSeek-V3 --backend pytorch --tp 16
 ```
 
-### 4. Benchmarking
+### Benchmarking
 
 To benchmark LMDeploy DeepSeekV3 inference performance, you may refer to the following scripts and modify the parameters according to your needs.
 
