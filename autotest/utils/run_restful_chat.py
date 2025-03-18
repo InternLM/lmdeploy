@@ -318,10 +318,11 @@ def run_reasoning_case(config, port: int = DEFAULT_PORT):
     file = open(restful_log, 'w')
 
     client = OpenAI(api_key='YOUR_API_KEY', base_url=http_url + '/v1')
+    model_name = client.available_models[0]
 
     with allure.step('step1 - stream'):
         messages = [{'role': 'user', 'content': '9.11 and 9.8, which is greater?'}]
-        response = client.chat.completions.create(model=model, messages=messages, temperature=0.01, stream=True)
+        response = client.chat.completions.create(model=model_name, messages=messages, temperature=0.01, stream=True)
         outputList = []
         final_content = ''
         final_reasoning_content = ''
@@ -335,7 +336,7 @@ def run_reasoning_case(config, port: int = DEFAULT_PORT):
                 outputList)
 
     with allure.step('step2 - batch'):
-        response = client.chat.completions.create(model=model, messages=messages, temperature=0.01, stream=False)
+        response = client.chat.completions.create(model=model_name, messages=messages, temperature=0.01, stream=False)
         reasoning_content = response.choices[0].message.reasoning_content
         content = response.choices[0].message.content
         file.writelines(str(outputList) + '\n')
@@ -591,6 +592,7 @@ def run_tools_case(config, port: int = DEFAULT_PORT):
     file = open(restful_log, 'w')
 
     client = OpenAI(api_key='YOUR_API_KEY', base_url=http_url + '/v1')
+    model_name = client.available_models[0]
 
     with allure.step('step1 - one_round_prompt'):
         tools = [{
@@ -615,7 +617,7 @@ def run_tools_case(config, port: int = DEFAULT_PORT):
             }
         }]
         messages = [{'role': 'user', 'content': "What's the weather like in Boston today?"}]
-        response = client.chat.completions.create(model=model,
+        response = client.chat.completions.create(model=model_name,
                                                   messages=messages,
                                                   temperature=0.01,
                                                   stream=False,
@@ -645,7 +647,7 @@ def run_tools_case(config, port: int = DEFAULT_PORT):
             }
         }]
         messages = [{'role': 'user', 'content': '搜索最近的人工智能发展趋势'}]
-        response = client.chat.completions.create(model=model,
+        response = client.chat.completions.create(model=model_name,
                                                   messages=messages,
                                                   temperature=0.01,
                                                   stream=False,
