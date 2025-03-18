@@ -71,6 +71,8 @@ _SUPPORTED_ARCHS = dict(
     InternLM2VEForCausalLM=True,
     # gemma2
     Gemma2ForCausalLM=True,
+    # gemma3
+    Gemma3ForCausalLM=True,
     # phi3.5-moe
     PhiMoEForCausalLM=True,
     # mllama
