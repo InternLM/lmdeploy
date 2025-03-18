@@ -4,6 +4,12 @@
 
 支持的模型列表在[这里](../../supported_models/supported_models.md#PyTorchEngine-华为昇腾平台).
 
+> \[!IMPORTANT\]
+> 我们已经在阿里云上提供了构建完成的鲲鹏CPU版本的镜像(从lmdeploy 0.7.1 + dlinfer 0.1.6开始)。
+> 请使用下面的命令来拉取镜像:
+> `docker pull crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:latest `
+> 下述的dockerfile依然是可以执行的，您可以直接拉取镜像，也可以使用dockerfile来自己构建。
+
 ## 安装
 
 我们强烈建议用户构建一个 Docker 镜像以简化环境设置。
@@ -99,12 +105,26 @@ if __name__ == "__main__":
 lmdeploy serve api_server --backend pytorch --device ascend --eager-mode internlm/internlm2_5-7b-chat
 ```
 
+也可以运行以下命令启动容器运行LLM模型服务。
+
+```bash
+docker exec -it --net=host crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:latest \
+    bash -i -c "lmdeploy serve api_server --backend pytorch --device ascend --eager-mode internlm/internlm2_5-7b-chat"
+```
+
 ### VLM 模型服务
 
 将`--device ascend`加入到服务启动命令中。
 
 ```bash
 lmdeploy serve api_server --backend pytorch --device ascend --eager-mode OpenGVLab/InternVL2-2B
+```
+
+也可以运行以下命令启动容器运行VLM模型服务。
+
+```bash
+docker exec -it --net=host crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:latest \
+    bash -i -c "lmdeploy serve api_server --backend pytorch --device ascend --eager-mode OpenGVLab/InternVL2-2B"
 ```
 
 ## 使用命令行与LLM模型对话
@@ -118,7 +138,7 @@ lmdeploy chat internlm/internlm2_5-7b-chat --backend pytorch --device ascend --e
 也可以运行以下命令使启动容器后开启lmdeploy聊天
 
 ```bash
-docker exec -it lmdeploy_ascend_demo \
+docker exec -it crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:latest \
     bash -i -c "lmdeploy chat --backend pytorch --device ascend --eager-mode internlm/internlm2_5-7b-chat"
 ```
 

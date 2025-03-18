@@ -32,6 +32,7 @@ public:
                  int                        batch_size,
                  const LlamaDenseWeight<T>& weight,
                  Type                       type      = kGemm,
+                 T*                         lora_buff = nullptr,
                  int*                       lora_mask = nullptr);
 
     void forward_moe(T*                         output_data,

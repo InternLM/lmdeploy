@@ -880,8 +880,6 @@ def test_deepseek_r1(model_path_or_name):
     }]
     ref = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     lm_res = chat_template.messages2prompt(messages)
-    if model_path_or_name != 'deepseek-ai/DeepSeek-V3':
-        lm_res += '<think>\n'
     assert ref == lm_res
 
 
@@ -910,5 +908,35 @@ def test_deepseek_vl2(model_path_or_name):
 
     ref = '<|User|>: This is image_1: <image>\nThis is image_2: <image>\nThis is image_3: <image>' + \
           '\n Can you tell me what are in the images?\n\n<|Assistant|>:'
+    lm_res = chat_template.messages2prompt(messages)
+    assert ref == lm_res
+
+
+@pytest.mark.parametrize('model_path_or_name', [
+    'Qwen/QwQ-32B',
+    'Qwen/QwQ-32B-Preview',
+    'Qwen/QwQ-32B-AWQ',
+])
+def test_qwq(model_path_or_name):
+    from transformers import AutoTokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained(model_path_or_name, trust_remote_code=True)
+    deduced_name = best_match_model(model_path_or_name)
+    chat_template = MODELS.get(deduced_name)()
+
+    messages = [{
+        'role': 'system',
+        'content': 'you are a helpful assistant'
+    }, {
+        'role': 'user',
+        'content': 'who are you'
+    }, {
+        'role': 'assistant',
+        'content': 'I am an AI'
+    }, {
+        'role': 'user',
+        'content': 'AGI is?'
+    }]
+    ref = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     lm_res = chat_template.messages2prompt(messages)
     assert ref == lm_res

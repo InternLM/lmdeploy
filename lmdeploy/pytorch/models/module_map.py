@@ -114,6 +114,12 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen2_vl.Qwen2VLForConditionalGeneration',
 })
 
+# qwen2_5_vl
+MODULE_MAP.update({
+    'Qwen2_5_VLForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen2_5_vl.Qwen2_5_VLForConditionalGeneration',
+})
+
 # dbrx
 MODULE_MAP.update({
     'DbrxForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.dbrx.DbrxForCausalLM',
@@ -172,5 +178,12 @@ MODULE_MAP.update({
 MODULE_MAP.update({
     'InternLM3ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm3.InternLM3ForCausalLM',
 })
+
+# internlm2 reward model
+MODULE_MAP.update(
+    {'InternLM2ForRewardModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2_reward.InternLM2ForRewardModel'})
+
+# qwen2 reward model
+MODULE_MAP.update({'Qwen2ForRewardModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen2_reward.Qwen2ForRewardModel'})
 
 CUSTOM_MODULE_MAP = dict()

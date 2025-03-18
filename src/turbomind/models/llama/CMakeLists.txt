@@ -34,12 +34,9 @@ target_link_libraries(Llama PUBLIC CUDA::cudart
         attention
         decoding_kernels
         unfused_attention_kernels
-        custom_ar_kernels
-        custom_ar_comm
         gpt_kernels
         tensor
         memory_utils
-        nccl_utils
         cuda_utils
         logger
         anomaly_handler)

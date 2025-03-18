@@ -5,6 +5,13 @@ Please read the original [Get Started](../get_started.md) guide before reading t
 
 Here is the [supported model list](../../supported_models/supported_models.md#PyTorchEngine-on-Huawei-Ascend-Platform).
 
+> \[!IMPORTANT\]
+> We have uploaded a docker image with KUNPENG CPU to aliyun(from lmdeploy 0.7.1 + dlinfer 0.1.6).
+> Please try to pull the image by following command:
+> `docker pull crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:latest`
+> The dockerfile described below still works, you can try
+> both pulling image and build your own image by dockerfile.
+
 ## Installation
 
 We highly recommend that users build a Docker image for streamlined environment setup.
@@ -102,12 +109,26 @@ Add `--device ascend` in the serve command.
 lmdeploy serve api_server --backend pytorch --device ascend --eager-mode internlm/internlm2_5-7b-chat
 ```
 
+Run the following commands to launch docker container for lmdeploy LLM serving:
+
+```bash
+docker exec -it --net=host crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:latest \
+    bash -i -c "lmdeploy serve api_server --backend pytorch --device ascend --eager-mode internlm/internlm2_5-7b-chat"
+```
+
 ### Serve a VLM model
 
 Add `--device ascend` in the serve command
 
 ```bash
 lmdeploy serve api_server --backend pytorch --device ascend --eager-mode OpenGVLab/InternVL2-2B
+```
+
+Run the following commands to launch docker container for lmdeploy VLM serving:
+
+```bash
+docker exec -it --net=host crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:latest \
+    bash -i -c "lmdeploy serve api_server --backend pytorch --device ascend --eager-mode OpenGVLab/InternVL2-2B"
 ```
 
 ## Inference with Command line Interface
@@ -121,7 +142,7 @@ lmdeploy chat internlm/internlm2_5-7b-chat --backend pytorch --device ascend --e
 Run the following commands to launch lmdeploy chatting after starting container:
 
 ```bash
-docker exec -it lmdeploy_ascend_demo \
+docker exec -it crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:latest \
     bash -i -c "lmdeploy chat --backend pytorch --device ascend --eager-mode internlm/internlm2_5-7b-chat"
 ```
 

@@ -4,7 +4,8 @@ from typing import Any, Dict, List, Union
 
 import torch
 from torch import Tensor
-from torch import distributed as dist
+
+import lmdeploy.pytorch.distributed as dist
 
 
 class MultiModalData:

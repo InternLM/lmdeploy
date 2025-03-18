@@ -125,6 +125,13 @@ class CudaOpsBackend(DefaultOpsBackend):
             kv_flatten_size=kv_flatten_size,
             quant_policy=step_context.kv_quant_policy,
         )
+        if getattr(step_context.model_config, 'use_flash_mla', False) is True:
+            if step_context.is_decoding is True:
+                import flash_mla_cuda
+                tile_scheduler_metadata, num_splits = flash_mla_cuda.get_mla_metadata(
+                    attn_metadata.kv_seqlens.to(torch.int32), step_context.model_config.num_attention_heads, 1)
+                attn_metadata.tile_scheduler_metadata = tile_scheduler_metadata
+                attn_metadata.num_splits = num_splits
 
         cross_seqlens = step_context.cross_seqlens
         cross_kv_seqlens = step_context.cross_kv_seqlens
@@ -160,3 +167,13 @@ class CudaOpsBackend(DefaultOpsBackend):
         """build graph runner."""
         from .graph_runner import CUDAGraphRunner
         return CUDAGraphRunner(model, model_config, cache_config, backend_config, device)
+
+    @staticmethod
+    def device_count():
+        """get num available devices."""
+        return torch.cuda.device_count()
+
+    @staticmethod
+    def support_ray():
+        """support ray."""
+        return True
