@@ -4,8 +4,8 @@
 | ------- | :-------: | :-------: | :--------: | :----------------------------: | :-----------------------------: | :--: |
 | 1024    |   10000   |   2048    |    1024    |            3489.50             |             1743.56             | 3.4  |
 | 1024    |   10000   |   2048    |    2048    |            1665.07             |             1682.41             | 1.62 |
-| 1024    |   10000   |   2048    |    4096    |                                |                                 |      |
-| 1024    |   10000   |   2048    |    8192    |                                |                                 |      |
+| 1024    |   10000   |   2048    |    4096    |             725.01             |             1455.12             | 0.71 |
+| 1024    |   10000   |   2048    |    8192    |             253.17             |             1009.80             | 0.25 |
 | 128     |   2000    |   2048    |   16384    |             76.78              |             600.07              | 0.07 |
 | 128     |   2000    |   2048    |   32768    |             17.75              |             281.89              | 0.02 |
 
@@ -13,9 +13,9 @@ For output lengths of 16k and 32k, we decrease the total prompt numbers to short
 
 ## 1. Installation using docker
 
-In this document, we will provide step-by-step guidance to set up DeepSeekV3 inference with LMDeploy on a multi-node cluster.
+In this document, we will provide step-by-step guidance on how to set up DeepSeekV3 inference with LMDeploy on a multi-node cluster.
 
-We highly recommend users adopt our official docker image to avoid potential errors caused by the environment differences. Execute the following commands on both head and slave nodes to create docker containers.
+We highly recommend that users adopt our official docker image to avoid potential errors caused by environmental differences. Execute the following commands on both head and slave nodes to create docker containers.
 
 ```bash
 # Get all RDMA devices
