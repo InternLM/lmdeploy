@@ -184,6 +184,7 @@ pytorch_vl_model:
     - OpenGVLab/Mono-InternVL-2B
     - Qwen/Qwen2-VL-2B-Instruct
     - Qwen/Qwen2-VL-7B-Instruct
+    - Qwen/Qwen2.5-VL-7B-Instruct
     - THUDM/cogvlm-chat-hf
     - THUDM/cogvlm2-llama3-chinese-chat-19B
     - THUDM/glm-4v-9b
