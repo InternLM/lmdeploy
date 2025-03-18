@@ -1,17 +1,27 @@
-# DeepSeekV3 Support
+# DeepSeekV3 Benchmarking
 
-| max bsz | prompt no | input-len | output-len | input token throughput (tok/s) | output token throughput (tok/s) | RPS  |
-| ------- | :-------: | :-------: | :--------: | :----------------------------: | :-----------------------------: | :--: |
-| 1024    |   10000   |   2048    |    1024    |            3489.50             |             1743.56             | 3.4  |
-| 1024    |   10000   |   2048    |    2048    |            1665.07             |             1682.41             | 1.62 |
-| 1024    |   10000   |   2048    |    4096    |             725.01             |             1455.12             | 0.71 |
-| 1024    |   10000   |   2048    |    8192    |             253.17             |             1009.80             | 0.25 |
-| 128     |   2000    |   2048    |   16384    |             76.78              |             600.07              | 0.07 |
-| 128     |   2000    |   2048    |   32768    |             17.75              |             281.89              | 0.02 |
+## Benchmark results
+
+______________________________________________________________________
+
+### 1. LMDeploy v0.7.1
+
+| max bsz | prompt no | input-len | output-len | input token throughput (tok/s) | output token throughput (tok/s) |
+| ------- | :-------: | :-------: | :--------: | :----------------------------: | :-----------------------------: |
+| 1024    |   10000   |   2048    |    1024    |            3489.50             |             1743.56             |
+| 1024    |   10000   |   2048    |    2048    |            1665.07             |             1682.41             |
+| 1024    |   10000   |   2048    |    4096    |             725.01             |             1455.12             |
+| 1024    |   10000   |   2048    |    8192    |             253.17             |             1009.80             |
+| 128     |   2000    |   2048    |   16384    |             76.78              |             600.07              |
+| 128     |   2000    |   2048    |   32768    |             17.75              |             281.89              |
 
 For output lengths of 16k and 32k, we decrease the total prompt numbers to shorten the execution time.
 
-## 1. Installation using docker
+## User guide
+
+______________________________________________________________________
+
+### 1. Installation
 
 In this document, we will provide step-by-step guidance on how to set up DeepSeekV3 inference with LMDeploy on a multi-node cluster.
 
@@ -39,14 +49,12 @@ docker run -it \
 
 Note that `--ipc host` and `$device_args` will impact inference efficiency. Ensure that they are not omitted.
 
-## 2. Build a multi-node cluster using Ray
+### 2. Build a multi-node cluster using Ray
 
 > :warning: The following operations are all assumed to be performed within the Docker container.
 > We will build a Ray cluster consisting of docker containers, therefore commands executed on the host machine terminal won't be able to access this cluster.
 
 LMdeploy utilizes Ray for multi-node cluster construction. In the following steps, we will build a Ray cluster with two nodes for illustration.
-
-### 2.1 Start multi-node Ray cluster
 
 Start the ray cluster on the head node. The default port in Ray is 6379 (change it to your own).
 
@@ -60,15 +68,13 @@ Start on the slave nodes to join in the ray cluster, suppose the head node ip is
 ray start --address=xxx:6379
 ```
 
-### 2.2 Check cluster status
-
 Use the following commands to check the ray cluster status on both head and slave nodes. You should be able to see the ray cluster status of multiple nodes information.
 
 ```bash
 ray status
 ```
 
-## 3. Launch DeepSeekV3 API service
+### 3. Launch service
 
 Use the following commands to launch the LMDeploy DeepSeekV3 API service. We currently support TP16 deployment.
 
@@ -76,7 +82,7 @@ Use the following commands to launch the LMDeploy DeepSeekV3 API service. We cur
 lmdeploy serve api_server deepseek-ai/DeepSeek-V3 --backend pytorch --tp 16
 ```
 
-## 4. Benchmarking the inference performance
+### 4. Benchmarking
 
 To benchmark LMDeploy DeepSeekV3 inference performance, you may refer to the following scripts and modify the parameters according to your needs.
 
