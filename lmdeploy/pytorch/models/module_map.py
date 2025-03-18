@@ -66,6 +66,12 @@ MODULE_MAP.update({
     'Gemma3ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.GemmaForCausalLM',
 })
 
+# gemma3 VL
+MODULE_MAP.update({
+    'Gemma3ForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma3_vl.Gemma3ForConditionalGeneration',
+})
+
 # deepseek
 MODULE_MAP.update({
     'DeepseekForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek.DeepseekForCausalLM',

@@ -4,6 +4,7 @@ import math
 from typing import Any, Iterable, List, Optional, Tuple
 
 import torch
+import torch.nn.functional as F
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
@@ -47,6 +48,9 @@ class GemmaAttention(nn.Module):
         self.model_type = config.model_type
 
         # attention
+        self.num_heads = num_heads
+        self.head_dim = head_dim
+        self.num_kv_heads = num_key_value_heads
         self.scaling = 1 / math.sqrt(config.head_dim)
         if hasattr(config, 'query_pre_attn_scalar'):
             self.scaling = config.query_pre_attn_scalar**-0.5
@@ -91,6 +95,8 @@ class GemmaAttention(nn.Module):
         rotary_pos_emb_local: Optional[Tuple[torch.FloatTensor, torch.FloatTensor]] = None,
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
         attn_metadata: Any = None,
+        global_attn_masks: torch.Tensor = None,
+        local_attn_masks: torch.Tensor = None,
     ):
         """Rewrite of LlamaAttention.forward."""
         # qkv proj
@@ -116,6 +122,7 @@ class GemmaAttention(nn.Module):
             inplace=True,
         )
 
+        gemma3_naive_attn_with_masks = global_attn_masks is not None and local_attn_masks is not None
         # attention
         attn_output = self.attn_fwd(
             query_states,
@@ -126,13 +133,67 @@ class GemmaAttention(nn.Module):
             attn_metadata,
             k_scales_zeros=None if len(past_key_value) == 2 else past_key_value[2],
             v_scales_zeros=None if len(past_key_value) == 2 else past_key_value[3],
-            inplace=True,
+            inplace=not gemma3_naive_attn_with_masks,
         )
         attn_output = attn_output.reshape(*hidden_states.shape[:-1], -1)
+
+        # gemma3 VL applied different attn masks
+        # intentionally compute attn twice to fill kv cache
+        if gemma3_naive_attn_with_masks is True:
+            attn_masks = local_attn_masks if self.sliding_window > 0 else global_attn_masks
+
+            attn_output = self.naive_attn_with_masks(query_states,
+                                                     key_states,
+                                                     value_states,
+                                                     out=attn_output,
+                                                     attn_masks=attn_masks,
+                                                     seq_lens=attn_metadata.q_seqlens)
 
         # o proj
         attn_output = self.o_proj(attn_output)
         return attn_output
+
+    # adapted from https://github.com/vllm-project/vllm/blob/5eeabc2a4400fde9b030f2f72746a2b03db059bd/vllm/model_executor/models/gemma3.py#L218  # noqa
+    def naive_attn_with_masks(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        out: torch.Tensor,
+        attn_masks: torch.Tensor,
+        seq_lens: torch.Tensor,
+    ) -> torch.Tensor:
+        q = q.view(-1, self.num_heads, self.head_dim)
+        # Expand the key and value to handle GQA.
+        num_queries_per_kv = self.num_heads // self.num_kv_heads
+        k = k.view(-1, self.num_kv_heads, self.head_dim)
+        k = k.repeat_interleave(num_queries_per_kv, dim=-2)
+        v = v.view(-1, self.num_kv_heads, self.head_dim)
+        v = v.repeat_interleave(num_queries_per_kv, dim=-2)
+
+        start_idx = 0
+        for seq_len, attn_mask in zip(seq_lens, attn_masks):
+            end_idx = start_idx + seq_len
+            query = q[start_idx:end_idx].unsqueeze(0)
+            key = k[start_idx:end_idx].unsqueeze(0)
+            value = v[start_idx:end_idx].unsqueeze(0)
+
+            # Transpose.
+            query = query.transpose(1, 2)
+            key = key.transpose(1, 2)
+            value = value.transpose(1, 2)
+
+            output = F.scaled_dot_product_attention(
+                query,
+                key,
+                value,
+                attn_mask,
+                self.scaling,
+            )
+            output = output.transpose(1, 2).flatten(-2, -1)
+            out[start_idx:end_idx] = output
+            start_idx = end_idx
+        return out
 
 
 class GemmaMLP(nn.Module):
@@ -228,6 +289,8 @@ class GemmaDecoderLayer(nn.Module):
         rotary_pos_emb_local: Optional[Tuple[torch.FloatTensor, torch.FloatTensor]] = None,
         residual: Optional[torch.Tensor] = None,
         attn_metadata: Any = None,
+        global_attn_masks: torch.Tensor = None,
+        local_attn_masks: torch.Tensor = None,
     ):
 
         if residual is None:
@@ -243,6 +306,8 @@ class GemmaDecoderLayer(nn.Module):
             rotary_pos_emb_local=rotary_pos_emb_local,
             past_key_value=past_key_value,
             attn_metadata=attn_metadata,
+            global_attn_masks=global_attn_masks,
+            local_attn_masks=local_attn_masks,
         )
 
         # Fully Connected
@@ -317,7 +382,7 @@ class GemmaModel(nn.Module):
             rope_type = rope_scaling['rope_type']
             if rope_type == 'linear':
                 emb_type = RopeType.LinearScaling
-            if rope_type == 'dynamic':
+            elif rope_type == 'dynamic':
                 emb_type = RopeType.DynamicNTKScaling
             else:
                 raise RuntimeError(f'Unsupported rope type: {rope_type}')
@@ -350,6 +415,8 @@ class GemmaModel(nn.Module):
         past_key_values: Optional[List[torch.FloatTensor]] = None,
         attn_metadata: Any = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
+        global_attn_masks: torch.Tensor = None,
+        local_attn_masks: torch.Tensor = None,
     ):
         """Rewrite of LlamaModel.forward."""
 
@@ -382,6 +449,8 @@ class GemmaModel(nn.Module):
                 past_key_value=past_key_value,
                 residual=residual,
                 attn_metadata=attn_metadata,
+                global_attn_masks=global_attn_masks,
+                local_attn_masks=local_attn_masks,
             )
 
         # norm
@@ -434,6 +503,8 @@ class GemmaForCausalLM(nn.Module, CudaGraphMixin):
         past_key_values: List[List[torch.Tensor]],
         attn_metadata: Any = None,
         inputs_embeds: torch.Tensor = None,
+        global_attn_masks: torch.Tensor = None,
+        local_attn_masks: torch.Tensor = None,
         **kwargs,
     ):
         """model forward, return logits."""
@@ -443,6 +514,8 @@ class GemmaForCausalLM(nn.Module, CudaGraphMixin):
             past_key_values=past_key_values,
             attn_metadata=attn_metadata,
             inputs_embeds=inputs_embeds,
+            global_attn_masks=global_attn_masks,
+            local_attn_masks=local_attn_masks,
         )
         return hidden_states
 
