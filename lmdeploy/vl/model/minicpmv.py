@@ -228,7 +228,7 @@ class MiniCPMVModel(VisonModel):
                 else:
                     prompt = (prompt + '\n' if self.version == '2.6' else prompt)
                 prompts.append(prompt)
-            content = [x['text'] for x in message['content'] if x['type'] == 'text']
+            content = [x.get('text', '') for x in message['content'] if x['type'] == 'text']
             prompt = ''.join(prompts) + content[0]
             prompt_messages.append(dict(role='user', content=prompt))
         prompt = chat_template.messages2prompt(prompt_messages, sequence_start)
