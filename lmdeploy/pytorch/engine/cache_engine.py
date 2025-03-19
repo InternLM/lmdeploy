@@ -199,7 +199,9 @@ class CacheEngine:
 
         return output
 
-    def init_migration(self, remote_engine_ids: List[int]):
+    def init_migration(self, config: List[int]):
+        self.remote_block_size = config["total"]
+        remote_engine_ids = config["remote_engine_ids"]
         self.transfer_engine = TransferEngine(f"mlx5_bond_{self.rank}", 1, "Ethernet")
         for engine_id in remote_engine_ids:
             self.transfer_engine.init_link(engine_id)

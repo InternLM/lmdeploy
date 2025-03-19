@@ -334,7 +334,7 @@ class AutoModelAgent:
                 blocks_to_migrate = torch.tensor(
                     [[0, 0, init_block_id, target_block_id]
                     for (init_block_id, target_block_id) in zip(decode_engine_block_ids, prefill_engine_block_ids)])
-                # self.cache_engine.migrate(blocks_to_migrate)
+                await self.cache_engine.migrate(blocks_to_migrate)
                 if rank % tp == 0:
                     event = torch.cuda.Event()
                     event.record()

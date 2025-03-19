@@ -165,25 +165,22 @@ def init_migration(args):
         cache_info = requests.get(get_url(endpoint, "distserve/get_engine_info")).json()
         total_blocks.append(cache_info["total"])
 
-    segment_id = [["10.130.8.138:7000", "10.130.8.138:7001", "10.130.8.138:7002", "10.130.8.138:7003",
-                   "10.130.8.138:7004", "10.130.8.138:7005", "10.130.8.138:7006", "10.130.8.138:7007"], 
-                  ["10.130.8.139:7000", "10.130.8.139:7001", "10.130.8.139:7002", "10.130.8.139:7003",
-                   "10.130.8.139:7004", "10.130.8.139:7005", "10.130.8.139:7006", "10.130.8.139:7007"]]
-    endpoint_id = [["10.130.8.139:7000", "10.130.8.139:7001", "10.130.8.139:7002", "10.130.8.139:7003",
-                   "10.130.8.139:7004", "10.130.8.139:7005", "10.130.8.139:7006", "10.130.8.139:7007"], 
-                  ["10.130.8.138:7000", "10.130.8.138:7001", "10.130.8.138:7002", "10.130.8.138:7003",
-                   "10.130.8.138:7004", "10.130.8.138:7005", "10.130.8.138:7006", "10.130.8.138:7007"]]
+    handler_config_prefill = {
+        "total": total_blocks[1],
+        "remote_engine_ids": [1],
+    }
 
-    for idx, endpoint in enumerate(engine_snapshot.endpoints):
-        engine_handler_config = {
-            "engine_id": idx,
-            "remote_block_size":total_blocks[1-idx],
-            "segment_id": segment_id[idx],
-            "etcd_endpoint": "10.130.8.139:2379",
-            "endpoint": endpoint_id[idx]
-        }
-        requests.post(get_url(endpoint, "distserve/init_migration"), json={"config": str(engine_handler_config)}).json()
-        print(engine_handler_config)
+    handler_config_decode = {
+        "total": total_blocks[0],
+        "remote_engine_ids": [0],
+    }
+
+    prefill_engine_info = requests.post(get_url(engine_snapshot.prefill_endpoints[0], "distserve/init_migration"), json={"config": str(handler_config_prefill)}).json()
+    decode_engine_info = requests.post(get_url(engine_snapshot.decode_endpoints[0], "distserve/init_migration"), json={"config": str(handler_config_decode)}).json()
+    print(prefill_engine_info, decode_engine_info)
+
+    requests.post(get_url(engine_snapshot.prefill_endpoints[0], "distserve/construct_rdma_link"), json={"1": decode_engine_info}).json()
+    requests.post(get_url(engine_snapshot.decode_endpoints[0], "distserve/construct_rdma_link"), json={"0": prefill_engine_info}).json()
 
 
 if __name__ == "__main__":
