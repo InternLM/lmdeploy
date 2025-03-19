@@ -522,6 +522,7 @@ async def cache_info() -> JSONResponse:
 @router.post('/distserve/init_migration')
 async def init_migration(raw_request: Request) -> JSONResponse:
     connect_config = await raw_request.json()
+    print(connect_config)
     VariableInterface.async_engine.init_migration(eval(connect_config["config"]))
 
 

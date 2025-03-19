@@ -6,12 +6,11 @@ import functools
 
 import torch
 
+from slime.config import RDMAInfo, MemoryRegionInfo
+from slime.transfer_engine.engine import TransferEngine
+
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.utils import get_logger
-
-
-from lmdeploy.pytorch.mooncake_lmdeploy_adaptor import mooncake_lmdeploy_adaptor
-from lmdeploy.pytorch import _slime_C
 
 from ..config import CacheConfig, ModelConfig
 
@@ -65,8 +64,7 @@ class CacheEngine:
         # Initialize the events for stream synchronization.
         self.events = torch.cuda.Event()
 
-        self.transfer_engine = mooncake_lmdeploy_adaptor()
-        self.segment_id: str = None
+        self.transfer_engine:TransferEngine = None
 
         logger.debug(f'Initialize cache engine with {cache_config.num_gpu_blocks}'
                      f' gpu blocks and {cache_config.num_cpu_blocks} cpu blocks.')
@@ -201,30 +199,27 @@ class CacheEngine:
 
         return output
 
-    def init_migration(self, config):
-        self.engine_id = config["engine_id"]
+    def init_migration(self, remote_engine_ids: List[int]):
+        self.transfer_engine = TransferEngine(f"mlx5_bond_{self.rank}", 1, "Ethernet")
+        rdma_info: Dict[int, Tuple[RDMAInfo, Tuple[MemoryRegionInfo, MemoryRegionInfo]]] = {}
+        for engine_id in remote_engine_ids:
+            self.transfer_engine.init_link(engine_id)
+            self.transfer_engine.register_torch(engine_id, "k", self.full_gpu_cache[0])
+            mr_info_k = self.transfer_engine.links[engine_id].get_mr_info("k")
+            self.transfer_engine.register_torch(engine_id, "v", self.full_gpu_cache[1])
+            mr_info_v = self.transfer_engine.links[engine_id].get_mr_info("v")
+            local_rdma_info = self.transfer_engine.get_local_info(engine_id)
+            rdma_info[engine_id] = (local_rdma_info, (mr_info_k, mr_info_v))
+        return rdma_info
+    
+    def construct_rdma_link(self, remote_rdma_info: Dict[int, Tuple[RDMAInfo, Tuple[MemoryRegionInfo, MemoryRegionInfo]]]):
+        for key, value in remote_rdma_info.items():
+            self.transfer_engine.construct(key, value)
+            self.transfer_engine.links[key].register_remote_mr("k", value[1][0])
+            self.transfer_engine.links[key].register_remote_mr("v", value[1][1])
+        return
 
-        self._C_handlers_k = {}
-        self._C_handlers_v = {}
-        self.segment_id = config["segment_id"][self.rank]
-        self.remote_block_size = config["remote_block_size"]
-        print(self.segment_id)
-        endpoint = config["endpoint"][self.rank]
-        etcd_endpoint = config["etcd_endpoint"]
-
-        self.transfer_engine.initialize(etcd_endpoint, endpoint)
-
-        self.transfer_engine.register_local_memory(
-            self.full_gpu_cache[0].data_ptr(),
-            self.full_gpu_cache[0].storage_offset(),
-            self.full_gpu_cache[0].numel() * self.full_gpu_cache[0].dtype.itemsize)
-
-        self.transfer_engine.register_local_memory(
-            self.full_gpu_cache[1].data_ptr(),
-            self.full_gpu_cache[1].storage_offset(),
-            self.full_gpu_cache[1].numel() * self.full_gpu_cache[1].dtype.itemsize)
-
-    def migrate(self, blocks_to_migration):
+    async def migrate(self, blocks_to_migration):
         head_dim = self.model_config.get_head_size()
         num_heads = self.model_config.num_key_value_heads // self.world_size
         block_size = self.cache_config.block_size
@@ -237,8 +232,27 @@ class CacheEngine:
         source_offset = [[int(block_to_migration[2]) * length + layer * layer_stride for layer in range(self.model_config.num_layers)] for block_to_migration in blocks_to_migration]
         source_offset = functools.reduce(lambda x, y: x + y, source_offset)
 
-        self.transfer_engine.transport_batch(self.segment_id, self.full_gpu_cache[0].data_ptr(), target_offset, 0, [length] * len(target_offset), source_offset)
-        self.transfer_engine.transport_batch(self.segment_id, self.full_gpu_cache[1].data_ptr(), target_offset, 1, [length] * len(target_offset), source_offset)
+        for block_to_migration in blocks_to_migration:
+            engine_id = block_to_migration[0]
+            source_offset = [int(block_to_migration[2]) * length + layer * layer_stride for layer in range(self.model_config.num_layers)]
+            target_offset = [int(block_to_migration[3]) * length + layer * layer_stride_remote for layer in range(self.model_config.num_layers)]
+            for tgt_offset, src_offset in zip(target_offset, source_offset):
+                await self.transfer_engine.r_rdma_async(
+                    engine_id,
+                    "k",
+                    self.transfer_engine.links[engine_id].remote_memory_pool["k"].addr + tgt_offset,
+                    src_offset,
+                    length,
+                    self.transfer_engine.links[engine_id].get_mr_info("k").r_key
+                )
+                await self.transfer_engine.r_rdma_async(
+                    engine_id,
+                    "v",
+                    self.transfer_engine.links[engine_id].remote_memory_pool["v"].addr + tgt_offset,
+                    src_offset,
+                    length,
+                    self.transfer_engine.links[engine_id].get_mr_info("v").r_key
+                )
 
     def allocate_gpu_cache(self):
         """allocate caches on GPU."""
