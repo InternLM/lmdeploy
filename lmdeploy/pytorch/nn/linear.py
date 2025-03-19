@@ -151,18 +151,17 @@ class LoRA(nn.Module):
 class BlockedF8Linear(nn.Module):
     """blocked f8 linear."""
 
-    def __init__(
-        self,
-        in_features: int,
-        out_features: int,
-        bias: bool,
-        dtype: Optional[torch.dtype] = None,
-        device: Optional[torch.device] = None,
-        fp8_dtype: torch.dtype = torch.float8_e4m3fn,
-        colwise: bool = True,
-        is_tp: bool = False,
-        all_reduce: bool = True,
-    ):
+    def __init__(self,
+                 in_features: int,
+                 out_features: int,
+                 bias: bool,
+                 dtype: Optional[torch.dtype] = None,
+                 device: Optional[torch.device] = None,
+                 fp8_dtype: torch.dtype = torch.float8_e4m3fn,
+                 colwise: bool = True,
+                 is_tp: bool = False,
+                 all_reduce: bool = True,
+                 op_type: OpType = OpType.LinearBlockedF8):
         super().__init__()
         if device is None:
             device = torch.device('cpu')
@@ -170,7 +169,7 @@ class BlockedF8Linear(nn.Module):
             dtype = torch.float16
         if is_tp:
             in_features, out_features = self._get_io_features(in_features, out_features, colwise)
-        impl_builder = get_backend().get_layer_impl_builder(OpType.LinearBlockedF8)
+        impl_builder = get_backend().get_layer_impl_builder(op_type)
         self.impl = impl_builder.build(in_features, out_features, block_size=128, bias=bias is not None, dtype=dtype)
         self.block_size = 128
         self.fp8_dtype = fp8_dtype
@@ -1297,17 +1296,19 @@ def build_linear(in_features: int,
             fp8_dtype = torch.float8_e5m2
         else:
             raise TypeError(f'Unsupported fp8 fmt: {fmt}')
-        return BlockedF8Linear(
-            in_features,
-            out_features,
-            bias=bias,
-            fp8_dtype=fp8_dtype,
-            dtype=dtype,
-            device=device,
-            colwise=colwise,
-            is_tp=is_tp,
-            all_reduce=all_reduce,
-        )
+        op_type = OpType.LinearBlockedF8
+        if quant_config.get('use_deep_gemm', False) is True:
+            op_type = OpType.DeepGemmBlockedF8
+        return BlockedF8Linear(in_features,
+                               out_features,
+                               bias=bias,
+                               fp8_dtype=fp8_dtype,
+                               dtype=dtype,
+                               device=device,
+                               colwise=colwise,
+                               is_tp=is_tp,
+                               all_reduce=all_reduce,
+                               op_type=op_type)
     else:
         raise RuntimeError(f'Unsupported quant method: {quant_method}')
 

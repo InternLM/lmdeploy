@@ -2,7 +2,7 @@
 from lmdeploy.pytorch.config import ModelConfig
 
 from .builder import AutoModelConfigBuilder
-from .utils import flash_mla_available
+from .utils import deep_gemm_available, flash_mla_available
 
 
 class DeepseekV2ModelConfigBuilder(AutoModelConfigBuilder):
@@ -25,6 +25,9 @@ class DeepseekV2ModelConfigBuilder(AutoModelConfigBuilder):
         # update num_kv_heads for tp mode
         num_key_value_heads = cls.update_num_kv_heads(hf_config, tp, num_key_value_heads)
         hf_config.use_flash_mla = flash_mla_available()
+        # check if we should use deep gemm
+        if deep_gemm_available(hf_config=hf_config):
+            hf_config.quantization_config['use_deep_gemm'] = True
 
         return ModelConfig(hidden_size=hf_config.hidden_size,
                            num_layers=hf_config.num_hidden_layers,
