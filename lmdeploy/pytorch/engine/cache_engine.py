@@ -212,10 +212,11 @@ class CacheEngine:
             local_rdma_info = self.transfer_engine.get_local_info(engine_id)
         return ExchangeInfo(rdma_info=local_rdma_info, mr_info=[mr_info_k, mr_info_v])
     
-    def construct_rdma_link(self, remote_rdma_info: Dict[int, ExchangeInfo]):
+    def construct_rdma_link(self, remote_rdma_info: Dict[int, List[ExchangeInfo]]):
         for key, value in remote_rdma_info.items():
             key = int(key)
             info = ExchangeInfo.model_validate(value[self.rank])
+            print(info)
             self.transfer_engine.construct(key, info.rdma_info)
             self.transfer_engine.links[key].register_remote_mr("k", info.mr_info[0])
             self.transfer_engine.links[key].register_remote_mr("v", info.mr_info[1])
@@ -239,13 +240,14 @@ class CacheEngine:
             source_offset = [int(block_to_migration[2]) * length + layer * layer_stride for layer in range(self.model_config.num_layers)]
             target_offset = [int(block_to_migration[3]) * length + layer * layer_stride_remote for layer in range(self.model_config.num_layers)]
             for tgt_offset, src_offset in zip(target_offset, source_offset):
+                print(tgt_offset, src_offset)
                 await self.transfer_engine.r_rdma_async(
                     engine_id,
                     "k",
                     tgt_offset,
                     src_offset,
                     length,
-                    self.transfer_engine.links[engine_id].get_mr_info("k").r_key
+                    self.transfer_engine.links[engine_id].get_remote_mr_info("k").r_key
                 )
                 await self.transfer_engine.r_rdma_async(
                     engine_id,
@@ -253,7 +255,7 @@ class CacheEngine:
                     tgt_offset,
                     src_offset,
                     length,
-                    self.transfer_engine.links[engine_id].get_mr_info("v").r_key
+                    self.transfer_engine.links[engine_id].get_remote_mr_info("v").r_key
                 )
 
     def allocate_gpu_cache(self):
