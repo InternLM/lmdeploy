@@ -28,21 +28,22 @@ def _silu_and_mul_kernel(
 ):
     """silu and mul kernel."""
     n_block_id = tl.program_id(0)
-    m_id = tl.program_id(1)
+    m_id_start = tl.program_id(1)
     m_id_stride = tl.num_programs(1)
 
-    while m_id < M:
-        up_ptr = gateup_ptr + N * stride_gun
+    up_ptr = gateup_ptr + N * stride_gun
+    offs_n = n_block_id * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
 
-        offs_n = n_block_id * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
-        gate_ptrs = gateup_ptr + m_id * stride_gum + offs_n * stride_gun
-        up_ptrs = up_ptr + m_id * stride_gum + offs_n * stride_gun
-        out_ptrs = out_ptr + m_id * stride_om + offs_n * stride_on
+    if N % BLOCK_SIZE_N == 0:
+        mask = None
+    else:
+        mask = offs_n < N
 
-        if N % BLOCK_SIZE_N == 0:
-            mask = None
-        else:
-            mask = offs_n < N
+    gate_ptrs = gateup_ptr + m_id_start * stride_gum + offs_n * stride_gun
+    up_ptrs = up_ptr + m_id_start * stride_gum + offs_n * stride_gun
+    out_ptrs = out_ptr + m_id_start * stride_om + offs_n * stride_on
+
+    for _ in tl.range(m_id_start, M, m_id_stride):
         gate = tl.load(gate_ptrs, mask=mask)
         up = tl.load(up_ptrs, mask=mask)
         gate = gate.to(tl.float32)
@@ -52,7 +53,10 @@ def _silu_and_mul_kernel(
         out = gate * up
 
         tl.store(out_ptrs, out, mask=mask)
-        m_id += m_id_stride
+
+        gate_ptrs += m_id_stride * stride_gum
+        up_ptrs += m_id_stride * stride_gum
+        out_ptrs += m_id_stride * stride_om
 
 
 def silu_and_mul(gate_up: torch.Tensor, out: torch.Tensor = None):
