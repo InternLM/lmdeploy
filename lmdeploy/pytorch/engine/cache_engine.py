@@ -210,11 +210,13 @@ class CacheEngine:
             local_rdma_info = self.transfer_engine.get_local_info(engine_id)
         return ExchangeInfo(rdma_info=local_rdma_info, mr_info=[mr_info_k, mr_info_v])
     
-    def construct_rdma_link(self, remote_rdma_info: Dict[int, Tuple[RDMAInfo, Tuple[MemoryRegionInfo, MemoryRegionInfo]]]):
+    def construct_rdma_link(self, remote_rdma_info: Dict[int, ExchangeInfo]):
         for key, value in remote_rdma_info.items():
-            self.transfer_engine.construct(key, value)
-            self.transfer_engine.links[key].register_remote_mr("k", value[1][0])
-            self.transfer_engine.links[key].register_remote_mr("v", value[1][1])
+            key = int(key)
+            info = ExchangeInfo.model_validate(value[self.rank])
+            self.transfer_engine.construct(key, info.rdma_info)
+            self.transfer_engine.links[key].register_remote_mr("k", info.mr_info[0])
+            self.transfer_engine.links[key].register_remote_mr("v", info.mr_info[1])
         return
 
     async def migrate(self, blocks_to_migration):

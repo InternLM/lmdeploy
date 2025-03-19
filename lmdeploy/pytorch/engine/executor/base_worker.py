@@ -111,6 +111,9 @@ class WorkerWrapperBase:
     
     def init_migration(self, config):
         return self.model_agent.cache_engine.init_migration(config)
+    
+    def construct_rdma_link(self, config):
+        return self.model_agent.cache_engine.construct_rdma_link(config)
 
     def get_ipc_handler(self):
         return self.model_agent.cache_engine.ipc_handler_k, self.model_agent.cache_engine.ipc_handler_v

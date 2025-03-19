@@ -330,6 +330,9 @@ class AsyncEngine(LogitsMixin):
 
     def init_migration(self, config):
         return self.engine.executor.init_migration(config)
+    
+    def construct_rdma_link(self, config):
+        return self.engine.executor.construct_rdma_link(config)
 
     def _get_free_insts(self):
         if self.free_insts is None:

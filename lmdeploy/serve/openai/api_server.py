@@ -527,6 +527,14 @@ async def init_migration(raw_request: Request) -> JSONResponse:
     return x
 
 
+@router.post('/distserve/construct_rdma_link')
+async def construct_rdma_link(raw_request: Request) -> JSONResponse:
+    connect_config = await raw_request.json()
+    print(connect_config)
+    x = VariableInterface.async_engine.construct_rdma_link(connect_config)
+    return x
+
+
 @router.post('/distserve/prefill')
 async def prefill(raw_request: Request) -> JSONResponse:
     raise NotImplementedError

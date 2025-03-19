@@ -56,6 +56,10 @@ class ExecutorBase:
     def init_migration(self, config):
         """ init migration """
         raise NotImplementedError('Not Implemented')
+    
+    def construct_rdma_link(self, config):
+        """ construct rdma link """
+        raise NotImplementedError('Not Implemented')
 
     def get_ipc_handler(self):
         """get ipc handler."""

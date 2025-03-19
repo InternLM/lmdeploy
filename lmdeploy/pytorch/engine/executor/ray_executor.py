@@ -248,6 +248,10 @@ class RayExecutor(ExecutorBase):
     def init_migration(self, config):
         """init migration."""
         return self.collective_rpc('init_migration', (config, ))
+    
+    def construct_rdma_link(self, config):
+        """ construct rdma link """
+        return self.collective_rpc('construct_rdma_link', (config, ))
 
     def build_model(self):
         """build model."""
