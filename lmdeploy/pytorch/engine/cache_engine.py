@@ -247,7 +247,6 @@ class CacheEngine:
                     tgt_offset,
                     src_offset,
                     length,
-                    self.transfer_engine.links[engine_id].get_remote_mr_info("k").r_key
                 )
                 await self.transfer_engine.r_rdma_async(
                     engine_id,
@@ -255,7 +254,6 @@ class CacheEngine:
                     tgt_offset,
                     src_offset,
                     length,
-                    self.transfer_engine.links[engine_id].get_remote_mr_info("v").r_key
                 )
 
     def allocate_gpu_cache(self):
