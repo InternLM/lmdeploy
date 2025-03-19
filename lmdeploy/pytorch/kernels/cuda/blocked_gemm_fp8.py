@@ -326,6 +326,7 @@ def blocked_gemm_fp8(A: Tensor,
     return C
 
 
+# adapted from https://github.com/deepseek-ai/DeepGEMM/blob/main/deep_gemm/jit_kernels/utils.py#L77
 def get_col_major_tma_aligned_tensor(x: torch.Tensor) -> torch.Tensor:
     """Returns TMA-aligned transposed format of the input tensor.
     `torch.transpose` will be called if necessary. If the input tensor is
@@ -360,6 +361,7 @@ def get_col_major_tma_aligned_tensor(x: torch.Tensor) -> torch.Tensor:
     return aligned_x.squeeze(0) if remove_dim else aligned_x
 
 
+# adapted from https://github.com/deepseek-ai/DeepGEMM/blob/main/deep_gemm/jit_kernels/gemm.py#L114
 def gemm_fp8_fp8_bf16_nt(lhs: Tuple[torch.Tensor, torch.Tensor], rhs: Tuple[torch.Tensor, torch.Tensor],
                          out: torch.Tensor) -> None:
     """Do a normal GEMM with FP8 inputs and BF16 output, with 1x128 LHS scaling
