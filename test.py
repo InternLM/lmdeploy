@@ -10,7 +10,7 @@ def main(rank: int):
     # model_path = '/nvme2/huggingface_hub_137_llm/hub/models--deepseek-ai--DeepSeek-V2-Lite/snapshots/604d5664dddd88a0433dbae533b7fe9472482de0'
     log_level = 'WARNING'
     prompts = [
-        'hello world.',
+        'fast fox jump over the lazy dog.',
         'fast fox jump over the lazy dog.',
         ]
     prompts = prompts[rank:rank+1]

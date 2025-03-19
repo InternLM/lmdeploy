@@ -382,16 +382,7 @@ class DeepseekV2MoE(nn.Module):
             enable_ep=dist_ctx.ep > 1,
             quant_config=quantization_config,
         )
-        if dist_ctx.ep > 1:
-            self.deepep_dispatcher = DeepEPTokenDispatcher(
-                num_local_experts=self.num_experts // dist_ctx.ep,
-                ep_group=dist_ctx.ep_gpu_group,
-                tok_k=self.top_k,
-                num_experts=self.num_experts,
-                hidden_size=self.hidden_dim,
-                params_dtype=torch.bfloat16,
-            )
-
+        
         self.shared_experts = None
         if config.n_shared_experts is not None:
             intermediate_size = (config.moe_intermediate_size * config.n_shared_experts)
@@ -410,12 +401,6 @@ class DeepseekV2MoE(nn.Module):
 
     def forward(self, hidden_states: torch.Tensor):
         """forward."""
-        # print(f"zcx base in:{hidden_states}")
-        if get_dist_manager().current_context().ep > 1:
-            return self.forward_ep(hidden_states)
-        # device = hidden_states.device
-        # hidden_states = torch.load("/nvme1/zhaochaoxing/ep0_hidden_states.pt").to(device)
-
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
         topk_weights, topk_ids = self.gate(hidden_states)
@@ -425,7 +410,6 @@ class DeepseekV2MoE(nn.Module):
             topk_weights,
             topk_ids,
         )
-        # print(f"zcx base after experts:{out_states}")
         if self.shared_experts is not None:
             shared_states = self.shared_experts(hidden_states)
             out_states += shared_states
@@ -433,68 +417,7 @@ class DeepseekV2MoE(nn.Module):
 
         if self._all_reduce:
             dist.all_reduce(out_states)
-        # print(f"zcx noep out:{out_states}")
-        # raise RuntimeError()
         return out_states
-    
-
-    def forward_ep(self, hidden_states: torch.Tensor):
-        """forward."""
-        # rank = get_dist_manager().current_context().ep_rank
-        # if rank == 0:
-        # device = hidden_states.device
-        # hidden_states = torch.load("/nvme1/zhaochaoxing/ep0_hidden_states.pt").to(device)
-        # raise RuntimeError()
-        batch_size, sequence_length, hidden_dim = hidden_states.shape
-        hidden_states = hidden_states.view(-1, hidden_dim)
-        topk_weights, topk_ids = self.gate(hidden_states)
-        # print(f"zcx: topk_weights:{topk_weights}, topk_ids:{topk_ids}")
-        # raise RuntimeError()
-        if self.shared_experts is not None:
-            shared_output = self.shared_experts(hidden_states)
-
-        # if rank == 0:
-        #     torch.save(hidden_states, "/nvme1/zhaochaoxing/pt/hidden_states")
-        #     torch.save(topk_ids, "/nvme1/zhaochaoxing/pt/topk_ids")
-        #     torch.save(topk_weights, "/nvme1/zhaochaoxing/pt/topk_weights")
-        # raise RuntimeError()
-            # print(f"zcx lmdeploy hidden_states:{hidden_states},topk_ids:{topk_ids},topk_weights:{topk_weights}")
-        # hidden_states = torch.load("/nvme1/zhaochaoxing/pt/hidden_states").to(device)
-        # topk_ids = torch.load("/nvme1/zhaochaoxing/pt/topk_ids").to(device)
-        # topk_weights = torch.load("/nvme1/zhaochaoxing/pt/topk_weights").to(device)
-        recv_hidden_states, recv_topk_ids, recv_topk_weights, tokens_per_expert = (
-            self.deepep_dispatcher.token_permutation(
-                hidden_states,
-                topk_ids.to(torch.int32),
-                topk_weights.to(torch.float32),
-                self.num_experts,
-            )
-        )
-        # print(f"[zcx] hidden_states:{hidden_states.shape}, recv_hidden_states:{recv_hidden_states.shape}, \
-        #       tokens_per_expert:{tokens_per_expert.shape}")
-        # if rank == 0:
-            # print(f"[zcx] recv_hidden_states:{recv_hidden_states},tokens_per_expert:{tokens_per_expert}")
-        # raise RuntimeError()
-        out_states = (
-            self.experts(
-                hidden_states=recv_hidden_states,
-                # topk_ids=recv_topk_ids,
-                # topk_weights=recv_topk_weights,
-                tokens_per_expert=tokens_per_expert,
-            )
-        )
-        # if rank == 0:
-            # print(f"[zcx] after experts out_states:{out_states}")
-        out_states = self.deepep_dispatcher.token_unpermutation(
-            out_states
-        )
-        # if rank == 0:
-            # print(f"zcx ep after token_unpermutation:{out_states}")
-        if shared_output is not None:
-            out_states = out_states + shared_output
-        # print(f"zcx ep out:{out_states}")
-        # raise RuntimeError()
-        return out_states.view(batch_size, sequence_length, -1)
 
 
 class DeepseekV2MLP(nn.Module):

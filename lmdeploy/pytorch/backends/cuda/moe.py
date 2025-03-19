@@ -3,12 +3,15 @@
 from typing import List
 
 import torch
-
+from torch import distributed as dist
+from lmdeploy.pytorch.backends.cuda.deepep_moe import DeepEPMoE
+from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.pytorch.kernels.cuda import fused_moe, fused_moe_w8a8
 from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import fused_moe_blocked_fp8
 from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
 from lmdeploy.pytorch.kernels.cuda.w8a8_triton_kernels import per_token_quant_int8
 from lmdeploy.pytorch.models.q_modules import QTensor
+from lmdeploy.pytorch.nn.token_dispatcher import DeepEPTokenDispatcher
 
 from ..moe import (FusedMoEBlockedF8Builder, FusedMoEBlockedF8Impl, FusedMoEBuilder, FusedMoEImpl, FusedMoEW8A8Builder,
                    FusedMoEW8A8Impl)
@@ -227,6 +230,53 @@ class TritonFusedMoEBlockedF8Impl(FusedMoEBlockedF8Impl):
         return output
 
 
+class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
+    def __init__(self,
+                 ep_size: int,
+                 ep_group:dist.ProcessGroup,
+                 top_k: int,
+                 num_experts: int,
+                 hidden_dim: int,
+                 renormalize: bool = False,
+                 block_size: int = 128,
+                 out_dtype: torch.dtype = torch.float16):
+        super().__init__(top_k, num_experts, renormalize, block_size, out_dtype)
+        self.deepep_dispatcher = DeepEPTokenDispatcher(
+                num_local_experts=self.num_experts // ep_size,
+                ep_group=ep_group,
+                tok_k=self.top_k,
+                num_experts=self.num_experts,
+                hidden_size=hidden_dim,
+                params_dtype=torch.bfloat16,
+            )
+        self.deepep_moe = DeepEPMoE(num_experts, ep_size)
+    
+    def forward(self,
+                hidden_states: torch.Tensor,
+                topk_weights: torch.Tensor,
+                topk_ids: torch.LongTensor,
+                gate_up_weights: torch.Tensor,
+                gate_up_scale: torch.Tensor,
+                down_weights: torch.Tensor,
+                down_scale: torch.Tensor,
+                expert_list: List[int] = None):
+        """forward."""
+        recv_hidden_states, recv_topk_ids, recv_topk_weights, tokens_per_expert = (
+            self.deepep_dispatcher.token_permutation(
+                hidden_states,
+                topk_ids.to(torch.int32),
+                topk_weights.to(torch.float32),
+                self.num_experts,
+            )
+        )
+        out_states = self.deepep_moe.forward(recv_hidden_states, tokens_per_expert, gate_up_weights, gate_up_scale,
+                                 down_weights, down_scale)
+        out_states = self.deepep_dispatcher.token_unpermutation(
+            out_states
+        )
+        return out_states
+
+
 class TritonFusedMoEBlockedF8Builder(FusedMoEBlockedF8Builder):
     """triton fused moe blocked f8 builder."""
 
@@ -237,8 +287,17 @@ class TritonFusedMoEBlockedF8Builder(FusedMoEBlockedF8Builder):
               block_size: int = 128,
               out_dtype: torch.dtype = torch.float16):
         """build from mlp."""
-        return TritonFusedMoEBlockedF8Impl(top_k=top_k,
+        dist_ctx = get_dist_manager().current_context()
+        return FusedDeepEpMoEBlockedF8Impl(ep_size=dist_ctx.ep,
+                                           ep_group=dist_ctx.ep_gpu_group,
+                                           top_k=top_k,
                                            num_experts=num_experts,
+                                           hidden_dim=7168,
                                            renormalize=renormalize,
                                            block_size=block_size,
                                            out_dtype=out_dtype)
+        # return TritonFusedMoEBlockedF8Impl(top_k=top_k,
+        #                                    num_experts=num_experts,
+        #                                    renormalize=renormalize,
+        #                                    block_size=block_size,
+        #                                    out_dtype=out_dtype)
