@@ -235,14 +235,14 @@ class CacheEngine:
         source_offset = functools.reduce(lambda x, y: x + y, source_offset)
 
         for block_to_migration in blocks_to_migration:
-            engine_id = block_to_migration[0]
+            engine_id = int(block_to_migration[0])
             source_offset = [int(block_to_migration[2]) * length + layer * layer_stride for layer in range(self.model_config.num_layers)]
             target_offset = [int(block_to_migration[3]) * length + layer * layer_stride_remote for layer in range(self.model_config.num_layers)]
             for tgt_offset, src_offset in zip(target_offset, source_offset):
                 await self.transfer_engine.r_rdma_async(
                     engine_id,
                     "k",
-                    self.transfer_engine.links[engine_id].remote_memory_pool["k"].addr + tgt_offset,
+                    tgt_offset,
                     src_offset,
                     length,
                     self.transfer_engine.links[engine_id].get_mr_info("k").r_key
@@ -250,7 +250,7 @@ class CacheEngine:
                 await self.transfer_engine.r_rdma_async(
                     engine_id,
                     "v",
-                    self.transfer_engine.links[engine_id].remote_memory_pool["v"].addr + tgt_offset,
+                    tgt_offset,
                     src_offset,
                     length,
                     self.transfer_engine.links[engine_id].get_mr_info("v").r_key
