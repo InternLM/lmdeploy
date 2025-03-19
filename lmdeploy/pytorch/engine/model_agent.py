@@ -1,107 +1,31 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-
 import asyncio
-import atexit
-import os
-import threading
-from datetime import timedelta
-from typing import Any, Callable, Dict, List
+import functools
+from contextlib import contextmanager
+from typing import Any, Dict
 
 import torch
 import torch.distributed as dist
-from torch import multiprocessing as mp
 
-from lmdeploy.utils import get_logger
+from lmdeploy.utils import get_logger, logging_timer
 
 from ..backends import get_backend
 from ..config import BackendConfig, CacheConfig, ModelConfig
 from ..devices import DeviceContext, get_device_manager
-from ..distributed import DistContext, get_dist_manager, get_world_rank
+from ..distributed import DistContext, get_dist_manager
 from ..model_inputs import ModelInputs
 from ..models.patch import add_adapters, build_patched_model, update_custom_module_map
 from ..utils import get_gpu_memory
 from ..weight_loader.model_weight_loader import load_model_weights
 from .cache_engine import CacheEngine
+from .logits_process import FusedLogitsProcessor, SamplingInputs
 
 logger = get_logger('lmdeploy')
 
 
-def _update_cache_config(model_config: ModelConfig,
-                         cache_config: CacheConfig,
-                         gpu_id: int = 0,
-                         host_mem_size: int = 1 * (1 << 30),
-                         world_size: int = 1):
-    """Update the gpu mem and cpu mem according to model info.
-
-    Args:
-        model_config (ModelConfig): The config of the model.
-        cache_config (CacheConfig): The config of the cache info.
-        gpu_id (int): The GPU id to use.
-    """
-
-    def __get_runtime_size(num_free_gpu_mem: int, cache_block_size: int, vocal_size: int):
-        """find best prefill num."""
-        cache_max_entry_count = cache_config.cache_max_entry_count
-        max_prefill_token_num = cache_config.max_prefill_token_num
-        runtime_cache_size = 0
-        while max_prefill_token_num > 0:
-            # lm_head output(2) + to float(4) + estimated misc(1) = 7
-            runtime_cache_size = int(max_prefill_token_num * vocal_size * 7)
-            num_available = (num_free_gpu_mem - runtime_cache_size) * cache_max_entry_count
-            if int(num_available) // cache_block_size >= 16:
-                break
-            max_prefill_token_num = max_prefill_token_num // 2
-        return runtime_cache_size, max_prefill_token_num
-
-    def __get_free_gpu_mem_size(cache_block_size: int):
-        """get free gpu memory size."""
-        torch.cuda.empty_cache()
-        gpu_mem_physical_free, _ = get_gpu_memory(gpu_id)
-        logger.debug(f'device<{gpu_id}> free gpu memory:'
-                     f' {gpu_mem_physical_free>>20} mb')
-        vocal_size = model_config.vocab_size
-
-        runtime_cache_size, max_prefill_token_num = __get_runtime_size(gpu_mem_physical_free, cache_block_size,
-                                                                       vocal_size)
-        if cache_config.max_prefill_token_num != max_prefill_token_num:
-            if max_prefill_token_num <= 0:
-                raise RuntimeError('No enough gpu memory for runtime.')
-            cache_config.max_prefill_token_num = max_prefill_token_num
-            logger.warning(f'device<{gpu_id}> No enough memory. '
-                           'update max_prefill_token_num='
-                           f'{max_prefill_token_num}')
-        gpu_mem_physical_free -= runtime_cache_size
-        logger.debug('estimated max runtime memory:'
-                     f' {runtime_cache_size>>20} mb')
-        return gpu_mem_physical_free * cache_config.cache_max_entry_count
-
-    def __adjust_block_size():
-        """adjust block_size."""
-        # TODO: support kernel with both large head dim and large block size.
-        if model_config.k_head_dim >= 512 and cache_config.block_size > 32:
-            cache_config.block_size = 32
-            _, rank = get_world_rank()
-            if rank == 0:
-                logger.warning(f'Update `block_size={cache_config.block_size}`'
-                               f' for large `head_dim={model_config.k_head_dim}`.')
-
-    __adjust_block_size()
-
-    cache_block_size = CacheEngine.get_cache_block_size(cache_config.block_size, model_config, world_size,
-                                                        cache_config.quant_policy)
-    gpu_mem = __get_free_gpu_mem_size(cache_block_size)
-    cpu_mem = host_mem_size
-    if cache_config.num_cpu_blocks == 0:
-        cache_config.num_cpu_blocks = int(cpu_mem / cache_block_size)
-        if cache_config.num_cpu_blocks <= 0:
-            raise RuntimeError('No enough host memory for kv cache.')
-    if cache_config.num_gpu_blocks == 0:
-        cache_config.num_gpu_blocks = int(gpu_mem / cache_block_size)
-        if cache_config.num_gpu_blocks <= 0:
-            raise RuntimeError('No enough gpu memory for kv cache.')
-    cache_config.window_size = model_config.sliding_window
-
-    logger.debug('block num: {}'.format(cache_config.num_gpu_blocks))
+def msg_with_rank(rank: int, msg: str):
+    """return message with rank."""
+    return f'rank[{rank}] - {msg}'
 
 
 def cache_swapping(cache_engine: CacheEngine, swap_in_map: dict, swap_out_map: dict):
@@ -152,15 +76,52 @@ def model_forward(
     return dict(hidden_states=output, model_metas=model_metas)
 
 
+def _batch_stopping_criteria(token_ids: torch.Tensor, stop_words: torch.Tensor, num_appendable_ids: torch.Tensor):
+    """batched stopping criteria."""
+    num_appendable_ids = num_appendable_ids - 1
+    # one more step to cache last token(stop word)
+    stopped = num_appendable_ids < 0
+    if stop_words is not None:
+        sw_stopped = (token_ids[:, None] == stop_words).any(1)
+        one_ids = torch.clamp_max(num_appendable_ids, 0)
+        num_appendable_ids = torch.where(sw_stopped, one_ids, num_appendable_ids)
+    return stopped, num_appendable_ids
+
+
 SwapMap = Dict[int, int]
 
 
 class AutoModelAgent:
     """Base model agent."""
 
-    def __init__(self, model_config: ModelConfig, cache_config: CacheConfig):
+    def __init__(
+        self,
+        model_config: ModelConfig,
+        cache_config: CacheConfig,
+        tokenizer: Any,
+        dist_ctx: DistContext,
+        device_ctx: DeviceContext,
+    ):
         self.model_config = model_config
         self.cache_config = cache_config
+        self.tokenizer = tokenizer
+
+        self._in_que = None
+        self._out_que = None
+        self._background_task = None
+
+        self.stream = torch.cuda.Stream()
+        self.out_stream = torch.cuda.Stream()
+
+        self.dist_ctx = dist_ctx
+        self.device_ctx = device_ctx
+
+    @contextmanager
+    def all_context(self):
+        device_mgr = get_device_manager()
+        dist_mgr = get_dist_manager()
+        with device_mgr.context(self.device_ctx), dist_mgr.context(self.dist_ctx):
+            yield
 
     async def async_forward(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
         """model forward.
@@ -180,9 +141,294 @@ class AutoModelAgent:
         """get input processor."""
         raise NotImplementedError('Not implemented.')
 
-    def close(self):
-        """release model."""
-        pass
+    def build_model(self):
+        """build model."""
+        raise NotImplementedError('Not implemented.')
+
+    def build_graph_runner(self):
+        """build graph runner."""
+        raise NotImplementedError('Not Implemented.')
+
+    def build_cache_engine(self):
+        """build cache engine."""
+        raise NotImplementedError('Not Implemented.')
+
+    def release(self):
+        """release."""
+        raise NotImplementedError('Not Implemented.')
+
+    def set_cache_config(self, cache_config: CacheConfig):
+        """set all cache config."""
+        self.cache_config = cache_config
+
+    def set_model_config(self, model_config: ModelConfig):
+        """set model config."""
+        self.model_config = model_config
+
+    def get_free_mem(self):
+        """gather available memory."""
+        with self.all_context():
+            torch.cuda.empty_cache()
+            gpu_mem_physical_free, _ = get_gpu_memory()
+            return gpu_mem_physical_free
+
+    async def _async_model_forward(self, inputs: ModelInputs, swap_in_map: Dict, swap_out_map: Dict,
+                                   return_logits: bool):
+        """model forward."""
+        max_prefill_token_num = self.cache_config.max_prefill_token_num
+        swap_done = False
+
+        class _OutputGather:
+            """output gather."""
+
+            def __init__(self, max_seq_len):
+                self._max_seq_len = max_seq_len
+                self._start = 0
+                self._output = None
+
+            def gather(self, output):
+                """gather."""
+                tmp_output = output['hidden_states']
+
+                if not return_logits:
+                    self._output = tmp_output
+                    return
+
+                out_logits = self._output
+                start = self._start
+                seq_len = tmp_output.size(-2)
+                if out_logits is None:
+                    out_logits = tmp_output.new_empty(1, self._max_seq_len, tmp_output.size(-1), device='cpu')
+                out_logits[:, start:start + seq_len].copy_(tmp_output, non_blocking=True)
+                self._start = start + seq_len
+                self._output = out_logits
+
+            def get_output(self):
+                """get tmp_output."""
+                if not return_logits:
+                    return self._output[:, -1:]
+                torch.cuda.synchronize()
+                return self._output
+
+        async def __forward(inputs):
+            """forward."""
+            nonlocal swap_done, swap_in_map, swap_out_map
+            if swap_done:
+                return await self.async_forward(inputs, swap_in_map=dict(), swap_out_map=dict())
+            else:
+                swap_done = True
+                return await self.async_forward(inputs, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
+
+        async def __long_context_single_forward(inputs):
+            """one large sequence."""
+            seq_len = inputs.seq_length
+            max_seq_len = inputs.seq_length[0]
+            batch_size = seq_len.size(0)
+            assert batch_size == 1
+
+            new_inputs = inputs.split(max_prefill_token_num)
+
+            model_metas = new_inputs[0].model_metas
+            output_gather = _OutputGather(max_seq_len)
+            for inp in new_inputs:
+                inp.model_metas = model_metas
+                tmp_out = await __forward(inp)
+                model_metas = tmp_out.get('model_metas')
+                output_gather.gather(tmp_out)
+                tmp_out.pop('hidden_states', None)
+            tmp_out['hidden_states'] = output_gather.get_output()
+            return tmp_out
+
+        if inputs.input_ids.numel() <= max_prefill_token_num:
+            ret = await __forward(inputs)
+            if not return_logits and not inputs.is_decoding:
+                last_token_loc = inputs.seq_length.cumsum(0) - 1
+                ret['hidden_states'] = ret['hidden_states'][:, last_token_loc]
+        else:
+            ret = await __long_context_single_forward(inputs)
+            if not return_logits and not inputs.is_decoding:
+                last_token_loc = [-1]
+                ret['hidden_states'] = ret['hidden_states'][:, last_token_loc]
+            else:
+                ret['hidden_states'] = ret['hidden_states'].to('cuda')
+
+        hidden_states = ret.pop('hidden_states')
+        logits = self.get_logits(hidden_states)
+        ret['logits'] = logits
+        return ret
+
+    @logging_timer('SamplingLogits', logger)
+    async def async_sampling_logits(self, logits: torch.Tensor, all_ids: torch.Tensor, guided_input_ids: torch.Tensor,
+                                    sampling_inputs: SamplingInputs, inputs: ModelInputs, ignore_eos: torch.Tensor):
+        """sampling logits."""
+
+        def __get_last_logits():
+            """get last logits."""
+            seq_length = inputs.seq_length
+            if len(seq_length) == logits.size(0):
+                return logits
+
+            last_idx = seq_length.cumsum(-1) - 1
+            return logits[last_idx, :]
+
+        split_logits = __get_last_logits()
+        logits_processor = FusedLogitsProcessor(sampling_inputs, ignore_eos, self.tokenizer)
+        logits = await logits_processor(all_ids, guided_input_ids, split_logits)
+        next_token_ids = logits_processor.sampling(logits)
+
+        return next_token_ids
+
+    async def _async_step_background(self, inputs: ModelInputs, swap_in_map: Dict, swap_out_map: Dict,
+                                     all_ids: torch.Tensor, guided_input_ids: torch.Tensor,
+                                     sampling_inputs: SamplingInputs, num_appendable_ids: torch.LongTensor,
+                                     num_ignore_eos: torch.LongTensor, loop_count: int, return_logits: bool,
+                                     output_que: asyncio.Queue):
+        """asyc forward task."""
+
+        def __update_inputs(next_token_ids):
+            """update inputs."""
+            nonlocal all_ids, guided_input_ids
+            inputs.update(next_token_ids)
+            if all_ids is not None:
+                all_ids = torch.cat([all_ids, next_token_ids[:, None].to(all_ids.device)], 1)
+            if guided_input_ids is not None:
+                guided_input_ids = torch.cat([guided_input_ids, next_token_ids[:, None].to(guided_input_ids.device)], 1)
+            if sampling_inputs.random_offsets is not None:
+                sampling_inputs.random_offsets += 1
+
+        logger.debug('<ForwardTask>: '
+                     f'batch_size={inputs.seq_length.size(0)} '
+                     f'num_tokens={inputs.input_ids.size(-1)}')
+        non_blocking = True
+        inputs = inputs.to_device('cuda', non_blocking=non_blocking)
+        is_decoding = inputs.is_decoding
+        if all_ids is not None:
+            all_ids = all_ids.cuda(non_blocking=non_blocking)
+        if guided_input_ids is not None:
+            guided_input_ids = guided_input_ids.cuda(non_blocking=non_blocking)
+        sampling_inputs = sampling_inputs.to_device('cuda', non_blocking=non_blocking)
+        num_appendable_ids = num_appendable_ids.cuda(non_blocking=non_blocking)
+        num_ignore_eos = num_ignore_eos.cuda(non_blocking=non_blocking)
+
+        self.stream.synchronize()
+
+        # dist tools
+        dist_ctx = get_dist_manager().current_context()
+        rank = dist_ctx.rank
+        tp = dist_ctx.tp
+
+        for idx in range(loop_count):
+            # inference
+            output = await self._async_model_forward(inputs,
+                                                     swap_in_map=swap_in_map,
+                                                     swap_out_map=swap_out_map,
+                                                     return_logits=return_logits)
+            logits = output['logits']
+            logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
+
+            if rank % tp == 0:
+                # sampling
+                next_token_ids = await self.async_sampling_logits(logits, all_ids, guided_input_ids, sampling_inputs,
+                                                                  inputs, num_ignore_eos > 0)
+                num_ignore_eos = num_ignore_eos - 1
+
+                # stopping criteria
+                stopped, num_appendable_ids = _batch_stopping_criteria(next_token_ids, sampling_inputs.stop_words,
+                                                                       num_appendable_ids)
+            else:
+                next_token_ids = torch.empty_like(num_ignore_eos)
+                stopped = None
+
+            if tp > 1 and idx < loop_count - 1:
+                tp_gpu_group = dist_ctx.tp_gpu_group
+                dist.broadcast(next_token_ids, src=rank // tp * tp, group=tp_gpu_group)
+
+            # send output
+            model_metas = output.get('model_metas')
+            if rank % tp == 0:
+                event = torch.cuda.Event()
+                event.record()
+                output = dict(next_token_ids=next_token_ids,
+                              logits=logits if return_logits else None,
+                              stopped=stopped,
+                              model_metas=model_metas,
+                              event=event)
+                output_que.put_nowait(output)
+
+            # update for next loop
+            if is_decoding and idx < loop_count - 1:
+                swap_in_map = dict()
+                swap_out_map = dict()
+                inputs.model_metas = model_metas
+                __update_inputs(next_token_ids)
+
+    @torch.inference_mode()
+    async def _async_loop_background(self, forward_event: asyncio.Event = None):
+        """async loop background."""
+        with self.all_context(), torch.cuda.stream(self.stream):
+            while True:
+                forward_inputs = await self._in_que.get()
+
+                if forward_event is not None:
+                    forward_event.clear()
+                await self._async_step_background(
+                    **forward_inputs,
+                    output_que=self._out_que,
+                )
+                if forward_event is not None:
+                    forward_event.set()
+
+    @staticmethod
+    def _on_finish_callback(task: asyncio.Task, ptask: asyncio.Task) -> None:
+        """raise exception on finish."""
+        task_name = task.get_name()
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            logger.debug(f'Task <{task_name}> cancelled.')
+            return
+        except Exception:
+            logger.exception(f'Task <{task_name}> failed')
+        finally:
+            if not task.done():
+                task.cancel()
+            if not ptask.done():
+                ptask.cancel()
+
+    def start(self, forward_event: asyncio.Event = None):
+        """start event loop."""
+        event_loop = asyncio.get_event_loop()
+        self._in_que = asyncio.Queue()
+        self._out_que = asyncio.Queue()
+        self._background_task = event_loop.create_task(self._async_loop_background(forward_event),
+                                                       name='ModelAgentLoop')
+        done_callback = functools.partial(self._on_finish_callback, ptask=asyncio.current_task())
+        self._background_task.add_done_callback(done_callback)
+
+    def stop(self):
+        """stop task."""
+        if self._background_task is not None:
+            if not self._background_task.done():
+                self._background_task.cancel()
+
+    def set_forward_inputs(self, inputs):
+        """set forward inputs."""
+        assert self._in_que is not None, ('Please start backendground task before forward.')
+        self._in_que.put_nowait(inputs)
+
+    async def get_output_async(self):
+        """async get output."""
+        assert self._out_que is not None, ('Please start backendground task before forward.')
+        out = await self._out_que.get()
+        event = out.pop('event')
+        while not event.query():
+            await asyncio.sleep(0.001)
+        with torch.cuda.stream(self.out_stream):
+            out['next_token_ids'] = out['next_token_ids'].cpu()
+            out['stopped'] = out['stopped'].cpu()
+            if out['logits'] is not None:
+                out['logits'] = out['logits'].cpu()
+        return out
 
 
 class BaseModelAgent(AutoModelAgent):
@@ -202,41 +448,73 @@ class BaseModelAgent(AutoModelAgent):
                  model_config: ModelConfig,
                  cache_config: CacheConfig,
                  backend_config: BackendConfig,
-                 adapters: Dict[str, str] = None,
-                 trust_remote_code: bool = True):
-        super().__init__(model_config=model_config, cache_config=cache_config)
+                 tokenizer: Any,
+                 dist_ctx: DistContext,
+                 device_ctx: DeviceContext,
+                 adapters: Dict[str, str] = None):
+        super().__init__(
+            model_config=model_config,
+            cache_config=cache_config,
+            tokenizer=tokenizer,
+            dist_ctx=dist_ctx,
+            device_ctx=device_ctx,
+        )
         device = 'cuda'
         self.backend_config = backend_config
-        self._adapters = adapters
+        rank = dist_ctx.rank
 
-        self.patched_model = self._build_model(model_path, adapters, device=device)
+        self.model_path = model_path
+        self.adapters = adapters
+        self.device = device
+        self.rank = rank
 
-        _update_cache_config(model_config, cache_config)
+        tp_rank = dist_ctx.tp_rank
+        tp = dist_ctx.tp
+        world_size = dist_ctx.world_size
+        self.tp = tp
+        self.world_size = world_size
+        self.tp_rank = tp_rank
 
-        backend = get_backend()
-        self.patched_model = backend.build_graph_runner(self.patched_model,
-                                                        model_config=model_config,
-                                                        cache_config=cache_config,
-                                                        backend_config=backend_config,
-                                                        device=device)
+        self.patched_model = None
+        self.cache_engine = None
 
-        self.cache_engine = CacheEngine(cache_config, model_config)
-
-        self.stream = torch.cuda.Stream()
-
-    def _build_model(self, model_path: str, adapters: Dict[str, str] = None, device: torch.device = 'cuda'):
+    def _build_model(self):
         """build patched model."""
+        model_path = self.model_path
+        adapters = self.adapters
+        device = self.device
+        rank = self.rank
         custom_module_map = self.model_config.custom_module_map
         if custom_module_map is not None:
             update_custom_module_map(custom_module_map)
-        logger.info('build model.')
+        logger.debug(msg_with_rank(rank, 'build model.'))
         patched_model = build_patched_model(self.model_config, device=device)
-        logger.info('loading weights.')
+        logger.debug(msg_with_rank(rank, 'loading weights.'))
         load_model_weights(patched_model, model_path, device=device)
-        logger.info('loading adapters.')
         if adapters is not None:
+            logger.debug(msg_with_rank(rank, 'loading adapters.'))
             add_adapters(patched_model, adapters, dtype=self.model_config.dtype, device=device)
-        return patched_model
+        self.patched_model = patched_model
+
+    def build_model(self):
+        """build model api."""
+        with self.all_context():
+            self._build_model()
+
+    def build_graph_runner(self):
+        """build graph runner."""
+        with self.all_context():
+            backend = get_backend()
+            self.patched_model = backend.build_graph_runner(self.patched_model,
+                                                            model_config=self.model_config,
+                                                            cache_config=self.cache_config,
+                                                            backend_config=self.backend_config,
+                                                            device=self.device)
+
+    def build_cache_engine(self):
+        """build cache engine."""
+        with self.all_context():
+            self.cache_engine = CacheEngine(self.cache_config, self.model_config, self.tp_rank, world_size=self.tp)
 
     def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
         cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
@@ -269,459 +547,27 @@ class BaseModelAgent(AutoModelAgent):
         """get input processor.."""
         return self.patched_model.get_input_processor()
 
-    def close(self):
-        """release model."""
+    def reset_graph_runner(self):
+        """reset graph runner to prevent tp hanging."""
+        if hasattr(self.patched_model, 'reset'):
+            self.patched_model.reset()
+
+    def release(self):
+        """release."""
+        self.reset_graph_runner()
         self.patched_model = None
         self.cache_engine = None
-
-
-@torch.inference_mode()
-def _tp_build_model(
-    rank: int,
-    model_path: str,
-    model_config: ModelConfig,
-    cache_config: CacheConfig,
-    backend_config: BackendConfig,
-    adapters: Dict[str, str],
-    world_size: int,
-):
-    """build tensor parallel model."""
-
-    patched_model = None
-    cache_engine = None
-
-    def _broadcast_config(cache_config):
-        """broadcast cache config, use minimum cache."""
-        if rank == 0:
-            gathered_configs = [None] * world_size
-            dist.gather_object(cache_config, gathered_configs)
-            num_gpu_blocks_list = [config.num_gpu_blocks for config in gathered_configs]
-            num_cpu_blocks_list = [config.num_cpu_blocks for config in gathered_configs]
-            min_num_gpu_blocks = min(num_gpu_blocks_list)
-            min_num_cpu_blocks = min(num_cpu_blocks_list)
-            cache_config.num_cpu_blocks = min_num_cpu_blocks
-            cache_config.num_gpu_blocks = min_num_gpu_blocks
-            config_list = [cache_config]
-        else:
-            gathered_configs = None
-            dist.gather_object(cache_config, gathered_configs)
-            config_list = [None]
-        dist.broadcast_object_list(config_list)
-        return config_list[0]
-
-    try:
-        device_map = torch.device('cuda')
-
-        custom_module_map = model_config.custom_module_map
-        if custom_module_map is not None:
-            update_custom_module_map(custom_module_map)
-        if rank == 0:
-            logger.info('build model.')
-        patched_model = build_patched_model(model_config, device=device_map)
-        if rank == 0:
-            logger.info('loading weights.')
-        load_model_weights(patched_model, model_path, device=device_map)
-
-        if adapters is not None:
-            if rank == 0:
-                logger.info('loading adapters.')
-            add_adapters(patched_model, adapters, dtype=model_config.dtype, device=device_map)
-
-        _update_cache_config(model_config, cache_config, gpu_id=rank, world_size=world_size)
-
-        backend = get_backend()
-        patched_model = backend.build_graph_runner(patched_model,
-                                                   model_config=model_config,
-                                                   cache_config=cache_config,
-                                                   backend_config=backend_config,
-                                                   device='cuda')
-
-        cache_config = _broadcast_config(cache_config)
-        cache_engine = CacheEngine(cache_config, model_config, rank=rank, world_size=world_size)
-
-    except Exception as e:
-        raise e
-
-    return patched_model, cache_engine, cache_config
-
-
-def _broadcast_inputs(rank: int, inputs: Any, group: dist.group, stream: torch.cuda.Stream):
-    """get input tensor parallel."""
-    # broadcast meta info
-    if rank != 0:
-        inputs = [None, None, None]
-    else:
-        device_inputs = inputs[0]
-        meta_inputs = device_inputs.to_device('meta')
-        inputs[0] = meta_inputs
-
-    with torch.cuda.stream(stream):
-        dist.broadcast_object_list(inputs, group=group)
-        if rank == 0:
-            device_inputs.broadcast()
-        else:
-            device_inputs = inputs[0].broadcast()
-
-    inputs[0] = device_inputs
-
-    return inputs
-
-
-def _tp_model_loop(
-    rank: int,
-    model_path: str,
-    model_config: ModelConfig,
-    cache_config: CacheConfig,
-    backend_config: BackendConfig,
-    adapters: Dict[str, str],
-    world_size: int,
-    barrier: mp.Barrier,
-    cpu_group: dist.group,
-):
-    """Start model loops for tensor parallel model inference.
-
-    Args:
-        rank (int): Distribution rank.
-        model_path (int): Path of the hugging face model. Could be
-            local or online.
-        model_config (ModelConfig): The config of the model.
-        cache_config (CacheConfig): The config of the cache.
-        in_que (mp.Queue): Input queue. Used to receive model input.
-        out_que (mp.Queue): Output queue. Used to send the model output.
-        world_size (int): The distribution world size.
-    """
-    stream = torch.cuda.Stream()
-    patched_model, cache_engine, _ = _tp_build_model(rank,
-                                                     model_path,
-                                                     model_config,
-                                                     cache_config,
-                                                     backend_config,
-                                                     adapters=adapters,
-                                                     world_size=world_size)
-
-    while True:
-        barrier.wait()
-        inputs, swap_in_map, swap_out_map = _broadcast_inputs(rank, None, cpu_group, stream)
-
-        cache_swapping(cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
-        inputs = inputs.to_device('cuda')
-
-        model_forward(
-            patched_model,
-            inputs,
-            cache_engine,
-            world_size=world_size,
-            stream=stream,
-        )
-
-
-def _start_tp_process(proc_id: int,
-                      world_size: int,
-                      func: Callable,
-                      log_level: int,
-                      device_context: DeviceContext,
-                      args: List = None,
-                      kwargs: Dict = None):
-    """Start the tensor parallel process.
-
-    Args:
-        rank (int): The distribution rank.
-        world_size (int): The distribution world size.
-        func (Callable): The function to be called in the process.
-        args (List): The arguments of the func.
-        kwargs (Dict): The keyword arguments of the func.
-    """
-    rank = proc_id + 1
-    logger.setLevel(log_level)
-    try:
-        from lmdeploy.pytorch.check_env import check_env_deeplink
-        check_env_deeplink(device_context.device_type)
-        timeout = timedelta(days=35600)
-        dist.init_process_group('nccl', rank=rank, world_size=world_size, timeout=timeout)
-        cpu_group = dist.new_group(timeout=timeout, backend='gloo')
-        kwargs['cpu_group'] = cpu_group
-        dist_ctx = DistContext(rank=rank, world_size=world_size)
-        torch.cuda.set_device(rank)
-        with get_dist_manager().context(dist_ctx), get_device_manager().context(device_context), torch.inference_mode():
-            args = args or tuple()
-            kwargs = kwargs or dict()
-            func(rank, *args, **kwargs)
-    except threading.BrokenBarrierError:
-        logger.warning(f'Rank[{rank}] exit.')
-        # dist.destroy_process_group() may hang if using cudagraph
-    except Exception as e:
-        from traceback import print_exc
-        logger.error(f'Rank[{rank}] failed.')
-        print_exc()
-        if dist.is_initialized():
-            dist.destroy_process_group()
-        raise e
-
-
-def _check_context_alive(mp_context: mp.ProcessContext):
-    """check context alive."""
-    procs: List[mp.Process] = mp_context.processes
-    failed_procs = list(idx for idx, p in enumerate(procs) if not p.is_alive())
-    if len(failed_procs) == 0:
-        return
-
-    log_procs = []
-    for idx, p in enumerate(procs):
-        if p.is_alive():
-            p.terminate()
-        else:
-            exitcode = p.exitcode
-            if exitcode > 0:
-                # terminated exitcode < 0
-                log_procs.append((idx, exitcode))
-            p.close()
-    for idx, exitcode in log_procs:
-        logger.error(f'TP process {idx} failed with exitcode {exitcode}.')
-    # TODO: not safe exit.
-    exit_code = 1 if len(log_procs) > 0 else 0
-    os._exit(exit_code)
-
-
-def _find_available_port() -> bool:
-    """find available port."""
-    import socket
-    port = 29500
-    while True:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            if s.connect_ex(('localhost', port)) != 0:
-                return port
-            port += 1
-
-
-class TPModelAgent(AutoModelAgent):
-    """Tensor Parallelism model agent.
-
-    load model on multiple GPUs
-
-    Args:
-        model_path (str): The hugging face model path.
-        model_config (ModelConfig): The config of the model.
-        cache_config (CacheConfig): The config of the cache info.
-        trust_remote_code (bool): Trust remote code
-    """
-
-    def __init__(self,
-                 model_path: str,
-                 model_config: ModelConfig,
-                 cache_config: CacheConfig,
-                 backend_config: BackendConfig,
-                 world_size: int,
-                 adapters: Dict[str, str] = None,
-                 trust_remote_code: bool = True) -> None:
-        import signal
-
-        def __signal_term_handler(sig, frame):
-            """sigterm handler."""
-            if hasattr(self, 'mp_context'):
-                procs = self.mp_context.processes
-                for p in procs:
-                    if p.is_alive():
-                        p.kill()
-            logger.error(f'Get signal[{sig}], kill all processes.')
-            signal.signal(sig, signal.SIG_DFL)
-            signal.raise_signal(sig)
-
-        super().__init__(model_config=model_config, cache_config=cache_config)
-
-        signal.signal(signal.SIGTERM, __signal_term_handler)
-
-        self.mp_ctx = mp.get_context('spawn')
-        self.world_size = world_size
-        self.backend_config = backend_config
-
-        self._dist_ctx = None
-        self.mp_bar = self.mp_ctx.Barrier(world_size)
-        self._start_sub_process(model_path,
-                                model_config=model_config,
-                                cache_config=cache_config,
-                                backend_config=backend_config,
-                                adapters=adapters,
-                                world_size=world_size,
-                                barrier=self.mp_bar)
-
-        model, cache_engine, cache_config = self._build_model(model_path=model_path,
-                                                              model_config=model_config,
-                                                              cache_config=cache_config,
-                                                              backend_config=backend_config,
-                                                              adapters=adapters,
-                                                              world_size=world_size)
-        self.patched_model = model
-        self.cache_config = cache_config
-        self.cache_engine = cache_engine
-        self.stream = torch.cuda.Stream()
-
-    def _mp_watchdog(self, mp_context: mp.ProcessContext, timeout: int = 1, stop_event: threading.Event = None):
-        """watch dog of mp context.
-
-        Args:
-            mp_context: context of multiprocess.
-            timeout: timeout
-        """
-        import time
-        while True:
-            if stop_event is not None and stop_event.is_set():
-                break
-            _check_context_alive(mp_context)
-            time.sleep(timeout)
-
-    def _start_sub_process(self, model_path: str, model_config: ModelConfig, cache_config: CacheConfig,
-                           backend_config: BackendConfig, adapters: Dict[str,
-                                                                         str], world_size: int, barrier: mp.Barrier):
-        """Start tensor parallel sub process."""
-        port = _find_available_port()
-        os.environ.setdefault('MASTER_ADDR', '127.0.0.1')
-        os.environ.setdefault('MASTER_PORT', str(port))
-        addr = os.environ['MASTER_ADDR']
-        port = os.environ['MASTER_PORT']
-        logger.info(f'MASTER_ADDR={addr}, MASTER_PORT={port}')
-
-        device_context = get_device_manager().current_context()
-        self.mp_context = mp.spawn(
-            _start_tp_process,
-            args=(
-                world_size,
-                _tp_model_loop,
-                logger.level,
-                device_context,
-                (model_path, ),
-                dict(
-                    model_config=model_config,
-                    cache_config=cache_config,
-                    backend_config=backend_config,
-                    adapters=adapters,
-                    world_size=world_size,
-                    barrier=barrier,
-                ),
-            ),
-            nprocs=world_size - 1,
-            join=False,
-            daemon=True,
-        )
-
-        stop_event = threading.Event()
-        t_watchdog = threading.Thread(target=self._mp_watchdog, args=[self.mp_context, 1.0, stop_event], daemon=True)
-        t_watchdog.start()
-        self.t_watchdog = t_watchdog
-        self.t_watchdog.stop_event = stop_event
-
-        rank = 0
-        try:
-            timeout = timedelta(days=35600)
-            dist.init_process_group('nccl', rank=rank, world_size=world_size, timeout=timeout)
-            cpu_group = dist.new_group(timeout=timeout, backend='gloo')
-            dist_ctx = DistContext(rank=rank, world_size=world_size)
-            self._dist_ctx = dist_ctx
-            self._cpu_group = cpu_group
-        except Exception as e:
-            from traceback import print_exc
-            logger.error(f'Rank[{rank}] failed.')
-            print_exc()
-            if dist.is_initialized():
-                dist.destroy_process_group()
-            raise e
-        atexit.register(_exit_handler, self)
-
-    @torch.inference_mode()
-    def _build_model(
-        self,
-        model_path: str,
-        model_config: ModelConfig,
-        cache_config: CacheConfig,
-        backend_config: BackendConfig,
-        adapters: Dict[str, str],
-        world_size: int,
-    ):
-        """build model."""
-        with get_dist_manager().context(self._dist_ctx):
-            rank = 0
-            model, cache_engine, cache_config = _tp_build_model(
-                rank,
-                model_path=model_path,
-                model_config=model_config,
-                cache_config=cache_config,
-                backend_config=backend_config,
-                adapters=adapters,
-                world_size=world_size,
-            )
-
-        return model, cache_engine, cache_config
-
-    def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
-        """forward impl."""
-        with get_dist_manager().context(self._dist_ctx):
-            self.mp_bar.wait()
-            rank = 0
-            _broadcast_inputs(rank, [inputs, swap_in_map, swap_out_map], self._cpu_group, self.stream)
-
-            cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
-            output = model_forward(
-                self.patched_model,
-                inputs,
-                self.cache_engine,
-                world_size=1,
-                stream=self.stream,
-            )
-        return output
-
-    async def async_forward(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
-        """model forward.
-
-        Args:
-            inputs (Dict): The input data comes from _make_inputs.
-            swap_in_map (SwapMap): Cache maps to swap in.
-            swap_out_map (SwapMap): Cache maps to swap out.
-        """
-        output = self._forward_impl(inputs, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
-        await asyncio.sleep(0)
-        return output
-
-    def get_logits(self, hidden_states: torch.Tensor):
-        """get logits of model output."""
-        return self.patched_model.get_logits(hidden_states)
-
-    def get_input_processor(self):
-        """get input processor.."""
-        return self.patched_model.get_input_processor()
-
-    def close(self):
-        """release model."""
-        if hasattr(self, 'mp_context') and self.mp_context is not None:
-            self.patched_model = None
-            self.cache_engine = None
-            self.t_watchdog.stop_event.set()
-            self.t_watchdog.join()
-            self.mp_bar.abort()
-            procs = self.mp_context.processes
-            for p in procs:
-                if p.is_alive():
-                    p.join()
-                    p.close()
-            self.mp_context = None
-            if dist.is_initialized():
-                if hasattr(self, '_cpu_group') and self._cpu_group is not None:
-                    dist.destroy_process_group(self._cpu_group)
-                    del self._cpu_group
-                dist.destroy_process_group()
-
-
-def _exit_handler(agent: TPModelAgent):
-    if hasattr(agent, 'patched_model'):
-        del agent.patched_model
+        torch.cuda.empty_cache()
 
 
 def build_model_agent(model_path: str,
+                      model_config: ModelConfig,
                       cache_config: CacheConfig,
                       backend_config: BackendConfig,
-                      trust_remote_code: bool,
-                      adapters: Dict[str, str] = None,
-                      tp: int = 1,
-                      dtype: str = 'auto',
-                      custom_module_map: str = None):
+                      tokenizer: Any,
+                      dist_ctx: DistContext = None,
+                      device_ctx: DeviceContext = None,
+                      adapters: Dict[str, str] = None):
     """create model agent.
 
     Args:
@@ -734,21 +580,21 @@ def build_model_agent(model_path: str,
         dtype (str): the data type of model weights and activations
         custom_module_map (str): customized nn module map
     """
-    model_config = ModelConfig.from_pretrained(model_path, trust_remote_code=trust_remote_code, dtype=dtype, tp=tp)
-    model_config.custom_module_map = custom_module_map
-    if tp == 1:
-        model_agent = BaseModelAgent(model_path,
-                                     model_config=model_config,
-                                     cache_config=cache_config,
-                                     backend_config=backend_config,
-                                     adapters=adapters,
-                                     trust_remote_code=trust_remote_code)
-    else:
-        model_agent = TPModelAgent(model_path,
-                                   model_config=model_config,
-                                   cache_config=cache_config,
-                                   backend_config=backend_config,
-                                   world_size=tp,
-                                   adapters=adapters,
-                                   trust_remote_code=trust_remote_code)
+    if device_ctx is None:
+        device_mgr = get_device_manager()
+        device_ctx = device_mgr.current_context()
+    if dist_ctx is None:
+        dist_mgr = get_dist_manager()
+        dist_ctx = dist_mgr.current_context()
+
+    model_agent = BaseModelAgent(
+        model_path,
+        model_config=model_config,
+        cache_config=cache_config,
+        backend_config=backend_config,
+        tokenizer=tokenizer,
+        adapters=adapters,
+        dist_ctx=dist_ctx,
+        device_ctx=device_ctx,
+    )
     return model_agent

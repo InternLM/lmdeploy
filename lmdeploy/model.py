@@ -234,8 +234,8 @@ class BaseChatTemplate(BaseModel):
         return ret
 
 
-@MODELS.register_module(name=['deepseek-r1'])
-class Deepseek(BaseChatTemplate):
+@MODELS.register_module(name=['deepseek-v3'])
+class DeepseekV3(BaseChatTemplate):
 
     def __init__(self, user='<｜User｜>', assistant='<｜Assistant｜>', eoa='<｜end▁of▁sentence｜>', **kwargs):
         super().__init__(user=user, assistant=assistant, eoa=eoa, **kwargs)
@@ -258,7 +258,27 @@ class Deepseek(BaseChatTemplate):
             model_path (str): the model path used for matching.
         """
         path = model_path.lower()
-        if 'deepseek-r1' in path or 'deepseek-v3' in path:
+        if 'deepseek-v3' in path:
+            return 'deepseek-v3'
+
+
+@MODELS.register_module(name=['deepseek-r1'])
+class DeepseekR1(DeepseekV3):
+
+    def messages2prompt(self, messages, sequence_start=True, **kwargs):
+        if sequence_start and not isinstance(messages, str):
+            return super().messages2prompt(messages, sequence_start, **kwargs) + '<think>\n'
+        return super().messages2prompt(messages, sequence_start, **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'deepseek-r1' in path:
             return 'deepseek-r1'
 
 
@@ -964,11 +984,12 @@ class Qwen7BChat(BaseChatTemplate):
         Args:
             model_path (str): the model path used for matching.
         """
-        if 'qwen' in model_path.lower() and 'qwen2.5' not in model_path.lower():
+        model_path = model_path.lower()
+        if 'qwen' in model_path and 'qwen2.5' not in model_path and 'qwq' not in model_path:
             return 'qwen'
-        if 'minicpm-v-2_6' in model_path.lower():
+        if 'minicpm-v-2_6' in model_path:
             return 'minicpmv-2d6'
-        if 'minicpm3-' in model_path.lower():
+        if 'minicpm3-' in model_path:
             return 'minicpm3'
 
 
@@ -1070,6 +1091,50 @@ class Qwen2d5Chat(Qwen7BChat):
         lower_path = model_path.lower()
         if 'qwen2.5' in lower_path or 'qwen2_5' in lower_path:
             return 'qwen2d5'
+
+
+@MODELS.register_module(name='qwq_preview')
+class QwQPreview(Qwen2d5Chat):
+
+    def __init__(
+            self,
+            meta_instruction='You are a helpful and harmless assistant. You are Qwen developed by Alibaba. You should think step-by-step.',
+            **kwargs):
+        super().__init__(meta_instruction=meta_instruction, **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        lower_path = model_path.lower()
+        if 'qwq' in lower_path and 'preview' in lower_path:
+            return 'qwq_preview'
+
+
+@MODELS.register_module(name='qwq')
+class QwQ(Qwen2d5Chat):
+
+    def __init__(self, meta_instruction='', **kwargs):
+        super().__init__(meta_instruction=meta_instruction, **kwargs)
+
+    def messages2prompt(self, messages, sequence_start=True, tools=None, **kwargs):
+        if isinstance(messages, str):
+            return self.get_prompt(messages, sequence_start)
+        return super().messages2prompt(messages, sequence_start, tools, **kwargs) + '<think>\n'
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        lower_path = model_path.lower()
+        if 'qwq' in lower_path and 'preview' not in lower_path:
+            return 'qwq'
 
 
 @MODELS.register_module(name='codellama')

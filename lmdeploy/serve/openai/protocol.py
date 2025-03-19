@@ -138,7 +138,7 @@ class ChatCompletionRequest(BaseModel):
     min_p: float = 0.0
 
 
-class FunctionResponse(BaseModel):
+class FunctionCall(BaseModel):
     """Function response."""
     name: str
     arguments: str
@@ -146,15 +146,27 @@ class FunctionResponse(BaseModel):
 
 class ToolCall(BaseModel):
     """Tool call response."""
-    id: str
+    id: str = Field(default_factory=lambda: f'chatcmpl-{shortuuid.random()}')
     type: Literal['function'] = 'function'
-    function: FunctionResponse
+    function: FunctionCall
+
+
+class ExtractedToolCallInformation(BaseModel):
+    # modified from https://github.com/vllm-project/vllm/blob/v0.7.3/vllm/entrypoints/openai/protocol.py#L1199
+    # indicate if tools were called
+    tools_called: bool
+    # extracted tool calls
+    tool_calls: List[ToolCall]
+    # content - per OpenAI spec, content AND tool calls can be returned rarely
+    # But some models will do this intentionally
+    content: Optional[str] = None
 
 
 class ChatMessage(BaseModel):
     """Chat messages."""
     role: str
-    content: str
+    content: Optional[str] = None
+    reasoning_content: Optional[str] = Field(default=None, examples=[None])
     tool_calls: Optional[List[ToolCall]] = Field(default=None, examples=[None])
 
 
@@ -200,10 +212,25 @@ class ChatCompletionResponse(BaseModel):
     usage: UsageInfo
 
 
+class DeltaFunctionCall(BaseModel):
+    name: Optional[str] = None
+    arguments: Optional[str] = None
+
+
+# a tool call delta where everything is optional
+class DeltaToolCall(BaseModel):
+    id: str = Field(default_factory=lambda: f'chatcmpl-tool-{shortuuid.random()}')
+    type: Literal['function'] = 'function'
+    index: int
+    function: Optional[DeltaFunctionCall] = None
+
+
 class DeltaMessage(BaseModel):
     """Delta messages."""
     role: Optional[str] = None
     content: Optional[str] = None
+    reasoning_content: Optional[str] = None
+    tool_calls: List[DeltaToolCall] = Field(default_factory=list)
 
 
 class ChatCompletionResponseStreamChoice(BaseModel):
@@ -211,7 +238,7 @@ class ChatCompletionResponseStreamChoice(BaseModel):
     index: int
     delta: DeltaMessage
     logprobs: Optional[ChoiceLogprobs] = None
-    finish_reason: Optional[Literal['stop', 'length']] = None
+    finish_reason: Optional[Literal['stop', 'length', 'tool_calls']] = None
 
 
 class ChatCompletionStreamResponse(BaseModel):

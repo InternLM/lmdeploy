@@ -14,6 +14,8 @@ def assert_result(input, rule_condition, model_name):
         for rule in dict:
             operator = list(rule.keys())[0]
             value = list(rule.values())[0]
+            if input is None or len(input) == 0:
+                return False, 'response is empty'
             if operator == 'contain':
                 if isinstance(value, list):
                     tmpResult = False

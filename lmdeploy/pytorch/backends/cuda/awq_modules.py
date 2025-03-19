@@ -2,7 +2,8 @@
 from typing import Optional
 
 import torch
-from torch import distributed as dist
+
+import lmdeploy.pytorch.distributed as dist
 
 from ..awq_modules import LinearW4A16Builder, LinearW4A16Impl
 

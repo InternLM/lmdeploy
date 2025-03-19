@@ -1,5 +1,5 @@
 import pytest
-from utils.config_utils import get_all_model_list, get_workerid
+from utils.config_utils import get_communicator_list, get_turbomind_model_list, get_workerid
 from utils.run_restful_chat import run_all_step, start_restful_api, stop_restful_api
 
 DEFAULT_PORT = 23333
@@ -17,7 +17,15 @@ def prepare_environment(request, config, worker_id):
 
 
 def getModelList(tp_num):
-    return [{'model': item, 'cuda_prefix': None, 'tp_num': tp_num} for item in get_all_model_list(tp_num)]
+    model_list = []
+    for communicator in get_communicator_list():
+        model_list += [{
+            'model': item,
+            'cuda_prefix': None,
+            'tp_num': tp_num,
+            'extra': f'--communicator {communicator}'
+        } for item in get_turbomind_model_list(tp_num)]
+    return model_list
 
 
 @pytest.mark.order(7)
@@ -57,12 +65,15 @@ def test_restful_chat_tp4(config, common_case_config, worker_id):
 
 
 def getKvintModelList(tp_num, quant_policy):
-    return [{
-        'model': item,
-        'cuda_prefix': None,
-        'tp_num': tp_num,
-        'extra': f'--quant-policy {quant_policy}'
-    } for item in get_all_model_list(tp_num, quant_policy=quant_policy)]
+    model_list = []
+    for communicator in get_communicator_list():
+        model_list += [{
+            'model': item,
+            'cuda_prefix': None,
+            'tp_num': tp_num,
+            'extra': f'--quant-policy {quant_policy} --communicator {communicator}'
+        } for item in get_turbomind_model_list(tp_num, quant_policy=quant_policy)]
+    return model_list
 
 
 @pytest.mark.order(7)
@@ -171,7 +182,7 @@ def test_restful_chat_pr(config, common_case_config):
 @pytest.mark.restful_api
 @pytest.mark.gpu_num_1
 @pytest.mark.parametrize('prepare_environment', [{
-    'model': 'Qwen/Qwen-7B-Chat',
+    'model': 'Qwen/Qwen2.5-7B-Instruct',
     'cuda_prefix': None,
     'tp_num': 1,
     'modelscope': True

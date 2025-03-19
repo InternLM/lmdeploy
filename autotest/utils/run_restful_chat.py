@@ -62,8 +62,6 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
         cmd += ' --backend pytorch'
         if not is_bf16_supported():
             cmd += ' --dtype float16'
-    if 'llava' in model:
-        cmd += ' --model-name vicuna'
     if 'quant_policy' in param.keys() and param['quant_policy'] is not None:
         quant_policy = param['quant_policy']
         cmd += f' --quant-policy {quant_policy}'
@@ -291,6 +289,7 @@ def run_vl_testcase(config, port: int = DEFAULT_PORT):
     for item in api_client.chat_completions_v1(model=model_name, messages=prompt_messages):
         continue
     file.writelines(str(item) + '\n')
+    file.close()
 
     allure.attach.file(restful_log, attachment_type=allure.attachment_type.TEXT)
 

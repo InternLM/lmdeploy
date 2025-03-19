@@ -23,6 +23,7 @@ _SUPPORTED_ARCHS = dict(
     InternLMForCausalLM=True,
     # internlm2
     InternLM2ForCausalLM=True,
+    InternLM2ForRewardModel=True,
     # internlm-xcomposer
     InternLMXComposerForCausalLM=False,
     # internlm2-xcomposer
@@ -42,6 +43,8 @@ _SUPPORTED_ARCHS = dict(
     Qwen2MoeForCausalLM=True,
     # Qwen2-VL-7B-Instruct
     Qwen2VLForConditionalGeneration=True,
+    # Qwen2.5-VL-7B-Instruct
+    Qwen2_5_VLForConditionalGeneration=True,
     # Dbrx 132B
     DbrxForCausalLM=True,
     # cogvlm-chat
@@ -68,6 +71,8 @@ _SUPPORTED_ARCHS = dict(
     InternLM2VEForCausalLM=True,
     # gemma2
     Gemma2ForCausalLM=True,
+    # gemma3
+    Gemma3ForCausalLM=True,
     # phi3.5-moe
     PhiMoEForCausalLM=True,
     # mllama
@@ -105,7 +110,7 @@ def is_supported(model_path: str):
 
     triton_model_path = os.path.join(model_path, 'triton_models')
     if os.path.exists(triton_model_path):
-        logger.warning(f'{model_path} seems to be a turbomind workspace, '
+        logger.warning(f'{model_path} seems to be a turbomind model, '
                        'which can only be ran with turbomind engine.')
     else:
         try:

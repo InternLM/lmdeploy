@@ -4,10 +4,10 @@ import math
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import torch
-import torch.distributed as dist
 import torch.nn.functional as F
 from torch import nn
 
+import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.distributed import get_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
@@ -80,6 +80,7 @@ class DeepseekV2Attention(nn.Module):
         self.q_head_dim = config.qk_nope_head_dim + config.qk_rope_head_dim
         num_replicate_kv_heads = getattr(config, 'num_replicate_key_value_heads', 1)
         num_key_value_heads = getattr(config, 'num_key_value_heads', 1)
+        use_flash_mla = getattr(config, 'use_flash_mla', False)
 
         if self.q_lora_rank is None:
             self.q_proj = build_colwise_linear(
@@ -152,7 +153,8 @@ class DeepseekV2Attention(nn.Module):
                                   scale=self.softmax_scale,
                                   num_kv_heads=num_key_value_heads,
                                   v_head_size=config.kv_lora_rank,
-                                  num_replicate_kv_heads=num_replicate_kv_heads)
+                                  num_replicate_kv_heads=num_replicate_kv_heads,
+                                  use_flash_mla=use_flash_mla)
 
         self.vc = DeepseekV2BMM(self.num_heads, config.kv_lora_rank, self.v_head_dim, dtype=dtype, device=device)
         self.o_proj = build_rowwise_linear(
@@ -323,7 +325,14 @@ class MoEGate(nn.Module):
             topk_weight = scores.gather(1, topk_idx)
         else:
             raise RuntimeError(f'Unsupported topk_method: {self.topk_method}')
-        if not self.renormalize:
+
+        if self.renormalize:
+            denominator = topk_weight.sum(dim=-1, keepdim=True) + 1e-20
+            topk_weight = topk_weight / denominator
+            if not topk_weight.is_contiguous():
+                topk_weight = topk_weight.contiguous()
+
+        if not self.renormalize or self.topk_method == 'noaux_tc':
             topk_weight = topk_weight * self.routed_scaling_factor
         return topk_weight, topk_idx
 
@@ -352,7 +361,7 @@ class DeepseekV2MoE(nn.Module):
             self.ffn_dim,
             self.num_experts,
             top_k=self.top_k,
-            renormalize=self.renormalize,
+            renormalize=False,
             dtype=dtype,
             device=device,
             all_reduce=False,
