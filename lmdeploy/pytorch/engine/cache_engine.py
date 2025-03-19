@@ -6,7 +6,7 @@ import functools
 
 import torch
 
-from slime.config import RDMAInfo, MemoryRegionInfo
+from slime.config import RDMAInfo, MemoryRegionInfo, ExchangeInfo
 from slime.transfer_engine.engine import TransferEngine
 
 from lmdeploy.pytorch.backends import get_backend
@@ -201,7 +201,6 @@ class CacheEngine:
 
     def init_migration(self, remote_engine_ids: List[int]):
         self.transfer_engine = TransferEngine(f"mlx5_bond_{self.rank}", 1, "Ethernet")
-        rdma_info: Dict[int, Tuple[RDMAInfo, Tuple[MemoryRegionInfo, MemoryRegionInfo]]] = {}
         for engine_id in remote_engine_ids:
             self.transfer_engine.init_link(engine_id)
             self.transfer_engine.register_torch(engine_id, "k", self.full_gpu_cache[0])
@@ -209,8 +208,7 @@ class CacheEngine:
             self.transfer_engine.register_torch(engine_id, "v", self.full_gpu_cache[1])
             mr_info_v = self.transfer_engine.links[engine_id].get_mr_info("v")
             local_rdma_info = self.transfer_engine.get_local_info(engine_id)
-            rdma_info[engine_id] = (local_rdma_info, (mr_info_k, mr_info_v))
-        return rdma_info
+        return ExchangeInfo(rdma_info=local_rdma_info, mr_info=[mr_info_k, mr_info_v])
     
     def construct_rdma_link(self, remote_rdma_info: Dict[int, Tuple[RDMAInfo, Tuple[MemoryRegionInfo, MemoryRegionInfo]]]):
         for key, value in remote_rdma_info.items():

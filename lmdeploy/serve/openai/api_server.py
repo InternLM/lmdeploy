@@ -523,7 +523,8 @@ async def cache_info() -> JSONResponse:
 async def init_migration(raw_request: Request) -> JSONResponse:
     connect_config = await raw_request.json()
     print(connect_config)
-    VariableInterface.async_engine.init_migration(eval(connect_config["config"]))
+    x = VariableInterface.async_engine.init_migration(eval(connect_config["config"])["remote_engine_ids"])
+    return x
 
 
 @router.post('/distserve/prefill')
