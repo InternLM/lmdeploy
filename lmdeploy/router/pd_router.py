@@ -175,6 +175,9 @@ def init_migration(args):
         "remote_engine_ids": [0],
     }
 
+    print(handler_config_prefill)
+    print(handler_config_decode)
+
     prefill_engine_info = requests.post(get_url(engine_snapshot.prefill_endpoints[0], "distserve/init_migration"), json={"config": str(handler_config_prefill)}).json()
     decode_engine_info = requests.post(get_url(engine_snapshot.decode_endpoints[0], "distserve/init_migration"), json={"config": str(handler_config_decode)}).json()
     print(prefill_engine_info, decode_engine_info)
