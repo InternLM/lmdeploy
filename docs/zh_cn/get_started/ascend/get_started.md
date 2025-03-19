@@ -105,12 +105,26 @@ if __name__ == "__main__":
 lmdeploy serve api_server --backend pytorch --device ascend --eager-mode internlm/internlm2_5-7b-chat
 ```
 
+也可以运行以下命令启动容器运行LLM模型服务。
+
+```bash
+docker exec -it --net=host crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:latest \
+    bash -i -c "lmdeploy serve api_server --backend pytorch --device ascend --eager-mode internlm/internlm2_5-7b-chat"
+```
+
 ### VLM 模型服务
 
 将`--device ascend`加入到服务启动命令中。
 
 ```bash
 lmdeploy serve api_server --backend pytorch --device ascend --eager-mode OpenGVLab/InternVL2-2B
+```
+
+也可以运行以下命令启动容器运行VLM模型服务。
+
+```bash
+docker exec -it --net=host crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:latest \
+    bash -i -c "lmdeploy serve api_server --backend pytorch --device ascend --eager-mode OpenGVLab/InternVL2-2B"
 ```
 
 ## 使用命令行与LLM模型对话
@@ -124,7 +138,7 @@ lmdeploy chat internlm/internlm2_5-7b-chat --backend pytorch --device ascend --e
 也可以运行以下命令使启动容器后开启lmdeploy聊天
 
 ```bash
-docker exec -it lmdeploy_ascend_demo \
+docker exec -it crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:latest \
     bash -i -c "lmdeploy chat --backend pytorch --device ascend --eager-mode internlm/internlm2_5-7b-chat"
 ```
 
