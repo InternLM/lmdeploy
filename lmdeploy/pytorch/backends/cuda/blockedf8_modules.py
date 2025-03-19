@@ -50,7 +50,7 @@ class TritonLinearBlockedF8Builder(LinearBlockedF8Builder):
 
 
 class DeepGemmLinearBlockedF8Impl(LinearBlockedF8Impl):
-    """triton linear blocked f8 implementation."""
+    """Deep gemm blocked f8 implementation."""
 
     def __init__(self, in_features: int, out_features: int, block_size: int, out_dtype: torch.dtype = torch.float16):
         self.in_features = in_features
@@ -81,7 +81,7 @@ class DeepGemmLinearBlockedF8Impl(LinearBlockedF8Impl):
 
 
 class DeepGemmLinearBlockedF8Builder(LinearBlockedF8Builder):
-    """triton linear blocked f8 implementation builder."""
+    """Deep gemm linear blocked f8 implementation builder."""
 
     @staticmethod
     def build(in_features: int, out_features: int, block_size: int = 128, bias: bool = True, dtype: torch.dtype = None):
