@@ -12,6 +12,7 @@ from lmdeploy.vl.model.base import VISION_MODELS
 from .cogvlm import CogVLMVisionModel  # noqa F401
 from .deepseek import DeepSeekVisionModel  # noqa F401
 from .deepseek_vl2 import DeepSeek2VisionModel  # noqa F401
+from .gemma3_vl import Gemma3VisionModel  # noqa F401
 from .glm_4v import GLM4VisionModel  # noqa F401
 from .internvl import InternVLVisionModel  # noqa F401
 from .internvl_llava import InternVLLlavaVisionModel  # noqa F401
