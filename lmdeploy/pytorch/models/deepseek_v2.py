@@ -46,7 +46,6 @@ class DeepseekV2BMM(nn.Module):
 
     def _get_tp_world_rank(self):
         """get tp world rank."""
-        from lmdeploy.pytorch.distributed import get_dist_manager
         dist_ctx = get_dist_manager().current_context()
         if dist_ctx.dp == 1:
             return get_tp_world_rank()
