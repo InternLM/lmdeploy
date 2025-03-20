@@ -187,12 +187,6 @@ jobs:
         with:
           repository: ${{ github.event.inputs.repo_org_lmdeploy || 'InternLM/lmdeploy' }}
           ref: ${{github.event.inputs.repo_ref_lmdeploy || 'main'}}
-      - name: Checkout opencompass
-        uses: actions/checkout@v3
-        with:
-          repository: ${{ github.event.inputs.repo_org || 'open-compass/opencompass' }}
-          ref: ${{github.event.inputs.repo_ref || 'main'}}
-          path: 'opencompass'
       - name:  modify config
         run: |
           mkdir opencompass

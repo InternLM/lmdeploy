@@ -318,7 +318,7 @@ def run_reasoning_case(config, port: int = DEFAULT_PORT):
     file = open(restful_log, 'w')
 
     client = OpenAI(api_key='YOUR_API_KEY', base_url=http_url + '/v1')
-    model_name = client.available_models[0]
+    model_name = client.models.list().data[0].id
 
     with allure.step('step1 - stream'):
         messages = [{'role': 'user', 'content': '9.11 and 9.8, which is greater?'}]
@@ -592,7 +592,7 @@ def run_tools_case(config, port: int = DEFAULT_PORT):
     file = open(restful_log, 'w')
 
     client = OpenAI(api_key='YOUR_API_KEY', base_url=http_url + '/v1')
-    model_name = client.available_models[0]
+    model_name = client.models.list().data[0].id
 
     with allure.step('step1 - one_round_prompt'):
         tools = [{
