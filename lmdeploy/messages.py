@@ -347,6 +347,8 @@ class ResponseType(enum.Enum):
     INPUT_LENGTH_ERROR = enum.auto()
     INTERNAL_ENGINE_ERROR = enum.auto()
 
+    MIGRATION_DONE = enum.auto()
+
 
 @dataclass
 class Response:

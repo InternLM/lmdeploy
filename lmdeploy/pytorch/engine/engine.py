@@ -360,7 +360,7 @@ class Engine:
                 msg = next(iter(sess.sequences.values()))
                 __update_max_new_tokens(msg)
                 status = MessageStatus.WAITING
-                if migration or self.cache_config.role == EngineRole.decode: 
+                if migration or self.cache_config.role == EngineRole.Decode: 
                     status = MessageStatus.WAITING_MIGRATION
                 self.scheduler.add_sequence(msg, status)
             else:
@@ -738,7 +738,7 @@ class Engine:
             __send_resps(resps)
 
     @torch.inference_mode()
-    async def _async_loop_migration(self, resp_que: asyncio.Queue):
+    async def _async_loop_migration(self, resp_que: asyncio.Queue, has_runable_event):
         """async loop migration."""
         while True:
             migration_running = self.scheduler._schedule_migration()
@@ -772,13 +772,15 @@ class Engine:
                 outputs: Dict[int, InferOutput] = dict()
                 for _, msg in enumerate(migration_running):
                     session_id = msg.session_id
+                    msg.resp.type = ResponseType.SUCCESS
                     out = InferOutput(
                         session_id=session_id,
                         resp=msg.resp,
-                        finish=True,
-                        token_ids=[]
+                        finish=False,
+                        token_ids=torch.tensor([0])
                     )
                     outputs[session_id] = out
+                    self._set_has_runable_event(has_runable_event)
                 resp_que.put_nowait(outputs)
             else:
                 await asyncio.sleep(0.01)
@@ -887,7 +889,7 @@ class Engine:
             # migration task
             logger.debug('Starting async task Migration.')
             loop_msg_migration = event_loop.create_task(
-                self._async_loop_migration(resp_que),
+                self._async_loop_migration(resp_que, has_runable_event=has_runable_event),
                 name='MainLoopMigration')
 
             # binding done callback
