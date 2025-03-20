@@ -1,6 +1,3 @@
-[submodule "migration/Mooncake"]
-	path = migration/Mooncake
-	url = https://github.com/JimyMa/Mooncake.git
-[submodule "migration/Slime"]
-	path = migration/Slime
-	url = git@github.com:JimyMa/SlimeTransferEngine.git
+[submodule "HeadLM"]
+	path = HeadLM
+	url = git@github.com:zhhsplendid/HeadLM.git
