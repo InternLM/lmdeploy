@@ -30,7 +30,9 @@ import requests
 from tqdm.asyncio import tqdm
 from transformers import AutoTokenizer, PreTrainedTokenizer, PreTrainedTokenizerBase, PreTrainedTokenizerFast
 
-AIOHTTP_TIMEOUT = aiohttp.ClientTimeout(total=6 * 60 * 60)
+_no_profile_timeout = int(os.getenv('NO_PROFILE_TIMEOUT', '0'))
+
+AIOHTTP_TIMEOUT = aiohttp.ClientTimeout(total=None) if _no_profile_timeout else aiohttp.ClientTimeout(total=6 * 60 * 60)
 
 global args
 
