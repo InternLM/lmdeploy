@@ -349,6 +349,10 @@ class RayExecutor(ExecutorBase):
             self.migration_dag = self._compile_dag("migration_async")
         inputs = ray.put(inputs)
         self.migration_dag.execute(inputs)
+    
+    async def migrate(self, inputs):
+        jobs = (worker.migrate.remote() for worker in self.workers)
+        return await asyncio.gather(**jobs)
 
     async def get_output_async(self):
         """get output async."""

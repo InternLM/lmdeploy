@@ -52,7 +52,7 @@ async def add_worker(request: Request):
 async def add_worker(request: Request):
     raise NotImplementedError
 
-@app.post("/generate")
+@app.post("/v1/completions")
 async def generate(request: Request):
     client_data = await request.json()
     session_id = None

@@ -192,6 +192,10 @@ class WorkerWrapperBase:
         """get migration output async."""
         ret = await self.model_agent.get_migration_output_async()
         return ret
+    
+    async def migrate(self, inputs):
+        ret = await self.model_agent.migrate(inputs)
+        return ret
 
     def release(self):
         """stop engine loop."""

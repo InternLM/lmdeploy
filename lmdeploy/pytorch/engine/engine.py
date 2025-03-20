@@ -755,14 +755,21 @@ class Engine:
                     total_decode_block_ids.extend(decode_block_ids)
                     total_engine_ids.extend(engine_ids)
 
-                await self.executor.migration_async({
-                    "inputs": MigrationInputs(
+                # await self.executor.migration_async({
+                #     "inputs": MigrationInputs(
+                #         prefill_engine_id=total_engine_ids,
+                #         prefill_engine_config=dict(),
+                #         prefill_block_ids=total_prefill_block_ids,
+                #         decode_block_ids=total_decode_block_ids)
+                # })
+                # migration_outputs = await self.executor.get_migration_output_async()
+                migration_inputs = MigrationInputs(
                         prefill_engine_id=total_engine_ids,
                         prefill_engine_config=dict(),
                         prefill_block_ids=total_prefill_block_ids,
-                        decode_block_ids=total_decode_block_ids)
-                })
-                migration_outputs = await self.executor.get_migration_output_async()
+                        decode_block_ids=total_decode_block_ids
+                )
+                migration_outputs = await self.executor.migrate()
 
                 for msg in migration_running:
                     self.scheduler._set_message_status(msg, MessageStatus.FINISH_MIGRATION)

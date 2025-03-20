@@ -407,6 +407,13 @@ class AutoModelAgent:
                 if forward_event is not None:
                     forward_event.set()
     
+    async def migrate(self, inputs: MigrationInputs):
+        prefill_engine_block_ids = inputs.prefill_block_ids
+        decode_engine_block_ids = inputs.decode_block_ids
+        blocks_to_migrate = [[prefill_engine_id, prefill_engine_id, init_block_id, target_block_id]
+            for (prefill_engine_id, init_block_id, target_block_id) in zip(inputs.prefill_engine_id, decode_engine_block_ids, prefill_engine_block_ids)]
+        await self.cache_engine.migrate(blocks_to_migrate)
+
     async def _async_migration_step_background(self, inputs: MigrationInputs, output_que):
         prefill_engine_block_ids = inputs.prefill_block_ids
         decode_engine_block_ids = inputs.decode_block_ids
