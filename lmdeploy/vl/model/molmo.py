@@ -56,7 +56,7 @@ class MolmoVisionModel(VisonModel):
             if not isinstance(message['content'], List):
                 continue
             images = [x['image'] for x in message['content'] if x['type'] == 'image']
-            content = [x['text'] for x in message['content'] if x['type'] == 'text']
+            content = [x.get('text', '') for x in message['content'] if x['type'] == 'text']
             prompt = f' User: {content[0]}'
             tokens = self.processor.tokenizer.encode(prompt, add_special_tokens=False)
             # preprocess images. The output is a dict, which is

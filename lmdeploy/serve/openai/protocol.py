@@ -357,6 +357,7 @@ class GenerateRequest(BaseModel):
     repetition_penalty: float = 1.0
     ignore_eos: bool = False
     skip_special_tokens: Optional[bool] = True
+    spaces_between_special_tokens: Optional[bool] = True
     cancel: Optional[bool] = False  # cancel a responding request
     adapter_name: Optional[str] = Field(default=None, examples=[None])
     seed: Optional[int] = None

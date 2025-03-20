@@ -233,7 +233,7 @@ class InternVLVisionModel(VisonModel):
             elif message['role'] in ['preprocess', 'forward']:
                 continue
             n_images = len([1 for x in message['content'] if x['type'] == 'image'])
-            content = [x['text'] for x in message['content'] if x['type'] == 'text']
+            content = [x.get('text', '') for x in message['content'] if x['type'] == 'text']
             prompt = content[0]
             if IMAGE_TOKEN in prompt and f'<img>{IMAGE_TOKEN}' not in prompt:
                 prompt = prompt.replace(f'{IMAGE_TOKEN}', f'<img>{IMAGE_TOKEN}</img>')
