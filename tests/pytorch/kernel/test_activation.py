@@ -5,8 +5,8 @@ import torch
 class TestSiluAndMul:
 
     @pytest.fixture
-    def seqlen(self):
-        yield 256
+    def seqlen(self, request):
+        yield request.param
 
     @pytest.fixture
     def feat_size(self, request):
@@ -22,6 +22,7 @@ class TestSiluAndMul:
         gate = torch.nn.functional.silu(gate)
         yield gate * up
 
+    @pytest.mark.parametrize('seqlen', [65536, 256], indirect=True)
     @pytest.mark.parametrize('feat_size', [4096, 768], indirect=True)
     def test_silu_and_mul(self, x, gt):
         from lmdeploy.pytorch.kernels.cuda.activation import silu_and_mul
