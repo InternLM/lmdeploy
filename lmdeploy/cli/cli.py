@@ -234,6 +234,7 @@ class CLI(object):
             adapters = get_lora_adapters(args.adapters)
             engine_config = PytorchEngineConfig(dtype=args.dtype,
                                                 tp=args.tp,
+                                                ep=args.ep,
                                                 session_len=args.session_len,
                                                 cache_max_entry_count=args.cache_max_entry_count,
                                                 adapters=adapters,

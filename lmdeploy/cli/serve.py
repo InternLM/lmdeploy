@@ -286,6 +286,7 @@ class SubCliServe:
             adapters = get_lora_adapters(args.adapters)
             backend_config = PytorchEngineConfig(dtype=args.dtype,
                                                  tp=args.tp,
+                                                #  ep=args.ep,
                                                  max_batch_size=max_batch_size,
                                                  cache_max_entry_count=args.cache_max_entry_count,
                                                  block_size=args.cache_block_seq_len,

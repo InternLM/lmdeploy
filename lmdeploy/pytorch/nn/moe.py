@@ -62,7 +62,7 @@ class LinearWeights(nn.Module):
         self.weight_type = weight_type
         self.half_out = out_features // 2
 
-        if True: # zcx self.ep:
+        if self.ep:
             self.expert_map = dict((eid, idx) for idx, eid in enumerate(expert_list))
             self.weight.weight_loader = self.weight_loader_ep
         else:
@@ -77,12 +77,12 @@ class LinearWeights(nn.Module):
 
     def weight_loader_tp(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, expert_id: int, shard_id: str):
         # zcx begin
-        expert_list = self.expert_list
-        if expert_id not in expert_list:
-            return
+        # expert_list = self.expert_list
+        # if expert_id not in expert_list:
+        #     return
 
-        expert_map = dict((eid, idx) for idx, eid in enumerate(expert_list))
-        expert_id = expert_map[expert_id]
+        # expert_map = dict((eid, idx) for idx, eid in enumerate(expert_list))
+        # expert_id = expert_map[expert_id]
         # zcx end
         """weight loader."""
         world_size, rank = get_tp_world_rank()
@@ -426,7 +426,7 @@ class LinearWeightsBlockedF8(LinearWeights):
         scale = torch.nn.Parameter(scale, requires_grad=False)
         self.register_parameter('scale', scale)
 
-        if self.ep:
+        if self.ep == True:
             self.expert_map = dict((eid, idx) for idx, eid in enumerate(expert_list))
             #self.scale.weight_loader = self.weight_loader_ep
         #else:
@@ -487,14 +487,12 @@ class FusedMoEBlockedF8(nn.Module):
             device = torch.device('cpu')
         dtype = torch.float16 if dtype is None else dtype
         self.block_size = 128
-        impl_builder = get_backend().get_layer_impl_builder(OpType.FusedMoEBlockedF8)
-        self.impl = impl_builder.build(top_k, num_experts, renormalize, block_size=self.block_size, out_dtype=dtype)
+        dist_ctx = get_dist_manager().current_context()
         self.ep_size, rank = get_ep_world_rank()
-        enable_ep = self.ep_size > 1 #enable_ep and self.impl.support_ep()
-        
+        impl_builder = get_backend().get_layer_impl_builder(OpType.FusedMoEBlockedF8)
+        self.impl = impl_builder.build(top_k, num_experts, hidden_dim, renormalize, block_size=self.block_size, ep_size=self.ep_size, ep_group=dist_ctx.ep_gpu_group, out_dtype=dtype)
+        enable_ep = self.ep_size > 1
         if enable_ep:
-            # zcx
-            # world_size, rank = get_tp_world_rank()
             expert_list = self.impl.ep_expert_list(self.ep_size, rank)
             num_experts = len(expert_list)
         else:

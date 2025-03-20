@@ -1,3 +1,4 @@
+import datetime
 import os
 from lmdeploy import pipeline, PytorchEngineConfig
 from lmdeploy.messages import GenerationConfig
@@ -12,13 +13,19 @@ def main(rank: int):
     prompts = [
         'fast fox jump over the lazy dog.',
         'fast fox jump over the lazy dog.',
+        'fast fox jump over the lazy dog.',
+        'fast fox jump over the lazy dog.',
+        'fast fox jump over the lazy dog.',
+        'fast fox jump over the lazy dog.',
+        'fast fox jump over the lazy dog.',
+        'fast fox jump over the lazy dog.',
         ]
     prompts = prompts[rank:rank+1]
 
     backend_config = PytorchEngineConfig(
         tp=1,
         dp=2,
-        ep=2,
+        ep=1,
         dp_rank=rank,
         eager_mode=True,
     )
@@ -26,22 +33,25 @@ def main(rank: int):
         temperature=1.0,
         top_k=1,
         do_sample=True,
-        max_new_tokens=32,
+        max_new_tokens=64,
     )
 
-    os.environ['LMDEPLOY_DP_MASTER_ADDR'] = '127.0.0.1'
-    os.environ['LMDEPLOY_DP_MASTER_PORT'] = str(29555)
+    os.environ['LMDEPLOY_DP_MASTER_ADDR'] = '10.130.8.139'
+    os.environ['LMDEPLOY_DP_MASTER_PORT'] = str(29551)
     with pipeline(model_path, backend_config=backend_config, log_level=log_level) as pipe:
         outputs = pipe(prompts, gen_config=gen_config)
         print(outputs)
 
         dist.barrier()
+        # import time
+        # time.sleep(5)
 
 if __name__ == '__main__':
     handle_torchrun()
-    rank = int(os.environ['RANK'])
-    os.environ['CUDA_VISIBLE_DEVICES'] = str(rank)
-    dist.init_process_group()
+    rank = int(os.environ['LOCAL_RANK'])
+    print(f"local rank : {rank}")
+    os.environ['CUDA_VISIBLE_DEVICES'] = str(rank+2)
+    dist.init_process_group(backend='nccl', timeout=datetime.timedelta(90))
     try:
         main(rank)
     finally:

@@ -7,6 +7,7 @@ from torch import distributed as dist
 from lmdeploy.pytorch.backends.cuda.deepep_moe import DeepEPMoE
 from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.pytorch.kernels.cuda import fused_moe, fused_moe_w8a8
+from lmdeploy.pytorch.kernels.cuda.fused_moe import _renormalize
 from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import fused_moe_blocked_fp8
 from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
 from lmdeploy.pytorch.kernels.cuda.w8a8_triton_kernels import per_token_quant_int8
@@ -261,6 +262,10 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
                 down_scale: torch.Tensor,
                 expert_list: List[int] = None):
         """forward."""
+        # dist_ctx = get_dist_manager().current_context()
+        # if dist_ctx.ep_rank == 0:
+
+        topk_weights = _renormalize(topk_weights, self.renormalize)
         recv_hidden_states, recv_topk_ids, recv_topk_weights, tokens_per_expert = (
             self.deepep_dispatcher.token_permutation(
                 hidden_states,
@@ -283,21 +288,25 @@ class TritonFusedMoEBlockedF8Builder(FusedMoEBlockedF8Builder):
     @staticmethod
     def build(top_k: int,
               num_experts: int,
+              hidden_dim: int,
               renormalize: bool = False,
               block_size: int = 128,
+              ep_size: int = 1,
+              ep_group: dist.ProcessGroup = None,
               out_dtype: torch.dtype = torch.float16):
         """build from mlp."""
-        dist_ctx = get_dist_manager().current_context()
-        return FusedDeepEpMoEBlockedF8Impl(ep_size=dist_ctx.ep,
-                                           ep_group=dist_ctx.ep_gpu_group,
-                                           top_k=top_k,
-                                           num_experts=num_experts,
-                                           hidden_dim=7168,
-                                           renormalize=renormalize,
-                                           block_size=block_size,
-                                           out_dtype=out_dtype)
-        # return TritonFusedMoEBlockedF8Impl(top_k=top_k,
-        #                                    num_experts=num_experts,
-        #                                    renormalize=renormalize,
-        #                                    block_size=block_size,
-        #                                    out_dtype=out_dtype)
+        if ep_size > 1:
+            return FusedDeepEpMoEBlockedF8Impl(ep_size=ep_size,
+                                            ep_group=ep_group,
+                                            top_k=top_k,
+                                            num_experts=num_experts,
+                                            hidden_dim=hidden_dim,
+                                            renormalize=renormalize,
+                                            block_size=block_size,
+                                            out_dtype=out_dtype)
+        else:
+            return TritonFusedMoEBlockedF8Impl(top_k=top_k,
+                                            num_experts=num_experts,
+                                            renormalize=renormalize,
+                                            block_size=block_size,
+                                            out_dtype=out_dtype)
