@@ -53,10 +53,10 @@ LMdeploy 使用 Ray 来构建多节点集群。在接下来的步骤中，我们
 ray start --head --port=6379
 ```
 
-在从节点上启动并加入 Ray 集群，假设主节点的 IP 是 `xxx`，端口是 `6379`（请按需修改）：
+在从节点上启动并加入 Ray 集群，请按需修改主节点 ip 和 port：
 
 ```bash
-ray start --address=xxx:6379
+ray start --address=${head_node_ip}:6379
 ```
 
 使用以下命令在主节点和从节点上检查 Ray 集群状态。您应该能够看到包含多节点信息的 Ray 集群状态。
@@ -85,7 +85,7 @@ backend="lmdeploy"
 dataset_name="random"
 dataset_path="./benchmark/ShareGPT_V3_unfiltered_cleaned_split.json"
 
-echo ">>> tp: ${tp}, num_prompts: ${num_prompts}, dataset: ${dataset_name}"
+echo ">>> num_prompts: ${num_prompts}, dataset: ${dataset_name}"
 
 for in_len in 2048
 do
@@ -101,8 +101,7 @@ do
             --dataset-path ${dataset_path} \
             --num-prompts ${num_prompts} \
             --random-input-len ${in_len} \
-            --random-output-len ${out_len} \
-            --output-file "./benchmark/res/api_n${num_prompts}_in${in_len}_out${out_len}_dsv3.csv"
+            --random-output-len ${out_len}
     done
 
 done

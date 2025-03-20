@@ -53,10 +53,10 @@ Start the ray cluster on the head node. The default port in Ray is 6379 (change 
 ray start --head --port=6379
 ```
 
-Start on the slave nodes to join in the ray cluster, suppose the head node ip is `xxx` and port is `6379` (change it to your own):
+Start on the slave nodes to join in the ray cluster, change the ip and port to your own:
 
 ```bash
-ray start --address=xxx:6379
+ray start --address=${head_node_ip}:6379
 ```
 
 Use the following commands to check the ray cluster status on both head and slave nodes. You should be able to see the ray cluster status of multiple nodes information.
@@ -85,7 +85,7 @@ backend="lmdeploy"
 dataset_name="random"
 dataset_path="./benchmark/ShareGPT_V3_unfiltered_cleaned_split.json"
 
-echo ">>> tp: ${tp}, num_prompts: ${num_prompts}, dataset: ${dataset_name}"
+echo ">>> num_prompts: ${num_prompts}, dataset: ${dataset_name}"
 
 for in_len in 2048
 do
@@ -101,8 +101,7 @@ do
             --dataset-path ${dataset_path} \
             --num-prompts ${num_prompts} \
             --random-input-len ${in_len} \
-            --random-output-len ${out_len} \
-            --output-file "./benchmark/res/api_n${num_prompts}_in${in_len}_out${out_len}_dsv3.csv"
+            --random-output-len ${out_len}
     done
 
 done
