@@ -153,6 +153,21 @@ class ArgumentHelper:
                                    help='GPU number used in tensor parallelism. Should be 2^n')
 
     @staticmethod
+    def dp(parser):
+        """Add argument dp to parser."""
+
+        return parser.add_argument('--dp', type=int, default=1, help='data parallelism. dp_rank is required.')
+
+    @staticmethod
+    def dp_rank(parser):
+        """add argument dp_rank to parser."""
+
+        return parser.add_argument('--dp-rank',
+                                   type=int,
+                                   default=0,
+                                   help='data parallelism rank, all ranks between 0 ~ dp should be created.')
+
+    @staticmethod
     def session_id(parser):
         """Add argument session_id to parser."""
 
