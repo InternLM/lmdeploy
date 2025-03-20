@@ -314,7 +314,7 @@ class RayExecutor(ExecutorBase):
         self.collective_rpc('stop')
         if self._prefetch_task is not None:
             self._prefetch_task.cancel()
-            self._prefetch_migration_task.cancel()
+            # self._prefetch_migration_task.cancel()
 
     def release(self):
         """release."""
@@ -349,8 +349,8 @@ class RayExecutor(ExecutorBase):
         self.migration_dag.execute(inputs)
     
     async def migrate(self, inputs):
-        jobs = (worker.migrate.remote() for worker in self.workers)
-        return await asyncio.gather(**jobs)
+        jobs = (worker.migrate.remote(inputs) for worker in self.workers)
+        return await asyncio.gather(*jobs)
 
     async def get_output_async(self):
         """get output async."""

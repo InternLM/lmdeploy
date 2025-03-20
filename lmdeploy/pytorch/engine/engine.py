@@ -357,12 +357,12 @@ class Engine:
                     block_ids=req.data['block_ids'],
                     remote_token_ids=req.data['remote_token_ids']
                 )
-                print(req.data["block_ids"])
                 msg = next(iter(sess.sequences.values()))
                 __update_max_new_tokens(msg)
-                status = MessageStatus.WAITING if not migration else MessageStatus.WAITING_MIGRATION
+                status = MessageStatus.WAITING
+                if migration or self.cache_config.role == EngineRole.decode: 
+                    status = MessageStatus.WAITING_MIGRATION
                 self.scheduler.add_sequence(msg, status)
-                print(msg.status)
             else:
                 msg = next(iter(sess.sequences.values()))
                 msg.update_token_ids(
@@ -636,7 +636,11 @@ class Engine:
 
         if prefill is None:
             prefill = self._do_prefill()
-        scheduler_output = self.scheduler.schedule(is_prefill=prefill, prealloc_size=prefill_interval)
+        scheduler_output = self.scheduler.schedule(
+            is_prefill=prefill,
+            prealloc_size=prefill_interval,
+            is_migration=self.cache_config.role == EngineRole.Decode
+        )
         # schedule decoding if no valid prefill reqs.
         if prefill and len(scheduler_output.running) == 0:
             prefill = False
@@ -739,8 +743,6 @@ class Engine:
         while True:
             migration_running = self.scheduler._schedule_migration()
 
-            print("migration_running:", migration_running)
-
             if migration_running:
                 total_prefill_block_ids = []
                 total_decode_block_ids = []
@@ -755,24 +757,16 @@ class Engine:
                     total_decode_block_ids.extend(decode_block_ids)
                     total_engine_ids.extend(engine_ids)
 
-                # await self.executor.migration_async({
-                #     "inputs": MigrationInputs(
-                #         prefill_engine_id=total_engine_ids,
-                #         prefill_engine_config=dict(),
-                #         prefill_block_ids=total_prefill_block_ids,
-                #         decode_block_ids=total_decode_block_ids)
-                # })
-                # migration_outputs = await self.executor.get_migration_output_async()
                 migration_inputs = MigrationInputs(
                         prefill_engine_id=total_engine_ids,
                         prefill_engine_config=dict(),
                         prefill_block_ids=total_prefill_block_ids,
                         decode_block_ids=total_decode_block_ids
                 )
-                migration_outputs = await self.executor.migrate(migration_inputs)
+                await self.executor.migrate(migration_inputs)
 
                 for msg in migration_running:
-                    self.scheduler._set_message_status(msg, MessageStatus.FINISH_MIGRATION)
+                    self.scheduler._set_message_status(msg, MessageStatus.WAITING)
 
                 # generate output
                 outputs: Dict[int, InferOutput] = dict()
@@ -787,7 +781,7 @@ class Engine:
                     outputs[session_id] = out
                 resp_que.put_nowait(outputs)
             else:
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.01)
 
     @torch.inference_mode()
     async def _async_loop_main(self, resp_que: asyncio.Queue, has_runable_event: asyncio.Event):

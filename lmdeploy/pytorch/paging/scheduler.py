@@ -190,7 +190,7 @@ class Scheduler:
         return running_migration
 
     @logging_timer('SchedulePrefilling', logger)
-    def _schedule_prefill(self):
+    def _schedule_prefill(self, is_migration=False):
         """Schedule for prefilling."""
 
         max_batches = self.scheduler_config.max_batches - self.num_running() - self.num_locked()
@@ -228,16 +228,17 @@ class Scheduler:
         while len(waiting) > 0 and len(running) < max_batches:
             seq = waiting.pop(0)
 
-            if (len(running) > 0 and token_count + seq.num_token_ids > self.cache_config.max_prefill_token_num):
-                break
+            if not is_migration:
+                if (len(running) > 0 and token_count + seq.num_token_ids > self.cache_config.max_prefill_token_num):
+                    break
 
-            self.block_trie.match(seq)
+                self.block_trie.match(seq)
 
-            if not __evict_for_seq(seq, waiting):
-                break
+                if not __evict_for_seq(seq, waiting):
+                    break
 
-            # allocate session memory
-            self.block_manager.allocate(seq)
+                # allocate session memory
+                self.block_manager.allocate(seq)
             _to_running(seq)
 
         return running, swap_in_map, swap_out_map, copy_map
@@ -285,10 +286,10 @@ class Scheduler:
 
         return self.running, swap_in_map, swap_out_map, copy_map
 
-    def schedule(self, is_prefill: bool, prealloc_size: int = 0):
+    def schedule(self, is_prefill: bool, prealloc_size: int = 0, is_migration=False):
         """Schedule inputs for next steps."""
         if is_prefill:
-            output = self._schedule_prefill()
+            output = self._schedule_prefill(is_migration=False)
         else:
             output = self._schedule_decoding(prealloc_size)
         running, swap_in_map, swap_out_map, copy_map = output
