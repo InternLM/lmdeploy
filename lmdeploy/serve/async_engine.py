@@ -433,6 +433,8 @@ class AsyncEngine(LogitsMixin):
     async def migrate(self, migration_request):
         session_id = migration_request["session_id"]
         async with self.model_inst(session_id) as inst:
+            print("????")
+            print(inst.async_migrate)
             await inst.async_migrate(session_id=session_id, input_ids=migration_request["input_ids"], block_ids=migration_request["block_ids"])
             return
 

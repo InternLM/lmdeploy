@@ -223,6 +223,7 @@ class CacheEngine:
         return
 
     async def migrate(self, blocks_to_migration):
+        print("????")
         head_dim = self.model_config.get_head_size()
         num_heads = self.model_config.num_key_value_heads // self.world_size
         block_size = self.cache_config.block_size
@@ -240,7 +241,6 @@ class CacheEngine:
             source_offset = [int(block_to_migration[2]) * length + layer * layer_stride for layer in range(self.model_config.num_layers)]
             target_offset = [int(block_to_migration[3]) * length + layer * layer_stride_remote for layer in range(self.model_config.num_layers)]
             for tgt_offset, src_offset in zip(target_offset, source_offset):
-                print(tgt_offset, src_offset)
                 await self.transfer_engine.r_rdma_async(
                     engine_id,
                     "k",

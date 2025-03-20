@@ -196,8 +196,10 @@ class EngineInstance:
                             **kwargs):
         """Send migration request."""
         assert block_ids, "block ids must be set"
-        if len(input_ids) > self.max_input_len:
-            return EngineOutput(ResponseType.INPUT_LENGTH_ERROR, [], 0)
+        print("?????????????sdfsdfsdf")
+        # if len(input_ids) > self.max_input_len:
+        #     return EngineOutput(ResponseType.INPUT_LENGTH_ERROR, [], 0)
+        print("?????????????sdfsdfsdf")
         gen_config = gen_config or GenerationConfig()
         sampling_param = SamplingParam.from_gen_config(gen_config=gen_config)
         self.req_sender.send_async(RequestType.ADD_SESSION, dict(session_id=session_id, response=False, migration=True))

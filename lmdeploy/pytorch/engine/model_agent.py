@@ -410,27 +410,20 @@ class AutoModelAgent:
     async def _async_migration_step_background(self, inputs: MigrationInputs, output_que):
         prefill_engine_block_ids = inputs.prefill_block_ids
         decode_engine_block_ids = inputs.decode_block_ids
-        blocks_to_migrate = torch.tensor(
-            [[prefill_engine_id, prefill_engine_id, init_block_id, target_block_id]
-            for (prefill_engine_id, init_block_id, target_block_id) in zip(inputs.prefill_engine_id, decode_engine_block_ids, prefill_engine_block_ids)])
-        print(inputs.prefill_engine_id, decode_engine_block_ids, prefill_engine_block_ids)
-        print(blocks_to_migrate)
+        blocks_to_migrate = [[prefill_engine_id, prefill_engine_id, init_block_id, target_block_id]
+            for (prefill_engine_id, init_block_id, target_block_id) in zip(inputs.prefill_engine_id, decode_engine_block_ids, prefill_engine_block_ids)]
 
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, self.cache_engine.migrate, blocks_to_migrate)
-        print("DDDFFF")
+        await self.cache_engine.migrate(blocks_to_migrate)
 
-        # self.cache_engine.migrate(blocks_to_migrate)
-
-        tensor_to_gather = torch.tensor([self.rank], dtype=torch.float32)
+        # tensor_to_gather = torch.tensor([self.rank], dtype=torch.float32)
         # 定义一个列表，用于存储收集到的张量
-        gathered_tensors = [torch.zeros_like(tensor_to_gather) for _ in range(self.dist_ctx.world_size)]
-        dist.gather(tensor_to_gather, gather_list=gathered_tensors if self.rank == 0 else None, dst=0, group=self.dist_ctx.world_cpu_group)
+        # gathered_tensors = [torch.zeros_like(tensor_to_gather) for _ in range(self.dist_ctx.world_size)]
+        # dist.gather(tensor_to_gather, gather_list=gathered_tensors if self.rank == 0 else None, dst=0, group=self.dist_ctx.world_cpu_group)
 
         if self.tp_rank % self.tp == 0:
             output = dict()
             output_que.put_nowait(output)
-            print(tensor_to_gather, gathered_tensors)
+            # print(tensor_to_gather, gathered_tensors)
 
     @torch.inference_mode()
     async def _async_migration_loop_background(self, forward_event: asyncio.Event = None):
