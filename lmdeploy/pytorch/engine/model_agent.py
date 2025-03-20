@@ -474,10 +474,10 @@ class AutoModelAgent:
 
         self._migration_in_que = asyncio.Queue()
         self._migration_out_que = asyncio.Queue()
-        self._migration_background_task = event_loop.create_task(self._async_migration_loop_background(forward_event),
-                                                                 name='ModelAgentMigrationLoop')
-        done_callback = functools.partial(self._on_finish_callback, ptask=asyncio.current_task())
-        self._migration_background_task.add_done_callback(done_callback)
+        # self._migration_background_task = event_loop.create_task(self._async_migration_loop_background(forward_event),
+        #                                                          name='ModelAgentMigrationLoop')
+        # done_callback = functools.partial(self._on_finish_callback, ptask=asyncio.current_task())
+        # self._migration_background_task.add_done_callback(done_callback)
 
     def stop(self):
         """stop task."""

@@ -769,7 +769,7 @@ class Engine:
                         prefill_block_ids=total_prefill_block_ids,
                         decode_block_ids=total_decode_block_ids
                 )
-                migration_outputs = await self.executor.migrate()
+                migration_outputs = await self.executor.migrate(migration_inputs)
 
                 for msg in migration_running:
                     self.scheduler._set_message_status(msg, MessageStatus.FINISH_MIGRATION)

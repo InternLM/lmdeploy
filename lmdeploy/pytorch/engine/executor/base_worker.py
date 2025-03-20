@@ -46,7 +46,7 @@ class WorkerWrapperBase:
         self.out_que: asyncio.Queue = None
         self._output_loop: asyncio.Task = None
 
-        self.migration_out_que: asyncio.Queue = None
+        # self.migration_out_que: asyncio.Queue = None
         self._migration_output_loop: asyncio.Task = None
 
     def init_process_group(self, rank: int, master_addr: str = None, master_port: str = None):
@@ -72,15 +72,15 @@ class WorkerWrapperBase:
             self.out_que.put_nowait(ret)
             await asyncio.sleep(0.000001)
     
-    async def _get_migration_outputs_loop(self):
-        """get migration outputs loop."""
-        assert self.migration_out_que is not None
-        while True:
-            ret = await self.get_migration_output_async()
-            ret = self.pack_output(ret)
-            self.migration_out_que.put_nowait(ret)
-            print("base worker migration_out_que: ", ret)
-            await asyncio.sleep(0.000001)
+    # async def _get_migration_outputs_loop(self):
+    #     """get migration outputs loop."""
+    #     assert self.migration_out_que is not None
+    #     while True:
+    #         ret = await self.get_migration_output_async()
+    #         ret = self.pack_output(ret)
+    #         self.migration_out_que.put_nowait(ret)
+    #         print("base worker migration_out_que: ", ret)
+    #         await asyncio.sleep(0.000001)
 
     async def get_outputs(self):
         """get outputs."""
@@ -163,8 +163,8 @@ class WorkerWrapperBase:
         self.out_que = asyncio.Queue()
         self._output_loop = event_loop.create_task(self._get_outputs_loop(), name='GetOutputsLoop')
 
-        self.migration_out_que = asyncio.Queue()
-        self._migration_output_loop = event_loop.create_task(self._get_migration_outputs_loop(), name='GetMigrationoutputsLoop')
+        # self.migration_out_que = asyncio.Queue()
+        # self._migration_output_loop = event_loop.create_task(self._get_migration_outputs_loop(), name='GetMigrationoutputsLoop')
 
     def stop(self):
         """stop engine loop."""

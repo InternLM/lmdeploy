@@ -308,8 +308,6 @@ class RayExecutor(ExecutorBase):
         self.remote_migration_outs = asyncio.Queue()
         event_loop = asyncio.get_event_loop()
         self._prefetch_task = event_loop.create_task(self._prefetch_outputs())
-        for i in range(len(self.workers)):
-            self._prefetch_migration_task = event_loop.create_task(self._prefetch_migration_outputs())
 
     def stop(self):
         """stop engine loop."""
