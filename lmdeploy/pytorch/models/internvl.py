@@ -318,6 +318,7 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
         x = x.permute(0, 2, 1, 3).contiguous()
         return x
 
+    @torch.compile(mode="max-autotune-no-cudagraphs")
     def extract_feature(self, pixel_values):
         """extract vision feature."""
         assert self.select_layer == -1
@@ -350,6 +351,7 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
     ):
         if inputs_embeds is None and pixel_values is not None:
             # extract feature
+            torch._dynamo.mark_dynamic(pixel_values, 0)
             vit_embeds = self.extract_feature(pixel_values)
             lang_embeds = self.language_model.get_input_embeddings()(input_ids)
             lang_embeds.masked_scatter_(image_mask[..., None], vit_embeds)
