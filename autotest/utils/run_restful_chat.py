@@ -327,6 +327,7 @@ def run_reasoning_case(config, port: int = DEFAULT_PORT):
         final_content = ''
         final_reasoning_content = ''
         for stream_response in response:
+            print(stream_response)
             final_content += stream_response.choices[0].delta.content
             final_reasoning_content += stream_response.choices[0].delta.reasoning_content
             outputList.append(stream_response)
@@ -337,6 +338,7 @@ def run_reasoning_case(config, port: int = DEFAULT_PORT):
 
     with allure.step('step2 - batch'):
         response = client.chat.completions.create(model=model_name, messages=messages, temperature=0.01, stream=False)
+        print(response)
         reasoning_content = response.choices[0].message.reasoning_content
         content = response.choices[0].message.content
         file.writelines(str(outputList) + '\n')
@@ -622,6 +624,7 @@ def run_tools_case(config, port: int = DEFAULT_PORT):
                                                   temperature=0.01,
                                                   stream=False,
                                                   tools=tools)
+        print(response)
         assert response.choices[0].finish_reason == 'tool_calls'
         assert response.choices[0].message.tool_calls[0].function.name == 'get_current_weather'
         assert 'Boston' in response.choices[0].message.tool_calls[0].function.arguments

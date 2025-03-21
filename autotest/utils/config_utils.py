@@ -7,23 +7,16 @@ from utils.get_run_config import get_tp_num
 from lmdeploy.utils import is_bf16_supported
 
 
-def get_turbomind_model_list(tp_num: int = None,
-                             model_type: str = 'chat_model',
-                             quant_policy: int = None,
-                             is_converted: bool = False):
+def get_turbomind_model_list(tp_num: int = None, model_type: str = 'chat_model', quant_policy: int = None):
     config = get_config()
 
     if quant_policy is None:
-        case_list_base = copy.deepcopy(config.get('turbomind_' + model_type))
+        case_list = copy.deepcopy(config.get('turbomind_' + model_type))
     else:
-        case_list_base = [
+        case_list = [
             x for x in config.get('turbomind_' + model_type)
             if x not in config.get('turbomind_quatization').get('no_kvint' + str(quant_policy))
         ]
-    if is_converted:
-        case_list =  [x for x in case_list_base if x in config.get('turbomind_quatization').get('converted')]
-    else:
-        case_list = copy.deepcopy(case_list_base)
 
     quatization_case_config = config.get('turbomind_quatization')
     for key in config.get('turbomind_' + model_type):

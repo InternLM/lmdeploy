@@ -251,6 +251,12 @@ def test_restful_chat_reasoning_tp2(config, worker_id):
         'extra': ' --tool-call-parser internlm'
     },
     {
+        'model': 'internlm/internlm3-8b-instruct',
+        'cuda_prefix': None,
+        'tp_num': 1,
+        'extra': ' --tool-call-parser internlm'
+    },
+    {
         'model': 'Qwen/Qwen2.5-7B-Instruct',
         'cuda_prefix': None,
         'tp_num': 1,

@@ -182,12 +182,6 @@ jobs:
         run: |
           pytest autotest/tools/quantization/test_quantization_w8a8.py -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Test lmdeploy - convert
-        continue-on-error: true
-        if: github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.backend), 'turbomind')
-        run: |
-          pytest autotest/tools/convert -m 'not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Clear workfile
         if: always()
         run: |
@@ -262,14 +256,6 @@ jobs:
           rm -rf /nvme/qa_test_models/autotest_model/log/*
           mkdir ${{env.REPORT_DIR}}/.pytest_cache -p
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
-      - name: Test lmdeploy - chat workspace
-        continue-on-error: true
-        if: matrix.backend == 'turbomind' && matrix.model == 'llm' && matrix.function == 'chat'
-        run: |
-          pytest autotest/tools/chat/test_command_chat_workspace.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/tools/chat/test_command_chat_workspace.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - chat
         continue-on-error: true
         if: (matrix.backend == 'pytorch' || matrix.backend == 'turbomind') && matrix.model == 'llm' && matrix.function == 'chat'
@@ -299,16 +285,6 @@ jobs:
           pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
           pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_4 and not pr_test' -n 2 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-      - name: Test lmdeploy - restful workspace
-        continue-on-error: true
-        if: matrix.backend == 'turbomind' && matrix.model == 'llm' && matrix.function == 'restful'
-        run: |
-          pytest autotest/tools/restful/test_restful_chat_workspace.py -m 'gpu_num_1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S') || true
-          pytest autotest/tools/restful/test_restful_chat_workspace.py -m 'gpu_num_2 and not pr_test' -n 4 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
-          pytest autotest/tools/restful/test_restful_chat_workspace.py -m 'gpu_num_4 and not pr_test' -n 2 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           mv .coverage ${{env.REPORT_DIR}}/.coverage.$(date +'%Y%m%d%H%M%S')
       - name: Test lmdeploy - local testcase
         if: matrix.backend == 'turbomind' && matrix.model == 'llm' && matrix.function == 'local_case'
