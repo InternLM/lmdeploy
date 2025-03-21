@@ -409,7 +409,7 @@ def gemm_fp8_fp8_bf16_nt(lhs: Tuple[torch.Tensor, torch.Tensor], rhs: Tuple[torc
     # Auto-tuning with compilation
     from deep_gemm.jit_kernels.gemm import get_best_configs, get_num_sms, includes, jit_tuner, template
     num_sms = get_num_sms()
-    block_m, block_n, num_stages, num_tma_multicast, smem_size = get_best_configs(m, n, k, 1, num_sms)
+    num_sms, block_m, block_n, num_stages, num_tma_multicast, smem_size = get_best_configs(m, n, k, 1, num_sms)
     args = (lhs, lhs_scales, rhs, rhs_scales, out, m, torch.cuda.current_stream(), num_sms, smem_size)
     runtime = jit_tuner.compile_and_tune(name='gemm_fp8_fp8_bf16_nt',
                                          keys={
