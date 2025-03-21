@@ -334,7 +334,7 @@ def run_reasoning_case(config, port: int = DEFAULT_PORT):
             outputList.append(stream_response)
         file.writelines(str(outputList) + '\n')
         with assume:
-            assert '' in final_reasoning_content and '' in final_reasoning_content and len(outputList) > 1, str(
+            assert '9.11' in final_reasoning_content and '9.11' in final_content and len(outputList) > 1, str(
                 outputList)
 
     with allure.step('step2 - batch'):
@@ -344,7 +344,7 @@ def run_reasoning_case(config, port: int = DEFAULT_PORT):
         content = response.choices[0].message.content
         file.writelines(str(outputList) + '\n')
         with assume:
-            assert ' ' in reasoning_content and ' ' in content and len(outputList) > 1, str(outputList)
+            assert '9.11' in reasoning_content and '9.11' in content and len(outputList) > 1, str(outputList)
 
     file.close()
     allure.attach.file(restful_log, attachment_type=allure.attachment_type.TEXT)
