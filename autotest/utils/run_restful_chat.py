@@ -329,7 +329,7 @@ def run_reasoning_case(config, port: int = DEFAULT_PORT):
         for stream_response in response:
             if stream_response.choices[0].delta.content is not None:
                 final_content += stream_response.choices[0].delta.content
-            if stream_response.choices[0].delta.reasoning_content is not None
+            if stream_response.choices[0].delta.reasoning_content is not None:
                 final_reasoning_content += stream_response.choices[0].delta.reasoning_content
             outputList.append(stream_response)
         file.writelines(str(outputList) + '\n')
