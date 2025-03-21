@@ -151,16 +151,18 @@ class LoRA(nn.Module):
 class BlockedF8Linear(nn.Module):
     """blocked f8 linear."""
 
-    def __init__(self,
-                 in_features: int,
-                 out_features: int,
-                 bias: bool,
-                 dtype: Optional[torch.dtype] = None,
-                 device: Optional[torch.device] = None,
-                 fp8_dtype: torch.dtype = torch.float8_e4m3fn,
-                 colwise: bool = True,
-                 is_tp: bool = False,
-                 all_reduce: bool = True):
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        bias: bool,
+        dtype: Optional[torch.dtype] = None,
+        device: Optional[torch.device] = None,
+        fp8_dtype: torch.dtype = torch.float8_e4m3fn,
+        colwise: bool = True,
+        is_tp: bool = False,
+        all_reduce: bool = True,
+    ):
         super().__init__()
         if device is None:
             device = torch.device('cpu')
@@ -1295,15 +1297,17 @@ def build_linear(in_features: int,
             fp8_dtype = torch.float8_e5m2
         else:
             raise TypeError(f'Unsupported fp8 fmt: {fmt}')
-        return BlockedF8Linear(in_features,
-                               out_features,
-                               bias=bias,
-                               fp8_dtype=fp8_dtype,
-                               dtype=dtype,
-                               device=device,
-                               colwise=colwise,
-                               is_tp=is_tp,
-                               all_reduce=all_reduce)
+        return BlockedF8Linear(
+            in_features,
+            out_features,
+            bias=bias,
+            fp8_dtype=fp8_dtype,
+            dtype=dtype,
+            device=device,
+            colwise=colwise,
+            is_tp=is_tp,
+            all_reduce=all_reduce,
+        )
     else:
         raise RuntimeError(f'Unsupported quant method: {quant_method}')
 

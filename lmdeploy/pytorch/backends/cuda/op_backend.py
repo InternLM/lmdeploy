@@ -65,9 +65,6 @@ class CudaOpsBackend(DefaultOpsBackend):
         elif layer_type == OpType.LinearBlockedF8:
             from .blockedf8_modules import TritonLinearBlockedF8Builder
             return TritonLinearBlockedF8Builder
-        elif layer_type == OpType.DeepGemmBlockedF8:
-            from .blockedf8_modules import DeepGemmLinearBlockedF8Builder
-            return DeepGemmLinearBlockedF8Builder
         else:
             logger.debug(f'Op {layer_type} fallback to default implementation.')
             return super().get_layer_impl_builder(layer_type)
