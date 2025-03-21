@@ -121,7 +121,7 @@ class Internlm2ToolParser(ToolParser):
                     delta = None
                 # first time to get parameters
                 elif cur_arguments and not prev_arguments:
-                    cur_arguments_json = json.dumps(cur_arguments)
+                    cur_arguments_json = json.dumps(cur_arguments, ensure_ascii=False)
 
                     arguments_delta = cur_arguments_json[:cur_arguments_json.index(delta_text) + len(delta_text)]
                     delta = DeltaMessage(tool_calls=[
@@ -132,8 +132,8 @@ class Internlm2ToolParser(ToolParser):
                     self.streamed_args_for_tool[self.current_tool_id] += arguments_delta
                 # both prev and cur parameters, send the increase parameters
                 elif cur_arguments and prev_arguments:
-                    cur_args_json = json.dumps(cur_arguments)
-                    prev_args_json = json.dumps(prev_arguments)
+                    cur_args_json = json.dumps(cur_arguments, ensure_ascii=False)
+                    prev_args_json = json.dumps(prev_arguments, ensure_ascii=False)
 
                     argument_diff = extract_intermediate_diff(cur_args_json, prev_args_json)
 
@@ -167,8 +167,9 @@ class Internlm2ToolParser(ToolParser):
             action = action.split('<|action_end|>'.strip())[0]
             action = action[action.find('{'):]
             action_dict = json.loads(action)
-            name, parameters = action_dict['name'], json.dumps(
-                action_dict.get('parameters', action_dict.get('arguments', {})))
+            name, parameters = action_dict['name'], json.dumps(action_dict.get('parameters',
+                                                                               action_dict.get('arguments', {})),
+                                                               ensure_ascii=False)
 
             if not tools or name not in [t.function.name for t in tools]:
                 ExtractedToolCallInformation(tools_called=False, tool_calls=[], content=text)
