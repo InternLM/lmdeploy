@@ -5,8 +5,11 @@ import torch
 
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import blocked_gemm_fp8, deep_gemm_fp8, quant_fp8, quant_fp8_tma
+from lmdeploy.utils import get_logger
 
 from ..blockedf8_modules import LinearBlockedF8Builder, LinearBlockedF8Impl
+
+logger = get_logger('lmdeploy')
 
 
 class TritonLinearBlockedF8Impl(LinearBlockedF8Impl):
@@ -48,6 +51,7 @@ class TritonLinearBlockedF8Builder(LinearBlockedF8Builder):
         """build."""
         try:
             import deep_gemm  # noqa
+            logger.debug('build with DeepGemmLinearBlockedF8Impl')
             return DeepGemmLinearBlockedF8Impl(in_features, out_features, block_size, dtype)
         except:  # noqa
             return TritonLinearBlockedF8Impl(in_features, out_features, block_size, dtype)
