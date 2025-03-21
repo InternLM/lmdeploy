@@ -626,10 +626,14 @@ def run_tools_case(config, port: int = DEFAULT_PORT):
                                                   stream=False,
                                                   tools=tools)
         print(response)
-        assert response.choices[0].finish_reason == 'tool_calls'
-        assert response.choices[0].message.tool_calls[0].function.name == 'get_current_weather'
-        assert 'Boston' in response.choices[0].message.tool_calls[0].function.arguments
-        assert response.choices[0].message.tool_calls[0].type == 'function'
+        with assume: 
+            assert response.choices[0].finish_reason == 'tool_calls'
+        with assume:
+            assert response.choices[0].message.tool_calls[0].function.name == 'get_current_weather'
+        with assume:
+            assert 'Boston' in response.choices[0].message.tool_calls[0].function.arguments
+        with assume:
+            assert response.choices[0].message.tool_calls[0].type == 'function'
         file.writelines(str(response) + '\n')
 
     with allure.step('step2 - search prompt'):
@@ -657,10 +661,14 @@ def run_tools_case(config, port: int = DEFAULT_PORT):
                                                   stream=False,
                                                   tools=tools)
         print(response)
-        assert response.choices[0].finish_reason == 'tool_calls'
-        assert response.choices[0].message.tool_calls[0].function.name == 'search'
-        assert '人工智能' in response.choices[0].message.tool_calls[0].function.arguments
-        assert response.choices[0].message.tool_calls[0].type == 'function'
+        with assume:
+            assert response.choices[0].finish_reason == 'tool_calls'
+        with assume:
+            assert response.choices[0].message.tool_calls[0].function.name == 'search'
+        with assume:
+            assert '人工智能' in response.choices[0].message.tool_calls[0].function.arguments
+        with assume:
+            assert response.choices[0].message.tool_calls[0].type == 'function'
         file.writelines(str(response) + '\n')
 
     with allure.step('step3 - multiple_round_prompt'):
