@@ -327,9 +327,10 @@ def run_reasoning_case(config, port: int = DEFAULT_PORT):
         final_content = ''
         final_reasoning_content = ''
         for stream_response in response:
-            print(stream_response)
-            final_content += stream_response.choices[0].delta.content
-            final_reasoning_content += stream_response.choices[0].delta.reasoning_content
+            if stream_response.choices[0].delta.content is not None:
+                final_content += stream_response.choices[0].delta.content
+            if stream_response.choices[0].delta.reasoning_content is not None
+                final_reasoning_content += stream_response.choices[0].delta.reasoning_content
             outputList.append(stream_response)
         file.writelines(str(outputList) + '\n')
         with assume:
@@ -664,9 +665,9 @@ def run_tools_case(config, port: int = DEFAULT_PORT):
 
     with allure.step('step3 - multiple_round_prompt'):
         if 'intern' in model.lower():
-            response_list = test_internlm_multiple_round_prompt(client, model)
+            response_list = test_internlm_multiple_round_prompt(client, model_name)
         if 'qwen' in model.lower():
-            response_list = test_qwen_multiple_round_prompt(client, model)
+            response_list = test_qwen_multiple_round_prompt(client, model_name)
 
         file.writelines(str(response_list) + '\n')
 
