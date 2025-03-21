@@ -160,8 +160,7 @@ class BlockedF8Linear(nn.Module):
                  fp8_dtype: torch.dtype = torch.float8_e4m3fn,
                  colwise: bool = True,
                  is_tp: bool = False,
-                 all_reduce: bool = True,
-                 use_deep_gemm: bool = False):
+                 all_reduce: bool = True):
         super().__init__()
         if device is None:
             device = torch.device('cpu')
@@ -170,12 +169,7 @@ class BlockedF8Linear(nn.Module):
         if is_tp:
             in_features, out_features = self._get_io_features(in_features, out_features, colwise)
         impl_builder = get_backend().get_layer_impl_builder(OpType.LinearBlockedF8)
-        self.impl = impl_builder.build(in_features,
-                                       out_features,
-                                       block_size=128,
-                                       bias=bias is not None,
-                                       dtype=dtype,
-                                       use_deep_gemm=use_deep_gemm)
+        self.impl = impl_builder.build(in_features, out_features, block_size=128, bias=bias is not None, dtype=dtype)
         self.block_size = 128
         self.fp8_dtype = fp8_dtype
         weight, scale, bias = self.create_weights(in_features, out_features, bias, dtype, device)
@@ -1301,7 +1295,6 @@ def build_linear(in_features: int,
             fp8_dtype = torch.float8_e5m2
         else:
             raise TypeError(f'Unsupported fp8 fmt: {fmt}')
-        use_deep_gemm = quant_config.get('use_deep_gemm', False)
         return BlockedF8Linear(in_features,
                                out_features,
                                bias=bias,
@@ -1310,8 +1303,7 @@ def build_linear(in_features: int,
                                device=device,
                                colwise=colwise,
                                is_tp=is_tp,
-                               all_reduce=all_reduce,
-                               use_deep_gemm=use_deep_gemm)
+                               all_reduce=all_reduce)
     else:
         raise RuntimeError(f'Unsupported quant method: {quant_method}')
 

@@ -44,16 +44,13 @@ class TritonLinearBlockedF8Builder(LinearBlockedF8Builder):
     """triton linear blocked f8 implementation builder."""
 
     @staticmethod
-    def build(in_features: int,
-              out_features: int,
-              block_size: int = 128,
-              bias: bool = True,
-              dtype: torch.dtype = None,
-              use_deep_gemm: bool = False):
+    def build(in_features: int, out_features: int, block_size: int = 128, bias: bool = True, dtype: torch.dtype = None):
         """build."""
-        if use_deep_gemm is True:
+        try:
+            import deep_gemm  # noqa
             return DeepGemmLinearBlockedF8Impl(in_features, out_features, block_size, dtype)
-        return TritonLinearBlockedF8Impl(in_features, out_features, block_size, dtype)
+        except:  # noqa
+            return TritonLinearBlockedF8Impl(in_features, out_features, block_size, dtype)
 
 
 class DeepGemmLinearBlockedF8Impl(LinearBlockedF8Impl):
