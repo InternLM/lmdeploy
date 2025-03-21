@@ -351,15 +351,15 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& reqs, std::vector<Signa
 
         // compute rope scaling factor
         if (r->session.start_flag) {
-            seq.rope_theta = model_->attn_param_.rotary_embedding_base;
-            if (model_->attn_param_.use_dynamic_ntk) {
-                auto scaling_factor = model_->attn_param_.rope_scaling_factor;
+            seq.rope_theta = model_->attn_param_.rope.base;
+            if (model_->attn_param_.rope.type == RopeType::kDynamic) {
+                auto scaling_factor = model_->attn_param_.rope.factor;
                 if (scaling_factor >= 1.f) {  // infer by current context length
                     auto max_seq_len = state.h_context_length[idx];
-                    auto max_pos_emb = model_->attn_param_.max_position_embeddings;
+                    auto max_pos_emb = model_->attn_param_.rope.max_position_embeddings;
                     if (max_seq_len > max_pos_emb) {
                         scaling_factor = scaling_factor * max_seq_len / max_pos_emb - (scaling_factor - 1);
-                        float rope_dim = model_->attn_param_.rotary_embedding_dim;
+                        float rope_dim = model_->attn_param_.rope.dim;
                         seq.rope_theta *= powf(scaling_factor, rope_dim / (rope_dim - 2.f));
                         TM_LOG_INFO("[ProcessInferRequests] %ld rope_scaling_factor: %f, rope_theta = %f",
                                     (long)seq.id,
