@@ -224,7 +224,9 @@ void LogitsProcessorLayer<T>::setup(const size_t batch_size, const size_t beam_w
     TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
 }
 
+#if defined(ENABLE_FP32) || defined(BUILD_TEST)
 template class LogitsProcessorLayer<float>;
+#endif
 template class LogitsProcessorLayer<half>;
 #ifdef ENABLE_BF16
 template class LogitsProcessorLayer<__nv_bfloat16>;

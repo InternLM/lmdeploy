@@ -285,7 +285,9 @@ void SamplingLayer<T>::setup(const size_t batch_size, const size_t beam_width, T
     TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
 }
 
+#if defined(ENABLE_FP32) || defined(BUILD_TEST)
 template class SamplingLayer<float>;
+#endif
 template class SamplingLayer<half>;
 #ifdef ENABLE_BF16
 template class SamplingLayer<nv_bfloat16>;

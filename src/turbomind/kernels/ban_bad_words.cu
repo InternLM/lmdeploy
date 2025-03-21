@@ -135,7 +135,9 @@ void invokeBanBadWords(T*           logits,
                                        size_t       step,                                                              \
                                        cudaStream_t stream);
 
+#if defined(ENABLE_FP32) || defined(BUILD_TEST)
 INSTANTIATE_INVOKE_BAN_BAD_WORDS(float);
+#endif
 INSTANTIATE_INVOKE_BAN_BAD_WORDS(half);
 #ifdef ENABLE_BF16
 INSTANTIATE_INVOKE_BAN_BAD_WORDS(__nv_bfloat16);

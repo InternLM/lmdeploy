@@ -330,7 +330,9 @@ void invokeBatchApplyTemperaturePenalty_v2(T*           logits,
                                                         const int    vocab_size_padded,                                \
                                                         cudaStream_t stream);
 
+#if defined(ENABLE_FP32) || defined(BUILD_TEST)
 INSTANTIATE_INVOKE_BATCH_APPLY_TEMPERATURE_PENALTY_V2(float);
+#endif
 INSTANTIATE_INVOKE_BATCH_APPLY_TEMPERATURE_PENALTY_V2(half);
 #ifdef ENABLE_BF16
 INSTANTIATE_INVOKE_BATCH_APPLY_TEMPERATURE_PENALTY_V2(__nv_bfloat16);
@@ -603,7 +605,9 @@ void invokeBatchApplyRepetitionPenalty(T*                    logits,
                                                     RepetitionPenaltyType penalty_type,                                \
                                                     cudaStream_t          stream);
 
+#if defined(ENABLE_FP32) || defined(BUILD_TEST)
 INSTANTIATE_INVOKE_BATCH_APPLY_REPETITION_PENALTY(float);
+#endif
 INSTANTIATE_INVOKE_BATCH_APPLY_REPETITION_PENALTY(half);
 #ifdef ENABLE_BF16
 INSTANTIATE_INVOKE_BATCH_APPLY_REPETITION_PENALTY(__nv_bfloat16);
@@ -656,7 +660,9 @@ void invokeMinLengthPenalty(T*           logits,
                                          const int    end_ids_size,                                                    \
                                          cudaStream_t stream);
 
+#if defined(ENABLE_FP32) || defined(BUILD_TEST)
 INSTANTIATE_INVOKE_MIN_LENGTH_PENALTY(float);
+#endif
 INSTANTIATE_INVOKE_MIN_LENGTH_PENALTY(half);
 #ifdef ENABLE_BF16
 INSTANTIATE_INVOKE_MIN_LENGTH_PENALTY(__nv_bfloat16);
