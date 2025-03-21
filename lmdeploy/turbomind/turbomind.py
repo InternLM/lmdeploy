@@ -267,10 +267,8 @@ class TurboMind:
         cfg = TurbomindModelConfig.from_dict(_cfg)
 
         # always use tp in converted model (config.yaml)
-        if cfg.model_config.attn_tp_size != engine_config.attn_tp_size:
-            logger.warning('tp in engine_config is different from in config.yaml'
-                           f'({config_path}), {engine_config.attn_tp_size} vs '
-                           f'{cfg.attn_tp_size}, using tp={cfg.attn_tp_size}')
+        assert cfg.model_config.attn_tp_size == engine_config.attn_tp_size, \
+            f'tp size mismatch ({cfg.model_config.attn_tp_size} vs {engine_config.attn_tp_size})'
 
         self._postprocess_config(cfg, engine_config)
 
