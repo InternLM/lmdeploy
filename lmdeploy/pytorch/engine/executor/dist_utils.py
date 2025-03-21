@@ -8,12 +8,11 @@ import torch.distributed as dist
 
 def find_available_port() -> bool:
     """find available port."""
-    port = 29500
-    while True:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            if s.connect_ex(('localhost', port)) != 0:
-                return port
-            port += 1
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('0.0.0.0', 0))
+        s.listen(1)
+        port = s.getsockname()[1]
+        return port
 
 
 def setup_master_addr(addr: str, port: str):

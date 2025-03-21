@@ -1,16 +1,20 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+from lmdeploy.pytorch.config import DistConfig
+
 from .base import BaseChecker
 
 
 class DistChecker(BaseChecker):
     """check dist environment."""
 
-    def __init__(self, tp: int, dp: int, distributed_executor_backend: str, device_type: str, logger=None):
+    def __init__(self, tp: int, ep: int, dp: int, distributed_executor_backend: str, device_type: str, logger=None):
         super().__init__(logger)
         self.tp = tp
+        self.ep = ep
         self.dp = dp
-        self.world_size = tp * dp
+        self.dist_config = DistConfig(dp=dp, tp=tp, ep=ep)
+        self.world_size = self.dist_config.world_size
         self.distributed_executor_backend = distributed_executor_backend
         self.device_type = device_type
 

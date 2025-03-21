@@ -255,6 +255,8 @@ class PytorchEngineConfig:
             The `auto` option will use FP16 precision for FP32 and FP16
             models, and BF16 precision for BF16 models.
         tp (int): Tensor Parallelism. default 1.
+        dp (int): Data Parallelism. default 1.
+        dp_rank (int): rank of dp.
         session_len (int): Max session length. Default None.
         max_batch_size (int): Max batch size. If it is not specified,
             the engine will automatically set it according to the device
@@ -287,9 +289,14 @@ class PytorchEngineConfig:
             bit, set it to 4 or 8, respectively
         distributed_executor_backend (str): backend of distributed backend,
             options: ['uni', 'mp', 'ray']
+        should_execute_dummy_batch (str): execute dummy batch when if dp rank
+            has no request.
     """
     dtype: str = 'auto'
     tp: int = 1
+    dp: int = 1
+    ep: int = 1
+    dp_rank: int = 0
     session_len: int = None
     max_batch_size: int = None
     cache_max_entry_count: float = 0.8
@@ -308,11 +315,14 @@ class PytorchEngineConfig:
     revision: str = None
     quant_policy: Literal[0, 4, 8] = 0
     distributed_executor_backend: str = None
+    should_execute_dummy_batch: bool = False
 
     def __post_init__(self):
         """Check input validation."""
         assert self.dtype in ['auto', 'float16', 'bfloat16']
         assert self.tp >= 1, 'invalid tp'
+        assert self.dp >= 1, 'invalid dp'
+        assert self.ep >= 1, 'invalid ep'
         assert 0 < self.cache_max_entry_count < 1, \
             'invalid cache_max_entry_count'
         assert self.num_cpu_blocks >= 0, 'invalid num_cpu_blocks'

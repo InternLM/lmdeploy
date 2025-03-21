@@ -10,7 +10,8 @@ from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, GeluAndMul, RMSNorm, RopeType, build_rotary_embedding
-from lmdeploy.pytorch.nn.linear import build_merged_colwise_linear, build_qkv_proj, build_rowwise_linear
+from lmdeploy.pytorch.nn.linear import (build_down_linear, build_gateup_linear, build_o_proj, build_qkv_proj,
+                                        build_rowwise_linear)
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
@@ -68,13 +69,13 @@ class GemmaAttention(nn.Module):
                                   logit_softcapping=logit_softcapping)
 
         # o_proj
-        self.o_proj = build_rowwise_linear(num_heads * head_dim,
-                                           hidden_size,
-                                           bias=config.attention_bias,
-                                           quant_config=quantization_config,
-                                           dtype=dtype,
-                                           device=device,
-                                           is_tp=True)
+        self.o_proj = build_o_proj(num_heads * head_dim,
+                                   hidden_size,
+                                   bias=config.attention_bias,
+                                   quant_config=quantization_config,
+                                   dtype=dtype,
+                                   device=device,
+                                   is_tp=True)
 
         if self.model_type == 'gemma3_text':
             self.q_norm = RMSNorm(config.head_dim,
@@ -204,7 +205,7 @@ class GemmaMLP(nn.Module):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         # gate up
-        self.gate_up_proj = build_merged_colwise_linear(
+        self.gate_up_proj = build_gateup_linear(
             config.hidden_size,
             [config.intermediate_size, config.intermediate_size],
             bias=False,
@@ -221,13 +222,13 @@ class GemmaMLP(nn.Module):
         self.act_fn = GeluAndMul(approximate='tanh')
 
         # down
-        self.down_proj = build_rowwise_linear(config.intermediate_size,
-                                              config.hidden_size,
-                                              bias=False,
-                                              quant_config=quantization_config,
-                                              dtype=dtype,
-                                              device=device,
-                                              is_tp=True)
+        self.down_proj = build_down_linear(config.intermediate_size,
+                                           config.hidden_size,
+                                           bias=False,
+                                           quant_config=quantization_config,
+                                           dtype=dtype,
+                                           device=device,
+                                           is_tp=True)
 
     def forward(self, x):
         """forward."""

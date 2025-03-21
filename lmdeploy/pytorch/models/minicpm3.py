@@ -7,7 +7,7 @@ import torch
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
-from lmdeploy.pytorch.distributed import get_world_rank
+from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
 from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_merged_colwise_linear, build_rowwise_linear
@@ -111,7 +111,7 @@ class MiniCPMAttention(nn.Module):
         attn_metadata: Any = None,
     ):
         """Rewrite of LlamaAttention.forward."""
-        world_size, _ = get_world_rank()
+        world_size, _ = get_tp_world_rank()
         num_heads = self.num_heads // world_size
         bsz, q_len, _ = hidden_states.size()
 

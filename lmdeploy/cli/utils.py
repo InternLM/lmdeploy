@@ -151,6 +151,15 @@ class ArgumentHelper:
                                    type=int,
                                    default=1,
                                    help='GPU number used in tensor parallelism. Should be 2^n')
+    
+    @staticmethod
+    def ep(parser):
+        """Add argument ep to parser."""
+
+        return parser.add_argument('--ep',
+                                   type=int,
+                                   default=1,
+                                   help='GPU number used in tensor parallelism. Should be 2^n')
 
     @staticmethod
     def session_id(parser):

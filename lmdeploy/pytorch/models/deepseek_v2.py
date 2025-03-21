@@ -8,12 +8,14 @@ import torch.nn.functional as F
 from torch import nn
 
 import lmdeploy.pytorch.distributed as dist
-from lmdeploy.pytorch.distributed import get_world_rank
+from lmdeploy.pytorch.distributed import get_dist_manager, get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
-from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_merged_colwise_linear, build_rowwise_linear
+from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_down_linear, build_gateup_linear, build_o_proj,
+                                        build_rowwise_linear)
 from lmdeploy.pytorch.nn.moe import SoftmaxTopK, build_fused_moe
 from lmdeploy.pytorch.nn.rotary_embedding import YarnParameters
+from lmdeploy.pytorch.nn.token_dispatcher import DeepEPTokenDispatcher
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
@@ -43,9 +45,17 @@ class DeepseekV2BMM(nn.Module):
         self.dtype = dtype
         self.device = device
 
+    def _get_tp_world_rank(self):
+        """get tp world rank."""
+        from lmdeploy.pytorch.distributed import get_dist_manager
+        dist_ctx = get_dist_manager().current_context()
+        if dist_ctx.dp == 1:
+            return get_tp_world_rank()
+        return 1, 0
+
     def _update_batch(self, batch: int):
         """update out features."""
-        world_size, _ = get_world_rank()
+        world_size, _ = self._get_tp_world_rank()
         batch = batch // world_size
         return batch
 
@@ -55,7 +65,7 @@ class DeepseekV2BMM(nn.Module):
 
     def weight_loader(self, param: nn.Parameter, weight: torch.Tensor):
         """weight loader."""
-        world_size, rank = get_world_rank()
+        world_size, rank = self._get_tp_world_rank()
         weight = weight.chunk(world_size, 0)[rank]
         param.data.copy_(weight)
 
@@ -91,6 +101,7 @@ class DeepseekV2Attention(nn.Module):
                 device=device,
                 is_tp=True,
                 quant_config=quantization_config,
+                dp_disable_tp=True,
             )
         else:
             self.q_a_proj = build_colwise_linear(
@@ -115,6 +126,7 @@ class DeepseekV2Attention(nn.Module):
                 device=device,
                 is_tp=True,
                 quant_config=quantization_config,
+                dp_disable_tp=True,
             )
 
         self.kv_a_proj_with_mqa = build_colwise_linear(
@@ -157,7 +169,7 @@ class DeepseekV2Attention(nn.Module):
                                   use_flash_mla=use_flash_mla)
 
         self.vc = DeepseekV2BMM(self.num_heads, config.kv_lora_rank, self.v_head_dim, dtype=dtype, device=device)
-        self.o_proj = build_rowwise_linear(
+        self.o_proj = build_o_proj(
             self.num_heads * self.v_head_dim,
             self.hidden_size,
             bias=config.attention_bias,
@@ -214,8 +226,12 @@ class DeepseekV2Attention(nn.Module):
         attn_metadata: Any = None,
     ):
         """Rewrite of LlamaAttention.forward."""
-        world_size, _ = get_world_rank()
-        num_heads = self.num_heads // world_size
+        dist_ctx = get_dist_manager().current_context()
+        if dist_ctx.dp > 1:
+            num_heads = self.num_heads
+        else:
+            world_size = dist_ctx.world_size
+            num_heads = self.num_heads // world_size
         nope_size = self.kv_lora_rank
         q_len = hidden_states.size(1)
 
@@ -337,6 +353,7 @@ class MoEGate(nn.Module):
         return topk_weight, topk_idx
 
 
+
 class DeepseekV2MoE(nn.Module):
     """Deepseek v2 MoE."""
 
@@ -353,9 +370,13 @@ class DeepseekV2MoE(nn.Module):
         self.topk_method = config.topk_method
         self.n_group = config.n_group
         self.topk_group = config.topk_group
-
+    
         self.gate = MoEGate(config, dtype=dtype, device=device)
 
+        dist_ctx = get_dist_manager().current_context()
+        dp = dist_ctx.dp
+        world_size = dist_ctx.world_size
+        moe_all_reduce = dp > 1 and dist_ctx.tp > 1
         self.experts = build_fused_moe(
             self.hidden_dim,
             self.ffn_dim,
@@ -364,10 +385,11 @@ class DeepseekV2MoE(nn.Module):
             renormalize=False,
             dtype=dtype,
             device=device,
-            all_reduce=False,
+            all_reduce=moe_all_reduce,
+            enable_ep=dist_ctx.ep > 1,
             quant_config=quantization_config,
         )
-
+        
         self.shared_experts = None
         if config.n_shared_experts is not None:
             intermediate_size = (config.moe_intermediate_size * config.n_shared_experts)
@@ -376,11 +398,10 @@ class DeepseekV2MoE(nn.Module):
                 intermediate_size=intermediate_size,
                 dtype=dtype,
                 device=device,
-                is_tp=True,
-                all_reduce=False,
+                is_shared_expert=True,
             )
-        world_size, _ = get_world_rank()
-        if world_size > 1:
+
+        if dp == 1 and world_size > 1:
             self._all_reduce = True
         else:
             self._all_reduce = False
@@ -396,7 +417,6 @@ class DeepseekV2MoE(nn.Module):
             topk_weights,
             topk_ids,
         )
-
         if self.shared_experts is not None:
             shared_states = self.shared_experts(hidden_states)
             out_states += shared_states
@@ -404,7 +424,6 @@ class DeepseekV2MoE(nn.Module):
 
         if self._all_reduce:
             dist.all_reduce(out_states)
-
         return out_states
 
 
@@ -416,14 +435,29 @@ class DeepseekV2MLP(nn.Module):
                  intermediate_size: int = None,
                  dtype: torch.dtype = None,
                  device: torch.device = None,
-                 is_tp: bool = True,
-                 all_reduce: bool = True):
+                 is_shared_expert: bool = False):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
+        if is_shared_expert:
+            dist_ctx = get_dist_manager().current_context()
+            dp = dist_ctx.dp
+            if dp == 1:
+                # split weight, do all reduce in moe
+                is_tp = True
+                all_reduce = False
+            else:
+                # do not split weight on dp
+                # TODO: support dp+tp?
+                is_tp = False
+                all_reduce = False
+        else:
+            all_reduce = True
+            is_tp = True
+
         # gate up
         if intermediate_size is None:
             intermediate_size = config.intermediate_size
-        self.gate_up_proj = build_merged_colwise_linear(
+        self.gate_up_proj = build_gateup_linear(
             config.hidden_size,
             [intermediate_size, intermediate_size],
             bias=False,
@@ -437,7 +471,7 @@ class DeepseekV2MLP(nn.Module):
         self.act_fn = SiluAndMul(inplace=True)
 
         # down
-        self.down_proj = build_rowwise_linear(
+        self.down_proj = build_down_linear(
             intermediate_size,
             config.hidden_size,
             bias=False,
@@ -616,6 +650,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                  dtype: torch.dtype = None,
                  device: torch.device = None):
         super().__init__()
+        config.num_hidden_layers = 4 #zcx
         self.config = config
         self.quantization_config = getattr(config, 'quantization_config', None)
         self.dtype = dtype
@@ -783,7 +818,6 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
         """load weights."""
-
         def __skip_nextn(name, nextn_keys):
             for nextn_key in nextn_keys:
                 if nextn_key in name:
@@ -833,6 +867,13 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
 
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:
+            # zcx begin
+            strs = name.split(".")
+            if len(strs) >= 3 and str.isdigit(strs[2]):
+                layer_number = int(strs[2])
+                if layer_number >= 4:
+                    continue
+            # zcx end
             if 'rotary_emb.inv_freq' in name:
                 continue
             if ('rotary_emb.cos_cached' in name or 'rotary_emb.sin_cached' in name):

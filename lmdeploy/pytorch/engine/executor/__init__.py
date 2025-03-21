@@ -3,7 +3,7 @@ import os
 from logging import Logger
 from typing import Any, Dict
 
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, ModelConfig
 from lmdeploy.utils import get_logger
 
 from .base import ExecutorBase
@@ -56,18 +56,18 @@ def get_distributed_executor_backend(world_size: int, dp: int, device_type: str,
 def build_executor(model_path: str,
                    cache_config: CacheConfig,
                    backend_config: BackendConfig,
+                   dist_config: DistConfig,
                    tokenizer: Any,
-                   dp: int = 1,
-                   tp: int = 1,
                    adapters: Dict[str, str] = None,
                    device_type: str = 'cuda',
                    distributed_executor_backend: str = None,
                    dtype: str = 'auto') -> ExecutorBase:
     """build model agent executor."""
     logger = get_logger('lmdeploy')
+    dp = dist_config.dp
+    world_size = dist_config.world_size
 
-    world_size = dp * tp
-    model_config = ModelConfig.from_pretrained(model_path, trust_remote_code=True, dtype=dtype, tp=tp)
+    model_config = ModelConfig.from_pretrained(model_path, trust_remote_code=True, dtype=dtype, dist_config=dist_config)
 
     if distributed_executor_backend is None:
         distributed_executor_backend = get_distributed_executor_backend(world_size, dp, device_type, logger)
@@ -98,9 +98,8 @@ def build_executor(model_path: str,
             model_config=model_config,
             cache_config=cache_config,
             backend_config=backend_config,
+            dist_config=dist_config,
             tokenizer=tokenizer,
-            dp=dp,
-            tp=tp,
             adapters=adapters,
             device_type=device_type,
         )
@@ -111,9 +110,8 @@ def build_executor(model_path: str,
             model_config=model_config,
             cache_config=cache_config,
             backend_config=backend_config,
+            dist_config=dist_config,
             tokenizer=tokenizer,
-            dp=dp,
-            tp=tp,
             adapters=adapters,
             device_type=device_type,
             dtype=dtype,

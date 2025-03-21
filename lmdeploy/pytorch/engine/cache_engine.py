@@ -29,10 +29,8 @@ class CacheEngine:
         self,
         cache_config: CacheConfig,
         model_config: ModelConfig,
-        rank: int = 0,
         world_size: int = 1,
     ) -> None:
-        self.rank = rank
         self.world_size = world_size
 
         self.cache_config = cache_config
