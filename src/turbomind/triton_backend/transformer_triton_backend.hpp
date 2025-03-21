@@ -20,7 +20,7 @@
 
 #pragma once
 
-#include "src/turbomind/comm/comm.h"
+#include "src/turbomind/comm/device_comm.h"
 #include <functional>
 #include <memory>
 #include <vector>

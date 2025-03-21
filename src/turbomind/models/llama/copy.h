@@ -20,6 +20,10 @@ public:
 
     void Submit(cudaStream_t stream)
     {
+        if (size_.empty()) {
+            return;
+        }
+
         invokeBatchedCopy(src_.data(), dst_.data(), size_.data(), size_.size(), stream);
         sync_check_cuda_error();
 

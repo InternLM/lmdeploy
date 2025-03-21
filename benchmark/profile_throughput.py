@@ -223,6 +223,7 @@ def parse_args():
     tb_group._group_actions.append(quant_policy_act)
     tb_group._group_actions.append(dtype_act)
 
+    ArgumentHelper.dp(tb_group)
     ArgumentHelper.model_format(tb_group, default='hf')
     ArgumentHelper.num_tokens_per_iter(tb_group)
     ArgumentHelper.max_prefill_iters(tb_group)
@@ -238,8 +239,9 @@ def main():
     if args.backend == 'turbomind':
         engine_config = TurbomindEngineConfig(
             session_len=args.session_len,
-            max_batch_size=args.concurrency,
+            max_batch_size=args.concurrency // args.dp,
             tp=args.tp,
+            dp=args.dp,
             cache_max_entry_count=args.cache_max_entry_count,
             cache_block_seq_len=args.cache_block_seq_len,
             model_format=args.model_format,

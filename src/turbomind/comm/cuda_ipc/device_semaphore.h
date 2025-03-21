@@ -2,8 +2,8 @@
 
 #pragma once
 
-#include "src/turbomind/comm/native/mscclpp.h"
-#include "src/turbomind/comm/native/native_comm.h"
+#include "src/turbomind/comm/cuda_ipc/cuda_ipc_comm.h"
+#include "src/turbomind/comm/cuda_ipc/mscclpp.h"
 
 #include <cuda/atomic>
 
@@ -21,7 +21,7 @@ __device__ T* cvta_generic_to_global(T* p)
 // https://github.com/microsoft/mscclpp/blob/591276f9d07d2df8e2a45a16738e27867e468ca3/include/mscclpp/semaphore_device.hpp#L40
 struct DeviceSemaphore {
 
-    __device__ void Load(mscclpp::SmDevice2DeviceSemaphoreDeviceHandle* data)
+    __device__ void Load(mscclpp::D2DSemaphoreHandle* data)
     {
         outbound_sempahore_id         = *(uint64_t*)cvta_generic_to_global(data->outboundSemaphoreId);
         expected_inbound_semaphore_id = *(uint64_t*)cvta_generic_to_global(data->expectedInboundSemaphoreId);
@@ -29,7 +29,7 @@ struct DeviceSemaphore {
         remote_inbound_semaphore_id   = data->remoteInboundSemaphoreId;
     }
 
-    __device__ void Save(mscclpp::SmDevice2DeviceSemaphoreDeviceHandle* data)
+    __device__ void Save(mscclpp::D2DSemaphoreHandle* data)
     {
         *(uint64_t*)cvta_generic_to_global(data->outboundSemaphoreId)        = outbound_sempahore_id;
         *(uint64_t*)cvta_generic_to_global(data->expectedInboundSemaphoreId) = expected_inbound_semaphore_id;
