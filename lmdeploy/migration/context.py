@@ -61,9 +61,6 @@ class RDMAContext:
                            source_offset,
                            length,
                            callback=None):
-        print(self.remote_memory_pool[mr_key].addr + target_offset)
-        print(self.remote_memory_pool[mr_key].r_key)
-
         rdma_call_back = None
         if callback is None:
             loop = asyncio.get_running_loop()

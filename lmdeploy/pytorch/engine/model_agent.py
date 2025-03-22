@@ -506,7 +506,6 @@ class AutoModelAgent:
         """async get migration output async."""
         assert self._migration_out_que is not None, ('Please start backendground task before forward.')
         out = await self._migration_out_que.get()
-        print("?????? get migration_output_async")
         return out
 
 
