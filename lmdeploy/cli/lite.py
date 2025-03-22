@@ -92,6 +92,7 @@ class SubCliLite(object):
                             type=str,
                             default='./work_dir',
                             help='The working directory for outputs. defaults to "./work_dir"')
+        parser.add_argument('--device', type=str, default='cuda', help='Device for weight quantization (cuda or npu)')
         ArgumentHelper.calib_dataset(parser)
         ArgumentHelper.calib_samples(parser)
         ArgumentHelper.calib_seqlen(parser)
