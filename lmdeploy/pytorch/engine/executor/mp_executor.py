@@ -15,7 +15,7 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 
 from lmdeploy.pytorch.backends.selector import init_backend
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, ModelConfig
 from lmdeploy.utils import get_logger
 
 from .base import ExecutorBase
@@ -222,9 +222,8 @@ class MPExecutor(ExecutorBase):
                  model_config: ModelConfig,
                  cache_config: CacheConfig,
                  backend_config: BackendConfig,
+                 dist_config: DistConfig,
                  tokenizer: Any,
-                 dp: int,
-                 tp: int,
                  adapters: Dict[str, str] = None,
                  device_type: str = 'cuda'):
         """initialize Executor."""
@@ -233,14 +232,12 @@ class MPExecutor(ExecutorBase):
                          cache_config=cache_config,
                          backend_config=backend_config,
                          tokenizer=tokenizer,
-                         dp=dp,
-                         tp=tp,
+                         dist_config=dist_config,
                          adapters=adapters,
                          device_type=device_type)
 
         # initialize processes.
         self.setup_master_addr()
-        self.world_size = tp * dp
         mp_ctx = mp.get_context('spawn')
         self.mp_ctx = mp_ctx
         self.comm_notifier = Notifier(self.world_size, mp_ctx)
@@ -265,9 +262,8 @@ class MPExecutor(ExecutorBase):
                        model_config=model_config,
                        cache_config=cache_config,
                        backend_config=backend_config,
+                       dist_config=dist_config,
                        tokenizer=tokenizer,
-                       dp=dp,
-                       tp=tp,
                        adapters=adapters,
                        device_type=device_type,
                        log_level=logger.level)
@@ -370,6 +366,10 @@ class MPExecutor(ExecutorBase):
         """build cache engine."""
         self.collective_rpc('build_cache_engine')
 
+    def warmup(self):
+        """build cache engine."""
+        self.collective_rpc('warmup')
+
     async def _prefetch_outputs(self):
         while True:
             outs = (await self.collective_rpc_async('get_outputs', receiver_mask=1, return_mask=1))[0]
@@ -423,8 +423,7 @@ class MPWorkerWrapper(WorkerWrapperBase):
         cache_config: CacheConfig,
         backend_config: BackendConfig,
         model_config: ModelConfig,
-        dp: int,
-        tp: int,
+        dist_config: DistConfig,
         adapters: Dict[str, str] = None,
         device_type: str = 'cuda',
         tokenizer: Any = None,
@@ -435,8 +434,7 @@ class MPWorkerWrapper(WorkerWrapperBase):
             cache_config=cache_config,
             backend_config=backend_config,
             model_config=model_config,
-            dp=dp,
-            tp=tp,
+            dist_config=dist_config,
             adapters=adapters,
             device_type=device_type,
             tokenizer=tokenizer,
@@ -486,9 +484,8 @@ class ExecutorProc:
         model_config: ModelConfig,
         cache_config: CacheConfig,
         backend_config: BackendConfig,
+        dist_config: DistConfig,
         tokenizer: Any,
-        dp: int,
-        tp: int,
         adapters: Dict[str, str] = None,
         device_type: str = 'cuda',
         log_level: int = 30,
@@ -508,8 +505,7 @@ class ExecutorProc:
                                  cache_config=cache_config,
                                  backend_config=backend_config,
                                  model_config=model_config,
-                                 dp=dp,
-                                 tp=tp,
+                                 dist_config=dist_config,
                                  adapters=adapters,
                                  device_type=device_type,
                                  tokenizer=tokenizer,

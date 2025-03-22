@@ -8,7 +8,7 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 import lmdeploy.pytorch.distributed as dist
-from lmdeploy.pytorch.distributed import get_world_rank
+from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
 from lmdeploy.pytorch.nn.linear import build_merged_colwise_linear, build_qkv_proj, build_rowwise_linear
@@ -204,7 +204,7 @@ class Qwen2MoeSparseMoeBlock(nn.Module):
                                                        dtype=dtype,
                                                        device=device,
                                                        all_reduce=False)
-        world_size, _ = get_world_rank()
+        world_size, _ = get_tp_world_rank()
         if world_size > 1:
             self._all_reduce = True
         else:

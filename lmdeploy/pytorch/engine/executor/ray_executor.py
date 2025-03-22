@@ -1,21 +1,23 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import os
 import time
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import ray
+import ray.exceptions
 import torch
 from ray.util.placement_group import PlacementGroup
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, ModelConfig
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.utils import get_logger
 
 from .base import ExecutorBase
 from .base_worker import WorkerWrapperBase
-from .dist_utils import find_available_port, setup_master_addr
+from .dist_utils import find_available_port
 
 logger = get_logger('lmdeploy')
 
@@ -106,9 +108,15 @@ def init_ray_cluster(world_size: int, ray_address: str = None):
 
 
 def _get_master_addr():
+    """get master addr."""
     gcs_addr = ray.get_runtime_context().gcs_address
     master_addr = gcs_addr.split(':')[0]
     return master_addr
+
+
+def _get_master_port():
+    """get master port."""
+    return find_available_port()
 
 
 class RayWorkerWrapper(WorkerWrapperBase):
@@ -119,8 +127,7 @@ class RayWorkerWrapper(WorkerWrapperBase):
         model_path: str,
         cache_config: CacheConfig,
         backend_config: BackendConfig,
-        dp: int,
-        tp: int,
+        dist_config: DistConfig,
         adapters: Dict[str, str] = None,
         device_type: str = 'cuda',
         dtype: str = 'auto',
@@ -128,14 +135,13 @@ class RayWorkerWrapper(WorkerWrapperBase):
     ):
         from lmdeploy.tokenizer import Tokenizer
         tokenizer = Tokenizer(model_path).model.model
-        model_config = ModelConfig.from_pretrained(model_path, dtype=dtype, tp=tp)
+        model_config = ModelConfig.from_pretrained(model_path, dtype=dtype, dist_config=dist_config)
         super().__init__(
             model_path=model_path,
             cache_config=cache_config,
             backend_config=backend_config,
             model_config=model_config,
-            dp=dp,
-            tp=tp,
+            dist_config=dist_config,
             adapters=adapters,
             device_type=device_type,
             tokenizer=tokenizer,
@@ -165,6 +171,10 @@ class RayWorkerWrapper(WorkerWrapperBase):
                 output[k] = v.numpy()
         return output
 
+    def exit(self):
+        """exit actor."""
+        ray.actor.exit_actor()
+
 
 class RayExecutor(ExecutorBase):
     """ray executor."""
@@ -174,9 +184,8 @@ class RayExecutor(ExecutorBase):
                  model_config: ModelConfig,
                  cache_config: CacheConfig,
                  backend_config: BackendConfig,
+                 dist_config: DistConfig,
                  tokenizer: Any,
-                 dp: int,
-                 tp: int,
                  adapters: Dict[str, str] = None,
                  device_type: str = 'cuda',
                  dtype: str = 'auto'):
@@ -185,29 +194,36 @@ class RayExecutor(ExecutorBase):
                          model_config=model_config,
                          cache_config=cache_config,
                          backend_config=backend_config,
+                         dist_config=dist_config,
                          tokenizer=tokenizer,
-                         dp=dp,
-                         tp=tp,
                          adapters=adapters,
                          device_type=device_type)
 
-        self.world_size = tp * dp
+        self.dp_rank = dist_config.dp_rank
         device_ctx = DeviceContext(device_type)
         with get_device_manager().context(device_ctx):
             logger.info('Init ray cluster.')
-            placement_group = init_ray_cluster(self.world_size)
+            ray_world_size = self.world_size
+            if self.dp > 1:
+                ray_world_size = 1
+            placement_group = init_ray_cluster(ray_world_size)
         self.placement_group = placement_group
-        self.master_addr = _get_master_addr()
-        self.master_port = find_available_port()
-        setup_master_addr(self.master_addr, self.master_port)
+
+        if self.dp == 1:
+            self.master_addr = _get_master_addr()
+            self.master_port = _get_master_port()
+        else:
+            self.master_addr = os.environ.get('LMDEPLOY_DP_MASTER_ADDR', None)
+            self.master_port = os.environ.get('LMDEPLOY_DP_MASTER_PORT', None)
+            if self.master_addr is None or self.master_port is None:
+                raise RuntimeError('DP > 1 requires "LMDEPLOY_DP_MASTER_ADDR" and "LMDEPLOY_DP_MASTER_PORT".')
 
         # create workerwrapper actors
         worker_kwargs = dict(
             model_path=model_path,
             cache_config=cache_config,
             backend_config=backend_config,
-            dp=dp,
-            tp=tp,
+            dist_config=dist_config,
             adapters=adapters,
             device_type=device_type,
             dtype=dtype,
@@ -221,12 +237,15 @@ class RayExecutor(ExecutorBase):
         self.remote_outs: asyncio.Queue = None
 
         logger.info('Init distributed process group.')
-        ray.get([
-            worker.init_process_group.remote(rank, self.master_addr, self.master_port)
-            for rank, worker in enumerate(self.workers)
-        ])
+        if self.dp == 1:
+            ray.get([
+                worker.init_process_group.remote(rank, self.master_addr, self.master_port)
+                for rank, worker in enumerate(self.workers)
+            ])
+        else:
+            ray.get(self.workers[0].init_process_group.remote(self.dp_rank, self.master_addr, self.master_port))
 
-        if self.world_size > 1:
+        if self.dist_config.world_size > 1:
             logger.info('Warming up distribute environment, this might take long time, please waiting...')
             ray.get([worker.warmup_dist.remote() for worker in self.workers])
 
@@ -262,6 +281,10 @@ class RayExecutor(ExecutorBase):
         """build cache engine."""
         self.collective_rpc('build_cache_engine')
 
+    def warmup(self):
+        """build cache engine."""
+        self.collective_rpc('warmup')
+
     def get_input_processor(self):
         """build cache engine."""
         return ray.get(self.workers[0].get_input_processor.remote())
@@ -276,6 +299,14 @@ class RayExecutor(ExecutorBase):
                         out[k] = torch.from_numpy(v)
                 self.remote_outs.put_nowait(out)
 
+    def _prefetch_task_callback(self, task: asyncio.Task):
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            pass
+        except BaseException:
+            logger.exception('Ray executor prefetch task failed.')
+
     def start(self, forward_event: asyncio.Event):
         """start engine loop."""
         self.forward_event = forward_event
@@ -287,15 +318,22 @@ class RayExecutor(ExecutorBase):
 
     def stop(self):
         """stop engine loop."""
-        self.collective_rpc('stop')
+        if self.dp == 1:
+            self.collective_rpc('stop_async')
         if self._prefetch_task is not None:
             self._prefetch_task.cancel()
 
     def release(self):
         """release."""
-        self.collective_rpc('release')
-        for worker in self.workers:
-            ray.kill(worker)
+        if self.dp == 1:
+            self.collective_rpc('release')
+            try:
+                self.collective_rpc('exit')
+            except ray.exceptions.RayActorError as e:
+                logger.debug(f'ray actor exit: {e}')
+        else:
+            [ray.kill(worker) for worker in self.workers]
+
         ray.util.remove_placement_group(self.placement_group)
 
     def _compile_dag(self):
@@ -314,7 +352,7 @@ class RayExecutor(ExecutorBase):
         if self.dag is None:
             self.dag = self._compile_dag()
         inputs = ray.put(inputs)
-        self.dag.execute(inputs)
+        ray.get(self.dag.execute(inputs))
 
     async def get_output_async(self):
         """get output async."""

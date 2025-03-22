@@ -2,7 +2,7 @@
 import asyncio
 from typing import Any, Dict
 
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, ModelConfig
 from lmdeploy.pytorch.devices import DeviceContext
 from lmdeploy.pytorch.engine.model_agent import build_model_agent
 from lmdeploy.utils import get_logger
@@ -28,9 +28,8 @@ class UniExecutor(ExecutorBase):
                          model_config=model_config,
                          cache_config=cache_config,
                          backend_config=backend_config,
+                         dist_config=DistConfig(),
                          tokenizer=tokenizer,
-                         dp=1,
-                         tp=1,
                          adapters=adapters,
                          device_type=device_type)
 
@@ -71,6 +70,9 @@ class UniExecutor(ExecutorBase):
         """build cache engine."""
         self.model_agent.build_cache_engine()
 
+    def warmup(self):
+        self.model_agent.warmup()
+
     def start(self, forward_event: asyncio.Event):
         """start engine loop."""
         self.model_agent.start(forward_event)
@@ -87,8 +89,9 @@ class UniExecutor(ExecutorBase):
         """start forward."""
         self.model_agent.set_forward_inputs(inputs)
 
-    async def get_output_async(self):
+    async def get_output_async(self, dp_rank: int = 0):
         """get output async."""
+        assert dp_rank == 0
         return await self.model_agent.get_output_async()
 
     def get_input_processor(self):
