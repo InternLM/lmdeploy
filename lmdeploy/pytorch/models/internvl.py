@@ -205,15 +205,33 @@ class InternVisionEncoderLayer(nn.Module):
         self.ls1 = nn.Parameter(torch.empty(self.embed_dim, dtype=dtype, device=device))
         self.ls2 = nn.Parameter(torch.empty(self.embed_dim, dtype=dtype, device=device))
 
+    def enable_micro_batch(func):
+        """Decorator to enable micro-batch computation."""
+        def wrapper(self, hidden_states, *args, **kwargs):
+            if isinstance(hidden_states, list):
+                # Apply forward computation to each micro-batch
+                return [func(self, hs, *args, **kwargs) for hs in hidden_states]
+            else:
+                # If not a list, directly apply the forward computation
+                return func(self, hidden_states, *args, **kwargs)
+        return wrapper
+
+    @enable_micro_batch
+    def _attn(self, hidden_states):
+        hidden_states = hidden_states + self.attn(self.norm1(hidden_states).to(hidden_states[0].dtype)) * self.ls1
+        return hidden_states
+
+    @enable_micro_batch
+    def _mlp(self, hidden_states):
+        hidden_states = hidden_states + self.mlp(self.norm2(hidden_states).to(hidden_states.dtype)) * self.ls2
+        return hidden_states
+
     def forward(
         self,
-        hidden_states: torch.Tensor,
+        hidden_states,
     ):
-        """forward."""
-        hidden_states = hidden_states + self.attn(self.norm1(hidden_states).to(hidden_states.dtype)) * self.ls1
-
-        hidden_states = hidden_states + self.mlp(self.norm2(hidden_states).to(hidden_states.dtype)) * self.ls2
-
+        hidden_states = self._attn(hidden_states)
+        hidden_states = self._mlp(hidden_states)
         return hidden_states
 
 
@@ -226,6 +244,20 @@ class InternVisionEncoder(nn.Module):
         self.layers = nn.ModuleList(
             [InternVisionEncoderLayer(config, dtype=dtype, device=device) for idx in range(config.num_hidden_layers)])
 
+    def split_inputs_embeds(num_splits=2):
+        """Decorator to split inputs_embeds along the 0th dimension into a specified number of chunks."""
+        def decorator(func):
+            def wrapper(self, *args, **kwargs):
+                inputs_embeds = kwargs.get('inputs_embeds', None)
+                if inputs_embeds is not None:
+                    split_embeds = list(torch.chunk(inputs_embeds, num_splits, dim=0))
+                    kwargs['inputs_embeds'] = split_embeds
+                    results = func(self, *args, **kwargs)
+                return torch.cat(results, dim=0)
+            return wrapper
+        return decorator
+
+    @split_inputs_embeds(num_splits=2)
     def forward(
         self,
         inputs_embeds,
