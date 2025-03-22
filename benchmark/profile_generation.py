@@ -148,6 +148,8 @@ def profile_throughput(model_path: str, concurrency: int, input_seqlen: int,
     _end = time.perf_counter()
     elapsed_time = _end - _start
 
+    tm_model.close()
+
     token_latency_stats = []
     while not que.empty():
         _, _stats = que.get_nowait()
