@@ -73,16 +73,7 @@ class AscendGraphRunner(GraphRunner):
 
     def patch_kernels_custom_op(self):
         from dlinfer.graph.custom_op import register_custom_op
-        dlinfer_kernels_module = import_module('lmdeploy.pytorch.kernels.dlinfer')
         dlinfer_backends_module = import_module('lmdeploy.pytorch.backends.dlinfer')
-
-        # prefill_attention
-        module_str = 'pagedattention'
-        paged_attn_module = getattr(dlinfer_kernels_module, module_str)
-        func_str = 'prefill_attention'
-        prefill_attn_origin = getattr(paged_attn_module, func_str)
-        prefill_attn_registered = register_custom_op(f'lmdeploy::{func_str}', ['attn_output'])(prefill_attn_origin)
-        setattr(paged_attn_module, func_str, prefill_attn_registered)
 
         # apply_rotary_pos_emb
         def apply_rotary_emb_abstract_impl(q, k, cos, sin, q_out, k_out):
