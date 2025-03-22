@@ -512,12 +512,13 @@ PYBIND11_MODULE(_turbomind, m)
     py::class_<AbstractTransformerModel, std::shared_ptr<AbstractTransformerModel>>(m, "AbstractTransformerModel")
         .def_static(
             "create_llama_model",
-            [](std::string model_dir,
-               std::string config,
-               size_t      tensor_para_size,
-               size_t      pipeline_para_size,
-               int         enable_custom_all_reduce,
-               std::string data_type) -> std::shared_ptr<AbstractTransformerModel> {
+            [](std::string      model_dir,
+               std::string      config,
+               size_t           tensor_para_size,
+               size_t           pipeline_para_size,
+               int              enable_custom_all_reduce,
+               std::vector<int> devices,
+               std::string      data_type) -> std::shared_ptr<AbstractTransformerModel> {
                 auto gil_factory = [] {  //
                     // erase the type
                     return std::static_pointer_cast<void>(std::make_shared<ScopedGIL>());
@@ -533,6 +534,7 @@ PYBIND11_MODULE(_turbomind, m)
                                                                                              enable_custom_all_reduce,
                                                                                              model_dir,
                                                                                              config,
+                                                                                             devices,
                                                                                              gil_factory),
                                                                   no_gil_deleter);
                     return model;
@@ -545,6 +547,7 @@ PYBIND11_MODULE(_turbomind, m)
                                                             enable_custom_all_reduce,
                                                             model_dir,
                                                             config,
+                                                            devices,
                                                             gil_factory),
                         no_gil_deleter);
                     return model;
@@ -554,8 +557,13 @@ PYBIND11_MODULE(_turbomind, m)
                 }
                 else {
 #ifdef ENABLE_FP32
-                    auto model = std::make_shared<LlamaTritonModel<float>>(
-                        tensor_para_size, pipeline_para_size, enable_custom_all_reduce, model_dir, config, gil_factory);
+                    auto model = std::make_shared<LlamaTritonModel<float>>(tensor_para_size,
+                                                                           pipeline_para_size,
+                                                                           enable_custom_all_reduce,
+                                                                           model_dir,
+                                                                           config,
+                                                                           devices,
+                                                                           gil_factory);
                     return model;
 #else
                     throw std::runtime_error("Error: turbomind has not been built with fp32 support.");
@@ -567,6 +575,7 @@ PYBIND11_MODULE(_turbomind, m)
             "tensor_para_size"_a         = 1,
             "pipeline_para_size"_a       = 1,
             "enable_custom_all_reduce"_a = 0,
+            "devices"_a                  = std::vector<int>{},
             "data_type"_a                = "half")
         .def(
             "create_model_instance",

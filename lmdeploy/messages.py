@@ -211,6 +211,7 @@ class TurbomindEngineConfig:
             "Dynamic SplitFuse"-like scheduling
         max_prefill_iters(int): the max number of forward pass during prefill
             stage
+        devices(List[int]): the used devices
     """
 
     dtype: str = 'auto'
@@ -231,6 +232,7 @@ class TurbomindEngineConfig:
     num_tokens_per_iter: int = 0
     max_prefill_iters: int = 1
     communicator: str = 'nccl'
+    devices: List[int] = None
 
     def __post_init__(self):
         """Check input validation."""
@@ -243,6 +245,8 @@ class TurbomindEngineConfig:
         assert self.max_prefill_token_num >= 0, \
             'invalid max_prefill_token_num'
         assert self.num_tokens_per_iter >= 0, 'invalid num_tokens_per_iter'
+        assert self.devices is None or len(self.devices) >= self.tp, \
+            f'number of devices={self.devices} should be greater than tp={self.tp}'
 
 
 @dataclass
