@@ -216,14 +216,12 @@ class CacheEngine:
         for key, value in remote_rdma_info.items():
             key = int(key)
             info = ExchangeInfo.model_validate(value[self.rank])
-            print(info)
             self.transfer_engine.construct(key, info.rdma_info)
             self.transfer_engine.links[key].register_remote_mr("k", info.mr_info[0])
             self.transfer_engine.links[key].register_remote_mr("v", info.mr_info[1])
         return
 
     async def migrate(self, blocks_to_migration):
-        print("????")
         head_dim = self.model_config.get_head_size()
         num_heads = self.model_config.num_key_value_heads // self.world_size
         block_size = self.cache_config.block_size
