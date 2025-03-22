@@ -163,6 +163,9 @@ class SubCliServe:
         prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
         max_prefill_token_num_act = ArgumentHelper.max_prefill_token_num(pt_group)
         quant_policy = ArgumentHelper.quant_policy(pt_group)
+        ArgumentHelper.dp(pt_group)
+        ArgumentHelper.dp_rank(pt_group)
+
         # turbomind args
         tb_group = parser.add_argument_group('TurboMind engine arguments')
         # common engine args
@@ -291,6 +294,8 @@ class SubCliServe:
             adapters = get_lora_adapters(args.adapters)
             backend_config = PytorchEngineConfig(dtype=args.dtype,
                                                  tp=args.tp,
+                                                 dp=args.dp,
+                                                 dp_rank=args.dp_rank,
                                                  max_batch_size=max_batch_size,
                                                  cache_max_entry_count=args.cache_max_entry_count,
                                                  block_size=args.cache_block_seq_len,

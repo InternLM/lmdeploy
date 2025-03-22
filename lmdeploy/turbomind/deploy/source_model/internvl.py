@@ -2,6 +2,7 @@
 import json
 import os.path as osp
 
+from ..config import RopeParam
 from .base import INPUT_MODELS
 from .internlm2 import InternLM2Reader
 from .llama import LlamaModel, LlamaReader
@@ -69,17 +70,20 @@ class InternVLModel(LlamaModel):
             max_position_embeddings = int(model_arg.get('max_position_embeddings', 0))
             rope_scaling = model_arg.get('rope_scaling', None)
             scaling_factor = 0.0
-            use_dynamic_ntk = 0
+            scaling_type = 'default'
             if isinstance(rope_scaling, dict):
-                scaling_type = model_arg['rope_scaling'].get('type', '')
+                scaling_type = model_arg['rope_scaling'].get('type', 'default')
                 scaling_factor = model_arg['rope_scaling'].get('factor', '')
-                if scaling_type == 'dynamic':
-                    use_dynamic_ntk = 1
             attn_bias = 1 if model_arg['architectures'][0] == 'Qwen2ForCausalLM' else 0
+            rotary_embedding = hidden_units // attn_head_num
+            rope_param = RopeParam(type=scaling_type,
+                                   base=rope_theta,
+                                   dim=rotary_embedding,
+                                   max_position_embeddings=max_position_embeddings,
+                                   factor=scaling_factor)
 
         return dict(num_layer=num_layer,
                     size_per_head=hidden_units // attn_head_num,
-                    rotary_embedding=hidden_units // attn_head_num,
                     attn_bias=attn_bias,
                     norm_eps=norm_eps,
                     hidden_units=hidden_units,
@@ -87,7 +91,5 @@ class InternVLModel(LlamaModel):
                     vocab_size=vocab_size,
                     head_num=attn_head_num,
                     kv_head_num=kv_head_num,
-                    rope_theta=rope_theta,
                     max_position_embeddings=max_position_embeddings,
-                    use_dynamic_ntk=use_dynamic_ntk,
-                    rope_scaling_factor=scaling_factor)
+                    rope_param=rope_param)
