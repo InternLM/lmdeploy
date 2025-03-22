@@ -11,6 +11,7 @@ import json
 
 from typing import List
 from dataclasses import dataclass
+from copy import deepcopy
 
 import argparse
 
@@ -60,11 +61,13 @@ async def generate(request: Request):
     async with httpx.AsyncClient() as client:
         try:
             # Prefill阶段
+            prefill_client_data = deepcopy(client_data)
+            prefill_client_data["max_tokens"] = 1
             prefill_url = get_url(engine_snapshot.prefill_endpoints[0], "v1/completions")
             
             # TODO (CJF): use new api "distserve/prefill" 
             
-            prefill_resp = await client.post(prefill_url, json=client_data, timeout=30.0)
+            prefill_resp = await client.post(prefill_url, json=prefill_client_data, timeout=30.0)
             prefill_resp.raise_for_status()
 
             # 解析首行响应
@@ -73,9 +76,6 @@ async def generate(request: Request):
             session_id = prefill_info["id"]
             block_ids = prefill_info["cache_block_ids"]
             remote_token_ids = prefill_info["choices"][0]["remote_token_ids"]
-            print(f"prefill_info: {prefill_info}")
-
-            # TODO (CJF): invoke "distserve/migration" before decode pass
 
             # 构建Decode请求
             # TODO (CJF): remove redundant parameter and invoke async relay

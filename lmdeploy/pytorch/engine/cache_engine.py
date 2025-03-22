@@ -6,8 +6,8 @@ import functools
 
 import torch
 
-from slime.config import RDMAInfo, MemoryRegionInfo, ExchangeInfo
-from slime.transfer_engine.engine import TransferEngine
+from lmdeploy.migration.config import RDMAInfo, MemoryRegionInfo, ExchangeInfo
+from lmdeploy.migration.engine import TransferEngine
 
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.utils import get_logger
