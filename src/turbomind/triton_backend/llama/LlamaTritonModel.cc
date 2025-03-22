@@ -235,6 +235,7 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t                                 ten
     }
     // Only weight classes need these
     model_param_.attn_bias  = model_reader["attn_bias"].as<int>(0);
+    model_param_.qk_norm    = model_reader["qk_norm"].as<bool>();
     model_param_.group_size = model_reader["group_size"].as<int>(0);
 
     // rotary embedding parameters
@@ -471,7 +472,8 @@ std::string LlamaTritonModel<T>::toString()
        << model_param_.head_dim
        //    << "\ninter_size: " << model_param_.inter_size
        << "\nnum_layer: " << model_param_.layer_num << "\nvocab_size: " << model_param_.vocab_size
-       << "\nattn_bias: " << model_param_.attn_bias << "\nmax_batch_size: " << engine_param_.max_batch_size
+       << "\nattn_bias: " << model_param_.attn_bias << "\nqk_norm: " << model_param_.qk_norm
+       << "\nmax_batch_size: " << engine_param_.max_batch_size
        << "\nmax_prefill_token_num: " << engine_param_.max_prefill_token_num
        << "\nmax_context_token_num: " << engine_param_.max_context_token_num
        << "\nnum_tokens_per_iter: " << engine_param_.num_tokens_per_iter
