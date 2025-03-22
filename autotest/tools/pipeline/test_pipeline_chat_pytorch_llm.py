@@ -127,7 +127,7 @@ def test_pipeline_chat_kvint8_tp4(config, common_case_config, model, worker_id):
 @pytest.mark.pr_test
 @pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'mistralai/Mixtral-8x7B-Instruct-v0.1'])
 def test_pipeline_chat_pytorch_pr(config, common_case_config, model, worker_id):
-    run_pipeline_chat_test(config, common_case_config, model, 'pytorch', worker_id, is_pr_test=True)
+    run_pipeline_chat_test(config, common_case_config, model, 'pytorch', worker_id, is_smoke=True)
 
 
 @pytest.mark.order(6)

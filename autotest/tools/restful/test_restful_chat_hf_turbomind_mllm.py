@@ -138,3 +138,97 @@ def test_restful_chat_kvint8_tp4(config, worker_id):
         run_vl_testcase(config)
     else:
         run_vl_testcase(config, port=DEFAULT_PORT + get_workerid(worker_id))
+
+
+@pytest.mark.order(7)
+@pytest.mark.restful_api_vl
+@pytest.mark.gpu_num_1
+@pytest.mark.parametrize('prepare_environment', [
+    {
+        'model': 'microsoft/Phi-3-mini-4k-instruct',
+        'cuda_prefix': None,
+        'tp_num': 1,
+    },
+    {
+        'model': 'microsoft/Phi-3-mini-4k-instruct-inner-4bits',
+        'cuda_prefix': None,
+        'tp_num': 1
+    },
+    {
+        'model': 'microsoft/Phi-3-mini-4k-instruct-inner-w8a8',
+        'cuda_prefix': None,
+        'tp_num': 1
+    },
+    {
+        'model': 'microsoft/Phi-3-mini-4k-instruct',
+        'cuda_prefix': None,
+        'tp_num': 1,
+        'extra': ' --communicator native'
+    },
+    {
+        'model': 'microsoft/Phi-3-mini-4k-instruct-inner-4bits',
+        'cuda_prefix': None,
+        'tp_num': 1,
+        'extra': ' --communicator native'
+    },
+    {
+        'model': 'microsoft/Phi-3-mini-4k-instruct-inner-w8a8',
+        'cuda_prefix': None,
+        'tp_num': 1,
+        'extra': ' --communicator native'
+    },
+    {
+        'model': 'microsoft/Phi-3-mini-4k-instruct',
+        'cuda_prefix': None,
+        'tp_num': 1,
+        'extra': ' --quant-policy 8 --communicator native'
+    },
+    {
+        'model': 'microsoft/Phi-3-mini-4k-instruct-inner-4bits',
+        'cuda_prefix': None,
+        'tp_num': 1,
+        'extra': ' --quant-policy 8 --communicator native'
+    },
+    {
+        'model': 'microsoft/Phi-3-mini-4k-instruct-inner-w8a8',
+        'cuda_prefix': None,
+        'tp_num': 1,
+        'extra': ' --quant-policy 8 --communicator native'
+    },
+],
+                         indirect=True)
+def test_restful_chat_fallback_backend_tp1(config, worker_id):
+    if get_workerid(worker_id) is None:
+        run_vl_testcase(config)
+    else:
+        run_vl_testcase(config, port=DEFAULT_PORT + get_workerid(worker_id))
+
+
+@pytest.mark.order(7)
+@pytest.mark.restful_api_vl
+@pytest.mark.gpu_num_2
+@pytest.mark.parametrize('prepare_environment', [
+    {
+        'model': 'meta-llama/Llama-3.2-11B-Vision-Instruct',
+        'cuda_prefix': None,
+        'tp_num': 2
+    },
+    {
+        'model': 'meta-llama/Llama-3.2-11B-Vision-Instruct',
+        'cuda_prefix': None,
+        'tp_num': 2,
+        'extra': ' --communicator native'
+    },
+    {
+        'model': 'meta-llama/Llama-3.2-11B-Vision-Instruct',
+        'cuda_prefix': None,
+        'tp_num': 2,
+        'extra': ' --quant-policy 8 --communicator native'
+    },
+],
+                         indirect=True)
+def test_restful_chat_fallback_backend_tp2(config, worker_id):
+    if get_workerid(worker_id) is None:
+        run_vl_testcase(config)
+    else:
+        run_vl_testcase(config, port=DEFAULT_PORT + get_workerid(worker_id))

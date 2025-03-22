@@ -150,6 +150,96 @@ def test_pipeline_chat_kvint8_tp4(config, common_case_config, model, communicato
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.pipeline_chat
 @pytest.mark.flaky(reruns=0)
+@pytest.mark.gpu_num_1
+@pytest.mark.parametrize('model', [
+    'microsoft/Phi-3-mini-4k-instruct', 'microsoft/Phi-3-mini-4k-instruct-inner-4bits',
+    'microsoft/Phi-3-mini-4k-instruct-inner-w8a8'
+])
+@pytest.mark.parametrize('communicator', get_communicator_list())
+def test_pipeline_chat_fallback_backend_tp1(config, common_case_config, model, communicator, worker_id):
+    if 'gw' in worker_id:
+        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=1)
+        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
+    run_pipeline_chat_test(config,
+                           common_case_config,
+                           model,
+                           'turbomind',
+                           worker_id, {'communicator': communicator},
+                           is_smoke=True)
+
+
+@pytest.mark.order(6)
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.pipeline_chat
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.gpu_num_1
+@pytest.mark.parametrize('model', [
+    'microsoft/Phi-3-mini-4k-instruct', 'microsoft/Phi-3-mini-4k-instruct-inner-4bits',
+    'microsoft/Phi-3-mini-4k-instruct-inner-w8a8'
+])
+@pytest.mark.parametrize('communicator', get_communicator_list())
+def test_pipeline_chat_fallback_backend_kvint8_tp1(config, common_case_config, model, communicator, worker_id):
+    if 'gw' in worker_id:
+        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=1)
+        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
+    run_pipeline_chat_test(config,
+                           common_case_config,
+                           model,
+                           'turbomind-kvint',
+                           worker_id, {
+                               'quant_policy': 8,
+                               'communicator': communicator
+                           },
+                           is_smoke=True)
+
+
+@pytest.mark.order(6)
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.pipeline_chat
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.gpu_num_2
+@pytest.mark.parametrize(
+    'model', ['google/gemma-2-27b-it', 'deepseek-ai/deepseek-moe-16b-chat', 'meta-llama/Llama-3.2-11B-Vision-Instruct'])
+@pytest.mark.parametrize('communicator', get_communicator_list())
+def test_pipeline_chat_fallback_backend_tp2(config, common_case_config, model, communicator, worker_id):
+    if 'gw' in worker_id:
+        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
+    run_pipeline_chat_test(config,
+                           common_case_config,
+                           model,
+                           'turbomind',
+                           worker_id, {'communicator': communicator},
+                           is_smoke=True)
+
+
+@pytest.mark.order(6)
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.pipeline_chat
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.gpu_num_2
+@pytest.mark.parametrize(
+    'model', ['google/gemma-2-27b-it', 'deepseek-ai/deepseek-moe-16b-chat', 'meta-llama/Llama-3.2-11B-Vision-Instruct'])
+@pytest.mark.parametrize('communicator', get_communicator_list())
+def test_pipeline_chat_fallback_backend_kvint8_tp2(config, common_case_config, model, communicator, worker_id):
+    if 'gw' in worker_id:
+        os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
+        os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
+    run_pipeline_chat_test(config,
+                           common_case_config,
+                           model,
+                           'turbomind-kvint',
+                           worker_id, {
+                               'quant_policy': 8,
+                               'communicator': communicator
+                           },
+                           is_smoke=True)
+
+
+@pytest.mark.order(6)
+@pytest.mark.usefixtures('common_case_config')
+@pytest.mark.pipeline_chat
+@pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_2
 @pytest.mark.pr_test
 @pytest.mark.parametrize('model', [
@@ -163,7 +253,7 @@ def test_pipeline_chat_pr(config, common_case_config, model, communicator, worke
                            'turbomind',
                            worker_id,
                            extra={'communicator': communicator},
-                           is_pr_test=True)
+                           is_smoke=True)
 
 
 @pytest.mark.order(6)
