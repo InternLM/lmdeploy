@@ -75,6 +75,8 @@ class CacheEngine:
             f" gpu blocks and {cache_config.num_cpu_blocks} cpu blocks."
         )
 
+        self.migration_handler_initialized = False
+
     @property
     def cpu_cache(self):
         """gpu cache."""
@@ -241,21 +243,22 @@ class CacheEngine:
             mr_info={"k": mr_info_k, "v": mr_info_v, "buffer": mr_info_buffer},
         )
 
-    async def construct_rdma_link(
-        self, remote_rdma_info: Dict[int, List[ExchangeInfo]]
-    ):
+    def construct_rdma_link(self, remote_rdma_info: Dict[int, List[ExchangeInfo]]):
         for key, value in remote_rdma_info.items():
             key = int(key)
             info = ExchangeInfo.model_validate(value[self.rank])
             self.transfer_engine.construct(key, info)
-            event_loop = asyncio.get_event_loop()
-            event_loop.create_task(
-                self.transfer_engine.links[key].r_rdma_async_batch_handler(),
-                name=f"read_handler_{key}",
-            )
+
         return
 
     async def migrate(self, blocks_to_migration):
+        if not self.migration_handler_initialized:
+            for engine_id, context in self.transfer_engine.links.items():
+                event_loop = asyncio.get_event_loop()
+                event_loop.create_task(
+                    context.r_rdma_async_batch_handler(),
+                    name=f"read_handler_{engine_id}",
+                )
         head_dim = self.model_config.get_head_size()
         num_heads = self.model_config.num_key_value_heads // self.world_size
         block_size = self.cache_config.block_size
