@@ -79,6 +79,7 @@ class RDMAContext:
                 [torch.arange(l) + off for (l, off) in zip(offset, length)]
             ).cuda()
             total_length = sum(length)
+            # gather
             self.memory_pool["buffer"][:total_length] = (
                 self.memory_pool[mr_key].view(-1).gather(dim=0, index=index_tensor)
             )
