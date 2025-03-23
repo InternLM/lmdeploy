@@ -39,7 +39,8 @@ class RDMAContext:
         ib_port: int = 1,
         link_type: str = "Ethernet",
     ) -> int:
-        self.meta_send.connect(f"tcp://{meta_endpoint}")
+        self.meta_recv.bind(f"tcp://{meta_endpoint}")
+        print(f"send port: {meta_endpoint}")
         return self._rdma_context_c.init_rdma_context(dev_name, ib_port, link_type)
 
     def register_mr(self, mr_key, length: int, device="cpu"):
@@ -61,7 +62,8 @@ class RDMAContext:
 
     def construct(self, info: ExchangeInfo):
         # - metadata server connection
-        self.meta_recv.bind(f"tcp://{info.metadata_endpoint}")
+        print(f"recv port: {info.metadata_endpoint}")
+        self.meta_send.connect(f"tcp://{info.metadata_endpoint}")
 
         # - qp init -> rts -> rtr
         _remote_rdma_info_c = info.rdma_info._to_migration_c()
@@ -78,6 +80,7 @@ class RDMAContext:
     async def r_rdma_async_batch_handler(self):
         print("?????????")
         while True:
+            print("!!!!!!!!!!")
             mr_key, offset, length = await self.meta_recv.recv_pyobj()
             index_tensor = torch.cat(
                 [torch.arange(l) + off for (l, off) in zip(offset, length)]
@@ -87,7 +90,9 @@ class RDMAContext:
             self.memory_pool["buffer"][:total_length] = (
                 self.memory_pool[mr_key].view(-1).gather(dim=0, index=index_tensor)
             )
+            print("sdffffff")
             self.meta_send.send_pyobj("done")
+            print("3!!!!!!!!!!")
 
     async def r_rdma_async_batch(
         self,
