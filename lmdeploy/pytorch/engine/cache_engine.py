@@ -243,7 +243,7 @@ class CacheEngine:
         for key, value in remote_rdma_info.items():
             key = int(key)
             info = ExchangeInfo.model_validate(value[self.rank])
-            self.transfer_engine.construct(key, info.rdma_info)
+            self.transfer_engine.construct(key, info)
             self.transfer_engine.links[key].register_remote_mr("k", info.mr_info[0])
             self.transfer_engine.links[key].register_remote_mr("v", info.mr_info[1])
         return
