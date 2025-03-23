@@ -39,7 +39,7 @@ class RDMAContext:
         ib_port: int = 1,
         link_type: str = "Ethernet",
     ) -> int:
-        self.meta_recv.bind(f"tcp://{meta_endpoint}")
+        self.meta_recv.bind(f"tcp://*:{meta_endpoint[-4:]}")
         print(f"recv port: {meta_endpoint}")
         return self._rdma_context_c.init_rdma_context(dev_name, ib_port, link_type)
 
