@@ -5,7 +5,7 @@ from typing import Dict, List, Optional, Tuple
 
 import torch
 import zmq
-from zmq import asyncio
+import zmq.asyncio
 
 from . import _migration_c
 from .config import ExchangeInfo, MemoryRegionInfo, RDMAInfo
@@ -21,7 +21,7 @@ class RDMAContext:
     ):
         self._rdma_context_c = _migration_c.rdma_context()
 
-        self.meta_agent = asyncio.Context()
+        self.meta_agent = zmq.asyncio.Context()
         self.meta_send = self.meta_agent.socket(zmq.PUSH)
         self.meta_recv = self.meta_agent.socket(zmq.PULL)
 
