@@ -72,7 +72,11 @@ class RDMAContext:
         for mr_key, mr_info in info.mr_info.items():
             self.register_remote_mr(mr_key, mr_info)
 
+        loop = asyncio.get_event_loop()
+        loop.create_task(self.r_rdma_async_batch_handler())
+
     async def r_rdma_async_batch_handler(self):
+        print("?????????")
         while True:
             mr_key, offset, length = await self.meta_recv.recv_pyobj()
             index_tensor = torch.cat(
