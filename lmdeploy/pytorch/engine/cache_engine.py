@@ -248,7 +248,6 @@ class CacheEngine:
             key = int(key)
             info = ExchangeInfo.model_validate(value[self.rank])
             self.transfer_engine.construct(key, info)
-
         return
 
     async def migrate(self, blocks_to_migration):
@@ -295,21 +294,27 @@ class CacheEngine:
                 int(block_to_migration[3]) * length + layer * layer_stride_remote
                 for layer in range(self.model_config.num_layers)
             ]
-            for tgt_offset, src_offset in zip(target_offset, source_offset):
-                await self.transfer_engine.r_rdma_async(
-                    engine_id,
-                    "k",
-                    tgt_offset,
-                    src_offset,
-                    length,
-                )
-                await self.transfer_engine.r_rdma_async(
-                    engine_id,
-                    "v",
-                    tgt_offset,
-                    src_offset,
-                    length,
-                )
+            await self.transfer_engine.links[engine_id].r_rdma_async_batch(
+                "k", target_offset, source_offset, [length] * len(target_offset)
+            )
+            await self.transfer_engine.links[engine_id].r_rdma_async_batch(
+                "v", target_offset, source_offset, [length] * len(target_offset)
+            )
+            # for tgt_offset, src_offset in zip(target_offset, source_offset):
+            #     await self.transfer_engine.r_rdma_async(
+            #         engine_id,
+            #         "k",
+            #         tgt_offset,
+            #         src_offset,
+            #         length,
+            #     )
+            #     await self.transfer_engine.r_rdma_async(
+            #         engine_id,
+            #         "v",
+            #         tgt_offset,
+            #         src_offset,
+            #         length,
+            #     )
 
     def allocate_gpu_cache(self):
         """allocate caches on GPU."""
