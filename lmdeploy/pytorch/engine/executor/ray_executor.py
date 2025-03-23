@@ -199,7 +199,6 @@ class RayExecutor(ExecutorBase):
         self.placement_group = placement_group
         self.master_addr = _get_master_addr()
         self.master_port = find_available_port()
-        self.migration_master_port = find_available_port()
         setup_master_addr(self.master_addr, self.master_port)
 
         # create workerwrapper actors
