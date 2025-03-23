@@ -72,6 +72,9 @@ class RDMAContext:
         for mr_key, mr_info in info.mr_info.items():
             self.register_remote_mr(mr_key, mr_info)
 
+    async def r_rdma_async_batch_handler():
+        pass
+
     async def r_rdma_async_batch(
         self,
         mr_key: str,
