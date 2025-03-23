@@ -39,7 +39,7 @@ class RDMAContext:
         ib_port: int = 1,
         link_type: str = "Ethernet",
     ) -> int:
-        self.meta_send.connect(meta_endpoint)
+        self.meta_send.connect(f"tcp://{meta_endpoint}")
         return self._rdma_context_c.init_rdma_context(dev_name, ib_port, link_type)
 
     def register_mr(self, mr_key, length: int, device="cpu"):
@@ -61,7 +61,7 @@ class RDMAContext:
 
     def construct(self, info: ExchangeInfo):
         # - metadata server connection
-        self.meta_recv.bind(info.metadata_endpoint)
+        self.meta_recv.bind(f"tcp://{info.metadata_endpoint}")
 
         # - qp init -> rts -> rtr
         _remote_rdma_info_c = info.rdma_info._to_migration_c()
