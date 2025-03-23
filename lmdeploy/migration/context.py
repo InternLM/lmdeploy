@@ -25,8 +25,7 @@ class RDMAContext:
         self.meta_send = self.meta_agent.socket(zmq.PUSH)
         self.meta_recv = self.meta_agent.socket(zmq.PULL)
 
-        self.init_rdma_context(dev_name, ib_port, link_type, meta_endpoint)
-        self.meta_endpoint = meta_endpoint
+        self.init_rdma_context(dev_name, meta_endpoint, ib_port, link_type)
         self.remote_memory_pool: Dict[str, MemoryRegionInfo] = {}
         self.memory_pool: Dict[str, torch.Tensor] = {}
 
