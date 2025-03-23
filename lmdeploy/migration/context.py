@@ -40,7 +40,7 @@ class RDMAContext:
         link_type: str = "Ethernet",
     ) -> int:
         self.meta_recv.bind(f"tcp://{meta_endpoint}")
-        print(f"send port: {meta_endpoint}")
+        print(f"recv port: {meta_endpoint}")
         return self._rdma_context_c.init_rdma_context(dev_name, ib_port, link_type)
 
     def register_mr(self, mr_key, length: int, device="cpu"):
@@ -62,7 +62,7 @@ class RDMAContext:
 
     def construct(self, info: ExchangeInfo):
         # - metadata server connection
-        print(f"recv port: {info.metadata_endpoint}")
+        print(f"send port: {info.metadata_endpoint}")
         self.meta_send.connect(f"tcp://{info.metadata_endpoint}")
 
         # - qp init -> rts -> rtr
@@ -91,7 +91,7 @@ class RDMAContext:
                 self.memory_pool[mr_key].view(-1).gather(dim=0, index=index_tensor)
             )
             print("sdffffff")
-            self.meta_send.send_pyobj("done")
+            await self.meta_send.send_pyobj("done")
             print("3!!!!!!!!!!")
 
     async def r_rdma_async_batch(
@@ -103,7 +103,7 @@ class RDMAContext:
         callback=None,
     ):
         # Step 1. Send request to get the buffer.
-        self.meta_send.send_pyobj([mr_key, target_offset, length])
+        await self.meta_send.send_pyobj([mr_key, target_offset, length])
 
         # Step 2. Recv the buffer tensor
         await self.meta_recv.recv_pyobj()
