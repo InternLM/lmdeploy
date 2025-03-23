@@ -219,7 +219,7 @@ class CacheEngine:
         for engine_id, endpoints in zip(remote_engine_ids, metadata_endpoints):
             # TODO (Jimy): Automaticly find the optimal NIC.
             self.transfer_engine.init_link(
-                engine_id, endpoints[self.rank], f"mlx5_bond_{self.rank}", 1, "Ethernet"
+                engine_id, f"mlx5_bond_{self.rank}", endpoints[self.rank], 1, "Ethernet"
             )
             local_rdma_info = self.transfer_engine.get_local_info(engine_id)
             mr_info_k = self.transfer_engine.register_torch(
