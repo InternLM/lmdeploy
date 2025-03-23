@@ -15,12 +15,15 @@ class TransferEngine:
         self.links: Dict[int, RDMAContext] = {}
 
     def init_link(
-        self, session_id: int, dev_name: str, ib_port, link_type: str
+        self, session_id: int, dev_name: str, metadata_endpoint, ib_port, link_type: str
     ) -> None:
         if session_id in self.links:
             raise KeyError(f"session_id {session_id} already in links")
         self.links[session_id] = RDMAContext(
-            dev_name=dev_name, ib_port=ib_port, link_type=link_type
+            dev_name=dev_name,
+            meta_endpoint=metadata_endpoint,
+            ib_port=ib_port,
+            link_type=link_type,
         )
 
     def register_mr(self, session_id, mr_key, length, device="cpu"):
