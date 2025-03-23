@@ -1,5 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
+import asyncio
+
 import functools
 from typing import Dict, List, Literal, Tuple
 
@@ -239,11 +241,18 @@ class CacheEngine:
             mr_info={"k": mr_info_k, "v": mr_info_v, "buffer": mr_info_buffer},
         )
 
-    def construct_rdma_link(self, remote_rdma_info: Dict[int, List[ExchangeInfo]]):
+    async def construct_rdma_link(
+        self, remote_rdma_info: Dict[int, List[ExchangeInfo]]
+    ):
         for key, value in remote_rdma_info.items():
             key = int(key)
             info = ExchangeInfo.model_validate(value[self.rank])
             self.transfer_engine.construct(key, info)
+            event_loop = asyncio.get_event_loop()
+            event_loop.create_task(
+                self.transfer_engine.links[key].r_rdma_async_batch_handler(),
+                name=f"read_handler_{key}",
+            )
         return
 
     async def migrate(self, blocks_to_migration):

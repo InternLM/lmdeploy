@@ -72,8 +72,16 @@ class RDMAContext:
         for mr_key, mr_info in info.mr_info.items():
             self.register_remote_mr(mr_key, mr_info)
 
-    async def r_rdma_async_batch_handler():
-        pass
+    async def r_rdma_async_batch_handler(self):
+        mr_key, offset, length = await self.meta_recv.recv_pyobj()
+        index_tensor = torch.cat(
+            [torch.arange(l) + off for (l, off) in zip(offset, length)]
+        ).cuda()
+        total_length = sum(length)
+        self.memory_pool["buffer"][:total_length] = (
+            self.memory_pool[mr_key].view(-1).gather(dim=0, index=index_tensor)
+        )
+        self.meta_send.send_pyobj("done")
 
     async def r_rdma_async_batch(
         self,
@@ -84,7 +92,7 @@ class RDMAContext:
         callback=None,
     ):
         # Step 1. Send request to get the buffer.
-        self.meta_send.send_pyobj([target_offset, length])
+        self.meta_send.send_pyobj([mr_key, target_offset, length])
 
         # Step 2. Recv the buffer tensor
         await self.meta_recv.recv_pyobj()
