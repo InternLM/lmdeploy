@@ -16,14 +16,9 @@ VERSION_300 = version.parse('3.0.0')
 assert TRITON_VERSION >= version.parse('2.2.0')
 
 # TODO: fast op might not work on non-nv device
-if TRITON_VERSION >= VERSION_300:
-    tanh = tl.extra.cuda.libdevice.tanh
-    tl_log2 = tl.log2
-    tl_exp2 = tl.exp2
-else:
-    tanh = tl.math.tanh
-    tl_log2 = tl.math.log2
-    tl_exp2 = tl.math.exp2
+tanh = tl.extra.cuda.libdevice.tanh
+tl_log2 = tl.log2
+tl_exp2 = tl.exp2
 
 
 def _get_block_d(head_dim_k, head_dim_v):
@@ -48,9 +43,9 @@ def softcapping(qk, logit_softcapping: tl.constexpr):
 
 
 @triton.jit
-def _load_kv(ptrs, causal_mask: tl.constexpr, boundary_check: tl.constexpr):
+def _load_kv(ptrs, boundary_check: tl.constexpr):
     """load kv."""
-    if causal_mask:
+    if boundary_check is not None:
         return tl.load(ptrs, boundary_check=boundary_check, padding_option='zero')
     else:
         return tl.load(ptrs)
@@ -59,7 +54,8 @@ def _load_kv(ptrs, causal_mask: tl.constexpr, boundary_check: tl.constexpr):
 @triton.jit
 def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs, loop_start, loop_end, sm_scale, history_mask,
                        kv_min_loc, causal_mask: tl.constexpr, window_size: tl.constexpr,
-                       logit_softcapping: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_DK1: tl.constexpr):
+                       logit_softcapping: tl.constexpr, k_bound: tl.constexpr, v_bound: tl.constexpr,
+                       BLOCK_N: tl.constexpr, BLOCK_DK1: tl.constexpr):
     k_ptrs = tl.advance(k_ptrs, (0, loop_start))
     v_ptrs = tl.advance(v_ptrs, (loop_start, 0))
     if BLOCK_DK1:
@@ -69,11 +65,11 @@ def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs, loop_start
     for start_n in range(loop_start, loop_end, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
 
-        k = _load_kv(k_ptrs, causal_mask, boundary_check=(1, ))
+        k = _load_kv(k_ptrs, boundary_check=k_bound)
         qk = tl.dot(q, k)
 
         if BLOCK_DK1 != 0:
-            k1 = _load_kv(k1_ptrs, causal_mask, boundary_check=(1, ))
+            k1 = _load_kv(k1_ptrs, boundary_check=k_bound)
             qk += tl.dot(q1, k1)
 
         if causal_mask:
@@ -122,7 +118,7 @@ def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs, loop_start
         acc = acc * alpha[:, None]
 
         # update acc
-        v = _load_kv(v_ptrs, causal_mask, boundary_check=(0, ))
+        v = _load_kv(v_ptrs, boundary_check=v_bound)
         p = p.to(v.dtype)
         acc += tl.dot(p, v)
         # update m_i and l_i
@@ -175,8 +171,8 @@ def _flash_prefill_fwd_kernel(
     stride_oh: tl.constexpr,
     stride_od: tl.constexpr,
     kv_group_num,
-    head_dim_k,
-    head_dim_v,
+    head_dim_k: tl.constexpr,
+    head_dim_v: tl.constexpr,
     causal: tl.constexpr,
     window_size: tl.constexpr,
     logit_softcapping: tl.constexpr,
@@ -237,6 +233,15 @@ def _flash_prefill_fwd_kernel(
         order=(1, 0),
     )
 
+    k_bound0: tl.constexpr = None
+    k_bound1: tl.constexpr = (1, )
+    if head_dim_v == BLOCK_DV:
+        v_bound0: tl.constexpr = None
+        v_bound1: tl.constexpr = (0, )
+    else:
+        v_bound0: tl.constexpr = (1, )
+        v_bound1: tl.constexpr = (0, 1)
+
     if BLOCK_DK1 != 0:
         offs_dk1 = BLOCK_DK + tl.arange(0, BLOCK_DK1)
         mask_dk1 = offs_dk1 < head_dim_k
@@ -283,6 +288,8 @@ def _flash_prefill_fwd_kernel(
                                        causal_mask=False,
                                        window_size=window_size,
                                        logit_softcapping=logit_softcapping,
+                                       k_bound=k_bound0,
+                                       v_bound=v_bound0,
                                        BLOCK_N=BLOCK_N,
                                        BLOCK_DK1=BLOCK_DK1)
 
@@ -307,6 +314,8 @@ def _flash_prefill_fwd_kernel(
                                        causal_mask=True,
                                        window_size=window_size,
                                        logit_softcapping=logit_softcapping,
+                                       k_bound=k_bound1,
+                                       v_bound=v_bound1,
                                        BLOCK_N=BLOCK_N,
                                        BLOCK_DK1=BLOCK_DK1)
     # epilogue
