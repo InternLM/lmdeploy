@@ -10,7 +10,7 @@ from lmdeploy.utils import get_logger
 
 from .dist_utils import init_process_group, setup_master_addr
 
-logger = get_logger('lmdeploy')
+logger = get_logger("lmdeploy")
 
 
 class WorkerWrapperBase:
@@ -25,7 +25,7 @@ class WorkerWrapperBase:
         dp: int,
         tp: int,
         adapters: Dict[str, str] = None,
-        device_type: str = 'cuda',
+        device_type: str = "cuda",
         tokenizer: Any = None,
         log_level: int = 30,
     ):
@@ -49,7 +49,9 @@ class WorkerWrapperBase:
         # self.migration_out_que: asyncio.Queue = None
         self._migration_output_loop: asyncio.Task = None
 
-    def init_process_group(self, rank: int, master_addr: str = None, master_port: str = None):
+    def init_process_group(
+        self, rank: int, master_addr: str = None, master_port: str = None
+    ):
         """initialize process group."""
         self.rank = rank
         if self.world_size > 1:
@@ -71,7 +73,7 @@ class WorkerWrapperBase:
             ret = self.pack_output(ret)
             self.out_que.put_nowait(ret)
             await asyncio.sleep(0.000001)
-    
+
     # async def _get_migration_outputs_loop(self):
     #     """get migration outputs loop."""
     #     assert self.migration_out_que is not None
@@ -93,7 +95,7 @@ class WorkerWrapperBase:
             return outs
         else:
             return [await self.out_que.get()]
-    
+
     async def get_migration_outputs(self):
         """get migration outputs."""
         assert self.migration_out_que is not None
@@ -108,28 +110,33 @@ class WorkerWrapperBase:
             outs = [await self.migration_out_que.get()]
             print(f"outs: {outs}")
             return outs
-    
-    def init_migration(self, config):
-        return self.model_agent.cache_engine.init_migration(config)
-    
+
+    async def init_migration(self, config):
+        return await self.model_agent.cache_engine.init_migration(config)
+
     def construct_rdma_link(self, config):
         return self.model_agent.cache_engine.construct_rdma_link(config)
 
     def get_ipc_handler(self):
-        return self.model_agent.cache_engine.ipc_handler_k, self.model_agent.cache_engine.ipc_handler_v
+        return (
+            self.model_agent.cache_engine.ipc_handler_k,
+            self.model_agent.cache_engine.ipc_handler_v,
+        )
 
     def build_model(self):
         """build model."""
         self.device_ctx = DeviceContext(device_type=self.device_type)
 
-        self.model_agent = build_model_agent(model_path=self.model_path,
-                                             model_config=self.model_config,
-                                             cache_config=self.cache_config,
-                                             backend_config=self.backend_config,
-                                             tokenizer=self.tokenizer,
-                                             device_ctx=self.device_ctx,
-                                             dist_ctx=self.dist_ctx,
-                                             adapters=self.adapters)
+        self.model_agent = build_model_agent(
+            model_path=self.model_path,
+            model_config=self.model_config,
+            cache_config=self.cache_config,
+            backend_config=self.backend_config,
+            tokenizer=self.tokenizer,
+            device_ctx=self.device_ctx,
+            dist_ctx=self.dist_ctx,
+            adapters=self.adapters,
+        )
         self.model_agent.build_model()
 
     def get_free_mem(self):
@@ -161,7 +168,9 @@ class WorkerWrapperBase:
         self.model_agent.start()
         event_loop = asyncio.get_event_loop()
         self.out_que = asyncio.Queue()
-        self._output_loop = event_loop.create_task(self._get_outputs_loop(), name='GetOutputsLoop')
+        self._output_loop = event_loop.create_task(
+            self._get_outputs_loop(), name="GetOutputsLoop"
+        )
 
         # self.migration_out_que = asyncio.Queue()
         # self._migration_output_loop = event_loop.create_task(self._get_migration_outputs_loop(), name='GetMigrationoutputsLoop')
@@ -171,7 +180,7 @@ class WorkerWrapperBase:
         self.model_agent.stop()
         if self._output_loop is not None:
             self._output_loop.cancel()
-        
+
         if self._migration_output_loop is not None:
             self._migration_output_loop.cancel()
 
@@ -187,12 +196,12 @@ class WorkerWrapperBase:
         """get output async."""
         ret = await self.model_agent.get_output_async()
         return ret
-    
+
     async def get_migration_output_async(self):
         """get migration output async."""
         ret = await self.model_agent.get_migration_output_async()
         return ret
-    
+
     async def migrate(self, inputs):
         ret = await self.model_agent.migrate(inputs)
         return ret
