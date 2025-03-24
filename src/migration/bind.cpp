@@ -1,4 +1,6 @@
 #include "config.h"
+
+#include "ops/ops.h"
 #include "rdma_transport.h"
 
 #include <pybind11/functional.h>
@@ -39,4 +41,7 @@ PYBIND11_MODULE(_migration_c, m)
         .def_readwrite("psn", &migration::RDMAInfo::psn)
         .def_readwrite("mtu", &migration::RDMAInfo::mtu)
         .def_readwrite("gidx", &migration::RDMAInfo::gidx);
+
+    m.def("gather", &migration::gather);
+    m.def("scatter", &migration::scatter);
 }

@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Tuple
 import torch
 import zmq
 import zmq.asyncio
+from torch.profiler import profile, ProfilerActivity, record_function
 
 from . import _migration_c
 from .config import ExchangeInfo, MemoryRegionInfo, RDMAInfo
@@ -24,10 +25,25 @@ class RDMAContext:
         self.meta_agent = zmq.asyncio.Context()
         self.meta_send = self.meta_agent.socket(zmq.PUSH)
         self.meta_recv = self.meta_agent.socket(zmq.PULL)
+        self.meta_recv.bind(f"tcp://{meta_endpoint}")
 
-        self.init_rdma_context(dev_name, meta_endpoint, ib_port, link_type)
+        self.init_rdma_context(dev_name, ib_port, link_type)
         self.remote_memory_pool: Dict[str, MemoryRegionInfo] = {}
         self.memory_pool: Dict[str, torch.Tensor] = {}
+
+    async def connect(self, endpoint: str):
+        # bind tcp
+        self.meta_send.connect(f"tcp://{endpoint}")
+        local_info = self.dump_info()
+        await self.meta_send.send_pyobj(local_info)
+        remote_info = await self.meta_recv.recv_pyobj()
+        await self.construct(remote_info)
+
+    def dump_info(self):
+        return ExchangeInfo(
+            mr_info={mr_key: self.get_mr_info(mr_key) for mr_key in self.memory_pool},
+            rdma_info=self.get_local_info(),
+        )
 
     def get_local_info(self):
         return RDMAInfo._from_migration_c(self._rdma_context_c.get_local_rdma_info())
@@ -35,12 +51,9 @@ class RDMAContext:
     def init_rdma_context(
         self,
         dev_name: str,
-        meta_endpoint,
         ib_port: int = 1,
         link_type: str = "Ethernet",
     ) -> int:
-        self.meta_recv.bind(f"tcp://*:{meta_endpoint[-4:]}")
-        print(f"recv port: {meta_endpoint}")
         return self._rdma_context_c.init_rdma_context(dev_name, ib_port, link_type)
 
     def register_mr(self, mr_key, length: int, device="cpu"):
@@ -60,11 +73,7 @@ class RDMAContext:
         self.memory_pool[mr_key] = t
         return self.get_mr_info(mr_key)
 
-    def construct(self, info: ExchangeInfo):
-        # - metadata server connection
-        print(f"send port: {info.metadata_endpoint}")
-        self.meta_send.connect(f"tcp://{info.metadata_endpoint}")
-
+    async def construct(self, info: ExchangeInfo):
         # - qp init -> rts -> rtr
         _remote_rdma_info_c = info.rdma_info._to_migration_c()
         self._rdma_context_c.modify_qp_to_rtsr(_remote_rdma_info_c)
@@ -74,26 +83,38 @@ class RDMAContext:
         for mr_key, mr_info in info.mr_info.items():
             self.register_remote_mr(mr_key, mr_info)
 
-        loop = asyncio.get_event_loop()
-        loop.create_task(self.r_rdma_async_batch_handler())
-
+    @torch.no_grad()
     async def r_rdma_async_batch_handler(self):
-        print("?????????")
-        while True:
-            print("!!!!!!!!!!")
-            mr_key, offset, length = await self.meta_recv.recv_pyobj()
-            index_tensor = torch.cat(
-                [torch.arange(l) + off for (l, off) in zip(offset, length)]
-            ).cuda()
-            total_length = sum(length)
-            # gather
-            self.memory_pool["buffer"][:total_length] = (
-                self.memory_pool[mr_key].view(-1).gather(dim=0, index=index_tensor)
-            )
-            print("sdffffff")
-            await self.meta_send.send_pyobj("done")
-            print("3!!!!!!!!!!")
+        with profile(
+            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+            schedule=torch.profiler.schedule(wait=1, warmup=1, active=5),
+            on_trace_ready=torch.profiler.tensorboard_trace_handler("./log_target"),
+            record_shapes=True,
+            profile_memory=True,
+            with_stack=True,
+        ) as prof:
+            while True:
+                mr_key, offset, length = await self.meta_recv.recv_pyobj()
+                # index_tensor = torch.cat(
+                #     [torch.arange(l) + off for (l, off) in zip(length, offset)]
+                # ).cuda()
+                # total_length = sum(length)
+                # # gather
+                # self.memory_pool["buffer"][:total_length] = (
+                #     self.memory_pool[mr_key].view(-1).gather(dim=0, index=index_tensor)
+                # )
+                offset = torch.tensor(offset, dtype=torch.int64, device="cuda")
+                _migration_c.gather(
+                    self.memory_pool[mr_key].data_ptr(),
+                    self.memory_pool["buffer"].data_ptr(),
+                    length[0],
+                    offset.data_ptr(),
+                    offset.numel(),
+                )
+                await self.meta_send.send_pyobj("done")
+                prof.step()
 
+    @torch.no_grad()
     async def r_rdma_async_batch(
         self,
         mr_key: str,
@@ -104,20 +125,30 @@ class RDMAContext:
     ):
         # Step 1. Send request to get the buffer.
         await self.meta_send.send_pyobj([mr_key, target_offset, length])
+        total_length = sum(length)
 
         # Step 2. Recv the buffer tensor
         await self.meta_recv.recv_pyobj()
 
         # Step 3. Read the Buffer
-        await self.r_rdma_async("buffer", 0, 0, sum(length))
+        await self.r_rdma_async("buffer", 0, 0, total_length)
 
-        # Step 4. Tensor Scatter
-        index_tensor = torch.cat(
-            [torch.arange(l) + off for (l, off) in zip(source_offset, length)]
-        ).cuda()
-        self.memory_pool[mr_key].view(-1).scatter_(
-            dim=0, index=index_tensor, src=self.memory_pool["buffer"]
+        # # Step 4. Tensor Scatter
+        # index_tensor = torch.cat(
+        #     [torch.arange(l) + off for (l, off) in zip(length, source_offset)]
+        # ).cuda()
+        # self.memory_pool[mr_key].view(-1).scatter_(
+        #     dim=0, index=index_tensor, src=self.memory_pool["buffer"][:total_length]
+        # )
+        source_offset = torch.tensor(source_offset, dtype=torch.int64, device="cuda")
+        _migration_c.scatter(
+            self.memory_pool[mr_key].data_ptr(),
+            self.memory_pool["buffer"].data_ptr(),
+            length[0],
+            source_offset.data_ptr(),
+            source_offset.numel(),
         )
+        print(total_length)
 
     async def r_rdma_async(
         self, mr_key, target_offset, source_offset, length, callback=None
@@ -155,3 +186,6 @@ class RDMAContext:
 
     def get_remote_mr_info(self, mr_key) -> MemoryRegionInfo:
         return self.remote_memory_pool[mr_key]
+
+    def stop(self):
+        self._rdma_context_c.stop_cq_future()

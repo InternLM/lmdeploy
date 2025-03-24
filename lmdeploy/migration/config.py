@@ -37,6 +37,5 @@ class MemoryRegionInfo(BaseModel):
 
 
 class ExchangeInfo(BaseModel):
-    metadata_endpoint: str
     rdma_info: RDMAInfo
     mr_info: Dict[str, MemoryRegionInfo]

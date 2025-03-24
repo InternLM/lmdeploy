@@ -15,8 +15,13 @@ class TransferEngine:
         self.links: Dict[int, RDMAContext] = {}
 
     def init_link(
-        self, session_id: int, dev_name: str, metadata_endpoint, ib_port, link_type: str
-    ) -> None:
+        self,
+        session_id: int,
+        dev_name: str,
+        metadata_endpoint,
+        ib_port=1,
+        link_type: str = "Ethernet",
+    ) -> RDMAContext:
         if session_id in self.links:
             raise KeyError(f"session_id {session_id} already in links")
         self.links[session_id] = RDMAContext(
@@ -25,6 +30,7 @@ class TransferEngine:
             ib_port=ib_port,
             link_type=link_type,
         )
+        return self.links[session_id]
 
     def register_mr(self, session_id, mr_key, length, device="cpu"):
         if session_id not in self.links:
@@ -197,5 +203,5 @@ class TransferEngine:
     def stop_link(self, session_id: int):
         if session_id not in self.links:
             raise KeyError(f"session_id {id} not in links")
-        self.links[session_id]._rdma_context_c.stop_cq_future()
+        self.links[session_id].stop_link()
         del self.links[session_id]
