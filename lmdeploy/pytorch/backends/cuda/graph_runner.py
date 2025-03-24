@@ -66,6 +66,7 @@ class CUDASingleGraphRunner:
 
     def capture(self, **kwargs):
         """capture graph."""
+        logger.debug(f'Capturing graph with meta: {self.meta}')
         self.meta.input_buffers = self.model.make_buffers_cudagraph(self.meta, **kwargs)
         padded_kwargs = self.model.fill_buffers_cudagraph(self.meta, **kwargs)
         context = self.ctx_mgr.current_context()

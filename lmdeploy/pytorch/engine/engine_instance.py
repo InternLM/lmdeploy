@@ -59,11 +59,13 @@ def try_add_session(req_sender: RequestSender, session_id: int):
 
 def end(req_sender: RequestSender, session_id: int):
     """End the given session."""
+    logger.debug(f'session[{session_id}] try end session.')
     req_sender.send_async(RequestType.END_SESSION, dict(session_id=session_id, response=False))
 
 
 def cancel(req_sender: RequestSender, session_id: int):
     """Stop current streaming inference."""
+    logger.debug(f'session[{session_id}] try end session.')
     resp = req_sender.send(RequestType.STOP_SESSION, dict(session_id=session_id))
     _check_resp_success(resp, (f'Failed to cancel session: {session_id}. '
                                f'Error: {resp.type}.'))
@@ -127,6 +129,7 @@ class EngineInstance:
             return
         gen_config = gen_config or GenerationConfig()
         sampling_param = SamplingParam.from_gen_config(gen_config=gen_config)
+        logger.debug(f'session[{session_id}] try add session.')
         self.req_sender.send_async(RequestType.ADD_SESSION, dict(session_id=session_id, response=False))
         msg = dict(
             token_ids=input_ids,
@@ -135,6 +138,7 @@ class EngineInstance:
             adapter_name=adapter_name,
             input_multimodals=multimodal,
         )
+        logger.debug(f'session[{session_id}] add message: num_input_ids={len(input_ids)}.')
         resp = self.req_sender.send_async(RequestType.ADD_MESSAGE, msg)
 
         while True:
@@ -142,14 +146,19 @@ class EngineInstance:
 
             if resp.type == ResponseType.SUCCESS:
                 token_ids = resp.data['token_ids'].tolist()
-                yield EngineOutput(resp.type, token_ids, len(token_ids))
+                num_ids = len(token_ids)
+                logger.debug(f'session[{session_id}] success: num_out_ids={num_ids}.')
+                yield EngineOutput(resp.type, token_ids, num_ids)
             elif resp.type == ResponseType.FINISH:
                 resp_data = resp.data
                 token_ids = resp_data['token_ids'].tolist()
                 logits = resp_data['logits']
-                yield EngineOutput(resp.type, token_ids, len(token_ids), logits=logits)
+                num_ids = len(token_ids)
+                logger.debug(f'session[{session_id}] finish: num_out_ids={num_ids}.')
+                yield EngineOutput(resp.type, token_ids, num_ids, logits=logits)
                 break
             else:
+                logger.debug(f'session[{session_id}] failed.')
                 yield EngineOutput(resp.type, [], 0)
                 break
 
