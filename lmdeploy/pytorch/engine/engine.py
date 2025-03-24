@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import copy
+import logging
 import os
 from dataclasses import dataclass
 from typing import Any, Dict, List
@@ -200,6 +201,11 @@ class InputsMakerAsync(InputsMakerBase):
         if forward_inputs is None:
             return None, None
         next_running = forward_inputs.pop('running')
+        inputs = forward_inputs['inputs']
+        logger.info(f'Sending forward inputs: {inputs.log_info()}')
+        if logger.level <= logging.DEBUG:
+            session_ids = [seq.session_id for seq in next_running]
+            logger.debug(f'Forward session_ids: {session_ids}')
         await self.executor.forward_async(forward_inputs)
         self.forward_inputs = forward_inputs
         return forward_inputs, next_running
@@ -224,6 +230,7 @@ class InputsMakerAsync(InputsMakerBase):
 
         if enable:
             # send next forward
+            logger.info('Prefetching next forward inputs.')
             return await self._send_next_inputs_impl(prefill, True)
         else:
             return None, None
@@ -247,6 +254,7 @@ class InputsMakerSync(InputsMakerAsync):
 
     async def prefetch_next_inputs(self):
         """prefetch."""
+        logger.info('Prefetching next forward inputs.')
         return await self.send_next_inputs()
 
 
@@ -680,7 +688,6 @@ class Engine:
             model_metas=model_metas,
         )
 
-    @logging_timer('UpdateRunning', logger)
     def update_running(self, running: SeqList, next_token_ids: torch.Tensor, stopped: torch.Tensor,
                        model_metas: List[Dict[str, Any]]):
         """update scheduler."""
@@ -784,6 +791,7 @@ class Engine:
 
         def __make_dummy_inputs():
             """make dummy inputs."""
+            logger.info(f'make dummy forward inputs: prefill={prefill}.')
             num_loops = 1 if prefill else prefill_interval
             return dict(
                 running=[],
@@ -796,6 +804,7 @@ class Engine:
             )
 
         scheduler = self.scheduler
+        logger.info(f'Make forward inputs with prefill={prefill}, enable_empty={enable_empty}')
 
         if self.should_execute_dummy_batch:
             if prefill and scheduler.num_waiting() == 0:
@@ -865,6 +874,14 @@ class Engine:
     async def _async_loop_send_responses(self, que: asyncio.Queue, forward_event: asyncio.Event):
         """send responses."""
 
+        def __log_resps(outputs: List[InferOutput]):
+            """log resps."""
+            if logger.level <= logging.DEBUG:
+                session_ids = [out.session_id for out in outputs]
+                logger.debug(f'Response sessions: {session_ids}')
+            elif logger.level <= logging.INFO:
+                logger.info(f'Response: num_outputs={len(outputs)}.')
+
         def __send_resp(out: InferOutput):
             """send response."""
             resp_type = (ResponseType.FINISH if out.finish else ResponseType.SUCCESS)
@@ -872,6 +889,7 @@ class Engine:
 
         def __send_resps(step_outputs: List[InferOutput]):
             """send response callback."""
+            __log_resps(step_outputs)
             for out in step_outputs:
                 __send_resp(out)
 
@@ -943,6 +961,7 @@ class Engine:
 
     def _loop_finally(self):
         """finally process for dist."""
+        logger.info('Cleanup executor.')
         self.executor.stop()
         self.executor.release()
 
@@ -954,18 +973,18 @@ class Engine:
             forward_event = asyncio.Event()
             forward_event.set()
 
-            logger.debug('Starting executor.')
+            logger.info('Starting executor.')
             self.executor.start(forward_event)
 
             # preprocess task
-            logger.debug('Starting async task MainLoopPreprocessMessage.')
+            logger.info('Starting async task MainLoopPreprocessMessage.')
             has_runable_event = build_runable_event(self.scheduler, self.should_execute_dummy_batch)
             loop_msg_proc = event_loop.create_task(self._async_loop_preprocess_message(
                 forward_event, has_runable_event),
                                                    name='MainLoopPreprocessMessage')
 
             # response task
-            logger.debug('Starting async task MainLoopResponse.')
+            logger.info('Starting async task MainLoopResponse.')
             resp_que = asyncio.Queue()
             loop_send_resp = event_loop.create_task(self._async_loop_send_responses(resp_que, forward_event),
                                                     name='MainLoopResponse')
@@ -977,7 +996,7 @@ class Engine:
             self._loop_main = loop_main
 
             # main loop
-            logger.debug('Starting async task MainLoop.')
+            logger.info('Starting async task MainLoop.')
             inputs_maker = build_inputs_maker(self)
             await self._async_loop_main(resp_que=resp_que,
                                         has_runable_event=has_runable_event,
