@@ -27,8 +27,10 @@
 namespace turbomind {
 
 template<typename T>
-LlamaWeight<T>::LlamaWeight(
-    const ModelParam& model, const LoraParam& lora_param, const MoeParam& moe_param, size_t tp_size, size_t tp_rank):
+LlamaWeight<T>::LlamaWeight(const ModelParam&  model,
+                            const EngineParam& engine_param,
+                            const LoraParam&   lora_param,
+                            const MoeParam&    moe_param):
     hidden_units_(model.hidden_units),
     inter_size_(model.inter_size),
     vocab_size_(model.vocab_size),
@@ -36,32 +38,32 @@ LlamaWeight<T>::LlamaWeight(
     embedding_size_(model.embedding_size),
     num_layer_(model.layer_num),
     weight_type_(model.weight_type),
-    tensor_para_size_(tp_size),
-    tensor_para_rank_(tp_rank)
+    tp_size_(engine_param.attn_tp_size),
+    tp_rank_(engine_param.attn_tp_rank)
 {
-    if (vocab_size_padded_ % tensor_para_size_ != 0) {
-        vocab_size_padded_ = (vocab_size_ + tensor_para_size_ - 1) / tensor_para_size_ * tensor_para_size_;
+    if (vocab_size_padded_ % tp_size_ != 0) {
+        vocab_size_padded_ = (vocab_size_ + tp_size_ - 1) / tp_size_ * tp_size_;
         TM_LOG_WARNING("pad vocab size from %d to %d", vocab_size_, vocab_size_padded_);
     }
-    if (embedding_size_ % tensor_para_size_ != 0) {
-        embedding_size_ = (embedding_size_ + tensor_para_size_ - 1) / tensor_para_size_ * tensor_para_size_;
+    if (embedding_size_ % tp_size_ != 0) {
+        embedding_size_ = (embedding_size_ + tp_size_ - 1) / tp_size_ * tp_size_;
         TM_LOG_WARNING("pad embed size from %d to %d", embedding_size_, embedding_size_);
     }
-    FT_CHECK(hidden_units_ % tensor_para_size_ == 0);
+    FT_CHECK(hidden_units_ % tp_size_ == 0);
 
     check_cuda_error(cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking));
 
     decoder_layer_weights.reserve(num_layer_);
     for (unsigned l = 0; l < num_layer_; ++l) {
         decoder_layer_weights.emplace_back(
-            new LlamaDecoderLayerWeight<T>(l, model, lora_param, moe_param, tp_size, tp_rank));
+            new LlamaDecoderLayerWeight<T>(l, model, engine_param, lora_param, moe_param));
         decoder_layer_weights.back()->malloc(stream_);
     }
 
-    FT_CHECK(vocab_size_padded_ % tensor_para_size_ == 0);
-    deviceMalloc((T**)&pre_decoder_embedding_table, embedding_size_ * hidden_units_ / tensor_para_size_, stream_);
+    FT_CHECK(vocab_size_padded_ % tp_size_ == 0);
+    deviceMalloc((T**)&pre_decoder_embedding_table, embedding_size_ * hidden_units_ / tp_size_, stream_);
     deviceMalloc((T**)&output_norm_weight, hidden_units_, stream_);
-    deviceMalloc((T**)&post_decoder_embedding_kernel, hidden_units_ * vocab_size_padded_ / tensor_para_size_, stream_);
+    deviceMalloc((T**)&post_decoder_embedding_kernel, hidden_units_ * vocab_size_padded_ / tp_size_, stream_);
 
     // Wait for allocations
     check_cuda_error(cudaStreamSynchronize(stream_));
@@ -97,15 +99,15 @@ void LlamaWeight<T>::loadModel(std::string dir_path)
     dir_path += '/';
 
     loadWeightFromBin((T*)pre_decoder_embedding_table,
-                      {embedding_size_ * hidden_units_ / tensor_para_size_},
-                      dir_path + "tok_embeddings." + std::to_string(tensor_para_rank_) + ".weight",
+                      {embedding_size_ * hidden_units_ / tp_size_},
+                      dir_path + "tok_embeddings." + std::to_string(tp_rank_) + ".weight",
                       model_file_type);
 
     loadWeightFromBin((T*)output_norm_weight, {hidden_units_}, dir_path + "norm.weight", model_file_type);
 
     loadWeightFromBin((T*)post_decoder_embedding_kernel,
-                      {hidden_units_ * vocab_size_padded_ / tensor_para_size_},
-                      dir_path + "output." + std::to_string(tensor_para_rank_) + ".weight",
+                      {hidden_units_ * vocab_size_padded_ / tp_size_},
+                      dir_path + "output." + std::to_string(tp_rank_) + ".weight",
                       model_file_type);
 
     for (unsigned layer = 0; layer < num_layer_; ++layer) {
@@ -118,19 +120,19 @@ TensorMap LlamaWeight<T>::getParams()
 {
     TensorMap output;
 
-    output.insert("tok_embeddings." + std::to_string(tensor_para_rank_) + ".weight",
+    output.insert("tok_embeddings." + std::to_string(tp_rank_) + ".weight",
                   Tensor{MEMORY_GPU,
                          getTensorType<T>(),
-                         {embedding_size_ * hidden_units_ / tensor_para_size_ * sizeof(T)},
+                         {embedding_size_ * hidden_units_ / tp_size_ * sizeof(T)},
                          pre_decoder_embedding_table});
 
     output.insert("norm.weight",
                   Tensor{MEMORY_GPU, getTensorType<T>(), {hidden_units_ * sizeof(T)}, output_norm_weight});
 
-    output.insert("output." + std::to_string(tensor_para_rank_) + ".weight",
+    output.insert("output." + std::to_string(tp_rank_) + ".weight",
                   Tensor{MEMORY_GPU,
                          getTensorType<T>(),
-                         {hidden_units_ * vocab_size_padded_ * sizeof(T) / tensor_para_size_},
+                         {hidden_units_ * vocab_size_padded_ * sizeof(T) / tp_size_},
                          post_decoder_embedding_kernel});
 
     // transformer layers
@@ -158,7 +160,7 @@ void LlamaWeight<T>::prepare(const cudaDeviceProp& prop)
 
     char* workspace{};
 
-    TM_LOG_INFO("[LlamaWeight<T>::prepare] workspace size: %d\n", workspace_size);
+    TM_LOG_INFO("[LlamaWeight<T>::prepare] workspace size: %d", workspace_size);
 
     // Wait for the weights to be filled externally
     check_cuda_error(cudaDeviceSynchronize());

@@ -24,6 +24,7 @@
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
+#include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/logger.h"
 #include "src/turbomind/utils/memory_utils.h"
@@ -52,12 +53,11 @@ static bool is_fuse_silu_act()
 }
 
 template<typename T>
-LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(int               layer_id,
-                                                    const ModelParam& model,
-                                                    const LoraParam&  lora_param,
-                                                    const MoeParam&   moe_param,
-                                                    size_t            tp_size,
-                                                    size_t            tp_rank):
+LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(int                layer_id,
+                                                    const ModelParam&  model,
+                                                    const EngineParam& engine,
+                                                    const LoraParam&   lora_param,
+                                                    const MoeParam&    moe_param):
     head_num_(model.head_num),
     kv_head_num_(model.kv_head_num),
     size_per_head_(model.head_dim),
@@ -65,8 +65,10 @@ LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(int               layer_id,
     inter_size_(model.inter_size.at(layer_id)),
     weight_type_(model.weight_type),
     attn_bias_(model.attn_bias),
-    tensor_para_size_(tp_size),
-    tensor_para_rank_(tp_rank)
+    attn_tp_size_(engine.attn_tp_size),
+    attn_tp_rank_(engine.attn_tp_rank),
+    mlp_tp_size_(engine.mlp_tp_size),
+    mlp_tp_rank_(engine.mlp_tp_rank)
 {
     self_attn_weights = LlamaAttentionWeight<T>{hidden_units_,
                                                 size_per_head_,
@@ -74,21 +76,21 @@ LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(int               layer_id,
                                                 kv_head_num_,
                                                 model.mla,
                                                 attn_bias_,
-                                                tensor_para_size_,
+                                                attn_tp_size_,
                                                 weight_type_,
                                                 model.group_size};
 
     ffn_weights = LlamaFfnWeight<T>{
         hidden_units_,
         inter_size_,
-        tensor_para_size_,
+        mlp_tp_size_,
         weight_type_,
         model.group_size,
         weight_type_ == WeightType::kINT4 && is_fuse_silu_act(),
     };
 
     moe_weights = MoeFfnWeight<T>{
-        layer_id, moe_param, hidden_units_, weight_type_, model.group_size, tensor_para_size_, is_fuse_silu_act()};
+        layer_id, moe_param, hidden_units_, weight_type_, model.group_size, mlp_tp_size_, is_fuse_silu_act()};
 
     if (lora_param.policy == LoraPolicy::kPlora) {
         std::vector<std::string> keys = {
@@ -319,30 +321,27 @@ LlamaDecoderLayerWeight<T>::~LlamaDecoderLayerWeight() = default;
 template<typename T>
 void LlamaDecoderLayerWeight<T>::loadModel(std::string dir_path, FtCudaDataType model_file_type)
 {
-    const auto rank_spec = std::to_string(tensor_para_rank_);
-    const auto type      = model_file_type;
+    const auto type = model_file_type;
 
     loadWeightFromBin(
         (T*)self_attn_norm_weights, {hidden_units_}, dir_path + ".attention_norm.weight", model_file_type);
     loadWeightFromBin((T*)ffn_norm_weights, {hidden_units_}, dir_path + ".ffn_norm.weight", model_file_type);
 
-    loadWeights(self_attn_weights.qkv, dir_path + ".attention.w_qkv", tensor_para_rank_, type, tensor_para_size_);
+    loadWeights(self_attn_weights.qkv, dir_path + ".attention.w_qkv", attn_tp_rank_, type, attn_tp_size_);
 
-    loadWeights(self_attn_weights.output, dir_path + ".attention.wo", tensor_para_rank_, type, tensor_para_size_);
+    loadWeights(self_attn_weights.output, dir_path + ".attention.wo", attn_tp_rank_, type, attn_tp_size_);
     if (moe_weights.experts.empty()) {
-        loadWeights(ffn_weights.gating, dir_path + ".feed_forward.w1", tensor_para_rank_, type, tensor_para_size_);
-        loadWeights(
-            ffn_weights.intermediate, dir_path + ".feed_forward.w3", tensor_para_rank_, type, tensor_para_size_);
-        loadWeights(ffn_weights.output, dir_path + ".feed_forward.w2", tensor_para_rank_, type, tensor_para_size_);
+        loadWeights(ffn_weights.gating, dir_path + ".feed_forward.w1", mlp_tp_rank_, type, mlp_tp_size_);
+        loadWeights(ffn_weights.intermediate, dir_path + ".feed_forward.w3", mlp_tp_rank_, type, mlp_tp_size_);
+        loadWeights(ffn_weights.output, dir_path + ".feed_forward.w2", mlp_tp_rank_, type, mlp_tp_size_);
     }
     else {
         loadWeights(moe_weights.gate, dir_path + ".moe_ffn.gate", type);
         for (size_t i = 0; i < moe_weights.experts.size(); ++i) {
             std::string weight_name = dir_path + ".moe_ffn.experts." + std::to_string(i);
-            loadWeights(moe_weights.experts[i].gating, weight_name + ".w1", tensor_para_rank_, type, tensor_para_size_);
-            loadWeights(
-                moe_weights.experts[i].intermediate, weight_name + ".w3", tensor_para_rank_, type, tensor_para_size_);
-            loadWeights(moe_weights.experts[i].output, weight_name + ".w2", tensor_para_rank_, type, tensor_para_size_);
+            loadWeights(moe_weights.experts[i].gating, weight_name + ".w1", mlp_tp_rank_, type, mlp_tp_size_);
+            loadWeights(moe_weights.experts[i].intermediate, weight_name + ".w3", mlp_tp_rank_, type, mlp_tp_size_);
+            loadWeights(moe_weights.experts[i].output, weight_name + ".w2", mlp_tp_rank_, type, mlp_tp_size_);
         }
     }
 }
@@ -376,20 +375,22 @@ TensorMap LlamaDecoderLayerWeight<T>::getParams(std::string prefix)
     output.insert(concat(prefix, "ffn_norm.weight"),
                   Tensor{MEMORY_GPU, getTensorType<T>(), {hidden_units_ * sizeof(T)}, ffn_norm_weights});
 
-    auto get_prefix = [=](std::string_view name) { return concat(prefix, name, tensor_para_rank_); };
+    auto get_attn = [=](std::string_view name) { return concat(prefix, name, attn_tp_rank_); };
 
     if (self_attn_weights.qkv.output_dims) {
-        getWeightTensor(self_attn_weights.qkv, attn_bias_, get_prefix("attention.w_qkv"), output);
+        getWeightTensor(self_attn_weights.qkv, attn_bias_, get_attn("attention.w_qkv"), output);
     }
     else {
-        getMLATensor(self_attn_weights, prefix, output, tensor_para_rank_);
+        getMLATensor(self_attn_weights, prefix, output, attn_tp_rank_);
     }
-    getWeightTensor(self_attn_weights.output, attn_bias_, get_prefix("attention.wo"), output);
+    getWeightTensor(self_attn_weights.output, attn_bias_, get_attn("attention.wo"), output);
+
+    auto get_mlp = [=](std::string_view name) { return concat(prefix, name, mlp_tp_rank_); };
 
     if (inter_size_) {
-        getWeightTensor(ffn_weights.gating, false, get_prefix("feed_forward.w1"), output);
-        getWeightTensor(ffn_weights.intermediate, false, get_prefix("feed_forward.w3"), output);
-        getWeightTensor(ffn_weights.output, false, get_prefix("feed_forward.w2"), output);
+        getWeightTensor(ffn_weights.gating, false, get_mlp("feed_forward.w1"), output);
+        getWeightTensor(ffn_weights.intermediate, false, get_mlp("feed_forward.w3"), output);
+        getWeightTensor(ffn_weights.output, false, get_mlp("feed_forward.w2"), output);
     }
 
     if (!moe_weights.experts.empty()) {
@@ -399,9 +400,9 @@ TensorMap LlamaDecoderLayerWeight<T>::getParams(std::string prefix)
         auto& experts = moe_weights.experts;
         for (size_t i = 0; i < experts.size(); ++i) {
             const std::string name = "moe_ffn.experts." + std::to_string(i);
-            getWeightTensor(experts[i].gating, false, get_prefix(concat(name, "w1")), output);
-            getWeightTensor(experts[i].intermediate, false, get_prefix(concat(name, "w3")), output);
-            getWeightTensor(experts[i].output, false, get_prefix(concat(name, "w2")), output);
+            getWeightTensor(experts[i].gating, false, get_mlp(concat(name, "w1")), output);
+            getWeightTensor(experts[i].intermediate, false, get_mlp(concat(name, "w3")), output);
+            getWeightTensor(experts[i].output, false, get_mlp(concat(name, "w2")), output);
         }
         if (moe_weights.shared_gate.kernel) {
             output.insert(concat(prefix, "moe_ffn.shared_gate.weight"),

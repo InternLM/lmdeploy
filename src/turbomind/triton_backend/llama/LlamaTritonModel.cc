@@ -24,7 +24,8 @@
 #include <cuda_runtime.h>
 #include <yaml-cpp/yaml.h>
 
-#include "src/turbomind/comm/comm.h"
+#include "src/turbomind/comm/device_comm.h"
+#include "src/turbomind/comm/host_comm.h"
 #include "src/turbomind/engine/gateway.h"
 #include "src/turbomind/engine/model_request.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
@@ -235,21 +236,10 @@ LlamaTritonModel<T>::~LlamaTritonModel()
 }
 
 template<typename T>
-LlamaTritonModel<T>::LlamaTritonModel(size_t                                 tensor_para_size,
-                                      size_t                                 pipeline_para_size,
-                                      int                                    enable_custom_all_reduce,
-                                      std::string                            model_dir,
+LlamaTritonModel<T>::LlamaTritonModel(std::string                            model_dir,
                                       std::string                            config,
                                       std::function<std::shared_ptr<void>()> ffi_ctx_factory):
-    model_param_{},
-    attn_param_{},
-    moe_param_{},
-    lora_param_{},
-    engine_param_{},
-    tensor_para_size_(tensor_para_size),
-    pipeline_para_size_(pipeline_para_size),
-    weights_(getDeviceCount()),
-    enable_custom_all_reduce_(enable_custom_all_reduce)
+    model_param_{}, attn_param_{}, moe_param_{}, lora_param_{}, engine_param_{}, weights_(getDeviceCount())
 {
     FT_CHECK_WITH_INFO(!(config.empty() && model_dir.empty()), "invalid init options");
 
@@ -319,7 +309,19 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t                                 ten
     engine_param_.num_tokens_per_iter = engine_reader["num_tokens_per_iter"].as<int>(0);
     engine_param_.max_prefill_iters   = engine_reader["max_prefill_iters"].as<int>(1);
 
-    const auto communicator = engine_reader["communicator"].as<std::string>();
+    engine_param_.outer_dp_size = engine_reader["outer_dp_size"].as<int>();
+    engine_param_.outer_dp_rank = 0;
+    engine_param_.attn_dp_size  = engine_reader["attn_dp_size"].as<int>();
+    engine_param_.attn_dp_rank  = 0;
+    engine_param_.attn_tp_size  = engine_reader["attn_tp_size"].as<int>();
+    engine_param_.attn_tp_rank  = 0;
+    engine_param_.mlp_tp_size   = engine_reader["mlp_tp_size"].as<int>();
+    engine_param_.mlp_tp_rank   = 0;
+
+    comm_size_ = engine_param_.attn_dp_size * engine_param_.attn_tp_size;
+    FT_CHECK(engine_param_.mlp_tp_size == comm_size_);
+
+    communicator_ = engine_reader["communicator"].as<std::string>();
 
     lora_param_.policy        = getLoraPolicy(reader["lora_config"]["lora_policy"].as<std::string>(""));
     lora_param_.r             = lora_reader["lora_r"].as<int>(0);
@@ -345,10 +347,7 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t                                 ten
 
     handleMissingParams();
 
-    shared_state_          = std::make_shared<SharedState>();
-    shared_state_->barrier = std::make_shared<Barrier>(tensor_para_size);
-
-    gateway_ = std::make_shared<Gateway>(ffi_ctx_factory);
+    gateway_ = std::make_shared<Gateway>(engine_param_.outer_dp_size, engine_param_.attn_dp_size, ffi_ctx_factory);
 
     const auto device_count = getDeviceCount();
     engines_.resize(device_count);
@@ -382,9 +381,21 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t                                 ten
     }
 
     // NOTE: This runs on Python main thread
-    if (tensor_para_size > 1) {
-        group_id_ = comm::CreateGroupId(communicator);
-        group_id_->Initialize();
+    group_ids_.resize(engine_param_.outer_dp_size);
+    for (size_t i = 0; i < group_ids_.size(); ++i) {
+        group_ids_[i] = comm::CreateHostGroupId("");
+        group_ids_[i]->Initialize();
+    }
+
+    const int device_num = engine_param_.outer_dp_size * comm_size_;
+
+    engine_params_.resize(device_num, engine_param_);
+    for (int i = 0; i < device_num; ++i) {
+        auto& e         = engine_params_[i];
+        e.outer_dp_rank = i / comm_size_;
+        e.attn_tp_rank  = i % comm_size_ % e.attn_tp_size;
+        e.attn_dp_rank  = i % comm_size_ / e.attn_tp_size;
+        e.mlp_tp_rank   = i % comm_size_;
     }
 
     TM_LOG_INFO("%s", toString().c_str());
@@ -408,27 +419,22 @@ template<typename T>
 void LlamaTritonModel<T>::createSharedWeights(int device_id, int rank) noexcept
 {
     check_cuda_error(cudaSetDevice(device_id));
-    const int tensor_para_rank   = rank % tensor_para_size_;
-    const int pipeline_para_rank = rank / tensor_para_size_;
-    FT_CHECK(pipeline_para_size_ == 1 && pipeline_para_rank == 0);
-    weights_[device_id] =
-        std::make_shared<LlamaWeight<T>>(model_param_, lora_param_, moe_param_, tensor_para_size_, tensor_para_rank);
+    weights_[rank] = std::make_shared<LlamaWeight<T>>(model_param_, engine_params_.at(rank), lora_param_, moe_param_);
     // model inited with model_dir
     if (model_dir_ != "") {
         weights_[device_id]->loadModel(model_dir_);
     }
-    return;
 }
 
 template<typename T>
-std::unordered_map<std::string, Tensor> LlamaTritonModel<T>::getParams(int deviceId, int rank) noexcept
+std::unordered_map<std::string, Tensor> LlamaTritonModel<T>::getParams(int device_id, int rank) noexcept
 {
-    check_cuda_error(cudaSetDevice(deviceId));
+    check_cuda_error(cudaSetDevice(device_id));
 
     // shared_weight should be created before getParams
-    FT_CHECK(weights_[deviceId] != nullptr);
+    FT_CHECK(weights_[rank] != nullptr);
 
-    TensorMap output = weights_[deviceId]->getParams();
+    TensorMap output = weights_[rank]->getParams();
 
     std::unordered_map<std::string, Tensor> result;
     for (auto [name, tensor] : output) {
@@ -452,27 +458,48 @@ void LlamaTritonModel<T>::processWeights(int device_id, int rank) noexcept
 }
 
 template<class T>
-comm::Splits LlamaTritonModel<T>::createCommSplits(int global_rank)
+Communicators LlamaTritonModel<T>::createCommSplits(int rank)
 {
-    comm::Splits comm;
-    if (tensor_para_size_ > 1) {
-        comm.tp = group_id_->CreateCommunicator(global_rank, tensor_para_size_);
+    Communicators comm{};
+
+    const int outer_rank = rank / comm_size_;
+    const int inner_rank = rank % comm_size_;
+
+    comm.h_comm = group_ids_[outer_rank]->CreateCommunicator(comm_size_, inner_rank);
+
+    comm.h_tp_group = comm.h_comm->Split(inner_rank / engine_param_.attn_tp_size, 0);
+    comm.h_dp_group = comm.h_comm->Split(inner_rank % engine_param_.attn_tp_size, 0);
+
+    if (comm_size_ > 1) {
+        comm.d_comm = CreateDeviceCommunicator(communicator_, comm_size_, inner_rank, comm.h_comm);
+        //
+        comm.d_tp_group = 0;
+        if (engine_param_.attn_tp_size != comm_size_) {
+            comm.d_tp_group = comm.d_comm->Split(inner_rank / engine_param_.attn_tp_size, 0, 0);
+        }
     }
+
     return comm;
 }
 
 template<typename T>
-void LlamaTritonModel<T>::createEngine(int device_id, int global_rank) noexcept
+void LlamaTritonModel<T>::createEngine(int device_id, int rank)
 {
     check_cuda_error(cudaSetDevice(device_id));
 
     auto ctx = std::make_unique<Context<T>>(device_id);
 
-    ctx->comm = createCommSplits(global_rank);
+    ctx->comm = createCommSplits(rank);
 
-    shared_state_->barrier->wait();
+    const auto& engine_param = engine_params_.at(rank);
+
+    // Get `h_comm` first as ctx will be moved later
+    const auto h_comm = ctx->comm.h_comm;
+
+    h_comm->Sync();
 
     auto model = std::make_unique<LlamaV2<T>>(model_param_,  //
+                                              engine_param,
                                               attn_param_,
                                               moe_param_,
                                               lora_param_,
@@ -480,24 +507,26 @@ void LlamaTritonModel<T>::createEngine(int device_id, int global_rank) noexcept
                                               engine_param_.max_batch_size,
                                               weights_[device_id]);
 
-    shared_state_->barrier->wait();
+    h_comm->Sync();
 
     try {
+        const int dp_rank   = engine_param.outer_dp_rank * engine_param.attn_dp_size + engine_param.attn_dp_rank;
         engines_[device_id] = std::make_unique<Engine<T>>(engine_param_,  //
                                                           std::move(model),
                                                           std::move(ctx),
-                                                          shared_state_,
                                                           gateway_,
-                                                          device_id);
+                                                          device_id,
+                                                          dp_rank);
     }
     catch (const std::exception& e) {
-        TM_LOG_ERROR("[TM][Engine][Init] %s", e.what());
-        std::abort();
+        TM_LOG_ERROR("[Engine][Init] %s", e.what());
+        throw;
     }
 
     // Wait for pinned buffers to be allocated for all ranks, otherwise tuning will hang
     // due to concurrent kernel launch & cudaMallocHost
-    shared_state_->barrier->wait();
+
+    h_comm->Sync();
 
     auto& engine = *engines_[device_id];
 
@@ -505,11 +534,11 @@ void LlamaTritonModel<T>::createEngine(int device_id, int global_rank) noexcept
         engine.Warmup();
     }
     catch (const std::exception& e) {
-        TM_LOG_ERROR("[TM][Engine][Warmup] %s", e.what());
-        std::abort();
+        TM_LOG_ERROR("[Engine][Warmup] %s", e.what());
+        throw;
     }
 
-    shared_state_->barrier->wait();
+    h_comm->Sync();
 
     engine.Start();
 }
@@ -531,11 +560,11 @@ std::string LlamaTritonModel<T>::toString()
        << "\nmax_prefill_iters: " << engine_param_.max_prefill_iters << "\nsession_len: " << engine_param_.session_len
        << "\ncache_max_entry_count: " << engine_param_.cache_max_block_count
        << "\ncache_block_seq_len: " << attn_param_.cache_block_seq_len
-       << "\ncache_chunk_size: " << engine_param_.cache_chunk_size
-       << "\nenable_prefix_caching: " << engine_param_.enable_prefix_caching
-       << "\ntensor_para_size: " << tensor_para_size_ << "\npipeline_para_size: " << pipeline_para_size_
-       << "\nenable_custom_all_reduce: " << enable_custom_all_reduce_ << "\nmodel_name: " << model_name_
-       << "\nmodel_dir: " << model_dir_ << "\nquant_policy: " << model_param_.quant_policy << "\ngroup_size: "
+       << "\ncache_chunk_size: " << engine_param_.cache_chunk_size << "\nenable_prefix_caching: "
+       << engine_param_.enable_prefix_caching
+       //    << "\ntensor_para_size: " << tensor_para_size_ << "\npipeline_para_size: " << pipeline_para_size_
+       << "\nmodel_name: " << model_name_ << "\nmodel_dir: " << model_dir_
+       << "\nquant_policy: " << model_param_.quant_policy << "\ngroup_size: "
        << model_param_.group_size
        //    << "\nexpert_num: " << moe_param_.expert_num
        << "\nexpert_per_token: " << moe_param_.experts_per_token << "\nmoe_method: " << moe_param_.method << std::endl;
@@ -546,13 +575,13 @@ std::string LlamaTritonModel<T>::toString()
 template<typename T>
 int LlamaTritonModel<T>::getTensorParaSize()
 {
-    return tensor_para_size_;
+    return engine_param_.attn_tp_size;
 }
 
 template<typename T>
 int LlamaTritonModel<T>::getPipelineParaSize()
 {
-    return pipeline_para_size_;
+    return 1;
 }
 
 #ifdef ENABLE_FP32

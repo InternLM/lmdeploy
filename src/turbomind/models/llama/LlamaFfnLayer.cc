@@ -95,8 +95,6 @@ void LlamaFfnLayer<T>::forward(TensorMap*               output_tensors,
     T*       ffn_output_data = output_tensors->at("ffn_output").getPtr<T>();
     int*     lora_mask = input_tensors->at("lora_mask", Tensor{MEMORY_GPU, TYPE_INVALID, {}, nullptr}).getPtr<int>();
 
-    const bool all_reduce = input_tensors->getVal<bool>("all_reduce", false);
-
     if (weights->fused_gating_intermediate.kernel) {
         NvtxScope scope("fused_silu_ffn");
 
@@ -162,7 +160,6 @@ void LlamaFfnLayer<T>::forward(TensorMap*               output_tensors,
     if (is_free_buffer_after_forward_) {
         freeBuffer();
     }
-    // LOG(WARNING);
 }
 
 #ifdef ENABLE_FP32
