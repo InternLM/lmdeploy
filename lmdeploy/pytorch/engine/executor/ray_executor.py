@@ -272,20 +272,16 @@ class RayExecutor(ExecutorBase):
         """build ipc handler."""
         return self.collective_rpc("get_ipc_handler")
 
-    async def init_migration(self, config):
-        """init migration."""
+    async def rdma_connect(self, config):
+        """rdma connect."""
         return await asyncio.gather(
             *[
-                worker.init_migration.remote(
+                worker.rdma_connect.remote(
                     config,
                 )
                 for worker in self.workers
             ]
         )
-
-    def construct_rdma_link(self, config):
-        """construct rdma link"""
-        return self.collective_rpc("construct_rdma_link", (config,))
 
     def build_model(self):
         """build model."""

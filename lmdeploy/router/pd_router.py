@@ -1,6 +1,8 @@
 import argparse
 import asyncio
 import json
+
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import dataclass
 
@@ -192,7 +194,7 @@ def init_migration(args):
 
     handler_config_prefill = {
         "total": total_blocks[1],
-        "remote_engine_ids": [1],
+        "remote_engine_id": [1],
         "metadata_endpoints": [
             [
                 "10.130.8.139:7000",
@@ -205,12 +207,7 @@ def init_migration(args):
                 "10.130.8.139:7007",
             ]
         ],
-    }
-
-    handler_config_decode = {
-        "total": total_blocks[0],
-        "remote_engine_ids": [0],
-        "metadata_endpoints": [
+        "remote_metadata_endpoints": [
             [
                 "10.130.8.138:7000",
                 "10.130.8.138:7001",
@@ -224,23 +221,46 @@ def init_migration(args):
         ],
     }
 
-    prefill_engine_info = requests.post(
-        get_url(engine_snapshot.prefill_endpoints[0], "distserve/init_migration"),
-        json={"config": str(handler_config_prefill)},
-    ).json()
-    decode_engine_info = requests.post(
-        get_url(engine_snapshot.decode_endpoints[0], "distserve/init_migration"),
-        json={"config": str(handler_config_decode)},
-    ).json()
+    handler_config_decode = {
+        "total": total_blocks[0],
+        "remote_engine_ids": 0,
+        "metadata_endpoints": [
+            [
+                "10.130.8.138:7000",
+                "10.130.8.138:7001",
+                "10.130.8.138:7002",
+                "10.130.8.138:7003",
+                "10.130.8.138:7004",
+                "10.130.8.138:7005",
+                "10.130.8.138:7006",
+                "10.130.8.138:7007",
+            ]
+        ],
+        "remote_metadata_endpoints": [
+            [
+                "10.130.8.139:7000",
+                "10.130.8.139:7001",
+                "10.130.8.139:7002",
+                "10.130.8.139:7003",
+                "10.130.8.139:7004",
+                "10.130.8.139:7005",
+                "10.130.8.139:7006",
+                "10.130.8.139:7007",
+            ]
+        ],
+    }
 
-    requests.post(
-        get_url(engine_snapshot.prefill_endpoints[0], "distserve/construct_rdma_link"),
-        json={"1": decode_engine_info},
-    ).json()
-    requests.post(
-        get_url(engine_snapshot.decode_endpoints[0], "distserve/construct_rdma_link"),
-        json={"0": prefill_engine_info},
-    ).json()
+    with ThreadPoolExecutor(2) as executor:
+        executor.submit(
+            requests.post,
+            get_url(engine_snapshot.prefill_endpoints[0], "distserve/rdma_connect"),
+            json={"config": str(handler_config_prefill)},
+        )
+        executor.submit(
+            requests.post,
+            get_url(engine_snapshot.decode_endpoints[0], "distserve/rdma_connect"),
+            json={"config": str(handler_config_decode)},
+        )
 
 
 if __name__ == "__main__":

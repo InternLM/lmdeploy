@@ -68,7 +68,7 @@ class CacheEngine:
         # Initialize the events for stream synchronization.
         self.events = torch.cuda.Event()
 
-        self.transfer_engine: TransferEngine = None
+        self.transfer_engine = TransferEngine()
 
         logger.debug(
             f"Initialize cache engine with {cache_config.num_gpu_blocks}"
@@ -215,40 +215,28 @@ class CacheEngine:
 
         return output
 
-    async def init_migration(self, config: List[int]):
+    async def rdma_connect(self, config: List[int]):
         self.remote_block_size = config["total"]
-        remote_engine_ids = config["remote_engine_ids"]
         metadata_endpoints = config["metadata_endpoints"]
-        self.transfer_engine = TransferEngine()
-        for engine_id, endpoints in zip(remote_engine_ids, metadata_endpoints):
-            # TODO (Jimy): Automaticly find the optimal NIC.
-            self.transfer_engine.init_link(
-                engine_id, f"mlx5_bond_{self.rank}", endpoints[self.rank], 1, "Ethernet"
-            )
-            local_rdma_info = self.transfer_engine.get_local_info(engine_id)
-            mr_info_k = self.transfer_engine.register_torch(
-                engine_id, "k", self.full_gpu_cache[0]
-            )
-            mr_info_v = self.transfer_engine.register_torch(
-                engine_id, "v", self.full_gpu_cache[1]
-            )
-            # a 1G Buffer
-            buffer = torch.zeros([1024 * 1024 * 1024], device="cuda")
-            mr_info_buffer = self.transfer_engine.register_torch(
-                engine_id, "buffer", buffer
-            )
-        return ExchangeInfo(
-            metadata_endpoint=endpoints[self.rank],
-            rdma_info=local_rdma_info,
-            mr_info={"k": mr_info_k, "v": mr_info_v, "buffer": mr_info_buffer},
+        remote_engine_id = config["remote_engine_id"]
+        remote_endpoints = config["remote_metadata_endpoints"]
+        link = self.transfer_engine.init_link(
+            remote_engine_id,
+            f"mlx5_bond_{self.rank}",
+            metadata_endpoints[self.rank],
+            1,
+            "Ethernet",
         )
-
-    def construct_rdma_link(self, remote_rdma_info: Dict[int, List[ExchangeInfo]]):
-        for key, value in remote_rdma_info.items():
-            key = int(key)
-            info = ExchangeInfo.model_validate(value[self.rank])
-            self.transfer_engine.construct(key, info)
-        return
+        self.transfer_engine.register_torch(
+            remote_engine_id, "k", self.full_gpu_cache[0]
+        )
+        self.transfer_engine.register_torch(
+            remote_engine_id, "v", self.full_gpu_cache[1]
+        )
+        # a 1G Buffer
+        buffer = torch.zeros([1024 * 1024 * 1024], device="cuda")
+        self.transfer_engine.register_torch(remote_engine_id, "buffer", buffer)
+        await link.connect(remote_endpoints[self.rank])
 
     async def migrate(self, blocks_to_migration):
         if not self.migration_handler_initialized:

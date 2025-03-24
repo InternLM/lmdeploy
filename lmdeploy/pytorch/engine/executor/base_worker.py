@@ -111,11 +111,8 @@ class WorkerWrapperBase:
             print(f"outs: {outs}")
             return outs
 
-    async def init_migration(self, config):
-        return await self.model_agent.cache_engine.init_migration(config)
-
-    def construct_rdma_link(self, config):
-        return self.model_agent.cache_engine.construct_rdma_link(config)
+    async def rdma_connect(self, config):
+        return await self.model_agent.cache_engine.rdma_connect(config)
 
     def get_ipc_handler(self):
         return (

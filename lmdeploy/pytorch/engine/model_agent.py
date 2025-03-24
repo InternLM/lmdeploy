@@ -7,28 +7,28 @@ from typing import Any, Dict
 import torch
 import torch.distributed as dist
 
+from lmdeploy.messages import EngineRole
+
 from lmdeploy.utils import get_logger, logging_timer
 
 from ..backends import get_backend
 from ..config import BackendConfig, CacheConfig, ModelConfig
 from ..devices import DeviceContext, get_device_manager
 from ..distributed import DistContext, get_dist_manager
-from ..model_inputs import ModelInputs, MigrationInputs
+from ..model_inputs import MigrationInputs, ModelInputs
 from ..models.patch import add_adapters, build_patched_model, update_custom_module_map
 from ..utils import get_gpu_memory
 from ..weight_loader.model_weight_loader import load_model_weights
 from .cache_engine import CacheEngine
 from .logits_process import FusedLogitsProcessor, SamplingInputs
 
-from lmdeploy.messages import EngineRole
 
-
-logger = get_logger('lmdeploy')
+logger = get_logger("lmdeploy")
 
 
 def msg_with_rank(rank: int, msg: str):
     """return message with rank."""
-    return f'rank[{rank}] - {msg}'
+    return f"rank[{rank}] - {msg}"
 
 
 def cache_swapping(cache_engine: CacheEngine, swap_in_map: dict, swap_out_map: dict):
@@ -79,7 +79,9 @@ def model_forward(
     return dict(hidden_states=output, model_metas=model_metas)
 
 
-def _batch_stopping_criteria(token_ids: torch.Tensor, stop_words: torch.Tensor, num_appendable_ids: torch.Tensor):
+def _batch_stopping_criteria(
+    token_ids: torch.Tensor, stop_words: torch.Tensor, num_appendable_ids: torch.Tensor
+):
     """batched stopping criteria."""
     num_appendable_ids = num_appendable_ids - 1
     # one more step to cache last token(stop word)
@@ -124,7 +126,9 @@ class AutoModelAgent:
         tp_rank = dist_ctx.tp_rank
         self.tp = tp
         self.tp_rank = tp_rank
-        self.cache_engine = CacheEngine(self.cache_config, self.model_config, self.tp_rank, world_size=self.tp)
+        self.cache_engine = CacheEngine(
+            self.cache_config, self.model_config, self.tp_rank, world_size=self.tp
+        )
 
     @contextmanager
     def all_context(self):
@@ -133,7 +137,9 @@ class AutoModelAgent:
         with device_mgr.context(self.device_ctx), dist_mgr.context(self.dist_ctx):
             yield
 
-    async def async_forward(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
+    async def async_forward(
+        self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap
+    ):
         """model forward.
 
         Args:
@@ -141,31 +147,31 @@ class AutoModelAgent:
             swap_in_map (SwapMap): Cache maps to swap in.
             swap_out_map (SwapMap): Cache maps to swap out.
         """
-        raise NotImplementedError('Not implemented.')
+        raise NotImplementedError("Not implemented.")
 
     def get_logits(self, hidden_states: torch.Tensor):
         """get logits of model output."""
-        raise NotImplementedError('Not implemented.')
+        raise NotImplementedError("Not implemented.")
 
     def get_input_processor(self):
         """get input processor."""
-        raise NotImplementedError('Not implemented.')
+        raise NotImplementedError("Not implemented.")
 
     def build_model(self):
         """build model."""
-        raise NotImplementedError('Not implemented.')
+        raise NotImplementedError("Not implemented.")
 
     def build_graph_runner(self):
         """build graph runner."""
-        raise NotImplementedError('Not Implemented.')
+        raise NotImplementedError("Not Implemented.")
 
     def build_cache_engine(self):
         """build cache engine."""
-        raise NotImplementedError('Not Implemented.')
+        raise NotImplementedError("Not Implemented.")
 
     def release(self):
         """release."""
-        raise NotImplementedError('Not Implemented.')
+        raise NotImplementedError("Not Implemented.")
 
     def set_cache_config(self, cache_config: CacheConfig):
         """set all cache config."""
@@ -182,8 +188,13 @@ class AutoModelAgent:
             gpu_mem_physical_free, _ = get_gpu_memory()
             return gpu_mem_physical_free
 
-    async def _async_model_forward(self, inputs: ModelInputs, swap_in_map: Dict, swap_out_map: Dict,
-                                   return_logits: bool):
+    async def _async_model_forward(
+        self,
+        inputs: ModelInputs,
+        swap_in_map: Dict,
+        swap_out_map: Dict,
+        return_logits: bool,
+    ):
         """model forward."""
         max_prefill_token_num = self.cache_config.max_prefill_token_num
         swap_done = False
@@ -198,7 +209,7 @@ class AutoModelAgent:
 
             def gather(self, output):
                 """gather."""
-                tmp_output = output['hidden_states']
+                tmp_output = output["hidden_states"]
 
                 if not return_logits:
                     self._output = tmp_output
@@ -208,8 +219,12 @@ class AutoModelAgent:
                 start = self._start
                 seq_len = tmp_output.size(-2)
                 if out_logits is None:
-                    out_logits = tmp_output.new_empty(1, self._max_seq_len, tmp_output.size(-1), device='cpu')
-                out_logits[:, start:start + seq_len].copy_(tmp_output, non_blocking=True)
+                    out_logits = tmp_output.new_empty(
+                        1, self._max_seq_len, tmp_output.size(-1), device="cpu"
+                    )
+                out_logits[:, start : start + seq_len].copy_(
+                    tmp_output, non_blocking=True
+                )
                 self._start = start + seq_len
                 self._output = out_logits
 
@@ -224,10 +239,14 @@ class AutoModelAgent:
             """forward."""
             nonlocal swap_done, swap_in_map, swap_out_map
             if swap_done:
-                return await self.async_forward(inputs, swap_in_map=dict(), swap_out_map=dict())
+                return await self.async_forward(
+                    inputs, swap_in_map=dict(), swap_out_map=dict()
+                )
             else:
                 swap_done = True
-                return await self.async_forward(inputs, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
+                return await self.async_forward(
+                    inputs, swap_in_map=swap_in_map, swap_out_map=swap_out_map
+                )
 
         async def __long_context_single_forward(inputs):
             """one large sequence."""
@@ -243,33 +262,40 @@ class AutoModelAgent:
             for inp in new_inputs:
                 inp.model_metas = model_metas
                 tmp_out = await __forward(inp)
-                model_metas = tmp_out.get('model_metas')
+                model_metas = tmp_out.get("model_metas")
                 output_gather.gather(tmp_out)
-                tmp_out.pop('hidden_states', None)
-            tmp_out['hidden_states'] = output_gather.get_output()
+                tmp_out.pop("hidden_states", None)
+            tmp_out["hidden_states"] = output_gather.get_output()
             return tmp_out
 
         if inputs.input_ids.numel() <= max_prefill_token_num:
             ret = await __forward(inputs)
             if not return_logits and not inputs.is_decoding:
                 last_token_loc = inputs.seq_length.cumsum(0) - 1
-                ret['hidden_states'] = ret['hidden_states'][:, last_token_loc]
+                ret["hidden_states"] = ret["hidden_states"][:, last_token_loc]
         else:
             ret = await __long_context_single_forward(inputs)
             if not return_logits and not inputs.is_decoding:
                 last_token_loc = [-1]
-                ret['hidden_states'] = ret['hidden_states'][:, last_token_loc]
+                ret["hidden_states"] = ret["hidden_states"][:, last_token_loc]
             else:
-                ret['hidden_states'] = ret['hidden_states'].to('cuda')
+                ret["hidden_states"] = ret["hidden_states"].to("cuda")
 
-        hidden_states = ret.pop('hidden_states')
+        hidden_states = ret.pop("hidden_states")
         logits = self.get_logits(hidden_states)
-        ret['logits'] = logits
+        ret["logits"] = logits
         return ret
 
-    @logging_timer('SamplingLogits', logger)
-    async def async_sampling_logits(self, logits: torch.Tensor, all_ids: torch.Tensor, guided_input_ids: torch.Tensor,
-                                    sampling_inputs: SamplingInputs, inputs: ModelInputs, ignore_eos: torch.Tensor):
+    @logging_timer("SamplingLogits", logger)
+    async def async_sampling_logits(
+        self,
+        logits: torch.Tensor,
+        all_ids: torch.Tensor,
+        guided_input_ids: torch.Tensor,
+        sampling_inputs: SamplingInputs,
+        inputs: ModelInputs,
+        ignore_eos: torch.Tensor,
+    ):
         """sampling logits."""
 
         def __get_last_logits():
@@ -282,17 +308,28 @@ class AutoModelAgent:
             return logits[last_idx, :]
 
         split_logits = __get_last_logits()
-        logits_processor = FusedLogitsProcessor(sampling_inputs, ignore_eos, self.tokenizer)
+        logits_processor = FusedLogitsProcessor(
+            sampling_inputs, ignore_eos, self.tokenizer
+        )
         logits = await logits_processor(all_ids, guided_input_ids, split_logits)
         next_token_ids = logits_processor.sampling(logits)
 
         return next_token_ids
 
-    async def _async_step_background(self, inputs: ModelInputs, swap_in_map: Dict, swap_out_map: Dict,
-                                     all_ids: torch.Tensor, guided_input_ids: torch.Tensor,
-                                     sampling_inputs: SamplingInputs, num_appendable_ids: torch.LongTensor,
-                                     num_ignore_eos: torch.LongTensor, loop_count: int, return_logits: bool,
-                                     output_que: asyncio.Queue):
+    async def _async_step_background(
+        self,
+        inputs: ModelInputs,
+        swap_in_map: Dict,
+        swap_out_map: Dict,
+        all_ids: torch.Tensor,
+        guided_input_ids: torch.Tensor,
+        sampling_inputs: SamplingInputs,
+        num_appendable_ids: torch.LongTensor,
+        num_ignore_eos: torch.LongTensor,
+        loop_count: int,
+        return_logits: bool,
+        output_que: asyncio.Queue,
+    ):
         """asyc forward task."""
 
         def __update_inputs(next_token_ids):
@@ -300,23 +337,33 @@ class AutoModelAgent:
             nonlocal all_ids, guided_input_ids
             inputs.update(next_token_ids)
             if all_ids is not None:
-                all_ids = torch.cat([all_ids, next_token_ids[:, None].to(all_ids.device)], 1)
+                all_ids = torch.cat(
+                    [all_ids, next_token_ids[:, None].to(all_ids.device)], 1
+                )
             if guided_input_ids is not None:
-                guided_input_ids = torch.cat([guided_input_ids, next_token_ids[:, None].to(guided_input_ids.device)], 1)
+                guided_input_ids = torch.cat(
+                    [
+                        guided_input_ids,
+                        next_token_ids[:, None].to(guided_input_ids.device),
+                    ],
+                    1,
+                )
             if sampling_inputs.random_offsets is not None:
                 sampling_inputs.random_offsets += 1
 
-        logger.debug('<ForwardTask>: '
-                     f'batch_size={inputs.seq_length.size(0)} '
-                     f'num_tokens={inputs.input_ids.size(-1)}')
+        logger.debug(
+            "<ForwardTask>: "
+            f"batch_size={inputs.seq_length.size(0)} "
+            f"num_tokens={inputs.input_ids.size(-1)}"
+        )
         non_blocking = True
-        inputs = inputs.to_device('cuda', non_blocking=non_blocking)
+        inputs = inputs.to_device("cuda", non_blocking=non_blocking)
         is_decoding = inputs.is_decoding
         if all_ids is not None:
             all_ids = all_ids.cuda(non_blocking=non_blocking)
         if guided_input_ids is not None:
             guided_input_ids = guided_input_ids.cuda(non_blocking=non_blocking)
-        sampling_inputs = sampling_inputs.to_device('cuda', non_blocking=non_blocking)
+        sampling_inputs = sampling_inputs.to_device("cuda", non_blocking=non_blocking)
         num_appendable_ids = num_appendable_ids.cuda(non_blocking=non_blocking)
         num_ignore_eos = num_ignore_eos.cuda(non_blocking=non_blocking)
 
@@ -329,59 +376,86 @@ class AutoModelAgent:
 
         for idx in range(loop_count):
             if not inputs.is_decoding and self.cache_config.role == EngineRole.Decode:
-                prefill_engine_block_ids = functools.reduce(lambda x, y: x + y, inputs.prefill_engine_block_ids)
-                decode_engine_block_ids = functools.reduce(lambda x, y: x + y, inputs.decode_engine_block_ids)
+                prefill_engine_block_ids = functools.reduce(
+                    lambda x, y: x + y, inputs.prefill_engine_block_ids
+                )
+                decode_engine_block_ids = functools.reduce(
+                    lambda x, y: x + y, inputs.decode_engine_block_ids
+                )
                 blocks_to_migrate = torch.tensor(
-                    [[0, 0, init_block_id, target_block_id]
-                    for (init_block_id, target_block_id) in zip(decode_engine_block_ids, prefill_engine_block_ids)])
+                    [
+                        [0, 0, init_block_id, target_block_id]
+                        for (init_block_id, target_block_id) in zip(
+                            decode_engine_block_ids, prefill_engine_block_ids
+                        )
+                    ]
+                )
                 # await self.cache_engine.migrate(blocks_to_migrate)
                 if rank % tp == 0:
                     event = torch.cuda.Event()
                     event.record()
                     output = dict(
-                        next_token_ids=torch.tensor([inputs.remote_token_ids]).to(num_ignore_eos),
+                        next_token_ids=torch.tensor([inputs.remote_token_ids]).to(
+                            num_ignore_eos
+                        ),
                         logits=None,
-                        stopped=torch.tensor([False] * len(inputs.remote_token_ids)).to(num_ignore_eos),
+                        stopped=torch.tensor([False] * len(inputs.remote_token_ids)).to(
+                            num_ignore_eos
+                        ),
                         model_metas=None,
-                        event=event)
+                        event=event,
+                    )
                     output_que.put_nowait(output)
             else:
                 # inference
-                output = await self._async_model_forward(inputs,
-                                                        swap_in_map=swap_in_map,
-                                                        swap_out_map=swap_out_map,
-                                                        return_logits=return_logits)
+                output = await self._async_model_forward(
+                    inputs,
+                    swap_in_map=swap_in_map,
+                    swap_out_map=swap_out_map,
+                    return_logits=return_logits,
+                )
 
-                logits = output['logits']
+                logits = output["logits"]
                 logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
 
                 if rank % tp == 0:
                     # sampling
-                    next_token_ids = await self.async_sampling_logits(logits, all_ids, guided_input_ids, sampling_inputs,
-                                                                    inputs, num_ignore_eos > 0)
+                    next_token_ids = await self.async_sampling_logits(
+                        logits,
+                        all_ids,
+                        guided_input_ids,
+                        sampling_inputs,
+                        inputs,
+                        num_ignore_eos > 0,
+                    )
                     num_ignore_eos = num_ignore_eos - 1
 
                     # stopping criteria
-                    stopped, num_appendable_ids = _batch_stopping_criteria(next_token_ids, sampling_inputs.stop_words,
-                                                                        num_appendable_ids)
+                    stopped, num_appendable_ids = _batch_stopping_criteria(
+                        next_token_ids, sampling_inputs.stop_words, num_appendable_ids
+                    )
                 else:
                     next_token_ids = torch.empty_like(num_ignore_eos)
                     stopped = None
 
                 if tp > 1 and idx < loop_count - 1:
                     tp_gpu_group = dist_ctx.tp_gpu_group
-                    dist.broadcast(next_token_ids, src=rank // tp * tp, group=tp_gpu_group)
+                    dist.broadcast(
+                        next_token_ids, src=rank // tp * tp, group=tp_gpu_group
+                    )
 
                 # send output
-                model_metas = output.get('model_metas')
+                model_metas = output.get("model_metas")
                 if rank % tp == 0:
                     event = torch.cuda.Event()
                     event.record()
-                    output = dict(next_token_ids=next_token_ids,
-                                logits=logits if return_logits else None,
-                                stopped=stopped,
-                                model_metas=model_metas,
-                                event=event)
+                    output = dict(
+                        next_token_ids=next_token_ids,
+                        logits=logits if return_logits else None,
+                        stopped=stopped,
+                        model_metas=model_metas,
+                        event=event,
+                    )
                     output_que.put_nowait(output)
 
             # update for next loop
@@ -406,19 +480,33 @@ class AutoModelAgent:
                 )
                 if forward_event is not None:
                     forward_event.set()
-    
+
     async def migrate(self, inputs: MigrationInputs):
         prefill_engine_block_ids = inputs.prefill_block_ids
         decode_engine_block_ids = inputs.decode_block_ids
-        blocks_to_migrate = [[prefill_engine_id, prefill_engine_id, init_block_id, target_block_id]
-            for (prefill_engine_id, init_block_id, target_block_id) in zip(inputs.prefill_engine_id, decode_engine_block_ids, prefill_engine_block_ids)]
+        blocks_to_migrate = [
+            [prefill_engine_id, prefill_engine_id, init_block_id, target_block_id]
+            for (prefill_engine_id, init_block_id, target_block_id) in zip(
+                inputs.prefill_engine_id,
+                decode_engine_block_ids,
+                prefill_engine_block_ids,
+            )
+        ]
         await self.cache_engine.migrate(blocks_to_migrate)
 
-    async def _async_migration_step_background(self, inputs: MigrationInputs, output_que):
+    async def _async_migration_step_background(
+        self, inputs: MigrationInputs, output_que
+    ):
         prefill_engine_block_ids = inputs.prefill_block_ids
         decode_engine_block_ids = inputs.decode_block_ids
-        blocks_to_migrate = [[prefill_engine_id, prefill_engine_id, init_block_id, target_block_id]
-            for (prefill_engine_id, init_block_id, target_block_id) in zip(inputs.prefill_engine_id, decode_engine_block_ids, prefill_engine_block_ids)]
+        blocks_to_migrate = [
+            [prefill_engine_id, prefill_engine_id, init_block_id, target_block_id]
+            for (prefill_engine_id, init_block_id, target_block_id) in zip(
+                inputs.prefill_engine_id,
+                decode_engine_block_ids,
+                prefill_engine_block_ids,
+            )
+        ]
 
         await self.cache_engine.migrate(blocks_to_migrate)
 
@@ -428,7 +516,9 @@ class AutoModelAgent:
         # dist.gather(tensor_to_gather, gather_list=gathered_tensors if self.rank == 0 else None, dst=0, group=self.dist_ctx.world_cpu_group)
 
     @torch.inference_mode()
-    async def _async_migration_loop_background(self, forward_event: asyncio.Event = None):
+    async def _async_migration_loop_background(
+        self, forward_event: asyncio.Event = None
+    ):
         """async loop background."""
         while True:
             forward_inputs = await self._migration_in_que.get()
@@ -446,10 +536,10 @@ class AutoModelAgent:
         try:
             task.result()
         except asyncio.CancelledError:
-            logger.debug(f'Task <{task_name}> cancelled.')
+            logger.debug(f"Task <{task_name}> cancelled.")
             return
         except Exception:
-            logger.exception(f'Task <{task_name}> failed')
+            logger.exception(f"Task <{task_name}> failed")
         finally:
             if not task.done():
                 task.cancel()
@@ -461,9 +551,12 @@ class AutoModelAgent:
         event_loop = asyncio.get_event_loop()
         self._in_que = asyncio.Queue()
         self._out_que = asyncio.Queue()
-        self._background_task = event_loop.create_task(self._async_loop_background(forward_event),
-                                                       name='ModelAgentLoop')
-        done_callback = functools.partial(self._on_finish_callback, ptask=asyncio.current_task())
+        self._background_task = event_loop.create_task(
+            self._async_loop_background(forward_event), name="ModelAgentLoop"
+        )
+        done_callback = functools.partial(
+            self._on_finish_callback, ptask=asyncio.current_task()
+        )
         self._background_task.add_done_callback(done_callback)
 
         self._migration_in_que = asyncio.Queue()
@@ -481,30 +574,38 @@ class AutoModelAgent:
 
     def set_forward_inputs(self, inputs):
         """set forward inputs."""
-        assert self._in_que is not None, ('Please start backendground task before forward.')
+        assert (
+            self._in_que is not None
+        ), "Please start backendground task before forward."
         self._in_que.put_nowait(inputs)
 
     def set_migration_inputs(self, inputs: MigrationInputs):
-        assert self._migration_in_que is not None, ('Please start backendground task before forward.')
+        assert (
+            self._migration_in_que is not None
+        ), "Please start backendground task before forward."
         self._migration_in_que.put_nowait(inputs)
 
     async def get_output_async(self):
         """async get output."""
-        assert self._out_que is not None, ('Please start backendground task before forward.')
+        assert (
+            self._out_que is not None
+        ), "Please start backendground task before forward."
         out = await self._out_que.get()
-        event = out.pop('event')
+        event = out.pop("event")
         while not event.query():
             await asyncio.sleep(0.001)
         with torch.cuda.stream(self.out_stream):
-            out['next_token_ids'] = out['next_token_ids'].cpu()
-            out['stopped'] = out['stopped'].cpu()
-            if out['logits'] is not None:
-                out['logits'] = out['logits'].cpu()
+            out["next_token_ids"] = out["next_token_ids"].cpu()
+            out["stopped"] = out["stopped"].cpu()
+            if out["logits"] is not None:
+                out["logits"] = out["logits"].cpu()
         return out
-    
+
     async def get_migration_output_async(self):
         """async get migration output async."""
-        assert self._migration_out_que is not None, ('Please start backendground task before forward.')
+        assert (
+            self._migration_out_que is not None
+        ), "Please start backendground task before forward."
         out = await self._migration_out_que.get()
         return out
 
@@ -521,15 +622,17 @@ class BaseModelAgent(AutoModelAgent):
         trust_remote_code (bool): Trust remote code
     """
 
-    def __init__(self,
-                 model_path: str,
-                 model_config: ModelConfig,
-                 cache_config: CacheConfig,
-                 backend_config: BackendConfig,
-                 tokenizer: Any,
-                 dist_ctx: DistContext,
-                 device_ctx: DeviceContext,
-                 adapters: Dict[str, str] = None):
+    def __init__(
+        self,
+        model_path: str,
+        model_config: ModelConfig,
+        cache_config: CacheConfig,
+        backend_config: BackendConfig,
+        tokenizer: Any,
+        dist_ctx: DistContext,
+        device_ctx: DeviceContext,
+        adapters: Dict[str, str] = None,
+    ):
         super().__init__(
             model_config=model_config,
             cache_config=cache_config,
@@ -537,7 +640,7 @@ class BaseModelAgent(AutoModelAgent):
             dist_ctx=dist_ctx,
             device_ctx=device_ctx,
         )
-        device = 'cuda'
+        device = "cuda"
         self.backend_config = backend_config
         rank = dist_ctx.rank
 
@@ -567,13 +670,15 @@ class BaseModelAgent(AutoModelAgent):
         custom_module_map = self.model_config.custom_module_map
         if custom_module_map is not None:
             update_custom_module_map(custom_module_map)
-        logger.debug(msg_with_rank(rank, 'build model.'))
+        logger.debug(msg_with_rank(rank, "build model."))
         patched_model = build_patched_model(self.model_config, device=device)
-        logger.debug(msg_with_rank(rank, 'loading weights.'))
+        logger.debug(msg_with_rank(rank, "loading weights."))
         load_model_weights(patched_model, model_path, device=device)
         if adapters is not None:
-            logger.debug(msg_with_rank(rank, 'loading adapters.'))
-            add_adapters(patched_model, adapters, dtype=self.model_config.dtype, device=device)
+            logger.debug(msg_with_rank(rank, "loading adapters."))
+            add_adapters(
+                patched_model, adapters, dtype=self.model_config.dtype, device=device
+            )
         self.patched_model = patched_model
 
     def build_model(self):
@@ -585,23 +690,31 @@ class BaseModelAgent(AutoModelAgent):
         """build graph runner."""
         with self.all_context():
             backend = get_backend()
-            self.patched_model = backend.build_graph_runner(self.patched_model,
-                                                            model_config=self.model_config,
-                                                            cache_config=self.cache_config,
-                                                            backend_config=self.backend_config,
-                                                            device=self.device)
+            self.patched_model = backend.build_graph_runner(
+                self.patched_model,
+                model_config=self.model_config,
+                cache_config=self.cache_config,
+                backend_config=self.backend_config,
+                device=self.device,
+            )
 
-    def init_migration(self, config):
+    async def rdma_connect(self, config):
         with self.all_context():
-            self.cache_engine.init_migration(config)
+            await self.cache_engine.rdma_connect(config)
 
     def build_cache_engine(self):
         """build cache engine."""
         with self.all_context():
-            self.cache_engine = CacheEngine(self.cache_config, self.model_config, self.tp_rank, world_size=self.tp)
+            self.cache_engine = CacheEngine(
+                self.cache_config, self.model_config, self.tp_rank, world_size=self.tp
+            )
 
-    def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
-        cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
+    def _forward_impl(
+        self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap
+    ):
+        cache_swapping(
+            self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map
+        )
 
         output = model_forward(
             self.patched_model,
@@ -612,7 +725,9 @@ class BaseModelAgent(AutoModelAgent):
         )
         return output
 
-    async def async_forward(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
+    async def async_forward(
+        self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap
+    ):
         """model forward.
 
         Args:
@@ -620,7 +735,9 @@ class BaseModelAgent(AutoModelAgent):
             swap_in_map (SwapMap): Cache maps to swap in.
             swap_out_map (SwapMap): Cache maps to swap out.
         """
-        output = self._forward_impl(inputs, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
+        output = self._forward_impl(
+            inputs, swap_in_map=swap_in_map, swap_out_map=swap_out_map
+        )
         await asyncio.sleep(0)
         return output
 
@@ -634,7 +751,7 @@ class BaseModelAgent(AutoModelAgent):
 
     def reset_graph_runner(self):
         """reset graph runner to prevent tp hanging."""
-        if hasattr(self.patched_model, 'reset'):
+        if hasattr(self.patched_model, "reset"):
             self.patched_model.reset()
 
     def release(self):
@@ -645,14 +762,16 @@ class BaseModelAgent(AutoModelAgent):
         torch.cuda.empty_cache()
 
 
-def build_model_agent(model_path: str,
-                      model_config: ModelConfig,
-                      cache_config: CacheConfig,
-                      backend_config: BackendConfig,
-                      tokenizer: Any,
-                      dist_ctx: DistContext = None,
-                      device_ctx: DeviceContext = None,
-                      adapters: Dict[str, str] = None):
+def build_model_agent(
+    model_path: str,
+    model_config: ModelConfig,
+    cache_config: CacheConfig,
+    backend_config: BackendConfig,
+    tokenizer: Any,
+    dist_ctx: DistContext = None,
+    device_ctx: DeviceContext = None,
+    adapters: Dict[str, str] = None,
+):
     """create model agent.
 
     Args:

@@ -9,43 +9,49 @@ from lmdeploy.utils import get_logger
 
 from .base import ExecutorBase
 
-logger = get_logger('lmdeploy')
+logger = get_logger("lmdeploy")
 
 
 class UniExecutor(ExecutorBase):
     """Single node single device Executor."""
 
-    def __init__(self,
-                 model_path: str,
-                 model_config: ModelConfig,
-                 cache_config: CacheConfig,
-                 backend_config: BackendConfig,
-                 tokenizer: Any,
-                 adapters: Dict[str, str] = None,
-                 device_type: str = 'cuda'):
+    def __init__(
+        self,
+        model_path: str,
+        model_config: ModelConfig,
+        cache_config: CacheConfig,
+        backend_config: BackendConfig,
+        tokenizer: Any,
+        adapters: Dict[str, str] = None,
+        device_type: str = "cuda",
+    ):
         """initialize Executor."""
-        super().__init__(model_path=model_path,
-                         model_config=model_config,
-                         cache_config=cache_config,
-                         backend_config=backend_config,
-                         tokenizer=tokenizer,
-                         dp=1,
-                         tp=1,
-                         adapters=adapters,
-                         device_type=device_type)
+        super().__init__(
+            model_path=model_path,
+            model_config=model_config,
+            cache_config=cache_config,
+            backend_config=backend_config,
+            tokenizer=tokenizer,
+            dp=1,
+            tp=1,
+            adapters=adapters,
+            device_type=device_type,
+        )
 
         self.device_ctx = DeviceContext(device_type=device_type)
-        self.model_agent = build_model_agent(model_path=model_path,
-                                             model_config=model_config,
-                                             cache_config=cache_config,
-                                             backend_config=backend_config,
-                                             tokenizer=tokenizer,
-                                             device_ctx=self.device_ctx,
-                                             adapters=adapters)
+        self.model_agent = build_model_agent(
+            model_path=model_path,
+            model_config=model_config,
+            cache_config=cache_config,
+            backend_config=backend_config,
+            tokenizer=tokenizer,
+            device_ctx=self.device_ctx,
+            adapters=adapters,
+        )
 
     def download_models(self):
         """download model."""
-        raise NotImplementedError('Not Implemented.')
+        raise NotImplementedError("Not Implemented.")
 
     def build_model(self):
         """build model."""
@@ -70,12 +76,9 @@ class UniExecutor(ExecutorBase):
     def build_cache_engine(self):
         """build cache engine."""
         self.model_agent.build_cache_engine()
-    
-    def init_migration(self, config):
-        return self.model_agent.init_migration(config)
 
-    def get_ipc_handler(self):
-        return self.model_agent.cache_engine.ipc_handler_k, self.model_agent.cache_engine.ipc_handler_v
+    async def rdma_connect(self, config):
+        return await self.model_agent.rdma_connect(config)
 
     def start(self, forward_event: asyncio.Event):
         """start engine loop."""
