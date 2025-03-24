@@ -6,7 +6,6 @@ from typing import Dict, List, Optional, Tuple
 import torch
 import zmq
 import zmq.asyncio
-from torch.profiler import profile, ProfilerActivity, record_function
 
 from . import _migration_c
 from .config import ExchangeInfo, MemoryRegionInfo, RDMAInfo
@@ -85,26 +84,18 @@ class RDMAContext:
 
     @torch.no_grad()
     async def r_rdma_async_batch_handler(self):
-        with profile(
-            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-            schedule=torch.profiler.schedule(wait=1, warmup=1, active=5),
-            on_trace_ready=torch.profiler.tensorboard_trace_handler("./log_target"),
-            record_shapes=True,
-            profile_memory=True,
-            with_stack=True,
-        ) as prof:
-            while True:
-                mr_key, offset, length = await self.meta_recv.recv_pyobj()
-                offset = torch.tensor(offset, dtype=torch.int64, device="cuda")
-                _migration_c.gather(
-                    self.memory_pool[mr_key].data_ptr(),
-                    self.memory_pool["buffer"].data_ptr(),
-                    length,
-                    offset.data_ptr(),
-                    offset.numel(),
-                )
-                await self.meta_send.send_pyobj("done")
-                prof.step()
+        while True:
+            mr_key, offset, length = await self.meta_recv.recv_pyobj()
+            offset = torch.tensor(offset, dtype=torch.int64, device="cuda")
+            _migration_c.gather(
+                self.memory_pool[mr_key].data_ptr(),
+                self.memory_pool["buffer"].data_ptr(),
+                length,
+                offset.data_ptr(),
+                offset.numel(),
+            )
+            await self.meta_send.send_pyobj("done")
+            prof.step()
 
     @torch.no_grad()
     async def r_rdma_async_batch(
