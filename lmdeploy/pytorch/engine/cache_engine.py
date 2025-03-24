@@ -7,6 +7,8 @@ from typing import Dict, List, Literal, Tuple
 
 import torch
 
+from lmdeploy.messages import EngineRole
+
 from lmdeploy.migration.config import ExchangeInfo, MemoryRegionInfo, RDMAInfo
 from lmdeploy.migration.engine import TransferEngine
 
@@ -218,7 +220,7 @@ class CacheEngine:
     async def rdma_connect(self, config: List[int]):
         self.remote_block_size = config["total"]
         metadata_endpoints = config["metadata_endpoints"]
-        remote_engine_id = config["remote_engine_id"]
+        remote_engine_id = int(config["remote_engine_id"])
         remote_endpoints = config["remote_metadata_endpoints"]
         link = self.transfer_engine.init_link(
             remote_engine_id,
@@ -237,6 +239,9 @@ class CacheEngine:
         buffer = torch.zeros([1024 * 1024 * 1024], device="cuda")
         self.transfer_engine.register_torch(remote_engine_id, "buffer", buffer)
         await link.connect(remote_endpoints[self.rank])
+        if self.cache_config.role == EngineRole.Prefill:
+            loop = asyncio.get_event_loop()
+            loop.create_task(link.r_rdma_async_batch_handler())
 
     async def migrate(self, blocks_to_migration):
         if not self.migration_handler_initialized:
@@ -283,28 +288,12 @@ class CacheEngine:
                 for layer in range(self.model_config.num_layers)
             ]
 
-            for tgt_offset, src_offset in zip(target_offset, source_offset):
-                await self.transfer_engine.r_rdma_async(
-                    engine_id,
-                    "k",
-                    tgt_offset,
-                    src_offset,
-                    length,
-                )
-                await self.transfer_engine.r_rdma_async(
-                    engine_id,
-                    "v",
-                    tgt_offset,
-                    src_offset,
-                    length,
-                )
-
-                # await self.transfer_engine.links[engine_id].r_rdma_async_batch(
-                #     "k", target_offset, source_offset, [length] * len(target_offset)
-                # )
-                # await self.transfer_engine.links[engine_id].r_rdma_async_batch(
-                #     "v", target_offset, source_offset, [length] * len(target_offset)
-                # )
+            await self.transfer_engine.links[engine_id].r_rdma_async_batch(
+                "k", target_offset, source_offset, length
+            )
+            await self.transfer_engine.links[engine_id].r_rdma_async_batch(
+                "v", target_offset, source_offset, length
+            )
 
     def allocate_gpu_cache(self):
         """allocate caches on GPU."""
