@@ -3,6 +3,8 @@
 import asyncio
 
 import functools
+
+import time
 from typing import Dict, List, Literal, Tuple
 
 import torch
@@ -285,12 +287,15 @@ class CacheEngine:
                 ]
             )
 
+        begin = time.time()
         await self.transfer_engine.links[engine_id].r_rdma_async_batch(
             "k", target_offset, source_offset, length
         )
         await self.transfer_engine.links[engine_id].r_rdma_async_batch(
             "v", target_offset, source_offset, length
         )
+        end = time.time()
+        print(f"bw: {length * len(source_offset) / (end - begin) / 1e9}GBps")
 
     def allocate_gpu_cache(self):
         """allocate caches on GPU."""
