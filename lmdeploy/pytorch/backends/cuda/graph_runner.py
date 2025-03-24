@@ -130,7 +130,11 @@ class CUDAGraphRunner(GraphRunner):
         context = self.ctx_mgr.current_context()
         is_decoding = context.is_decoding
         num_tokens = input_ids.numel()
-        new_num_tokens = next_power_of_2(num_tokens)
+        meta = self.get_meta()
+        if meta.padding_batch_size is None:
+            new_num_tokens = next_power_of_2(num_tokens)
+        else:
+            new_num_tokens = next_power_of_2(meta.padding_batch_size)
         return (new_num_tokens, is_decoding)
 
     def __call__(self, **kwargs):

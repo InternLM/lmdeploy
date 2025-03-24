@@ -284,10 +284,6 @@ class Engine:
         tp = engine_config.tp
         dp = engine_config.dp
         dp_rank = engine_config.dp_rank
-        if dp > 1 and tp > 1 and not engine_config.eager_mode:
-            logger.warning('Enable eager mode on dp > 1.')
-            # TODO: support eager with dp
-            engine_config.eager_mode = True
 
         self.tokenizer = tokenizer
         self.tp = tp
