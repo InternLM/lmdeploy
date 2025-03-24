@@ -77,8 +77,6 @@ class CacheEngine:
             f" gpu blocks and {cache_config.num_cpu_blocks} cpu blocks."
         )
 
-        self.migration_handler_initialized = False
-
     @property
     def cpu_cache(self):
         """gpu cache."""
@@ -244,13 +242,6 @@ class CacheEngine:
             loop.create_task(link.r_rdma_async_batch_handler())
 
     async def migrate(self, blocks_to_migration):
-        if not self.migration_handler_initialized:
-            for engine_id, context in self.transfer_engine.links.items():
-                event_loop = asyncio.get_event_loop()
-                event_loop.create_task(
-                    context.r_rdma_async_batch_handler(),
-                    name=f"read_handler_{engine_id}",
-                )
         head_dim = self.model_config.get_head_size()
         num_heads = self.model_config.num_key_value_heads // self.world_size
         block_size = self.cache_config.block_size
@@ -277,23 +268,29 @@ class CacheEngine:
         ]
         source_offset = functools.reduce(lambda x, y: x + y, source_offset)
 
+        source_offset = []
+        target_offset = []
         for block_to_migration in blocks_to_migration:
             engine_id = int(block_to_migration[0])
-            source_offset = [
-                int(block_to_migration[2]) * length + layer * layer_stride
-                for layer in range(self.model_config.num_layers)
-            ]
-            target_offset = [
-                int(block_to_migration[3]) * length + layer * layer_stride_remote
-                for layer in range(self.model_config.num_layers)
-            ]
+            source_offset.extend(
+                [
+                    int(block_to_migration[2]) * length + layer * layer_stride
+                    for layer in range(self.model_config.num_layers)
+                ]
+            )
+            target_offset.extend(
+                [
+                    int(block_to_migration[3]) * length + layer * layer_stride_remote
+                    for layer in range(self.model_config.num_layers)
+                ]
+            )
 
-            await self.transfer_engine.links[engine_id].r_rdma_async_batch(
-                "k", target_offset, source_offset, length
-            )
-            await self.transfer_engine.links[engine_id].r_rdma_async_batch(
-                "v", target_offset, source_offset, length
-            )
+        await self.transfer_engine.links[engine_id].r_rdma_async_batch(
+            "k", target_offset, source_offset, length
+        )
+        await self.transfer_engine.links[engine_id].r_rdma_async_batch(
+            "v", target_offset, source_offset, length
+        )
 
     def allocate_gpu_cache(self):
         """allocate caches on GPU."""
