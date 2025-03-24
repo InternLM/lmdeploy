@@ -275,10 +275,12 @@ class RayExecutor(ExecutorBase):
     async def init_migration(self, config):
         """init migration."""
         return await asyncio.gather(
-            worker.init_migration.get(
-                config,
-            )
-            for worker in self.workers
+            *[
+                worker.init_migration.get(
+                    config,
+                )
+                for worker in self.workers
+            ]
         )
 
     def construct_rdma_link(self, config):
