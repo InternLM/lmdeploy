@@ -34,7 +34,7 @@ def run_pipeline_chat_test(config,
         extra = json.dumps(extra, ensure_ascii=False, indent=None)
         extra = extra.replace(' ', '').replace('"', '\\"').replace(',', '\\,')
     with open(pipeline_chat_log, 'w') as f:
-        cmd = f'python3 autotest/tools/pipeline/llm_case.py run_pipeline_chat_test {hf_path} autotest/prompt_case.yaml {tp} {backend_type} {is_pr_test} {extra}'  # noqa E501
+        cmd = f'python3 autotest/tools/pipeline/llm_case.py run_pipeline_chat_test {hf_path} autotest/prompt_case.yaml {tp} {backend_type} {is_smoke} {extra}'  # noqa E501
 
         f.writelines('reproduce command: ' + cmd + '\n')
         print('reproduce command: ' + cmd)
@@ -89,7 +89,7 @@ def run_pipeline_vl_chat_test(config,
         extra = json.dumps(extra, ensure_ascii=False, indent=None)
         extra = extra.replace(' ', '').replace('"', '\\"').replace(',', '\\,')
     with open(pipeline_chat_log, 'w') as f:
-        cmd = f'python3 autotest/tools/pipeline/mllm_case.py run_pipeline_mllm_test {hf_path} {resource_path} {tp} {backend_type} {is_pr_test} {extra}'  # noqa E501
+        cmd = f'python3 autotest/tools/pipeline/mllm_case.py run_pipeline_mllm_test {hf_path} {resource_path} {tp} {backend_type} {is_smoke} {extra}'  # noqa E501
 
         f.writelines('reproduce command: ' + cmd + '\n')
         print('reproduce command: ' + cmd)
