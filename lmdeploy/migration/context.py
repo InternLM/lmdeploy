@@ -95,19 +95,11 @@ class RDMAContext:
         ) as prof:
             while True:
                 mr_key, offset, length = await self.meta_recv.recv_pyobj()
-                # index_tensor = torch.cat(
-                #     [torch.arange(l) + off for (l, off) in zip(length, offset)]
-                # ).cuda()
-                # total_length = sum(length)
-                # # gather
-                # self.memory_pool["buffer"][:total_length] = (
-                #     self.memory_pool[mr_key].view(-1).gather(dim=0, index=index_tensor)
-                # )
                 offset = torch.tensor(offset, dtype=torch.int64, device="cuda")
                 _migration_c.gather(
                     self.memory_pool[mr_key].data_ptr(),
                     self.memory_pool["buffer"].data_ptr(),
-                    length[0],
+                    length,
                     offset.data_ptr(),
                     offset.numel(),
                 )
@@ -125,7 +117,7 @@ class RDMAContext:
     ):
         # Step 1. Send request to get the buffer.
         await self.meta_send.send_pyobj([mr_key, target_offset, length])
-        total_length = sum(length)
+        total_length = length * len(target_offset)
 
         # Step 2. Recv the buffer tensor
         await self.meta_recv.recv_pyobj()
@@ -134,17 +126,11 @@ class RDMAContext:
         await self.r_rdma_async("buffer", 0, 0, total_length)
 
         # # Step 4. Tensor Scatter
-        # index_tensor = torch.cat(
-        #     [torch.arange(l) + off for (l, off) in zip(length, source_offset)]
-        # ).cuda()
-        # self.memory_pool[mr_key].view(-1).scatter_(
-        #     dim=0, index=index_tensor, src=self.memory_pool["buffer"][:total_length]
-        # )
         source_offset = torch.tensor(source_offset, dtype=torch.int64, device="cuda")
         _migration_c.scatter(
             self.memory_pool[mr_key].data_ptr(),
             self.memory_pool["buffer"].data_ptr(),
-            length[0],
+            length,
             source_offset.data_ptr(),
             source_offset.numel(),
         )
