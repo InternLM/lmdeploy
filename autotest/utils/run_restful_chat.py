@@ -626,7 +626,7 @@ def run_tools_case(config, port: int = DEFAULT_PORT):
                                                   stream=False,
                                                   tools=tools)
         print(response)
-        with assume: 
+        with assume:
             assert response.choices[0].finish_reason == 'tool_calls'
         with assume:
             assert response.choices[0].message.tool_calls[0].function.name == 'get_current_weather'
