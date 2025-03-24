@@ -83,7 +83,7 @@ void RDMAContext::cq_poll_handle()
 
         while (ibv_poll_cq(cq_, 1, &wc) > 0) {
             if (wc.status == IBV_WC_SUCCESS) {
-                std::cout << "RDMA READ completed successfully." << std::endl;
+                MIGRATION_LOG_INFO("RDMA READ completed successfully." << std::endl);
                 if (wc.wr_id != 0) {
                     wr_info_base* ptr = reinterpret_cast<wr_info_base*>(wc.wr_id);
                     if (ptr->get_wr_type() == WrType::RDMA_READ_ACK) {

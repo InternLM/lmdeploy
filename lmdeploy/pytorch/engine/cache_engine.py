@@ -12,6 +12,7 @@ import torch
 from lmdeploy.messages import EngineRole
 
 from lmdeploy.migration.config import ExchangeInfo, MemoryRegionInfo, RDMAInfo
+from lmdeploy.migration import _migration_c
 from lmdeploy.migration.engine import TransferEngine
 
 from lmdeploy.pytorch.backends import get_backend
@@ -222,6 +223,7 @@ class CacheEngine:
         metadata_endpoint = config["metadata_endpoints"][self.rank]
         remote_engine_id = int(config["remote_engine_id"])
         remote_endpoint = config["remote_metadata_endpoints"][self.rank]
+        print(self.rank, metadata_endpoint, remote_endpoint)
         link = self.transfer_engine.init_link(
             remote_engine_id,
             f"mlx5_bond_{self.rank}",
@@ -254,23 +256,6 @@ class CacheEngine:
         layer_stride = self.cache_config.num_gpu_blocks * length
         layer_stride_remote = self.remote_block_size * length
 
-        target_offset = [
-            [
-                int(block_to_migration[3]) * length + layer * layer_stride_remote
-                for layer in range(self.model_config.num_layers)
-            ]
-            for block_to_migration in blocks_to_migration
-        ]
-        target_offset = functools.reduce(lambda x, y: x + y, target_offset)
-        source_offset = [
-            [
-                int(block_to_migration[2]) * length + layer * layer_stride
-                for layer in range(self.model_config.num_layers)
-            ]
-            for block_to_migration in blocks_to_migration
-        ]
-        source_offset = functools.reduce(lambda x, y: x + y, source_offset)
-
         source_offset = []
         target_offset = []
         for block_to_migration in blocks_to_migration:
@@ -287,16 +272,23 @@ class CacheEngine:
                     for layer in range(self.model_config.num_layers)
                 ]
             )
-        # begin = time.time()
-        # for t_off, s_off in zip(target_offset, source_offset):
-        #     await self.transfer_engine.links[engine_id].r_rdma_async(
-        #         "k", t_off, s_off, length
-        #     )
-        #     await self.transfer_engine.links[engine_id].r_rdma_async(
-        #         "v", t_off, s_off, length
-        #     )
-        # end = time.time()
-        # print(f"bw: {length * len(source_offset) / (end - begin) / 1e9}GBps")
+        begin = time.time()
+        for t_off, s_off in zip(target_offset, source_offset):
+            await self.transfer_engine.links[engine_id].r_rdma_async(
+                "k", t_off, s_off, length
+            )
+            await self.transfer_engine.links[engine_id].r_rdma_async(
+                "v", t_off, s_off, length
+            )
+        end = time.time()
+        print(f"bw: {length * len(source_offset) / (end - begin) / 1e9}GBps")
+
+        _migration_c.gather(
+            self.transfer_engine.links[engine_id].memory_pool["v"].data_ptr(),
+            self.transfer_engine.links[engine_id].memory_pool["buffer"].data_ptr(),
+            length, torch.tensor(source_offset, dtype=torch.int64, device="cuda").data_ptr(), len(source_offset))
+        # if self.rank == 0:
+        print(f"before: {self.rank}", self.transfer_engine.links[engine_id].memory_pool["buffer"][:length // 2].sum(), self.transfer_engine.links[engine_id].memory_pool["buffer"][0:16])
 
         begin = time.time()
         await self.transfer_engine.links[engine_id].r_rdma_async_batch(
@@ -305,6 +297,8 @@ class CacheEngine:
         await self.transfer_engine.links[engine_id].r_rdma_async_batch(
             "v", target_offset, source_offset, length
         )
+        # if self.rank == 0:
+        print(f"after: {self.rank}", self.transfer_engine.links[engine_id].memory_pool["buffer"][:length // 2].sum(), self.transfer_engine.links[engine_id].memory_pool["buffer"][0:16])
         end = time.time()
         print(f"bw: {length * len(source_offset) / (end - begin) / 1e9}GBps")
 
