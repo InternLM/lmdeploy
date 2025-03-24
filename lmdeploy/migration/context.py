@@ -94,6 +94,7 @@ class RDMAContext:
                 offset.data_ptr(),
                 offset.numel(),
             )
+            torch.cuda.synchronize()
             await self.meta_send.send_pyobj("done")
 
     @torch.no_grad()
@@ -124,6 +125,7 @@ class RDMAContext:
             source_offset.data_ptr(),
             source_offset.numel(),
         )
+        torch.cuda.synchronize()
 
     async def r_rdma_async(
         self, mr_key, target_offset, source_offset, length, callback=None

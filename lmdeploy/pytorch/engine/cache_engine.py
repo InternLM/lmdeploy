@@ -288,6 +288,7 @@ class CacheEngine:
             self.transfer_engine.links[engine_id].memory_pool["v"].data_ptr(),
             self.transfer_engine.links[engine_id].memory_pool["buffer"].data_ptr(),
             length, torch.tensor(source_offset, dtype=torch.int64, device="cuda").data_ptr(), len(source_offset))
+        torch.cuda.synchronize()
         # if self.rank == 0:
         print(f"before: {self.rank}", self.transfer_engine.links[engine_id].memory_pool["buffer"][:length].sum(), self.transfer_engine.links[engine_id].memory_pool["buffer"][0:16])
 
