@@ -95,7 +95,6 @@ class RDMAContext:
                 offset.numel(),
             )
             await self.meta_send.send_pyobj("done")
-            prof.step()
 
     @torch.no_grad()
     async def r_rdma_async_batch(

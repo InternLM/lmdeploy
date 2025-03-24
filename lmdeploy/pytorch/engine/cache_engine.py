@@ -219,13 +219,13 @@ class CacheEngine:
 
     async def rdma_connect(self, config: List[int]):
         self.remote_block_size = config["total"]
-        metadata_endpoints = config["metadata_endpoints"]
+        metadata_endpoint = config["metadata_endpoints"][self.rank]
         remote_engine_id = int(config["remote_engine_id"])
-        remote_endpoints = config["remote_metadata_endpoints"]
+        remote_endpoint = config["remote_metadata_endpoints"][self.rank]
         link = self.transfer_engine.init_link(
             remote_engine_id,
             f"mlx5_bond_{self.rank}",
-            metadata_endpoints[self.rank],
+            metadata_endpoint,
             1,
             "Ethernet",
         )
@@ -238,7 +238,7 @@ class CacheEngine:
         # a 1G Buffer
         buffer = torch.zeros([1024 * 1024 * 1024], device="cuda")
         self.transfer_engine.register_torch(remote_engine_id, "buffer", buffer)
-        await link.connect(remote_endpoints[self.rank])
+        await link.connect(remote_endpoint)
         if self.cache_config.role == EngineRole.Prefill:
             loop = asyncio.get_event_loop()
             loop.create_task(link.r_rdma_async_batch_handler())
