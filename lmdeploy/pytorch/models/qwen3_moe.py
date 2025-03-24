@@ -3,7 +3,6 @@
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import torch
-import torch.nn.functional as F
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
@@ -322,7 +321,8 @@ class Qwen3MoeModel(nn.Module):
 
         # build rotary embedding
         emb_type = RopeType.LinearScaling
-        rope_dim = config.head_dim # Qwen3 explicitly set head_dim in config
+        # Qwen3 explicitly set head_dim in config
+        rope_dim = config.head_dim
         rope_max_pos_emb = config.max_position_embeddings
         rope_base = config.rope_theta
         self.rotary_emb = build_rotary_embedding(

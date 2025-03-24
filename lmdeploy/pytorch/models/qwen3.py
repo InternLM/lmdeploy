@@ -244,7 +244,8 @@ class Qwen3model(nn.Module):
         # build rotary embedding
         # emb_type = RopeType.LinearScaling
         rope_params = build_rotary_params(config)
-        rope_dim = config.head_dim # Qwen3 explicitly set head_dim in config
+        # Qwen3 explicitly set head_dim in config
+        rope_dim = config.head_dim
         rope_max_pos_emb = config.max_position_embeddings
         rope_base = config.rope_theta
         self.rotary_emb = build_rotary_embedding(
