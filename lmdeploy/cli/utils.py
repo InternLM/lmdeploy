@@ -157,6 +157,12 @@ class ArgumentHelper:
         """Add argument dp to parser."""
 
         return parser.add_argument('--dp', type=int, default=1, help='data parallelism. dp_rank is required.')
+    
+    @staticmethod
+    def ep(parser):
+        """Add argument ep to parser."""
+
+        return parser.add_argument('--ep', type=int, default=1, help='expert parallelism. Should be 2^n.')
 
     @staticmethod
     def dp_rank(parser):

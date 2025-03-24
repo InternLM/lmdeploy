@@ -294,6 +294,7 @@ class PytorchEngineConfig:
     tp: int = 1
     dp: int = 1
     dp_rank: int = 0
+    ep: int = 1
     session_len: int = None
     max_batch_size: int = None
     cache_max_entry_count: float = 0.8
@@ -318,6 +319,7 @@ class PytorchEngineConfig:
         assert self.dtype in ['auto', 'float16', 'bfloat16']
         assert self.tp >= 1, 'invalid tp'
         assert self.dp >= 1, 'invalid dp'
+        assert self.ep >= 1, 'invalid ep'
         assert 0 < self.cache_max_entry_count < 1, \
             'invalid cache_max_entry_count'
         assert self.num_cpu_blocks >= 0, 'invalid num_cpu_blocks'
