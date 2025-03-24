@@ -367,7 +367,6 @@ def _get_logprobs_impl(logprob_vals: torch.Tensor,
         tok_res = {idx[i].item(): val[i].item() for i in range(topn)}
         token_id = output_ids[pos]
         if token_id not in tok_res:
-            print(token_id, tok_res)
             valid_n = n.item()
             tok_res[token_id] = \
                 val[:valid_n][idx[:valid_n] == token_id].item()

@@ -431,7 +431,7 @@ class Qwen2_5_VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphM
                 pixel_values = pixel_values.to(dtype)
                 image_embeds = self.visual(pixel_values,
                                            cu_seqlens=vis_cu_seqlens,
-                                           rotary_pos_emb=vis_pos_emb,
+                                           rotary_pos_emb=vis_pos_emb.to(dtype),
                                            window_index=window_index,
                                            cu_window_seqlens=cu_window_seqlens)
                 inputs_embeds = inputs_embeds.masked_scatter(image_mask[..., None], image_embeds)
@@ -479,7 +479,7 @@ class Qwen2_5_VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphM
         window_index = None
         cu_window_seqlens = None
         if context.input_multimodals is not None:
-            image_data = [input_mm['image'] for input_mm in context.input_multimodals]
+            image_data = [input_mm.get('image', []) for input_mm in context.input_multimodals]
 
             if len(image_data) > 0:
                 # flatten batch
@@ -639,7 +639,7 @@ class Qwen2_5_VLForConditionalGeneration(nn.Module, DeployModelMixin, CudaGraphM
         for pos_ids, model_meta, input_mm in zip(batched_pos_ids, model_metas, input_multimodals):
             images = []
             if input_mm is not None:
-                images = input_mm['image']
+                images = input_mm.get('image', [])
             if model_meta is None or 'mrope_delta' not in model_meta:
                 mrope_delta = 0
             else:

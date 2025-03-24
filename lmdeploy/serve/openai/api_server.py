@@ -26,8 +26,10 @@ from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, ChatCompletio
                                             CompletionResponse, CompletionResponseChoice,
                                             CompletionResponseStreamChoice, CompletionStreamResponse, DeltaMessage,
                                             EmbeddingsRequest, EncodeRequest, EncodeResponse, ErrorResponse,
-                                            FunctionResponse, GenerateRequest, GenerateResponse, LogProbs, ModelCard,
-                                            ModelList, ModelPermission, ToolCall, TopLogprob, UsageInfo)
+                                            GenerateRequest, GenerateResponse, LogProbs, ModelCard, ModelList,
+                                            ModelPermission, TopLogprob, UsageInfo)
+from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import ReasoningParser, ReasoningParserManager
+from lmdeploy.serve.openai.tool_parser.tool_parser import ToolParser, ToolParserManager
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import get_logger
 
@@ -45,6 +47,10 @@ class VariableInterface:
     # following are for registering to proxy server
     proxy_url: Optional[str] = None
     api_server_url: Optional[str] = None
+    # following are for reasoning parsers
+    reasoning_parser: Optional[ReasoningParser] = None
+    # following is for tool parsers
+    tool_parser: Optional[ToolParser] = None
 
 
 router = APIRouter()
@@ -375,9 +381,6 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     tools = None
     if request.tools and request.tool_choice != 'none':
         gen_config.skip_special_tokens = False
-        if request.stream is True:
-            logger.warning('Set stream to False for tools')
-            request.stream = False
         # internlm2 only uses contents inside function regardless of 'type'
         if not isinstance(request.tool_choice, str):
             tools = [
@@ -399,12 +402,12 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     )
 
     def create_stream_response_json(index: int,
-                                    text: str,
+                                    delta_message: DeltaMessage,
                                     finish_reason: Optional[str] = None,
                                     logprobs: Optional[LogProbs] = None,
                                     usage: Optional[UsageInfo] = None) -> str:
         choice_data = ChatCompletionResponseStreamChoice(index=index,
-                                                         delta=DeltaMessage(role='assistant', content=text),
+                                                         delta=delta_message,
                                                          finish_reason=finish_reason,
                                                          logprobs=logprobs)
         response = ChatCompletionStreamResponse(
@@ -419,6 +422,11 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         return response_json
 
     async def completion_stream_generator() -> AsyncGenerator[str, None]:
+        previous_text = ''
+        current_text = ''
+        previous_token_ids = []
+        current_token_ids = []
+        delta_token_ids = []
         async for res in result_generator:
             logprobs, usage = None, None
             if gen_logprobs and res.logprobs:
@@ -431,8 +439,46 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                     completion_tokens=res.generate_token_len,
                     total_tokens=total_tokens,
                 )
+            delta_message = DeltaMessage(role='assistant', content=res.response)
+            if request.tool_choice != 'none' and VariableInterface.tool_parser is not None:
+                if res.finish_reason == 'stop':
+                    res.finish_reason = 'tool_calls'
+                current_text = current_text + res.response
+                delta_token_ids = res.token_ids if res.token_ids is not None else []
+                current_token_ids = current_token_ids + delta_token_ids
+                tool_delta = VariableInterface.tool_parser.extract_tool_calls_streaming(
+                    previous_text=previous_text,
+                    current_text=current_text,
+                    delta_text=res.response,
+                    previous_token_ids=previous_token_ids,
+                    current_token_ids=current_token_ids,
+                    delta_token_ids=delta_token_ids,
+                    request=request)
+                if tool_delta is not None:
+                    delta_message.tool_calls = tool_delta.tool_calls
+                    delta_message.content = tool_delta.content
+                previous_text = current_text
+                previous_token_ids = current_token_ids
+            elif VariableInterface.reasoning_parser is not None:
+                current_text = current_text + res.response
+                delta_token_ids = res.token_ids if res.token_ids is not None else []
+                current_token_ids = current_token_ids + delta_token_ids
+                reasoning_delta = VariableInterface.reasoning_parser.extract_reasoning_content_streaming(
+                    previous_text=previous_text,
+                    current_text=current_text,
+                    delta_text=res.response,
+                    previous_token_ids=previous_token_ids,
+                    current_token_ids=current_token_ids,
+                    delta_token_ids=delta_token_ids)
+                if reasoning_delta is not None:
+                    delta_message.reasoning_content = reasoning_delta.reasoning_content
+                    delta_message.content = reasoning_delta.content
+                previous_text = current_text
+                previous_token_ids = current_token_ids
+            elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
+                logger.error('Please lanuch the api_server with --tool-parser if you want to use tool.')
             response_json = create_stream_response_json(index=0,
-                                                        text=res.response,
+                                                        delta_message=delta_message,
                                                         finish_reason=res.finish_reason,
                                                         logprobs=logprobs,
                                                         usage=usage)
@@ -461,19 +507,21 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             final_logprobs.extend(res.logprobs)
 
     tool_calls = None
-    if request.tool_choice != 'none' and ('<|plugin|>' in text or '<function=' in text or '<tool_call>' in text):
+    reasoning_content = None
+    if request.tool_choice != 'none' and VariableInterface.tool_parser is not None:
         if final_res.finish_reason == 'stop':
             final_res.finish_reason = 'tool_calls'
         try:  # TODO add json_schema guidance to turbomind
-            text, call_info_list = VariableInterface.async_engine.parse_tool_response(  # noqa
-                text, request.tools)
-            tool_calls = [
-                ToolCall(id=str(call_info[0]), function=FunctionResponse(name=call_info[1], arguments=call_info[2]))
-                for call_info in call_info_list
-            ]
+            tool_call_info = VariableInterface.tool_parser.extract_tool_calls(text, request=request)
+            text, tool_calls = tool_call_info.content, tool_call_info.tool_calls
         except Exception as e:
             logger.error(f'Failed to parse {text}. Exception: {e}.')
             return create_error_response(HTTPStatus.BAD_REQUEST, 'Failed to parse fc related info to json format!')
+    # assume reasoning uncompatible with tool call
+    elif VariableInterface.reasoning_parser is not None:
+        reasoning_content, text = VariableInterface.reasoning_parser.extract_reasoning_content(text, request)
+    elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
+        logger.error('Please lanuch the api_server with --tool-parser if you want to use tool.')
 
     logprobs = None
     if gen_logprobs and len(final_logprobs):
@@ -484,7 +532,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     choices = []
     choice_data = ChatCompletionResponseChoice(
         index=0,
-        message=ChatMessage(role='assistant', content=text, tool_calls=tool_calls),
+        message=ChatMessage(role='assistant', content=text, tool_calls=tool_calls, reasoning_content=reasoning_content),
         logprobs=logprobs,
         finish_reason=final_res.finish_reason,
     )
@@ -775,6 +823,9 @@ async def chat_interactive_v1(request: GenerateRequest, raw_request: Request = N
     - ignore_eos (bool): indicator for ignoring eos
     - skip_special_tokens (bool): Whether or not to remove special tokens
         in the decoding. Default to be True.
+    - spaces_between_special_tokens (bool): Whether or not to add spaces
+        around special tokens. The behavior of Fast tokenizers is to have
+        this to False. This is setup to True in slow tokenizers.
     - adapter_name (str): For slora inference. Choose which lora to do the
         inference.
     - min_new_tokens (int): To generate at least numbers of tokens.
@@ -819,6 +870,7 @@ async def chat_interactive_v1(request: GenerateRequest, raw_request: Request = N
                                   ignore_eos=request.ignore_eos,
                                   stop_words=request.stop,
                                   skip_special_tokens=request.skip_special_tokens,
+                                  spaces_between_special_tokens=request.spaces_between_special_tokens,
                                   min_new_tokens=request.min_new_tokens,
                                   min_p=request.min_p,
                                   random_seed=random_seed)
@@ -921,6 +973,28 @@ class ConcurrencyLimitMiddleware(BaseHTTPMiddleware):
             return response
 
 
+def set_parsers(reasoning_parser: Optional[str] = None, tool_parser: Optional[str] = None):
+    """Set tool parser and reasoning parsers."""
+    # set reasoning parser
+    if reasoning_parser is not None:
+        if reasoning_parser in ReasoningParserManager.module_dict:
+            tokenizer = VariableInterface.async_engine.tokenizer
+            VariableInterface.reasoning_parser = ReasoningParserManager.get(reasoning_parser)(tokenizer)
+        else:
+            raise ValueError(
+                f'The reasoning parser {reasoning_parser} is not in the parser list: {ReasoningParserManager.module_dict.keys()}'  # noqa
+            )
+    # set tool parsers
+    if tool_parser is not None:
+        if tool_parser in ToolParserManager.module_dict:
+            tokenizer = VariableInterface.async_engine.tokenizer
+            VariableInterface.tool_parser = ToolParserManager.get(tool_parser)(tokenizer)
+        else:
+            raise ValueError(
+                f'The reasoning parser {tool_parser} is not in the parser list: {ToolParserManager.module_dict.keys()}'  # noqa
+            )
+
+
 def serve(model_path: str,
           model_name: Optional[str] = None,
           backend: Literal['turbomind', 'pytorch'] = 'turbomind',
@@ -939,6 +1013,8 @@ def serve(model_path: str,
           max_log_len: int = None,
           disable_fastapi_docs: bool = False,
           max_concurrent_requests: Optional[int] = None,
+          reasoning_parser: Optional[str] = None,
+          tool_call_parser: Optional[str] = None,
           **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -988,6 +1064,8 @@ def serve(model_path: str,
             process the engine’s tasks once the maximum number of concurrent
             requests is reached, regardless of any additional requests sent by
             clients concurrently during that time. Default to None.
+        reasoning_parser (str): The reasoning parser name.
+        tool_call_parser (str): The tool call parser name.
     """
     if os.getenv('TM_LOG_LEVEL') is None:
         os.environ['TM_LOG_LEVEL'] = log_level
@@ -1012,6 +1090,7 @@ def serve(model_path: str,
             allow_methods=allow_methods,
             allow_headers=allow_headers,
         )
+
     # Set the maximum number of concurrent requests
     if max_concurrent_requests is not None:
         app.add_middleware(ConcurrencyLimitMiddleware, max_concurrent_requests=max_concurrent_requests)
@@ -1035,6 +1114,8 @@ def serve(model_path: str,
                                                     chat_template_config=chat_template_config,
                                                     max_log_len=max_log_len,
                                                     **kwargs)
+    # set reasoning parser and tool parser
+    set_parsers(reasoning_parser, tool_call_parser)
 
     if proxy_url is not None:
         VariableInterface.proxy_url = proxy_url

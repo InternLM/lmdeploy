@@ -131,15 +131,22 @@ class GenerationConfig:
 
     def update_from_hf_gen_cfg(self, generation_config, tokenizer_eos_token_id):
         """update the stop_token_ids."""
-        stop_token_ids = self.stop_token_ids or []
+        stop_token_ids = set(self.stop_token_ids or [])
+
+        # add tokenizer's eos_token_id
         if tokenizer_eos_token_id is not None:
-            stop_token_ids.append(tokenizer_eos_token_id)
+            stop_token_ids.add(tokenizer_eos_token_id)
+
+        # add eos_token_id from model's generation_config.json file if there
+        # is any.
         eos_token_id = generation_config.get('eos_token_id')
         if eos_token_id is not None:
-            eos_token_id = {eos_token_id} if isinstance(eos_token_id, int) else set(eos_token_id)
-            if stop_token_ids:
-                eos_token_id.update(stop_token_ids)
-            self.stop_token_ids = list(eos_token_id)
+            if isinstance(eos_token_id, int):
+                stop_token_ids.add(eos_token_id)
+            else:
+                stop_token_ids.update(eos_token_id)
+
+        self.stop_token_ids = list(stop_token_ids)
 
     def __post_init__(self):
         """Check input validation."""
@@ -255,6 +262,8 @@ class PytorchEngineConfig:
             The `auto` option will use FP16 precision for FP32 and FP16
             models, and BF16 precision for BF16 models.
         tp (int): Tensor Parallelism. default 1.
+        dp (int): Data Parallelism. default 1.
+        dp_rank (int): rank of dp.
         session_len (int): Max session length. Default None.
         max_batch_size (int): Max batch size. If it is not specified,
             the engine will automatically set it according to the device
@@ -290,6 +299,8 @@ class PytorchEngineConfig:
     """
     dtype: str = 'auto'
     tp: int = 1
+    dp: int = 1
+    dp_rank: int = 0
     session_len: int = None
     max_batch_size: int = None
     cache_max_entry_count: float = 0.8
@@ -313,6 +324,7 @@ class PytorchEngineConfig:
         """Check input validation."""
         assert self.dtype in ['auto', 'float16', 'bfloat16']
         assert self.tp >= 1, 'invalid tp'
+        assert self.dp >= 1, 'invalid dp'
         assert 0 < self.cache_max_entry_count < 1, \
             'invalid cache_max_entry_count'
         assert self.num_cpu_blocks >= 0, 'invalid num_cpu_blocks'

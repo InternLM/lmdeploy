@@ -21,6 +21,27 @@ def _broadcast_tensor(value: torch.Tensor, src: int = 0, device: str = 'cuda'):
 
 
 @dataclass
+class DPMeta:
+    tp_sizes: List[int] = None
+    ep_sizes: List[int] = None
+
+    @classmethod
+    def build(cls, seqlen: int):
+        """get dp meta."""
+        dist_ctx = dist.get_dist_manager().current_context()
+
+        tp = dist_ctx.tp
+        if tp > 1:
+            tp_sizes = [None for _ in range(tp)]
+            tp_group = dist.get_tp_group('gpu')
+            dist.all_gather_object(tp_sizes, seqlen, group=tp_group)
+        else:
+            tp_sizes = [seqlen]
+
+        return DPMeta(tp_sizes=tp_sizes, )
+
+
+@dataclass
 class VisionModelInputs:
     """Vision model inputs."""
     history_lengths: torch.LongTensor = None
@@ -129,6 +150,7 @@ class ModelInputs:
     cross_length: torch.LongTensor = None
     history_cross_length: torch.LongTensor = None
     model_metas: List[Dict[str, Any]] = None
+    dp_meta: 'DPMeta' = None
 
     def update(self, input_ids: torch.LongTensor):
         """update input ids."""
@@ -253,6 +275,31 @@ class ModelInputs:
 
         return ModelInputs(**out_dict)
 
+    def build_dp_meta(self):
+        """build dp meta."""
+        self.dp_meta = DPMeta.build(self.input_ids.numel())
+
+    @classmethod
+    def make_dummy(cls, batch_size: int, is_decoding: bool, device: str = 'cpu', dummy_block_id: int = 0):
+        """make dummy inputs."""
+        input_ids = torch.zeros((
+            1,
+            batch_size,
+        ), dtype=torch.long, device=device)
+        seq_length = torch.ones((batch_size, ), dtype=torch.long, device=device)
+        history_lengths = torch.zeros((batch_size, ), dtype=torch.long, device=device)
+        block_offsets = torch.full((batch_size, 1), dummy_block_id, dtype=torch.long, device=device)
+        num_ignored_history = torch.zeros((batch_size, ), dtype=torch.long, device=device)
+
+        return cls(
+            input_ids=input_ids,
+            seq_length=seq_length,
+            history_lengths=history_lengths,
+            block_offsets=block_offsets,
+            is_decoding=is_decoding,
+            num_ignored_history=num_ignored_history,
+        )
+
 
 @dataclass
 class StepContext:
@@ -262,15 +309,14 @@ class StepContext:
     """
     input_ids: torch.LongTensor
     model_config: ModelConfig
-    block_offsets: torch.LongTensor
+    block_offsets: torch.IntTensor
     position_ids: torch.LongTensor
     attention_mask: torch.LongTensor
     q_seqlens: torch.LongTensor
-    kv_seqlens: torch.LongTensor
+    kv_seqlens: torch.IntTensor
     q_start_loc: torch.LongTensor
     kv_caches: List
     is_decoding: bool
-    world_size: int = 1
     local_adapter_ids: torch.LongTensor = None
     input_embeddings: torch.Tensor = None
     input_embedding_indexing: torch.Tensor = None
@@ -282,6 +328,7 @@ class StepContext:
     cross_attn_metadata: Any = None
     kv_quant_policy: Literal[0, 4, 8] = 0
     model_metas: List[Dict[str, Any]] = None
+    dp_meta: DPMeta = None
 
     _outputs: Dict = field(default_factory=dict)
 
@@ -290,7 +337,6 @@ class StepContext:
         cls,
         inputs: ModelInputs,
         model_config: ModelConfig,
-        world_size: int = 1,
         kv_caches: List = None,
         kv_quant_policy: Literal[0, 4, 8] = 0,
     ):
@@ -298,7 +344,6 @@ class StepContext:
 
         Args:
             inputs (ModelInputs): packaged model inputs.
-            world_size (int): The distribution world size.
             device (str): The device of the tensors.
         """
         q_seqlens = inputs.seq_length
@@ -353,13 +398,13 @@ class StepContext:
             q_start_loc=q_start_loc,
             kv_caches=kv_caches,
             is_decoding=inputs.is_decoding,
-            world_size=world_size,
             local_adapter_ids=inputs.local_adapter_ids,
             vision_inputs=inputs.vision_inputs,
             kv_quant_policy=kv_quant_policy,
             model_metas=inputs.model_metas,
             cross_seqlens=cross_seqlens,
             cross_kv_seqlens=cross_kv_seqlens,
+            dp_meta=inputs.dp_meta,
         )
 
         ret = get_backend().update_step_context(ret)
@@ -386,7 +431,6 @@ class StepContextManager:
     def build_context(
         inputs: ModelInputs,
         model_config: ModelConfig,
-        world_size: int = 1,
         kv_caches: List = None,
         kv_quant_policy: Literal[0, 4, 8] = 0,
     ):
@@ -394,18 +438,44 @@ class StepContextManager:
         return StepContext.new(
             inputs,
             model_config,
-            world_size,
             kv_caches,
             kv_quant_policy,
         )
 
+    def set_context(self, ctx: StepContext):
+        """set context."""
+        self._current_ctx = ctx
+
     @contextmanager
     def context(self, ctx: StepContext):
         """context context."""
-        self._current_ctx = ctx
+        old_ctx = self.current_context()
+        self.set_context(ctx)
         yield ctx
-        self._current_ctx = None
+        self.set_context(old_ctx)
 
     def current_context(self):
         """get current_context."""
         return self._current_ctx
+
+
+_CTX_MANAGER: StepContextManager = None
+
+
+def set_step_ctx_manager(mgr: StepContextManager):
+    global _CTX_MANAGER
+    _CTX_MANAGER = mgr
+    return mgr
+
+
+def get_step_ctx_manager():
+    """get device manager."""
+    return _CTX_MANAGER
+
+
+@contextmanager
+def step_ctx_manager(mgr: StepContextManager):
+    old_mgr = _CTX_MANAGER
+    set_step_ctx_manager(mgr)
+    yield mgr
+    set_step_ctx_manager(old_mgr)

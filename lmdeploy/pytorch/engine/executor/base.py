@@ -3,7 +3,7 @@
 import asyncio
 from typing import Any, Dict
 
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, ModelConfig
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine
 from lmdeploy.utils import get_logger
 
@@ -18,9 +18,8 @@ class ExecutorBase:
                  model_config: ModelConfig,
                  cache_config: CacheConfig,
                  backend_config: BackendConfig,
+                 dist_config: DistConfig,
                  tokenizer: Any,
-                 dp: int,
-                 tp: int,
                  adapters: Dict[str, str] = None,
                  device_type: str = 'cuda'):
         """initialize Executor."""
@@ -28,9 +27,11 @@ class ExecutorBase:
         self.model_config = model_config
         self.cache_config = cache_config
         self.backend_config = backend_config
+        self.dist_config = dist_config
         self.tokenizer = tokenizer
-        self.dp = dp
-        self.tp = tp
+        self.dp = dist_config.dp
+        self.tp = dist_config.tp
+        self.world_size = dist_config.world_size
         self.device_type = device_type
 
     def download_models(self):
@@ -59,6 +60,10 @@ class ExecutorBase:
 
     def build_cache_engine(self):
         """build cache engine."""
+        raise NotImplementedError('Not Implemented.')
+
+    def warmup(self):
+        """warmup."""
         raise NotImplementedError('Not Implemented.')
 
     def get_input_processor(self):
@@ -101,11 +106,16 @@ class ExecutorBase:
 
     def _adjust_block_size(self):
         """adjust block_size."""
+        if self.model_config.use_flash_mla is True:
+            if self.cache_config.block_size != 64:
+                raise ValueError('Please set block_size to 64 for flash_mla.')
+            return
         # TODO: support kernel with both large head dim and large block size.
         if self.model_config.k_head_dim >= 512 and self.cache_config.block_size > 32:
             self.cache_config.block_size = 32
-            logger.warning(f'Update `block_size={self.cache_config.block_size}`'
-                           f' for large `head_dim={self.model_config.k_head_dim}`.')
+            logger.warning(
+                f'Update `block_size={self.cache_config.block_size}` for large `head_dim={self.model_config.k_head_dim}`.'  # noqa
+            )
 
     def update_configs(self):
         """update cache config."""
@@ -114,10 +124,11 @@ class ExecutorBase:
         model_config = self.model_config
         free_mems = self.gather_free_mem()
         free_mem = min(free_mems)
-        logger.debug(f'minimal free gpu memory: {free_mem>>20} mb')
+        logger.debug(f'minimal free gpu memory: {free_mem >> 20} mb')
         vocal_size = self.model_config.vocab_size
 
-        cache_block_size = CacheEngine.get_cache_block_size(cache_config.block_size, model_config, self.tp,
+        tp = self.dist_config.attn_config.tp
+        cache_block_size = CacheEngine.get_cache_block_size(cache_config.block_size, model_config, tp,
                                                             cache_config.quant_policy)
         runtime_mem, max_prefill_token_num = self._get_runtime_size(free_mem, cache_block_size, vocal_size)
         if cache_config.max_prefill_token_num != max_prefill_token_num:
@@ -126,7 +137,7 @@ class ExecutorBase:
             cache_config.max_prefill_token_num = max_prefill_token_num
             logger.warning(f'No enough memory. Update max_prefill_token_num={max_prefill_token_num}')
         free_mem -= runtime_mem
-        logger.debug(f'estimated max runtime memory: {runtime_mem>>20} mb')
+        logger.debug(f'estimated max runtime memory: {runtime_mem >> 20} mb')
         available_mem = free_mem * cache_config.cache_max_entry_count
 
         if cache_config.num_gpu_blocks == 0:
@@ -144,5 +155,7 @@ class ExecutorBase:
         self.update_configs()
         logger.info('Building GraphRunner.')
         self.build_graph_runner()
-        logger.info(f'Building CacheEngine with config:\n{self.cache_config}.')
+        logger.info(f'Building CacheEngine with config: \n{self.cache_config}.')
         self.build_cache_engine()
+        logger.info('Warming up model.')
+        self.warmup()

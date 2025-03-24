@@ -2,7 +2,7 @@
 import torch
 from torch import nn
 
-from lmdeploy.pytorch.distributed import get_world_rank
+from lmdeploy.pytorch.distributed import get_dist_manager, get_tp_world_rank
 
 from ..backends import OpType, get_backend
 from ..backends.attention import AttentionMetadata
@@ -11,7 +11,11 @@ from .utils import get_distribute_size
 
 def _update_num_heads(num_heads: int, num_kv_heads: int):
     """update heads."""
-    world_size, rank = get_world_rank()
+    dist_ctx = get_dist_manager().current_context()
+    if dist_ctx.dp == 1:
+        world_size, rank = get_tp_world_rank()
+    else:
+        world_size, rank = 1, 0
     num_heads = get_distribute_size(num_heads, world_size, rank)
     num_kv_heads = get_distribute_size(num_kv_heads, world_size, rank)
     return num_heads, num_kv_heads
@@ -31,6 +35,7 @@ class Attention(nn.Module):
         sliding_window: int = None,
         logit_softcapping: float = None,
         causal: bool = True,
+        use_flash_mla: bool = False,
         **kwargs,
     ):
         super().__init__()
@@ -53,6 +58,7 @@ class Attention(nn.Module):
             sliding_window=sliding_window,
             logit_softcapping=logit_softcapping,
             causal=causal,
+            use_flash_mla=use_flash_mla,
             **kwargs,
         )
 

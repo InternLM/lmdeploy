@@ -14,6 +14,14 @@ def config_from_dict(cls, env):
     """initiate an instance of a config class from a dict."""
     params = inspect.signature(cls).parameters
     used = {k: v for k, v in env.items() if k in params and v is not None}
+
+    def _remove_none(d: dict):
+        for k, v in d.items():
+            if isinstance(v, dict):
+                d[k] = _remove_none(v)
+        return {k: v for k, v in d.items() if v is not None}
+
+    used = _remove_none(used)
     return cls(**used)
 
 
@@ -80,22 +88,27 @@ class ModelConfig:
 
 
 @dataclass
+class RopeParam:
+    type: str
+    base: float
+    dim: int
+    factor: float = 1.0
+    max_position_embeddings: int = None
+    attention_factor: float = 1.0
+    beta_fast: float = 32
+    beta_slow: float = 1
+    low_freq_factor: float = None
+    high_freq_factor: float = None
+    original_max_position_embeddings: int = None
+
+
+@dataclass
 class AttentionConfig:
-    rotary_embedding: int = 128
-    rope_theta: float = 10000.0
     softmax_scale: float = 0
-    attention_factor: float = None
-    max_position_embeddings: int = 0
-    original_max_position_embeddings: int = 0
-    rope_scaling_type: str = ''
-    rope_scaling_factor: float = 0.0
-    use_dynamic_ntk: int = 0
-    low_freq_factor: float = 1.0
-    high_freq_factor: float = 1.0
-    beta_fast: float = 32.0
-    beta_slow: float = 1.0
-    use_logn_attn: int = 0
     cache_block_seq_len: int = 64
+    use_logn_attn: int = 0
+    max_position_embeddings: int = 0
+    rope_param: RopeParam = None
 
 
 @dataclass
@@ -132,6 +145,13 @@ class TurbomindModelConfig:
                 setattr(self.model_config, key, value)
             if hasattr(self.attention_config, key):
                 setattr(self.attention_config, key, value)
+
+        # use dynamic ntk
+        if config.rope_scaling_factor:
+            if self.attention_config.rope_param is None:
+                # some ut will create empty RopeParam, will check base/dim in src code
+                self.attention_config.rope_param = RopeParam(type='', base=0, dim=0)
+            self.attention_config.rope_param.__dict__.update(type='dynamic', factor=config.rope_scaling_factor)
 
     @classmethod
     def from_dict(cls, config: dict = {}):
