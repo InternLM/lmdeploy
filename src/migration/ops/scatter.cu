@@ -12,7 +12,7 @@ __global__ void _scatter(int8_t* des, int8_t* buffer, int64_t length, int64_t* o
         if (blockDim.x * i + threadIdx.x < length) {
             int64_t buf_idx = blockIdx.x * length + blockDim.x * i + threadIdx.x;
             int64_t des_idx = offset[blockIdx.x] + blockDim.x * i + threadIdx.x;
-            buffer[buf_idx] = des[des_idx];
+            des[des_idx] = buffer[buf_idx];
         }
     }
 }
