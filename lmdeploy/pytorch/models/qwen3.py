@@ -52,12 +52,12 @@ class Qwen3Attention(nn.Module):
 
         # o_proj
         self.o_proj = build_rowwise_linear(num_heads * head_dim,
-                                   hidden_size,
-                                   bias=config.attention_bias,
-                                   quant_config=quantization_config,
-                                   dtype=dtype,
-                                   device=device,
-                                   is_tp=True)
+                                           hidden_size,
+                                           bias=config.attention_bias,
+                                           quant_config=quantization_config,
+                                           dtype=dtype,
+                                           device=device,
+                                           is_tp=True)
 
         # q, k norm
         self.q_norm = RMSNorm(head_dim,
@@ -142,12 +142,12 @@ class Qwen3MLP(nn.Module):
 
         # down
         self.down_proj = build_rowwise_linear(config.intermediate_size,
-                                           config.hidden_size,
-                                           bias=False,
-                                           quant_config=quantization_config,
-                                           dtype=dtype,
-                                           device=device,
-                                           is_tp=True)
+                                              config.hidden_size,
+                                              bias=False,
+                                              quant_config=quantization_config,
+                                              dtype=dtype,
+                                              device=device,
+                                              is_tp=True)
 
     def forward(self, x):
         """forward."""
