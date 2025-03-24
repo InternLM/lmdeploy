@@ -383,6 +383,7 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
     ):
         if inputs_embeds is None and pixel_values is not None:
             # extract feature
+            torch._inductor.config.reorder_for_compute_comm_overlap = True
             torch._dynamo.mark_dynamic(pixel_values, 0)
             vit_embeds = self.extract_feature(pixel_values)
             lang_embeds = self.language_model.get_input_embeddings()(input_ids)
