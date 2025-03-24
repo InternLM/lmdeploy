@@ -9,9 +9,9 @@ __global__ void _scatter(int8_t* des, int8_t* buffer, int64_t length, int64_t* o
     int64_t iter = (length + blockDim.x - 1) / blockDim.x;
 
     for (int i = 0; i < iter; i++) {
-        if (blockDim.x * threadIdx.x + i < length) {
-            int64_t buf_idx = blockIdx.x * length + blockDim.x * threadIdx.x + i;
-            int64_t des_idx = offset[blockIdx.x] + blockDim.x * threadIdx.x + i;
+        if (blockDim.x * i + threadIdx.x < length) {
+            int64_t buf_idx = blockIdx.x * length + blockDim.x * i + threadIdx.x;
+            int64_t des_idx = offset[blockIdx.x] + blockDim.x * i + threadIdx.x;
             buffer[buf_idx] = des[des_idx];
         }
     }

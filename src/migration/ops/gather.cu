@@ -9,9 +9,9 @@ __global__ void _gather(int8_t* src, int8_t* buffer, int64_t length, int64_t* of
     int64_t iter = (length + blockDim.x - 1) / blockDim.x;
 
     for (int i = 0; i < iter; i++) {
-        if (blockDim.x * threadIdx.x + i < length) {
-            int64_t buf_idx = blockIdx.x * length + blockDim.x * threadIdx.x + i;
-            int64_t src_idx = offset[blockIdx.x] + blockDim.x * threadIdx.x + i;
+        if (blockDim.x * i + threadIdx.x < length) {
+            int64_t src_idx = offset[blockIdx.x] + blockDim.x * i + threadIdx.x;
+            int64_t buf_idx = blockIdx.x * length + blockDim.x * i + threadIdx.x + i;
             buffer[buf_idx] = src[src_idx];
         }
     }
