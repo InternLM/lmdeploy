@@ -11,8 +11,26 @@
 #include <ctime>
 #include <numeric>
 #include <stdexcept>
+#include <sstream>
 
 namespace turbomind {
+
+template<typename T>
+std::string serialize_vector(const std::vector<T>& data)
+{
+    if (data.empty()) {
+        return "";
+    }
+
+    std::stringstream ss;
+    auto it = data.begin();
+    ss << *it;
+
+    for (++it; it < data.end(); ++it) {
+        ss << ", " << *it;
+    }
+    return ss.str();
+}
 
 SequenceManager::SequenceManager(size_t             layer_num,
                                  const BlockConfig& block_config,
@@ -30,7 +48,9 @@ SequenceManager::SequenceManager(size_t             layer_num,
     size_t block_size = layout.block_size(layer_num);
 
     block_manager_ = std::make_shared<BlockManager>(block_size, block_count, chunk_size, allocator, get_free_size);
-    block_trie_    = std::make_shared<BlockTrie>(block_config.block_len_, block_manager_, enable_prefix_caching);
+    if (enable_prefix_caching) {
+        block_trie_    = std::make_shared<BlockTrie>(block_config.block_len_, block_manager_);
+    }
 }
 
 const Sequence* SequenceManager::Create(uint64_t id)
@@ -71,7 +91,7 @@ void SequenceManager::Erase(std::map<uint64_t, Sequence>::iterator& it)
         UpdateAndSetUnlock(seq);
     }
     // if prefix cache enabled, blocks will be shared by sequences, cannot be freed immediately
-    if (!block_trie_->enabled()) {
+    if (block_trie_) {
         freed_.insert(freed_.end(), seq.blocks.begin(), seq.blocks.end());
     }
     it = sequences_.erase(it);
@@ -86,18 +106,26 @@ bool SequenceManager::Erase(uint64_t id)
     return false;
 }
 
-void SequenceManager::CacheIfEnabled(const Sequences& sequences, int active_size)
+void SequenceManager::CachePrompt(const Sequences& sequences, int active_size)
 {
-    if (block_trie_->enabled()) {
-        block_trie_->verify();
+    if (block_trie_) {
         for (int i = 0; i < active_size; ++i) {
             auto& seq = *sequences[i];
-            // only cache prompt blocks
-            if (!seq.prompt.empty()) {
-                block_trie_->cache(seq);
-                seq.prompt.clear();
-            }
+            BlockIds block_ids;
+            UniqueIds block_unique_ids;
+            std::tie(block_ids, block_unique_ids) = block_trie_->cache(seq, seq.prompt);
+            // TODO:
         }
+    }
+}
+
+void SequenceManager::CacheGeneration(const Sequence& seq)
+{
+    if (block_trie_) {
+        BlockIds block_ids;
+        UniqueIds block_unique_ids;
+        std::tie(block_ids, block_unique_ids) = block_trie_->cache(seq, seq.tokens);
+        // TODO:
     }
 }
 
@@ -323,25 +351,6 @@ void SequenceManager::SortByPriority(Sequences&                   sequences,
     context_lengths.swap(tmp_lengths);
 }
 
-// template<class P, class... Ts>
-// void SortByPriority(const std::vector<P>& priorities, Ts&... ranges)
-// {
-//     // sort according to priority
-//     std::vector<int> idxs(priorities.size());
-//     std::iota(idxs.begin(), idxs.end(), 0);
-//     std::sort(idxs.begin(), idxs.end(), [&](int i, int j) {
-//         return priorities[i] < priorities[j];  //
-//     });
-//     auto reorder = [&](auto& src) {
-//         auto dst = src;
-//         for (size_t i = 0; i < idxs.size(); ++i) {
-//             dst[i] = src[idxs[i]];
-//         }
-//         src.swap(dst);
-//     };
-//     (reorder(ranges), ...);
-// }
-
 std::vector<int> SequenceManager::CountRequiredBlocks(const Sequences&        sequences,
                                                       const std::vector<int>& context_lengths,
                                                       int                     step_length)
@@ -394,17 +403,23 @@ auto SequenceManager::Materialize(Sequences                    sequences,
     // the blocks can still be preempted later
     VerifyAndLockCached(sequences);
 
-    if (block_trie_->enabled()) {
-        // verify blocks in trie cache
-        block_trie_->verify();
-
+    if (block_trie_) {
         // match prefix cache
         for (int i = 0; i < sequences.size(); i++) {
-            if (!sequences[i]->prompt.empty() && sequences[i]->blocks.empty()) {
-                auto& seq = const_cast<Sequence&>(*sequences[i]);
-                block_trie_->match(seq);
-                seq.cache_len = seq.blocks.size() * block_seq_len_;
+            BlockIds  block_ids;
+            UniqueIds unique_ids;
+            std::vector<std::shared_ptr<TrieNode>> matched_nodes;
+            auto& seq = *sequences[i];
+
+            std::tie(block_ids, unique_ids, matched_nodes) = block_trie_->match(seq);
+            const int count = block_manager_->Verify(block_ids, unique_ids);
+            seq.cache_len = count * block_seq_len_;
+            if (rank_ == 0) {
+                TM_LOG_DEBUG("matched block_ids %s, unique_ids %s", serialize_vector(block_ids), serialize_vector(unique_ids), count);
+                TM_LOG_DEBUG("valid block count %d, cache_len %d", count, seq.cache_len);
             }
+            // TODO: remove invalid node in `block_trie_`
+            // How to retrieve the invalid node root in O(1), matched_values -> matched_nodes (the match path)
         }
     }
 

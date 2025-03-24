@@ -224,6 +224,16 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& reqs, std::vector<Signa
                 }
                 s = ptr->tokens.size();
             }
+            else if (s == ptr->tokens.size()) {
+                if (rank_ == 0) {
+                    TM_LOG_INFO("[ProcessInferRequests] ID %lu, step(%d) == tokens(%d)", ptr->id, s, ptr->tokens.size());
+                }
+            }
+            else if (s != 0) {
+                if (rank_ == 0) {
+                    TM_LOG_WARNING("[ProcessInferRequests] ID %lu, step(%d) < tokens(%d)", ptr->id, s, ptr->tokens.size());
+                }
+            }
             return s;
         }();
 
@@ -1486,7 +1496,7 @@ void LlamaBatch<T>::Finish(GenerationState& g, std::vector<Signal>& signals)
     }
 
     // Cache computed blocks to block trie
-    sequence_manager_->CacheIfEnabled(state_->sequences, batch_size);
+    sequence_manager_->CachePrompt(state_->sequences, batch_size);
 
     if (debug_ && rank_ == 0) {
         for (int i = 0; i < batch_size; ++i) {
@@ -1587,6 +1597,8 @@ auto LlamaBatch<T>::Interrupt(int index, bool force_stop, bool force_end) -> Sig
         // output_ids is updated & synced in `Finish`
         const auto output_ids = state_->requests[index]->output_ids.getPtr<int>();
         std::copy_n(output_ids, output_len, seq.tokens.data());
+        // Cache the generated tokens of the sequence
+        sequence_manager_->CacheGeneration(seq);
 
         // Save random state in host memory
         seq.random_state.resize(sizeof(curandState_t));

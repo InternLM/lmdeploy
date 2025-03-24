@@ -107,8 +107,22 @@ public:
                                       const std::vector<uint64_t>& priorities,
                                       int                          step_length,
                                       AdjustInputCount             adjust);
+    /** @brief cache the input prompt tokens of each seq in sequences[0:active_size-1]
+     *
+     * @param sequences The sequence list
+     * @param active_size the number of active sequences in the list
+     */
+    void CachePrompt(const Sequences& sequences, int active_size);
 
-    void CacheIfEnabled(const Sequences& sequences, int active_size);
+    /** @brief cache the generated tokens of a given sequence
+     *
+     * @param sequence the given sequence
+     *
+     * @note This function can only be called after the sequence finish generation
+     * and all tokens including the prompt tokens and generated tokens have been put to
+     * `seq.tokens`
+     */
+    void CacheGeneration(const Sequence& sequence);
 
     [[nodiscard]] void* GetBlockPtr(int block_id)
     {
