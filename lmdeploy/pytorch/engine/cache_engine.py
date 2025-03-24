@@ -236,7 +236,8 @@ class CacheEngine:
             remote_engine_id, "v", self.full_gpu_cache[1]
         )
         # a 1G Buffer
-        buffer = torch.zeros([1024 * 1024 * 1024], device="cuda")
+        buffer = torch.zeros([1024 * 1024 * 1024], dtype=torch.int8, device="cuda")
+        print(f"offset: {buffer.storage_offset()}")
         self.transfer_engine.register_torch(remote_engine_id, "buffer", buffer)
         await link.connect(remote_endpoint)
         if self.cache_config.role == EngineRole.Prefill:
@@ -286,6 +287,16 @@ class CacheEngine:
                     for layer in range(self.model_config.num_layers)
                 ]
             )
+        # begin = time.time()
+        # for t_off, s_off in zip(target_offset, source_offset):
+        #     await self.transfer_engine.links[engine_id].r_rdma_async(
+        #         "k", t_off, s_off, length
+        #     )
+        #     await self.transfer_engine.links[engine_id].r_rdma_async(
+        #         "v", t_off, s_off, length
+        #     )
+        # end = time.time()
+        # print(f"bw: {length * len(source_offset) / (end - begin) / 1e9}GBps")
 
         begin = time.time()
         await self.transfer_engine.links[engine_id].r_rdma_async_batch(

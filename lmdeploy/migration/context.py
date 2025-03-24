@@ -124,7 +124,6 @@ class RDMAContext:
             source_offset.data_ptr(),
             source_offset.numel(),
         )
-        print(total_length)
 
     async def r_rdma_async(
         self, mr_key, target_offset, source_offset, length, callback=None
