@@ -2,7 +2,6 @@
 
 #include <cstdint>
 #include <cuda.h>
-#include <vector>
 
 __global__ void _scatter(int8_t* des, int8_t* buffer, int64_t length, int64_t* offset)
 {
@@ -16,6 +15,7 @@ __global__ void _scatter(int8_t* des, int8_t* buffer, int64_t length, int64_t* o
         }
     }
 }
+
 namespace migration {
 void scatter(int64_t des_ptr, int64_t buffer_ptr, int64_t length, int64_t offset_ptr, int64_t num_offset)
 {
