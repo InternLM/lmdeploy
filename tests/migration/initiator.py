@@ -19,7 +19,7 @@ link = engine.init_link(
 
 
 async def main():
-    layer_num = 64 * 80
+    layer_num = 16000
     block_size = 256
     k = torch.zeros(
         [layer_num, 10, block_size, 1, 128], dtype=torch.half, device="cuda"
@@ -32,24 +32,24 @@ async def main():
     link.register_torch("v", v)
     link.register_torch("buffer", buffer)
     await link.connect("10.130.8.139:7000")
-    length = [block_size * 1 * 128] * layer_num
+    length = block_size * 1 * 128
     offset = [lid * 10 * block_size * 1 * 128 for lid in range(layer_num)]
-    # with profile(
-    #     activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-    #     schedule=torch.profiler.schedule(wait=1, warmup=1, active=5),
-    #     on_trace_ready=torch.profiler.tensorboard_trace_handler("./log_source"),
-    #     record_shapes=True,
-    #     profile_memory=True,
-    #     with_stack=True,
-    # ) as prof:
-    begin = time.time()
-    # for l, o in zip(length, offset):
-    #     await link.r_rdma_async("k", o, o, l)
-    for step in range(10):
-        await link.r_rdma_async_batch("k", offset, offset, length)
-    #     prof.step()
-    end = time.time()
-    print(f"bw: {sum(length) * 10 / (end - begin) / 1e9}GBps")
+    with profile(
+        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+        schedule=torch.profiler.schedule(wait=1, warmup=1, active=5),
+        on_trace_ready=torch.profiler.tensorboard_trace_handler("./log_source"),
+        record_shapes=True,
+        profile_memory=True,
+        with_stack=True,
+    ) as prof:
+        begin = time.time()
+        # for l, o in zip(length, offset):
+        #     await link.r_rdma_async("k", o, o, l)
+        for step in range(10):
+            await link.r_rdma_async_batch("k", offset, offset, length)
+            prof.step()
+        end = time.time()
+    print(f"bw: {length * len(offset) * 10 / (end - begin) / 1e9} GBps")
     link.stop()
     link.meta_send.close()
     link.meta_recv.close()
