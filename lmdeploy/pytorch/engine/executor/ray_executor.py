@@ -276,7 +276,7 @@ class RayExecutor(ExecutorBase):
         """init migration."""
         return await asyncio.gather(
             *[
-                worker.init_migration.get(
+                worker.init_migration.remote(
                     config,
                 )
                 for worker in self.workers
