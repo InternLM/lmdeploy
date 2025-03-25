@@ -151,7 +151,6 @@ class Qwen2MoeModel(LlamaModel):
         info['inter_size'] = cfg['shared_expert_intermediate_size']
         info['moe_shared_gate'] = info['inter_size'] > 0
         info['norm_topk_prob'] = cfg['norm_topk_prob']
-        info['attn_bias'] = cfg.get('attention_bias', 1)
         return info
 
 
