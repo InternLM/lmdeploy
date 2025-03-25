@@ -10,8 +10,8 @@
 #include <cstdlib>
 #include <ctime>
 #include <numeric>
-#include <stdexcept>
 #include <sstream>
+#include <stdexcept>
 
 namespace turbomind {
 
@@ -105,7 +105,7 @@ bool SequenceManager::Erase(uint64_t id)
     }
     return false;
 }
-//clang-format off
+
 void SequenceManager::CachePrompt(const Sequences& sequences, int active_size)
 {
     if (!block_trie_) {
@@ -117,14 +117,17 @@ void SequenceManager::CachePrompt(const Sequences& sequences, int active_size)
             // seq prefill finished. We don't cache the prompt any longer
             continue;
         }
-        BlockIds block_ids;
-        UniqueIds block_unique_ids;
+        BlockIds                               block_ids;
+        UniqueIds                              block_unique_ids;
         std::vector<std::shared_ptr<TrieNode>> nodes;
         std::tie(block_ids, block_unique_ids, nodes) = block_trie_->cache(seq, seq.prompt);
-        int valid = block_manager_->Verify(block_ids, block_unique_ids);
+        int valid                                    = block_manager_->Verify(block_ids, block_unique_ids);
         if (rank_ == 0) {
             TM_LOG_INFO("[CachePrompt] session %llu, cached block_ids %s, cached block_unique_ids %s, valid %d",
-                seq.id, serialize_vector(block_ids).c_str(), serialize_vector(block_unique_ids).c_str(), valid);
+                        seq.id,
+                        serialize_vector(block_ids).c_str(),
+                        serialize_vector(block_unique_ids).c_str(),
+                        valid);
         }
         // remove invalid nodes from trie tree if there is any
         if (valid < block_ids.size()) {
@@ -138,21 +141,24 @@ void SequenceManager::CacheGeneration(const Sequence& seq)
     if (!block_trie_) {
         return;
     }
-    BlockIds  block_ids;
-    UniqueIds block_unique_ids;
+    BlockIds                               block_ids;
+    UniqueIds                              block_unique_ids;
     std::vector<std::shared_ptr<TrieNode>> nodes;
     std::tie(block_ids, block_unique_ids, nodes) = block_trie_->cache(seq, seq.tokens);
-    int valid = block_manager_->Verify(block_ids, block_unique_ids);
+    int valid                                    = block_manager_->Verify(block_ids, block_unique_ids);
     if (rank_ == 0) {
         TM_LOG_INFO("[CacheGeneration] session %llu, cached block_ids %s, cached block_unique_ids %s, valid %d",
-            seq.id, serialize_vector(block_ids).c_str(), serialize_vector(block_unique_ids).c_str(), valid);
+                    seq.id,
+                    serialize_vector(block_ids).c_str(),
+                    serialize_vector(block_unique_ids).c_str(),
+                    valid);
     }
     // remove invalid nodes from trie tree if there is any
     if (valid < block_ids.size()) {
         block_trie_->Remove(nodes, valid);
     }
 }
-// clang-format on
+
 void SequenceManager::VerifyAndLockCached(const Sequences& sequences)
 {
     BlockIds blocks;
@@ -407,7 +413,6 @@ void SequenceManager::AssignAndActivate(const Sequences&        sequences,  //
     }
 }
 
-//clang-format off
 void SequenceManager::PrefixMatch(Sequences& sequences)
 {
     if (!block_trie_) {
@@ -415,10 +420,10 @@ void SequenceManager::PrefixMatch(Sequences& sequences)
     }
 
     for (int i = 0; i < sequences.size(); i++) {
-        BlockIds  block_ids;
-        UniqueIds unique_ids;
+        BlockIds                               block_ids;
+        UniqueIds                              unique_ids;
         std::vector<std::shared_ptr<TrieNode>> matched_nodes;
-        auto& seq = const_cast<Sequence&>(*sequences[i]);
+        auto&                                  seq = const_cast<Sequence&>(*sequences[i]);
 
         if (seq.cache_len != 0) {
             // We only apply prefix-cache matching when seq.cache_len is 0,
@@ -427,10 +432,12 @@ void SequenceManager::PrefixMatch(Sequences& sequences)
             continue;
         }
         std::tie(block_ids, unique_ids, matched_nodes) = block_trie_->match(seq);
-        const int valid = block_manager_->Verify(block_ids, unique_ids);
+        const int valid                                = block_manager_->Verify(block_ids, unique_ids);
         if (rank_ == 0) {
             TM_LOG_INFO("[match] session %llu, matched block_ids %s, unique_ids %s",
-                seq.id, serialize_vector(block_ids).c_str(), serialize_vector(unique_ids).c_str());
+                        seq.id,
+                        serialize_vector(block_ids).c_str(),
+                        serialize_vector(unique_ids).c_str());
             TM_LOG_INFO("[match] valid blocks %d, cache_len %d", valid, seq.cache_len);
         }
         // remove invalid nodes from trie tree if there is any
@@ -446,7 +453,6 @@ void SequenceManager::PrefixMatch(Sequences& sequences)
         seq.cache_len = valid * block_seq_len_;
     }
 }
-//clang-format on
 
 auto SequenceManager::Materialize(Sequences                    sequences,
                                   std::vector<int>             context_lengths,

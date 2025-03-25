@@ -14,8 +14,7 @@ size_t hash(const std::vector<int>& vec)
     return seed;
 }
 
-BlockTrie::BlockTrie(size_t block_len):
-    block_seq_len_(block_len)
+BlockTrie::BlockTrie(size_t block_len): block_seq_len_(block_len)
 {
     root_ = std::make_shared<TrieNode>();
 }
@@ -52,7 +51,7 @@ std::tuple<BlockIds, UniqueIds, std::vector<std::shared_ptr<TrieNode>>> BlockTri
     return std::tuple(matched_blocks, matched_unique_ids, matched_nodes);
 }
 
-std::tuple<BlockIds, UniqueIds, std::vector<std::shared_ptr<TrieNode>>> BlockTrie::cache(const Sequence& seq,
+std::tuple<BlockIds, UniqueIds, std::vector<std::shared_ptr<TrieNode>>> BlockTrie::cache(const Sequence&         seq,
                                                                                          const std::vector<int>& tokens)
 {
     TM_LOG_INFO("[cache] session %llu, seq.blocks %d, tokens %d", seq.id, seq.blocks.size(), tokens.size());
@@ -108,10 +107,9 @@ std::tuple<BlockIds, UniqueIds, std::vector<std::shared_ptr<TrieNode>>> BlockTri
     return std::make_tuple(cache_block_ids, cache_block_unique_ids, cache_nodes);
 }
 
-
 void BlockTrie::Remove(const std::vector<std::shared_ptr<TrieNode>>& nodes, int valid_size)
 {
-    if (nodes.empty() || valid_size < 1 ) {
+    if (nodes.empty() || valid_size < 1) {
         return;
     }
     // visit nodes in reverse order

@@ -37,7 +37,7 @@ public:
      *
      * @note If no blocks are matched, all containers in the returned tuple will be empty.
      */
-   std::tuple<BlockIds, UniqueIds, std::vector<std::shared_ptr<TrieNode>>> match(const Sequence& seq) const;
+    std::tuple<BlockIds, UniqueIds, std::vector<std::shared_ptr<TrieNode>>> match(const Sequence& seq) const;
 
     /**
      * @brief Cache the key-value (KV) blocks of a given sequence.
@@ -53,7 +53,7 @@ public:
      *         - UniqueIds: A list of unique IDs of the cached blocks.
      *         - std::vector<std::shared_ptr<TrieNode>>: A list of cached node
      */
-    std::tuple<BlockIds, UniqueIds, std::vector<std::shared_ptr<TrieNode>>> cache(const Sequence& seq,
+    std::tuple<BlockIds, UniqueIds, std::vector<std::shared_ptr<TrieNode>>> cache(const Sequence&         seq,
                                                                                   const std::vector<int>& tokens);
 
     /** @brief remove nodes[valid_size:] in a visited path from the trie tree
