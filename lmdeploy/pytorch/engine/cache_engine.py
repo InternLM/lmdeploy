@@ -237,12 +237,7 @@ class CacheEngine:
         self.transfer_engine.register_torch(
             remote_engine_id, "v", self.full_gpu_cache[1]
         )
-        # a 1G Buffer
         buffer = torch.zeros([1024 * 1024 * 1024], dtype=torch.int8, device="cuda")
-
-        print(
-            f"offset: {buffer.storage_offset(), self.full_gpu_cache[0].storage_offset(), self.full_gpu_cache[1].storage_offset()}"
-        )
         self.transfer_engine.register_torch(remote_engine_id, "buffer", buffer)
         await link.connect(remote_endpoint)
 
@@ -275,11 +270,11 @@ class CacheEngine:
         
         # begin = time.time()
         # for t_off, s_off in zip(target_offset, source_offset):
-        #     await self.transfer_engine.links[engine_id].r_rdma_async(
-        #         "k", t_off, s_off, length
+        #     await self.transfer_engine.links[engine_id].batch_r_rdma_async(
+        #         "k", [t_off], [s_off], length
         #     )
-        #     await self.transfer_engine.links[engine_id].r_rdma_async(
-        #         "v", t_off, s_off, length
+        #     await self.transfer_engine.links[engine_id].batch_r_rdma_async(
+        #         "v", [t_off], [s_off], length
         #     )
         # end = time.time()
         # print(f"bw: {length * len(source_offset) / (end - begin) / 1e9}GBps")
@@ -290,12 +285,6 @@ class CacheEngine:
         )
         await self.transfer_engine.links[engine_id].batch_r_rdma_async(
             "v", target_offset, source_offset, length
-        )
-        # if self.rank == 0:
-        print(
-            f"after: {self.rank}",
-            self.transfer_engine.links[engine_id].memory_pool["buffer"][:length].sum(),
-            self.transfer_engine.links[engine_id].memory_pool["buffer"][0:16],
         )
         end = time.time()
         print(f"bw: {length * len(source_offset) / (end - begin) / 1e9}GBps")

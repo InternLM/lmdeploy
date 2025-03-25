@@ -83,11 +83,12 @@ void RDMAContext::cq_poll_handle()
 
         while (ibv_poll_cq(cq_, 1, &wc) > 0) {
             if (wc.status == IBV_WC_SUCCESS) {
-                MIGRATION_LOG_INFO("RDMA READ completed successfully." << std::endl);
+                std::cout << "RDMA READ completed successfully." << std::endl;
                 if (wc.wr_id != 0) {
+                    std::cout << "???" << std::endl;
                     wr_info_base* ptr = reinterpret_cast<wr_info_base*>(wc.wr_id);
                     if (ptr->get_wr_type() == WrType::RDMA_READ_ACK) {
-                        MIGRATION_LOG_DEBUG("read cache done: Received IMM, imm_data: ", wc.imm_data);
+                        std::cout << "read cache done: Received IMM, imm_data: " << wc.imm_data;
                         auto* info = reinterpret_cast<read_info*>(ptr);
                         info->callback(wc.imm_data);
                         delete info;
