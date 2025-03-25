@@ -37,6 +37,13 @@ class DlinferFusedMoEImpl(FusedMoEImpl):
         self.top_k = top_k
         self.renormalize = renormalize
 
+    def update_weights(self, gate_up_weights: torch.Tensor, down_weights: torch.Tensor):
+        """update weights."""
+        device_type = gate_up_weights.device.type
+        if device_type in ['npu']:
+            return gate_up_weights.transpose(-1, -2).contiguous(), down_weights.transpose(-1, -2).contiguous()
+        return gate_up_weights, down_weights
+
     def forward(self,
                 hidden_states: torch.Tensor,
                 topk_weights: torch.Tensor,
