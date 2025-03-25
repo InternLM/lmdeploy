@@ -272,14 +272,14 @@ class RayExecutor(ExecutorBase):
                 log_level=logger.level,
             )
 
-            logger.info('Init distributed environment by device.')
-            self._init_distributed_environment_by_device(device_type)
-
             logger.info('Init ray workers.')
             self.workers = self._init_workers_ray(placement_group, worker_kwargs)
             self.dag = None
             self._prefetch_task: asyncio.Task = None
             self.remote_outs: asyncio.Queue = None
+
+            logger.info('Init distributed environment by device.')
+            self._init_distributed_environment_by_device(device_type)
 
             logger.info('Init distributed process group.')
             if self.dp == 1:
