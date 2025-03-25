@@ -19,14 +19,14 @@ template<typename T>
 std::string serialize_vector(const std::vector<T>& data)
 {
     if (data.empty()) {
-        return "";
+        return "nil";
     }
 
     std::stringstream ss;
     auto it = data.begin();
     ss << *it;
 
-    for (++it; it < data.end(); ++it) {
+    for (++it; it != data.end(); ++it) {
         ss << ", " << *it;
     }
     return ss.str();
@@ -108,24 +108,48 @@ bool SequenceManager::Erase(uint64_t id)
 
 void SequenceManager::CachePrompt(const Sequences& sequences, int active_size)
 {
-    if (block_trie_) {
-        for (int i = 0; i < active_size; ++i) {
-            auto& seq = *sequences[i];
-            BlockIds block_ids;
-            UniqueIds block_unique_ids;
-            std::tie(block_ids, block_unique_ids) = block_trie_->cache(seq, seq.prompt);
-            // TODO:
+    if (!block_trie_) {
+        return;
+    }
+    for (int i = 0; i < active_size; ++i) {
+        auto& seq = *sequences[i];
+        if (seq.cache_len > seq.prompt.size()) {
+            // seq prefill finished. We don't cache the prompt any longer
+            continue;
+        }
+        BlockIds block_ids;
+        UniqueIds block_unique_ids;
+        std::vector<std::shared_ptr<TrieNode>> nodes;
+        std::tie(block_ids, block_unique_ids, nodes) = block_trie_->cache(seq, seq.prompt);
+        int valid = block_manager_->Verify(block_ids, block_unique_ids);
+        if (rank_ == 0) {
+            TM_LOG_INFO("[CachePrompt] session %llu, cached block_ids %s, cached block_unique_ids %s, valid %d",
+                seq.id, serialize_vector(block_ids).c_str(), serialize_vector(block_unique_ids).c_str(), valid);
+        }
+        // remove invalid nodes from trie tree if there is any
+        if (valid < block_ids.size()) {
+            block_trie_->Remove(nodes, valid);
         }
     }
 }
 
 void SequenceManager::CacheGeneration(const Sequence& seq)
 {
-    if (block_trie_) {
-        BlockIds block_ids;
-        UniqueIds block_unique_ids;
-        std::tie(block_ids, block_unique_ids) = block_trie_->cache(seq, seq.tokens);
-        // TODO:
+    if (!block_trie_) {
+        return;
+    }
+    BlockIds block_ids;
+    UniqueIds block_unique_ids;
+    std::vector<std::shared_ptr<TrieNode>> nodes;
+    std::tie(block_ids, block_unique_ids, nodes) = block_trie_->cache(seq, seq.tokens);
+    int valid = block_manager_->Verify(block_ids, block_unique_ids);
+    if (rank_ == 0) {
+        TM_LOG_INFO("[CacheGeneration] session %llu, cached block_ids %s, cached block_unique_ids %s, valid %d",
+            seq.id, serialize_vector(block_ids).c_str(), serialize_vector(block_unique_ids).c_str(), valid);
+    }
+    // remove invalid nodes from trie tree if there is any
+    if (valid < block_ids.size()) {
+        block_trie_->Remove(nodes, valid);
     }
 }
 
@@ -383,6 +407,45 @@ void SequenceManager::AssignAndActivate(const Sequences&        sequences,  //
     }
 }
 
+void SequenceManager::PrefixMatch(Sequences& sequences) {
+    if (!block_trie_) {
+        return;
+    }
+
+    for (int i = 0; i < sequences.size(); i++) {
+        BlockIds  block_ids;
+        UniqueIds unique_ids;
+        std::vector<std::shared_ptr<TrieNode>> matched_nodes;
+        auto& seq = const_cast<Sequence&>(*sequences[i]);
+
+        if (seq.cache_len != 0) {
+            // We only apply prefix-cache matching when seq.cache_len is 0,
+            // which means this seq is a brand-new sequence.
+            // seq.cache_len is updated after every forward iter. Refer to `LlamaBatch::Forward`
+            continue;
+        }
+        std::tie(block_ids, unique_ids, matched_nodes) = block_trie_->match(seq);
+        const int valid = block_manager_->Verify(block_ids, unique_ids);
+        if (rank_ == 0) {
+            TM_LOG_INFO("[match] session %llu, matched block_ids %s, unique_ids %s",
+                seq.id, serialize_vector(block_ids).c_str(), serialize_vector(unique_ids).c_str());
+            TM_LOG_INFO("[match] valid blocks %d, cache_len %d", valid, seq.cache_len);
+        }
+        // remove invalid nodes from trie tree if there is any
+        if (valid < block_ids.size()) {
+            block_trie_->Remove(matched_nodes, valid);
+        }
+        BlockIds matched_blocks(block_ids.begin(), block_ids.begin() + valid);
+        block_manager_->Lock(matched_blocks);
+        // block_manager_->Touch(matched_blocks);
+
+        seq.blocks.insert(seq.blocks.end(), block_ids.begin(), block_ids.begin() + valid);
+        seq.block_unique_ids.insert(seq.block_unique_ids.end(), unique_ids.begin(), unique_ids.begin() + valid);
+        seq.cache_len = valid * block_seq_len_;
+    }
+
+}
+
 auto SequenceManager::Materialize(Sequences                    sequences,
                                   std::vector<int>             context_lengths,
                                   const std::vector<uint64_t>& priorities,
@@ -403,25 +466,8 @@ auto SequenceManager::Materialize(Sequences                    sequences,
     // the blocks can still be preempted later
     VerifyAndLockCached(sequences);
 
-    if (block_trie_) {
-        // match prefix cache
-        for (int i = 0; i < sequences.size(); i++) {
-            BlockIds  block_ids;
-            UniqueIds unique_ids;
-            std::vector<std::shared_ptr<TrieNode>> matched_nodes;
-            auto& seq = *sequences[i];
+    PrefixMatch(sequences);
 
-            std::tie(block_ids, unique_ids, matched_nodes) = block_trie_->match(seq);
-            const int count = block_manager_->Verify(block_ids, unique_ids);
-            seq.cache_len = count * block_seq_len_;
-            if (rank_ == 0) {
-                TM_LOG_DEBUG("matched block_ids %s, unique_ids %s", serialize_vector(block_ids), serialize_vector(unique_ids), count);
-                TM_LOG_DEBUG("valid block count %d, cache_len %d", count, seq.cache_len);
-            }
-            // TODO: remove invalid node in `block_trie_`
-            // How to retrieve the invalid node root in O(1), matched_values -> matched_nodes (the match path)
-        }
-    }
 
     const int max_input_count = adjust(sequences, context_lengths);
 

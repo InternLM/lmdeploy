@@ -1583,7 +1583,7 @@ auto LlamaBatch<T>::Interrupt(int index, bool force_stop, bool force_end) -> Sig
         TM_LOG_INFO("[Interrupt] slot %d, tokens [%s]", index, ss.str().c_str());
     }
 
-    if (state_->requests[index]->session.end_flag || force_end) {
+    if (/*state_->requests[index]->session.end_flag ||*/ force_end) {
         // Sequence is ending this round or a stop request is issued to end it
         FT_CHECK(sequence_manager_->Erase(state_->requests[index]->id));
     }

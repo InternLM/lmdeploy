@@ -154,6 +154,8 @@ private:
                                   const BlockIds&         blocks,
                                   const UniqueIds&        unique_ids);
 
+    void PrefixMatch(Sequences& sequences);
+
 private:
     int block_seq_len_;
     int rank_;

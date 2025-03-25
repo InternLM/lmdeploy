@@ -37,7 +37,7 @@ public:
     *
     * @note If no blocks are matched, all containers in the returned tuple will be empty.
     */
-   std::tuple<BlockIds, UniqueIds, std::vector<std::shared_ptr<TrieNode>>> match(const Sequence& seq);
+   std::tuple<BlockIds, UniqueIds, std::vector<std::shared_ptr<TrieNode>>> match(const Sequence& seq) const;
 
     /**
      * @brief Cache the key-value (KV) blocks of a given sequence.
@@ -48,13 +48,20 @@ public:
      *
      * @param seq The sequence whose KV blocks are to be cached.
      * @param tokens The token list that the quence's KV blocks map
-     * @return A pair of vectors containing the IDs and unique IDs of the successfully
-              cached blocks. If no blocks are cached, a pair of empty vectors is returned.
-     *
-     * @note Only valid blocks of a non-kCached sequence are processed for caching.
+     * @return A tuple containing the following:
+     *         - BlockIds: A list of IDs of the cached blocks.
+     *         - UniqueIds: A list of unique IDs of the cached blocks.
+     *         - std::vector<std::shared_ptr<TrieNode>>: A list of cached node
      */
-    std::pair<BlockIds, UniqueIds> cache(const Sequence& seq, const std::vector<int>& tokens);
+    std::tuple<BlockIds, UniqueIds, std::vector<std::shared_ptr<TrieNode>>> cache(const Sequence& seq, const std::vector<int>& tokens);
 
+    /** @brief remove nodes[valid_size:] in a visited path from the trie tree
+
+    * @param nodes a visited path returned by `match` or `cache`
+    * @param valid_size the valid number of cached blocks from the beginning of the path
+    * @note the visited path must be the returned value from `match` or `cache`
+    */
+    void Remove(const std::vector<std::shared_ptr<TrieNode>>& nodes, int valid_size);
 private:
     size_t block_seq_len_;
 
