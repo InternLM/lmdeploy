@@ -357,6 +357,11 @@ class AutoModelAgent:
             if sampling_inputs.random_offsets is not None:
                 sampling_inputs.random_offsets += 1
 
+        async def __await_distworker(worker, timeout: float = 0.001):
+            while not worker.is_completed():
+                await asyncio.sleep(timeout)
+            worker.wait()
+
         # dist tools
         dist_ctx = get_dist_manager().current_context()
         rank = dist_ctx.rank
@@ -372,7 +377,9 @@ class AutoModelAgent:
             if is_decoding:
                 batch_size = inputs.seq_length.numel()
                 all_batch_sizes = torch.tensor([0] * dp, device='cuda')
-                lc_handle = dist.all_gather_into_tensor(all_batch_sizes, all_batch_sizes.new_tensor(batch_size))
+                lc_handle = dist.all_gather_into_tensor(all_batch_sizes,
+                                                        all_batch_sizes.new_tensor(batch_size),
+                                                        async_op=True)
             else:
                 all_sync_flags = torch.tensor([False] * dp, device='cuda')
                 lc_handle = dist.all_gather_into_tensor(all_sync_flags,
@@ -391,12 +398,13 @@ class AutoModelAgent:
 
         if dp > 1:
             if is_decoding:
+                await __await_distworker(lc_handle)
                 padding_batch_size = all_batch_sizes.cpu().max().item()
                 meta = self.patched_model.get_meta()
                 meta.padding_batch_size = padding_batch_size
                 logger.debug(f'padding_batch_size={padding_batch_size}')
             else:
-                lc_handle.wait()
+                await __await_distworker(lc_handle)
                 sync_long_context = all_sync_flags.any()
                 logger.debug(f'sync_long_context={sync_long_context}')
             inputs.build_dp_meta()
