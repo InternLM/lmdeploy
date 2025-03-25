@@ -6,7 +6,6 @@ import torch
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
-import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.distributed import get_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
@@ -67,14 +66,12 @@ class Qwen3MoeAttention(nn.Module):
                               config.rms_norm_eps,
                               quant_config=quantization_config,
                               dtype=dtype,
-                              device=device,
-                              tp=True)
+                              device=device)
         self.k_norm = RMSNorm(head_dim,
                               config.rms_norm_eps,
                               quant_config=quantization_config,
                               dtype=dtype,
-                              device=device,
-                              tp=True)
+                              device=device)
 
     def forward(
         self,
@@ -196,6 +193,9 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
 
         self.softmax_topk = SoftmaxTopK(self.top_k)
 
+        world_size, _ = get_world_rank()
+        _all_reduce = world_size > 1
+
         self.experts = build_fused_moe(
             self.hidden_dim,
             self.ffn_dim,
@@ -204,14 +204,8 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
             renormalize=self.renormalize,
             dtype=dtype,
             device=device,
-            all_reduce=False,
+            all_reduce=_all_reduce,
         )
-
-        world_size, _ = get_world_rank()
-        if world_size > 1:
-            self._all_reduce = True
-        else:
-            self._all_reduce = False
 
     def forward(self, hidden_states: torch.Tensor):
         """forward."""
@@ -228,10 +222,6 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
         )
 
         out_states = out_states.reshape(batch_size, sequence_length, -1)
-
-        if self._all_reduce:
-            dist.all_reduce(out_states)
-
         return out_states
 
 
