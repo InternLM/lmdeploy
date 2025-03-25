@@ -7,7 +7,7 @@ from typing import Any, Dict
 import torch
 import torch.distributed as dist
 
-from lmdeploy.utils import get_logger, logging_timer
+from lmdeploy.utils import get_logger
 
 from ..backends import get_backend
 from ..config import BackendConfig, CacheConfig, ModelConfig
@@ -309,7 +309,6 @@ class AutoModelAgent:
         ret['logits'] = logits
         return ret
 
-    @logging_timer('SamplingLogits', logger)
     async def async_sampling_logits(self, logits: torch.Tensor, all_ids: torch.Tensor, guided_input_ids: torch.Tensor,
                                     sampling_inputs: SamplingInputs, inputs: ModelInputs, ignore_eos: torch.Tensor):
         """sampling logits."""
@@ -358,14 +357,16 @@ class AutoModelAgent:
             if sampling_inputs.random_offsets is not None:
                 sampling_inputs.random_offsets += 1
 
-        logger.debug('<ForwardTask>: '
-                     f'batch_size={inputs.seq_length.size(0)} '
-                     f'num_tokens={inputs.input_ids.size(-1)}')
         # dist tools
         dist_ctx = get_dist_manager().current_context()
         rank = dist_ctx.rank
         tp = dist_ctx.tp
         dp = dist_ctx.dp
+
+        logger.info(f'<ForwardTask> rank[{rank}]: '
+                    f'batch_size={inputs.seq_length.size(0)} '
+                    f'num_tokens={inputs.input_ids.size(-1)}')
+
         is_decoding = inputs.is_decoding
         if dp > 1:
             if is_decoding:
@@ -404,6 +405,7 @@ class AutoModelAgent:
 
         for idx in range(loop_count):
             # inference
+            logger.debug(f'<ForwardTask> rank[{rank}]: model forward [{idx}].')
             output = await self._async_model_forward(
                 inputs,
                 swap_in_map=swap_in_map,
@@ -421,6 +423,7 @@ class AutoModelAgent:
             need_broadcast_next = (dp == 1 and tp > 1 and idx < loop_count - 1)
             if need_output:
                 # sampling
+                logger.debug(f'<ForwardTask> rank[{rank}]: Sampling [{idx}].')
                 next_token_ids = await self.async_sampling_logits(logits, all_ids, guided_input_ids, sampling_inputs,
                                                                   inputs, num_ignore_eos > 0)
                 num_ignore_eos = num_ignore_eos - 1
@@ -433,6 +436,7 @@ class AutoModelAgent:
                 stopped = None
 
             if need_broadcast_next:
+                logger.debug(f'<ForwardTask> rank[{rank}]: synchornize token ids [{idx}]')
                 tp_gpu_group = dist_ctx.tp_gpu_group
                 dist.broadcast(next_token_ids, src=rank // tp * tp, group=tp_gpu_group)
 
@@ -446,6 +450,7 @@ class AutoModelAgent:
                               stopped=stopped,
                               model_metas=model_metas,
                               event=event)
+                logger.debug(f'<ForwardTask> rank[{rank}]: Output [{idx}]')
                 self._out_que.put_nowait(output)
 
             # update for next loop

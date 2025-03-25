@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import enum
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List
 
@@ -282,6 +283,18 @@ class RequestManager:
 
         Should only be called in loop task.
         """
+
+        def _log_reqs(reqs: ReqList):
+            num_reqs = len(reqs)
+            if num_reqs == 0:
+                return
+            logger_level = logger.level
+            if logger_level <= logging.DEBUG:
+                sender_id = [req.sender_id for req in reqs]
+                logger.debug(f'Receive {req_type.name} Request: senders: {sender_id}')
+            elif logger_level <= logging.INFO:
+                logger.info(f'Receive {req_type.name} Request: {num_reqs}')
+
         reqs_by_type = await self.get_all_requests()
 
         # handle requests
@@ -291,6 +304,7 @@ class RequestManager:
                 continue
 
             reqs: ReqList = reqs_by_type[req_type]
+            _log_reqs(reqs)
             self.process_request(req_type, reqs, **kwargs)
 
     def run_until_complete(self, future: Awaitable):

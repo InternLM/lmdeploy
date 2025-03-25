@@ -292,6 +292,7 @@ class RayExecutor(ExecutorBase):
     async def _prefetch_outputs(self):
         while True:
             outs = await self.workers[0].get_outputs.remote()
+            logger.debug(f'Receive {len(outs)} outputs from worker[0].')
             for out in outs:
                 # pack pytorch
                 for k, v in out.items():
@@ -303,9 +304,11 @@ class RayExecutor(ExecutorBase):
         try:
             task.result()
         except asyncio.CancelledError:
-            pass
+            logger.debug(f'{task.get_name()} cancelled.')
+        except KeyboardInterrupt:
+            logger.debug(f'{task.get_name()} KeyboardInterrupt.')
         except BaseException:
-            logger.exception('Ray executor prefetch task failed.')
+            logger.exception(f'{task.get_name()} task failed.')
 
     def start(self, forward_event: asyncio.Event):
         """start engine loop."""
@@ -314,12 +317,15 @@ class RayExecutor(ExecutorBase):
 
         self.remote_outs = asyncio.Queue()
         event_loop = asyncio.get_event_loop()
+        logger.info('Starting async task RayPrefetchOutput loop.')
         self._prefetch_task = event_loop.create_task(self._prefetch_outputs())
+        self._prefetch_task.add_done_callback(self._prefetch_task_callback)
 
     def stop(self):
         """stop engine loop."""
         if self.dp == 1:
             self.collective_rpc('stop_async')
+            logger.debug('RayExecutor workers stopped.')
         if self._prefetch_task is not None:
             self._prefetch_task.cancel()
 
@@ -327,14 +333,17 @@ class RayExecutor(ExecutorBase):
         """release."""
         if self.dp == 1:
             self.collective_rpc('release')
+            logger.debug('RayExecutor workers released.')
             try:
                 self.collective_rpc('exit')
+                logger.debug('RayExecutor workers exited.')
             except ray.exceptions.RayActorError as e:
                 logger.debug(f'ray actor exit: {e}')
         else:
             [ray.kill(worker) for worker in self.workers]
 
         ray.util.remove_placement_group(self.placement_group)
+        logger.debug('RayExecutor placement group removed.')
 
     def _compile_dag(self):
         """compile dag."""
