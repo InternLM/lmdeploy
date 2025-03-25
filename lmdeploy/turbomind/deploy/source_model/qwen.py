@@ -149,7 +149,7 @@ class Qwen2MoeModel(LlamaModel):
         info['expert_inter_size'] = cfg['moe_intermediate_size']
         info['experts_per_token'] = cfg['num_experts_per_tok']
         info['inter_size'] = cfg['shared_expert_intermediate_size']
-        info['moe_shared_gate'] = info['inter_size']
+        info['moe_shared_gate'] = True
         info['norm_topk_prob'] = cfg['norm_topk_prob']
         info['attn_bias'] = cfg.get('qkv_bias', 1)
         return info
