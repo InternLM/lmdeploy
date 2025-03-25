@@ -5,6 +5,8 @@ from datetime import timedelta
 
 import torch.distributed as dist
 
+from lmdeploy.pytorch.backends.selector import get_backend
+
 
 def find_available_port() -> bool:
     """find available port."""
@@ -38,5 +40,7 @@ def init_process_group(rank: int, world_size: int):
     DIST_TIMEOUT = timedelta(days=35600)
     init_dist_environ(rank, world_size)
     os.environ.pop('TORCHELASTIC_USE_AGENT_STORE', None)
-    dist.init_process_group(backend='nccl', rank=rank, world_size=world_size, timeout=DIST_TIMEOUT)
+
+    ccl_backend = get_backend().ccl_backend()
+    dist.init_process_group(backend=ccl_backend, rank=rank, world_size=world_size, timeout=DIST_TIMEOUT)
     assert dist.is_initialized()
