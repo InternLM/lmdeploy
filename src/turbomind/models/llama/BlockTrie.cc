@@ -14,16 +14,16 @@ size_t hash(const std::vector<int>& vec)
     return seed;
 }
 
-BlockTrie::BlockTrie(size_t block_seq_len, std::shared_ptr<BlockManager> block_manager):
-    block_seq_len_(block_seq_len), block_manager_(block_manager)
+BlockTrie::BlockTrie(size_t block_len):
+    block_seq_len_(block_len)
 {
     root_ = std::make_shared<TrieNode>();
 }
 
 std::tuple<BlockIds, UniqueIds, std::vector<std::shared_ptr<TrieNode>>> BlockTrie::match(const Sequence& seq) const
 {
-    BlockIds  matched_blocks;
-    UniqueIds matched_unique_ids;
+    BlockIds                               matched_blocks;
+    UniqueIds                              matched_unique_ids;
     std::vector<std::shared_ptr<TrieNode>> matched_nodes;
 
     std::shared_ptr<TrieNode> curr_node   = root_;
@@ -52,28 +52,27 @@ std::tuple<BlockIds, UniqueIds, std::vector<std::shared_ptr<TrieNode>>> BlockTri
     return std::tuple(matched_blocks, matched_unique_ids, matched_nodes);
 }
 
-std::tuple<BlockIds, UniqueIds, std::vector<std::shared_ptr<TrieNode>>> BlockTrie::cache(const Sequence& seq, const std::vector<int>& tokens)
+std::tuple<BlockIds, UniqueIds, std::vector<std::shared_ptr<TrieNode>>> BlockTrie::cache(const Sequence& seq,
+                                                                                         const std::vector<int>& tokens)
 {
     TM_LOG_INFO("[cache] session %llu, seq.blocks %d, tokens %d", seq.id, seq.blocks.size(), tokens.size());
     FT_CHECK(seq.status != Sequence::kCached);
     FT_CHECK(tokens.size() <= seq.blocks.size() * block_seq_len_);
 
-    std::shared_ptr<TrieNode> curr_node   = root_;
-    int                       idx         = 0;
+    std::shared_ptr<TrieNode> curr_node = root_;
+    int                       idx       = 0;
 
-    BlockIds  cache_block_ids;
-    UniqueIds cache_block_unique_ids;
+    BlockIds                               cache_block_ids;
+    UniqueIds                              cache_block_unique_ids;
     std::vector<std::shared_ptr<TrieNode>> cache_nodes;
-
-    // // Only cache valid blocks
-    // int valid_blocks = block_manager_->Verify(seq.blocks, seq.block_unique_ids);
 
     // We don't cache the last block of the sequence, since it might not be full
     // TODO(lvhan): determine wether the last block is full or not. It is not trivial
     // considering chunk prefill
     for (int idx = 0; idx < seq.blocks.size() - 1; ++idx) {
         auto start = tokens.begin() + idx * block_seq_len_;
-        auto end = start + block_seq_len_;
+        auto end   = start + block_seq_len_;
+
         std::vector<int> curr_tokens(start, end);
         // TODO(lvhan): add salt to ensure the hash security
         size_t hash_key = hash(curr_tokens);
@@ -110,15 +109,16 @@ std::tuple<BlockIds, UniqueIds, std::vector<std::shared_ptr<TrieNode>>> BlockTri
 }
 
 
-void BlockTrie::Remove(const std::vector<std::shared_ptr<TrieNode>>& nodes, int valid_size) {
+void BlockTrie::Remove(const std::vector<std::shared_ptr<TrieNode>>& nodes, int valid_size)
+{
     if (nodes.empty() || valid_size < 1 ) {
         return;
     }
     // visit nodes in reverse order
     for (int idx = nodes.size() - 1; idx >= valid_size; --idx) {
-        auto child = nodes[idx];
+        auto child  = nodes[idx];
         auto parent = nodes[idx - 1];
-        auto it = parent->children.find(child->hash_key);
+        auto it     = parent->children.find(child->hash_key);
         FT_CHECK(it != parent->children.end());
         FT_CHECK(it->second->tokens == child->tokens);
         parent->children.erase(it);

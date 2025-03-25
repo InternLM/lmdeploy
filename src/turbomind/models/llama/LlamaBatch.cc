@@ -224,16 +224,6 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& reqs, std::vector<Signa
                 }
                 s = ptr->tokens.size();
             }
-            else if (s == ptr->tokens.size()) {
-                if (rank_ == 0) {
-                    TM_LOG_INFO("[ProcessInferRequests] ID %lu, step(%d) == tokens(%d)", ptr->id, s, ptr->tokens.size());
-                }
-            }
-            else if (s != 0) {
-                if (rank_ == 0) {
-                    TM_LOG_WARNING("[ProcessInferRequests] ID %lu, step(%d) < tokens(%d)", ptr->id, s, ptr->tokens.size());
-                }
-            }
             return s;
         }();
 
@@ -252,10 +242,7 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& reqs, std::vector<Signa
         if (step < seq.tokens.size()) {
             // resize sequence tokens to match step
             seq.tokens.resize(step);
-            auto cache_len = seq.cache_len;
-            seq.cache_len = std::min(cache_len, step);
-            TM_LOG_INFO("[ProcessInferRequests] [%llu] step %d, seq.tokens %d,  adjust cache len from %d to %d",
-                seq.id, step, seq.tokens, cache_len, seq.cache_len);
+            seq.cache_len = std::min(seq.cache_len, step);
             DropEmbeddings(seq);
         }
 

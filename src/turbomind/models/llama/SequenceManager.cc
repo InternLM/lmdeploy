@@ -21,8 +21,8 @@ std::string serialize_vector(const std::vector<T>& data)
     if (data.empty()) {
         return "nil";
     }
-
     std::stringstream ss;
+
     auto it = data.begin();
     ss << *it;
 
@@ -49,7 +49,7 @@ SequenceManager::SequenceManager(size_t             layer_num,
 
     block_manager_ = std::make_shared<BlockManager>(block_size, block_count, chunk_size, allocator, get_free_size);
     if (enable_prefix_caching) {
-        block_trie_    = std::make_shared<BlockTrie>(block_config.block_len_, block_manager_);
+        block_trie_ = std::make_shared<BlockTrie>(block_config.block_len_);
     }
 }
 
@@ -105,7 +105,7 @@ bool SequenceManager::Erase(uint64_t id)
     }
     return false;
 }
-
+//clang-format off
 void SequenceManager::CachePrompt(const Sequences& sequences, int active_size)
 {
     if (!block_trie_) {
@@ -138,7 +138,7 @@ void SequenceManager::CacheGeneration(const Sequence& seq)
     if (!block_trie_) {
         return;
     }
-    BlockIds block_ids;
+    BlockIds  block_ids;
     UniqueIds block_unique_ids;
     std::vector<std::shared_ptr<TrieNode>> nodes;
     std::tie(block_ids, block_unique_ids, nodes) = block_trie_->cache(seq, seq.tokens);
@@ -152,7 +152,7 @@ void SequenceManager::CacheGeneration(const Sequence& seq)
         block_trie_->Remove(nodes, valid);
     }
 }
-
+// clang-format on
 void SequenceManager::VerifyAndLockCached(const Sequences& sequences)
 {
     BlockIds blocks;
@@ -407,7 +407,9 @@ void SequenceManager::AssignAndActivate(const Sequences&        sequences,  //
     }
 }
 
-void SequenceManager::PrefixMatch(Sequences& sequences) {
+//clang-format off
+void SequenceManager::PrefixMatch(Sequences& sequences)
+{
     if (!block_trie_) {
         return;
     }
@@ -443,8 +445,8 @@ void SequenceManager::PrefixMatch(Sequences& sequences) {
         seq.block_unique_ids.insert(seq.block_unique_ids.end(), unique_ids.begin(), unique_ids.begin() + valid);
         seq.cache_len = valid * block_seq_len_;
     }
-
 }
+//clang-format on
 
 auto SequenceManager::Materialize(Sequences                    sequences,
                                   std::vector<int>             context_lengths,
@@ -467,7 +469,6 @@ auto SequenceManager::Materialize(Sequences                    sequences,
     VerifyAndLockCached(sequences);
 
     PrefixMatch(sequences);
-
 
     const int max_input_count = adjust(sequences, context_lengths);
 
