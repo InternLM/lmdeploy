@@ -121,7 +121,7 @@ class QwenVisionModel(VisonModel):
             elif message['role'] in ['images', 'preprocess', 'forward']:
                 continue
             n_images = len([1 for x in message['content'] if x['type'] == 'image'])
-            content = [x['text'] for x in message['content'] if x['type'] == 'text']
+            content = [x.get('text', '') for x in message['content'] if x['type'] == 'text']
             prompt = content[0]
             if IMAGE_TOKEN in prompt:
                 pass

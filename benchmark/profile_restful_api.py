@@ -30,7 +30,18 @@ import requests
 from tqdm.asyncio import tqdm
 from transformers import AutoTokenizer, PreTrainedTokenizer, PreTrainedTokenizerBase, PreTrainedTokenizerFast
 
-AIOHTTP_TIMEOUT = aiohttp.ClientTimeout(total=6 * 60 * 60)
+AIOHTTP_TIMEOUT = aiohttp.ClientTimeout(total=None)
+
+_timeout_value = os.getenv('AIOHTTP_TIMEOUT', None)
+if _timeout_value is not None:
+    try:
+        _timeout_value = int(_timeout_value)
+        if _timeout_value < 0:
+            raise ValueError('AIOHTTP_TIMEOUT cannot be negative.')
+        AIOHTTP_TIMEOUT = aiohttp.ClientTimeout(total=_timeout_value * 60 * 60)
+    except ValueError as e:
+        print(f'Invalid AIOHTTP_TIMEOUT: {e}.')
+        AIOHTTP_TIMEOUT = aiohttp.ClientTimeout(total=None)
 
 global args
 

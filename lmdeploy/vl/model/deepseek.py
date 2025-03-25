@@ -139,7 +139,7 @@ class DeepSeekVisionModel(VisonModel):
                 continue
             elif message['role'] in ['images', 'preprocess', 'forward']:
                 continue
-            content = [x['text'] for x in message['content'] if x['type'] == 'text']
+            content = [x.get('text', '') for x in message['content'] if x['type'] == 'text']
             content = content[0]
             n_image = sum([1 for x in message['content'] if x['type'] == 'image'])
             n_placeholder = content.count(IMAGE_TOKEN)

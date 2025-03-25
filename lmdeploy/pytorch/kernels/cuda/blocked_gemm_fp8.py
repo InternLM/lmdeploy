@@ -4,12 +4,15 @@ import triton
 import triton.language as tl
 from torch import Tensor
 
+from .utils import get_device_props
+
 
 @triton.jit
 def _quant_fp8_kernel(
     a_ptr,
     out_ptr,
     scale_ptr,
+    M,
     fp8_min: tl.constexpr,
     fp8_max: tl.constexpr,
     stride_am,
@@ -22,25 +25,32 @@ def _quant_fp8_kernel(
 ):
     """quant fp8 kernel."""
     group_id = tl.program_id(0)
-    m_id = tl.program_id(1)
+    m_id_start = tl.program_id(1)
+    m_id_stride = tl.num_programs(1)
 
     g_offs = group_id * GROUP_SIZE + tl.arange(0, GROUP_SIZE)
+    rfp8_max = 1 / fp8_max
 
+    m_id = m_id_start
     a_ptrs = a_ptr + m_id * stride_am + g_offs * stride_ak
     o_ptrs = out_ptr + m_id * stride_om + g_offs * stride_ok
     s_ptr = scale_ptr + m_id * stride_sm + group_id * stride_sg
 
-    rfp8_max = 1 / fp8_max
+    for _ in range(m_id_start, M, m_id_stride):
 
-    a = tl.load(a_ptrs).to(tl.float32)
-    scale = tl.max(tl.abs(a)) * rfp8_max
-    out = a / scale
+        a = tl.load(a_ptrs).to(tl.float32)
+        scale = tl.max(tl.abs(a)) * rfp8_max
+        out = a / scale
 
-    out = tl.clamp(out, fp8_min, fp8_max)
-    out = out.to(out_ptr.dtype.element_ty)
+        out = tl.clamp(out, fp8_min, fp8_max)
+        out = out.to(out_ptr.dtype.element_ty)
 
-    tl.store(o_ptrs, out)
-    tl.store(s_ptr, scale)
+        tl.store(o_ptrs, out)
+        tl.store(s_ptr, scale)
+
+        a_ptrs += m_id_stride * stride_am
+        o_ptrs += m_id_stride * stride_om
+        s_ptr += m_id_stride * stride_sm
 
 
 def quant_fp8(A: Tensor, group_size: int, dtype: torch.dtype = torch.float8_e4m3fn):
@@ -56,13 +66,21 @@ def quant_fp8(A: Tensor, group_size: int, dtype: torch.dtype = torch.float8_e4m3
 
     out = torch.empty_like(A, dtype=dtype)
     scales = A.new_empty(M, num_groups, dtype=torch.float32)
-    grid = (num_groups, M)
+
     num_warps = 4
     num_stages = 1
+
+    props = get_device_props(A.device.index)
+    num_sm = props['multi_processor_count']
+    warps_per_sm = props['warps_per_sm']
+    grid_size1 = min(M, num_sm * warps_per_sm // num_warps)
+    assert grid_size1 < 65536
+    grid = (num_groups, grid_size1)
     _quant_fp8_kernel[grid](
         A,
         out,
         scales,
+        M,
         fp8_min=fmin,
         fp8_max=fmax,
         stride_am=A.stride(0),
