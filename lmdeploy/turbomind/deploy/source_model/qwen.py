@@ -149,9 +149,9 @@ class Qwen2MoeModel(LlamaModel):
         info['expert_inter_size'] = cfg['moe_intermediate_size']
         info['experts_per_token'] = cfg['num_experts_per_tok']
         info['inter_size'] = cfg['shared_expert_intermediate_size']
-        info['moe_shared_gate'] = info['inter_size'] > 0
+        info['moe_shared_gate'] = True
         info['norm_topk_prob'] = cfg['norm_topk_prob']
-        info['attn_bias'] = cfg.get('attention_bias', 1)
+        info['attn_bias'] = cfg.get('qkv_bias', 1)
         return info
 
 
@@ -170,8 +170,9 @@ class Qwen3Model(LlamaModel):
     Reader = Qwen3Reader
 
     def model_info(self):
+        cfg = self.model_config
         info = super().model_info()
-        info['qk_norm'] = True
+        info.update(qk_norm=True, attn_bias=cfg.get('attention_bias', 0))
         return info
 
 
@@ -186,10 +187,18 @@ class Qwen3MoeReader(Qwen2MoeReader):
 
 
 @INPUT_MODELS.register_module(name='qwen3-moe')
-class Qwen3MoeModel(Qwen2MoeModel):
+class Qwen3MoeModel(LlamaModel):
     Reader = Qwen3MoeReader
 
     def model_info(self):
+        cfg = self.model_config
         info = super().model_info()
-        info['qk_norm'] = True
+        info.update(
+            qk_norm=True,
+            expert_num=cfg.get('num_experts', 128),
+            experts_per_token=cfg.get('num_experts_per_tok', 8),
+            expert_inter_size=cfg.get('moe_intermediate_size', 768),
+            attn_bias=cfg.get('attention_bias', 0),
+            inter_size=0,  # no shared expert
+            norm_topk_prob=cfg.get('norm_topk_prob', False))
         return info
