@@ -4,7 +4,9 @@ from typing import Any, Dict, List, Tuple
 import torch
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
+from lmdeploy.pytorch.distributed import get_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext
+from lmdeploy.pytorch.models.internvl import InternVLChatModel, InternVisionModel
 from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMeta
 from lmdeploy.utils import get_logger
 
@@ -102,6 +104,18 @@ class CUDASingleGraphRunner:
         del self._graph
 
 
+def split_batch(func, param_name, num_splits=2):
+    """Decorator to split along the 0th dimension into a specified number of chunks."""
+    def decorator(*args, **kwargs):
+        inputs = kwargs.get(param_name, None)
+        if inputs is not None:
+            split_inputs = list(torch.chunk(inputs, num_splits, dim=0))
+            kwargs[param_name] = split_inputs
+            results = func(*args, **kwargs)
+        return torch.cat(results, dim=0)
+    return decorator
+
+
 class CUDAGraphRunner(GraphRunner):
     """cuda graph runner."""
 
@@ -112,7 +126,17 @@ class CUDAGraphRunner(GraphRunner):
         self.max_tokens = cache_config.max_prefill_token_num
         self.num_blocks = cache_config.num_gpu_blocks
 
+        self.use_compile = False
         self.enable_graph = self.check_enable_graph()
+        if not self.backend_config.eager_mode and isinstance(self.model, InternVLChatModel):
+            world_size, _ = get_world_rank()
+            if world_size > 1:
+                torch._inductor.config.reorder_for_compute_comm_overlap = True
+                if isinstance(self.model.vision_model, InternVisionModel):
+                    self.model.vision_model.encoder.forward = split_batch(self.model.vision_model.encoder.forward, "inputs_embeds")
+            self.model.extract_feature = torch.compile(self.model.extract_feature, mode="max-autotune")
+            self.use_compile = True
+            self.compiled = False
 
         self.graph_pool_handle = torch.cuda.graph_pool_handle()
         self._runner_map: Dict[Any, CUDASingleGraphRunner] = dict()
@@ -135,6 +159,13 @@ class CUDAGraphRunner(GraphRunner):
 
     def __call__(self, **kwargs):
         """call."""
+        if self.use_compile and not self.compiled:
+            for tensor_name, dynamic_dims in self.model.compile_dynamic_args.items():
+                tensor = kwargs.get(tensor_name, None)
+                if tensor is None:
+                    continue
+                torch._dynamo.mark_dynamic(tensor, dynamic_dims)
+            self.compiled = True
         enable_graph = self.enable_graph(**kwargs)
 
         if not enable_graph:

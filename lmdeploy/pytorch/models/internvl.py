@@ -244,20 +244,6 @@ class InternVisionEncoder(nn.Module):
         self.layers = nn.ModuleList(
             [InternVisionEncoderLayer(config, dtype=dtype, device=device) for idx in range(config.num_hidden_layers)])
 
-    def split_inputs_embeds(num_splits=2):
-        """Decorator to split inputs_embeds along the 0th dimension into a specified number of chunks."""
-        def decorator(func):
-            def wrapper(self, *args, **kwargs):
-                inputs_embeds = kwargs.get('inputs_embeds', None)
-                if inputs_embeds is not None:
-                    split_embeds = list(torch.chunk(inputs_embeds, num_splits, dim=0))
-                    kwargs['inputs_embeds'] = split_embeds
-                    results = func(self, *args, **kwargs)
-                return torch.cat(results, dim=0)
-            return wrapper
-        return decorator
-
-    @split_inputs_embeds(num_splits=2)
     def forward(
         self,
         inputs_embeds,
@@ -338,6 +324,9 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
 
         self.input_processor = InternVLInputProcessor(self.config, dtype)
 
+        # for torch.compile, will call torch._dynamo.mark_dynamic to reduce recompile
+        self.compile_dynamic_args = {"pixel_values": [0]}
+
     def pixel_shuffle(self, x, scale_factor=0.5):
         n, w, h, c = x.size()
         # N, W, H, C --> N, W, H * scale, C // scale
@@ -350,7 +339,6 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
         x = x.permute(0, 2, 1, 3).contiguous()
         return x
 
-    @torch.compile(mode="max-autotune-no-cudagraphs")
     def extract_feature(self, pixel_values):
         """extract vision feature."""
         assert self.select_layer == -1
@@ -383,8 +371,6 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
     ):
         if inputs_embeds is None and pixel_values is not None:
             # extract feature
-            torch._inductor.config.reorder_for_compute_comm_overlap = True
-            torch._dynamo.mark_dynamic(pixel_values, 0)
             vit_embeds = self.extract_feature(pixel_values)
             lang_embeds = self.language_model.get_input_embeddings()(input_ids)
             lang_embeds.masked_scatter_(image_mask[..., None], vit_embeds)
