@@ -408,6 +408,8 @@ class AutoModelAgent:
                 sync_long_context = all_sync_flags.any()
                 logger.debug(f'sync_long_context={sync_long_context}')
             inputs.build_dp_meta()
+        else:
+            sync_long_context = False
 
         need_output = dp > 1 or rank % tp == 0
 
