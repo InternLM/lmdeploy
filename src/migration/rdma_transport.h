@@ -41,9 +41,9 @@ public:
 
     int64_t batch_r_rdma_async(const std::vector<uintptr_t>&     target_addrs,
                                const std::vector<uintptr_t>&     source_addrs,
-                               const std::vector<uint64_t>&      lengths,
-                               const std::vector<std::string>&   mr_keys,
-                               const std::vector<int64_t>        remote_keys,
+                               uint64_t                          length,
+                               std::string                       mr_key,
+                               int64_t                           remote_key,
                                std::function<void(unsigned int)> callback);
 
     /* Completion Queue Polling */

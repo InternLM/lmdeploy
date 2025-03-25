@@ -127,6 +127,33 @@ class RDMAContext:
         )
         torch.cuda.synchronize()
 
+    async def batch_r_rdma_async(
+        self, mr_key, target_offset, source_offset, length, callback=None
+    ):
+        rdma_call_back = None
+        if callback is None:
+            loop = asyncio.get_running_loop()
+            future = loop.create_future()
+
+            def _default_callback(code):
+                loop.call_soon_threadsafe(future.set_result, code)
+
+            rdma_call_back = _default_callback
+        else:
+            rdma_call_back = callback
+
+        self._rdma_context_c.batch_r_rdma_async(
+            [self.remote_memory_pool[mr_key].addr + off for off in target_offset],
+            [self.memory_pool[mr_key].data_ptr() + off for off in source_offset],
+            length,
+            mr_key,
+            self.remote_memory_pool[mr_key].r_key,
+            rdma_call_back,
+        )
+
+        if callback is None:
+            await future
+
     async def r_rdma_async(
         self, mr_key, target_offset, source_offset, length, callback=None
     ):

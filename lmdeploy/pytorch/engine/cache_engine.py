@@ -10,9 +10,9 @@ from typing import Dict, List, Literal, Tuple
 import torch
 
 from lmdeploy.messages import EngineRole
+from lmdeploy.migration import _migration_c
 
 from lmdeploy.migration.config import ExchangeInfo, MemoryRegionInfo, RDMAInfo
-from lmdeploy.migration import _migration_c
 from lmdeploy.migration.engine import TransferEngine
 
 from lmdeploy.pytorch.backends import get_backend
@@ -239,13 +239,12 @@ class CacheEngine:
         )
         # a 1G Buffer
         buffer = torch.zeros([1024 * 1024 * 1024], dtype=torch.int8, device="cuda")
-        
-        print(f"offset: {buffer.storage_offset(), self.full_gpu_cache[0].storage_offset(), self.full_gpu_cache[1].storage_offset()}")
+
+        print(
+            f"offset: {buffer.storage_offset(), self.full_gpu_cache[0].storage_offset(), self.full_gpu_cache[1].storage_offset()}"
+        )
         self.transfer_engine.register_torch(remote_engine_id, "buffer", buffer)
         await link.connect(remote_endpoint)
-        if self.cache_config.role == EngineRole.Prefill:
-            loop = asyncio.get_event_loop()
-            loop.create_task(link.r_rdma_async_batch_handler())
 
     async def migrate(self, blocks_to_migration):
         head_dim = self.model_config.get_head_size()
@@ -273,34 +272,31 @@ class CacheEngine:
                     for layer in range(self.model_config.num_layers)
                 ]
             )
-        begin = time.time()
-        for t_off, s_off in zip(target_offset, source_offset):
-            await self.transfer_engine.links[engine_id].r_rdma_async(
-                "k", t_off, s_off, length
-            )
-            await self.transfer_engine.links[engine_id].r_rdma_async(
-                "v", t_off, s_off, length
-            )
-        end = time.time()
-        print(f"bw: {length * len(source_offset) / (end - begin) / 1e9}GBps")
-
-        _migration_c.gather(
-            self.transfer_engine.links[engine_id].memory_pool["v"].data_ptr(),
-            self.transfer_engine.links[engine_id].memory_pool["buffer"].data_ptr(),
-            length, torch.tensor(source_offset, dtype=torch.int64, device="cuda").data_ptr(), len(source_offset))
-        torch.cuda.synchronize()
-        # if self.rank == 0:
-        print(f"before: {self.rank}", self.transfer_engine.links[engine_id].memory_pool["buffer"][:length].sum(), self.transfer_engine.links[engine_id].memory_pool["buffer"][0:16])
+        
+        # begin = time.time()
+        # for t_off, s_off in zip(target_offset, source_offset):
+        #     await self.transfer_engine.links[engine_id].r_rdma_async(
+        #         "k", t_off, s_off, length
+        #     )
+        #     await self.transfer_engine.links[engine_id].r_rdma_async(
+        #         "v", t_off, s_off, length
+        #     )
+        # end = time.time()
+        # print(f"bw: {length * len(source_offset) / (end - begin) / 1e9}GBps")
 
         begin = time.time()
-        await self.transfer_engine.links[engine_id].r_rdma_async_batch(
+        await self.transfer_engine.links[engine_id].batch_r_rdma_async(
             "k", target_offset, source_offset, length
         )
-        await self.transfer_engine.links[engine_id].r_rdma_async_batch(
+        await self.transfer_engine.links[engine_id].batch_r_rdma_async(
             "v", target_offset, source_offset, length
         )
         # if self.rank == 0:
-        print(f"after: {self.rank}", self.transfer_engine.links[engine_id].memory_pool["buffer"][:length].sum(), self.transfer_engine.links[engine_id].memory_pool["buffer"][0:16])
+        print(
+            f"after: {self.rank}",
+            self.transfer_engine.links[engine_id].memory_pool["buffer"][:length].sum(),
+            self.transfer_engine.links[engine_id].memory_pool["buffer"][0:16],
+        )
         end = time.time()
         print(f"bw: {length * len(source_offset) / (end - begin) / 1e9}GBps")
 
