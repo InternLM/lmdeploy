@@ -11,7 +11,8 @@ def flash_mla_available():
     # use flash_mla by default if it is installed
     use_flash_mla = False
     try:
-        if torch.cuda.get_device_properties(0).major >= 9:
+        device_properties = torch.cuda.get_device_properties(0)
+        if hasattr(device_properties, 'major') and device_properties.major >= 9:
             import flash_mla_cuda  # noqa
             use_flash_mla = True
     except ImportError:
