@@ -43,8 +43,6 @@ class DistChecker(BaseChecker):
             if self.dp % self.ep != 0:
                 self.log_and_exit(mod_name='Dist',
                                   message=f'ep>1 requires dp % ep == 0. Get dp={self.dp} and ep={self.ep}.')
-            if self.tp != 1:
-                self.log_and_exit(mod_name='Dist', message=f'ep>1 requires tp == 1. Get tp={self.tp} and ep={self.ep}.')
 
         if distributed_executor_backend == 'ray':
             try:
