@@ -153,11 +153,11 @@ class WorkerWrapperBase:
         """stop engine loop."""
         self.model_agent.release()
 
-    async def init_rdma_link(self, remote_engine_id: int):
+    def init_rdma_link(self, remote_engine_id: int):
         return self.model_agent.cache_engine.init_rdma_link(remote_engine_id)
 
-    async def rdma_connect(self, config):
-        return await self.model_agent.cache_engine.rdma_connect(config)
+    def rdma_connect(self, config):
+        return self.model_agent.cache_engine.rdma_connect(config)
 
     async def migrate(self, inputs):
         ret = await self.model_agent.migrate(inputs)

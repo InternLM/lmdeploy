@@ -215,7 +215,7 @@ class CacheEngine:
 
         return output
 
-    async def init_rdma_link(self, remote_engine_id):
+    def init_rdma_link(self, remote_engine_id):
         link: RDMAContext = self.transfer_engine.init_link(
             remote_engine_id,
             f"mlx5_bond_{self.rank}",
@@ -232,7 +232,7 @@ class CacheEngine:
         )
         return link.local_info
 
-    async def rdma_connect(self, config: List[int]):
+    def rdma_connect(self, config: List[int]):
         self.remote_block_size = config["total"]
         remote_engine_id = int(config["remote_engine_id"])
         rdma_exchange_info = config["rdma_exchange_info"][self.rank]
