@@ -2,7 +2,7 @@ import argparse
 import asyncio
 import json
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from dataclasses import dataclass
 
@@ -200,32 +200,33 @@ def init_migration(args):
             json={"remote_engine_id": 0},
         )
 
-    results = [prefill_future.result, decode_future.result]
+        results = [r.result() for r in as_completed([prefill_future, decode_future])]
 
     handler_config_prefill = {
         "total": total_blocks[1],
         "remote_engine_id": 1,
-        "rdma_exchange_info": results[1],
+        "rdma_exchange_info": results[1].json(),
     }
 
     handler_config_decode = {
         "total": total_blocks[0],
         "remote_engine_id": 0,
-        "rdma_exchange_info": results[0],
+        "rdma_exchange_info": results[0].json(),
     }
 
     with ThreadPoolExecutor(2) as executor:
-        executor.submit(
+        prefill_future = executor.submit(
             requests.post,
             get_url(engine_snapshot.prefill_endpoints[0], "distserve/rdma_connect"),
             json={"config": handler_config_prefill},
         )
-        executor.submit(
+        decode_future = executor.submit(
             requests.post,
             get_url(engine_snapshot.decode_endpoints[0], "distserve/rdma_connect"),
             json={"config": handler_config_decode},
         )
-        print("???")
+
+        return [r.result() for r in as_completed([prefill_future, decode_future])]
 
 
 if __name__ == "__main__":
