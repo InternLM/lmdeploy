@@ -47,14 +47,14 @@ public:
     }
 
     /* Async RDMA Read */
-    int64_t r_rdma_async(uintptr_t                         target_addr,
-                         uintptr_t                         source_addr,
+    int64_t r_rdma_async(uint64_t                         target_addr,
+                         uint64_t                         source_addr,
                          uint64_t                          length,
                          std::string                       mr_key,
                          std::function<void(unsigned int)> callback);
 
-    int64_t batch_r_rdma_async(const std::vector<uintptr_t>&     target_addrs,
-                               const std::vector<uintptr_t>&     source_addrs,
+    int64_t batch_r_rdma_async(const std::vector<uint64_t>&     target_addrs,
+                               const std::vector<uint64_t>&     source_addrs,
                                uint64_t                          length,
                                std::string                       mr_key,
                                std::function<void(unsigned int)> callback);
