@@ -217,6 +217,10 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         linear_->forward(
             qkv_buf_, attention_input, token_num, weights->qkv, LlamaLinear<T>::kGemm, lora_buf_, lora_mask);
         sync_check_cuda_error();
+
+        if (model_param_.qk_norm) {
+            qk_norm(qkv_buf_, token_num, *weights);
+        }
     }
     else {
         forward_mla(attention_input, token_num, *weights);
@@ -485,6 +489,40 @@ void UnifiedAttentionLayer<T>::forward_mla(const T* inputs, int token_num, const
     deviceFree(q, stream_);
     deviceFree(kv_a, stream_);
     deviceFree(kv_b, stream_);
+}
+
+template<typename T>
+void UnifiedAttentionLayer<T>::qk_norm(T* qkv, int token_num, const WeightType& weights)
+{
+    check_cuda_error(cudaEventRecord(qkv_event_, stream_));
+    check_cuda_error(cudaStreamWaitEvent(aux_stream_, qkv_event_));
+
+    FT_CHECK(model_param_.attn_bias == false);
+
+    invokeQkRMSNorm(qkv_buf_,
+                    weights.qkv.output_dims,
+                    weights.q_a_layernorm,
+                    getTensorType<T>(),
+                    size_per_head_,
+                    local_head_num_,
+                    token_num,
+                    model_param_.norm_eps,
+                    stream_);
+    sync_check_cuda_error();
+
+    invokeQkRMSNorm(qkv_buf_ + size_per_head_ * local_head_num_,
+                    weights.qkv.output_dims,
+                    weights.kv_a_layernorm,
+                    getTensorType<T>(),
+                    size_per_head_,
+                    local_kv_head_num_,
+                    token_num,
+                    model_param_.norm_eps,
+                    aux_stream_);
+    sync_check_cuda_error();
+
+    check_cuda_error(cudaEventRecord(aux_event_, aux_stream_));
+    check_cuda_error(cudaStreamWaitEvent(stream_, aux_event_));
 }
 
 #ifdef ENABLE_FP32

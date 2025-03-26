@@ -33,6 +33,7 @@ struct ModelParam {
     WeightType weight_type;
     int        group_size;
     MLAParam   mla;
+    bool       qk_norm;
     int        tune_layer_num;
 
     std::vector<int> inter_size;

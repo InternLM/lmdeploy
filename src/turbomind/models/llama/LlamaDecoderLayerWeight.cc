@@ -76,6 +76,7 @@ LlamaDecoderLayerWeight<T>::LlamaDecoderLayerWeight(int                layer_id,
                                                 kv_head_num_,
                                                 model.mla,
                                                 attn_bias_,
+                                                model.qk_norm,
                                                 attn_tp_size_,
                                                 weight_type_,
                                                 model.group_size};
@@ -379,6 +380,19 @@ TensorMap LlamaDecoderLayerWeight<T>::getParams(std::string prefix)
 
     if (self_attn_weights.qkv.output_dims) {
         getWeightTensor(self_attn_weights.qkv, attn_bias_, get_attn("attention.w_qkv"), output);
+
+        if (self_attn_weights.qk_norm) {
+            output.insert(concat(prefix, "attention.q_norm"),
+                          Tensor{MEMORY_GPU,
+                                 getTensorType<T>(),
+                                 {sizeof(T) * self_attn_weights.head_dim},
+                                 self_attn_weights.q_a_layernorm});
+            output.insert(concat(prefix, "attention.k_norm"),
+                          Tensor{MEMORY_GPU,
+                                 getTensorType<T>(),
+                                 {sizeof(T) * self_attn_weights.head_dim},
+                                 self_attn_weights.kv_a_layernorm});
+        }
     }
     else {
         getMLATensor(self_attn_weights, prefix, output, attn_tp_rank_);

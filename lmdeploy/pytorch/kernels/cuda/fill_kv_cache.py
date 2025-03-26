@@ -301,6 +301,8 @@ def fill_kv_cache(k_states: Tensor,
     BLOCK_H = triton.next_power_of_2(num_heads)
     BLOCK_D = triton.next_power_of_2(head_dim)
     BLOCK_DV = triton.next_power_of_2(head_dim_v)
+    if k_caches.data_ptr() == v_caches.data_ptr() and head_dim_v <= head_dim:
+        BLOCK_DV = 0
     if quant_policy == 0:
         grid = (num_heads, max_num_blocks, batch_size)
         is_decoding = max_num_blocks == 1
