@@ -64,7 +64,7 @@ void RDMAContext::cq_poll_handle()
     MIGRATION_LOG_INFO("Polling CQ");
 
     MIGRATION_ASSERT(connected_, "Please construct first");
-    MIGRATION_ASSERT(comp_channel_ != nullptr, "comp_channel_ should be constructed");
+    MIGRATION_ASSERT(comp_channel_ != NULL, "comp_channel_ should be constructed");
 
     while (!stop_) {
         struct ibv_cq* ev_cq;
@@ -108,13 +108,13 @@ int64_t RDMAContext::batch_r_rdma_async(const std::vector<uintptr_t>&     target
                                         int64_t                           remote_rkey,
                                         std::function<void(unsigned int)> callback)
 {
-    auto* call_back_info = new read_info([callback](unsigned int code) { callback(code); });
+    auto*  call_back_info = new read_info([callback](unsigned int code) { callback(code); });
     size_t batch_size     = target_addrs.size();
 
-    struct ibv_send_wr* bad_wr        = NULL;
-    struct ibv_send_wr *wr = new ibv_send_wr[batch_size];
-    struct ibv_sge *sge = new ibv_sge[batch_size];
-    for (int i = 0; i < batch_size; ++i) {
+    struct ibv_send_wr* bad_wr = NULL;
+    struct ibv_send_wr* wr     = new ibv_send_wr[batch_size];
+    struct ibv_sge*     sge    = new ibv_sge[batch_size];
+    for (size_t i = 0; i < batch_size; ++i) {
         memset(&sge[i], 0, sizeof(ibv_sge));
         sge[i].addr   = source_addrs[i];
         sge[i].length = length;
@@ -127,7 +127,7 @@ int64_t RDMAContext::batch_r_rdma_async(const std::vector<uintptr_t>&     target
         wr[i].send_flags          = (i == batch_size - 1) ? IBV_SEND_SIGNALED : 0;
         wr[i].wr.rdma.remote_addr = target_addrs[i];
         wr[i].wr.rdma.rkey        = remote_rkey;
-        wr[i].next                = (i == batch_size - 1) ? NULL: &wr[i+1];
+        wr[i].next                = (i == batch_size - 1) ? NULL : &wr[i + 1];
     }
 
     int ret = 0;
@@ -135,6 +135,9 @@ int64_t RDMAContext::batch_r_rdma_async(const std::vector<uintptr_t>&     target
         std::unique_lock<std::mutex> lock(rdma_post_send_mutex_);
         ret = ibv_post_send(qp_, wr, &bad_wr);
     }
+
+    delete[] wr;
+    delete[] sge;
 
     if (ret) {
         MIGRATION_ABORT("Failed to post RDMA send : " << strerror(ret));
