@@ -38,7 +38,7 @@ class DistContext:
         assert dist.is_initialized()
         # world(assume world group is gloo)
         # world_cpu_group = dist.GroupMember.WORLD
-        world_cpu_group = dist.new_group(ranks=list(range(world_size)), timeout=timeout, backend="gloo")
+        world_cpu_group = dist.new_group(ranks=list(range(world_size)), timeout=timeout, backend='gloo')
 
         # tp
         tp_gpu_group = None

@@ -19,7 +19,6 @@ English | [简体中文](README_zh-CN.md) | [日本語](README_ja.md)
 
 </div>
 
-
 ## distserve 安装方法
 
 ```
@@ -33,7 +32,9 @@ pip install -v -e .
 ```
 
 ## 使用方法
+
 ### 启动服务
+
 ```
 # 启动 etcd 元数据存储 (Mooncake 用于存储 RDMA 网络拓扑)
 ./etcd --listen-client-urls http://0.0.0.0:2379 --advertise-client-urls http://10.130.8.139:2379
@@ -42,9 +43,11 @@ lmdeploy serve api_server /nvme1/majinming/hub/models--internlm--internlm2_5-7b-
 # 在 10.130.8.138 上启动 Decode 实例
 lmdeploy serve api_server /nvme1/majinming/hub/models--internlm--internlm2_5-7b-chat/snapshots/4434a5ffc2582f9d5ac45085043ed3e3264f0a9b --server-port 23334 --role Decode --tp 8
 # 在 10.130.8.139 上启动 Router
-python -m lmdeploy.router.pd_router --host 127.0.0.1 --port 5000 --prefill-endpoint http://10.130.8.139:23333 --decode-endpoint http://10.130.8.138:23334  
+python -m lmdeploy.router.pd_router --host 127.0.0.1 --port 5000 --prefill-endpoint http://10.130.8.139:23333 --decode-endpoint http://10.130.8.138:23334
 ```
+
 ### 发送请求
+
 ```
 curl -X POST "http://localhost:5000/generate" \
 -H "Content-Type: application/json" \

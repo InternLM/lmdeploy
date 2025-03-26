@@ -16,50 +16,24 @@ from fastapi.security.http import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from lmdeploy.archs import get_task
-from lmdeploy.messages import (
-    GenerationConfig,
-    LogitsProcessor,
-    PytorchEngineConfig,
-    TurbomindEngineConfig,
-)
+from lmdeploy.messages import GenerationConfig, LogitsProcessor, PytorchEngineConfig, TurbomindEngineConfig
 from lmdeploy.model import ChatTemplateConfig
 from lmdeploy.serve.async_engine import AsyncEngine
-from lmdeploy.serve.openai.protocol import (  # noqa: E501
-    ChatCompletionRequest,
-    ChatCompletionResponse,
-    ChatCompletionResponseChoice,
-    ChatCompletionResponseStreamChoice,
-    ChatCompletionStreamResponse,
-    ChatCompletionTokenLogprob,
-    ChatMessage,
-    ChoiceLogprobs,
-    CompletionRequest,
-    CompletionResponse,
-    CompletionResponseChoice,
-    CompletionResponseStreamChoice,
-    CompletionStreamResponse,
-    DeltaMessage,
-    EmbeddingsRequest,
-    EncodeRequest,
-    EncodeResponse,
-    ErrorResponse,
-    FunctionResponse,
-    GenerateRequest,
-    GenerateResponse,
-    LogProbs,
-    ModelCard,
-    ModelList,
-    ModelPermission,
-    ToolCall,
-    TopLogprob,
-    UsageInfo,
-)
+from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, ChatCompletionResponse,  # noqa: E501
+                                            ChatCompletionResponseChoice, ChatCompletionResponseStreamChoice,
+                                            ChatCompletionStreamResponse, ChatCompletionTokenLogprob, ChatMessage,
+                                            ChoiceLogprobs, CompletionRequest, CompletionResponse,
+                                            CompletionResponseChoice, CompletionResponseStreamChoice,
+                                            CompletionStreamResponse, DeltaMessage, EmbeddingsRequest, EncodeRequest,
+                                            EncodeResponse, ErrorResponse, FunctionResponse, GenerateRequest,
+                                            GenerateResponse, LogProbs, ModelCard, ModelList, ModelPermission, ToolCall,
+                                            TopLogprob, UsageInfo)
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import get_logger
 
 # yapf: enable
 
-logger = get_logger("lmdeploy")
+logger = get_logger('lmdeploy')
 
 
 class VariableInterface:
@@ -78,26 +52,21 @@ router = APIRouter()
 get_bearer_token = HTTPBearer(auto_error=False)
 
 
-async def check_api_key(
-    auth: Optional[HTTPAuthorizationCredentials] = Depends(get_bearer_token),
-) -> str:
+async def check_api_key(auth: Optional[HTTPAuthorizationCredentials] = Depends(get_bearer_token), ) -> str:
     """Check if client provide valid api key.
 
     Adopted from https://github.com/lm-sys/FastChat/blob/v0.2.35/fastchat/serve/openai_api_server.py#L108-L127
     """  # noqa
     if VariableInterface.api_keys:
-        if (
-            auth is None
-            or (token := auth.credentials) not in VariableInterface.api_keys
-        ):
+        if (auth is None or (token := auth.credentials) not in VariableInterface.api_keys):
             raise HTTPException(
                 status_code=401,
                 detail={
-                    "error": {
-                        "message": "Please request with valid api key!",
-                        "type": "invalid_request_error",
-                        "param": None,
-                        "code": "invalid_api_key",
+                    'error': {
+                        'message': 'Please request with valid api key!',
+                        'type': 'invalid_request_error',
+                        'param': None,
+                        'code': 'invalid_api_key',
                     }
                 },
             )
@@ -114,24 +83,20 @@ def get_model_list():
     """
     model_names = [VariableInterface.async_engine.model_name]
     cfg = VariableInterface.async_engine.backend_config
-    model_names += getattr(cfg, "adapters", None) or []
+    model_names += getattr(cfg, 'adapters', None) or []
     return model_names
 
 
-@router.get("/v1/models", dependencies=[Depends(check_api_key)])
+@router.get('/v1/models', dependencies=[Depends(check_api_key)])
 def available_models():
     """Show available models."""
     model_cards = []
     for model_name in get_model_list():
-        model_cards.append(
-            ModelCard(id=model_name, root=model_name, permission=[ModelPermission()])
-        )
+        model_cards.append(ModelCard(id=model_name, root=model_name, permission=[ModelPermission()]))
     return ModelList(data=model_cards)
 
 
-def create_error_response(
-    status: HTTPStatus, message: str, error_type="invalid_request_error"
-):
+def create_error_response(status: HTTPStatus, message: str, error_type='invalid_request_error'):
     """Create error response according to http status and message.
 
     Args:
@@ -147,29 +112,21 @@ def create_error_response(
 
 async def check_request(request) -> Optional[JSONResponse]:
     """Check if a request is valid."""
-    if hasattr(request, "model") and request.model not in get_model_list():
-        return create_error_response(
-            HTTPStatus.NOT_FOUND, f"The model `{request.model}` does not exist."
-        )
-    if hasattr(request, "n") and request.n <= 0:
-        return create_error_response(
-            HTTPStatus.BAD_REQUEST, f"The n `{request.n}` must be a positive int."
-        )
-    if hasattr(request, "top_p") and not (request.top_p > 0 and request.top_p <= 1):
-        return create_error_response(
-            HTTPStatus.BAD_REQUEST, f"The top_p `{request.top_p}` must be in (0, 1]."
-        )
-    if hasattr(request, "top_k") and request.top_k < 0:
+    if hasattr(request, 'model') and request.model not in get_model_list():
+        return create_error_response(HTTPStatus.NOT_FOUND, f'The model `{request.model}` does not exist.')
+    if hasattr(request, 'n') and request.n <= 0:
+        return create_error_response(HTTPStatus.BAD_REQUEST, f'The n `{request.n}` must be a positive int.')
+    if hasattr(request, 'top_p') and not (request.top_p > 0 and request.top_p <= 1):
+        return create_error_response(HTTPStatus.BAD_REQUEST, f'The top_p `{request.top_p}` must be in (0, 1].')
+    if hasattr(request, 'top_k') and request.top_k < 0:
         return create_error_response(
             HTTPStatus.BAD_REQUEST,
-            f"The top_k `{request.top_k}` cannot be a negative integer.",
+            f'The top_k `{request.top_k}` cannot be a negative integer.',
         )
-    if hasattr(request, "temperature") and not (
-        request.temperature <= 2 and request.temperature >= 0
-    ):
+    if hasattr(request, 'temperature') and not (request.temperature <= 2 and request.temperature >= 0):
         return create_error_response(
             HTTPStatus.BAD_REQUEST,
-            f"The temperature `{request.temperature}` must be in [0, 2]",
+            f'The temperature `{request.temperature}` must be in [0, 2]',
         )
     return
 
@@ -256,14 +213,12 @@ def _create_chat_completion_logprobs(
 
     content: List[ChatCompletionTokenLogprob] = []
     for token_id, tops in zip(token_ids, logprobs):
-        item = ChatCompletionTokenLogprob(
-            token="", bytes=[], logprob=0.0, top_logprobs=[]
-        )
+        item = ChatCompletionTokenLogprob(token='', bytes=[], logprob=0.0, top_logprobs=[])
         for top_id, prob in tops.items():
             token = tokenizer.model.model.convert_ids_to_tokens(top_id)
             if isinstance(token, bytes):
                 _bytes = list(token)
-                token = token.decode("utf-8", errors="backslashreplace")
+                token = token.decode('utf-8', errors='backslashreplace')
             else:
                 _bytes = list(token.encode())  # token is str
             if top_id == token_id:
@@ -271,23 +226,19 @@ def _create_chat_completion_logprobs(
                 item.bytes = _bytes
                 item.logprob = prob
             else:
-                item.top_logprobs.append(
-                    TopLogprob(token=token, bytes=_bytes, logprob=prob)
-                )
+                item.top_logprobs.append(TopLogprob(token=token, bytes=_bytes, logprob=prob))
         content.append(item)
     return ChoiceLogprobs(content=content)
 
 
-@router.get("/health")
+@router.get('/health')
 async def health() -> Response:
     """Health check."""
     return Response(status_code=200)
 
 
 # modified from https://github.com/vllm-project/vllm/blob/v0.5.4/vllm/entrypoints/openai/logits_processors.py#L51  # noqa
-def logit_bias_logits_processor(
-    logit_bias: Union[Dict[int, float], Dict[str, float]], tokenizer
-) -> LogitsProcessor:
+def logit_bias_logits_processor(logit_bias: Union[Dict[int, float], Dict[str, float]], tokenizer) -> LogitsProcessor:
     try:
         # Convert token_id to integer
         # Clamp the bias between -100 and 100 per OpenAI API spec
@@ -296,17 +247,14 @@ def logit_bias_logits_processor(
             for token_id, bias in logit_bias.items()
         }
     except ValueError as exc:
-        raise ValueError(
-            "Found token_id in logit_bias that is not "
-            "an integer or string representing an integer"
-        ) from exc
+        raise ValueError('Found token_id in logit_bias that is not '
+                         'an integer or string representing an integer') from exc
 
     # Check if token_id is within the vocab size
     for token_id, bias in clamped_logit_bias.items():
         if token_id < 0 or token_id >= tokenizer.vocab_size:
-            raise ValueError(
-                f"token_id {token_id} in logit_bias contains " "out-of-vocab token id"
-            )
+            raise ValueError(f'token_id {token_id} in logit_bias contains '
+                             'out-of-vocab token id')
 
     def _logit_bias_processor(
         logit_bias,
@@ -320,10 +268,8 @@ def logit_bias_logits_processor(
     return partial(_logit_bias_processor, clamped_logit_bias)
 
 
-@router.post("/v1/chat/completions", dependencies=[Depends(check_api_key)])
-async def chat_completions_v1(
-    request: ChatCompletionRequest, raw_request: Request = None
-):
+@router.post('/v1/chat/completions', dependencies=[Depends(check_api_key)])
+async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Request = None):
     """Completion API similar to OpenAI's API.
 
     Refer to  `https://platform.openai.com/docs/api-reference/chat/create`
@@ -392,7 +338,7 @@ async def chat_completions_v1(
     if VariableInterface.async_engine.id2step.get(request.session_id, 0) != 0:
         return create_error_response(
             HTTPStatus.BAD_REQUEST,
-            f"The session_id `{request.session_id}` is occupied.",
+            f'The session_id `{request.session_id}` is occupied.',
         )
 
     model_name = request.model
@@ -409,20 +355,18 @@ async def chat_completions_v1(
     if request.logprobs and request.top_logprobs:
         gen_logprobs = request.top_logprobs
     response_format = None
-    if request.response_format and request.response_format.type != "text":
-        if VariableInterface.async_engine.backend != "pytorch":
+    if request.response_format and request.response_format.type != 'text':
+        if VariableInterface.async_engine.backend != 'pytorch':
             return create_error_response(
                 HTTPStatus.BAD_REQUEST,
-                "only pytorch backend can use response_format now",
+                'only pytorch backend can use response_format now',
             )
         response_format = request.response_format.model_dump()
 
     if request.logit_bias is not None:
         try:
             logits_processors = [
-                logit_bias_logits_processor(
-                    request.logit_bias, VariableInterface.async_engine.tokenizer.model
-                )
+                logit_bias_logits_processor(request.logit_bias, VariableInterface.async_engine.tokenizer.model)
             ]
         except Exception as e:
             return create_error_response(HTTPStatus.BAD_REQUEST, str(e))
@@ -449,16 +393,15 @@ async def chat_completions_v1(
     )
 
     tools = None
-    if request.tools and request.tool_choice != "none":
+    if request.tools and request.tool_choice != 'none':
         gen_config.skip_special_tokens = False
         if request.stream is True:
-            logger.warning("Set stream to False for tools")
+            logger.warning('Set stream to False for tools')
             request.stream = False
         # internlm2 only uses contents inside function regardless of 'type'
         if not isinstance(request.tool_choice, str):
             tools = [
-                item.function.model_dump()
-                for item in request.tools
+                item.function.model_dump() for item in request.tools
                 if item.function.name == request.tool_choice.function.name
             ]
         else:
@@ -471,9 +414,7 @@ async def chat_completions_v1(
         stream_response=True,  # always use stream to enable batching
         sequence_start=True,
         sequence_end=True,
-        do_preprocess=not isinstance(
-            request.messages, str
-        ),  # text completion for string input
+        do_preprocess=not isinstance(request.messages, str),  # text completion for string input
         adapter_name=adapter_name,
     )
 
@@ -486,7 +427,7 @@ async def chat_completions_v1(
     ) -> str:
         choice_data = ChatCompletionResponseStreamChoice(
             index=index,
-            delta=DeltaMessage(role="assistant", content=text),
+            delta=DeltaMessage(role='assistant', content=text),
             finish_reason=finish_reason,
             logprobs=logprobs,
         )
@@ -511,9 +452,7 @@ async def chat_completions_v1(
                     res.logprobs,
                 )
             if request.stream_options and request.stream_options.include_usage:
-                total_tokens = sum(
-                    [res.history_token_len, res.input_token_len, res.generate_token_len]
-                )
+                total_tokens = sum([res.history_token_len, res.input_token_len, res.generate_token_len])
                 usage = UsageInfo(
                     prompt_tokens=res.input_token_len,
                     completion_tokens=res.generate_token_len,
@@ -526,25 +465,23 @@ async def chat_completions_v1(
                 logprobs=logprobs,
                 usage=usage,
             )
-            yield f"data: {response_json}\n\n"
-        yield "data: [DONE]\n\n"
+            yield f'data: {response_json}\n\n'
+        yield 'data: [DONE]\n\n'
 
     # Streaming response
     if request.stream:
-        return StreamingResponse(
-            completion_stream_generator(), media_type="text/event-stream"
-        )
+        return StreamingResponse(completion_stream_generator(), media_type='text/event-stream')
 
     # Non-streaming response
     final_logprobs = []
     final_token_ids = []
     final_res = None
-    text = ""
+    text = ''
     async for res in result_generator:
         if await raw_request.is_disconnected():
             # Abort the request if the client disconnects.
             await VariableInterface.async_engine.stop_session(request.session_id)
-            return create_error_response(HTTPStatus.BAD_REQUEST, "Client disconnected")
+            return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
         final_res = res
         text += res.response
         if res.token_ids:
@@ -553,56 +490,46 @@ async def chat_completions_v1(
             final_logprobs.extend(res.logprobs)
 
     tool_calls = None
-    if request.tool_choice != "none" and (
-        "<|plugin|>" in text or "<function=" in text or "<tool_call>" in text
-    ):
-        if final_res.finish_reason == "stop":
-            final_res.finish_reason = "tool_calls"
+    if request.tool_choice != 'none' and ('<|plugin|>' in text or '<function=' in text or '<tool_call>' in text):
+        if final_res.finish_reason == 'stop':
+            final_res.finish_reason = 'tool_calls'
         try:  # TODO add json_schema guidance to turbomind
             text, call_info_list = (
                 VariableInterface.async_engine.parse_tool_response(  # noqa
-                    text, request.tools
-                )
-            )
+                    text, request.tools))
             tool_calls = [
                 ToolCall(
                     id=str(call_info[0]),
-                    function=FunctionResponse(
-                        name=call_info[1], arguments=call_info[2]
-                    ),
-                )
-                for call_info in call_info_list
+                    function=FunctionResponse(name=call_info[1], arguments=call_info[2]),
+                ) for call_info in call_info_list
             ]
         except Exception as e:
-            logger.error(f"Failed to parse {text}. Exception: {e}.")
+            logger.error(f'Failed to parse {text}. Exception: {e}.')
             return create_error_response(
                 HTTPStatus.BAD_REQUEST,
-                "Failed to parse fc related info to json format!",
+                'Failed to parse fc related info to json format!',
             )
 
     logprobs = None
     if gen_logprobs and len(final_logprobs):
-        logprobs = _create_chat_completion_logprobs(
-            VariableInterface.async_engine.tokenizer, final_token_ids, final_logprobs
-        )
+        logprobs = _create_chat_completion_logprobs(VariableInterface.async_engine.tokenizer, final_token_ids,
+                                                    final_logprobs)
 
     assert final_res is not None
     choices = []
     choice_data = ChatCompletionResponseChoice(
         index=0,
-        message=ChatMessage(role="assistant", content=text, tool_calls=tool_calls),
+        message=ChatMessage(role='assistant', content=text, tool_calls=tool_calls),
         logprobs=logprobs,
         finish_reason=final_res.finish_reason,
     )
     choices.append(choice_data)
 
-    total_tokens = sum(
-        [
-            final_res.history_token_len,
-            final_res.input_token_len,
-            final_res.generate_token_len,
-        ]
-    )
+    total_tokens = sum([
+        final_res.history_token_len,
+        final_res.input_token_len,
+        final_res.generate_token_len,
+    ])
     usage = UsageInfo(
         prompt_tokens=final_res.input_token_len,
         completion_tokens=final_res.generate_token_len,
@@ -619,7 +546,7 @@ async def chat_completions_v1(
     return response
 
 
-@router.post("/v1/completions", dependencies=[Depends(check_api_key)])
+@router.post('/v1/completions', dependencies=[Depends(check_api_key)])
 async def completions_v1(request: CompletionRequest, raw_request: Request = None):
     """Completion API similar to OpenAI's API.
 
@@ -670,7 +597,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     if VariableInterface.async_engine.id2step.get(request.session_id, 0) != 0:
         return create_error_response(
             HTTPStatus.BAD_REQUEST,
-            f"The session_id `{request.session_id}` is occupied.",
+            f'The session_id `{request.session_id}` is occupied.',
         )
 
     model_name = request.model
@@ -763,19 +690,14 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
                             all_token_ids,
                             state,
                             gen_config.spaces_between_special_tokens,
-                        )
-                    )
-                if (
-                    request.stream_options and request.stream_options.include_usage
-                ):  # noqa E501
+                        ))
+                if (request.stream_options and request.stream_options.include_usage):  # noqa E501
                     final_res = res
-                    total_tokens = sum(
-                        [
-                            final_res.history_token_len,
-                            final_res.input_token_len,
-                            final_res.generate_token_len,
-                        ]
-                    )
+                    total_tokens = sum([
+                        final_res.history_token_len,
+                        final_res.input_token_len,
+                        final_res.generate_token_len,
+                    ])
                     usage = UsageInfo(
                         prompt_tokens=final_res.input_token_len,
                         completion_tokens=final_res.generate_token_len,
@@ -790,14 +712,12 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
                     cache_block_ids=res.cache_block_ids,
                     remote_token_ids=res.token_ids,
                 )
-                yield f"data: {response_json}\n\n"
-        yield "data: [DONE]\n\n"
+                yield f'data: {response_json}\n\n'
+        yield 'data: [DONE]\n\n'
 
     # Streaming response
     if request.stream:
-        return StreamingResponse(
-            completion_stream_generator(), media_type="text/event-stream"
-        )
+        return StreamingResponse(completion_stream_generator(), media_type='text/event-stream')
 
     # Non-streaming response
     usage = UsageInfo()
@@ -807,14 +727,12 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         final_logprobs = []
         final_token_ids = []
         final_res = None
-        text = ""
+        text = ''
         async for res in generator:
             if await raw_request.is_disconnected():
                 # Abort the request if the client disconnects.
                 await VariableInterface.async_engine.stop_session(request.session_id)
-                return create_error_response(
-                    HTTPStatus.BAD_REQUEST, "Client disconnected"
-                )
+                return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
             final_res = res
             text += res.response
             if res.token_ids:
@@ -841,20 +759,16 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         )
         choices[i] = choice_data
 
-        total_tokens = sum(
-            [
-                final_res.history_token_len,
-                final_res.input_token_len,
-                final_res.generate_token_len,
-            ]
-        )
+        total_tokens = sum([
+            final_res.history_token_len,
+            final_res.input_token_len,
+            final_res.generate_token_len,
+        ])
         usage.prompt_tokens += final_res.input_token_len
         usage.completion_tokens += final_res.generate_token_len
         usage.total_tokens += total_tokens
 
-    await asyncio.gather(
-        *[_inner_call(i, generators[i]) for i in range(len(generators))]
-    )
+    await asyncio.gather(*[_inner_call(i, generators[i]) for i in range(len(generators))])
 
     response = CompletionResponse(
         id=request_id,
@@ -867,13 +781,13 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     return response
 
 
-@router.post("/v1/embeddings", tags=["unsupported"])
+@router.post('/v1/embeddings', tags=['unsupported'])
 async def create_embeddings(request: EmbeddingsRequest, raw_request: Request = None):
     """Creates embeddings for the text."""
-    return create_error_response(HTTPStatus.BAD_REQUEST, "Unsupported by turbomind.")
+    return create_error_response(HTTPStatus.BAD_REQUEST, 'Unsupported by turbomind.')
 
 
-@router.post("/v1/encode", dependencies=[Depends(check_api_key)])
+@router.post('/v1/encode', dependencies=[Depends(check_api_key)])
 async def encode(request: EncodeRequest, raw_request: Request = None):
     """Encode prompts.
 
@@ -886,12 +800,8 @@ async def encode(request: EncodeRequest, raw_request: Request = None):
 
     def encode(prompt: str, do_preprocess: bool, add_bos: bool):
         if do_preprocess:
-            prompt = VariableInterface.async_engine.chat_template.get_prompt(
-                prompt, sequence_start=add_bos
-            )
-        input_ids = VariableInterface.async_engine.tokenizer.encode(
-            prompt, add_bos=add_bos
-        )
+            prompt = VariableInterface.async_engine.chat_template.get_prompt(prompt, sequence_start=add_bos)
+        input_ids = VariableInterface.async_engine.tokenizer.encode(prompt, add_bos=add_bos)
         return input_ids
 
     if isinstance(request.input, str):
@@ -906,42 +816,39 @@ async def encode(request: EncodeRequest, raw_request: Request = None):
         return EncodeResponse(input_ids=encoded, length=length)
 
 
-@router.get("/distserve/get_engine_info")
+@router.get('/distserve/get_engine_info')
 async def cache_info() -> JSONResponse:
     """
     Step 1: Get engine information [EngineSnapshot]
     """
     num_free, num_total = VariableInterface.async_engine.get_cache_info()
-    return JSONResponse(
-        {
-            "free": num_free,
-            "total": num_total,
-        }
-    )
+    return JSONResponse({
+        'free': num_free,
+        'total': num_total,
+    })
 
 
-@router.post("/distserve/init_rdma_link")
+@router.post('/distserve/init_rdma_link')
 async def init_rdma_link(raw_request: Request) -> JSONResponse:
     config = await raw_request.json()
-    print(config)
-    remote_engine_id = int(config["remote_engine_id"])
+    remote_engine_id = int(config['remote_engine_id'])
     return VariableInterface.async_engine.init_rdma_link(remote_engine_id)
 
 
-@router.post("/distserve/rdma_connect")
+@router.post('/distserve/rdma_connect')
 async def rdma_connect(raw_request: Request) -> JSONResponse:
     connect_config = await raw_request.json()
-    return VariableInterface.async_engine.rdma_connect(connect_config["config"])
+    return VariableInterface.async_engine.rdma_connect(connect_config['config'])
 
 
-@router.post("/distserve/free_cache")
+@router.post('/distserve/free_cache')
 async def free_cache(raw_request: Request) -> JSONResponse:
     config = await raw_request.json()
-    session_id = int(config["session_id"])
+    session_id = int(config['session_id'])
     VariableInterface.async_engine.free_cache(session_id)
 
 
-@router.post("/v1/chat/interactive", dependencies=[Depends(check_api_key)])
+@router.post('/v1/chat/interactive', dependencies=[Depends(check_api_key)])
 async def chat_interactive_v1(request: GenerateRequest, raw_request: Request = None):
     """Generate completion for the request.
 
@@ -987,16 +894,14 @@ async def chat_interactive_v1(request: GenerateRequest, raw_request: Request = N
         if request.session_id != -1:
             await VariableInterface.async_engine.stop_session(request.session_id)
             return {
-                "text": "",
-                "tokens": 0,
-                "input_tokens": 0,
-                "history_tokens": 0,
-                "finish_reason": "stop",
+                'text': '',
+                'tokens': 0,
+                'input_tokens': 0,
+                'history_tokens': 0,
+                'finish_reason': 'stop',
             }
         else:
-            return create_error_response(
-                HTTPStatus.BAD_REQUEST, "please set a session_id to cancel a request"
-            )
+            return create_error_response(HTTPStatus.BAD_REQUEST, 'please set a session_id to cancel a request')
     error_check_ret = await check_request(request)
     if error_check_ret is not None:
         return error_check_ret
@@ -1010,20 +915,16 @@ async def chat_interactive_v1(request: GenerateRequest, raw_request: Request = N
     if isinstance(request.stop, str):
         request.stop = [request.stop]
 
-    end_session = (
-        sequence_end and request.prompt == "" and request.request_output_len == 0
-    )
+    end_session = (sequence_end and request.prompt == '' and request.request_output_len == 0)
     if end_session:
         await async_engine.end_session(request.session_id)
-        return JSONResponse(
-            dict(
-                text="",
-                tokens=0,
-                input_tokens=0,
-                history_tokens=0,
-                finish_reason="stop",
-            )
-        )
+        return JSONResponse(dict(
+            text='',
+            tokens=0,
+            input_tokens=0,
+            history_tokens=0,
+            finish_reason='stop',
+        ))
 
     random_seed = request.seed if request.seed else None
 
@@ -1051,10 +952,8 @@ async def chat_interactive_v1(request: GenerateRequest, raw_request: Request = N
             )
         else:
             request.prompt = (request.prompt, load_image(request.image_url))
-        if not hasattr(async_engine, "_convert_prompts"):
-            return create_error_response(
-                HTTPStatus.BAD_REQUEST, "`image_url` argument only works for VL model"
-            )
+        if not hasattr(async_engine, '_convert_prompts'):
+            return create_error_response(HTTPStatus.BAD_REQUEST, '`image_url` argument only works for VL model')
         request.prompt = async_engine._convert_prompts(request.prompt)
     generation = async_engine.generate(
         request.prompt,
@@ -1077,33 +976,31 @@ async def chat_interactive_v1(request: GenerateRequest, raw_request: Request = N
                 finish_reason=out.finish_reason,
             )
             data = chunk.model_dump_json()
-            yield f"{data}\n"
+            yield f'{data}\n'
 
     if request.stream:
-        return StreamingResponse(stream_results(), media_type="text/event-stream")
+        return StreamingResponse(stream_results(), media_type='text/event-stream')
     else:
         ret = {}
-        text = ""
+        text = ''
         tokens, input_tokens, history_tokens = 0, 0, 0
         finish_reason = None
         async for out in generation:
             if await raw_request.is_disconnected():
                 # Abort the request if the client disconnects.
                 await async_engine.stop_session(request.session_id)
-                return create_error_response(
-                    HTTPStatus.BAD_REQUEST, "Client disconnected"
-                )
+                return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
             text += out.response
             tokens = out.generate_token_len
             input_tokens = out.input_token_len
             history_tokens = out.history_token_len
             finish_reason = out.finish_reason
         ret = {
-            "text": text,
-            "tokens": tokens,
-            "input_tokens": input_tokens,
-            "history_tokens": history_tokens,
-            "finish_reason": finish_reason,
+            'text': text,
+            'tokens': tokens,
+            'input_tokens': input_tokens,
+            'history_tokens': history_tokens,
+            'finish_reason': finish_reason,
         }
         return JSONResponse(ret)
 
@@ -1114,32 +1011,34 @@ def handle_torchrun():
     def dummy_get_device_id():
         return 0
 
-    if int(os.environ.get("LOCAL_RANK", -1)) > 0:
+    if int(os.environ.get('LOCAL_RANK', -1)) > 0:
         from lmdeploy.vl.model.utils import _set_func
 
         # the replacement can't be recovered
-        _set_func("mmengine.logging.logger._get_device_id", dummy_get_device_id)
+        _set_func('mmengine.logging.logger._get_device_id', dummy_get_device_id)
 
 
-@router.on_event("startup")
+@router.on_event('startup')
 async def startup_event():
     if VariableInterface.proxy_url is None:
         return
     try:
         import requests
 
-        url = f"{VariableInterface.proxy_url}/nodes/add"
+        url = f'{VariableInterface.proxy_url}/nodes/add'
         data = {
-            "url": VariableInterface.api_server_url,
-            "status": {"models": get_model_list()},
+            'url': VariableInterface.api_server_url,
+            'status': {
+                'models': get_model_list()
+            },
         }
-        headers = {"accept": "application/json", "Content-Type": "application/json"}
+        headers = {'accept': 'application/json', 'Content-Type': 'application/json'}
         response = requests.post(url, headers=headers, json=data)
 
         if response.status_code != 200:
-            raise HTTPException(status_code=400, detail="Service registration failed")
+            raise HTTPException(status_code=400, detail='Service registration failed')
     except Exception as e:
-        print(f"Service registration failed: {e}")
+        print(f'Service registration failed: {e}')
 
 
 class ConcurrencyLimitMiddleware(BaseHTTPMiddleware):
@@ -1157,16 +1056,16 @@ class ConcurrencyLimitMiddleware(BaseHTTPMiddleware):
 def serve(
     model_path: str,
     model_name: Optional[str] = None,
-    backend: Literal["turbomind", "pytorch"] = "turbomind",
+    backend: Literal['turbomind', 'pytorch'] = 'turbomind',
     backend_config: Optional[Union[PytorchEngineConfig, TurbomindEngineConfig]] = None,
     chat_template_config: Optional[ChatTemplateConfig] = None,
-    server_name: str = "0.0.0.0",
+    server_name: str = '0.0.0.0',
     server_port: int = 23333,
-    allow_origins: List[str] = ["*"],
+    allow_origins: List[str] = ['*'],
     allow_credentials: bool = True,
-    allow_methods: List[str] = ["*"],
-    allow_headers: List[str] = ["*"],
-    log_level: str = "ERROR",
+    allow_methods: List[str] = ['*'],
+    allow_headers: List[str] = ['*'],
+    log_level: str = 'ERROR',
     api_keys: Optional[Union[List[str], str]] = None,
     ssl: bool = False,
     proxy_url: Optional[str] = None,
@@ -1224,8 +1123,8 @@ def serve(
             requests is reached, regardless of any additional requests sent by
             clients concurrently during that time. Default to None.
     """
-    if os.getenv("TM_LOG_LEVEL") is None:
-        os.environ["TM_LOG_LEVEL"] = log_level
+    if os.getenv('TM_LOG_LEVEL') is None:
+        os.environ['TM_LOG_LEVEL'] = log_level
     logger.setLevel(log_level)
 
     if disable_fastapi_docs:
@@ -1235,7 +1134,7 @@ def serve(
             openapi_url=None,
         )
     else:
-        app = FastAPI(docs_url="/")
+        app = FastAPI(docs_url='/')
 
     app.include_router(router)
 
@@ -1249,19 +1148,17 @@ def serve(
         )
     # Set the maximum number of concurrent requests
     if max_concurrent_requests is not None:
-        app.add_middleware(
-            ConcurrencyLimitMiddleware, max_concurrent_requests=max_concurrent_requests
-        )
+        app.add_middleware(ConcurrencyLimitMiddleware, max_concurrent_requests=max_concurrent_requests)
 
     if api_keys is not None:
         if isinstance(api_keys, str):
-            api_keys = api_keys.split(",")
+            api_keys = api_keys.split(',')
         VariableInterface.api_keys = api_keys
-    ssl_keyfile, ssl_certfile, http_or_https = None, None, "http"
+    ssl_keyfile, ssl_certfile, http_or_https = None, None, 'http'
     if ssl:
-        ssl_keyfile = os.environ["SSL_KEYFILE"]
-        ssl_certfile = os.environ["SSL_CERTFILE"]
-        http_or_https = "https"
+        ssl_keyfile = os.environ['SSL_KEYFILE']
+        ssl_certfile = os.environ['SSL_CERTFILE']
+        http_or_https = 'https'
 
     handle_torchrun()
     _, pipeline_class = get_task(model_path)
@@ -1278,25 +1175,23 @@ def serve(
     if proxy_url is not None:
         VariableInterface.proxy_url = proxy_url
         VariableInterface.api_server_url = (
-            f"{http_or_https}://{server_name}:{server_port}"  # noqa
+            f'{http_or_https}://{server_name}:{server_port}'  # noqa
         )
     for i in range(3):
-        print(
-            f"HINT:    Please open \033[93m\033[1m{http_or_https}://"
-            f"{server_name}:{server_port}\033[0m in a browser for detailed api"
-            " usage!!!"
-        )
+        print(f'HINT:    Please open \033[93m\033[1m{http_or_https}://'
+              f'{server_name}:{server_port}\033[0m in a browser for detailed api'
+              ' usage!!!')
     uvicorn.run(
         app=app,
         host=server_name,
         port=server_port,
-        log_level="info",
+        log_level='info',
         ssl_keyfile=ssl_keyfile,
         ssl_certfile=ssl_certfile,
     )
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     import fire
 
     fire.Fire(serve)

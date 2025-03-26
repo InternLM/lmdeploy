@@ -139,6 +139,7 @@ class MessageStatus(enum.Enum):
     RUNNING_MIGRATION = enum.auto()
     FINISH_MIGRATION = enum.auto()
 
+
 _SEQ_COUNT = 0
 
 

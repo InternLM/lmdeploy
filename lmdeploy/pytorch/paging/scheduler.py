@@ -52,7 +52,6 @@ class Scheduler:
         self.migration_sessions: Dict[int, SchedulerSession] = OrderedDict()
         self.unfreed_sessions: Dict[int, SchedulerSession] = OrderedDict()
 
-
     @property
     def waiting(self):
         """get waiting sequence."""
@@ -76,19 +75,19 @@ class Scheduler:
         """get waiting sequence."""
         seq_map = self.seq_manager.get_sequences(MessageStatus.LOCKED)
         return list(seq_map.values())
-    
+
     @property
     def waiting_migration(self):
         """get migration sequence"""
         seq_map = self.seq_manager.get_sequences(MessageStatus.WAITING_MIGRATION)
         return list(seq_map.values())
-    
+
     @property
     def running_migrating(self):
         """get migration sequence"""
         seq_map = self.seq_manager.get_sequences(MessageStatus.RUNNING_MIGRATION)
         return list(seq_map.values())
-    
+
     @property
     def finish_migrating(self):
         """get migration sequence"""
@@ -117,7 +116,7 @@ class Scheduler:
 
     def add_migration(self, session_id: int):
         """Add Migration session
-        
+
         Args:
             session_id (int): Migration session id.
         """
@@ -138,7 +137,7 @@ class Scheduler:
         self.sessions[session_id] = session
         return session
 
-    def add_sequence(self, seq: SchedulerSequence, status: MessageStatus=MessageStatus.WAITING):
+    def add_sequence(self, seq: SchedulerSequence, status: MessageStatus = MessageStatus.WAITING):
         """Add sequence.
 
         Args:
@@ -175,7 +174,7 @@ class Scheduler:
             return sorted(self.waiting_migration, key=lambda seq: seq.arrive_time)
 
         waiting = _reorder_migrating()
-                
+
         while len(waiting) > 0:
             seq = waiting.pop(0)
 
@@ -327,13 +326,13 @@ class Scheduler:
         seq.set_step(0)
         seq.session.remove_sequence(seq)
 
-    def end_session(self, session_id: int, free_cache: bool=True):
+    def end_session(self, session_id: int, free_cache: bool = True):
         """End session.
 
         Args:
             session_id (int): The session id.
             free_cache (bool): Whether to free KVCache
-        
+
         Note: In the PD separation scenario, the KV Cache free is carried out after the migration of KVCache).
         """
         session = self.sessions[session_id]

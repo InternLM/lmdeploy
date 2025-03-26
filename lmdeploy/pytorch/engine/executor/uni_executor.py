@@ -9,7 +9,7 @@ from lmdeploy.utils import get_logger
 
 from .base import ExecutorBase
 
-logger = get_logger("lmdeploy")
+logger = get_logger('lmdeploy')
 
 
 class UniExecutor(ExecutorBase):
@@ -23,7 +23,7 @@ class UniExecutor(ExecutorBase):
         backend_config: BackendConfig,
         tokenizer: Any,
         adapters: Dict[str, str] = None,
-        device_type: str = "cuda",
+        device_type: str = 'cuda',
     ):
         """initialize Executor."""
         super().__init__(
@@ -51,7 +51,7 @@ class UniExecutor(ExecutorBase):
 
     def download_models(self):
         """download model."""
-        raise NotImplementedError("Not Implemented.")
+        raise NotImplementedError('Not Implemented.')
 
     def build_model(self):
         """build model."""

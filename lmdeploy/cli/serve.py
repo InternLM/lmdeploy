@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from lmdeploy.utils import get_max_batch_size
 from lmdeploy.messages import EngineRole
+from lmdeploy.utils import get_max_batch_size
 
 from .cli import CLI
 from .utils import ArgumentHelper, DefaultsAndTypesHelpFormatter, convert_args, get_chat_template, get_lora_adapters
@@ -128,7 +128,10 @@ class SubCliServe:
                             'concurrently during that time. Default to None.')
         # Prefill - Decode Disaggregation
         parser.add_argument('--role',
-                            type=str, default="Hybrid", choices=["Hybrid", "Prefill", "Decode"], help="--role")
+                            type=str,
+                            default='Hybrid',
+                            choices=['Hybrid', 'Prefill', 'Decode'],
+                            help='--role')
         # common args
         ArgumentHelper.backend(parser)
         ArgumentHelper.log_level(parser)

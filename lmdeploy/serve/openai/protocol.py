@@ -290,7 +290,7 @@ class CompletionStreamResponse(BaseModel):
     model: str
     choices: List[CompletionResponseStreamChoice]
     usage: Optional[UsageInfo] = None
-    
+
     # for disaggregation
     cache_block_ids: Optional[List[int]] = None
     remote_token_ids: Optional[List[int]] = None

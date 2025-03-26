@@ -144,14 +144,19 @@ class EngineInstance:
 
             if resp.type == ResponseType.SUCCESS:
                 token_ids = resp.data['token_ids'].tolist()
-                yield EngineOutput(resp.type, token_ids, len(token_ids), cache_block_ids=resp.data.get("cache_block_ids"))
+                yield EngineOutput(resp.type,
+                                   token_ids,
+                                   len(token_ids),
+                                   cache_block_ids=resp.data.get('cache_block_ids'))
             elif resp.type == ResponseType.FINISH:
                 resp_data = resp.data
                 token_ids = resp_data['token_ids'].tolist()
                 logits = resp_data['logits']
-                yield EngineOutput(resp.type, token_ids, len(token_ids),
+                yield EngineOutput(resp.type,
+                                   token_ids,
+                                   len(token_ids),
                                    logits=logits,
-                                   cache_block_ids=resp_data.get("cache_block_ids"))
+                                   cache_block_ids=resp_data.get('cache_block_ids'))
                 break
             else:
                 yield EngineOutput(resp.type, [], 0)
@@ -185,7 +190,7 @@ class EngineInstance:
                 return outputs
 
         return outputs
-    
+
     async def async_migrate(self,
                             session_id: int,
                             input_ids: List[int],
@@ -195,7 +200,7 @@ class EngineInstance:
                             adapter_name: str = None,
                             **kwargs):
         """Send migration request."""
-        assert block_ids, "block ids must be set"
+        assert block_ids, 'block ids must be set'
         # if len(input_ids) > self.max_input_len:
         #     return EngineOutput(ResponseType.INPUT_LENGTH_ERROR, [], 0)
         gen_config = gen_config or GenerationConfig()
@@ -212,12 +217,11 @@ class EngineInstance:
             migration=True,
         )
 
-        logger.info("migration msg: ", msg)
+        logger.info('migration msg: ', msg)
 
         resp = self.req_sender.send_async(RequestType.ADD_MESSAGE, msg)
         resp = await self.req_sender.async_recv(resp)
         return
-
 
     def stream_infer(self,
                      session_id: int,

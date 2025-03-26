@@ -1,9 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
 import asyncio
-
 import functools
-
 import time
 from typing import Dict, List, Literal, Tuple
 
@@ -11,7 +9,6 @@ import torch
 
 from lmdeploy.migration.context import RDMAContext
 from lmdeploy.migration.engine import TransferEngine
-
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.engine.executor.dist_utils import find_available_port
 from lmdeploy.utils import get_logger
@@ -20,7 +17,7 @@ from ..config import CacheConfig, ModelConfig
 
 KVCache = Tuple[torch.Tensor, torch.Tensor]
 
-logger = get_logger("lmdeploy")
+logger = get_logger('lmdeploy')
 
 
 class CacheEngine:
@@ -51,14 +48,12 @@ class CacheEngine:
         self.num_layers = model_config.num_layers
         self.kv_cache_dtype = model_config.dtype
         if cache_config.quant_policy > 0:
-            if self.cache_config.device_type in ["cuda"]:
+            if self.cache_config.device_type in ['cuda']:
                 self.kv_cache_dtype = torch.uint8
-            elif self.cache_config.device_type in ["ascend", "npu"]:
+            elif self.cache_config.device_type in ['ascend', 'npu']:
                 self.kv_cache_dtype = torch.int8
             else:
-                raise ValueError(
-                    f"unsupported device_type {self.cache_config.device_type}"
-                )
+                raise ValueError(f'unsupported device_type {self.cache_config.device_type}')
 
         # Initialize the cache.
         self.local_gpu_cache = self.allocate_gpu_cache()
@@ -72,10 +67,8 @@ class CacheEngine:
 
         self.transfer_engine = TransferEngine()
 
-        logger.debug(
-            f"Initialize cache engine with {cache_config.num_gpu_blocks}"
-            f" gpu blocks and {cache_config.num_cpu_blocks} cpu blocks."
-        )
+        logger.debug(f'Initialize cache engine with {cache_config.num_gpu_blocks}'
+                     f' gpu blocks and {cache_config.num_cpu_blocks} cpu blocks.')
 
     @property
     def cpu_cache(self):
@@ -112,14 +105,10 @@ class CacheEngine:
         dtype = model_config.dtype
         num_heads = model_config.num_key_value_heads
         if local:
-            assert (
-                num_heads % world_size == 0
-            ), f"num_heads: {num_heads}, world_size: {world_size}"
+            assert (num_heads % world_size == 0), f'num_heads: {num_heads}, world_size: {world_size}'
             num_heads = num_heads // world_size
         if quant_policy == 4:  # pack head_dim to uint8
-            assert (
-                head_size % 2 == 0
-            ), f"head_size: {head_size}, quant_policy: {quant_policy}"
+            assert (head_size % 2 == 0), f'head_size: {head_size}, quant_policy: {quant_policy}'
             head_size = head_size // 2
         return attn_backend.get_k_block_shape(block_size, num_heads, head_size, dtype)
 
@@ -138,14 +127,10 @@ class CacheEngine:
         dtype = model_config.dtype
         num_heads = model_config.num_key_value_heads
         if local:
-            assert (
-                num_heads % world_size == 0
-            ), f"num_heads: {num_heads}, world_size: {world_size}"
+            assert (num_heads % world_size == 0), f'num_heads: {num_heads}, world_size: {world_size}'
             num_heads = num_heads // world_size
         if quant_policy == 4:  # pack head_dim to uint8
-            assert (
-                head_size % 2 == 0
-            ), f"head_size: {head_size}, quant_policy: {quant_policy}"
+            assert (head_size % 2 == 0), f'head_size: {head_size}, quant_policy: {quant_policy}'
             head_size = head_size // 2
 
         return attn_backend.get_v_block_shape(block_size, num_heads, head_size, dtype)
@@ -218,35 +203,33 @@ class CacheEngine:
     def init_rdma_link(self, remote_engine_id):
         link: RDMAContext = self.transfer_engine.init_link(
             remote_engine_id,
-            f"mlx5_bond_{self.rank}",
+            f'mlx5_bond_{self.rank}',
             1,
-            "Ethernet",
+            'Ethernet',
         )
         link.register_memory(
-            "k",
+            'k',
             self.full_gpu_cache[0].data_ptr() + self.full_gpu_cache[0].storage_offset(),
             self.full_gpu_cache[0].numel() * self.full_gpu_cache[0].itemsize,
         )
         link.register_memory(
-            "v",
+            'v',
             self.full_gpu_cache[1].data_ptr() + self.full_gpu_cache[1].storage_offset(),
             self.full_gpu_cache[1].numel() * self.full_gpu_cache[1].itemsize,
         )
         return link.local_info
 
     def rdma_connect(self, config: List[int]):
-        self.remote_block_size = config["total"]
-        remote_engine_id = int(config["remote_engine_id"])
-        rdma_exchange_info = config["rdma_exchange_info"][self.rank]
+        self.remote_block_size = config['total']
+        remote_engine_id = int(config['remote_engine_id'])
+        rdma_exchange_info = config['rdma_exchange_info'][self.rank]
         self.transfer_engine.links[remote_engine_id].connect(rdma_exchange_info)
 
     async def migrate(self, blocks_to_migration):
         head_dim = self.model_config.get_head_size()
         num_heads = self.model_config.num_key_value_heads // self.world_size
         block_size = self.cache_config.block_size
-        length = (
-            head_dim * num_heads * block_size * self.full_gpu_cache[0].dtype.itemsize
-        )
+        length = (head_dim * num_heads * block_size * self.full_gpu_cache[0].dtype.itemsize)
         layer_stride = self.cache_config.num_gpu_blocks * length
         layer_stride_remote = self.remote_block_size * length
 
@@ -254,29 +237,21 @@ class CacheEngine:
         target_offset = []
         for block_to_migration in blocks_to_migration:
             engine_id = int(block_to_migration[0])
-            source_offset.extend(
-                [
-                    int(block_to_migration[1]) * length + layer * layer_stride
-                    for layer in range(self.model_config.num_layers)
-                ]
-            )
-            target_offset.extend(
-                [
-                    int(block_to_migration[2]) * length + layer * layer_stride_remote
-                    for layer in range(self.model_config.num_layers)
-                ]
-            )
+            source_offset.extend([
+                int(block_to_migration[1]) * length + layer * layer_stride
+                for layer in range(self.model_config.num_layers)
+            ])
+            target_offset.extend([
+                int(block_to_migration[2]) * length + layer * layer_stride_remote
+                for layer in range(self.model_config.num_layers)
+            ])
 
         begin = time.time()
-        await self.transfer_engine.links[engine_id].batch_r_rdma_async(
-            "k", target_offset, source_offset, length
-        )
-        await self.transfer_engine.links[engine_id].batch_r_rdma_async(
-            "v", target_offset, source_offset, length
-        )
+        await self.transfer_engine.links[engine_id].batch_r_rdma_async('k', target_offset, source_offset, length)
+        await self.transfer_engine.links[engine_id].batch_r_rdma_async('v', target_offset, source_offset, length)
 
         end = time.time()
-        print(f"bw: {length * len(source_offset) / (end - begin) / 1e9}GBps")
+        print(f'bw: {length * len(source_offset) / (end - begin) / 1e9}GBps')
 
         # begin = time.time()
         # for t_off, s_off in zip(target_offset, source_offset):
@@ -291,14 +266,14 @@ class CacheEngine:
 
     def allocate_gpu_cache(self):
         """allocate caches on GPU."""
-        caches = self._allocate_cache(self.num_gpu_blocks, "cuda")
+        caches = self._allocate_cache(self.num_gpu_blocks, 'cuda')
         self.full_gpu_cache = caches
         self.local_gpu_cache = list(zip(*caches))
         return self.local_gpu_cache
 
     def allocate_cpu_cache(self):
         """allocate caches on Host."""
-        caches = self._allocate_cache(self.num_cpu_blocks, "cpu")
+        caches = self._allocate_cache(self.num_cpu_blocks, 'cpu')
 
         self.full_cpu_cache = caches
         self.local_cpu_cache = list(zip(*caches))
@@ -326,8 +301,8 @@ class CacheEngine:
         with torch.cuda.stream(self.cache_stream):
             for scache, dcache in zip(src, dst):
                 for idx in range(0, num_copy, BLOCKS_PER_COPY):
-                    sidx = src_idx[idx : idx + BLOCKS_PER_COPY]
-                    didx = dst_idx[idx : idx + BLOCKS_PER_COPY]
+                    sidx = src_idx[idx:idx + BLOCKS_PER_COPY]
+                    didx = dst_idx[idx:idx + BLOCKS_PER_COPY]
                     sdata = scache[:, sidx]
                     dcache.index_copy_(1, didx, sdata.to(dcache.device))
             self.events.record(stream=self.cache_stream)
@@ -390,29 +365,21 @@ class CacheEngine:
         )
         if quant_policy == 0:
             dtype = model_config.dtype
-            key_block = torch.empty(key_shape, dtype=dtype, device="meta")
-            value_block = torch.empty(value_shape, dtype=dtype, device="meta")
+            key_block = torch.empty(key_shape, dtype=dtype, device='meta')
+            value_block = torch.empty(value_shape, dtype=dtype, device='meta')
             mem_key_block = key_block.numel() * key_block.element_size()
             mem_value_block = value_block.numel() * value_block.element_size()
         elif quant_policy in (4, 8):
-            key_block = torch.empty(key_shape, dtype=torch.uint8, device="meta")
-            value_block = torch.empty(value_shape, dtype=torch.uint8, device="meta")
-            key_scale_zero_block = torch.empty(
-                (*key_shape[:-1], 2), dtype=model_config.dtype, device="meta"
-            )
-            value_scale_zero_block = torch.empty(
-                (*value_shape[:-1], 2), dtype=model_config.dtype, device="meta"
-            )
-            mem_key_block = (
-                key_block.numel() * key_block.element_size()
-                + key_scale_zero_block.numel() * key_scale_zero_block.element_size()
-            )
-            mem_value_block = (
-                value_block.numel() * value_block.element_size()
-                + value_scale_zero_block.numel() * value_scale_zero_block.element_size()
-            )
+            key_block = torch.empty(key_shape, dtype=torch.uint8, device='meta')
+            value_block = torch.empty(value_shape, dtype=torch.uint8, device='meta')
+            key_scale_zero_block = torch.empty((*key_shape[:-1], 2), dtype=model_config.dtype, device='meta')
+            value_scale_zero_block = torch.empty((*value_shape[:-1], 2), dtype=model_config.dtype, device='meta')
+            mem_key_block = (key_block.numel() * key_block.element_size() +
+                             key_scale_zero_block.numel() * key_scale_zero_block.element_size())
+            mem_value_block = (value_block.numel() * value_block.element_size() +
+                               value_scale_zero_block.numel() * value_scale_zero_block.element_size())
         else:
-            raise ValueError(f"unsupported quant_policy {quant_policy}")
+            raise ValueError(f'unsupported quant_policy {quant_policy}')
 
         total = num_layers * (mem_key_block + mem_value_block)
         return total

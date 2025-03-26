@@ -17,7 +17,7 @@ from .base import ExecutorBase
 from .base_worker import WorkerWrapperBase
 from .dist_utils import find_available_port, setup_master_addr
 
-logger = get_logger("lmdeploy")
+logger = get_logger('lmdeploy')
 
 PG_WAIT_TIMEOUT = 1800
 
@@ -26,13 +26,13 @@ def get_device_str():
     """get device str."""
     device_type = get_device_manager().current_context().device_type
 
-    if device_type == "cuda":
-        device_type = "GPU"
+    if device_type == 'cuda':
+        device_type = 'GPU'
 
     return device_type
 
 
-def _wait_until_pg_ready(current_placement_group: "PlacementGroup"):
+def _wait_until_pg_ready(current_placement_group: 'PlacementGroup'):
     """Wait until a placement group is ready.
 
     It prints the informative log messages if the placement group is not created within time.
@@ -54,12 +54,12 @@ def _wait_until_pg_ready(current_placement_group: "PlacementGroup"):
         # Exponential backoff for warning print.
         wait_interval *= 2
         logger.info(
-            "Waiting for creating a placement group of specs for "
-            "%d seconds. specs=%s. Check "
-            "`ray status` to see if you have enough resources,"
-            " and make sure the IP addresses used by ray cluster"
-            " are the same as VLLM_HOST_IP environment variable"
-            " specified in each node if you are running on a multi-node.",
+            'Waiting for creating a placement group of specs for '
+            '%d seconds. specs=%s. Check '
+            '`ray status` to see if you have enough resources,'
+            ' and make sure the IP addresses used by ray cluster'
+            ' are the same as VLLM_HOST_IP environment variable'
+            ' specified in each node if you are running on a multi-node.',
             int(time.time() - s),
             placement_group_specs,
         )
@@ -67,11 +67,9 @@ def _wait_until_pg_ready(current_placement_group: "PlacementGroup"):
     try:
         ray.get(pg_ready_ref, timeout=0)
     except ray.exceptions.GetTimeoutError:
-        raise ValueError(
-            "Cannot provide a placement group of "
-            f"{placement_group_specs=} within {PG_WAIT_TIMEOUT} seconds. See "
-            "`ray status` to make sure the cluster has enough resources."
-        ) from None
+        raise ValueError('Cannot provide a placement group of '
+                         f'{placement_group_specs=} within {PG_WAIT_TIMEOUT} seconds. See '
+                         '`ray status` to make sure the cluster has enough resources.') from None
 
 
 def init_ray_cluster(world_size: int, ray_address: str = None):
@@ -88,15 +86,13 @@ def init_ray_cluster(world_size: int, ray_address: str = None):
         num_devices_in_cluster = ray.cluster_resources().get(device_str, 0)
         if world_size > num_devices_in_cluster:
             logger.warning(
-                "The number of required %ss exceeds the total "
-                "number of available %ss in the placement group.",
+                'The number of required %ss exceeds the total '
+                'number of available %ss in the placement group.',
                 device_str,
                 device_str,
             )
         # Create a new placement group
-        placement_group_specs: List[Dict[str, float]] = [
-            {device_str: 1.0} for _ in range(world_size)
-        ]
+        placement_group_specs: List[Dict[str, float]] = [{device_str: 1.0} for _ in range(world_size)]
 
         # gcs_addr = ray.get_runtime_context().gcs_address
         # master_addr = gcs_addr.split(':')[0]
@@ -106,9 +102,7 @@ def init_ray_cluster(world_size: int, ray_address: str = None):
         # placement_group_specs[0][f'node:{current_ip}'] = 0.001
 
         # By default, Ray packs resources as much as possible.
-        current_placement_group = ray.util.placement_group(
-            placement_group_specs, strategy="PACK"
-        )
+        current_placement_group = ray.util.placement_group(placement_group_specs, strategy='PACK')
         _wait_until_pg_ready(current_placement_group)
 
     assert current_placement_group is not None
@@ -119,7 +113,7 @@ def init_ray_cluster(world_size: int, ray_address: str = None):
 
 def _get_master_addr():
     gcs_addr = ray.get_runtime_context().gcs_address
-    master_addr = gcs_addr.split(":")[0]
+    master_addr = gcs_addr.split(':')[0]
     return master_addr
 
 
@@ -134,8 +128,8 @@ class RayWorkerWrapper(WorkerWrapperBase):
         dp: int,
         tp: int,
         adapters: Dict[str, str] = None,
-        device_type: str = "cuda",
-        dtype: str = "auto",
+        device_type: str = 'cuda',
+        dtype: str = 'auto',
         log_level: int = 30,
     ):
         from lmdeploy.tokenizer import Tokenizer
@@ -163,13 +157,13 @@ class RayWorkerWrapper(WorkerWrapperBase):
     def warmup_dist(self):
         # None default CUDA_VISIBLE_DEVICES might leads to slow first time all_reduce
         # WHY?
-        logger.debug("Warmup all_reduce.")
+        logger.debug('Warmup all_reduce.')
         import torch
 
         from lmdeploy.pytorch.distributed import all_reduce, get_dist_manager
 
         with get_dist_manager().context(self.dist_ctx):
-            tmp = torch.empty((1,), device="cuda")
+            tmp = torch.empty((1, ), device='cuda')
             all_reduce(tmp)
 
     def pack_output(self, output: Dict):
@@ -193,8 +187,8 @@ class RayExecutor(ExecutorBase):
         dp: int,
         tp: int,
         adapters: Dict[str, str] = None,
-        device_type: str = "cuda",
-        dtype: str = "auto",
+        device_type: str = 'cuda',
+        dtype: str = 'auto',
     ):
         """initialize Executor."""
         super().__init__(
@@ -212,7 +206,7 @@ class RayExecutor(ExecutorBase):
         self.world_size = tp * dp
         device_ctx = DeviceContext(device_type)
         with get_device_manager().context(device_ctx):
-            logger.info("Init ray cluster.")
+            logger.info('Init ray cluster.')
             placement_group = init_ray_cluster(self.world_size)
         self.placement_group = placement_group
         self.master_addr = _get_master_addr()
@@ -232,63 +226,53 @@ class RayExecutor(ExecutorBase):
             log_level=30,
         )
 
-        logger.info("Init ray workers.")
+        logger.info('Init ray workers.')
         self.workers = self._init_workers_ray(placement_group, worker_kwargs)
         self.dag = None
         self._prefetch_task: asyncio.Task = None
         self.remote_outs: asyncio.Queue = None
 
-        logger.info("Init distributed process group.")
-        ray.get(
-            [
-                worker.init_process_group.remote(
-                    rank, self.master_addr, self.master_port
-                )
-                for rank, worker in enumerate(self.workers)
-            ]
-        )
+        logger.info('Init distributed process group.')
+        ray.get([
+            worker.init_process_group.remote(rank, self.master_addr, self.master_port)
+            for rank, worker in enumerate(self.workers)
+        ])
 
         if self.world_size > 1:
-            logger.info(
-                "Warming up distribute environment, this might take long time, please waiting..."
-            )
+            logger.info('Warming up distribute environment, this might take long time, please waiting...')
             ray.get([worker.warmup_dist.remote() for worker in self.workers])
 
-    def collective_rpc(
-        self, method: str, args: Tuple[Any] = None, kwargs: Dict[str, Any] = None
-    ):
+    def collective_rpc(self, method: str, args: Tuple[Any] = None, kwargs: Dict[str, Any] = None):
         """collective rpc."""
         if args is None:
             args = list()
         if kwargs is None:
             kwargs = dict()
-        return ray.get(
-            [getattr(worker, method).remote(*args, **kwargs) for worker in self.workers]
-        )
+        return ray.get([getattr(worker, method).remote(*args, **kwargs) for worker in self.workers])
 
     def build_model(self):
         """build model."""
-        self.collective_rpc("build_model")
+        self.collective_rpc('build_model')
 
     def gather_free_mem(self):
         """gather available memory."""
-        return self.collective_rpc("get_free_mem")
+        return self.collective_rpc('get_free_mem')
 
     def set_cache_config(self, cache_config: CacheConfig):
         """set all cache config."""
-        self.collective_rpc("set_cache_config", (cache_config,))
+        self.collective_rpc('set_cache_config', (cache_config, ))
 
     def set_model_config(self, model_config: ModelConfig):
         """set all model config."""
-        self.collective_rpc("set_model_config", (model_config,))
+        self.collective_rpc('set_model_config', (model_config, ))
 
     def build_graph_runner(self):
         """build graph runner."""
-        self.collective_rpc("build_graph_runner")
+        self.collective_rpc('build_graph_runner')
 
     def build_cache_engine(self):
         """build cache engine."""
-        self.collective_rpc("build_cache_engine")
+        self.collective_rpc('build_cache_engine')
 
     def get_input_processor(self):
         """build cache engine."""
@@ -308,7 +292,7 @@ class RayExecutor(ExecutorBase):
     def start(self, forward_event: asyncio.Event):
         """start engine loop."""
         self.forward_event = forward_event
-        self.collective_rpc("start")
+        self.collective_rpc('start')
 
         self.remote_outs = asyncio.Queue()
         event_loop = asyncio.get_event_loop()
@@ -316,19 +300,19 @@ class RayExecutor(ExecutorBase):
 
     def stop(self):
         """stop engine loop."""
-        self.collective_rpc("stop")
+        self.collective_rpc('stop')
         if self._prefetch_task is not None:
             self._prefetch_task.cancel()
             # self._prefetch_migration_task.cancel()
 
     def release(self):
         """release."""
-        self.collective_rpc("release")
+        self.collective_rpc('release')
         for worker in self.workers:
             ray.kill(worker)
         ray.util.remove_placement_group(self.placement_group)
 
-    def _compile_dag(self, fn="forward_async"):
+    def _compile_dag(self, fn='forward_async'):
         """compile dag."""
         from ray.dag.input_node import InputNode
         from ray.dag.output_node import MultiOutputNode
@@ -391,7 +375,7 @@ class RayExecutor(ExecutorBase):
         for bundle_id, bundle in enumerate(placement_group.bundle_specs):
             if bundle.get(device_str, 0):
                 bundle_indices.append(bundle_id)
-        bundle_indices = bundle_indices[: self.world_size]
+        bundle_indices = bundle_indices[:self.world_size]
 
         workers = list()
         for _, bundle_id in enumerate(bundle_indices):
@@ -414,11 +398,11 @@ class RayExecutor(ExecutorBase):
         return workers
 
     def init_rdma_link(self, remote_engine_id):
-        return self.collective_rpc("init_rdma_link", (remote_engine_id,))
+        return self.collective_rpc('init_rdma_link', (remote_engine_id, ))
 
     def rdma_connect(self, config):
         """rdma connect."""
-        return self.collective_rpc("rdma_connect", (config,))
+        return self.collective_rpc('rdma_connect', (config, ))
 
     async def migrate(self, inputs):
         jobs = (worker.migrate.remote(inputs) for worker in self.workers)

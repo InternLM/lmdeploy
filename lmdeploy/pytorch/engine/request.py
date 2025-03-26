@@ -282,7 +282,7 @@ class RequestManager:
 
     async def migration_step(self, **kwargs):
         """handle migration requests.
-        
+
         Should only be called in loop task.
         """
         raise NotImplementedError

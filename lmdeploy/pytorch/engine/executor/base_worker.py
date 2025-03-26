@@ -10,7 +10,7 @@ from lmdeploy.utils import get_logger
 
 from .dist_utils import init_process_group, setup_master_addr
 
-logger = get_logger("lmdeploy")
+logger = get_logger('lmdeploy')
 
 
 class WorkerWrapperBase:
@@ -25,7 +25,7 @@ class WorkerWrapperBase:
         dp: int,
         tp: int,
         adapters: Dict[str, str] = None,
-        device_type: str = "cuda",
+        device_type: str = 'cuda',
         tokenizer: Any = None,
         log_level: int = 30,
     ):
@@ -49,9 +49,7 @@ class WorkerWrapperBase:
         # self.migration_out_que: asyncio.Queue = None
         self._migration_output_loop: asyncio.Task = None
 
-    def init_process_group(
-        self, rank: int, master_addr: str = None, master_port: str = None
-    ):
+    def init_process_group(self, rank: int, master_addr: str = None, master_port: str = None):
         """initialize process group."""
         self.rank = rank
         if self.world_size > 1:
@@ -130,9 +128,7 @@ class WorkerWrapperBase:
         self.model_agent.start()
         event_loop = asyncio.get_event_loop()
         self.out_que = asyncio.Queue()
-        self._output_loop = event_loop.create_task(
-            self._get_outputs_loop(), name="GetOutputsLoop"
-        )
+        self._output_loop = event_loop.create_task(self._get_outputs_loop(), name='GetOutputsLoop')
 
     def stop(self):
         """stop engine loop."""
