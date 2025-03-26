@@ -381,6 +381,7 @@ int64_t RDMAContext::init_rdma_context(std::string dev_name, uint8_t ib_port, st
     qp_init_attr.cap.max_recv_wr         = MAX_RECV_WR;
     qp_init_attr.cap.max_send_sge        = 1;
     qp_init_attr.cap.max_recv_sge        = 1;
+    qp_init_attr.sq_sig_all              = false;
 
     qp_ = ibv_create_qp(pd_, &qp_init_attr);
     if (!qp_) {
