@@ -268,6 +268,17 @@ class CacheEngine:
                 ]
             )
         
+        begin = time.time()
+        await self.transfer_engine.links[engine_id].batch_r_rdma_async(
+                "k", target_offset, source_offset, length
+            )
+        await self.transfer_engine.links[engine_id].batch_r_rdma_async(
+                "v", target_offset, source_offset, length
+            )
+
+        end = time.time()
+        print(f"bw: {length * len(source_offset) / (end - begin) / 1e9}GBps")
+
         # begin = time.time()
         # for t_off, s_off in zip(target_offset, source_offset):
         #     await self.transfer_engine.links[engine_id].batch_r_rdma_async(
@@ -278,16 +289,6 @@ class CacheEngine:
         #     )
         # end = time.time()
         # print(f"bw: {length * len(source_offset) / (end - begin) / 1e9}GBps")
-
-        begin = time.time()
-        await self.transfer_engine.links[engine_id].batch_r_rdma_async(
-            "k", target_offset, source_offset, length
-        )
-        await self.transfer_engine.links[engine_id].batch_r_rdma_async(
-            "v", target_offset, source_offset, length
-        )
-        end = time.time()
-        print(f"bw: {length * len(source_offset) / (end - begin) / 1e9}GBps")
 
     def allocate_gpu_cache(self):
         """allocate caches on GPU."""

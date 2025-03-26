@@ -83,12 +83,11 @@ void RDMAContext::cq_poll_handle()
 
         while (ibv_poll_cq(cq_, 1, &wc) > 0) {
             if (wc.status == IBV_WC_SUCCESS) {
-                std::cout << "RDMA READ completed successfully." << std::endl;
+                MIGRATION_LOG_INFO("RDMA READ completed successfully.");
                 if (wc.wr_id != 0) {
-                    std::cout << "???" << std::endl;
                     wr_info_base* ptr = reinterpret_cast<wr_info_base*>(wc.wr_id);
                     if (ptr->get_wr_type() == WrType::RDMA_READ_ACK) {
-                        std::cout << "read cache done: Received IMM, imm_data: " << wc.imm_data;
+                        MIGRATION_LOG_DEBUG("read cache done: Received IMM, imm_data: " << wc.imm_data);
                         auto* info = reinterpret_cast<read_info*>(ptr);
                         info->callback(wc.imm_data);
                         delete info;
@@ -104,55 +103,37 @@ void RDMAContext::cq_poll_handle()
 
 int64_t RDMAContext::batch_r_rdma_async(const std::vector<uintptr_t>&     target_addrs,
                                         const std::vector<uintptr_t>&     source_addrs,
-                                        uint64_t                          lengths,
+                                        uint64_t                          length,
                                         std::string                       mr_key,
                                         int64_t                           remote_rkey,
                                         std::function<void(unsigned int)> callback)
 {
     auto* call_back_info = new read_info([callback](unsigned int code) { callback(code); });
-    int   batch_size     = target_addrs.size();
+    size_t batch_size     = target_addrs.size();
 
-    struct ibv_send_wr* batch_wr_head = NULL;
-    struct ibv_send_wr* cur_wr        = NULL;
     struct ibv_send_wr* bad_wr        = NULL;
+    struct ibv_send_wr *wr = new ibv_send_wr[batch_size];
+    struct ibv_sge *sge = new ibv_sge[batch_size];
     for (int i = 0; i < batch_size; ++i) {
-        struct ibv_sge sge;
-        memset(&sge, 0, sizeof(sge));
-        sge.addr   = source_addrs[i];
-        sge.length = lengths;
-        sge.lkey   = memory_region_[mr_key]->lkey;
+        memset(&sge[i], 0, sizeof(ibv_sge));
+        sge[i].addr   = source_addrs[i];
+        sge[i].length = length;
+        sge[i].lkey   = memory_region_[mr_key]->lkey;
 
-        struct ibv_send_wr* wr = NULL;
-        wr                     = (ibv_send_wr*)malloc(sizeof(ibv_send_wr));
-        memset(wr, 0, sizeof(ibv_send_wr));
-
-        wr->wr_id               = 0;
-        wr->opcode              = IBV_WR_RDMA_READ;
-        wr->sg_list             = &sge;
-        wr->num_sge             = 1;
-        wr->send_flags          = IBV_SEND_SIGNALED;
-        wr->wr.rdma.remote_addr = target_addrs[i];
-        wr->wr.rdma.rkey        = remote_rkey;
-
-        if (batch_wr_head == NULL) {
-            batch_wr_head = wr;
-        }
-        if (cur_wr != NULL) {
-            cur_wr->next = wr;
-        }
-        cur_wr = wr;
-    }
-
-    if (cur_wr != NULL) {
-        // Only call the callback at the last wr
-        cur_wr->wr_id = (uintptr_t)call_back_info;
-        cur_wr->next  = NULL;
+        wr[i].wr_id               = (i == batch_size - 1) ? (uintptr_t)call_back_info : 0;
+        wr[i].opcode              = IBV_WR_RDMA_READ;
+        wr[i].sg_list             = &sge[i];
+        wr[i].num_sge             = 1;
+        wr[i].send_flags          = (i == batch_size - 1) ? IBV_SEND_SIGNALED : 0;
+        wr[i].wr.rdma.remote_addr = target_addrs[i];
+        wr[i].wr.rdma.rkey        = remote_rkey;
+        wr[i].next                = (i == batch_size - 1) ? NULL: &wr[i+1];
     }
 
     int ret = 0;
     {
         std::unique_lock<std::mutex> lock(rdma_post_send_mutex_);
-        ret = ibv_post_send(qp_, batch_wr_head, &bad_wr);
+        ret = ibv_post_send(qp_, wr, &bad_wr);
     }
 
     if (ret) {
