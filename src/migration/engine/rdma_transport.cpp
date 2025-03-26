@@ -158,8 +158,8 @@ int64_t RDMAContext::batch_r_rdma_async(const std::vector<uintptr_t>&     target
     return 0;
 }
 
-int64_t RDMAContext::r_rdma_async(uintptr_t                         target_addr,
-                                  uintptr_t                         source_addr,
+int64_t RDMAContext::r_rdma_async(uintptr_t                         target_offset,
+                                  uintptr_t                         source_offset,
                                   uint64_t                          length,
                                   std::string                       mr_key,
                                   std::function<void(unsigned int)> callback)
@@ -173,7 +173,7 @@ int64_t RDMAContext::r_rdma_async(uintptr_t                         target_addr,
 
     struct ibv_sge sge;
     memset(&sge, 0, sizeof(sge));
-    sge.addr   = source_addr;
+    sge.addr   = (uintptr_t)mr->addr + source_offset;
     sge.length = length;
     sge.lkey   = mr->lkey;
 
@@ -185,8 +185,8 @@ int64_t RDMAContext::r_rdma_async(uintptr_t                         target_addr,
     wr.sg_list             = &sge;
     wr.num_sge             = 1;
     wr.send_flags          = IBV_SEND_SIGNALED;
-    wr.wr.rdma.remote_addr = target_addr;
-    wr.wr.rdma.rkey        = remote_mr[mr_key]["rkey"].get<uint32_t>();
+    wr.wr.rdma.remote_addr = remote_mr["addr"].get<uint64_t>()  + target_offset;
+    wr.wr.rdma.rkey        = remote_mr["rkey"].get<uint32_t>();
 
     {
         std::unique_lock<std::mutex> lock(rdma_post_send_mutex_);
