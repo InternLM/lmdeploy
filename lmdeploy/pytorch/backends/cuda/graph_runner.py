@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Tuple
 import torch
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
+from lmdeploy.pytorch.decorators import split_batch
 from lmdeploy.pytorch.distributed import get_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext
 from lmdeploy.pytorch.models.internvl import InternVLChatModel, InternVisionModel
@@ -104,18 +105,6 @@ class CUDASingleGraphRunner:
         del self._graph
 
 
-def split_batch(func, param_name, num_splits=2):
-    """Decorator to split along the 0th dimension into a specified number of chunks."""
-    def decorator(*args, **kwargs):
-        inputs = kwargs.get(param_name, None)
-        if inputs is not None:
-            split_inputs = list(torch.chunk(inputs, num_splits, dim=0))
-            kwargs[param_name] = split_inputs
-            results = func(*args, **kwargs)
-        return torch.cat(results, dim=0)
-    return decorator
-
-
 class CUDAGraphRunner(GraphRunner):
     """cuda graph runner."""
 
@@ -126,8 +115,12 @@ class CUDAGraphRunner(GraphRunner):
         self.max_tokens = cache_config.max_prefill_token_num
         self.num_blocks = cache_config.num_gpu_blocks
 
-        self.use_compile = False
         self.enable_graph = self.check_enable_graph()
+
+        self.graph_pool_handle = torch.cuda.graph_pool_handle()
+        self._runner_map: Dict[Any, CUDASingleGraphRunner] = dict()
+
+        self.compile_vit = False
         if not self.backend_config.eager_mode and isinstance(self.model, InternVLChatModel):
             world_size, _ = get_world_rank()
             if world_size > 1:
@@ -135,11 +128,8 @@ class CUDAGraphRunner(GraphRunner):
                 if isinstance(self.model.vision_model, InternVisionModel):
                     self.model.vision_model.encoder.forward = split_batch(self.model.vision_model.encoder.forward, "inputs_embeds")
             self.model.extract_feature = torch.compile(self.model.extract_feature, mode="max-autotune")
-            self.use_compile = True
+            self.compile_vit = True
             self.compiled = False
-
-        self.graph_pool_handle = torch.cuda.graph_pool_handle()
-        self._runner_map: Dict[Any, CUDASingleGraphRunner] = dict()
 
     def check_enable_graph(self):
         """check enable graph."""
@@ -157,15 +147,30 @@ class CUDAGraphRunner(GraphRunner):
         new_num_tokens = next_power_of_2(num_tokens)
         return (new_num_tokens, is_decoding)
 
+    def _is_decoding(self, attn_metadata: Any, **kwargs):
+        return attn_metadata.is_decoding
+
+    def _mark_dynamic_once(self, **kwargs):
+        """call torch._dynamo.mark_dynamic to avoid recompile"""
+        if self.compiled:
+            return
+
+        for tensor_name, dynamic_dims in self.model.compile_dynamic_args.items():
+            tensor = kwargs.get(tensor_name, None)
+            if tensor is None:
+                continue
+            torch._dynamo.mark_dynamic(tensor, dynamic_dims)
+        self.compiled = True
+
     def __call__(self, **kwargs):
         """call."""
-        if self.use_compile and not self.compiled:
-            for tensor_name, dynamic_dims in self.model.compile_dynamic_args.items():
-                tensor = kwargs.get(tensor_name, None)
-                if tensor is None:
-                    continue
-                torch._dynamo.mark_dynamic(tensor, dynamic_dims)
-            self.compiled = True
+        if self.backend_config.eager_mode:
+            return self.model(**kwargs)
+
+        if self.compile_vit and not self._is_decoding(**kwargs):
+            self._mark_dynamic_once(**kwargs)
+            return self.model(**kwargs)
+
         enable_graph = self.enable_graph(**kwargs)
 
         if not enable_graph:

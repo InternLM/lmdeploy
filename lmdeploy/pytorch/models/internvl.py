@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
+from lmdeploy.pytorch.decorators import enable_micro_batch
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
@@ -205,16 +206,6 @@ class InternVisionEncoderLayer(nn.Module):
         self.ls1 = nn.Parameter(torch.empty(self.embed_dim, dtype=dtype, device=device))
         self.ls2 = nn.Parameter(torch.empty(self.embed_dim, dtype=dtype, device=device))
 
-    def enable_micro_batch(func):
-        """Decorator to enable micro-batch computation."""
-        def wrapper(self, hidden_states, *args, **kwargs):
-            if isinstance(hidden_states, list):
-                # Apply forward computation to each micro-batch
-                return [func(self, hs, *args, **kwargs) for hs in hidden_states]
-            else:
-                # If not a list, directly apply the forward computation
-                return func(self, hidden_states, *args, **kwargs)
-        return wrapper
 
     @enable_micro_batch
     def _attn(self, hidden_states):
