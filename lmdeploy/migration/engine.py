@@ -46,7 +46,7 @@ class TransferEngine:
             raise KeyError(f"session_id {id} not in links")
         await self.links[id].construct(local_info)
 
-    def get_local_info(self, session_id: int) -> RDMAInfo:
+    def get_local_info(self, session_id: int):
         if session_id not in self.links:
             raise KeyError(f"session_id {session_id} not in links")
         local_info = self.links[session_id].get_local_info()
