@@ -47,7 +47,6 @@ repos:
     rev: v1.4
     hooks:
       - id: docformatter
-        language: conda
         args: ["--in-place", "--wrap-descriptions", "120"]
 
   - repo: https://github.com/open-mmlab/pre-commit-hooks
