@@ -25,7 +25,7 @@ class RDMAContext:
     ) -> int:
         return self._rdma_context_c.init_rdma_context(dev_name, ib_port, link_type)
 
-    async def connect(self, exchange_info):
+    def connect(self, exchange_info):
         self._rdma_context_c.connect(exchange_info)
         self._rdma_context_c.launch_cq_future()
 
