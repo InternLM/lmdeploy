@@ -12,7 +12,6 @@ import torch
 from lmdeploy.messages import EngineRole
 from lmdeploy.migration import _migration_c
 
-from lmdeploy.migration.config import ExchangeInfo, MemoryRegionInfo, RDMAInfo
 from lmdeploy.migration.engine import TransferEngine
 
 from lmdeploy.pytorch.backends import get_backend
