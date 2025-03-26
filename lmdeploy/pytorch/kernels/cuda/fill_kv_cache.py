@@ -5,8 +5,6 @@ import triton
 import triton.language as tl
 from torch import Tensor
 
-from .triton_utils import get_kernel_meta
-
 
 @triton.jit
 def _div_up(val, other):
@@ -303,7 +301,8 @@ def fill_kv_cache(k_states: Tensor,
     BLOCK_H = triton.next_power_of_2(num_heads)
     BLOCK_D = triton.next_power_of_2(head_dim)
     BLOCK_DV = triton.next_power_of_2(head_dim_v)
-    kernel_meta = get_kernel_meta(k_states)
+    if k_caches.data_ptr() == v_caches.data_ptr() and head_dim_v <= head_dim:
+        BLOCK_DV = 0
     if quant_policy == 0:
         grid = [num_heads, max_num_blocks, batch_size]
         is_decoding = max_num_blocks == 1
@@ -339,7 +338,6 @@ def fill_kv_cache(k_states: Tensor,
             BLOCK_DV=BLOCK_DV,
             num_warps=4,
             num_stages=3,
-            **kernel_meta,
         )
     else:
         grid = [batch_size, max_num_blocks]
@@ -387,5 +385,4 @@ def fill_kv_cache(k_states: Tensor,
             BLOCK_H=BLOCK_H,
             num_warps=4,
             num_stages=3,
-            **kernel_meta,
         )
