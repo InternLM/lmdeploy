@@ -485,7 +485,7 @@ class AutoModelAgent:
         prefill_engine_block_ids = inputs.prefill_block_ids
         decode_engine_block_ids = inputs.decode_block_ids
         blocks_to_migrate = [
-            [prefill_engine_id, prefill_engine_id, init_block_id, target_block_id]
+            [prefill_engine_id, init_block_id, target_block_id]
             for (prefill_engine_id, init_block_id, target_block_id) in zip(
                 inputs.prefill_engine_id,
                 decode_engine_block_ids,

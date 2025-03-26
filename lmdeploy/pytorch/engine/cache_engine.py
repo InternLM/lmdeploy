@@ -9,9 +9,7 @@ from typing import Dict, List, Literal, Tuple
 
 import torch
 
-from lmdeploy.messages import EngineRole
-from lmdeploy.migration import _migration_c
-
+from lmdeploy.migration.context import RDMAContext
 from lmdeploy.migration.engine import TransferEngine
 
 from lmdeploy.pytorch.backends import get_backend
@@ -217,27 +215,28 @@ class CacheEngine:
 
         return output
 
-    async def rdma_connect(self, config: List[int]):
-        self.remote_block_size = config["total"]
-        metadata_endpoint = config["metadata_endpoints"][self.rank]
-        remote_engine_id = int(config["remote_engine_id"])
-        remote_endpoint = config["remote_metadata_endpoints"][self.rank]
-        link = self.transfer_engine.init_link(
+    async def init_rdma_link(self, remote_engine_id):
+        link: RDMAContext = self.transfer_engine.init_link(
             remote_engine_id,
             f"mlx5_bond_{self.rank}",
-            metadata_endpoint,
             1,
             "Ethernet",
         )
-        self.transfer_engine.register_torch(
-            remote_engine_id, "k", self.full_gpu_cache[0]
+        link.register_memory(
+            "k",
+            self.full_gpu_cache[0].data_ptr() + self.full_gpu_cache[0].storage_offset(),
         )
-        self.transfer_engine.register_torch(
-            remote_engine_id, "v", self.full_gpu_cache[1]
+        link.register_memory(
+            "v",
+            self.full_gpu_cache[1].data_ptr() + self.full_gpu_cache[1].storage_offset(),
         )
-        buffer = torch.zeros([1024 * 1024 * 1024], dtype=torch.int8, device="cuda")
-        self.transfer_engine.register_torch(remote_engine_id, "buffer", buffer)
-        await link.connect(remote_endpoint)
+        return link.local_info
+
+    async def rdma_connect(self, config: List[int]):
+        self.remote_block_size = config["total"]
+        remote_engine_id = int(config["remote_engine_id"])
+        rdma_exchange_info = config["rdma_exchange_info"][self.rank]
+        self.transfer_engine.links[remote_engine_id].connect(rdma_exchange_info)
 
     async def migrate(self, blocks_to_migration):
         head_dim = self.model_config.get_head_size()
@@ -255,13 +254,13 @@ class CacheEngine:
             engine_id = int(block_to_migration[0])
             source_offset.extend(
                 [
-                    int(block_to_migration[2]) * length + layer * layer_stride
+                    int(block_to_migration[1]) * length + layer * layer_stride
                     for layer in range(self.model_config.num_layers)
                 ]
             )
             target_offset.extend(
                 [
-                    int(block_to_migration[3]) * length + layer * layer_stride_remote
+                    int(block_to_migration[2]) * length + layer * layer_stride_remote
                     for layer in range(self.model_config.num_layers)
                 ]
             )
@@ -275,6 +274,7 @@ class CacheEngine:
         )
 
         end = time.time()
+        print(f"bw: {length * len(source_offset) / (end - begin) / 1e9}GBps")
 
         # begin = time.time()
         # for t_off, s_off in zip(target_offset, source_offset):

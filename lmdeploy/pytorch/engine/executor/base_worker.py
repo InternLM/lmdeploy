@@ -72,17 +72,6 @@ class WorkerWrapperBase:
             ret = await self.get_output_async()
             ret = self.pack_output(ret)
             self.out_que.put_nowait(ret)
-            await asyncio.sleep(0.000001)
-
-    # async def _get_migration_outputs_loop(self):
-    #     """get migration outputs loop."""
-    #     assert self.migration_out_que is not None
-    #     while True:
-    #         ret = await self.get_migration_output_async()
-    #         ret = self.pack_output(ret)
-    #         self.migration_out_que.put_nowait(ret)
-    #         print("base worker migration_out_que: ", ret)
-    #         await asyncio.sleep(0.000001)
 
     async def get_outputs(self):
         """get outputs."""
@@ -95,30 +84,6 @@ class WorkerWrapperBase:
             return outs
         else:
             return [await self.out_que.get()]
-
-    async def get_migration_outputs(self):
-        """get migration outputs."""
-        assert self.migration_out_que is not None
-        qsize = self.migration_out_que.qsize()
-        if qsize > 0:
-            outs = []
-            for _ in range(qsize):
-                outs.append(self.migration_out_que.get_nowait())
-            print(f"outs: {outs}")
-            return outs
-        else:
-            outs = [await self.migration_out_que.get()]
-            print(f"outs: {outs}")
-            return outs
-
-    async def rdma_connect(self, config):
-        return await self.model_agent.cache_engine.rdma_connect(config)
-
-    def get_ipc_handler(self):
-        return (
-            self.model_agent.cache_engine.ipc_handler_k,
-            self.model_agent.cache_engine.ipc_handler_v,
-        )
 
     def build_model(self):
         """build model."""
@@ -169,40 +134,31 @@ class WorkerWrapperBase:
             self._get_outputs_loop(), name="GetOutputsLoop"
         )
 
-        # self.migration_out_que = asyncio.Queue()
-        # self._migration_output_loop = event_loop.create_task(self._get_migration_outputs_loop(), name='GetMigrationoutputsLoop')
-
     def stop(self):
         """stop engine loop."""
         self.model_agent.stop()
         if self._output_loop is not None:
             self._output_loop.cancel()
 
-        if self._migration_output_loop is not None:
-            self._migration_output_loop.cancel()
-
     async def forward_async(self, inputs):
         """start forward."""
         self.model_agent.set_forward_inputs(inputs)
-
-    async def migration_async(self, inputs):
-        """migration"""
-        self.model_agent.set_migration_inputs(inputs)
 
     async def get_output_async(self):
         """get output async."""
         ret = await self.model_agent.get_output_async()
         return ret
 
-    async def get_migration_output_async(self):
-        """get migration output async."""
-        ret = await self.model_agent.get_migration_output_async()
-        return ret
+    def release(self):
+        """stop engine loop."""
+        self.model_agent.release()
+
+    async def init_rdma_link(self, remote_engine_id: int):
+        return self.model_agent.cache_engine.init_rdma_link(remote_engine_id)
+
+    async def rdma_connect(self, config):
+        return await self.model_agent.cache_engine.rdma_connect(config)
 
     async def migrate(self, inputs):
         ret = await self.model_agent.migrate(inputs)
         return ret
-
-    def release(self):
-        """stop engine loop."""
-        self.model_agent.release()

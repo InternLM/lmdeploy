@@ -619,55 +619,6 @@ async def chat_completions_v1(
     return response
 
 
-@router.get("/distserve/get_engine_info")
-async def cache_info() -> JSONResponse:
-    """
-    Step 1: Get engine information [EngineSnapshot]
-    """
-    num_free, num_total = VariableInterface.async_engine.get_cache_info()
-    return JSONResponse(
-        {
-            "free": num_free,
-            "total": num_total,
-        }
-    )
-
-
-@router.post("/distserve/rdma_connect")
-async def rdma_connect(raw_request: Request) -> JSONResponse:
-    connect_config = await raw_request.json()
-    x = await VariableInterface.async_engine.rdma_connect(connect_config["config"])
-    return x
-
-
-@router.post("/distserve/prefill")
-async def prefill(raw_request: Request) -> JSONResponse:
-    raise NotImplementedError
-
-
-@router.post("/distserve/free_cache")
-async def free_cache(raw_request: Request) -> JSONResponse:
-    config = await raw_request.json()
-    session_id = int(config["session_id"])
-    VariableInterface.async_engine.free_cache(session_id)
-
-
-@router.post("/distserve/migration")
-async def migration(raw_request: Request) -> JSONResponse:
-    """
-    - prefill_engine_config:
-    prefill_block_ids:
-    decode_block_ids:
-    """
-    json_request = await raw_request.json()
-    if json_request["session_id"] == -1:
-        VariableInterface.session_id += 1
-        json_request["session_id"] = VariableInterface.session_id
-
-    await VariableInterface.async_engine.migrate(json_request)
-    return {"status": True}
-
-
 @router.post("/v1/completions", dependencies=[Depends(check_api_key)])
 async def completions_v1(request: CompletionRequest, raw_request: Request = None):
     """Completion API similar to OpenAI's API.
@@ -953,6 +904,41 @@ async def encode(request: EncodeRequest, raw_request: Request = None):
             encoded.append(ids)
             length.append(len(ids))
         return EncodeResponse(input_ids=encoded, length=length)
+
+
+@router.get("/distserve/get_engine_info")
+async def cache_info() -> JSONResponse:
+    """
+    Step 1: Get engine information [EngineSnapshot]
+    """
+    num_free, num_total = VariableInterface.async_engine.get_cache_info()
+    return JSONResponse(
+        {
+            "free": num_free,
+            "total": num_total,
+        }
+    )
+
+
+@router.post("/distserve/init_rdma_link")
+async def rdma_connect(raw_request: Request) -> JSONResponse:
+    config = await raw_request.json()
+    remote_engine_id = int(config["remote_engine_id"])
+    return VariableInterface.async_engine.rdma_connect(remote_engine_id)
+
+
+@router.post("/distserve/rdma_connect")
+async def rdma_connect(raw_request: Request) -> JSONResponse:
+    connect_config = await raw_request.json()
+    x = await VariableInterface.async_engine.rdma_connect(connect_config["config"])
+    return x
+
+
+@router.post("/distserve/free_cache")
+async def free_cache(raw_request: Request) -> JSONResponse:
+    config = await raw_request.json()
+    session_id = int(config["session_id"])
+    VariableInterface.async_engine.free_cache(session_id)
 
 
 @router.post("/v1/chat/interactive", dependencies=[Depends(check_api_key)])

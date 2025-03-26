@@ -377,8 +377,11 @@ class AsyncEngine(LogitsMixin):
             self.engine.scheduler._remove_sequence(seq)
         self.engine.scheduler.unfreed_sessions.pop(session_id)
 
-    async def rdma_connect(self, config):
-        return await self.engine.executor.rdma_connect(config)
+    def init_rdma_link(self, remote_engine_id: int):
+        return self.engine.executor.init_rdma_link(remote_engine_id)
+
+    def rdma_connect(self, config):
+        return self.engine.executor.rdma_connect(config)
 
     def _get_free_insts(self):
         if self.free_insts is None:
@@ -494,16 +497,6 @@ class AsyncEngine(LogitsMixin):
         async for req in requests:
             gen = self.generate(**req, **kwargs)
             yield gen
-
-    async def migrate(self, migration_request):
-        session_id = migration_request["session_id"]
-        async with self.model_inst(session_id) as inst:
-            await inst.async_migrate(
-                session_id=session_id,
-                input_ids=migration_request["input_ids"],
-                block_ids=migration_request["block_ids"],
-            )
-            return
 
     def _infer(
         self, requests: Iterator[Dict], multiplex: bool, pbar=None, loop=None

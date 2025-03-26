@@ -235,8 +235,6 @@ class RayExecutor(ExecutorBase):
         logger.info("Init ray workers.")
         self.workers = self._init_workers_ray(placement_group, worker_kwargs)
         self.dag = None
-        self.migration_dag = None
-        self.get_migration_outputs_dag = None
         self._prefetch_task: asyncio.Task = None
         self.remote_outs: asyncio.Queue = None
 
@@ -266,21 +264,6 @@ class RayExecutor(ExecutorBase):
             kwargs = dict()
         return ray.get(
             [getattr(worker, method).remote(*args, **kwargs) for worker in self.workers]
-        )
-
-    def get_ipc_handler(self):
-        """build ipc handler."""
-        return self.collective_rpc("get_ipc_handler")
-
-    async def rdma_connect(self, config):
-        """rdma connect."""
-        return await asyncio.gather(
-            *[
-                worker.rdma_connect.remote(
-                    config,
-                )
-                for worker in self.workers
-            ]
         )
 
     def build_model(self):
@@ -322,19 +305,12 @@ class RayExecutor(ExecutorBase):
                 self.remote_outs.put_nowait(out)
             await asyncio.sleep(0.00001)
 
-    async def _prefetch_migration_outputs(self):
-        while True:
-            outs = await self.workers[0].get_migration_outputs.remote()
-            self.remote_migration_outs.put_nowait(outs)
-            await asyncio.sleep(0.00001)
-
     def start(self, forward_event: asyncio.Event):
         """start engine loop."""
         self.forward_event = forward_event
         self.collective_rpc("start")
 
         self.remote_outs = asyncio.Queue()
-        self.remote_migration_outs = asyncio.Queue()
         event_loop = asyncio.get_event_loop()
         self._prefetch_task = event_loop.create_task(self._prefetch_outputs())
 
@@ -372,27 +348,11 @@ class RayExecutor(ExecutorBase):
         inputs = ray.put(inputs)
         self.dag.execute(inputs)
 
-    async def migration_async(self, inputs):
-        if self.migration_dag is None:
-            self.migration_dag = self._compile_dag("migration_async")
-        inputs = ray.put(inputs)
-        self.migration_dag.execute(inputs)
-
-    async def migrate(self, inputs):
-        jobs = (worker.migrate.remote(inputs) for worker in self.workers)
-        return await asyncio.gather(*jobs)
-
     async def get_output_async(self):
         """get output async."""
         if self.remote_outs.qsize() > 0:
             return self.remote_outs.get_nowait()
         return await self.remote_outs.get()
-
-    async def get_migration_output_async(self):
-        """get migration output async."""
-        if self.remote_migration_outs.qsize() > 0:
-            return self.remote_migration_outs.get_nowait()
-        return await self.remote_migration_outs.get()
 
     def _sort_workers(self, driver_ip: str, workers: List[RayWorkerWrapper]):
         """sort workers by ip."""
@@ -452,3 +412,14 @@ class RayExecutor(ExecutorBase):
         workers = self._sort_workers(driver_ip, workers)
 
         return workers
+
+    async def rdma_init_link(self, remote_engine_id):
+        return self.collective_rpc("init_rdma_link", (remote_engine_id,))
+
+    async def rdma_connect(self, config):
+        """rdma connect."""
+        return self.collective_rpc("rdma_connect", (config,))
+
+    async def migrate(self, inputs):
+        jobs = (worker.migrate.remote(inputs) for worker in self.workers)
+        return await asyncio.gather(*jobs)

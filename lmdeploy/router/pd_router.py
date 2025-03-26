@@ -77,8 +77,6 @@ async def generate(request: Request):
                 engine_snapshot.prefill_endpoints[0], "v1/completions"
             )
 
-            # TODO (CJF): use new api "distserve/prefill"
-
             prefill_resp = await client.post(
                 prefill_url, json=prefill_client_data, timeout=30.0
             )
@@ -91,8 +89,6 @@ async def generate(request: Request):
             block_ids = prefill_info["cache_block_ids"]
             remote_token_ids = prefill_info["choices"][0]["remote_token_ids"]
 
-            # 构建Decode请求
-            # TODO (CJF): remove redundant parameter and invoke async relay
             decode_data = client_data.copy()
             decode_data.update(
                 {
@@ -192,54 +188,30 @@ def init_migration(args):
         cache_info = requests.get(get_url(endpoint, "distserve/get_engine_info")).json()
         total_blocks.append(cache_info["total"])
 
+    with ThreadPoolExecutor(2) as executor:
+        prefill_future = executor.submit(
+            requests.post,
+            get_url(engine_snapshot.prefill_endpoints[0], "distserve/init_rdma_link"),
+            json={"remote_engine_id": 1},
+        )
+        decode_future = executor.submit(
+            requests.post,
+            get_url(engine_snapshot.decode_endpoints[0], "distserve/init_rdma_link"),
+            json={"remote_engine_id": 0},
+        )
+
+    results = [prefill_future.result, decode_future.result]
+
     handler_config_prefill = {
         "total": total_blocks[1],
         "remote_engine_id": 1,
-        "metadata_endpoints": [
-            "10.130.8.140:7000",
-            "10.130.8.140:7001",
-            "10.130.8.140:7002",
-            "10.130.8.140:7003",
-            "10.130.8.140:7004",
-            "10.130.8.140:7005",
-            "10.130.8.140:7006",
-            "10.130.8.140:7007",
-        ],
-        "remote_metadata_endpoints": [
-            "10.130.8.138:7000",
-            "10.130.8.138:7001",
-            "10.130.8.138:7002",
-            "10.130.8.138:7003",
-            "10.130.8.138:7004",
-            "10.130.8.138:7005",
-            "10.130.8.138:7006",
-            "10.130.8.138:7007",
-        ],
+        "rdma_exchange_info": results[1],
     }
 
     handler_config_decode = {
         "total": total_blocks[0],
         "remote_engine_id": 0,
-        "metadata_endpoints": [
-            "10.130.8.138:7000",
-            "10.130.8.138:7001",
-            "10.130.8.138:7002",
-            "10.130.8.138:7003",
-            "10.130.8.138:7004",
-            "10.130.8.138:7005",
-            "10.130.8.138:7006",
-            "10.130.8.138:7007",
-        ],
-        "remote_metadata_endpoints": [
-            "10.130.8.140:7000",
-            "10.130.8.140:7001",
-            "10.130.8.140:7002",
-            "10.130.8.140:7003",
-            "10.130.8.140:7004",
-            "10.130.8.140:7005",
-            "10.130.8.140:7006",
-            "10.130.8.140:7007",
-        ],
+        "rdma_exchange_info": results[0],
     }
 
     with ThreadPoolExecutor(2) as executor:
