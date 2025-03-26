@@ -125,6 +125,7 @@
 |  QWen1.5-MoE   |  A2.7B   | LLM  |       Yes        |        -         |      No      |
 |   QWen2(.5)    |    7B    | LLM  |       Yes        |       Yes        |      No      |
 |   QWen2-MoE    | A14.57B  | LLM  |       Yes        |        -         |      No      |
+|  DeepSeek-V2   |   16B    | LLM  |        No        |       Yes        |      No      |
 | InternVL(v1.5) |  2B-26B  | MLLM |       Yes        |        -         |     Yes      |
 |   InternVL2    |  1B-40B  | MLLM |       Yes        |       Yes        |     Yes      |
 |  CogVLM2-chat  |   19B    | MLLM |       Yes        |        No        |      -       |
