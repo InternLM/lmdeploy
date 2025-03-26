@@ -127,7 +127,6 @@ int64_t RDMAContext::batch_r_rdma_async(const std::vector<uint64_t>&     target_
     json remote_mr = memory_pool_.get_remote_mr(mr_key);
     uint64_t remote_addr = remote_mr["addr"].get<uint64_t>();
     uint32_t remote_rkey = remote_mr["rkey"].get<uint32_t>();
-    std::cout << remote_addr << " " << remote_rkey << std::endl;
     for (size_t i = 0; i < batch_size; ++i) {
         memset(&sge[i], 0, sizeof(ibv_sge));
         sge[i].addr               = (uint64_t)mr->addr + source_offsets[i];
