@@ -1,6 +1,6 @@
 #pragma once
 
-#include "logging.h"
+#include "utils/logging.h"
 #include <cstdint>
 #include <functional>
 #include <infiniband/verbs.h>

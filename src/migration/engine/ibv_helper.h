@@ -44,13 +44,10 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-int ibv_read_sysfs_file(const char *dir, const char *file, char *buf,
-                        size_t size);
+int ibv_read_sysfs_file(const char* dir, const char* file, char* buf, size_t size);
 
 /* GID types as appear in sysfs, no change is expected as of ABI
  * compatibility.
  */
-int ibv_query_gid_type(struct ibv_context *context, uint8_t port_num,
-                       unsigned int index, enum ibv_gid_type *type);
-int ibv_find_sgid_type(struct ibv_context *context, uint8_t port_num,
-                       enum ibv_gid_type gid_type, int gid_family);
+int ibv_query_gid_type(struct ibv_context* context, uint8_t port_num, unsigned int index, enum ibv_gid_type* type);
+int ibv_find_sgid_type(struct ibv_context* context, uint8_t port_num, enum ibv_gid_type gid_type, int gid_family);
