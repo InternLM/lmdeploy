@@ -213,7 +213,7 @@ void RDMAContext::modify_qp_to_rtsr(RDMAInfo remote_rdma_info)
     attr.rq_psn             = remote_rdma_info_.psn;
     attr.max_dest_rd_atomic = 16;
     attr.min_rnr_timer      = 12;
-    attr.ah_attr.dlid       = 0;  // RoCE v2 is used.
+    attr.ah_attr.dlid       = 0;
     attr.ah_attr.sl         = 0;
     attr.ah_attr.src_path_bits = 0;
     attr.ah_attr.port_num      = 1;
@@ -234,9 +234,6 @@ void RDMAContext::modify_qp_to_rtsr(RDMAInfo remote_rdma_info)
     flags = IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU | IBV_QP_DEST_QPN | IBV_QP_RQ_PSN | IBV_QP_MAX_DEST_RD_ATOMIC
             | IBV_QP_MIN_RNR_TIMER;
 
-    struct ibv_device_attr device_attr;
-    ibv_query_device(ib_ctx_, &device_attr);
-
     ret = ibv_modify_qp(qp_, &attr, flags);
     if (ret) {
         MIGRATION_ABORT("Failed to modify QP to RTR: reason: " << strerror(ret));
@@ -249,7 +246,7 @@ void RDMAContext::modify_qp_to_rtsr(RDMAInfo remote_rdma_info)
     attr.retry_cnt     = 7;
     attr.rnr_retry     = 7;
     attr.sq_psn        = local_rdma_info_.psn;
-    attr.max_rd_atomic = 1;
+    attr.max_rd_atomic = 16;
 
     flags =
         IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT | IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN | IBV_QP_MAX_QP_RD_ATOMIC;
@@ -392,9 +389,10 @@ int64_t RDMAContext::init_rdma_context(std::string dev_name, uint8_t ib_port, st
     /* Modify QP to INIT state */
     struct ibv_qp_attr attr = {};
     attr.qp_state           = IBV_QPS_INIT;
-    attr.port_num           = 1;
+    attr.port_num           = ib_port_;
     attr.pkey_index         = 0;
-    attr.qp_access_flags    = IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE;
+    attr.qp_access_flags =
+        IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
 
     int flags = IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_ACCESS_FLAGS;
 
