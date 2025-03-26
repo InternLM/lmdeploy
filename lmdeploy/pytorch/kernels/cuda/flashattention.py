@@ -55,7 +55,7 @@ def _load_kv(ptrs, boundary_check: tl.constexpr):
 def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs, loop_start, loop_end, sm_scale, history_mask,
                        kv_min_loc, causal_mask: tl.constexpr, window_size: tl.constexpr,
                        logit_softcapping: tl.constexpr, k_bound: tl.constexpr, v_bound: tl.constexpr,
-                       BLOCK_N: tl.constexpr, BLOCK_DK1: tl.constexpr):
+                       shared_kv: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_DK1: tl.constexpr):
     k_ptrs = tl.advance(k_ptrs, (0, loop_start))
     v_ptrs = tl.advance(v_ptrs, (loop_start, 0))
     if BLOCK_DK1:
@@ -118,7 +118,10 @@ def _prefill_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, q1, k1_ptrs, loop_start
         acc = acc * alpha[:, None]
 
         # update acc
-        v = _load_kv(v_ptrs, boundary_check=v_bound)
+        if shared_kv:
+            v = tl.trans(k)
+        else:
+            v = _load_kv(v_ptrs, boundary_check=v_bound)
         p = p.to(v.dtype)
         acc += tl.dot(p, v)
         # update m_i and l_i
@@ -176,6 +179,7 @@ def _flash_prefill_fwd_kernel(
     causal: tl.constexpr,
     window_size: tl.constexpr,
     logit_softcapping: tl.constexpr,
+    shared_kv: tl.constexpr,
     BLOCK_M: tl.constexpr,
     BLOCK_N: tl.constexpr,
     BLOCK_DK: tl.constexpr,
@@ -290,6 +294,7 @@ def _flash_prefill_fwd_kernel(
                                        logit_softcapping=logit_softcapping,
                                        k_bound=k_bound0,
                                        v_bound=v_bound0,
+                                       shared_kv=shared_kv,
                                        BLOCK_N=BLOCK_N,
                                        BLOCK_DK1=BLOCK_DK1)
 
@@ -316,6 +321,7 @@ def _flash_prefill_fwd_kernel(
                                        logit_softcapping=logit_softcapping,
                                        k_bound=k_bound1,
                                        v_bound=v_bound1,
+                                       shared_kv=shared_kv,
                                        BLOCK_N=BLOCK_N,
                                        BLOCK_DK1=BLOCK_DK1)
     # epilogue
@@ -391,6 +397,8 @@ def flash_attention_fwd(
 
     BLOCK_DK, BLOCK_DK1, BLOCK_DV = _get_block_d(head_dim_k, head_dim_v)
 
+    shared_kv = k_states.data_ptr() == v_states.data_ptr() and BLOCK_DK == BLOCK_DV
+
     BLOCK_N = 32
     if _nv_cap[0] < 8:
         BLOCK_M = max(16, 8192 // BLOCK_DK)
@@ -433,6 +441,7 @@ def flash_attention_fwd(
         causal=causal,
         window_size=window_size,
         logit_softcapping=logit_softcapping,
+        shared_kv=shared_kv,
         BLOCK_DK=BLOCK_DK,
         BLOCK_DK1=BLOCK_DK1,
         BLOCK_DV=BLOCK_DV,
