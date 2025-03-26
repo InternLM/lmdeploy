@@ -23,6 +23,8 @@ namespace migration {
 // than max layers of model.
 #define MAX_RECV_WR 8192
 
+#define POLL_COUNT 64
+
 void RDMAContext::launch_cq_future()
 {
     cq_future_ = std::async(std::launch::async, [this]() -> void { cq_poll_handle(); });
@@ -79,23 +81,28 @@ void RDMAContext::cq_poll_handle()
             MIGRATION_ABORT("Failed to request CQ notification");
         }
 
-        struct ibv_wc wc = {0};
+        struct ibv_wc wc[POLL_COUNT];
 
-        while (ibv_poll_cq(cq_, 1, &wc) > 0) {
-            if (wc.status == IBV_WC_SUCCESS) {
+        size_t nr_poll = ibv_poll_cq(cq_, POLL_COUNT, wc);
+        if (nr_poll < 0) {
+            MIGRATION_LOG_WARN("Worker: Failed to poll completion queues");
+            continue;
+        }
+        for (size_t i = 0; i < nr_poll; ++i) {
+            if (wc[i].status == IBV_WC_SUCCESS) {
                 MIGRATION_LOG_INFO("RDMA READ completed successfully.");
-                if (wc.wr_id != 0) {
-                    wr_info_base* ptr = reinterpret_cast<wr_info_base*>(wc.wr_id);
+                if (wc[i].wr_id != 0) {
+                    wr_info_base* ptr = reinterpret_cast<wr_info_base*>(wc[i].wr_id);
                     if (ptr->get_wr_type() == WrType::RDMA_READ_ACK) {
-                        MIGRATION_LOG_DEBUG("read cache done: Received IMM, imm_data: " << wc.imm_data);
+                        MIGRATION_LOG_DEBUG("read cache done: Received IMM, imm_data: " << wc[i].imm_data);
                         auto* info = reinterpret_cast<read_info*>(ptr);
-                        info->callback(wc.imm_data);
+                        info->callback(wc[i].imm_data);
                         delete info;
                     }
                 }
             }
             else {
-                std::cerr << "RDMA READ failed with status: " << ibv_wc_status_str(wc.status) << std::endl;
+                std::cerr << "RDMA READ failed with status: " << ibv_wc_status_str(wc[i].status) << std::endl;
             }
         }
     }
@@ -203,7 +210,7 @@ void RDMAContext::modify_qp_to_rtsr(RDMAInfo remote_rdma_info)
     attr.path_mtu           = (enum ibv_mtu)std::min((uint32_t)remote_rdma_info_.mtu, (uint32_t)local_rdma_info_.mtu);
     attr.dest_qp_num        = remote_rdma_info_.qpn;
     attr.rq_psn             = remote_rdma_info_.psn;
-    attr.max_dest_rd_atomic = 4;
+    attr.max_dest_rd_atomic = 16;
     attr.min_rnr_timer      = 12;
     attr.ah_attr.dlid       = 0;  // RoCE v2 is used.
     attr.ah_attr.sl         = 0;
