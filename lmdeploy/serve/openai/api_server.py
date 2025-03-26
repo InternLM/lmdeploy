@@ -458,7 +458,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                 if tool_delta is not None:
                     delta_message.tool_calls = tool_delta.tool_calls
                     delta_message.content = tool_delta.content
-                    if tool_delta.tool_calls is not None and len(tool_delta.tool_calls):
+                    if isinstance(tool_delta.tool_calls, List) and len(tool_delta.tool_calls):
                         streaming_tools = True
                 previous_text = current_text
                 previous_token_ids = current_token_ids
@@ -515,7 +515,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         try:  # TODO add json_schema guidance to turbomind
             tool_call_info = VariableInterface.tool_parser.extract_tool_calls(text, request=request)
             text, tool_calls = tool_call_info.content, tool_call_info.tool_calls
-            if tool_calls is not None and len(tool_calls) > 0:
+            if isinstance(tool_calls, List) and len(tool_calls):
                 if final_res.finish_reason == 'stop':
                     final_res.finish_reason = 'tool_calls'
 
