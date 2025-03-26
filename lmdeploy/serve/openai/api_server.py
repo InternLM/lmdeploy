@@ -923,6 +923,7 @@ async def cache_info() -> JSONResponse:
 @router.post("/distserve/init_rdma_link")
 async def init_rdma_link(raw_request: Request) -> JSONResponse:
     config = await raw_request.json()
+    print(config)
     remote_engine_id = int(config["remote_engine_id"])
     return VariableInterface.async_engine.init_rdma_link(remote_engine_id)
 
