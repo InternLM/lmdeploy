@@ -35,9 +35,6 @@ class RDMAContext:
         remote_info = await self.meta_recv.recv_pyobj()
         await self.construct(remote_info)
 
-    def get_local_info(self):
-        return RDMAInfo._from_migration_c(self._rdma_context_c.get_local_rdma_info())
-
     def init_rdma_context(
         self,
         dev_name: str,

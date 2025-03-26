@@ -41,7 +41,7 @@ class TransferEngine:
             raise KeyError(f"session_id {id} not in links")
         return self.links[session_id].register_torch(mr_key, t)
 
-    async def construct(self, id, local_info: RDMAInfo):
+    async def construct(self, id, local_info):
         if id not in self.links:
             raise KeyError(f"session_id {id} not in links")
         await self.links[id].construct(local_info)
