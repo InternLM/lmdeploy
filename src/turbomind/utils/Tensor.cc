@@ -438,4 +438,32 @@ void TensorMap::saveNpy(const std::string& base_folder)
     }
 }
 
+ManagedTensor
+ManagedTensor::create(DataType dtype, MemoryType where, const std::vector<int64_t>& size, int64_t& byte_size)
+{
+    byte_size = std::accumulate(size.begin(), size.end(), Tensor::getTypeSize(dtype), std::multiplies<>{});
+    void* data{};
+
+    if (where == MEMORY_GPU) {
+        check_cuda_error(cudaMallocAsync(&data, byte_size, nullptr));
+    }
+    else {
+        data = std::malloc(byte_size);
+    }
+
+    ManagedTensor ret;
+    ret.tensor = Tensor{where, dtype, std::vector<size_t>(size.begin(), size.end()), data};
+    ret.data_holder.reset((void*)nullptr, [data, where](auto) {
+        // std::cerr << "turbomind tensor deallocate" << std::endl;
+        if (where == MEMORY_GPU) {
+            /// TODO: guard device id
+            check_cuda_error(cudaFreeAsync(data, nullptr));
+        }
+        else {
+            std::free(data);
+        }
+    });
+    return ret;
+}
+
 }  // namespace turbomind

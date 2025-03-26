@@ -577,6 +577,8 @@ struct ManagedTensor {
     {
         return tensor;
     }
+
+    static ManagedTensor create(DataType dtype, MemoryType where, const std::vector<int64_t>& size, int64_t& byte_size);
 };
 
 }  // namespace turbomind

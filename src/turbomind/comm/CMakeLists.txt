@@ -3,6 +3,7 @@
 cmake_minimum_required(VERSION 3.8)
 
 add_library(host_comm STATIC host_comm.cc thread_comm.cc)
+target_link_libraries(host_comm PRIVATE logger)
 set_property(TARGET host_comm PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 add_library(device_comm STATIC device_comm.cc)
@@ -19,9 +20,21 @@ if (BUILD_MULTI_GPU)
         target_link_libraries(device_comm INTERFACE nccl_comm)
     endif ()
 
+    add_subdirectory(gloo)
+    target_link_libraries(host_comm INTERFACE gloo_comm)
+
+    add_library(serialize STATIC serialize.cc)
+    target_link_libraries(serialize INTERFACE tensor)
+    set_property(TARGET serialize PROPERTY POSITION_INDEPENDENT_CODE ON)
+    target_link_libraries(host_comm INTERFACE serialize)
+
     if (BUILD_TEST)
         add_executable(test_comm test_comm.cu)
         target_link_libraries(test_comm PRIVATE device_comm host_comm pthread nvtx_utils)
         target_compile_options(test_comm PRIVATE -O3 -march=native -mtune=native)
+
+        # add_executable(test_gloo test_gloo.cc)
+        # target_link_libraries(test_gloo PRIVATE host_comm)
+        # target_compile_options(test_gloo PRIVATE -O3 -march=native -mtune=native)
     endif ()
 endif ()
