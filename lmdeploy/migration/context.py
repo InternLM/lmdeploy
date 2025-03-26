@@ -14,7 +14,7 @@ class RDMAContext:
         self.init_rdma_context(dev_name, ib_port, link_type)
 
     @property
-    async def local_info(self):
+    def local_info(self):
         return self._rdma_context_c.exchange_info()
 
     def init_rdma_context(
