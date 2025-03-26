@@ -15,21 +15,17 @@ class DeepSeekVLReader(LlamaReader):
     norm_weight_key = 'language_model.model.norm.weight'
     output_weight_key = 'language_model.lm_head.weight'
 
-    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool,
-                 model_cfg: dict, **kwargs):
+    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool, model_cfg: dict, **kwargs):
         model_cfg = model_cfg['language_config']
-        super().__init__(new_params, unused_params, last_bin, model_cfg,
-                         **kwargs)
+        super().__init__(new_params, unused_params, last_bin, model_cfg, **kwargs)
 
     def attn_norm(self, i: int):
         """Get attn norm for layer i."""
-        return self.params[
-            f'language_model.model.layers.{i}.input_layernorm.weight']
+        return self.params[f'language_model.model.layers.{i}.input_layernorm.weight']
 
     def ffn_norm(self, i: int):
         """Get ffn norm for layer i."""
-        return self.params[
-            f'language_model.model.layers.{i}.post_attention_layernorm.weight']
+        return self.params[f'language_model.model.layers.{i}.post_attention_layernorm.weight']
 
 
 @INPUT_MODELS.register_module(name='deepseekvl')
@@ -43,8 +39,7 @@ class DeepSeekVLModel(LlamaModel):
         params_path = osp.join(self.model_path, 'config.json')
         with open(params_path) as f:
             model_arg = json.load(f)
-            if 'language_config' in model_arg and model_arg[
-                    'language_config'].get('model_type', None) == 'llama':
+            if 'language_config' in model_arg and model_arg['language_config'].get('model_type', None) == 'llama':
                 model_arg = model_arg['language_config']  # depseek-vl
             num_layer = model_arg['num_hidden_layers']
             hidden_units = model_arg.get('hidden_size', 4096)
@@ -57,8 +52,7 @@ class DeepSeekVLModel(LlamaModel):
             else:
                 kv_head_num = model_arg.get('num_attention_heads', 32)
             rope_theta = float(model_arg.get('rope_theta', 10000.0))
-            max_position_embeddings = int(
-                model_arg.get('max_position_embeddings', 0))
+            max_position_embeddings = int(model_arg.get('max_position_embeddings', 0))
             rope_scaling = model_arg.get('rope_scaling', None)
             scaling_factor = 0.0
             use_dynamic_ntk = 0

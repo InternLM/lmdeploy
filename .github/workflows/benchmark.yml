@@ -15,7 +15,7 @@ on:
         default: 'main'
       benchmark_type:
         required: true
-        description: 'Set benchmark type. Default is "["generation", "throughtput", "api_server"]"'
+        description: 'Set benchmark type. Default is "["generation", "throughput", "api_server"]"'
         type: string
         default: "['apiserver', 'generation', 'throughput']"
       offline_mode:
@@ -88,7 +88,7 @@ jobs:
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Clone repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v2
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         with:
           repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
@@ -105,10 +105,7 @@ jobs:
         run: |
           # manually install flash attn
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/flash_attn-2.6.3+cu118torch2.3cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
-          python3 -m pip install -e /root/packages/AutoAWQ_kernels
-          python3 -m pip install /root/packages/autoawq-0.2.6-cp310-cp310-manylinux2014_x86_64.whl --no-deps
-          python3 -m pip install /root/packages/xformers-0.0.27+cu118-cp310-cp310-manylinux2014_x86_64.whl --no-deps
+          python3 -m pip install /root/packages/flash_attn-*.whl
           python3 -m pip install -r /nvme/qa_test_models/offline_pkg/requirements.txt
       - name: Install lmdeploy
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
@@ -129,9 +126,9 @@ jobs:
           ln -s ${{env.REPORT_DIR}}/allure-results/.pytest_cache autotest
       - name: Run other benchmark
         run: |
-            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 8 --run_id ${{ github.run_id }} -m gpu_num_1 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}}/allure-results || true
-            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 4 --run_id ${{ github.run_id }} -m gpu_num_2 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}}/allure-results || true
-            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 2 --run_id ${{ github.run_id }} -m gpu_num_4 ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}}/allure-results
+            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 8 --run_id ${{ github.run_id }} -m 'gpu_num_1 and not pr_test' ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}}/allure-results || true
+            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 4 --run_id ${{ github.run_id }} -m 'gpu_num_2 and not pr_test' ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}}/allure-results || true
+            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n 2 --run_id ${{ github.run_id }} -m 'gpu_num_4 and not pr_test' ${{env.FAIL_CONFIG}} --alluredir=${{env.REPORT_DIR}}/allure-results
       - name: Clear workfile
         if: always()
         run: |
@@ -148,9 +145,15 @@ jobs:
     needs: [benchmark]
     timeout-minutes: 5
     runs-on: [self-hosted, linux-a100]
+    container:
+      image: openmmlab/lmdeploy:latest-cu11
+      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
+      volumes:
+        - /nvme/qa_test_models:/nvme/qa_test_models
+        - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Clone repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v2
         with:
           repository: ${{ github.event.inputs.repo_org || 'InternLM/lmdeploy' }}
           ref: ${{github.event.inputs.repo_ref || 'main'}}

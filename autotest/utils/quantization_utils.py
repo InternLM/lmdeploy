@@ -15,26 +15,18 @@ def quantization(config,
     origin_model_path = config.get('model_path') + '/' + origin_model_name
     quantization_model_path = model_path + '/' + quantization_model_name
     quantization_log = os.path.join(
-        log_path, '_'.join([
-            'quantization', quantization_type,
-            quantization_model_name.split('/')[1]
-        ]) + '.log')
+        log_path, '_'.join(['quantization', quantization_type,
+                            quantization_model_name.split('/')[1]]) + '.log')
 
     if quantization_type == 'awq':
-        quantization_cmd = ' '.join([
-            cuda_prefix, 'lmdeploy lite auto_awq', origin_model_path,
-            '--work-dir', quantization_model_path
-        ])
+        quantization_cmd = ' '.join(
+            [cuda_prefix, 'lmdeploy lite auto_awq', origin_model_path, '--work-dir', quantization_model_path])
     elif quantization_type == 'gptq':
-        quantization_cmd = ' '.join([
-            cuda_prefix, 'lmdeploy lite auto_gptq', origin_model_path,
-            '--work-dir', quantization_model_path
-        ])
+        quantization_cmd = ' '.join(
+            [cuda_prefix, 'lmdeploy lite auto_gptq', origin_model_path, '--work-dir', quantization_model_path])
     elif quantization_type == 'w8a8':
-        quantization_cmd = ' '.join([
-            cuda_prefix, 'lmdeploy lite smooth_quant', origin_model_path,
-            '--work-dir', quantization_model_path
-        ])
+        quantization_cmd = ' '.join(
+            [cuda_prefix, 'lmdeploy lite smooth_quant', origin_model_path, '--work-dir', quantization_model_path])
     else:
         return False, 'quantization type should in [awq, gptq, w8a8], \
             now the type is ' + quantization_type
@@ -42,7 +34,7 @@ def quantization(config,
     if 'llama-3' in origin_model_name.lower():
         quantization_cmd += ' --search-scale'
 
-    if not is_bf16_supported():
+    if not is_bf16_supported() or quantization_type == 'gptq':
         quantization_cmd += ' --batch-size 8'
     else:
         quantization_cmd += ' --batch-size 32'
@@ -56,8 +48,7 @@ def quantization(config,
                        text=True,
                        encoding='utf-8')
 
-        f.writelines('reproduce command quantization_cmd: ' +
-                     quantization_cmd + '\n')
+        f.writelines('reproduce command quantization_cmd: ' + quantization_cmd + '\n')
         print('reproduce command quantization_cmd: ' + quantization_cmd)
         # quantization
         quantizationRes = subprocess.run([quantization_cmd],

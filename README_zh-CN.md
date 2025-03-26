@@ -24,6 +24,10 @@ ______________________________________________________________________
 ## 最新进展 🎉
 
 <details open>
+<summary><b>2025</b></summary>
+</details>
+
+<details close>
 <summary><b>2024</b></summary>
 
 - \[2024/11\] PyTorch engine 支持 Mono-InternVL 模型
@@ -93,13 +97,6 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
 
 ![v0 1 0-benchmark](https://github.com/InternLM/lmdeploy/assets/4560679/8e455cf1-a792-4fa8-91a2-75df96a2a5ba)
 
-更多设备、更多计算精度、更多setting下的的推理 benchmark，请参考以下链接：
-
-- [A100](./docs/en/benchmark/a100_fp16.md)
-- 4090
-- 3090
-- 2080
-
 # 支持的模型
 
 <table>
@@ -121,11 +118,14 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>Llama3.2 (1B, 3B)</li>
   <li>InternLM (7B - 20B)</li>
   <li>InternLM2 (7B - 20B)</li>
+  <li>InternLM3 (8B)</li>
   <li>InternLM2.5 (7B)</li>
   <li>Qwen (1.8B - 72B)</li>
   <li>Qwen1.5 (0.5B - 110B)</li>
   <li>Qwen1.5 - MoE (0.5B - 72B)</li>
   <li>Qwen2 (0.5B - 72B)</li>
+  <li>Qwen2-MoE (57BA14B)</li>
+  <li>Qwen2.5 (0.5B - 32B)</li>
   <li>Baichuan (7B)</li>
   <li>Baichuan2 (7B-13B)</li>
   <li>Code Llama (7B - 34B)</li>
@@ -137,6 +137,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>Mistral (7B)</li>
   <li>DeepSeek-MoE (16B)</li>
   <li>DeepSeek-V2 (16B, 236B)</li>
+  <li>DeepSeek-V2.5 (236B)</li>
   <li>Mixtral (8x7B, 8x22B)</li>
   <li>Gemma (2B - 7B)</li>
   <li>Dbrx (132B)</li>
@@ -154,9 +155,12 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>InternLM-XComposer2.5 (7B)</li>
   <li>Qwen-VL (7B)</li>
   <li>Qwen2-VL (2B, 7B, 72B)</li>
+  <li>Qwen2.5-VL (3B, 7B, 72B)</li>
   <li>DeepSeek-VL (7B)</li>
+  <li>DeepSeek-VL2 (3B, 16B, 27B)</li>
   <li>InternVL-Chat (v1.1-v1.5)</li>
   <li>InternVL2 (1B-76B)</li>
+  <li>InternVL2.5(MPO) (1B-78B)</li>
   <li>Mono-InternVL (2B)</li>
   <li>ChemVLM (8B-26B)</li>
   <li>MiniGeminiLlama (7B)</li>
@@ -169,6 +173,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>GLM-4V (9B)</li>
   <li>Llama3.2-vision (11B, 90B)</li>
   <li>Molmo (7B-D,72B)</li>
+  <li>Gemma3 (1B - 27B)</li>
 </ul>
 </td>
 </tr>
@@ -197,9 +202,9 @@ pip install lmdeploy
 
 ```python
 import lmdeploy
-pipe = lmdeploy.pipeline("internlm/internlm2-chat-7b")
-response = pipe(["Hi, pls intro yourself", "Shanghai is"])
-print(response)
+with lmdeploy.pipeline("internlm/internlm3-8b-instruct") as pipe:
+    response = pipe(["Hi, pls intro yourself", "Shanghai is"])
+    print(response)
 ```
 
 > \[!NOTE\]

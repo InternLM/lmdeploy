@@ -11,22 +11,21 @@
 #include "src/turbomind/utils/nvtx_utils.h"
 #include "src/turbomind/utils/string_utils.h"
 #include <cuda_runtime.h>
-#include <cuda_runtime_api.h>
 #include <iomanip>
 
 namespace turbomind {
 
 template<class T>
-void MoeFfnLayer<T>::AllocateBuffer(size_t tokens, size_t padded)
+void MoeFfnLayer<T>::AllocateBuffer(size_t tokens, size_t padded, size_t expert_num, size_t inter_buf_factor)
 {
     char* base = 0;
 
     auto allocate = [&](void* base) {
         Monotonic alloc{base};
         alloc(&inout_buf_, tokens * param_.experts_per_token * hidden_dim_);
-        alloc(&inter_buf_, tokens * param_.experts_per_token * inter_size_ * 2);
-        alloc(&logits_, tokens * param_.expert_num);
-        alloc(&masks_, param_.expert_num * padded);
+        alloc(&inter_buf_, tokens * param_.experts_per_token * inter_size_ * inter_buf_factor);
+        alloc(&logits_, tokens * expert_num);
+        alloc(&masks_, expert_num * padded);
         alloc(&f2n_, param_.experts_per_token * tokens);
         alloc(&en2f_, param_.experts_per_token * tokens);
         alloc(&scales_, param_.experts_per_token * tokens);
@@ -80,17 +79,44 @@ void MoeFfnLayer<T>::gate(float* logits, const T* input, int tokens, const Llama
 template<class T>
 void MoeFfnLayer<T>::forward(T* output, const T* input, int tokens, int layer_id, const MoeFfnWeight<T>& moe)
 {
-    const size_t padded = (tokens + kMoeGateVecSize - 1) / kMoeGateVecSize * kMoeGateVecSize;
+    const size_t padded     = (tokens + kMoeGateVecSize - 1) / kMoeGateVecSize * kMoeGateVecSize;
+    const int    expert_num = moe.experts.size();
 
-    AllocateBuffer(tokens, padded);
+    FT_CHECK(expert_num);
+
+    const size_t inter_buf_factor = [&] {
+        if (param_.method == MoeParam::kNaive) {
+            return 0;  // managed by ffn
+        }
+        else if (moe.block.is_fused_silu) {
+            return 1;
+        }
+        else {
+            return 2;
+        }
+    }();
+
+    AllocateBuffer(tokens, padded, expert_num, inter_buf_factor);
 
     gate(logits_, input, tokens, moe.gate);
     sync_check_cuda_error();
 
-    check_cuda_error(cudaMemsetAsync(accum_, 0, sizeof(int) * param_.expert_num * kMoeGateMaxTiles, stream_));
-    sync_check_cuda_error();
+    // if (tensor_para_.rank_ == 0) {
+    //     Compare(logits_, tokens * expert_num, Concat("logit", layer_id), compare_mode, stream_);
+    // }
+
+    check_cuda_error(cudaMemsetAsync(accum_, 0, sizeof(int) * expert_num * kMoeGateMaxTiles, stream_));
+    check_cuda_error(cudaMemsetAsync(masks_, -1, sizeof(int8_t) * expert_num * padded, stream_));
 
     // dump_logits(tokens, layer_id);
+
+    bool softmax = true;
+    if (param_.topk_method == "group_limited_greedy") {
+        invokeMoeSoftmaxMaskTopKGroups(
+            logits_, tokens, expert_num, expert_num / param_.n_group, param_.topk_group, stream_);
+        sync_check_cuda_error();
+        softmax = false;
+    }
 
     /// TODO: fix illegal memory access even if NaN are present in logits
     invokeMoeGate_V2(f2n_,
@@ -102,25 +128,27 @@ void MoeFfnLayer<T>::forward(T* output, const T* input, int tokens, int layer_id
                      logits_,
                      tokens,
                      padded,
-                     param_.expert_num,
+                     expert_num,
                      param_.experts_per_token,
-                     param_.norm_topk,
+                     softmax,
+                     param_.norm_topk_prob,
+                     param_.routed_scale,
                      stream_);
     sync_check_cuda_error();
 
     if (isTuning()) {
         std::mt19937     g;
-        const auto       expert_ids = SampleUniform(tokens, param_.expert_num, param_.experts_per_token, g);
-        std::vector<int> cnt(param_.expert_num);
+        const auto       expert_ids = SampleUniform(tokens, expert_num, param_.experts_per_token, g);
+        std::vector<int> cnt(expert_num);
         for (const auto& x : expert_ids) {
             ++cnt[x];
         }
         h_offsets_[0] = 0;
-        for (int i = 0; i < param_.expert_num; ++i) {
+        for (int i = 0; i < expert_num; ++i) {
             h_offsets_[i + 1] = h_offsets_[i] + cnt[i];
         }
         check_cuda_error(
-            cudaMemcpyAsync(offsets_, h_offsets_, sizeof(int) * (param_.expert_num + 1), cudaMemcpyDefault, stream_));
+            cudaMemcpyAsync(offsets_, h_offsets_, sizeof(int) * (expert_num + 1), cudaMemcpyDefault, stream_));
     }
 
     if (param_.method == MoeParam::kNaive) {
@@ -129,15 +157,15 @@ void MoeFfnLayer<T>::forward(T* output, const T* input, int tokens, int layer_id
         sync_check_cuda_error();
 
         check_cuda_error(
-            cudaMemcpyAsync(h_offsets_, offsets_, sizeof(int) * (param_.expert_num + 1), cudaMemcpyDefault, stream_));
+            cudaMemcpyAsync(h_offsets_, offsets_, sizeof(int) * (expert_num + 1), cudaMemcpyDefault, stream_));
 
         check_cuda_error(cudaStreamSynchronize(stream_));
 
-        if (h_offsets_[param_.expert_num] != tokens * param_.experts_per_token) {
-            FT_CHECK_WITH_INFO(0, fmtstr("%d vs %d", h_offsets_[param_.expert_num], tokens * param_.experts_per_token));
+        if (h_offsets_[expert_num] != tokens * param_.experts_per_token) {
+            FT_CHECK_WITH_INFO(0, fmtstr("%d vs %d", h_offsets_[expert_num], tokens * param_.experts_per_token));
         }
 
-        for (int i = 0; i < param_.expert_num; ++i) {
+        for (int i = 0; i < expert_num; ++i) {
 
             FT_CHECK(moe.experts[i].is_fused_silu == false);
 
@@ -153,7 +181,7 @@ void MoeFfnLayer<T>::forward(T* output, const T* input, int tokens, int layer_id
         }
     }
     else {
-        context_->set_offsets(offsets_);
+        context_->update(expert_num, param_.experts_per_token, offsets_);
 
         auto& block = moe.block;
 
@@ -217,7 +245,7 @@ void MoeFfnLayer<T>::forward(T* output, const T* input, int tokens, int layer_id
 }
 
 template<class T>
-void MoeFfnLayer<T>::reduce(T* output, int tokens, const MoeFfnWeight<T>& moe)
+void MoeFfnLayer<T>::reduce(T* output, int tokens, float output_scale, int layer_id, const MoeFfnWeight<T>& moe)
 {
     invokeMoeReduce(output,
                     inout_buf_,
@@ -227,19 +255,15 @@ void MoeFfnLayer<T>::reduce(T* output, int tokens, const MoeFfnWeight<T>& moe)
                     tokens,
                     param_.experts_per_token,
                     hidden_dim_,
+                    output_scale,
                     stream_);
     sync_check_cuda_error();
-
-    if (tensor_para_.world_size_ > 1) {
-        ftNcclAllReduceSum(output, output, tokens * hidden_dim_, tensor_para_, stream_);
-        sync_check_cuda_error();
-    }
 }
 
 template<class T>
-void MoeFfnLayer<T>::dump_logits(int token_num, int layer_id)
+void MoeFfnLayer<T>::dump_logits(int token_num, int layer_id, int expert_num)
 {
-    std::vector<float> logits(token_num * param_.expert_num);
+    std::vector<float> logits(token_num * expert_num);
     check_cuda_error(
         cudaMemcpyAsync(logits.data(), logits_, sizeof(float) * logits.size(), cudaMemcpyDefault, stream_));
     check_cuda_error(cudaStreamSynchronize(stream_));
@@ -247,7 +271,7 @@ void MoeFfnLayer<T>::dump_logits(int token_num, int layer_id)
     auto ptr = logits.data();
     std::cout << "layer_id: " << layer_id << std::endl;
     for (int i = 0; i < token_num; ++i) {
-        for (int e = 0; e < param_.expert_num; ++e) {
+        for (int e = 0; e < expert_num; ++e) {
             std::cout << *ptr++ << " ";
         }
         std::cout << std::endl;

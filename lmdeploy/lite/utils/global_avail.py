@@ -7,13 +7,9 @@ from torch import nn
 class GlobalAvailMixin:
     """Mixin class to make instances globally available."""
 
-    _instances: Dict[str, Dict[Union[str, nn.Module], 'GlobalAvailMixin']] = {
-        'default': {}
-    }
+    _instances: Dict[str, Dict[Union[str, nn.Module], 'GlobalAvailMixin']] = {'default': {}}
 
-    def global_available(self,
-                         key: Union[str, nn.Module] = 'default',
-                         group: str = 'default') -> None:
+    def global_available(self, key: Union[str, nn.Module] = 'default', group: str = 'default') -> None:
         """Make the instance globally available.
 
         Args:
@@ -45,9 +41,7 @@ class GlobalAvailMixin:
         cls._instances[group][key] = instance
 
     @classmethod
-    def find(cls,
-             key: Union[str, nn.Module] = 'default',
-             group: str = 'default') -> Union[None, 'GlobalAvailMixin']:
+    def find(cls, key: Union[str, nn.Module] = 'default', group: str = 'default') -> Union[None, 'GlobalAvailMixin']:
         """Find an instance by its key and group.
 
         Args:
@@ -63,9 +57,7 @@ class GlobalAvailMixin:
         return cls._instances.get(group, {}).get(key)
 
     @classmethod
-    def find_group(
-            cls,
-            group: str) -> Dict[Union[str, nn.Module], 'GlobalAvailMixin']:
+    def find_group(cls, group: str) -> Dict[Union[str, nn.Module], 'GlobalAvailMixin']:
         """Find all instances in a group.
 
         Args:
@@ -78,7 +70,6 @@ class GlobalAvailMixin:
         return cls._instances.get(group, {})
 
     @classmethod
-    def instances(
-            cls) -> Dict[str, Dict[Union[str, nn.Module], 'GlobalAvailMixin']]:
+    def instances(cls) -> Dict[str, Dict[Union[str, nn.Module], 'GlobalAvailMixin']]:
         """Get all instances."""
         return cls._instances

@@ -5,6 +5,7 @@
 #include "src/turbomind/kernels/core/common.h"
 #include <cassert>
 #include <cstdint>
+#include <type_traits>
 
 namespace turbomind {
 
@@ -40,6 +41,13 @@ TM_HOST_DEVICE constexpr T log2(T x)
 // static_assert(log2(65536) == 16);
 // static_assert(log2(32) == 5);
 // static_assert(log2(1) == 0);
+
+template<class T>
+TM_HOST_DEVICE constexpr T lowbit(T x)
+{
+    const std::make_signed_t<T> s = x;
+    return static_cast<T>(s & -s);
+}
 
 // https://arxiv.org/abs/1902.01961
 template<class T>

@@ -27,8 +27,7 @@ class BaseLoader(ABC):
         self.pattern = pattern
         self.item_count = defaultdict(int)
 
-    def get_index(self, index_name: str,
-                  file_pattern: str) -> Tuple[dict, list]:
+    def get_index(self, index_name: str, file_pattern: str) -> Tuple[dict, list]:
         """get shards and weight map (if possible) for the model."""
         get_path = partial(osp.join, self.model_path)
         shards = []
@@ -41,8 +40,7 @@ class BaseLoader(ABC):
             index = {}
             shards = glob(get_path(file_pattern))
         if not shards:
-            raise RuntimeError(
-                f'failed to locate weight files for {self.model_path}')
+            raise RuntimeError(f'failed to locate weight files for {self.model_path}')
         return sorted(shards), index
 
     @abstractmethod
@@ -52,11 +50,7 @@ class BaseLoader(ABC):
 
 class SafetensorsLoader(BaseLoader):
 
-    def __init__(self,
-                 model_path: str,
-                 pattern: str,
-                 index_name=None,
-                 file_pattern=None):
+    def __init__(self, model_path: str, pattern: str, index_name=None, file_pattern=None):
         super().__init__(model_path, pattern)
         self.shards, index = self.get_index(index_name, file_pattern)
         if not index:
@@ -88,14 +82,31 @@ class SafetensorsLoader(BaseLoader):
                     yield (-1, {k: f.get_tensor(k) for k in misc})
         assert not params
 
+    # def items(self):
+    #     params = defaultdict(dict)
+    #     for shard in self.shards:
+    #         # with safe_open(shard, 'pt') as f:
+    #         with open(shard, 'rb') as f:
+    #             w = safetensors.torch.load(f.read())
+    #             misc = []
+    #             for k in w.keys():
+    #                 match = re.findall(self.pattern, k)
+    #                 if not match:
+    #                     misc.append(k)
+    #                 else:
+    #                     idx = int(match[0])
+    #                     param = params[idx]
+    #                     param[k] = w[k]
+    #                     if len(param) == self.item_count[idx]:
+    #                         yield (idx, params.pop(idx))
+    #             if misc:
+    #                 yield (-1, {k: w[k] for k in misc})
+    #     assert not params
+
 
 class PytorchLoader(BaseLoader):
 
-    def __init__(self,
-                 model_path: str,
-                 pattern: str,
-                 index_name=None,
-                 file_pattern=None):
+    def __init__(self, model_path: str, pattern: str, index_name=None, file_pattern=None):
         super().__init__(model_path, pattern)
         self.shards, index = self.get_index(index_name, file_pattern)
         for k in index.keys():

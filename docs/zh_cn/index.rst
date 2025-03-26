@@ -60,6 +60,7 @@ LMDeploy 工具箱提供以下核心功能：
    llm/pipeline.md
    llm/api_server.md
    llm/api_server_tools.md
+   llm/api_server_reasoning.md
    llm/api_server_lora.md
    llm/gradio.md
    llm/proxy_server.md
@@ -88,9 +89,7 @@ LMDeploy 工具箱提供以下核心功能：
    :maxdepth: 1
    :caption: 测试基准
 
-   benchmark/profile_generation.md
-   benchmark/profile_throughput.md
-   benchmark/profile_api_server.md
+   benchmark/benchmark.md
    benchmark/evaluate_with_opencompass.md
 
 .. toctree::
@@ -104,6 +103,7 @@ LMDeploy 工具箱提供以下核心功能：
    advance/chat_template.md
    advance/debug_turbomind.md
    advance/structed_output.md
+   advance/pytorch_multinodes.md
 
 .. toctree::
    :maxdepth: 1

@@ -2,8 +2,8 @@
 
 #include "decoding.h"
 #include "decoding_config.h"
+#include "src/turbomind/kernels/attention/arch.h"
 #include "src/turbomind/models/llama/llama_utils.h"
-// #include "src/turbomind/utils/dispatch.h"
 #include <type_traits>
 #include <utility>
 
@@ -112,6 +112,21 @@ void dispatchDecoding(const AttentionParams<T>& params)
 
         return false;
     };
+
+    if (params.size_per_head == 192) {
+
+        if (is_kv_int8) {
+            invokeDecoding<Decoding<arch::Sm80, T, uint8_t, 1, 192>>(params);
+        }
+        else if (is_kv_int4) {
+            FT_CHECK_WITH_INFO(!is_kv_int4, "not implemented");
+            // invokeDecoding<Decoding<arch::Sm80, T, uint4_t, 1, 192>>(params);
+        }
+        else {
+            invokeDecoding<Decoding<arch::Sm80, T, T, 1, 192>>(params);
+        }
+        return;
+    }
 
     auto success = dispatch();
 

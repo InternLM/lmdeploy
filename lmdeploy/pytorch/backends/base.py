@@ -12,7 +12,8 @@ from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 
 class OpType(Enum):
     """Layer type enumerate."""
-    Attention = auto()
+    PagedAttention = auto()
+    FlashAttention = auto()
     Linear = auto()
     RotaryEmbedding = auto()
     ApplyRotaryEmb = auto()
@@ -27,6 +28,9 @@ class OpType(Enum):
     LinearW4A16 = auto()
     SoftmaxTopK = auto()
     FusedMoE = auto()
+    FusedMoEW8A8 = auto()
+    LinearBlockedF8 = auto()
+    FusedMoEBlockedF8 = auto()
 
 
 class OpsBackend(ABC):
@@ -81,11 +85,18 @@ class OpsBackend(ABC):
         return step_context
 
     @staticmethod
-    def build_graph_runner(model: torch.nn.Module, model_config: ModelConfig,
-                           cache_config: CacheConfig,
-                           backend_config: BackendConfig,
-                           device: torch.device):
+    def build_graph_runner(model: torch.nn.Module, model_config: ModelConfig, cache_config: CacheConfig,
+                           backend_config: BackendConfig, device: torch.device):
         """build graph runner."""
         from .graph_runner import GraphRunner
-        return GraphRunner(model, model_config, cache_config, backend_config,
-                           device)
+        return GraphRunner(model, model_config, cache_config, backend_config, device)
+
+    @staticmethod
+    def device_count():
+        """get num available devices."""
+        return None
+
+    @staticmethod
+    def support_ray():
+        """support ray."""
+        return False

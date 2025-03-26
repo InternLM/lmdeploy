@@ -1,69 +1,16 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import os.path as osp
-import shutil
+from typing import Literal
 
 import fire
 import torch
 from torch import nn
 
-import lmdeploy
-from lmdeploy.lite.apis.calibrate import calibrate
-from lmdeploy.lite.quantization.awq import (FC_FCS_MAP, NORM_FCS_MAP,
-                                            awq_layers, smooth_layers)
+from lmdeploy.lite.apis.calibrate import LAYER_TYPE_MAP, NORM_TYPE_MAP, calibrate
+from lmdeploy.lite.quantization.awq import FC_FCS_MAP, NORM_FCS_MAP, awq_layers, skipped_module, smooth_layers
 from lmdeploy.lite.utils import collect_target_modules
 from lmdeploy.pytorch.models import QLinear, QRMSNorm
-
-LAYER_TYPE_MAP = {
-    'InternLMForCausalLM': 'InternLMDecoderLayer',
-    'InternLM2ForCausalLM': 'InternLM2DecoderLayer',
-    'QWenLMHeadModel': 'QWenBlock',
-    'BaiChuanForCausalLM': 'DecoderLayer',
-    'LlamaForCausalLM': 'LlamaDecoderLayer',
-    'ChatGLMForConditionalGeneration': 'GLMBlock',
-}
-NORM_TYPE_MAP = {
-    'InternLMForCausalLM': 'InternLMRMSNorm',
-    'InternLM2ForCausalLM': 'InternLM2RMSNorm',
-    'QWenLMHeadModel': 'RMSNorm',
-    'BaiChuanForCausalLM': 'RMSNorm',
-    'LlamaForCausalLM': 'LlamaRMSNorm',
-    'ChatGLMForConditionalGeneration': 'RMSNorm',
-}
-
-LMDEPLOY_ROOT = lmdeploy.__path__[0]
-
-MODEL_PATH_MAP = {
-    'InternLMForCausalLM':
-    osp.join(LMDEPLOY_ROOT, 'pytorch/modeling/modeling_internlm.py'),
-    'InternLM2ForCausalLM':
-    osp.join(LMDEPLOY_ROOT, 'pytorch/modeling/modeling_internlm2.py'),
-    'LlamaForCausalLM':
-    osp.join(LMDEPLOY_ROOT, 'pytorch/modeling/modeling_llama.py'),
-    'BaiChuanForCausalLM':
-    osp.join(LMDEPLOY_ROOT, 'pytorch/modeling/modeling_baichuan.py')
-}
-
-AUTO_MAP = {
-    'InternLMForCausalLM': {
-        'AutoConfig': 'configuration_internlm.InternLMConfig',
-        'AutoModel': 'modeling_internlm.InternLMForCausalLM',
-        'AutoModelForCausalLM': 'modeling_internlm.InternLMForCausalLM'
-    },
-    'InternLM2ForCausalLM': {
-        'AutoConfig': 'configuration_internlm2.InternLMConfig',
-        'AutoModelForCausalLM': 'modeling_internlm2.InternLM2ForCausalLM',
-        'AutoModel': 'modeling_internlm2.InternLM2ForCausalLM'
-    },
-    'LlamaForCausalLM': {
-        'AutoModel': 'modeling_llama.LlamaForCausalLM',
-        'AutoModelForCausalLM': 'modeling_llama.LlamaForCausalLM'
-    },
-    'BaiChuanForCausalLM': {
-        'AutoConfig': 'configuration_baichuan.BaiChuanConfig',
-        'AutoModelForCausalLM': 'modeling_baichuan.BaiChuanForCausalLM'
-    }
-}
 
 
 def smooth_quant(model: str,
@@ -74,8 +21,26 @@ def smooth_quant(model: str,
                  search_scale: bool = False,
                  batch_size: int = 1,
                  w_bits: int = 8,
-                 device: str = 'cuda'):
+                 dtype: Literal['float16', 'bfloat16', 'auto'] = 'auto',
+                 device: str = 'cuda',
+                 quant_dtype: Literal['int8', 'fp8', 'float8_e4m3fn', 'float8_e5m2'] = 'int8',
+                 revision: str = None,
+                 download_dir: str = None):
+    if quant_dtype == 'fp8':
+        quant_dtype = 'float8_e4m3fn'
 
+    quant_dtype = getattr(torch, quant_dtype, torch.int8)
+    if quant_dtype.is_floating_point:
+        q_dtype_info = torch.finfo(quant_dtype)
+    else:
+        q_dtype_info = torch.iinfo(quant_dtype)
+
+    assert q_dtype_info.bits == w_bits
+    if not osp.exists(model):
+        print(f'can\'t find model from local_path {model}, '
+              'try to download from remote')
+        from lmdeploy.utils import get_model
+        model = get_model(model, revision=revision, download_dir=download_dir)
     model_path = model
     vl_model, model, tokenizer, work_dir = calibrate(model,
                                                      calib_dataset,
@@ -86,6 +51,7 @@ def smooth_quant(model: str,
                                                      w_bits=w_bits,
                                                      w_group_size=-1,
                                                      search_scale=search_scale,
+                                                     dtype=dtype,
                                                      batch_size=batch_size)
 
     # calibrate function exports the calibration statistics
@@ -95,19 +61,17 @@ def smooth_quant(model: str,
 
     model_type = type(model).__name__
     if model_type not in LAYER_TYPE_MAP or model_type not in NORM_TYPE_MAP:
-        raise RuntimeError(
-            f'Currently, quantification and calibration of {model_type} are '
-            f'not supported. The supported model types are '
-            f"{', '.join(LAYER_TYPE_MAP.keys())}.")
+        raise RuntimeError(f'Currently, quantification and calibration of {model_type} are '
+                           f'not supported. The supported model types are '
+                           f"{', '.join(LAYER_TYPE_MAP.keys())}.")
 
     if model_type == 'QWenLMHeadModel':
         try:
             import flash_attn  # noqa: F401
         except ImportError:
-            raise RuntimeError(
-                'When using Qwen, you need to `pip install flash-attn` first, '
-                'otherwise calibration and quantification will not work '
-                'properly.')
+            raise RuntimeError('When using Qwen, you need to `pip install flash-attn` first, '
+                               'otherwise calibration and quantification will not work '
+                               'properly.')
 
     layer_type = LAYER_TYPE_MAP[type(model).__name__]
     norm_type = NORM_TYPE_MAP[type(model).__name__]
@@ -123,46 +87,45 @@ def smooth_quant(model: str,
     if search_scale:
         awq_ratios = inp_stats['ratios']
         act_scales = inp_stats['absmean']
-        awq_layers(layers, fc2fcs, norm2fcs, act_scales, awq_ratios, -1,
-                   device)
+        awq_layers(layers, fc2fcs, norm2fcs, act_scales, awq_ratios, -1, device)
     else:
         smooth_layers(layers, fc2fcs, norm2fcs, act_scales, -1, device)
 
     rmsnorms = collect_target_modules(model, norm_type)
 
     for name, linear in fcs.items():
+        if skipped_module(name):
+            continue
         linear.to(device)
-        q_linear = QLinear.from_float(linear)
+        q_linear = QLinear.from_float(linear, quant_dtype=quant_dtype)
         parent_name, _, child_name = name.rpartition('.')
         parent = model.get_submodule(parent_name)
         setattr(parent, child_name, q_linear)
         linear.to('cpu')
+        q_linear.to('cpu')
+        torch.cuda.empty_cache()
 
     for name, norm in rmsnorms.items():
+        if skipped_module(name):
+            continue
         norm.to(device)
-        q_norm = QRMSNorm.from_float(norm)
+        q_norm = QRMSNorm.from_float(norm, quant_dtype=quant_dtype)
         parent_name, _, child_name = name.rpartition('.')
         parent = model.get_submodule(parent_name)
         setattr(parent, child_name, q_norm)
         norm.to('cpu')
+        q_linear.to('cpu')
+        torch.cuda.empty_cache()
 
-    if hasattr(model.config, 'auto_map'):
-        model.config.auto_map.update(AUTO_MAP[type(model).__name__])
-    else:
-        model.config.auto_map = AUTO_MAP[type(model).__name__]
+    quant_dtype_s = str(quant_dtype).split('.')[1]
+    model.config.update(dict(quantization_config=dict(quant_method='smooth_quant', quant_dtype=f'{quant_dtype_s}')))
 
     if vl_model:
         from .auto_awq import save_vl_model
         save_vl_model(vl_model, model_path, work_dir)
     else:
-        model.config.update(
-            dict(quantization_config=dict(quant_method='smooth_quant')))
-        model.save_pretrained(work_dir,
-                              max_shard_size='2GB',
-                              safe_serialization=False)
+        model.save_pretrained(work_dir, max_shard_size='2GB', safe_serialization=False)
     tokenizer.save_pretrained(work_dir)
-
-    shutil.copy(MODEL_PATH_MAP[type(model).__name__], work_dir)
 
 
 if __name__ == '__main__':

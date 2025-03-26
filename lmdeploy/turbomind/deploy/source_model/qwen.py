@@ -56,13 +56,6 @@ class QwenModel(LlamaModel):
 
     Reader = QwenReader
 
-    def tokenizer_info(self):
-        """Read tokenizer info."""
-        n_words = 151851
-        bos_id = 0
-        eos_id = 151643
-        return n_words, bos_id, eos_id
-
     def model_info(self):
         """Read model info."""
         params_path = osp.join(self.model_path, 'config.json')
@@ -100,21 +93,10 @@ class QwenModel(LlamaModel):
 class Qwen2Model(LlamaModel):
     """Qwen model in hf format.
 
-    The weight of qwen2 model is similar to Llama, except its attention bias
-    doesn't include o_proj bias.
+    The weight of qwen2 model is similar to Llama, except its attention bias doesn't include o_proj bias.
     """
 
     Reader = LlamaReader
-
-    def tokenizer_info(self):
-        """set tokenizer info.
-
-        Refer to https://huggingface.co/Qwen/Qwen1.5-7B-Chat/blob/main/generation_config.json
-        """  # noqa: E501
-        n_words = 152064
-        bos_id = 151643
-        eos_id = 151645
-        return n_words, bos_id, eos_id
 
     def model_info(self):
         cfg = super().model_info()
@@ -146,29 +128,19 @@ class Qwen2MoeReader(LlamaReader):
             return self.filter(self.ffn_pattern)
         result = []
         for key in ['gate', 'down', 'up']:
-            tensor = self.params[
-                f'model.layers.{i}.mlp.shared_expert.{key}_proj.{kind}']
+            tensor = self.params[f'model.layers.{i}.mlp.shared_expert.{key}_proj.{kind}']
             tensor = self.transform(tensor, kind)
             result.append(tensor)
         return (*result, )
 
     def moe_ffn_shared_gate(self, i):
-        return self.params.get(
-            f'model.layers.{i}.mlp.shared_expert_gate.weight')
+        return self.params.get(f'model.layers.{i}.mlp.shared_expert_gate.weight')
 
 
 @INPUT_MODELS.register_module(name='qwen2-moe')
 class Qwen2MoeModel(LlamaModel):
 
     Reader = Qwen2MoeReader
-
-    def tokenizer_info(self):
-        """https://huggingface.co/Qwen/Qwen1.5-7B-Chat/blob/main/generation_con
-        fig.json."""  # noqa: E501
-        n_words = 152064
-        bos_id = 151643
-        eos_id = 151645
-        return n_words, bos_id, eos_id
 
     def model_info(self):
         cfg = self.model_config
@@ -178,6 +150,55 @@ class Qwen2MoeModel(LlamaModel):
         info['experts_per_token'] = cfg['num_experts_per_tok']
         info['inter_size'] = cfg['shared_expert_intermediate_size']
         info['moe_shared_gate'] = True
-        info['moe_norm_topk_prob'] = cfg['norm_topk_prob']
-        info['attn_bias'] = 1
+        info['norm_topk_prob'] = cfg['norm_topk_prob']
+        info['attn_bias'] = cfg.get('qkv_bias', 1)
+        return info
+
+
+class Qwen3Reader(LlamaReader):
+
+    def qk_norm(self, i: int):
+        result = []
+        for x in ['q', 'k']:
+            name = f'{self.attn_layer_prefix}.{i}.self_attn.{x}_norm.weight'
+            result.append(self.params.get(name))
+        return (*result, )
+
+
+@INPUT_MODELS.register_module(name='qwen3')
+class Qwen3Model(LlamaModel):
+    Reader = Qwen3Reader
+
+    def model_info(self):
+        cfg = self.model_config
+        info = super().model_info()
+        info.update(qk_norm=True, attn_bias=cfg.get('attention_bias', 0))
+        return info
+
+
+class Qwen3MoeReader(Qwen2MoeReader):
+
+    def qk_norm(self, i: int):
+        result = []
+        for x in ['q', 'k']:
+            name = f'{self.attn_layer_prefix}.{i}.self_attn.{x}_norm.weight'
+            result.append(self.params.get(name))
+        return (*result, )
+
+
+@INPUT_MODELS.register_module(name='qwen3-moe')
+class Qwen3MoeModel(LlamaModel):
+    Reader = Qwen3MoeReader
+
+    def model_info(self):
+        cfg = self.model_config
+        info = super().model_info()
+        info.update(
+            qk_norm=True,
+            expert_num=cfg.get('num_experts', 128),
+            experts_per_token=cfg.get('num_experts_per_tok', 8),
+            expert_inter_size=cfg.get('moe_intermediate_size', 768),
+            attn_bias=cfg.get('attention_bias', 0),
+            inter_size=0,  # no shared expert
+            norm_topk_prob=cfg.get('norm_topk_prob', False))
         return info

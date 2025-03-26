@@ -23,6 +23,7 @@ _SUPPORTED_ARCHS = dict(
     InternLMForCausalLM=True,
     # internlm2
     InternLM2ForCausalLM=True,
+    InternLM2ForRewardModel=True,
     # internlm-xcomposer
     InternLMXComposerForCausalLM=False,
     # internlm2-xcomposer
@@ -42,14 +43,16 @@ _SUPPORTED_ARCHS = dict(
     Qwen2MoeForCausalLM=True,
     # Qwen2-VL-7B-Instruct
     Qwen2VLForConditionalGeneration=True,
+    # Qwen2.5-VL-7B-Instruct
+    Qwen2_5_VLForConditionalGeneration=True,
     # Dbrx 132B
     DbrxForCausalLM=True,
     # cogvlm-chat
     CogVLMForCausalLM=True,
     # llava
-    LlavaLlamaForCausalLM=True,
+    LlavaLlamaForCausalLM=False,
     # llava mistral
-    LlavaMistralForCausalLM=True,
+    LlavaMistralForCausalLM=False,
     # deepseekvl
     MultiModalityCausalLM=False,
     # StarCoder2
@@ -60,16 +63,24 @@ _SUPPORTED_ARCHS = dict(
     LlavaNextForConditionalGeneration=True,
     # deepseek-v2
     DeepseekV2ForCausalLM=True,
+    # deepseek-vl2
+    DeepseekVLV2ForCausalLM=True,
     # internvl
     InternVLChatModel=True,
     # mono-internvl
     InternLM2VEForCausalLM=True,
     # gemma2
     Gemma2ForCausalLM=True,
+    # gemma3
+    Gemma3ForCausalLM=True,
     # phi3.5-moe
     PhiMoEForCausalLM=True,
     # mllama
     MllamaForConditionalGeneration=True,
+    # MiniCPM-V-2_6
+    MiniCPMVForCausalLM=True,
+    # internlm3
+    InternLM3ForCausalLM=True,
 )
 
 
@@ -99,12 +110,11 @@ def is_supported(model_path: str):
 
     triton_model_path = os.path.join(model_path, 'triton_models')
     if os.path.exists(triton_model_path):
-        logger.warning(f'{model_path} seems to be a turbomind workspace, '
+        logger.warning(f'{model_path} seems to be a turbomind model, '
                        'which can only be ran with turbomind engine.')
     else:
         try:
-            cfg = AutoConfig.from_pretrained(model_path,
-                                             trust_remote_code=True)
+            cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
         except Exception as e:  # noqa
             logger.warning('AutoConfig.from_pretrained failed for '
                            f'{model_path}. Exception: {e}')
@@ -112,12 +122,10 @@ def is_supported(model_path: str):
 
         if hasattr(cfg, 'architectures'):
             arch = cfg.architectures[0]
-        elif hasattr(cfg,
-                     'auto_map') and 'AutoModelForCausalLM' in cfg.auto_map:
+        elif hasattr(cfg, 'auto_map') and 'AutoModelForCausalLM' in cfg.auto_map:
             arch = cfg.auto_map['AutoModelForCausalLM'].split('.')[-1]
         else:
-            raise RuntimeError(
-                f'Could not find model architecture from config: {cfg}')
+            raise RuntimeError(f'Could not find model architecture from config: {cfg}')
 
         if arch in _SUPPORTED_ARCHS:
             support_by_torch = _SUPPORTED_ARCHS[arch]

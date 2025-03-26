@@ -21,6 +21,8 @@
 
 #pragma once
 
+#include <cuda_runtime.h>
+
 #include "src/turbomind/kernels/gemm/test/test_utils.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
@@ -28,8 +30,6 @@
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
-#include "src/turbomind/utils/nccl_utils.h"
-#include <cuda_runtime_api.h>
 
 namespace turbomind {
 
@@ -42,7 +42,7 @@ public:
     static constexpr int kMaxWorkspaceTokens = 4096;
 
     void freeBuffer();
-    void allocateBuffer(size_t q_count, size_t k_count, size_t batch_size, const WeightType* weights);
+    void allocateBuffer(size_t q_count, size_t k_count, size_t batch_size, size_t qkv_lora_rank);
 
     void allocateWorkspace();
     void freeWorkspace();
@@ -67,10 +67,10 @@ public:
     UnifiedAttentionLayer(const ModelParam&     model,
                           const AttentionParam& attn,
                           const LoraParam&      lora,
-                          const NcclParam&      tp,
+                          size_t                tp_size,
                           const Context<T>&     context);
 
-    void forward(TensorMap* outputs, const TensorMap* inputs, const LlamaAttentionWeight<T>* weights);
+    void forward(TensorMap* outputs, const TensorMap* inputs, const WeightType* weights);
 
     void prefill(T*                output,
                  T*                tmp_kv_buffer,
@@ -108,6 +108,11 @@ public:
                 const WeightType* weights);
 
 private:
+    void forward_mla(const T* inputs, int token_num, const WeightType& weights);
+
+    void qk_norm(T* qkv, int token_num, const WeightType& weights);
+
+private:
     const size_t head_num_;
     const size_t kv_head_num_;
     const size_t size_per_head_;
@@ -118,7 +123,6 @@ private:
     const AttentionParam param_;
     const ModelParam     model_param_;
     const LoraParam      lora_param_;
-    const NcclParam      tensor_para_;
     const Context<T>&    context_;
 
     cudaStream_t const    stream_;
@@ -146,6 +150,7 @@ private:
     float* qk_buf_float_{};
     T*     qkv_buf_2_{};
     T*     qkv_buf_3_{};
+    T*     lora_buf_{};
 
     float* partial_M_{};
     float* partial_L_{};

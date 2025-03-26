@@ -13,11 +13,7 @@ from .block_manager import BaseBlockManager
 class Node:
     """node of block trie."""
 
-    def __init__(self,
-                 hash_key: int,
-                 block: int,
-                 tokens: np.ndarray,
-                 num_matched: int = 0):
+    def __init__(self, hash_key: int, block: int, tokens: np.ndarray, num_matched: int = 0):
         self.hash_key = hash_key
         self.block = block
         self.tokens = tokens
@@ -48,8 +44,7 @@ class Node:
 class BlockTrie:
     """block trie for prefix caching."""
 
-    def __init__(self, cache_config: CacheConfig,
-                 block_manager: BaseBlockManager):
+    def __init__(self, cache_config: CacheConfig, block_manager: BaseBlockManager):
         self.block_manager = block_manager
         self.cache_config = cache_config
         self.allocator = self.block_manager.allocator
@@ -87,8 +82,7 @@ class BlockTrie:
             num_matched += block_size
 
         while num_matched + block_size < seq.num_all_ids:
-            curr_tokens = seq.history_cache[num_matched:num_matched +
-                                            block_size]
+            curr_tokens = seq.history_cache[num_matched:num_matched + block_size]
 
             key = hash(tuple(curr_tokens))
             if key not in curr.children:
@@ -134,8 +128,7 @@ class BlockTrie:
         blocks = []
         free_blocks = []
         while num_matched + block_size <= num_all_ids:
-            curr_tokens = seq.history_cache[num_matched:num_matched +
-                                            block_size]
+            curr_tokens = seq.history_cache[num_matched:num_matched + block_size]
 
             block = logical_blocks[block_id]
 
@@ -149,10 +142,7 @@ class BlockTrie:
                 free_blocks.append(block)
                 logical_blocks[block_id] = node.block
             else:
-                node = Node(hash_key=hash_key,
-                            block=block,
-                            tokens=curr_tokens,
-                            num_matched=num_matched + block_size)
+                node = Node(hash_key=hash_key, block=block, tokens=curr_tokens, num_matched=num_matched + block_size)
                 node.parent = parent
             blocks.append(node.block)
             num_matched += block_size

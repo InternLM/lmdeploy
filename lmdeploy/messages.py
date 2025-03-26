@@ -7,6 +7,9 @@ import torch
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 
 from .tokenizer import Tokenizer
+from .utils import get_logger
+
+logger = get_logger('lmdeploy')
 
 LogitsProcessor = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 """LogitsProcessor is a function that takes a tensor of input_ids, the logits
@@ -52,6 +55,9 @@ class GenerationConfig:
             ignoring the number of tokens in the prompt.
         skip_special_tokens (bool): Whether or not to remove special tokens
             in the decoding. Default to be True.
+        spaces_between_special_tokens (bool): Whether or not to add spaces
+            around special tokens. The behavior of Fast tokenizers is to have
+            this to False. This is setup to True in slow tokenizers.
         logprobs (int): Number of log probabilities to return per output token.
         response_format (Dict): Only pytorch backend support formatting
         response. Examples:
@@ -94,9 +100,12 @@ class GenerationConfig:
     bad_token_ids: List[int] = None
     min_new_tokens: int = None
     skip_special_tokens: bool = True
+    spaces_between_special_tokens: bool = True
     logprobs: int = None
     response_format: Optional[Dict] = None
     logits_processors: Optional[List[LogitsProcessor]] = None
+    output_logits: Literal['all', 'generation'] = None
+    output_last_hidden_state: Literal['all', 'generation'] = None
 
     def convert_stop_bad_words_to_ids(self, tokenizer: Tokenizer):
         """convert stop_words/bad_sords to ids and append the ids to
@@ -120,11 +129,29 @@ class GenerationConfig:
         self.stop_token_ids = list(set(stop_token_ids)) or None
         self.bad_token_ids = list(set(bad_token_ids)) or None
 
+    def update_from_hf_gen_cfg(self, generation_config, tokenizer_eos_token_id):
+        """update the stop_token_ids."""
+        stop_token_ids = set(self.stop_token_ids or [])
+
+        # add tokenizer's eos_token_id
+        if tokenizer_eos_token_id is not None:
+            stop_token_ids.add(tokenizer_eos_token_id)
+
+        # add eos_token_id from model's generation_config.json file if there
+        # is any.
+        eos_token_id = generation_config.get('eos_token_id')
+        if eos_token_id is not None:
+            if isinstance(eos_token_id, int):
+                stop_token_ids.add(eos_token_id)
+            else:
+                stop_token_ids.update(eos_token_id)
+
+        self.stop_token_ids = list(stop_token_ids)
+
     def __post_init__(self):
         """Check input validation."""
-        assert type(
-            self.n) == int and self.n > 0, 'n is not a positive integer'
-        assert self.top_p > 0 and self.top_p <= 1  # (0, 1]
+        assert type(self.n) == int and self.n > 0, 'n is not a positive integer'
+        assert self.top_p >= 0 and self.top_p <= 1  # [0, 1]
         assert self.top_k >= 0, 'top_k can not be a negative integer'
         assert self.temperature >= 0 and self.temperature <= 2  # [0,2]
         assert 0 <= self.min_p <= 1, \
@@ -141,11 +168,10 @@ class TurbomindEngineConfig:
             The `auto` option will use FP16 precision for FP32 and FP16
             models, and BF16 precision for BF16 models.
         model_format (str): the layout of the deployed model. It can be one
-            of the following values [hf, meta_llama, awq, gptq],`hf` meaning
-            huggingface model(.bin, .safetensors), `meta_llama` being
-            meta llama's format(.pth), `awq` and `gptq` meaning the quantized
-            model by AWQ and GPTQ, respectively. If it is not specified,
-            i.e. None, it will be extracted from the input model
+            of the following values [hf, awq, gptq],`hf` meaning
+            huggingface model(.bin, .safetensors), `awq` and `gptq` meaning
+            the quantized model by AWQ and GPTQ, respectively. If it is not
+            specified, i.e. None, it will be extracted from the input model
         tp (int): the number of GPU cards used in tensor parallelism,
             default to 1
         session_len (int): the max session length of a sequence, default to
@@ -204,6 +230,7 @@ class TurbomindEngineConfig:
     max_prefill_token_num: int = 8192
     num_tokens_per_iter: int = 0
     max_prefill_iters: int = 1
+    communicator: str = 'nccl'
 
     def __post_init__(self):
         """Check input validation."""
@@ -258,6 +285,8 @@ class PytorchEngineConfig:
             If unspecified, will use the default version.
         quant_policy (int): default to 0. When k/v is quantized into 4 or 8
             bit, set it to 4 or 8, respectively
+        distributed_executor_backend (str): backend of distributed backend,
+            options: ['uni', 'mp', 'ray']
     """
     dtype: str = 'auto'
     tp: int = 1
@@ -278,6 +307,7 @@ class PytorchEngineConfig:
     download_dir: str = None
     revision: str = None
     quant_policy: Literal[0, 4, 8] = 0
+    distributed_executor_backend: str = None
 
     def __post_init__(self):
         """Check input validation."""
@@ -290,11 +320,14 @@ class PytorchEngineConfig:
             'invalid max_prefill_token_num'
         assert self.num_gpu_blocks >= 0, 'invalid num_gpu_blocks'
         assert self.quant_policy in (0, 4, 8), 'invalid quant_policy'
-        assert self.device_type in [
-            'cuda', 'ascend', 'maca'
-        ], (f'invalid device_type: {self.device_type}')
-        if self.quant_policy > 0 and self.device_type != 'cuda':
-            assert False, 'kv cache quantization only works for CUDA.'
+        assert self.device_type in ['cuda', 'ascend', 'maca', 'camb'], (f'invalid device_type: {self.device_type}')
+        if self.quant_policy > 0 and self.device_type not in ['cuda', 'ascend']:
+            assert False, \
+                   'kv cache quantization only works for CUDA and ASCEND.'
+        if self.device_type == 'camb' and self.block_size != 16:
+            self.block_size = 16
+            logger.warning('Currently, camb device requires block size to be 16, \
+                    setting block size to 16')
 
 
 class ResponseType(enum.Enum):
@@ -335,10 +368,11 @@ class Response:
     text: str
     generate_token_len: int
     input_token_len: int
-    session_id: int
     finish_reason: Optional[Literal['stop', 'length']] = None
     token_ids: List[int] = field(default_factory=list)
     logprobs: List[Dict[int, float]] = None
+    logits: torch.Tensor = None
+    last_hidden_state: torch.Tensor = None
     index: int = 0
 
 
@@ -358,6 +392,8 @@ class EngineOutput:
     token_ids: List[int]
     num_token: int
     logprobs: List[Dict[int, float]] = None
+    logits: torch.Tensor = None
+    last_hidden_state: torch.Tensor = None
 
 
 @dataclass

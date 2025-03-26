@@ -18,8 +18,7 @@ class MixtralReader(LlamaReader):
         return (*result, )
 
     def moe_ffn_gate(self, i):
-        return self.params.get(
-            f'model.layers.{i}.block_sparse_moe.gate.weight')
+        return self.params.get(f'model.layers.{i}.block_sparse_moe.gate.weight')
 
 
 @INPUT_MODELS.register_module(name='mixtral')
@@ -33,6 +32,6 @@ class MixtralModel(LlamaModel):
         info['expert_num'] = cfg['num_local_experts']
         info['expert_inter_size'] = cfg['intermediate_size']
         info['experts_per_token'] = cfg['num_experts_per_tok']
-        info['moe_norm_topk'] = True
+        info['norm_topk_prob'] = True
         info['inter_size'] = 0
         return info

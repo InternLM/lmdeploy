@@ -172,7 +172,7 @@ inline __device__ void copy(const Array<T, N> (&src)[M], Array<T, N> (&dst)[M])
 }
 
 template<typename T, int N>
-inline __device__ void Store(T* __restrict__ dst, const Array<T, N>& src)
+inline __device__ void Store(T* dst, const Array<T, N>& src)
 {
     if constexpr (sizeof(Array<T, N>) == sizeof(uint4)) {
         *(uint4*)dst = (const uint4&)src;
@@ -250,6 +250,25 @@ inline __device__ void Ldg(Array<T, N>& dst, const T* src)
     }
     else if constexpr (sizeof(Array<T, N>) == sizeof(uint)) {
         (uint&)dst = __ldg((const uint*)src);
+    }
+    else {
+        static_assert(!std::is_same_v<T, T>);
+    }
+}
+
+template<typename T, int N>
+inline __device__ void Ldcs(Array<T, N>& dst, const T* src)
+{
+    static_assert(sizeof(Array<T, N>) <= sizeof(uint4));
+
+    if constexpr (sizeof(Array<T, N>) == sizeof(uint4)) {
+        (uint4&)dst = __ldcs((const uint4*)src);
+    }
+    else if constexpr (sizeof(Array<T, N>) == sizeof(uint2)) {
+        (uint2&)dst = __ldcs((const uint2*)src);
+    }
+    else if constexpr (sizeof(Array<T, N>) == sizeof(uint)) {
+        (uint&)dst = __ldcs((const uint*)src);
     }
     else {
         static_assert(!std::is_same_v<T, T>);

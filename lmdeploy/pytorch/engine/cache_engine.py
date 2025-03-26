@@ -32,8 +32,6 @@ class CacheEngine:
         rank: int = 0,
         world_size: int = 1,
     ) -> None:
-        if rank == 0:
-            logger.info(f'build CacheEngine with config:{cache_config}')
         self.rank = rank
         self.world_size = world_size
 
@@ -44,7 +42,12 @@ class CacheEngine:
         self.num_layers = model_config.num_layers
         self.kv_cache_dtype = model_config.dtype
         if cache_config.quant_policy > 0:
-            self.kv_cache_dtype = torch.uint8
+            if self.cache_config.device_type in ['cuda']:
+                self.kv_cache_dtype = torch.uint8
+            elif self.cache_config.device_type in ['ascend', 'npu']:
+                self.kv_cache_dtype = torch.int8
+            else:
+                raise ValueError(f'unsupported device_type {self.cache_config.device_type}')
 
         # Initialize the cache.
         self.local_gpu_cache = self.allocate_gpu_cache()
@@ -54,11 +57,10 @@ class CacheEngine:
         self.cache_stream = torch.cuda.Stream()
         assert self.cache_stream != torch.cuda.current_stream()
         # Initialize the events for stream synchronization.
-        self.events = [torch.cuda.Event() for _ in range(self.num_layers)]
+        self.events = torch.cuda.Event()
 
-        logger.debug(
-            f'Initialize cache engine with {cache_config.num_gpu_blocks}'
-            f' gpu blocks and {cache_config.num_cpu_blocks} cpu blocks.')
+        logger.debug(f'Initialize cache engine with {cache_config.num_gpu_blocks}'
+                     f' gpu blocks and {cache_config.num_cpu_blocks} cpu blocks.')
 
     @property
     def cpu_cache(self):
@@ -92,7 +94,7 @@ class CacheEngine:
         attn_backend = get_backend()
         dtype = model_config.dtype
         num_heads = model_config.num_key_value_heads
-        if local and not model_config.multi_query_attention:
+        if local:
             assert num_heads % world_size == 0, \
                 f'num_heads: {num_heads}, world_size: {world_size}'
             num_heads = num_heads // world_size
@@ -100,8 +102,7 @@ class CacheEngine:
             assert head_size % 2 == 0, \
                 f'head_size: {head_size}, quant_policy: {quant_policy}'
             head_size = head_size // 2
-        return attn_backend.get_k_block_shape(block_size, num_heads, head_size,
-                                              dtype)
+        return attn_backend.get_k_block_shape(block_size, num_heads, head_size, dtype)
 
     @classmethod
     def _get_value_block_shape_impl(cls,
@@ -115,7 +116,7 @@ class CacheEngine:
         attn_backend = get_backend()
         dtype = model_config.dtype
         num_heads = model_config.num_key_value_heads
-        if local and not model_config.multi_query_attention:
+        if local:
             assert num_heads % world_size == 0, \
                 f'num_heads: {num_heads}, world_size: {world_size}'
             num_heads = num_heads // world_size
@@ -124,8 +125,7 @@ class CacheEngine:
                 f'head_size: {head_size}, quant_policy: {quant_policy}'
             head_size = head_size // 2
 
-        return attn_backend.get_v_block_shape(block_size, num_heads, head_size,
-                                              dtype)
+        return attn_backend.get_v_block_shape(block_size, num_heads, head_size, dtype)
 
     def get_key_block_shape(self, local: bool = False) -> Tuple[int, int, int]:
         """get shape of key block."""
@@ -141,8 +141,7 @@ class CacheEngine:
             local=local,
         )
 
-    def get_value_block_shape(self,
-                              local: bool = False) -> Tuple[int, int, int]:
+    def get_value_block_shape(self, local: bool = False) -> Tuple[int, int, int]:
         """get shape of value block."""
         head_size = self.model_config.v_head_dim
         if head_size is None:
@@ -156,81 +155,60 @@ class CacheEngine:
             local=local,
         )
 
-    def allocate_gpu_cache(self):
-        """allocate caches on GPU."""
-        gpu_cache: List[KVCache] = []
+    def _allocate_cache(self, num_blocks: int, device: torch.device):
+        """allocate cache implement."""
         key_block_shape = self.get_key_block_shape(local=True)
         value_block_shape = self.get_value_block_shape(local=True)
 
-        for _ in range(self.num_layers):
-            key_blocks = torch.empty(
-                size=(self.num_gpu_blocks, *key_block_shape),
-                dtype=self.kv_cache_dtype,
-                device='cuda',
-            )
-            value_blocks = torch.empty(
-                size=(self.num_gpu_blocks, *value_block_shape),
-                dtype=self.kv_cache_dtype,
-                device='cuda',
-            )
-            if self.cache_config.quant_policy in (4, 8):
-                key_scales_zeros = torch.empty(
-                    size=(self.num_gpu_blocks, *key_block_shape[:-1], 2),
-                    dtype=self.model_config.dtype,
-                    device='cuda',
-                )
-                value_scales_zeros = torch.empty(
-                    size=(self.num_gpu_blocks, *value_block_shape[:-1], 2),
-                    dtype=self.model_config.dtype,
-                    device='cuda',
-                )
-                gpu_cache.append((key_blocks, value_blocks, key_scales_zeros,
-                                  value_scales_zeros))
-            else:
-                gpu_cache.append((key_blocks, value_blocks))
+        num_layers = self.num_layers
+        kv_cache_dtype = self.kv_cache_dtype
 
-        return gpu_cache
+        key_cache = torch.empty(
+            size=(num_layers, num_blocks, *key_block_shape),
+            dtype=kv_cache_dtype,
+            device=device,
+        )
+        value_cache = torch.empty(
+            size=(num_layers, num_blocks, *value_block_shape),
+            dtype=kv_cache_dtype,
+            device=device,
+        )
+
+        output = (key_cache, value_cache)
+
+        if self.cache_config.quant_policy in (4, 8):
+            dtype = self.model_config.dtype
+            key_sz_cache = torch.empty(
+                size=(num_layers, num_blocks, *key_block_shape[:-1], 2),
+                dtype=dtype,
+                device=device,
+            )
+            val_sz_cache = torch.empty(
+                size=(num_layers, num_blocks, *value_block_shape[:-1], 2),
+                dtype=dtype,
+                device=device,
+            )
+            output = output + (key_sz_cache, val_sz_cache)
+
+        return output
+
+    def allocate_gpu_cache(self):
+        """allocate caches on GPU."""
+        caches = self._allocate_cache(self.num_gpu_blocks, 'cuda')
+        self.full_gpu_cache = caches
+        self.local_gpu_cache = list(zip(*caches))
+        return self.local_gpu_cache
 
     def allocate_cpu_cache(self):
         """allocate caches on Host."""
-        cpu_cache: List[KVCache] = []
-        key_block_shape = self.get_key_block_shape(local=True)
-        value_block_shape = self.get_value_block_shape(local=True)
+        caches = self._allocate_cache(self.num_cpu_blocks, 'cpu')
 
-        # TODO: pin memory might need be banned on wsl
-        pin_memory = True
-
-        for _ in range(self.num_layers):
-            key_blocks = torch.empty(
-                size=(self.num_cpu_blocks, *key_block_shape),
-                dtype=self.kv_cache_dtype,
-                pin_memory=pin_memory,
-            )
-            value_blocks = torch.empty(
-                size=(self.num_cpu_blocks, *value_block_shape),
-                dtype=self.kv_cache_dtype,
-                pin_memory=pin_memory,
-            )
-            if self.cache_config.quant_policy in (4, 8):
-                key_scales_zeros = torch.empty(
-                    size=(self.num_cpu_blocks, *key_block_shape[:-1], 2),
-                    dtype=self.model_config.dtype,
-                    pin_memory=pin_memory,
-                )
-                value_scales_zeros = torch.empty(
-                    size=(self.num_cpu_blocks, *value_block_shape[:-1], 2),
-                    dtype=self.model_config.dtype,
-                    pin_memory=pin_memory,
-                )
-                cpu_cache.append((key_blocks, value_blocks, key_scales_zeros,
-                                  value_scales_zeros))
-            else:
-                cpu_cache.append((key_blocks, value_blocks))
-        return cpu_cache
+        self.full_cpu_cache = caches
+        self.local_cpu_cache = list(zip(*caches))
+        return self.local_cpu_cache
 
     @torch.inference_mode()
-    def _swap(self, src: List[KVCache], dst: List[KVCache],
-              src_to_dst: Dict[int, int]):
+    def _swap(self, src: List[torch.Tensor], dst: List[torch.Tensor], src_to_dst: Dict[int, int]):
         """Move caches from src memory to dst memory.
 
         Args:
@@ -238,18 +216,19 @@ class CacheEngine:
             dst (List[KVCache]): Destination cache.
             src_to_dst (Dict[int, int]): Map between src and dst.
         """
+        BLOCKS_PER_COPY = 2
+        num_copy = len(src_to_dst)
+        src_idx, dst_idx = list(zip(*src_to_dst.items()))
+        src_idx = torch.tensor(src_idx, device=src[0].device)
+        dst_idx = torch.tensor(dst_idx, device=dst[0].device)
         with torch.cuda.stream(self.cache_stream):
-            for i in range(self.num_layers):
-                src_key_cache, src_value_cache = src[i]
-                dst_key_cache, dst_value_cache = dst[i]
-
-                for src_id, dst_id in src_to_dst.items():
-                    if isinstance(dst_key_cache[dst_id], torch.Tensor):
-                        dst_key_cache[dst_id].copy_(src_key_cache[src_id])
-                        dst_value_cache[dst_id].copy_(src_value_cache[src_id])
-
-                    event = self.events[i]
-                    event.record(stream=self.cache_stream)
+            for scache, dcache in zip(src, dst):
+                for idx in range(0, num_copy, BLOCKS_PER_COPY):
+                    sidx = src_idx[idx:idx + BLOCKS_PER_COPY]
+                    didx = dst_idx[idx:idx + BLOCKS_PER_COPY]
+                    sdata = scache[:, sidx]
+                    dcache.index_copy_(1, didx, sdata.to(dcache.device))
+            self.events.record(stream=self.cache_stream)
 
     def swap_in(self, src_to_dst: Dict[int, int]) -> None:
         """Move cache from Host to Device.
@@ -257,7 +236,7 @@ class CacheEngine:
         Args:
             src_to_dst (Dict[int, int]): Map between src and dst.
         """
-        self._swap(self.local_cpu_cache, self.local_gpu_cache, src_to_dst)
+        self._swap(self.full_cpu_cache, self.full_gpu_cache, src_to_dst)
 
     def swap_out(self, src_to_dst: Dict[int, int]) -> None:
         """Move cache from Device to Host.
@@ -265,7 +244,7 @@ class CacheEngine:
         Args:
             src_to_dst (Dict[int, int]): Map between src and dst.
         """
-        self._swap(self.local_gpu_cache, self.local_cpu_cache, src_to_dst)
+        self._swap(self.full_gpu_cache, self.full_cpu_cache, src_to_dst)
 
     @classmethod
     def get_cache_block_size(cls,
@@ -312,23 +291,13 @@ class CacheEngine:
             mem_key_block = key_block.numel() * key_block.element_size()
             mem_value_block = value_block.numel() * value_block.element_size()
         elif quant_policy in (4, 8):
-            key_block = torch.empty(key_shape,
-                                    dtype=torch.uint8,
-                                    device='meta')
-            value_block = torch.empty(value_shape,
-                                      dtype=torch.uint8,
-                                      device='meta')
-            key_scale_zero_block = torch.empty((*key_shape[:-1], 2),
-                                               dtype=model_config.dtype,
-                                               device='meta')
-            value_scale_zero_block = torch.empty((*value_shape[:-1], 2),
-                                                 dtype=model_config.dtype,
-                                                 device='meta')
-            mem_key_block = key_block.numel() * key_block.element_size(
-            ) + key_scale_zero_block.numel(
+            key_block = torch.empty(key_shape, dtype=torch.uint8, device='meta')
+            value_block = torch.empty(value_shape, dtype=torch.uint8, device='meta')
+            key_scale_zero_block = torch.empty((*key_shape[:-1], 2), dtype=model_config.dtype, device='meta')
+            value_scale_zero_block = torch.empty((*value_shape[:-1], 2), dtype=model_config.dtype, device='meta')
+            mem_key_block = key_block.numel() * key_block.element_size() + key_scale_zero_block.numel(
             ) * key_scale_zero_block.element_size()
-            mem_value_block = value_block.numel() * value_block.element_size(
-            ) + value_scale_zero_block.numel(
+            mem_value_block = value_block.numel() * value_block.element_size() + value_scale_zero_block.numel(
             ) * value_scale_zero_block.element_size()
         else:
             raise ValueError(f'unsupported quant_policy {quant_policy}')

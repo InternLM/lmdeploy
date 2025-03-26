@@ -2,8 +2,8 @@
 
 import enum
 
-LATENCY_DEEQUE_LEN = 15
-API_TIMEOUT_LEN = 100
+LATENCY_DEQUE_LEN = 15
+API_READ_TIMEOUT = 100
 
 
 class Strategy(enum.Enum):
@@ -34,9 +34,7 @@ class ErrorCodes(enum.Enum):
 
 
 err_msg = {
-    ErrorCodes.MODEL_NOT_FOUND:
-    'The request model name does not exist in the model list.',
-    ErrorCodes.SERVICE_UNAVAILABLE:
-    'The service is unavailable now. May retry later.',
+    ErrorCodes.MODEL_NOT_FOUND: 'The request model name does not exist in the model list.',
+    ErrorCodes.SERVICE_UNAVAILABLE: 'The service is unavailable now. May retry later.',
     ErrorCodes.API_TIMEOUT: 'Failed to get response after a period of time'
 }

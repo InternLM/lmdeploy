@@ -7,8 +7,7 @@ from typing import Dict, List, Optional
 
 import psutil
 import pynvml
-from prometheus_client import (REGISTRY, Counter, Gauge, Histogram, Info,
-                               disable_created_metrics)
+from prometheus_client import REGISTRY, Counter, Gauge, Histogram, Info, disable_created_metrics
 
 disable_created_metrics()
 
@@ -89,9 +88,7 @@ def refresh_system(metrics):
 class Metrics:
     """The metrics for serving."""
 
-    def __init__(self,
-                 applied: bool = False,
-                 labelnames: Optional[List[str]] = []):
+    def __init__(self, applied: bool = False, labelnames: Optional[List[str]] = []):
         self.applied = applied
         # Unregister any existing lmdeploy collectors
         for collector in list(REGISTRY._collector_to_names):
@@ -99,39 +96,30 @@ class Metrics:
                 REGISTRY.unregister(collector)
 
         # Config Information
-        self.info_backend_config = Info(
-            name='lmdeploy:backend_config',
-            documentation='information of backend_config')
+        self.info_backend_config = Info(name='lmdeploy:backend_config', documentation='information of backend_config')
 
         # System stats
-        self.info_gpu_utilization = Info(
-            name='lmdeploy:gpu_utilization',
-            documentation='GPU utilization. 1 means 100 percent usage.')
-        self.info_gpu_memory_used_bytes = Info(
-            name='lmdeploy:gpu_memory_used_bytes',
-            documentation='GPU memory used bytes.')
-        self.gauge_cpu_utilization = Gauge(
-            name='lmdeploy:cpu_utilization',
-            documentation='CPU utilization. 1 means 100 percent usage.',
-            labelnames=labelnames)
-        self.gauge_cpu_memory_used_bytes = Gauge(
-            name='lmdeploy:cpu_memory_used_bytes',
-            documentation='CPU memory used bytes.',
-            labelnames=labelnames)
+        self.info_gpu_utilization = Info(name='lmdeploy:gpu_utilization',
+                                         documentation='GPU utilization. 1 means 100 percent usage.')
+        self.info_gpu_memory_used_bytes = Info(name='lmdeploy:gpu_memory_used_bytes',
+                                               documentation='GPU memory used bytes.')
+        self.gauge_cpu_utilization = Gauge(name='lmdeploy:cpu_utilization',
+                                           documentation='CPU utilization. 1 means 100 percent usage.',
+                                           labelnames=labelnames)
+        self.gauge_cpu_memory_used_bytes = Gauge(name='lmdeploy:cpu_memory_used_bytes',
+                                                 documentation='CPU memory used bytes.',
+                                                 labelnames=labelnames)
 
         # requests
-        self.counter_request_success = Counter(
-            name='lmdeploy:request_success',
-            documentation='Number of successful requests.',
-            labelnames=labelnames)
-        self.counter_request_failure = Counter(
-            name='lmdeploy:request_failure',
-            documentation='Number of failed requests.',
-            labelnames=labelnames)
-        self.counter_request_total = Counter(
-            name='lmdeploy:request_total',
-            documentation='Number of total requests.',
-            labelnames=labelnames)
+        self.counter_request_success = Counter(name='lmdeploy:request_success',
+                                               documentation='Number of successful requests.',
+                                               labelnames=labelnames)
+        self.counter_request_failure = Counter(name='lmdeploy:request_failure',
+                                               documentation='Number of failed requests.',
+                                               labelnames=labelnames)
+        self.counter_request_total = Counter(name='lmdeploy:request_total',
+                                             documentation='Number of total requests.',
+                                             labelnames=labelnames)
 
         # latency metrics
         self.histogram_duration_queue = Histogram(
@@ -156,17 +144,12 @@ class Metrics:
             labelnames=labelnames,
         )
         self.stats = Stats()
-        self.refresh_thread = threading.Thread(target=refresh_system,
-                                               args=(self, ),
-                                               daemon=True)
+        self.refresh_thread = threading.Thread(target=refresh_system, args=(self, ), daemon=True)
         self.refresh_thread.start()
 
     def info(self, backend_config: object) -> None:
         if self.applied:
-            config_dict = {
-                key: str(value)
-                for key, value in dataclasses.asdict(backend_config).items()
-            }
+            config_dict = {key: str(value) for key, value in dataclasses.asdict(backend_config).items()}
             self.info_backend_config.info(config_dict)
 
     def failure_frame(self):
@@ -191,8 +174,7 @@ class Metrics:
     def update_preprocess(self, start_frame):
         """Update preprocess duration."""
         if self.applied:
-            self.histogram_duration_preprocess.observe(time.time() -
-                                                       start_frame)
+            self.histogram_duration_preprocess.observe(time.time() - start_frame)
 
     def update_queue_waiting(self, start_frame):
         """Update queue waiting time."""
@@ -202,5 +184,4 @@ class Metrics:
     def update_FTL(self, start_frame):
         """Update first token latency."""
         if self.applied:
-            self.histogram_first_token_latency.observe(time.time() -
-                                                       start_frame)
+            self.histogram_first_token_latency.observe(time.time() - start_frame)

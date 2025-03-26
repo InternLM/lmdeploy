@@ -5,8 +5,7 @@ from typing import Dict, Iterator, Union
 import torch
 from mmengine import Registry
 
-INPUT_MODELS = Registry(
-    'source model', locations=['lmdeploy.turbomind.deploy.source_model.base'])
+INPUT_MODELS = Registry('source model', locations=['lmdeploy.turbomind.deploy.source_model.base'])
 
 
 class BaseReader(ABC):
@@ -15,8 +14,7 @@ class BaseReader(ABC):
     def __init__(self):
         pass
 
-    def transform(self, x: Union[torch.Tensor, None],
-                  kind: str) -> Union[torch.Tensor, None]:
+    def transform(self, x: Union[torch.Tensor, None], kind: str) -> Union[torch.Tensor, None]:
         return None if x is None else self._transform(x, kind)
 
     @abstractmethod
@@ -37,11 +35,6 @@ class BaseInputModel(ABC):
         """
         self.model_path = model_path
         self.tokenizer_path = tokenizer_path
-
-    @abstractmethod
-    def tokenizer_info(self):
-        """Read tokenizer info."""
-        pass
 
     @abstractmethod
     def model_info(self) -> Dict:

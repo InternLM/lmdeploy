@@ -3,6 +3,15 @@
 The usage of lmdeploy on a Huawei Ascend device is almost the same as its usage on CUDA with PytorchEngine in lmdeploy.
 Please read the original [Get Started](../get_started.md) guide before reading this tutorial.
 
+Here is the [supported model list](../../supported_models/supported_models.md#PyTorchEngine-on-Huawei-Ascend-Platform).
+
+> \[!IMPORTANT\]
+> We have uploaded a docker image with KUNPENG CPU to aliyun(from lmdeploy 0.7.1 + dlinfer 0.1.6).
+> Please try to pull the image by following command:
+> `docker pull crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:latest`
+> The dockerfile described below still works, you can try
+> both pulling image and build your own image by dockerfile.
+
 ## Installation
 
 We highly recommend that users build a Docker image for streamlined environment setup.
@@ -16,7 +25,7 @@ cd lmdeploy
 
 ### Environment Preparation
 
-The Docker version is supposed to be no less than `18.03`. And `Ascend Docker Runtime` should be installed by following [the official guide](https://www.hiascend.com/document/detail/zh/mindx-dl/60rc2/clusterscheduling/clusterschedulingig/.clusterschedulingig/dlug_installation_012.html).
+The Docker version is supposed to be no less than `18.09`. And `Ascend Docker Runtime` should be installed by following [the official guide](https://www.hiascend.com/document/detail/zh/mindx-dl/60rc2/clusterscheduling/clusterschedulingig/.clusterschedulingig/dlug_installation_012.html).
 
 > \[!CAUTION\]
 > If error message `libascend_hal.so: cannot open shared object file` shows, that means **Ascend Docker Runtime** is not installed correctly!
@@ -37,6 +46,8 @@ Run the following command in the root directory of lmdeploy to build the image:
 DOCKER_BUILDKIT=1 docker build -t lmdeploy-aarch64-ascend:latest \
     -f docker/Dockerfile_aarch64_ascend .
 ```
+
+The `Dockerfile_aarch64_ascend` is tested on Kunpeng CPU. For intel CPU, please try [this dockerfile](https://github.com/InternLM/lmdeploy/issues/2745#issuecomment-2473285703) (which is not fully tested)
 
 If the following command executes without any errors, it indicates that the environment setup is successful.
 
@@ -98,12 +109,26 @@ Add `--device ascend` in the serve command.
 lmdeploy serve api_server --backend pytorch --device ascend --eager-mode internlm/internlm2_5-7b-chat
 ```
 
+Run the following commands to launch docker container for lmdeploy LLM serving:
+
+```bash
+docker exec -it --net=host crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:latest \
+    bash -i -c "lmdeploy serve api_server --backend pytorch --device ascend --eager-mode internlm/internlm2_5-7b-chat"
+```
+
 ### Serve a VLM model
 
 Add `--device ascend` in the serve command
 
 ```bash
 lmdeploy serve api_server --backend pytorch --device ascend --eager-mode OpenGVLab/InternVL2-2B
+```
+
+Run the following commands to launch docker container for lmdeploy VLM serving:
+
+```bash
+docker exec -it --net=host crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:latest \
+    bash -i -c "lmdeploy serve api_server --backend pytorch --device ascend --eager-mode OpenGVLab/InternVL2-2B"
 ```
 
 ## Inference with Command line Interface
@@ -117,7 +142,7 @@ lmdeploy chat internlm/internlm2_5-7b-chat --backend pytorch --device ascend --e
 Run the following commands to launch lmdeploy chatting after starting container:
 
 ```bash
-docker exec -it lmdeploy_ascend_demo \
+docker exec -it crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:latest \
     bash -i -c "lmdeploy chat --backend pytorch --device ascend --eager-mode internlm/internlm2_5-7b-chat"
 ```
 
@@ -132,3 +157,9 @@ lmdeploy lite auto_awq $HF_MODEL --work-dir $WORK_DIR --device npu
 ```
 
 Please check [supported_models](../../supported_models/supported_models.md) before use this feature.
+
+### int8 KV-cache Quantization
+
+Ascend backend has supported offline int8 KV-cache Quantization on eager mode.
+
+Please refer this [doc](https://github.com/DeepLink-org/dlinfer/blob/main/docs/quant/ascend_kv_quant.md) for details.

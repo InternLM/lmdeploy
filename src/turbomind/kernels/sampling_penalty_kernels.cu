@@ -17,6 +17,8 @@
 #include <assert.h>
 #include <float.h>
 
+#include "src/turbomind/kernels/core/array_ops.h"
+#include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/sampling_penalty_kernels.h"
 
 namespace turbomind {
@@ -221,6 +223,81 @@ template void invokeBatchApplyTemperaturePenalty(half*        logits,
                                                  const int    vocab_size_padd,
                                                  cudaStream_t stream);
 #endif
+
+template<int vec_size>
+__global__ void batchApplyTemperaturePenalty_v2(float*       logits,
+                                                const float* bias,
+                                                const float* temperatures,
+                                                const int    batch_size,
+                                                const int    vocab_size,
+                                                const int    vocab_size_padded)
+{
+    const int vi = blockIdx.x * blockDim.x + threadIdx.x;
+    const int bi = blockIdx.y;
+
+    __shared__ float shared_scale;
+
+    if (threadIdx.x == 0) {
+        shared_scale = fdividef(1.f, temperatures[bi] + 1e-6f);
+    }
+
+    __syncthreads();
+
+    const float scale = shared_scale;
+
+    logits += (size_t)bi * vocab_size_padded;
+
+    const int step = gridDim.x * blockDim.x * vec_size;
+
+    for (int i = vi * vec_size; i < vocab_size_padded; i += step) {
+        Array<float, vec_size> vec;
+        Load(vec, logits + i);
+        PRAGMA_UNROLL
+        for (int c = 0; c < vec_size; ++c) {
+            if (i + c < vocab_size) {
+                vec[c] *= scale;
+            }
+            else {
+                vec[c] = -FLT_MAX;
+            }
+        }
+        Store(logits + i, vec);
+    }
+}
+
+void invokeBatchApplyTemperaturePenalty_v2(float*       logits,
+                                           const float* bias,
+                                           const float* temperatures,
+                                           const int    batch_size,
+                                           const int    vocab_size,
+                                           const int    vocab_size_padded,
+                                           cudaStream_t stream)
+{
+
+    auto invoke = [&](auto vec_size) {
+        constexpr int threads        = 256;
+        const int     blocks_per_tok = (vocab_size_padded + threads * vec_size - 1) / (threads * vec_size);
+        const dim3    blocks(blocks_per_tok, batch_size);
+        batchApplyTemperaturePenalty_v2<vec_size.value><<<blocks, threads, 0, stream>>>(  //
+            logits,
+            bias,
+            temperatures,
+            batch_size,
+            vocab_size,
+            vocab_size_padded);
+    };
+
+    if (vocab_size_padded % 4 == 0) {
+        invoke(std::integral_constant<int, 4>{});
+    }
+    else if (vocab_size_padded % 2 == 0) {
+        invoke(std::integral_constant<int, 2>{});
+    }
+    else {
+        invoke(std::integral_constant<int, 1>{});
+    }
+}
+
 template<typename T, RepetitionPenaltyType penalty_type>
 __global__ void applyRepetitionPenalty(T*          logits,
                                        const float penalty,
@@ -501,54 +578,49 @@ template void invokeBatchApplyRepetitionPenalty(half*                 logits,
                                                 cudaStream_t          stream);
 #endif
 template<typename T>
-__global__ void batchApplyMinLengthPenalty(T*         logits,
-                                           const int* min_lengths,
-                                           const int* end_ids,
-                                           const int* sequence_lengths,
-                                           const int  max_input_length,
-                                           const int  vocab_size_padded)
+__global__ void batchApplyMinLengthPenalty(T* __restrict__ logits,
+                                           const int* __restrict__ min_lengths,
+                                           const int* __restrict__ sequence_lengths,
+                                           const int vocab_size_padded,
+                                           const int batch_size,
+                                           const int* __restrict__ end_ids,
+                                           const int end_ids_size)
 {
-    int bid = threadIdx.x + blockIdx.x * blockDim.x;  // batch index
-    // In decoder, sequence_lengths means length of sequence that has kv cache already computed
-    if (sequence_lengths[bid] + 1 < min_lengths[bid]) {
-        T mask_val                                     = (std::is_same<T, half>::value) ? -65504.0f : -FLT_MAX;
-        logits[bid * vocab_size_padded + end_ids[bid]] = mask_val;
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    int bid = tid / end_ids_size;
+    int eid = tid % end_ids_size;
+    if (bid < batch_size) {
+        int end_id = end_ids[bid * end_ids_size + eid];
+        if (end_id > 0 && sequence_lengths[bid] + 1 < min_lengths[bid]) {
+            T mask_val                               = (std::is_same<T, half>::value) ? -65504.0f : -FLT_MAX;
+            logits[bid * vocab_size_padded + end_id] = mask_val;
+        }
     }
 }
 
 template<typename T>
 void invokeMinLengthPenalty(T*           logits,
                             const int*   min_lengths,
-                            const int*   end_ids,
                             const int*   sequnece_lengths,
-                            const int    max_input_length,
-                            const int    batch_size,
                             const int    vocab_size_padded,
+                            const int    batch_size,
+                            const int*   end_ids,
+                            const int    end_ids_size,
                             cudaStream_t stream)
-
 {
-    const int block_size = min(batch_size, 1024);
-    const int grid_size  = (batch_size + block_size - 1) / block_size;
-    batchApplyMinLengthPenalty<<<grid_size, block_size, 0, stream>>>(
-        logits, min_lengths, end_ids, sequnece_lengths, max_input_length, vocab_size_padded);
+    const dim3 block(std::min(batch_size * end_ids_size, 1024));
+    const dim3 grid((batch_size * end_ids_size + block.x - 1) / block.x);
+    batchApplyMinLengthPenalty<<<block, grid, 0, stream>>>(
+        logits, min_lengths, sequnece_lengths, vocab_size_padded, batch_size, end_ids, end_ids_size);
 }
 
 template void invokeMinLengthPenalty(float*       logits,
                                      const int*   min_lengths,
-                                     const int*   end_ids,
                                      const int*   sequnece_lengths,
-                                     const int    max_input_length,
-                                     const int    batch_size,
                                      const int    vocab_size_padded,
-                                     cudaStream_t stream);
-#if 0
-template void invokeMinLengthPenalty(half*        logits,
-                                     const int*   min_lengths,
+                                     const int    batch_size,
                                      const int*   end_ids,
-                                     const int*   sequnece_lengths,
-                                     const int    max_input_length,
-                                     const int    batch_size,
-                                     const int    vocab_size_padded,
+                                     const int    end_ids_size,
                                      cudaStream_t stream);
-#endif
+
 }  // namespace turbomind

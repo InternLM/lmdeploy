@@ -11,16 +11,14 @@ def test_get_names_from_hf_model():
         ('InternLM/internlm2_5-7b-chat', None, 'internlm2'),
     ]
     for model_path, model_name, chat_template in cases:
-        _model_name, _chat_template = get_names_from_model(
-            model_path=model_path, model_name=model_name)
+        _model_name, _chat_template = get_names_from_model(model_path=model_path, model_name=model_name)
         assert _chat_template == chat_template
         assert _model_name == model_name if model_name else model_path
 
 
 def test_get_names_from_turbomind_model():
     workspace = tempfile.TemporaryDirectory('internlm2_5-7b-chat').name
-    os.makedirs(os.path.join(workspace, 'triton_models', 'weights'),
-                exist_ok=True)
+    os.makedirs(os.path.join(workspace, 'triton_models', 'weights'), exist_ok=True)
 
     import yaml
 

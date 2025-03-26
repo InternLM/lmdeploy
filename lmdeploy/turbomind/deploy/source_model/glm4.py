@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import json
 import os.path as osp
-from typing import List
 
 import torch
 
@@ -29,13 +28,8 @@ class Glm4Reader(LlamaReader):
         if self.model_cfg.get('multi_query_attention', False):
             kv_head_num = self.model_cfg['multi_query_group_num']
         HEAD_DIM = 128
-        q, k, v = torch.split(qkv, [
-            attn_head_num * HEAD_DIM, kv_head_num * HEAD_DIM,
-            kv_head_num * HEAD_DIM
-        ],
-                              dim=0)
-        o = self.params.get(
-            f'transformer.encoder.layers.{i}.self_attention.dense.{kind}')
+        q, k, v = torch.split(qkv, [attn_head_num * HEAD_DIM, kv_head_num * HEAD_DIM, kv_head_num * HEAD_DIM], dim=0)
+        o = self.params.get(f'transformer.encoder.layers.{i}.self_attention.dense.{kind}')
         o = self.transform(o, kind)
         if o is None:  # handle the case when qkv has bias but o doesn't
             o = torch.zeros_like(q)
@@ -43,24 +37,20 @@ class Glm4Reader(LlamaReader):
 
     def attn_norm(self, i: int):
         """Get attn norm for layer i."""
-        return self.params[
-            f'transformer.encoder.layers.{i}.input_layernorm.weight']
+        return self.params[f'transformer.encoder.layers.{i}.input_layernorm.weight']
 
     def _ffn(self, i: int, kind: str):
         """Get ffn kind for layer i."""
-        up_and_gate = self.params[
-            f'transformer.encoder.layers.{i}.mlp.dense_h_to_4h.{kind}']
+        up_and_gate = self.params[f'transformer.encoder.layers.{i}.mlp.dense_h_to_4h.{kind}']
         up_and_gate = self.transform(up_and_gate, kind)
         up, gate = up_and_gate.chunk(2, dim=0)
-        down = self.params[
-            f'transformer.encoder.layers.{i}.mlp.dense_4h_to_h.{kind}']
+        down = self.params[f'transformer.encoder.layers.{i}.mlp.dense_4h_to_h.{kind}']
         down = self.transform(down, kind)
         return (up, down, gate)
 
     def ffn_norm(self, i: int):
         """Get ffn norm for layer i."""
-        return self.params[
-            f'transformer.encoder.layers.{i}.post_attention_layernorm.weight']
+        return self.params[f'transformer.encoder.layers.{i}.post_attention_layernorm.weight']
 
 
 @INPUT_MODELS.register_module(name='glm4')
@@ -74,15 +64,6 @@ class Glm4Model(LlamaModel):
         config_path = osp.join(self.model_path, 'config.json')
         with open(config_path) as f:
             self.config = json.load(f)
-
-    def tokenizer_info(self):
-        """Read tokenizer info."""
-        n_words = self.config['padded_vocab_size']
-        bos_id = 0
-        eos_id = self.config['eos_token_id']
-        if isinstance(eos_id, List):
-            eos_id = eos_id[0]
-        return n_words, bos_id, eos_id
 
     def model_info(self):
         """Read model info."""

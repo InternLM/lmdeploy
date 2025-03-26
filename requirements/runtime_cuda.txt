@@ -1,0 +1,23 @@
+accelerate>=0.29.3
+einops
+fastapi
+fire
+mmengine-lite
+numpy<2.0.0
+openai
+outlines
+peft<=0.14.0
+pillow
+protobuf
+pydantic>2.0.0
+pynvml
+ray
+safetensors
+sentencepiece
+shortuuid
+tiktoken
+torch<=2.5.1,>=2.0.0
+torchvision<=0.20.1,>=0.15.0
+transformers
+triton<=3.1.0,>=3.0.0; sys_platform == "linux"
+uvicorn

@@ -20,23 +20,23 @@ add_library(Llama STATIC
         unified_attention_layer.cc
         llama_kernels.cu
         llama_decoder_kernels.cu
-        llama_utils.cu)
+        llama_utils.cu
+        mla_utils.cu)
 set_property(TARGET Llama PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET Llama PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(Llama PUBLIC CUDA::cudart
+        engine
         gemm2
+        rms_norm
         cublasMMWrapper
         DynamicDecodeLayer
         activation_kernels
         attention
         decoding_kernels
         unfused_attention_kernels
-        custom_ar_kernels
-        custom_ar_comm
         gpt_kernels
         tensor
         memory_utils
-        nccl_utils
         cuda_utils
         logger
         anomaly_handler)

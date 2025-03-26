@@ -60,6 +60,7 @@ Documentation
    llm/pipeline.md
    llm/api_server.md
    llm/api_server_tools.md
+   llm/api_server_reasoning.md
    llm/api_server_lora.md
    llm/gradio.md
    llm/proxy_server.md
@@ -87,9 +88,7 @@ Documentation
    :maxdepth: 1
    :caption: Benchmark
 
-   benchmark/profile_generation.md
-   benchmark/profile_throughput.md
-   benchmark/profile_api_server.md
+   benchmark/benchmark.md
    benchmark/evaluate_with_opencompass.md
 
 .. toctree::
@@ -103,6 +102,7 @@ Documentation
    advance/chat_template.md
    advance/debug_turbomind.md
    advance/structed_output.md
+   advance/pytorch_multinodes.md
 
 .. toctree::
    :maxdepth: 1
