@@ -8,11 +8,12 @@ from .base import BaseChecker
 class DistChecker(BaseChecker):
     """check dist environment."""
 
-    def __init__(self, tp: int, dp: int, distributed_executor_backend: str, device_type: str, logger=None):
+    def __init__(self, tp: int, dp: int, ep: int, distributed_executor_backend: str, device_type: str, logger=None):
         super().__init__(logger)
         self.tp = tp
         self.dp = dp
-        self.dist_config = DistConfig(dp=dp, tp=tp)
+        self.ep = ep
+        self.dist_config = DistConfig(dp=dp, tp=tp, ep=ep)
         self.world_size = self.dist_config.world_size
         self.distributed_executor_backend = distributed_executor_backend
         self.device_type = device_type
@@ -37,6 +38,11 @@ class DistChecker(BaseChecker):
             self.log_and_exit(mod_name='Dist',
                               message='dp>1 requires distributed_executor_backend="ray". '
                               f'Get distributed_executor_backend={distributed_executor_backend}.')
+
+        if self.dp > 1 and self.ep > 1 and self.dp % self.ep != 0:
+            self.log_and_exit(mod_name='Dist',
+                              message='ep>1 requires dp % ep == 0. '
+                              f'Get dp={self.dp} and ep={self.ep}.')
 
         if distributed_executor_backend == 'ray':
             try:

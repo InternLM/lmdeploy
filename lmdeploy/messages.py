@@ -264,6 +264,7 @@ class PytorchEngineConfig:
         tp (int): Tensor Parallelism. default 1.
         dp (int): Data Parallelism. default 1.
         dp_rank (int): rank of dp.
+        ep (int): Expert Parallelism. default 1.
         session_len (int): Max session length. Default None.
         max_batch_size (int): Max batch size. If it is not specified,
             the engine will automatically set it according to the device

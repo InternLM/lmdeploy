@@ -4,13 +4,13 @@ from typing import List
 
 import torch
 import torch.distributed as dist
+
 from lmdeploy.pytorch.backends.cuda.token_dispatcher import DeepEPDispatcher
-from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.pytorch.kernels.cuda import fused_moe, fused_moe_w8a8
 from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import fused_moe_blocked_fp8
 from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
-from lmdeploy.pytorch.kernels.cuda.fused_moe import _renormalize
 from lmdeploy.pytorch.kernels.cuda.ep_moe import grouped_gemm_triton, silu_and_mul_triton_kernel
+from lmdeploy.pytorch.kernels.cuda.fused_moe import _renormalize
 from lmdeploy.pytorch.kernels.cuda.w8a8_triton_kernels import per_token_quant_int8
 from lmdeploy.pytorch.models.q_modules import QTensor
 
@@ -231,11 +231,9 @@ class TritonFusedMoEBlockedF8Impl(FusedMoEBlockedF8Impl):
         return output
 
 
-
 class DeepEPMoE:
-    """
-    MoE Expert Parallel Impl based on DeepEP (https://github.com/deepseek-ai/DeepEP/tree/main)
-    """
+    """MoE Expert Parallel Impl based on DeepEP (https://github.com/deepseek-
+    ai/DeepEP/tree/main)"""
 
     def __init__(
         self,
@@ -250,23 +248,12 @@ class DeepEPMoE:
         self.block_shape = block_shape
         self.use_fp8_w8a8 = True
 
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-        tokens_per_expert: torch.Tensor,
-        gate_up_weight:torch.Tensor,
-        gate_up_scale:torch.Tensor,
-        gate_down_weight:torch.Tensor,
-        gate_down_scale:torch.Tensor
-    ):
-        seg_indptr_cur_rank = torch.cat(
-            [
-                torch.zeros(
-                    1, device=tokens_per_expert.device, dtype=tokens_per_expert.dtype
-                ),
-                torch.cumsum(tokens_per_expert, dim=0),
-            ]
-        )
+    def forward(self, hidden_states: torch.Tensor, tokens_per_expert: torch.Tensor, gate_up_weight: torch.Tensor,
+                gate_up_scale: torch.Tensor, gate_down_weight: torch.Tensor, gate_down_scale: torch.Tensor):
+        seg_indptr_cur_rank = torch.cat([
+            torch.zeros(1, device=tokens_per_expert.device, dtype=tokens_per_expert.dtype),
+            torch.cumsum(tokens_per_expert, dim=0),
+        ])
         reorder_topk_ids = torch.repeat_interleave(tokens_per_expert)
         weight_indices_cur_rank = torch.arange(
             0,
@@ -305,7 +292,7 @@ class DeepEPMoE:
             device=gateup_output.device,
             dtype=hidden_states.dtype,
         )
-        silu_and_mul_triton_kernel[(gateup_output.shape[0],)](
+        silu_and_mul_triton_kernel[(gateup_output.shape[0], )](
             gateup_output,
             down_input,
             gateup_output.shape[1],
@@ -335,16 +322,17 @@ class DeepEPMoE:
                 weight_indices=weight_indices_cur_rank,
                 use_fp8_w8a8=self.use_fp8_w8a8,
                 scale_a=down_input_scale,
-                scale_b=gate_down_scale, 
+                scale_b=gate_down_scale,
                 block_shape=self.block_shape,
             )
         return down_output
 
 
 class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
+
     def __init__(self,
                  ep_size: int,
-                 ep_group:dist.ProcessGroup,
+                 ep_group: dist.ProcessGroup,
                  top_k: int,
                  num_experts: int,
                  hidden_dim: int,
@@ -353,16 +341,14 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
                  out_dtype: torch.dtype = torch.bfloat16):
         super().__init__(top_k, num_experts, renormalize, block_size, out_dtype)
         self.token_dispatcher = DeepEPDispatcher(
-                group=ep_group,
-                router_topk=self.top_k,
-                permute_fusion=True,
-                num_experts=self.num_experts,
-                num_local_experts=self.num_experts // ep_size,
-                hidden_size=hidden_dim,
-                params_dtype=out_dtype,
-            )
-        self.experts = DeepEPMoE(num_experts, ep_size, [block_size,block_size])
-    
+            group=ep_group,
+            num_experts=self.num_experts,
+            num_local_experts=self.num_experts // ep_size,
+            hidden_size=hidden_dim,
+            params_dtype=out_dtype,
+        )
+        self.experts = DeepEPMoE(num_experts, ep_size, [block_size, block_size])
+
     def forward(self,
                 hidden_states: torch.Tensor,
                 topk_weights: torch.Tensor,
@@ -374,18 +360,17 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
                 expert_list: List[int] = None):
         """forward."""
         topk_weights = _renormalize(topk_weights, self.renormalize)
-        recv_hidden_states, recv_topk_ids, recv_topk_weights, tokens_per_expert = (
-            self.token_dispatcher.dispatch(
-                hidden_states,
-                topk_ids.to(torch.int32),
-                topk_weights.to(torch.float32),
-                self.num_experts,
-            )
-        )
+        recv_hidden_states, recv_topk_ids, recv_topk_weights, tokens_per_expert = (self.token_dispatcher.dispatch(
+            hidden_states,
+            topk_ids,
+            topk_weights.to(torch.float32),
+            self.num_experts,
+        ))
         out_states = self.experts.forward(recv_hidden_states, tokens_per_expert, gate_up_weights, gate_up_scale,
-                                 down_weights, down_scale)
+                                          down_weights, down_scale)
         out_states = self.token_dispatcher.combine(out_states)
         return out_states
+
 
 class TritonFusedMoEBlockedF8Builder(FusedMoEBlockedF8Builder):
     """triton fused moe blocked f8 builder."""
@@ -393,7 +378,7 @@ class TritonFusedMoEBlockedF8Builder(FusedMoEBlockedF8Builder):
     @staticmethod
     def build(top_k: int,
               num_experts: int,
-              hidden_dim: int,
+              hidden_dim: int = 1,
               renormalize: bool = False,
               block_size: int = 128,
               ep_size: int = 1,
@@ -402,17 +387,16 @@ class TritonFusedMoEBlockedF8Builder(FusedMoEBlockedF8Builder):
         """build from mlp."""
         if ep_size > 1:
             return FusedDeepEpMoEBlockedF8Impl(ep_size=ep_size,
-                                            ep_group=ep_group,
-                                            top_k=top_k,
-                                            num_experts=num_experts,
-                                            hidden_dim=hidden_dim,
-                                            renormalize=renormalize,
-                                            block_size=block_size,
-                                            out_dtype=out_dtype)
+                                               ep_group=ep_group,
+                                               top_k=top_k,
+                                               num_experts=num_experts,
+                                               hidden_dim=hidden_dim,
+                                               renormalize=renormalize,
+                                               block_size=block_size,
+                                               out_dtype=out_dtype)
         else:
             return TritonFusedMoEBlockedF8Impl(top_k=top_k,
-                                            num_experts=num_experts,
-                                            renormalize=renormalize,
-                                            block_size=block_size,
-                                            out_dtype=out_dtype)
-
+                                               num_experts=num_experts,
+                                               renormalize=renormalize,
+                                               block_size=block_size,
+                                               out_dtype=out_dtype)

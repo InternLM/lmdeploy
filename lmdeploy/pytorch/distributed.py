@@ -175,6 +175,7 @@ def get_dp_world_rank():
     ctx = get_dist_manager().current_context()
     return ctx.dp, ctx.dp_rank
 
+
 def get_ep_world_rank():
     ctx = get_dist_manager().current_context()
     return ctx.ep, ctx.ep_rank

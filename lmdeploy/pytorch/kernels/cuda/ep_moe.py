@@ -1,9 +1,11 @@
+# Copyright (c) OpenMMLab. All rights reserved.
 # modify from sglang
 from typing import List, Optional
 
 import torch
 import triton
 import triton.language as tl
+
 
 @triton.jit
 def silu_and_mul_triton_kernel(
@@ -110,9 +112,8 @@ def grouped_gemm_triton_kernel(
     if pid_m >= total_m_block:
         return
 
-    m_range_start, m_range_end, expert_id = compute_m_range(
-        pid_m, batch_size, seg_indptr, weight_indices, m_num_tiles_indptr, BLOCK_SIZE_M
-    )
+    m_range_start, m_range_end, expert_id = compute_m_range(pid_m, batch_size, seg_indptr, weight_indices,
+                                                            m_num_tiles_indptr, BLOCK_SIZE_M)
     if m_range_end - m_range_start == 0:
         return
 
@@ -129,11 +130,7 @@ def grouped_gemm_triton_kernel(
     offs_k = tl.arange(0, BLOCK_SIZE_K)
 
     a_ptr = a + (m_range_start + offs_am[:, None]) * a_stride_0 + offs_k[None, :]
-    b_ptr = b + (
-        (expert_id * b_stride_0)
-        + (n_range_start + offs_bn[:, None]) * b_stride_1
-        + offs_k[None, :]
-    )
+    b_ptr = b + ((expert_id * b_stride_0) + (n_range_start + offs_bn[:, None]) * b_stride_1 + offs_k[None, :])
 
     if group_k > 0 and group_n > 0:
         a_scale_ptrs = scale_a + (m_range_start + offs_am[:, None]) * as_stride_0
@@ -142,12 +139,8 @@ def grouped_gemm_triton_kernel(
 
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
-        a_tile = tl.load(
-            a_ptr, mask=offs_k[None, :] < (K - k * BLOCK_SIZE_K), other=0.0
-        )
-        b_tile = tl.load(
-            b_ptr, mask=offs_k[None, :] < (K - k * BLOCK_SIZE_K), other=0.0
-        )
+        a_tile = tl.load(a_ptr, mask=offs_k[None, :] < (K - k * BLOCK_SIZE_K), other=0.0)
+        b_tile = tl.load(b_ptr, mask=offs_k[None, :] < (K - k * BLOCK_SIZE_K), other=0.0)
 
         if group_k > 0 and group_n > 0:
             k_start = k * BLOCK_SIZE_K
@@ -175,9 +168,7 @@ def grouped_gemm_triton_kernel(
 
 
 @triton.jit
-def compute_m_num_tiles_indptr(
-    m_num_tiles_indptr, seg_indptr, batch_size: tl.constexpr, BLOCK_SIZE_M: tl.constexpr
-):
+def compute_m_num_tiles_indptr(m_num_tiles_indptr, seg_indptr, batch_size: tl.constexpr, BLOCK_SIZE_M: tl.constexpr):
     for bs in range(batch_size):
         m = tl.load(seg_indptr + bs + 1) - tl.load(seg_indptr + bs)
         cur_num_tiles = tl.cdiv(m, BLOCK_SIZE_M)
@@ -198,7 +189,7 @@ def grouped_gemm_triton(
     scale_b: torch.Tensor = None,
     block_shape: Optional[List[int]] = None,
 ):
-    assert weight_column_major == True  # TODO: more
+    assert weight_column_major
     if use_fp8_w8a8 and block_shape is None:
         assert scale_a is not None and scale_b is not None
 
@@ -212,20 +203,19 @@ def grouped_gemm_triton(
     # TODO: adjust config or tune kernel
     # Reduce block size to prevent L40 shared memory overflow.
     config = {
-        "BLOCK_SIZE_M": 64,
-        "BLOCK_SIZE_N": 32,
-        "BLOCK_SIZE_K": 128,
+        'BLOCK_SIZE_M': 64,
+        'BLOCK_SIZE_N': 32,
+        'BLOCK_SIZE_K': 128,
     }
 
     m_num_tiles_indptr = torch.zeros(batch_size + 1, device=a.device, dtype=torch.int64)
-    compute_m_num_tiles_indptr[(1,)](
-        m_num_tiles_indptr, seg_indptr, batch_size, config["BLOCK_SIZE_M"]
-    )
+    compute_m_num_tiles_indptr[(1, )](m_num_tiles_indptr, seg_indptr, batch_size, config['BLOCK_SIZE_M'])
 
-    grid = lambda META: (
-        triton.cdiv(a.size(0), META["BLOCK_SIZE_M"]) + batch_size,
-        triton.cdiv(b.size(1), META["BLOCK_SIZE_N"]),
-    )
+    def grid(META):
+        return (
+            triton.cdiv(a.size(0), META['BLOCK_SIZE_M']) + batch_size,
+            triton.cdiv(b.size(1), META['BLOCK_SIZE_N']),
+        )
 
     grouped_gemm_triton_kernel[grid](
         a,
