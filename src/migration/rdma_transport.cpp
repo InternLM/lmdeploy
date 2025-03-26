@@ -83,26 +83,27 @@ void RDMAContext::cq_poll_handle()
 
         struct ibv_wc wc[POLL_COUNT];
 
-        size_t nr_poll = ibv_poll_cq(cq_, POLL_COUNT, wc);
-        if (nr_poll < 0) {
-            MIGRATION_LOG_WARN("Worker: Failed to poll completion queues");
-            continue;
-        }
-        for (size_t i = 0; i < nr_poll; ++i) {
-            if (wc[i].status == IBV_WC_SUCCESS) {
-                MIGRATION_LOG_INFO("RDMA READ completed successfully.");
-                if (wc[i].wr_id != 0) {
-                    wr_info_base* ptr = reinterpret_cast<wr_info_base*>(wc[i].wr_id);
-                    if (ptr->get_wr_type() == WrType::RDMA_READ_ACK) {
-                        MIGRATION_LOG_DEBUG("read cache done: Received IMM, imm_data: " << wc[i].imm_data);
-                        auto* info = reinterpret_cast<read_info*>(ptr);
-                        info->callback(wc[i].imm_data);
-                        delete info;
+        while (size_t nr_poll = ibv_poll_cq(cq_, POLL_COUNT, wc)) {
+            if (nr_poll < 0) {
+                MIGRATION_LOG_WARN("Worker: Failed to poll completion queues");
+                continue;
+            }
+            for (size_t i = 0; i < nr_poll; ++i) {
+                if (wc[i].status == IBV_WC_SUCCESS) {
+                    MIGRATION_LOG_INFO("RDMA READ completed successfully.");
+                    if (wc[i].wr_id != 0) {
+                        wr_info_base* ptr = reinterpret_cast<wr_info_base*>(wc[i].wr_id);
+                        if (ptr->get_wr_type() == WrType::RDMA_READ_ACK) {
+                            MIGRATION_LOG_DEBUG("read cache done: Received IMM, imm_data: " << wc[i].imm_data);
+                            auto* info = reinterpret_cast<read_info*>(ptr);
+                            info->callback(wc[i].imm_data);
+                            delete info;
+                        }
                     }
                 }
-            }
-            else {
-                std::cerr << "RDMA READ failed with status: " << ibv_wc_status_str(wc[i].status) << std::endl;
+                else {
+                    std::cerr << "RDMA READ failed with status: " << ibv_wc_status_str(wc[i].status) << std::endl;
+                }
             }
         }
     }
