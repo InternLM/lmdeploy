@@ -413,7 +413,7 @@ class RayExecutor(ExecutorBase):
 
         return workers
 
-    async def rdma_init_link(self, remote_engine_id):
+    async def init_rdma_link(self, remote_engine_id):
         return self.collective_rpc("init_rdma_link", (remote_engine_id,))
 
     async def rdma_connect(self, config):
