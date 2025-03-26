@@ -8,7 +8,6 @@ import zmq
 import zmq.asyncio
 
 from . import _migration_c
-from .config import ExchangeInfo, MemoryRegionInfo, RDMAInfo
 
 
 class RDMAContext:
@@ -27,8 +26,6 @@ class RDMAContext:
         self.meta_recv.bind(f"tcp://{meta_endpoint}")
 
         self.init_rdma_context(dev_name, ib_port, link_type)
-        self.remote_memory_pool: Dict[str, MemoryRegionInfo] = {}
-        self.memory_pool: Dict[str, torch.Tensor] = {}
 
     async def connect(self, endpoint: str):
         # bind tcp
