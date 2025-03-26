@@ -230,7 +230,7 @@ class CacheEngine:
         link.register_memory(
             "v",
             self.full_gpu_cache[1].data_ptr() + self.full_gpu_cache[1].storage_offset(),
-            self.full_gpu_cache[0].numel() * self.full_gpu_cache[0].itemsize
+            self.full_gpu_cache[1].numel() * self.full_gpu_cache[1].itemsize
         )
         return link.local_info
 
