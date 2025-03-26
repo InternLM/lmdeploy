@@ -103,7 +103,7 @@ struct LlamaLinear<T>::Impl {
                               weight.output_dims,
                               1.0f,
                               type == kFusedAdd ? 1.0f : 0.0f);
-        sync_check_cuda_error();
+        // sync_check_cuda_error();
     }
 
     void forwardInt4(T* output_data, Pitched input_data, int batch_size, const LlamaDenseWeight<T>& weight, Type type)

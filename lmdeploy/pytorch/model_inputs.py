@@ -300,6 +300,12 @@ class ModelInputs:
             num_ignored_history=num_ignored_history,
         )
 
+    def log_info(self):
+        """get log info."""
+        ret = (f'num_tokens={self.input_ids.numel()}, batch_size={self.seq_length.numel()}'
+               f', is_decoding={self.is_decoding}, has_vision={self.vision_inputs is not None}')
+        return ret
+
 
 @dataclass
 class StepContext:

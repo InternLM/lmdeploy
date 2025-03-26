@@ -4,6 +4,7 @@ from typing import List, Optional
 
 import torch
 
+import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.kernels.dlinfer import linear
 
 from ..linear import LinearBuilder, LinearImpl
@@ -26,7 +27,10 @@ class DlinferLinearImpl(LinearImpl):
                 rank: int = 0,
                 scatter_size: List[int] = None):
         """forward."""
-        return linear(x, weight, bias, all_reduce)
+        out = linear(x, weight, bias, False)
+        if all_reduce:
+            dist.all_reduce(out)
+        return out
 
 
 class DlinferLinearBuilder(LinearBuilder):

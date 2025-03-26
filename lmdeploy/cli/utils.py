@@ -156,7 +156,11 @@ class ArgumentHelper:
     def dp(parser):
         """Add argument dp to parser."""
 
-        return parser.add_argument('--dp', type=int, default=1, help='data parallelism. dp_rank is required.')
+        return parser.add_argument('--dp',
+                                   type=int,
+                                   default=1,
+                                   help='data parallelism. dp_rank is required when pytorch engine is used.')
+    
     
     @staticmethod
     def ep(parser):
@@ -164,6 +168,7 @@ class ArgumentHelper:
 
         return parser.add_argument('--ep', type=int, default=1, help='expert parallelism. Should be 2^n.')
 
+        
     @staticmethod
     def dp_rank(parser):
         """add argument dp_rank to parser."""
