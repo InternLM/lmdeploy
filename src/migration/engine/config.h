@@ -15,13 +15,6 @@ namespace migration {
 
 using json = nlohmann::json;
 
-typedef struct TransferConfig {
-    size_t ib_port;
-    size_t gid_index;
-} transfer_config_t;
-
-transfer_config_t loadGlobalConfig();
-
 typedef struct RDMAInfo {
     uint32_t      qpn;
     union ibv_gid gid;
