@@ -5,7 +5,6 @@ from typing import Dict, List, Tuple
 import torch
 import zmq
 
-from .config import ExchangeInfo, RDMAInfo
 from .context import RDMAContext
 
 
