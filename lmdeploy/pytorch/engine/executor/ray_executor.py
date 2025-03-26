@@ -418,8 +418,7 @@ class RayExecutor(ExecutorBase):
 
     def rdma_connect(self, config):
         """rdma connect."""
-        x = self.collective_rpc("rdma_connect", (config,))
-        return x
+        return self.collective_rpc("rdma_connect", (config,))
 
     async def migrate(self, inputs):
         jobs = (worker.migrate.remote(inputs) for worker in self.workers)
