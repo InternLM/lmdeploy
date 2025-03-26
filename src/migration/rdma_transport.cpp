@@ -211,7 +211,7 @@ void RDMAContext::modify_qp_to_rtsr(RDMAInfo remote_rdma_info)
     attr.path_mtu           = (enum ibv_mtu)std::min((uint32_t)remote_rdma_info_.mtu, (uint32_t)local_rdma_info_.mtu);
     attr.dest_qp_num        = remote_rdma_info_.qpn;
     attr.rq_psn             = remote_rdma_info_.psn;
-    attr.max_dest_rd_atomic = 16;
+    attr.max_dest_rd_atomic = 32;
     attr.min_rnr_timer      = 12;
     attr.ah_attr.dlid       = 0;
     attr.ah_attr.sl         = 0;
@@ -246,7 +246,7 @@ void RDMAContext::modify_qp_to_rtsr(RDMAInfo remote_rdma_info)
     attr.retry_cnt     = 7;
     attr.rnr_retry     = 7;
     attr.sq_psn        = local_rdma_info_.psn;
-    attr.max_rd_atomic = 16;
+    attr.max_rd_atomic = 32;
 
     flags =
         IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT | IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN | IBV_QP_MAX_QP_RD_ATOMIC;
