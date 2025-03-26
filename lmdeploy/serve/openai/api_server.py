@@ -930,7 +930,7 @@ async def rdma_connect(raw_request: Request) -> JSONResponse:
 @router.post("/distserve/rdma_connect")
 async def rdma_connect(raw_request: Request) -> JSONResponse:
     connect_config = await raw_request.json()
-    x = await VariableInterface.async_engine.rdma_connect(connect_config["config"])
+    x = VariableInterface.async_engine.rdma_connect(connect_config["config"])
     return x
 
 
