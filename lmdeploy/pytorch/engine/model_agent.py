@@ -357,6 +357,11 @@ class AutoModelAgent:
             if sampling_inputs.random_offsets is not None:
                 sampling_inputs.random_offsets += 1
 
+        async def __await_distworker(worker, timeout: float = 0.001):
+            while not worker.is_completed():
+                await asyncio.sleep(timeout)
+            worker.wait()
+
         # dist tools
         dist_ctx = get_dist_manager().current_context()
         rank = dist_ctx.rank
@@ -368,11 +373,18 @@ class AutoModelAgent:
                     f'num_tokens={inputs.input_ids.size(-1)}')
 
         is_decoding = inputs.is_decoding
-        if dp > 1 and not is_decoding:
-            all_sync_flags = torch.tensor([False] * dp, device='cuda')
-            lc_handle = dist.all_gather_into_tensor(all_sync_flags,
-                                                    torch.tensor(sync_long_context, device='cuda'),
-                                                    async_op=True)
+        if dp > 1:
+            if is_decoding:
+                batch_size = inputs.seq_length.numel()
+                all_batch_sizes = torch.tensor([0] * dp, device='cuda')
+                lc_handle = dist.all_gather_into_tensor(all_batch_sizes,
+                                                        all_batch_sizes.new_tensor(batch_size),
+                                                        async_op=True)
+            else:
+                all_sync_flags = torch.tensor([False] * dp, device='cuda')
+                lc_handle = dist.all_gather_into_tensor(all_sync_flags,
+                                                        torch.tensor(sync_long_context, device='cuda'),
+                                                        async_op=True)
 
         non_blocking = True
         inputs = _try_to_cuda(inputs, non_blocking=non_blocking)
@@ -385,10 +397,19 @@ class AutoModelAgent:
         self.stream.synchronize()
 
         if dp > 1:
-            if not is_decoding:
-                lc_handle.wait()
+            if is_decoding:
+                await __await_distworker(lc_handle)
+                padding_batch_size = all_batch_sizes.cpu().max().item()
+                meta = self.patched_model.get_meta()
+                meta.padding_batch_size = padding_batch_size
+                logger.debug(f'padding_batch_size={padding_batch_size}')
+            else:
+                await __await_distworker(lc_handle)
                 sync_long_context = all_sync_flags.any()
+                logger.debug(f'sync_long_context={sync_long_context}')
             inputs.build_dp_meta()
+        else:
+            sync_long_context = False
 
         need_output = dp > 1 or rank % tp == 0
 
