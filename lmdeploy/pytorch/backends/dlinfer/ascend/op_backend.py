@@ -257,3 +257,16 @@ class AscendOpsBackend(DlinferOpsBackend):
     @staticmethod
     def ccl_backend():
         return 'hccl'
+
+    @staticmethod
+    def device_count():
+        """get num available devices."""
+        return torch.npu.device_count()
+
+    @staticmethod
+    def support_ray():
+        """support ray."""
+        rank_table_file = os.environ.get('ASCEND_RANK_TABLE_FILE_PATH', None)
+        if rank_table_file:
+            return True
+        return False

@@ -304,7 +304,7 @@ def fill_kv_cache(k_states: Tensor,
     if k_caches.data_ptr() == v_caches.data_ptr() and head_dim_v <= head_dim:
         BLOCK_DV = 0
     if quant_policy == 0:
-        grid = [num_heads, max_num_blocks, batch_size]
+        grid = (num_heads, max_num_blocks, batch_size)
         is_decoding = max_num_blocks == 1
         _fill_kv_cache_kernel[grid](
             k_states,
@@ -340,7 +340,7 @@ def fill_kv_cache(k_states: Tensor,
             num_stages=3,
         )
     else:
-        grid = [batch_size, max_num_blocks]
+        grid = (batch_size, max_num_blocks)
         _fill_kv_cache_quant_kernel[grid](
             k_states,
             v_states,

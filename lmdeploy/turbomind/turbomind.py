@@ -3,8 +3,10 @@
 import asyncio
 import copy
 import json
+import math
 import os.path as osp
 import sys
+from collections import defaultdict
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
@@ -63,6 +65,43 @@ def _tm_dict_to_torch_dict(tm_dict: _tm.TensorMap):
     return ret
 
 
+def complete_parallel_config(cfg: TurbomindEngineConfig):
+    if any((cfg.attn_dp_size, cfg.attn_tp_size, cfg.mlp_dp_size, cfg.mlp_tp_size, cfg.outer_dp_size)):
+        cfg.attn_dp_size = cfg.attn_dp_size or 1
+        cfg.attn_tp_size = cfg.attn_tp_size or 1
+        cfg.mlp_dp_size = cfg.mlp_dp_size or 1
+        cfg.mlp_tp_size = cfg.mlp_tp_size or 1
+        cfg.outer_dp_size = cfg.outer_dp_size or 1
+        gcd = math.gcd(cfg.mlp_dp_size, cfg.attn_dp_size)
+        cfg.outer_dp_size *= gcd
+        cfg.mlp_dp_size //= gcd
+        cfg.attn_dp_size //= gcd
+        return True
+    return False
+
+
+def update_parallel_config(cfg: TurbomindEngineConfig):
+    if not complete_parallel_config(cfg):
+        total = cfg.dp * cfg.tp
+        if not cfg.device_num:
+            count = torch.cuda.device_count()
+            if total < count:
+                count = total
+            cfg.device_num = count
+        assert total % cfg.device_num == 0
+        overlap = total // cfg.device_num
+        attn_dp_size = overlap
+        mlp_tp_size = overlap
+        inner_tp_size = cfg.tp // mlp_tp_size
+        cfg.outer_dp_size = cfg.dp // attn_dp_size
+        cfg.attn_dp_size = attn_dp_size
+        cfg.attn_tp_size = inner_tp_size
+        cfg.mlp_dp_size = 1
+        cfg.mlp_tp_size = mlp_tp_size * inner_tp_size
+    assert cfg.attn_dp_size * cfg.attn_tp_size == cfg.mlp_dp_size * cfg.mlp_tp_size
+    assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.outer_dp_size == cfg.device_num
+
+
 class TurboMind:
     """LMDeploy's inference engine.
 
@@ -97,7 +136,9 @@ class TurboMind:
         assert _engine_config.max_batch_size > 0, 'max_batch_size should be' \
             f' greater than 0, but got {_engine_config.max_batch_size}'
 
-        self.gpu_count = _engine_config.tp
+        update_parallel_config(_engine_config)
+
+        self.gpu_count = _engine_config.device_num
 
         self.tokenizer = tokenizer
         if model_source == ModelSource.WORKSPACE:
@@ -139,7 +180,7 @@ class TurboMind:
             for future in futures:
                 future.result()
 
-    def _get_model_params(self, model_comm, tm_params):
+    def _get_model_params(self, model_comm, tm_params: defaultdict):
         """Get turbomind model params when loading from hf."""
 
         def _get_params(device_id, que):
@@ -158,11 +199,9 @@ class TurboMind:
         for _ in range(self.gpu_count):
             tensor_map = que.get()
             for k, v in tensor_map.items():
-                if k not in tm_params:
-                    tm_params[k] = []
                 tm_params[k].append(v)
 
-    def _postprocess_config(self, tm_config, engine_config):
+    def _postprocess_config(self, tm_config: TurbomindModelConfig, engine_config: TurbomindEngineConfig):
         """postprocess turbomind config by."""
         import copy
         self.config = copy.deepcopy(tm_config)
@@ -202,7 +241,6 @@ class TurboMind:
 
         model_comm = _tm.AbstractTransformerModel.create_llama_model(model_dir='',
                                                                      config=yaml.safe_dump(self.config_dict),
-                                                                     tensor_para_size=self.gpu_count,
                                                                      data_type=self.config.model_config.weight_type)
 
         # create empty weight
@@ -229,19 +267,14 @@ class TurboMind:
         cfg = TurbomindModelConfig.from_dict(_cfg)
 
         # always use tp in converted model (config.yaml)
-        if cfg.tensor_para_size != engine_config.tp:
-            logger.warning('tp in engine_config is different from in config.yaml'
-                           f'({config_path}), {engine_config.tp} vs '
-                           f'{cfg.tensor_para_size}, using tp={cfg.tensor_para_size}')
-        self.gpu_count = cfg.tensor_para_size
-        engine_config.tp = self.gpu_count
+        assert cfg.model_config.attn_tp_size == engine_config.attn_tp_size, \
+            f'tp size mismatch ({cfg.model_config.attn_tp_size} vs {engine_config.attn_tp_size})'
 
         self._postprocess_config(cfg, engine_config)
 
         weight_dir = osp.join(model_path, 'triton_models', 'weights')
         model_comm = _tm.AbstractTransformerModel.create_llama_model(model_dir=weight_dir,
                                                                      config=yaml.safe_dump(self.config_dict),
-                                                                     tensor_para_size=self.gpu_count,
                                                                      data_type=self.config.weight_type)
 
         # create weight and load params

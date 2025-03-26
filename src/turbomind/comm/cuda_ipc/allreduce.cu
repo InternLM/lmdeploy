@@ -3,8 +3,8 @@
 #include <atomic>
 #include <stdexcept>
 
-#include "src/turbomind/comm/native/device_semaphore.h"
-#include "src/turbomind/comm/native/native_comm.h"
+#include "src/turbomind/comm/cuda_ipc/cuda_ipc_comm.h"
+#include "src/turbomind/comm/cuda_ipc/device_semaphore.h"
 
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/meta.h"
@@ -143,13 +143,13 @@ __global__ void __launch_bounds__(1024, 1) AllreduceKernel_LL_WS(T*             
 // Modified from
 // https://github.com/microsoft/mscclpp/blob/591276f9d07d2df8e2a45a16738e27867e468ca3/test/mscclpp-test/allreduce_test.cu#L963
 template<class T, int vec_size, class Relaxed>
-__global__ void Allreduce_Simple_Pull(T*                                             buf,
-                                      Array<T*, kMaxNearPeers>                       chns,
-                                      mscclpp::SmDevice2DeviceSemaphoreDeviceHandle* semaphores,
-                                      int                                            rank,
-                                      int                                            peers,
-                                      int                                            slice,
-                                      int                                            count,
+__global__ void Allreduce_Simple_Pull(T*                           buf,
+                                      Array<T*, kMaxNearPeers>     chns,
+                                      mscclpp::D2DSemaphoreHandle* semaphores,
+                                      int                          rank,
+                                      int                          peers,
+                                      int                          slice,
+                                      int                          count,
                                       constant<vec_size>,
                                       Relaxed relaxed)
 {
@@ -217,14 +217,14 @@ __global__ void Allreduce_Simple_Pull(T*                                        
 // ! slice <= grid size
 // Slightly lower latency
 template<class T, int vec_size, class Relaxed>
-__global__ void Allreduce_Simple_Push(T*                                             buf,
-                                      T*                                             scratch,
-                                      Array<T*, kMaxNearPeers>                       near,
-                                      mscclpp::SmDevice2DeviceSemaphoreDeviceHandle* semaphores,
-                                      int                                            rank,
-                                      int                                            peers,
-                                      int                                            slice,  // in vec
-                                      int                                            count,  // in vec
+__global__ void Allreduce_Simple_Push(T*                           buf,
+                                      T*                           scratch,
+                                      Array<T*, kMaxNearPeers>     near,
+                                      mscclpp::D2DSemaphoreHandle* semaphores,
+                                      int                          rank,
+                                      int                          peers,
+                                      int                          slice,  // in vec
+                                      int                          count,  // in vec
                                       constant<vec_size>,
                                       Relaxed relaxed)
 {
@@ -291,15 +291,15 @@ __global__ void Allreduce_Simple_Push(T*                                        
 }
 
 template<class T, int vec_size, class Relaxed>
-__global__ void Allreduce_Simple_Push_v2(T*                                             buf,
-                                         T*                                             scratch,
-                                         Array<T*, kMaxNearPeers>                       near_buf,
-                                         Array<T*, kMaxNearPeers>                       near_scratch,
-                                         mscclpp::SmDevice2DeviceSemaphoreDeviceHandle* semaphores,
-                                         int                                            rank,
-                                         int                                            peers,
-                                         int                                            slice,  // in vec
-                                         int                                            count,  // in vec
+__global__ void Allreduce_Simple_Push_v2(T*                           buf,
+                                         T*                           scratch,
+                                         Array<T*, kMaxNearPeers>     near_buf,
+                                         Array<T*, kMaxNearPeers>     near_scratch,
+                                         mscclpp::D2DSemaphoreHandle* semaphores,
+                                         int                          rank,
+                                         int                          peers,
+                                         int                          slice,  // in vec
+                                         int                          count,  // in vec
                                          constant<vec_size>,
                                          Relaxed relaxed)
 {
@@ -355,29 +355,35 @@ __global__ void Allreduce_Simple_Push_v2(T*                                     
     }
 }
 
-void NativeComm::AllReduceSum(const void* sendbuff, void* recvbuff, size_t count, DataType type, cudaStream_t stream)
+void CudaIpcCommImpl::AllReduceSum(
+    const void* sendbuff, void* recvbuff, size_t count, DataType type, int group, cudaStream_t stream)
 {
     FT_CHECK(sendbuff == recvbuff);
 
     void* data = recvbuff;
+
+    const int n_ranks = this->n_ranks(group);
+    const int rank    = this->rank(group);
+
+    auto semaphores = groups_.at(group).d2d_semaphores;
 
     auto invoke = [&](auto t) {
         using T               = decltype(t);
         const size_t bytesize = sizeof(T) * count;
         if (bytesize <= 1 << 20) {
             constexpr int vec_size      = sizeof(uint2) / sizeof(T);
-            const int     slice         = (count / vec_size + world_size_ - 1) / world_size_;
+            const int     slice         = (count / vec_size + n_ranks - 1) / n_ranks;
             constexpr int ctas_per_peer = 4;
             constexpr int threads       = 1024;
-            const int     blocks        = (world_size_ - 1) * ctas_per_peer;
+            const int     blocks        = (n_ranks - 1) * ctas_per_peer;
             auto          incoming      = (LLPacket*)packet_buff_;
-            auto          outgoing      = get_near(incoming);
+            auto          outgoing      = get_symmetric(incoming, group);
             AllreduceKernel_LL<<<blocks, threads, 0, stream>>>((T*)data,  //
                                                                (T*)data,
                                                                incoming,
                                                                outgoing,
-                                                               rank_,
-                                                               world_size_ - 1,
+                                                               rank,
+                                                               n_ranks - 1,
                                                                slice,
                                                                count / vec_size,
                                                                flag_++,
@@ -385,17 +391,17 @@ void NativeComm::AllReduceSum(const void* sendbuff, void* recvbuff, size_t count
         }
         else {
             constexpr int vec_size = sizeof(uint4) / sizeof(T);
-            const int     slice    = (count / vec_size + world_size_ - 1) / world_size_;
+            const int     slice    = (count / vec_size + n_ranks - 1) / n_ranks;
             if (bytesize <= kScratchBuffSize && bytesize <= 6 << 20) {
                 constexpr int threads = 1024;
                 const int     blocks  = std::min(48, (slice + threads - 1) / threads);
                 Allreduce_Simple_Push_v2<<<blocks, threads, 0, stream>>>((T*)data,
                                                                          (T*)scratch_buff_,
-                                                                         get_near((T*)data),
-                                                                         get_near((T*)scratch_buff_),
-                                                                         device_semaphores_,
-                                                                         rank_,
-                                                                         world_size_ - 1,
+                                                                         get_symmetric((T*)data, group),
+                                                                         get_symmetric((T*)scratch_buff_, group),
+                                                                         semaphores,
+                                                                         rank,
+                                                                         n_ranks - 1,
                                                                          slice,
                                                                          count / vec_size,
                                                                          constant<vec_size>{},
@@ -405,10 +411,10 @@ void NativeComm::AllReduceSum(const void* sendbuff, void* recvbuff, size_t count
                 constexpr int threads = 1024;
                 const int     blocks  = std::min(48, (slice + threads - 1) / threads);
                 Allreduce_Simple_Pull<<<blocks, threads, 0, stream>>>((T*)data,
-                                                                      get_near((T*)data),
-                                                                      device_semaphores_,
-                                                                      rank_,
-                                                                      world_size_ - 1,
+                                                                      get_symmetric((T*)data, group),
+                                                                      semaphores,
+                                                                      rank,
+                                                                      n_ranks - 1,
                                                                       slice,
                                                                       count / vec_size,
                                                                       constant<vec_size>{},
