@@ -225,6 +225,7 @@ def init_migration(args):
             get_url(engine_snapshot.decode_endpoints[0], "distserve/rdma_connect"),
             json={"config": handler_config_decode},
         )
+        print("???")
 
 
 if __name__ == "__main__":
