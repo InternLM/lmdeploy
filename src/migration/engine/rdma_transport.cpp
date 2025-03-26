@@ -1,4 +1,5 @@
 #include "engine/rdma_transport.h"
+#include "engine/memory_pool.h"
 #include "ibv_helper.h"
 #include "utils/logging.h"
 #include "utils/utils.h"
@@ -126,7 +127,7 @@ int64_t RDMAContext::batch_r_rdma_async(const std::vector<uintptr_t>&     target
         memset(&sge[i], 0, sizeof(ibv_sge));
         sge[i].addr   = source_addrs[i];
         sge[i].length = length;
-        sge[i].lkey   = memory_region_[mr_key]->lkey;
+        sge[i].lkey   = get_lkey(mr_key);
 
         wr[i].wr_id               = (i == batch_size - 1) ? (uintptr_t)call_back_info : 0;
         wr[i].opcode              = IBV_WR_RDMA_READ;
@@ -170,7 +171,7 @@ int64_t RDMAContext::r_rdma_async(uintptr_t                         target_addr,
     memset(&sge, 0, sizeof(sge));
     sge.addr   = source_addr;
     sge.length = length;
-    sge.lkey   = memory_region_[mr_key]->lkey;
+    sge.lkey   = get_lkey(mr_key);
 
     struct ibv_send_wr wr, *bad_wr = NULL;
     memset(&wr, 0, sizeof(wr));
@@ -263,26 +264,6 @@ void RDMAContext::modify_qp_to_rtsr(RDMAInfo remote_rdma_info)
     }
 }
 
-int64_t RDMAContext::registerMemoryRegion(std::string mem_key, int64_t addr, size_t length)
-{
-
-    /* MemoryRegion Access Right = 777 */
-    const static int access_rights = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ;
-
-    ibv_mr* mr = ibv_reg_mr(pd_, (void*)addr, length, access_rights);
-
-    MIGRATION_ASSERT(mr, " Failed to register memory " << addr);
-
-    MIGRATION_LOG_INFO("Memory region: " << (void*)addr << " -- " << (void*)((uintptr_t)addr + length)
-                                         << ", Device name: " << device_name_ << ", Length: " << length << " ("
-                                         << length / 1024 / 1024 << " MB)"
-                                         << ", Permission: " << access_rights << ", LKey: " << mr->lkey
-                                         << ", RKey: " << mr->rkey);
-
-    memory_region_[mem_key] = mr;
-    return 0;
-}
-
 int64_t RDMAContext::init_rdma_context(std::string dev_name, uint8_t ib_port, std::string link_type)
 {
     uint16_t      lid;
@@ -362,6 +343,7 @@ int64_t RDMAContext::init_rdma_context(std::string dev_name, uint8_t ib_port, st
         MIGRATION_ABORT("Failed to allocate PD");
         return -1;
     }
+    memory_pool_ = MemoryPool(pd_);
 
     /* Alloc Complete Queue (CQ) */
     MIGRATION_ASSERT(ib_ctx_, "init rdma context first");

@@ -1,6 +1,8 @@
 #pragma once
 
 #include "engine/config.h"
+#include "engine/memory_pool.h"
+#include "utils/json.hpp"
 
 #include <cstdint>
 #include <functional>
@@ -8,10 +10,13 @@
 #include <infiniband/verbs.h>
 #include <mutex>
 #include <stdexcept>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
 namespace migration {
+
+using json = nlohmann::json;
 
 class RDMAContext {
 public:
@@ -29,7 +34,26 @@ public:
     void modify_qp_to_rtsr(RDMAInfo remote_rdma_info);
 
     /* Memory Allocation */
-    int64_t registerMemoryRegion(std::string mem_key, int64_t addr, size_t length);
+    int64_t register_memory(std::string mr_key, uintptr_t data_ptr, size_t length)
+    {
+        memory_pool_.register_memory_region(mr_key, data_ptr, length);
+        return 0;
+    }
+
+    int64_t register_remote_memory(std::string mr_key, json mr_info)
+    {
+        memory_pool_.register_remote_memory_region(mr_key, mr_info);
+        return 0;
+    }
+
+    uint32_t get_lkey(std::string mr_key)
+    {
+        return memory_pool_.get_lkey(mr_key);
+    }
+    uint32_t get_rkey(std::string mr_key)
+    {
+        return memory_pool_.get_rkey(mr_key);
+    }
 
     /* Async RDMA Read */
     int64_t r_rdma_async(uintptr_t                         target_addr,
@@ -61,14 +85,9 @@ public:
         return remote_rdma_info_;
     }
 
-    /* Add a memory pool management */
-    uint32_t getLKey(std::string mr_key)
+    json exchange_info()
     {
-        return memory_region_[mr_key]->lkey;
-    }
-    uint32_t getRKey(std::string mr_key)
-    {
-        return memory_region_[mr_key]->rkey;
+        return json{{"rdma_info", local_rdma_info_.to_json()}, {"mr_info", memory_pool_.mr_info()}};
     }
 
 private:
@@ -82,8 +101,7 @@ private:
     struct ibv_qp*           qp_           = nullptr;
     uint8_t                  ib_port_      = -1;
 
-    /* TODO: Memory Pool */
-    std::unordered_map<std::string, ibv_mr*> memory_region_;
+    MemoryPool memory_pool_;
 
     /* RDMA Exchange Information */
     rdma_info_t remote_rdma_info_;

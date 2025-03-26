@@ -1,14 +1,19 @@
 #pragma once
 
+#include "utils/json.hpp"
 #include "utils/logging.h"
+
 #include <cstdint>
 #include <functional>
 #include <infiniband/verbs.h>
 #include <iostream>
 #include <string>
 #include <tuple>
+#include <unordered_map>
 
 namespace migration {
+
+using json = nlohmann::json;
 
 typedef struct TransferConfig {
     size_t ib_port;
@@ -25,38 +30,28 @@ typedef struct RDMAInfo {
     uint64_t      psn;
     uint64_t      mtu;
     RDMAInfo() {}
-    RDMAInfo(uint32_t qpn,
-             uint64_t gid_subnet_prefix,
-             uint64_t gid_interface_id,
-             int64_t  gidx,
-             uint16_t lid,
-             uint64_t psn,
-             uint64_t mtu):
-        qpn(qpn), gidx(gidx), lid(lid), psn(psn), mtu(mtu)
-    {
-        gid.global = {gid_subnet_prefix, gid_interface_id};
-    }
     RDMAInfo(uint32_t qpn, union ibv_gid gid, int64_t gidx, uint16_t lid, uint64_t psn, uint64_t mtu):
-        RDMAInfo(qpn, gid.global.interface_id, gid.global.subnet_prefix, gidx, lid, psn, mtu)
+        qpn(qpn), gidx(gidx), lid(lid), psn(psn), mtu(mtu), gid(gid)
     {
     }
-    std::tuple<uint64_t, uint64_t> get_gid()
+
+    RDMAInfo(json json_config)
     {
-        return {gid.global.subnet_prefix, gid.global.interface_id};
+        gid.global.subnet_prefix = json_config["gid"]["subnet_prefix"];
+        gid.global.interface_id  = json_config["gid"]["interface_id"];
+        gidx                     = json_config["gidx"];
+        lid                      = json_config["lid"];
+        qpn                      = json_config["qpn"];
+        psn                      = json_config["psn"];
+        mtu                      = json_config["mtu"];
     }
-    void set_gid(std::tuple<uint64_t, uint64_t> remote_gid)
+
+    json to_json()
     {
-        gid.global = {std::get<0>(remote_gid), std::get<1>(remote_gid)};
+        json gid_config{{"subnet_prefix", gid.global.subnet_prefix}, {"interface_id", gid.global.interface_id}};
+        return json{{"gid", gid_config}, {"gidx", gidx}, {"lid", lid}, {"qpn", qpn}, {"psn", psn}, {"mtu", mtu}};
     }
-    void log()
-    {
-        MIGRATION_LOG_INFO("GID: " << gid.global.subnet_prefix << ", " << gid.global.interface_id);
-        MIGRATION_LOG_INFO("GIDX: " << gidx);
-        MIGRATION_LOG_INFO("LID: " << lid);
-        MIGRATION_LOG_INFO("QPN: " << qpn);
-        MIGRATION_LOG_INFO("PSN: " << psn);
-        MIGRATION_LOG_INFO("MTU: " << mtu);
-    }
+
 } rdma_info_t;
 
 enum class WrType {
