@@ -494,10 +494,6 @@ class FusedMoEBlockedF8(nn.Module):
         if self.ep_size > 1:
             expert_list = self.impl.ep_expert_list(self.ep_size, rank)
             num_experts = len(expert_list)
-        elif self.tp_size > 1:
-            world_size, rank = get_tp_world_rank()
-            expert_list = self.impl.ep_expert_list(world_size, rank)
-            num_experts = len(expert_list)
         else:
             hidden_dim, ffn_dim = _update_args(hidden_dim, ffn_dim)
             expert_list = None
@@ -511,7 +507,7 @@ class FusedMoEBlockedF8(nn.Module):
                                               dtype=fp8_dtype,
                                               device=device,
                                               expert_list=expert_list,
-                                              ep=self.tp_size > 1 or self.ep_size > 1)
+                                              ep=self.ep_size > 1)
         self.down = LinearWeightsBlockedF8(
             num_experts,
             ffn_dim,
@@ -521,7 +517,7 @@ class FusedMoEBlockedF8(nn.Module):
             dtype=fp8_dtype,
             device=device,
             expert_list=expert_list,
-            ep=self.tp_size > 1 or self.ep_size > 1,
+            ep=self.ep_size > 1,
         )
 
         self.hidden_dim = hidden_dim
@@ -543,13 +539,12 @@ class FusedMoEBlockedF8(nn.Module):
         self.down.update_weight(down_weights, down_scale)
 
     def forward(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.LongTensor):
-        hidden_states, topk_weights, topk_ids = _moe_gather_inputs(hidden_states, topk_weights, topk_ids, self.tp_size
-                                                                   > 1)
+        hidden_states, topk_weights, topk_ids = _moe_gather_inputs(hidden_states, topk_weights, topk_ids, False)
 
         ret = self.impl.forward(hidden_states, topk_weights, topk_ids, self.gate_up.weight, self.gate_up.scale,
                                 self.down.weight, self.down.scale, self.expert_list)
         if self.all_reduce:
-            ret = _moe_reduce(ret, self.tp_size > 1)
+            ret = _moe_reduce(ret, False)
         return ret
 
 

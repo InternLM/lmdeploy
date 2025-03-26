@@ -39,10 +39,12 @@ class DistChecker(BaseChecker):
                               message='dp>1 requires distributed_executor_backend="ray". '
                               f'Get distributed_executor_backend={distributed_executor_backend}.')
 
-        if self.dp > 1 and self.ep > 1 and self.dp % self.ep != 0:
-            self.log_and_exit(mod_name='Dist',
-                              message='ep>1 requires dp % ep == 0. '
-                              f'Get dp={self.dp} and ep={self.ep}.')
+        if self.ep > 1:
+            if self.dp % self.ep != 0:
+                self.log_and_exit(mod_name='Dist',
+                                  message=f'ep>1 requires dp % ep == 0. Get dp={self.dp} and ep={self.ep}.')
+            if self.tp != 1:
+                self.log_and_exit(mod_name='Dist', message=f'ep>1 requires tp == 1. Get tp={self.tp} and ep={self.ep}.')
 
         if distributed_executor_backend == 'ray':
             try:
