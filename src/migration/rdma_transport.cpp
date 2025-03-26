@@ -21,7 +21,7 @@ namespace migration {
 
 // this is only used for recving RDMA_SEND or IMM data. this should be bigger
 // than max layers of model.
-#define MAX_RECV_WR 64
+#define MAX_RECV_WR 8192
 
 void RDMAContext::launch_cq_future()
 {
