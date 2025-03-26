@@ -25,8 +25,8 @@ public:
     int register_remote_memory_region(std::string mr_key, json mr_info);
     int unregister_remote_memory_region(std::string mr_key);
 
-    uint32_t get_lkey(std::string mr_key);
-    uint32_t get_rkey(std::string mr_key);
+    struct ibv_mr* get_mr(std::string mr_key) {return mrs_[mr_key];}
+    json get_remote_mr(std::string mr_key) {return remote_mrs_[mr_key];}
 
     json mr_info();
     json remote_mr_info();

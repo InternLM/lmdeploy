@@ -46,28 +46,17 @@ public:
         return 0;
     }
 
-    uint32_t get_lkey(std::string mr_key)
-    {
-        return memory_pool_.get_lkey(mr_key);
-    }
-    uint32_t get_rkey(std::string mr_key)
-    {
-        return memory_pool_.get_rkey(mr_key);
-    }
-
     /* Async RDMA Read */
     int64_t r_rdma_async(uintptr_t                         target_addr,
                          uintptr_t                         source_addr,
                          uint64_t                          length,
                          std::string                       mr_key,
-                         int64_t                           remote_rkey,
                          std::function<void(unsigned int)> callback);
 
     int64_t batch_r_rdma_async(const std::vector<uintptr_t>&     target_addrs,
                                const std::vector<uintptr_t>&     source_addrs,
                                uint64_t                          length,
                                std::string                       mr_key,
-                               int64_t                           remote_key,
                                std::function<void(unsigned int)> callback);
 
     /* Completion Queue Polling */

@@ -98,15 +98,8 @@ int initiator(RDMAContext& rdma_context)
         target_addrs.emplace_back((uintptr_t)data + i * FLAGS_block_size);
     }
 
-    std::promise<int> promise;
-    auto              future = promise.get_future();
-
-    rdma_context.batch_r_rdma_async(
-        target_addrs, source_addrs, FLAGS_block_size, "buffer", mr_info["buffer"]["rkey"], [&promise](int code) {
-            promise.set_value(0);
-        });
-
-    future.get();
+    // TODO: Add a future event for asynchronization
+    throw std::runtime_error("UnimplementedError");
 
     return 0;
 }

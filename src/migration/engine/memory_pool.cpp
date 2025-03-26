@@ -66,13 +66,4 @@ json MemoryPool::remote_mr_info()
     return mr_info;
 }
 
-uint32_t MemoryPool::get_lkey(std::string mr_key)
-{
-    return mrs_[mr_key]->lkey;
-}
-uint32_t MemoryPool::get_rkey(std::string mr_key)
-{
-    return mrs_[mr_key]->rkey;
-}
-
 }  // namespace migration

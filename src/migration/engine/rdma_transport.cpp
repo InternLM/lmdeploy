@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <functional>
+#include <sys/types.h>
 #include <unistd.h>
 #include <vector>
 
@@ -110,32 +111,33 @@ void RDMAContext::cq_poll_handle()
     }
 }
 
-int64_t RDMAContext::batch_r_rdma_async(const std::vector<uintptr_t>&     target_addrs,
-                                        const std::vector<uintptr_t>&     source_addrs,
+int64_t RDMAContext::batch_r_rdma_async(const std::vector<uintptr_t>&     target_offsets,
+                                        const std::vector<uintptr_t>&     source_offsets,
                                         uint64_t                          length,
                                         std::string                       mr_key,
-                                        int64_t                           remote_rkey,
                                         std::function<void(unsigned int)> callback)
 {
     auto*  call_back_info = new read_info([callback](unsigned int code) { callback(code); });
-    size_t batch_size     = target_addrs.size();
+    size_t batch_size     = target_offsets.size();
 
     struct ibv_send_wr* bad_wr = NULL;
     struct ibv_send_wr* wr     = new ibv_send_wr[batch_size];
     struct ibv_sge*     sge    = new ibv_sge[batch_size];
+    struct ibv_mr*      mr     = memory_pool_.get_mr(mr_key);
+    json remote_mr = memory_pool_.get_remote_mr(mr_key);
     for (size_t i = 0; i < batch_size; ++i) {
         memset(&sge[i], 0, sizeof(ibv_sge));
-        sge[i].addr   = source_addrs[i];
-        sge[i].length = length;
-        sge[i].lkey   = get_lkey(mr_key);
+        sge[i].addr               = uint64_t(mr->addr) + source_offsets[i];
+        sge[i].length             = length;
+        sge[i].lkey               = mr->lkey;
 
         wr[i].wr_id               = (i == batch_size - 1) ? (uintptr_t)call_back_info : 0;
         wr[i].opcode              = IBV_WR_RDMA_READ;
         wr[i].sg_list             = &sge[i];
         wr[i].num_sge             = 1;
         wr[i].send_flags          = (i == batch_size - 1) ? IBV_SEND_SIGNALED : 0;
-        wr[i].wr.rdma.remote_addr = target_addrs[i];
-        wr[i].wr.rdma.rkey        = remote_rkey;
+        wr[i].wr.rdma.remote_addr = remote_mr["addr"].get<uint64_t>() + target_offsets[i];
+        wr[i].wr.rdma.rkey        = remote_mr["rkey"].get<uint32_t>();
         wr[i].next                = (i == batch_size - 1) ? NULL : &wr[i + 1];
     }
 
@@ -160,18 +162,20 @@ int64_t RDMAContext::r_rdma_async(uintptr_t                         target_addr,
                                   uintptr_t                         source_addr,
                                   uint64_t                          length,
                                   std::string                       mr_key,
-                                  int64_t                           remote_rkey,
                                   std::function<void(unsigned int)> callback)
 {
     auto* call_back_info = new read_info([callback](unsigned int code) { callback(code); });
 
     int ret;
 
+    struct ibv_mr*      mr     = memory_pool_.get_mr(mr_key);
+    json remote_mr = memory_pool_.get_remote_mr(mr_key);
+
     struct ibv_sge sge;
     memset(&sge, 0, sizeof(sge));
     sge.addr   = source_addr;
     sge.length = length;
-    sge.lkey   = get_lkey(mr_key);
+    sge.lkey   = mr->lkey;
 
     struct ibv_send_wr wr, *bad_wr = NULL;
     memset(&wr, 0, sizeof(wr));
@@ -182,7 +186,7 @@ int64_t RDMAContext::r_rdma_async(uintptr_t                         target_addr,
     wr.num_sge             = 1;
     wr.send_flags          = IBV_SEND_SIGNALED;
     wr.wr.rdma.remote_addr = target_addr;
-    wr.wr.rdma.rkey        = remote_rkey;
+    wr.wr.rdma.rkey        = remote_mr[mr_key]["rkey"].get<uint32_t>();
 
     {
         std::unique_lock<std::mutex> lock(rdma_post_send_mutex_);
