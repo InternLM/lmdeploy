@@ -1550,14 +1550,13 @@ void LlamaBatch<T>::Finish(GenerationState& g, std::vector<Signal>& signals)
 }
 
 template<typename T>
-auto LlamaBatch<T>::Interrupt(int index, bool force_stop, bool force_end) -> Signal
+auto LlamaBatch<T>::Interrupt(int index, bool force_stop) -> Signal
 {
     if (rank_ == 0) {
-        TM_LOG_INFO("[Interrupt] slot %d, request %lu, stop %d, end %d",
+        TM_LOG_INFO("[Interrupt] slot %d, request %lu, stop %d",
                     index,
                     (long)state_->requests[index]->id,
-                    force_stop,
-                    force_end);
+                    force_stop);
     }
 
     if (debug_ && rank_ == 0) {
@@ -1571,11 +1570,11 @@ auto LlamaBatch<T>::Interrupt(int index, bool force_stop, bool force_end) -> Sig
         TM_LOG_INFO("[Interrupt] slot %d, tokens [%s]", index, ss.str().c_str());
     }
 
-    if (/*state_->requests[index]->session.end_flag ||*/ force_end) {
-        // Sequence is ending this round or a stop request is issued to end it
-        FT_CHECK(sequence_manager_->Erase(state_->requests[index]->id));
-    }
-    else {
+    // if (state_->requests[index]->session.end_flag || force_end) {
+    //     // Sequence is ending this round or a stop request is issued to end it
+    //     FT_CHECK(sequence_manager_->Erase(state_->requests[index]->id));
+    // }
+    // else {
         const int output_len = state_->h_context_length[index];
         auto&     seq        = *state_->sequences[index];
 
@@ -1595,7 +1594,7 @@ auto LlamaBatch<T>::Interrupt(int index, bool force_stop, bool force_end) -> Sig
 
         // Set unlock flag for corresponding blocks, will be unlocked in the next `Materialize()`
         sequence_manager_->UpdateAndSetUnlock(seq);
-    }
+    // }
 
     state_->sequences[index] = nullptr;
 

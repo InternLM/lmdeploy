@@ -59,22 +59,32 @@ const Sequence* SequenceManager::Create(uint64_t id)
     auto     it = sequences_.find(id);
     if (it != sequences_.end()) {
         if (rank_ == 0) {
-            TM_LOG_WARNING("[SequenceManager][Create] Removing conflicting ID %llu", id);
+            TM_LOG_WARNING("[SeqMgr][Create] Removing conflicting ID %llu", id);
         }
         Erase(it);
     }
     it = sequences_.emplace_hint(it, id, std::move(sequence));
     if (rank_ == 0) {
-        TM_LOG_INFO("[SequenceManager][Create] ID %llu", id);
+        TM_LOG_INFO("[SeqMgr][Create] ID %llu", id);
     }
     return &it->second;
 }
 
 const Sequence* SequenceManager::Get(uint64_t id)
 {
+    if (!block_trie_) {
+        // when prefix_caching is not enabled, check if the id exists. If so, remove the older one
+        auto it = sequences_.find(id);
+        if (it != sequences_.end()) {
+            if (rank_ == 0) {
+                TM_LOG_INFO("[SeqMgr][Get] Removing conflicting ID %llu", id);
+            }
+            Erase(it);
+        }
+    }
     if (auto it = sequences_.find(id); it != sequences_.end()) {
         if (rank_ == 0) {
-            TM_LOG_INFO("[SequenceManager][Get] ID %llu", id);
+            TM_LOG_INFO("[SeqMgr][Get] ID %llu", id);
         }
         return &it->second;
     }
@@ -82,7 +92,7 @@ const Sequence* SequenceManager::Get(uint64_t id)
         Sequence sequence{id};
         it = sequences_.emplace_hint(it, id, std::move(sequence));
         if (rank_ == 0) {
-            TM_LOG_INFO("[SequenceManager][Create] ID %llu", id);
+            TM_LOG_INFO("[SeqMgr][Get] Create ID %llu", id);
         }
         return &it->second;
     }
@@ -103,11 +113,14 @@ void SequenceManager::Erase(std::map<uint64_t, Sequence>::iterator& it)
     else {
         UpdateAndSetUnlock(seq);
     }
-    // if prefix cache enabled, blocks will be shared by sequences, cannot be freed immediately
-    if (block_trie_) {
-        freed_.insert(freed_.end(), seq.blocks.begin(), seq.blocks.end());
-    }
+
     it = sequences_.erase(it);
+    if (block_trie_) {
+        auto is_valid = [this](int block_id, uint64_t block_unique_id) -> bool {
+            return this->block_manager_->unique_id(block_id) == block_unique_id;
+        };
+        block_trie_->Prune(is_valid);
+    }
 }
 
 bool SequenceManager::Erase(uint64_t id)
@@ -133,14 +146,14 @@ void SequenceManager::CachePrompt(const Sequences& sequences, int active_size)
         BlockIds                               block_ids;
         UniqueIds                              block_unique_ids;
         std::vector<std::shared_ptr<TrieNode>> nodes;
-        std::tie(block_ids, block_unique_ids, nodes) = block_trie_->cache(seq, seq.prompt);
+        std::tie(block_ids, block_unique_ids, nodes) = block_trie_->Cache(seq, seq.prompt);
         int valid                                    = block_manager_->Verify(block_ids, block_unique_ids);
         if (rank_ == 0) {
-            TM_LOG_INFO("[CachePrompt] session %llu, cached block_ids %s, cached block_unique_ids %s, valid %d",
-                        seq.id,
-                        serialize_vector(block_ids).c_str(),
-                        serialize_vector(block_unique_ids).c_str(),
-                        valid);
+            TM_LOG_INFO("[SeqMgr][CachePrompt] ID %llu, cached blocks %d, valid num %d", seq.id, block_ids.size(), valid);
+            TM_LOG_DEBUG("[SeqMgr][CachePrompt] ID %llu, cached block_ids %s, block_unique_ids %s",
+                seq.id,
+                serialize_vector(block_ids).c_str(),
+                serialize_vector(block_unique_ids).c_str());
         }
         // remove invalid nodes from trie tree if there is any
         if (valid < block_ids.size()) {
@@ -157,14 +170,14 @@ void SequenceManager::CacheGeneration(const Sequence& seq)
     BlockIds                               block_ids;
     UniqueIds                              block_unique_ids;
     std::vector<std::shared_ptr<TrieNode>> nodes;
-    std::tie(block_ids, block_unique_ids, nodes) = block_trie_->cache(seq, seq.tokens);
+    std::tie(block_ids, block_unique_ids, nodes) = block_trie_->Cache(seq, seq.tokens);
     int valid                                    = block_manager_->Verify(block_ids, block_unique_ids);
     if (rank_ == 0) {
-        TM_LOG_INFO("[CacheGeneration] session %llu, cached block_ids %s, cached block_unique_ids %s, valid %d",
-                    seq.id,
-                    serialize_vector(block_ids).c_str(),
-                    serialize_vector(block_unique_ids).c_str(),
-                    valid);
+        TM_LOG_INFO("[SeqMgr][CacheGeneration] ID %llu, cached blocks %d, valid %d", seq.id, block_ids.size(), valid);
+        TM_LOG_DEBUG("[SeqMgr][CacheGeneration] ID %llu, cached block_ids %s, cached block_unique_ids %s",
+            seq.id,
+            serialize_vector(block_ids).c_str(),
+            serialize_vector(block_unique_ids).c_str());
     }
     // remove invalid nodes from trie tree if there is any
     if (valid < block_ids.size()) {
@@ -444,7 +457,7 @@ void SequenceManager::PrefixMatch(Sequences& sequences)
             // seq.cache_len is updated after every forward iter. Refer to `LlamaBatch::Forward`
             continue;
         }
-        std::tie(block_ids, unique_ids, matched_nodes) = block_trie_->match(seq);
+        std::tie(block_ids, unique_ids, matched_nodes) = block_trie_->Match(seq);
         const int valid                                = block_manager_->Verify(block_ids, unique_ids);
         // remove invalid nodes from trie tree if there is any
         if (valid < block_ids.size()) {
@@ -458,11 +471,11 @@ void SequenceManager::PrefixMatch(Sequences& sequences)
         seq.block_unique_ids.insert(seq.block_unique_ids.end(), unique_ids.begin(), unique_ids.begin() + valid);
         seq.cache_len = valid * block_seq_len_;
         if (rank_ == 0) {
-            TM_LOG_INFO("[match] session %llu, matched block_ids %s, unique_ids %s",
+            TM_LOG_INFO("[SeqMgr][match] ID %llu, hit blocks %d, cache_len %d", seq.id, valid, seq.cache_len);
+            TM_LOG_DEBUG("[SeqMgr][match] ID %llu, hit block_ids %s, unique_ids %s",
                         seq.id,
                         serialize_vector(block_ids).c_str(),
                         serialize_vector(unique_ids).c_str());
-            TM_LOG_INFO("[match] valid blocks %d, cache_len %d", valid, seq.cache_len);
         }
     }
 }

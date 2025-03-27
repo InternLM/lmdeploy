@@ -23,7 +23,8 @@ class BlockTrie {
 public:
     explicit BlockTrie(size_t block_len);
 
-    /** @brief Attempt to match cached key-value (KV) blocks for a given sequence.
+    /**
+     * @brief Attempt to match cached key-value (KV) blocks for a given sequence.
      *
      * This function iterates the tokens of the sequence and attempts
      * to match them with the cached KV blocks. If the max prefix match is found,
@@ -37,7 +38,7 @@ public:
      *
      * @note If no blocks are matched, all containers in the returned tuple will be empty.
      */
-    std::tuple<BlockIds, UniqueIds, std::vector<std::shared_ptr<TrieNode>>> match(const Sequence& seq) const;
+    std::tuple<BlockIds, UniqueIds, std::vector<std::shared_ptr<TrieNode>>> Match(const Sequence& seq) const;
 
     /**
      * @brief Cache the key-value (KV) blocks of a given sequence.
@@ -53,16 +54,26 @@ public:
      *         - UniqueIds: A list of unique IDs of the cached blocks.
      *         - std::vector<std::shared_ptr<TrieNode>>: A list of cached node
      */
-    std::tuple<BlockIds, UniqueIds, std::vector<std::shared_ptr<TrieNode>>> cache(const Sequence&         seq,
+    std::tuple<BlockIds, UniqueIds, std::vector<std::shared_ptr<TrieNode>>> Cache(const Sequence&         seq,
                                                                                   const std::vector<int>& tokens);
 
-    /** @brief remove nodes[valid_size:] in a visited path from the trie tree
+    /**
+     * @brief remove nodes[valid_size:] in a visited path from the trie tree
 
-    * @param nodes a visited path returned by `match` or `cache`
-    * @param valid_size the valid number of cached blocks from the beginning of the path
-    * @note the visited path must be the returned value from `match` or `cache`
-    */
+     * @param nodes a visited path returned by `match` or `cache`
+     * @param valid_size the valid number of cached blocks from the beginning of the path
+     * @note the visited path must be the returned value from `match` or `cache`
+     */
     void Remove(const std::vector<std::shared_ptr<TrieNode>>& nodes, int valid_size);
+
+    /**
+     * @brief prune invalid nodes from the tree
+     */
+    using ValidBlockChecker = std::function<bool(int, uint64_t)>;
+    void Prune(ValidBlockChecker checker);
+
+private:
+    void DFSPrune(std::shared_ptr<TrieNode>& node, ValidBlockChecker checker);
 
 private:
     size_t block_seq_len_;

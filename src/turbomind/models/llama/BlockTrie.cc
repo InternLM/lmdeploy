@@ -19,7 +19,7 @@ BlockTrie::BlockTrie(size_t block_len): block_seq_len_(block_len)
     root_ = std::make_shared<TrieNode>();
 }
 
-std::tuple<BlockIds, UniqueIds, std::vector<std::shared_ptr<TrieNode>>> BlockTrie::match(const Sequence& seq) const
+std::tuple<BlockIds, UniqueIds, std::vector<std::shared_ptr<TrieNode>>> BlockTrie::Match(const Sequence& seq) const
 {
     BlockIds                               matched_blocks;
     UniqueIds                              matched_unique_ids;
@@ -51,7 +51,7 @@ std::tuple<BlockIds, UniqueIds, std::vector<std::shared_ptr<TrieNode>>> BlockTri
     return std::make_tuple(matched_blocks, matched_unique_ids, matched_nodes);
 }
 
-std::tuple<BlockIds, UniqueIds, std::vector<std::shared_ptr<TrieNode>>> BlockTrie::cache(const Sequence&         seq,
+std::tuple<BlockIds, UniqueIds, std::vector<std::shared_ptr<TrieNode>>> BlockTrie::Cache(const Sequence&         seq,
                                                                                          const std::vector<int>& tokens)
 {
     TM_LOG_INFO("[BlockTrie][cache] session %llu, seq.blocks %d, tokens %d", seq.id, seq.blocks.size(), tokens.size());
@@ -120,6 +120,25 @@ void BlockTrie::Remove(const std::vector<std::shared_ptr<TrieNode>>& nodes, int 
         FT_CHECK(it != parent->children.end());
         FT_CHECK(it->second->tokens == child->tokens);
         parent->children.erase(it);
+    }
+}
+
+void BlockTrie::Prune(ValidBlockChecker checker)
+{
+    return DFSPrune(root_, checker);
+}
+
+void BlockTrie::DFSPrune(std::shared_ptr<TrieNode>& node, ValidBlockChecker checker)
+{
+    for (auto it = node->children.begin(); it != node->children.end();) {
+        if (!checker(it->second->block_id, it->second->block_unique_id)) {
+            // child invalid
+            it = node->children.erase(it);
+        }
+        else {
+            DFSPrune(it->second, checker);
+            it++;
+        }
     }
 }
 
