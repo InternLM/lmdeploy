@@ -22,7 +22,7 @@ def _quant_fp8_kernel(
     stride_om,
     stride_ok: tl.constexpr,
     stride_sm,
-    stride_sg: tl.constexpr,
+    stride_sg,
     GROUP_SIZE: tl.constexpr,
 ):
     """quant fp8 kernel."""
@@ -31,6 +31,7 @@ def _quant_fp8_kernel(
     m_id_stride = tl.num_programs(1)
 
     g_offs = group_id * GROUP_SIZE + tl.arange(0, GROUP_SIZE)
+    g_offs = tl.max_contiguous(tl.multiple_of(g_offs, GROUP_SIZE), GROUP_SIZE)
     rfp8_max = 1 / fp8_max
 
     m_id = m_id_start
@@ -38,7 +39,7 @@ def _quant_fp8_kernel(
     o_ptrs = out_ptr + m_id * stride_om + g_offs * stride_ok
     s_ptr = scale_ptr + m_id * stride_sm + group_id * stride_sg
 
-    for _ in range(m_id_start, M, m_id_stride):
+    for _ in tl.range(m_id_start, M, m_id_stride):
 
         a = tl.load(a_ptrs).to(tl.float32)
         scale = tl.max(tl.abs(a)) * rfp8_max
@@ -55,27 +56,24 @@ def _quant_fp8_kernel(
         s_ptr += m_id_stride * stride_sm
 
 
-def quant_fp8(A: Tensor, group_size: int, dtype: torch.dtype = torch.float8_e4m3fn):
+def _quant_fp8_launcher(A: Tensor, group_size: int, out: Tensor, scales: Tensor):
     """quant online."""
-    assert A.dim() == 2
     M, K = A.shape
-    assert K % group_size == 0
     num_groups = K // group_size
 
+    dtype = out.dtype
     finfo = torch.finfo(dtype)
     fmin = finfo.min
     fmax = finfo.max
 
-    out = torch.empty_like(A, dtype=dtype)
-    scales = A.new_empty(M, num_groups, dtype=torch.float32)
-
-    num_warps = 4
+    num_warps = 1
     num_stages = 1
 
     props = get_device_props(A.device.index)
     num_sm = props['multi_processor_count']
     warps_per_sm = props['warps_per_sm']
-    grid_size1 = min(M, num_sm * warps_per_sm // num_warps)
+    max_ctas = num_sm * warps_per_sm // num_warps
+    grid_size1 = min(M, max_ctas // num_groups)
     assert grid_size1 < 65536
     grid = (num_groups, grid_size1)
     _quant_fp8_kernel[grid](
@@ -99,6 +97,17 @@ def quant_fp8(A: Tensor, group_size: int, dtype: torch.dtype = torch.float8_e4m3
     return out, scales
 
 
+def quant_fp8(A: Tensor, group_size: int, dtype: torch.dtype = torch.float8_e4m3fn):
+    """quant fp8."""
+    assert A.dim() == 2
+    M, K = A.shape
+    assert K % group_size == 0
+    num_groups = K // group_size
+    out = torch.empty_like(A, dtype=dtype)
+    scales = A.new_empty(M, num_groups, dtype=torch.float32)
+    return _quant_fp8_launcher(A, group_size, out, scales)
+
+
 # adapted from https://github.com/deepseek-ai/DeepGEMM/blob/main/deep_gemm/jit_kernels/utils.py#L46
 def get_tma_aligned_size(x: int, element_size: int) -> int:
     """Global memory address of TMA must be 16-byte aligned. Since we use
@@ -118,79 +127,16 @@ def get_tma_aligned_size(x: int, element_size: int) -> int:
     return triton.cdiv(x, alignment) * alignment
 
 
-@triton.jit
-def _quant_fp8_tma_kernel(
-    a_ptr,
-    out_ptr,
-    scale_ptr,
-    fp8_min: tl.constexpr,
-    fp8_max: tl.constexpr,
-    stride_am,
-    stride_ak: tl.constexpr,
-    stride_om,
-    stride_ok: tl.constexpr,
-    stride_sg,
-    stride_sm: tl.constexpr,
-    GROUP_SIZE: tl.constexpr,
-):
-    """quant fp8 kernel."""
-    group_id = tl.program_id(0)
-    m_id = tl.program_id(1)
-
-    g_offs = group_id * GROUP_SIZE + tl.arange(0, GROUP_SIZE)
-
-    a_ptrs = a_ptr + m_id * stride_am + g_offs * stride_ak
-    o_ptrs = out_ptr + m_id * stride_om + g_offs * stride_ok
-    s_ptr = scale_ptr + m_id * stride_sm + group_id * stride_sg
-
-    rfp8_max = 1 / fp8_max
-
-    a = tl.load(a_ptrs).to(tl.float32)
-    scale = tl.max(tl.abs(a)) * rfp8_max
-    out = a / scale
-
-    out = tl.clamp(out, fp8_min, fp8_max)
-    out = out.to(out_ptr.dtype.element_ty)
-
-    tl.store(o_ptrs, out)
-    tl.store(s_ptr, scale)
-
-
 def quant_fp8_tma(A: Tensor, group_size: int, dtype: torch.dtype = torch.float8_e4m3fn):
-    """quant online."""
+    """quant fp8 tma."""
     assert A.dim() == 2
     M, K = A.shape
     assert K % group_size == 0
     num_groups = K // group_size
-
-    finfo = torch.finfo(dtype)
-    fmin = finfo.min
-    fmax = finfo.max
-
     out = torch.empty_like(A, dtype=dtype)
     aligned_M = get_tma_aligned_size(M, torch.float32.itemsize)
-    scales = A.new_empty(num_groups, aligned_M, dtype=torch.float32)
-    grid = (num_groups, M)
-    num_warps = 4
-    num_stages = 1
-    _quant_fp8_tma_kernel[grid](
-        A,
-        out,
-        scales,
-        fp8_min=fmin,
-        fp8_max=fmax,
-        stride_am=A.stride(0),
-        stride_ak=A.stride(1),
-        stride_om=out.stride(0),
-        stride_ok=out.stride(1),
-        stride_sg=scales.stride(0),
-        stride_sm=scales.stride(1),
-        GROUP_SIZE=group_size,
-        num_warps=num_warps,
-        num_stages=num_stages,
-    )
-
-    return out, scales.transpose(0, 1)
+    scales = A.new_empty(num_groups, aligned_M, dtype=torch.float32).T
+    return _quant_fp8_launcher(A, group_size, out, scales)
 
 
 @triton.autotune(configs=[
