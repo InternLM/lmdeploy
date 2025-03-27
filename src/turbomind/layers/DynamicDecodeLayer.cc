@@ -153,7 +153,7 @@ void DynamicDecodeLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_
     }
 }
 
-#if defined(ENABLE_FP32) || defined(BUILD_TEST)
+#ifdef ENABLE_FP32
 template class DynamicDecodeLayer<float>;
 #endif
 template class DynamicDecodeLayer<half>;

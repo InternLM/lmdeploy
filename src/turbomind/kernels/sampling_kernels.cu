@@ -97,7 +97,7 @@ void invokeSampling(SamplingParams& params, cudaStream_t stream)
                                                    params.sampled_nums);
 }
 
-#if defined(ENABLE_FP32) || defined(BUILD_TEST)
+#ifdef ENABLE_FP32
 template void invokeSampling<float>(SamplingParams& params, cudaStream_t stream);
 #endif
 template void invokeSampling<half>(SamplingParams& params, cudaStream_t stream);

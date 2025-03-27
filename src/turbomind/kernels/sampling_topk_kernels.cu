@@ -107,7 +107,9 @@ __global__ void topKSortStage1(T*         logits,
         if (tid == 0) {
             topk_tmp_id_buf[ite]  = total.p;
             topk_tmp_val_buf[ite] = total.u;
-            logits[total.p]       = -MAX_T_VAL;
+            if (total.p != -1) {
+                logits[total.p] = -MAX_T_VAL;
+            }
         }
         __syncthreads();
     }
@@ -241,7 +243,7 @@ void invokeTopKSortFilter(TopKSortFilterParams& params, cudaStream_t stream)
     }
 }
 
-#if defined(ENABLE_FP32) || defined(BUILD_TEST)
+#ifdef ENABLE_FP32
 template void invokeTopKSortFilter<float>(TopKSortFilterParams& params, cudaStream_t stream);
 #endif
 template void invokeTopKSortFilter<half>(TopKSortFilterParams& params, cudaStream_t stream);

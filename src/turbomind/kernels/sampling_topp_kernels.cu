@@ -145,7 +145,7 @@ void invokeSoftmax(T*           logits,
                                    const int*   kept,                                                                  \
                                    cudaStream_t stream);
 
-#if defined(ENABLE_FP32) || defined(BUILD_TEST)
+#ifdef ENABLE_FP32
 INSTANTIATE_INVOKE_SOFTMAX(float);
 #endif
 INSTANTIATE_INVOKE_SOFTMAX(half);
@@ -290,7 +290,7 @@ void invokeTopPSort(TopPSortParams& params, cudaStream_t stream)
                                                                         stream));       // cudaStream_t
 }
 
-#if defined(ENABLE_FP32) || defined(BUILD_TEST)
+#ifdef ENABLE_FP32
 template void invokeTopPSort<float>(TopPSortParams& params, cudaStream_t stream);
 #endif
 template void invokeTopPSort<half>(TopPSortParams& params, cudaStream_t stream);
@@ -404,7 +404,7 @@ void invokeTopPMinPFilter(TopPMinPFilterParams& params, cudaStream_t stream)
                                                                   params.min_ps);
 }
 
-#if defined(ENABLE_FP32) || defined(BUILD_TEST)
+#ifdef ENABLE_FP32
 template void invokeTopPMinPFilter<float>(TopPMinPFilterParams& params, cudaStream_t stream);
 #endif
 template void invokeTopPMinPFilter<half>(TopPMinPFilterParams& params, cudaStream_t stream);
