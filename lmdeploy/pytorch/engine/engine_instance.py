@@ -134,6 +134,8 @@ class EngineInstance:
             sampling_param=sampling_param,
             adapter_name=adapter_name,
             input_multimodals=multimodal,
+            block_ids=gen_config.block_ids,
+            remote_token_ids=gen_config.remote_token_ids,
         )
         resp = self.req_sender.send_async(RequestType.ADD_MESSAGE, msg)
 
