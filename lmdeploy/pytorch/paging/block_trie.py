@@ -132,7 +132,7 @@ class BlockTrie:
 
             block = logical_blocks[block_id]
 
-            hash_key = hash(tuple(curr_tokens))
+            hash_key = hash( ("random",tuple(curr_tokens)) )
             parent = node
             if hash_key in parent.children:
                 child = parent.children[hash_key]
