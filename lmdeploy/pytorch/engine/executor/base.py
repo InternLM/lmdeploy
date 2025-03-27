@@ -56,7 +56,7 @@ class ExecutorBase:
         raise NotImplementedError('Not Implemented.')
 
     async def rdma_connect(self, config):
-        """rdma_connect"""
+        """rdma_connect."""
         raise NotImplementedError('Not Implemented')
 
     def get_ipc_handler(self):

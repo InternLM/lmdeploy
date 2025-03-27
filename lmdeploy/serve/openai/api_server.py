@@ -818,9 +818,7 @@ async def encode(request: EncodeRequest, raw_request: Request = None):
 
 @router.get('/distserve/get_engine_info')
 async def cache_info() -> JSONResponse:
-    """
-    Step 1: Get engine information [EngineSnapshot]
-    """
+    """Step 1: Get engine information [EngineSnapshot]"""
     num_free, num_total = VariableInterface.async_engine.get_cache_info()
     return JSONResponse({
         'free': num_free,

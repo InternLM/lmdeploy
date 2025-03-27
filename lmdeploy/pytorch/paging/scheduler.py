@@ -78,19 +78,19 @@ class Scheduler:
 
     @property
     def waiting_migration(self):
-        """get migration sequence"""
+        """get migration sequence."""
         seq_map = self.seq_manager.get_sequences(MessageStatus.WAITING_MIGRATION)
         return list(seq_map.values())
 
     @property
     def running_migrating(self):
-        """get migration sequence"""
+        """get migration sequence."""
         seq_map = self.seq_manager.get_sequences(MessageStatus.RUNNING_MIGRATION)
         return list(seq_map.values())
 
     @property
     def finish_migrating(self):
-        """get migration sequence"""
+        """get migration sequence."""
         seq_map = self.seq_manager.get_sequences(MessageStatus.FINISH_MIGRATION)
         return list(seq_map.values())
 
@@ -115,7 +115,7 @@ class Scheduler:
         message.status = status
 
     def add_migration(self, session_id: int):
-        """Add Migration session
+        """Add Migration session.
 
         Args:
             session_id (int): Migration session id.

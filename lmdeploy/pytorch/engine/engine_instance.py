@@ -8,7 +8,7 @@ from ..messages import SamplingParam
 from .engine import Engine
 from .request import RequestSender, RequestType, Response, ResponseType
 
-logger = get_logger("lmdeploy")
+logger = get_logger('lmdeploy')
 
 InputMultiModalType = List[Dict[str, Any]]
 
@@ -34,24 +34,20 @@ async def async_try_add_session(req_sender: RequestSender, session_id: int):
     Args:
         session_id (int): The session id to add.
     """
-    resp = await req_sender.async_send(
-        RequestType.ADD_SESSION, dict(session_id=session_id)
-    )
+    resp = await req_sender.async_send(RequestType.ADD_SESSION, dict(session_id=session_id))
     _check_resp(
         resp,
         [ResponseType.SUCCESS, ResponseType.SESSION_REPEAT],
-        (f"Can not add session {session_id} " f"with error: {resp.type}"),
+        (f'Can not add session {session_id} '
+         f'with error: {resp.type}'),
     )
 
 
 async def async_cancel(req_sender: RequestSender, session_id: int):
     """Stop current streaming inference."""
-    resp = await req_sender.async_send(
-        RequestType.STOP_SESSION, dict(session_id=session_id)
-    )
-    _check_resp_success(
-        resp, (f"Failed to cancel session: {session_id}. " f"Error: {resp.type}.")
-    )
+    resp = await req_sender.async_send(RequestType.STOP_SESSION, dict(session_id=session_id))
+    _check_resp_success(resp, (f'Failed to cancel session: {session_id}. '
+                               f'Error: {resp.type}.'))
 
 
 def try_add_session(req_sender: RequestSender, session_id: int):
@@ -64,23 +60,21 @@ def try_add_session(req_sender: RequestSender, session_id: int):
     _check_resp(
         resp,
         [ResponseType.SUCCESS, ResponseType.SESSION_REPEAT],
-        (f"Can not add session {session_id} " f"with error: {resp.type}"),
+        (f'Can not add session {session_id} '
+         f'with error: {resp.type}'),
     )
 
 
 def end(req_sender: RequestSender, session_id: int):
     """End the given session."""
-    req_sender.send_async(
-        RequestType.END_SESSION, dict(session_id=session_id, response=False)
-    )
+    req_sender.send_async(RequestType.END_SESSION, dict(session_id=session_id, response=False))
 
 
 def cancel(req_sender: RequestSender, session_id: int):
     """Stop current streaming inference."""
     resp = req_sender.send(RequestType.STOP_SESSION, dict(session_id=session_id))
-    _check_resp_success(
-        resp, (f"Failed to cancel session: {session_id}. " f"Error: {resp.type}.")
-    )
+    _check_resp_success(resp, (f'Failed to cancel session: {session_id}. '
+                               f'Error: {resp.type}.'))
 
 
 class EngineInstance:
@@ -143,9 +137,7 @@ class EngineInstance:
             return
         gen_config = gen_config or GenerationConfig()
         sampling_param = SamplingParam.from_gen_config(gen_config=gen_config)
-        self.req_sender.send_async(
-            RequestType.ADD_SESSION, dict(session_id=session_id, response=False)
-        )
+        self.req_sender.send_async(RequestType.ADD_SESSION, dict(session_id=session_id, response=False))
         msg = dict(
             token_ids=input_ids,
             session_id=session_id,
@@ -161,23 +153,23 @@ class EngineInstance:
             resp = await self.req_sender.async_recv(resp)
 
             if resp.type == ResponseType.SUCCESS:
-                token_ids = resp.data["token_ids"].tolist()
+                token_ids = resp.data['token_ids'].tolist()
                 yield EngineOutput(
                     resp.type,
                     token_ids,
                     len(token_ids),
-                    cache_block_ids=resp.data.get("cache_block_ids"),
+                    cache_block_ids=resp.data.get('cache_block_ids'),
                 )
             elif resp.type == ResponseType.FINISH:
                 resp_data = resp.data
-                token_ids = resp_data["token_ids"].tolist()
-                logits = resp_data["logits"]
+                token_ids = resp_data['token_ids'].tolist()
+                logits = resp_data['logits']
                 yield EngineOutput(
                     resp.type,
                     token_ids,
                     len(token_ids),
                     logits=logits,
-                    cache_block_ids=resp_data.get("cache_block_ids"),
+                    cache_block_ids=resp_data.get('cache_block_ids'),
                 )
                 break
             else:
@@ -205,11 +197,11 @@ class EngineInstance:
             int: The number of the output tokens.
         """
         async for outputs in self.async_stream_infer(
-            session_id,
-            input_ids,
-            multimodal=multimodal,
-            gen_config=gen_config,
-            **kwargs,
+                session_id,
+                input_ids,
+                multimodal=multimodal,
+                gen_config=gen_config,
+                **kwargs,
         ):
             status = outputs.status
             if status not in [ResponseType.SUCCESS, ResponseType.FINISH]:
@@ -285,8 +277,7 @@ class EngineInstance:
                 multimodal=multimodal,
                 gen_config=gen_config,
                 **kwargs,
-            )
-        )
+            ))
 
     async def async_end(self, session_id: int):
         """End the given session."""

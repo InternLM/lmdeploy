@@ -2,7 +2,6 @@
 import argparse
 import asyncio
 import json
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import List
@@ -40,21 +39,6 @@ TODO: router relay v1/completions, v1/chat/completions, v1/encode, v1/embedding 
 
 
 async def relay(endpoint: str, service_name: str, raw_requests: Request):
-    raise NotImplementedError
-
-
-"""
-TODO: worker management
-"""
-
-
-@app.post('/router/add_worker')
-async def add_worker(request: Request):
-    raise NotImplementedError
-
-
-@app.post('/router/remove_worker')
-async def add_worker(request: Request):
     raise NotImplementedError
 
 

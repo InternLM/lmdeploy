@@ -354,12 +354,6 @@ class AutoModelAgent:
 
         for idx in range(loop_count):
             if not inputs.is_decoding and self.cache_config.role == EngineRole.Decode:
-                prefill_engine_block_ids = functools.reduce(lambda x, y: x + y, inputs.prefill_engine_block_ids)
-                decode_engine_block_ids = functools.reduce(lambda x, y: x + y, inputs.decode_engine_block_ids)
-                blocks_to_migrate = torch.tensor(
-                    [[0, 0, init_block_id, target_block_id]
-                     for (init_block_id, target_block_id) in zip(decode_engine_block_ids, prefill_engine_block_ids)])
-                # await self.cache_engine.migrate(blocks_to_migrate)
                 if rank % tp == 0:
                     event = torch.cuda.Event()
                     event.record()
@@ -465,11 +459,6 @@ class AutoModelAgent:
                              )]
 
         await self.cache_engine.migrate(blocks_to_migrate)
-
-        # tensor_to_gather = torch.tensor([self.rank], dtype=torch.float32)
-        # 定义一个列表，用于存储收集到的张量
-        # gathered_tensors = [torch.zeros_like(tensor_to_gather) for _ in range(self.dist_ctx.world_size)]
-        # dist.gather(tensor_to_gather, gather_list=gathered_tensors if self.rank == 0 else None, dst=0, group=self.dist_ctx.world_cpu_group)
 
     @torch.inference_mode()
     async def _async_migration_loop_background(self, forward_event: asyncio.Event = None):
