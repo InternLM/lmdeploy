@@ -84,7 +84,7 @@ class BlockTrie:
         while num_matched + block_size < seq.num_all_ids:
             curr_tokens = seq.history_cache[num_matched:num_matched + block_size]
 
-            key = hash(tuple(curr_tokens))
+            key = hash( ("random",tuple(curr_tokens)) )
             if key not in curr.children:
                 break
 
