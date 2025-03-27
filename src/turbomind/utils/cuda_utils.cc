@@ -21,6 +21,26 @@
 
 namespace turbomind {
 
+void syncAndCheck(const char* const file, int const line)
+{
+    // When FT_DEBUG_LEVEL=DEBUG, must check error
+    static char* level_name = std::getenv("TM_DEBUG_LEVEL");
+    if (level_name != nullptr) {
+        static std::string level = std::string(level_name);
+        if (level == "DEBUG") {
+            cudaDeviceSynchronize();
+            cudaError_t result = cudaGetLastError();
+            if (result) {
+                TM_LOG_ERROR((std::string("CUDA runtime error: ") + (_cudaGetErrorEnum(result)) + " " + file + ":"
+                              + std::to_string(line))
+                                 .c_str());
+                std::abort();
+            }
+            TM_LOG_DEBUG(fmtstr("run syncAndCheck at %s:%d", file, line));
+        }
+    }
+}
+
 /* **************************** debug tools ********************************* */
 
 template<typename T>

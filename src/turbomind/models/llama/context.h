@@ -10,6 +10,7 @@
 #include <cublas_v2.h>
 
 #include "src/turbomind/comm/device_comm.h"
+#include "src/turbomind/core/core.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
@@ -28,6 +29,8 @@ struct Communicators {
 // Execution context for the model
 template<class T>
 struct Context {
+    core::Stream                                    core_stream;
+    core::Allocator                                 core_allocator;
     cudaStream_t                                    stream;
     std::unique_ptr<Allocator<AllocatorType::CUDA>> allocator;
     cublasHandle_t                                  cublas_handle;
@@ -41,7 +44,10 @@ struct Context {
 
     Context(int device_id)
     {
-        check_cuda_error(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+        core_stream    = core::Stream::create();
+        core_allocator = core::Allocator(core_stream, false);
+
+        stream = core_stream.handle();
 
         allocator = std::make_unique<Allocator<AllocatorType::CUDA>>(device_id, false);
         allocator->setStream(stream);
@@ -93,9 +99,6 @@ struct Context {
         allocator.reset();
 
         // `comm` destroyed by infer threads collectively
-
-        cudaStreamDestroy(stream);
-        stream = {};
     }
 };
 

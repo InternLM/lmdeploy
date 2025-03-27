@@ -23,6 +23,7 @@
 
 #include <cuda_runtime.h>
 
+#include "src/turbomind/core/tensor.h"
 #include "src/turbomind/kernels/gemm/test/test_utils.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
@@ -41,15 +42,32 @@ public:
     static constexpr int kMaxKVSplits        = 128;
     static constexpr int kMaxWorkspaceTokens = 4096;
 
-    void freeBuffer();
-    void allocateBuffer(size_t q_count, size_t k_count, size_t batch_size, size_t qkv_lora_rank);
+    // clang-format off
+    struct ForwardParam {
+        core::Tensor input;
+        core::Tensor output;
+        const WeightType* weights;
+        int decode_num;
+        int prefil_num;
+        int* h_q_len;
+        int* h_k_len;
+        int* cu_q_len;
+        int* cu_k_len;
+        int* h_cu_q_len;
+        int* h_cu_k_len;
+        bool* is_finished;
+        float* rope_base;
+        void** block_ptrs;
+        int* cu_block_count;
+        int layer_id;
+    };
+    // clang-format on
 
     void allocateWorkspace();
     void freeWorkspace();
 
     ~UnifiedAttentionLayer()
     {
-        freeBuffer();
         freeWorkspace();
 
         for (auto& s : streams_) {
@@ -70,7 +88,7 @@ public:
                           size_t                tp_size,
                           const Context<T>&     context);
 
-    void forward(TensorMap* outputs, const TensorMap* inputs, const WeightType* weights);
+    void forward(ForwardParam&& param);
 
     void prefill(T*                output,
                  T*                tmp_kv_buffer,
@@ -108,9 +126,9 @@ public:
                 const WeightType* weights);
 
 private:
-    void forward_mla(const T* inputs, int token_num, const WeightType& weights);
+    core::Tensor forward_mla(const core::Tensor& hidden_state, const WeightType& weights);
 
-    void qk_norm(T* qkv, int token_num, const WeightType& weights);
+    void qk_norm(core::Tensor& qkv, const WeightType& weights);
 
 private:
     const size_t head_num_;
@@ -130,8 +148,6 @@ private:
     IAllocator* const     allocator_;
     const int             arch_{};
 
-    const bool is_free_buffer_after_forward_{false};
-
     cudaStream_t aux_stream_;
     cudaEvent_t  qkv_event_;
     cudaEvent_t  aux_event_;
@@ -142,27 +158,12 @@ private:
 
     RopeKernelParam rope_param_{};
 
-    T*     qkv_buf_{};
-    T*     q_buf_2_{};
-    T*     k_buf_2_{};
-    T*     v_buf_2_{};
-    T*     k_cache_buf_{};
-    T*     v_cache_buf_{};
-    T*     qk_buf_{};
-    float* qk_buf_float_{};
-    T*     qkv_buf_2_{};
-    T*     qkv_buf_3_{};
-    T*     lora_buf_{};
-
     float* partial_M_{};
     float* partial_L_{};
     float* partial_O_{};
     int*   split_cnt_{};
     int*   barriers_{};  // always zero
 
-    T* tmp_kv_buf_{};
-
-    bool is_allocate_buffer_    = false;
     bool is_allocate_workspace_ = false;
 };
 

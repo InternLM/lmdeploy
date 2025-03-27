@@ -51,13 +51,7 @@ private:
 
     using WeightType = LlamaDecoderLayerWeight<T>;
 
-    void forwardSelfAttn(T*                attn_io,
-                         TensorMap*        _outputs,
-                         const TensorMap*  _inputs,
-                         size_t            token_num,
-                         size_t            batch_size,
-                         int               layer_id,
-                         const WeightType* weight);
+    typename UnifiedAttentionLayer<T>::ForwardParam InitAttnFwdParam(const TensorMap& inputs, const TensorMap& outputs);
 
     void AllreduceResidualRMSnorm(T*         hidden_states,
                                   T*         residual,

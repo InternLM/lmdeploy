@@ -123,40 +123,17 @@ template<typename T>
 void check(T result, char const* const func, const char* const file, int const line)
 {
     if (result) {
-        throw std::runtime_error(std::string("[TM][ERROR] CUDA runtime error: ") + (_cudaGetErrorEnum(result)) + " "
-                                 + file + ":" + std::to_string(line) + " \n");
+        TM_LOG_ERROR((std::string("CUDA runtime error: ") + (_cudaGetErrorEnum(result)) + " " + file + ":"
+                      + std::to_string(line))
+                         .c_str());
+        std::abort();
     }
 }
 
 #define check_cuda_error(val) check((val), #val, __FILE__, __LINE__)
 #define check_cuda_error_2(val, file, line) check((val), #val, file, line)
 
-inline void syncAndCheck(const char* const file, int const line)
-{
-    // When FT_DEBUG_LEVEL=DEBUG, must check error
-    static char* level_name = std::getenv("TM_DEBUG_LEVEL");
-    if (level_name != nullptr) {
-        static std::string level = std::string(level_name);
-        if (level == "DEBUG") {
-            cudaDeviceSynchronize();
-            cudaError_t result = cudaGetLastError();
-            if (result) {
-                throw std::runtime_error(std::string("[TM][ERROR] CUDA runtime error: ") + (_cudaGetErrorEnum(result))
-                                         + " " + file + ":" + std::to_string(line) + " \n");
-            }
-            TM_LOG_DEBUG(fmtstr("run syncAndCheck at %s:%d", file, line));
-        }
-    }
-
-#ifndef NDEBUG
-    cudaDeviceSynchronize();
-    cudaError_t result = cudaGetLastError();
-    if (result) {
-        throw std::runtime_error(std::string("[TM][ERROR] CUDA runtime error: ") + (_cudaGetErrorEnum(result)) + " "
-                                 + file + ":" + std::to_string(line) + " \n");
-    }
-#endif
-}
+void syncAndCheck(const char* const file, int const line);
 
 #define sync_check_cuda_error() syncAndCheck(__FILE__, __LINE__)
 
@@ -223,10 +200,10 @@ inline void myAssert(bool result, const char* const file, int const line, std::s
     }
 }
 
-#define FT_CHECK(val) myAssert(val, __FILE__, __LINE__)
+#define FT_CHECK(val) myAssert(bool(val), __FILE__, __LINE__)
 #define FT_CHECK_WITH_INFO(val, info)                                                                                  \
     do {                                                                                                               \
-        bool is_valid_val = (val);                                                                                     \
+        bool is_valid_val = bool(val);                                                                                 \
         if (!is_valid_val) {                                                                                           \
             turbomind::myAssert(is_valid_val, __FILE__, __LINE__, (info));                                             \
         }                                                                                                              \

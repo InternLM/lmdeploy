@@ -22,6 +22,8 @@
 #include <algorithm>
 #include <math.h>
 
+#include "src/turbomind/core/check.h"
+#include "src/turbomind/core/tensor.h"
 #include "src/turbomind/kernels/attention/attention.h"
 #include "src/turbomind/kernels/attention/decoding.h"
 #include "src/turbomind/kernels/attention/kv_cache_utils_v2.h"
@@ -57,7 +59,7 @@ UnifiedAttentionLayer<T>::UnifiedAttentionLayer(
     allocator_(ctx.allocator.get()),
     arch_(getSMVersion())
 {
-    FT_CHECK(head_num_ % kv_head_num_ == 0);
+    TM_CHECK(head_num_ % kv_head_num_ == 0);
 
     check_cuda_error(cudaStreamCreateWithFlags(&aux_stream_, cudaStreamNonBlocking));
     check_cuda_error(cudaEventCreateWithFlags(&qkv_event_, cudaEventDisableTiming));
@@ -72,32 +74,10 @@ UnifiedAttentionLayer<T>::UnifiedAttentionLayer(
 }
 
 template<typename T>
-void UnifiedAttentionLayer<T>::allocateBuffer(size_t q_count, size_t k_count, size_t batch_size, size_t max_lora_rank)
-{
-    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
-
-    if (max_lora_rank) {
-        lora_buf_ = (T*)allocator_->reMalloc(lora_buf_, sizeof(T) * q_count * max_lora_rank);
-    }
-
-    const int local_q_kv_head_num = local_head_num_ + 2 * local_kv_head_num_;
-
-    qkv_buf_ = (T*)allocator_->reMalloc(qkv_buf_, sizeof(T) * q_count * local_q_kv_head_num * size_per_head_, false);
-
-    qkv_buf_3_ = (T*)allocator_->reMalloc(qkv_buf_3_, sizeof(T) * q_count * local_head_num_ * size_per_head_, false);
-
-    // Pad the tmp buffer for linear KV cache by `MAX_CTA_S` to avoid illegal accesses
-    tmp_kv_buf_ = (T*)allocator_->reMalloc(
-        tmp_kv_buf_, sizeof(T) * local_kv_head_num_ * 2 * (k_count + MAX_CTA_S) * size_per_head_, false);
-
-    is_allocate_buffer_ = true;
-}
-
-template<typename T>
 void UnifiedAttentionLayer<T>::allocateWorkspace()
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
-    FT_CHECK(!is_allocate_workspace_);
+    TM_CHECK(!is_allocate_workspace_);
     partial_M_ = (float*)allocator_->malloc(sizeof(float) * kMaxWorkspaceTokens * local_head_num_);
     partial_L_ = (float*)allocator_->malloc(sizeof(float) * kMaxWorkspaceTokens * local_head_num_);
     partial_O_ = (float*)allocator_->malloc(sizeof(float) * kMaxWorkspaceTokens * local_head_num_ * size_per_head_);
@@ -123,22 +103,7 @@ void UnifiedAttentionLayer<T>::freeWorkspace()
 }
 
 template<typename T>
-void UnifiedAttentionLayer<T>::freeBuffer()
-{
-    if (is_allocate_buffer_) {
-        TM_LOG_DEBUG(__PRETTY_FUNCTION__);
-
-        allocator_->free((void**)&qkv_buf_);
-        allocator_->free((void**)&qkv_buf_3_);
-        allocator_->free((void**)&tmp_kv_buf_);
-        allocator_->free((void**)&lora_buf_);
-
-        is_allocate_buffer_ = false;
-    }
-}
-
-template<typename T>
-inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMap* inputs, const WeightType* weights)
+inline void UnifiedAttentionLayer<T>::forward(ForwardParam&& param)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
@@ -165,100 +130,65 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
 
     /////////////////////////////////////////////
     /// parse inputs
-    const int token_num = inputs->at("input_query").shape[0];
-    const int layer_id  = inputs->getVal<int>("layer_id");
-
-    const int dc_batch_size = inputs->getVal<int>("dc_batch_size");
-    const int pf_batch_size = inputs->getVal<int>("pf_batch_size");
-    const int batch_size    = dc_batch_size + pf_batch_size;
-
-    int* h_q_len    = inputs->getPtr<int>("h_q_len");
-    int* h_k_len    = inputs->getPtr<int>("h_k_len");
-    int* cu_q_len   = inputs->getPtr<int>("cu_q_len");
-    int* cu_k_len   = inputs->getPtr<int>("cu_k_len");
-    int* h_cu_q_len = inputs->getPtr<int>("h_cu_q_len");
-    int* h_cu_k_len = inputs->getPtr<int>("h_cu_k_len");
-
-    bool*  is_finished = inputs->getPtr<bool>("finished");
-    float* rope_theta  = inputs->getPtr<float>("rope_theta");
-
-    void** block_ptrs     = outputs->getPtr<void*>("block_ptrs");
-    int*   cu_block_count = inputs->getPtr<int>("cu_block_counts");
-
-    T* attention_input = inputs->getPtr<T>("input_query");
-    T* attention_out   = outputs->getPtr<T>("hidden_features");
+    const int token_num = param.input.shape(0);
 
     if (token_num == 0) {
         return;
     }
 
-    /////////////////////////////////////////////
-    /// allocate buffers
-    allocateBuffer(token_num,                                           // shared
-                   h_cu_k_len[batch_size] - h_cu_k_len[dc_batch_size],  // prefill
-                   batch_size,
-                   std::max(weights->qkv.lora.r, weights->output.lora.r));
+    const int layer_id = param.layer_id;
+
+    const int dc_batch_size = param.decode_num;
+    const int pf_batch_size = param.prefil_num;
+    const int batch_size    = dc_batch_size + pf_batch_size;
+
+    const auto weights = param.weights;
+
+    const auto device = param.input.device();
+    const auto dtype  = getTensorType<T>();
+
+    int* h_q_len    = param.h_q_len;
+    int* h_k_len    = param.h_k_len;
+    int* cu_q_len   = param.cu_q_len;
+    int* cu_k_len   = param.cu_k_len;
+    int* h_cu_q_len = param.h_cu_q_len;
+    int* h_cu_k_len = param.h_cu_k_len;
+
+    bool*  is_finished = param.is_finished;
+    float* rope_theta  = param.rope_base;
+
+    void** block_ptrs     = param.block_ptrs;
+    int*   cu_block_count = param.cu_block_count;
+
+    const int q_count = token_num;
+    const int k_count = h_cu_k_len[batch_size] - h_cu_k_len[dc_batch_size];
+
+    const int local_q_kv_head_num = local_head_num_ + 2 * local_kv_head_num_;
 
     // [L, 2, H, s, D]
     const size_t layer_offset = layer_id * 2 * local_kv_head_num_ * param_.cache_block_seq_len * size_per_head_;
 
-    // static int count = 0;
-
-    // if (tensor_para_.rank_ == 0) {
-    //     Compare(attention_input, token_num * hidden_units_, Concat("qkv_input", layer_id), compare_mode, stream_);
-    // }
-
-    int* lora_mask = inputs->at("lora_mask", Tensor{MEMORY_GPU, TYPE_INVALID, {}, nullptr}).getPtr<int>();
+    core::Tensor qkv;
 
     if (weights->qkv.output_dims) {
         //////////////////////////////////////////////
         /// qkv gemm
-        // [token_num, hidden_dim] -> [token_num, 3, local_hidden_dim]
-        linear_->forward(
-            qkv_buf_, attention_input, token_num, weights->qkv, LlamaLinear<T>::kGemm, lora_buf_, lora_mask);
+        // [token_num, hidden_dim] -> [token_num, local_q_kv_head_num, head_dim]
+        qkv = linear_->forward(param.input, weights->qkv, LlamaLinear<T>::kGemm);
         sync_check_cuda_error();
 
         if (model_param_.qk_norm) {
-            qk_norm(qkv_buf_, token_num, *weights);
+            qk_norm(qkv, *weights);
         }
     }
     else {
-        forward_mla(attention_input, token_num, *weights);
+        qkv = forward_mla(param.input, *weights);
     }
 
-    // std::cerr << layer_id << " " << count << " " << tensor_para_.rank_ << "\n";
+    count_and_fix(qkv.data<T>(), qkv.size(), Concat("qkv", layer_id), 3);
 
-    count_and_fix(qkv_buf_, token_num * weights->qkv.output_dims, Concat("qkv", layer_id), 3);
-
-    // std::cerr << "token num: " << token_num << "\n";
-
-    // if (layer_id == 0 && count == 0 && tensor_para_.rank_ == 0) {
-    //     Compare(qkv_buf_, token_num * (3 * local_head_num_ * size_per_head_), "qkv_buf", CMP_MODE, stream_);
-    // }
-
-    if constexpr (0) {
-        std::vector<T> tmp(token_num * weights->qkv.output_dims);
-        cudaMemcpyAsync(tmp.data(), qkv_buf_, sizeof(T) * tmp.size(), cudaMemcpyDefault, stream_);
-        cudaStreamSynchronize(stream_);
-        int i = 0;
-        for (auto& x : tmp) {
-            std::cout << (float)x << " ";
-            if (++i == 256) {
-                break;
-            }
-        }
-        std::cout << "\n";
-        i = 0;
-        for (auto it = tmp.rbegin(); it != tmp.rend(); ++it) {
-            std::cout << (float)*it << " ";
-            if (++i == 256) {
-                break;
-            }
-        }
-        std::cout << "\n";
-    }
-
-    // FT_CHECK(0);
+    core::Tensor attn{{q_count, (int)local_head_num_, (int)size_per_head_}, dtype, device};
+    core::Tensor tmp_kv{{2, (int)local_kv_head_num_, k_count + MAX_CTA_S, (int)size_per_head_}, dtype, device};
 
     auto stream_ptr = streams_.data();
 
@@ -266,9 +196,9 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         AttentionParams<T> params{};
 
         // Batch offset for `out` and `q` are computed inside the kernel
-        params.out = qkv_buf_3_;
+        params.out = (T*)attn.raw_data();
 
-        params.q      = (T*)qkv_buf_;
+        params.q      = (T*)qkv.raw_data();
         params.k      = params.q + local_head_num_ * size_per_head_;
         params.v      = params.k + local_kv_head_num_ * size_per_head_;
         params.stride = (local_head_num_ + 2 * local_kv_head_num_) * size_per_head_;
@@ -292,7 +222,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
 
         // Prefilling use only
         const int sum_k_len       = h_cu_k_len[offset + pf_batch_size] - h_cu_k_len[offset];
-        params.linear_iter_params = LinearIteratorParams{tmp_kv_buf_,  //
+        params.linear_iter_params = LinearIteratorParams{tmp_kv.raw_data(),  //
                                                          int(2 * sum_k_len * size_per_head_),
                                                          int(sum_k_len * size_per_head_)};
 
@@ -324,7 +254,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         params.max_position_embeddings = param_.max_position_embeddings;
 
         // Decoding use only for now
-        FT_CHECK(barriers_);
+        TM_CHECK_NOTNULL(barriers_);
         params.split_cnt   = split_cnt_;
         params.partial_L   = partial_L_;
         params.partial_M   = partial_M_;
@@ -380,42 +310,23 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         check_cuda_error(cudaStreamWaitEvent(stream_, aux_event_));
     }
 
-    // if (layer_id == 0 && count == 0) {
-    //     Compare(qkv_buf_3_, num_token * weights->output.input_dims, "qkv_buf_3", kCmpRead, stream_);
-
-    //     dump(qkv_buf_3_, num_token * weights->output.input_dims, stream_, "qkv_buf_3");
-    // }
-
     if (isTuning()) {
         rng_.set_stream(stream_);
-        rng_.GenerateUniform(qkv_buf_3_, token_num * weights->output.input_dims, .02f, -.01f);
+        rng_.GenerateUniform(attn.data<T>(), token_num * weights->output.input_dims, .02f, -.01f);
     }
 
-    count_and_fix(qkv_buf_3_, token_num * weights->output.input_dims, Concat("attn", layer_id), 3);
+    count_and_fix(attn.data<T>(), attn.size(), Concat("attn", layer_id), 3);
 
     //////////////////////////////////////////////
     /// output gemm <Bs,HD> -> <Bs,HD>
-    linear_->forward(
-        attention_out, qkv_buf_3_, token_num, weights->output, LlamaLinear<T>::kGemm, lora_buf_, lora_mask);
+    (void)linear_->forward(attn.view({q_count, -1}), weights->output, LlamaLinear<T>::kGemm, &param.output);
     sync_check_cuda_error();
 
-    count_and_fix(attention_out, token_num * weights->output.output_dims, Concat("wo", layer_id), 3);
-
-    // if (tensor_para_.rank_ == 0) {
-    //     Compare(attention_out, token_num * hidden_units_, Concat("attn_out", layer_id), compare_mode, stream_);
-    //     // dump(qkv_buf_3_, num_token * weights->output.input_dims, stream_, "qkv_buf_3");
-    // }
-
-    if (is_free_buffer_after_forward_ == true) {
-        freeBuffer();
-    }
-    sync_check_cuda_error();
-
-    // ++count;
+    count_and_fix((T*)param.output.raw_data(), param.output.size(), Concat("wo", layer_id), 3);
 }
 
 template<typename T>
-void UnifiedAttentionLayer<T>::forward_mla(const T* inputs, int token_num, const WeightType& w)
+core::Tensor UnifiedAttentionLayer<T>::forward_mla(const core::Tensor& hidden_state, const WeightType& w)
 {
     const int q_lora_rank  = w.q_a_proj.output_dims;
     const int kv_lora_rank = w.kv_b_proj.input_dims;
@@ -423,60 +334,42 @@ void UnifiedAttentionLayer<T>::forward_mla(const T* inputs, int token_num, const
     const int qk_nope_dim  = std::max(w.q_b_proj.output_dims, w.q_proj.output_dims) / local_head_num_ - qk_rope_dim;
     const int v_head_dim   = w.kv_b_proj.output_dims / local_head_num_ - qk_nope_dim;
 
-    T* q{};
+    const auto token_num = hidden_state.shape(0);
+    const auto dtype     = getTensorType<T>();
+
+    core::Tensor q;
 
     if (w.q_proj.kernel) {
-        deviceMalloc((T**)&q, (size_t)token_num * w.q_proj.output_dims, stream_);
-        linear_->forward(q, inputs, token_num, w.q_proj);
+        q = linear_->forward(hidden_state, w.q_proj);
         sync_check_cuda_error();
     }
     else {
-        T* q_a{};
-        deviceMalloc((T**)&q_a, (size_t)token_num * q_lora_rank, stream_);
-
-        linear_->forward(q_a, inputs, token_num, w.q_a_proj);
+        core::Tensor q_a = linear_->forward(hidden_state, w.q_a_proj);
         sync_check_cuda_error();
 
-        invokeRMSNorm(q_a,
-                      q_lora_rank,
-                      q_a,
-                      q_lora_rank,
-                      w.q_a_layernorm,
-                      q_lora_rank,
-                      token_num,
-                      model_param_.norm_eps,
-                      stream_);
+        invokeRMSNorm(q_a, q_a, w.q_a_layernorm, model_param_.norm_eps, stream_);
         sync_check_cuda_error();
 
-        deviceMalloc((T**)&q, (size_t)token_num * w.q_b_proj.output_dims, stream_);
-        linear_->forward(q, q_a, token_num, w.q_b_proj);
+        q = linear_->forward(q_a, w.q_b_proj);
         sync_check_cuda_error();
-
-        deviceFree(q_a, stream_);
     }
 
-    T*        kv_a{};
-    const int kv_a_dim = w.kv_a_proj.output_dims;
-    deviceMalloc((T**)&kv_a, (size_t)token_num * kv_a_dim, stream_);
-
-    linear_->forward(kv_a, inputs, token_num, w.kv_a_proj);
+    core::Tensor kv_a = linear_->forward(hidden_state, w.kv_a_proj);
     sync_check_cuda_error();
 
-    invokeRMSNorm(
-        kv_a, kv_a_dim, kv_a, kv_a_dim, w.kv_a_layernorm, kv_lora_rank, token_num, model_param_.norm_eps, stream_);
+    invokeRMSNorm(kv_a, kv_a, w.kv_a_layernorm, model_param_.norm_eps, stream_);
     sync_check_cuda_error();
 
-    T* kv_b{};
-    deviceMalloc((T**)&kv_b, (size_t)token_num * w.kv_b_proj.output_dims, stream_);
+    core::Tensor kv_b = linear_->forward(kv_a.slice({0, 0}, {token_num, kv_lora_rank}), w.kv_b_proj);
     sync_check_cuda_error();
 
-    linear_->forward(kv_b, {kv_a, kv_a_dim}, token_num, w.kv_b_proj);
-    sync_check_cuda_error();
+    const int local_q_kv_head_num = local_head_num_ + 2 * local_kv_head_num_;
 
-    dispatchMLACopyQKV(qkv_buf_,
-                       q,
-                       kv_a,
-                       kv_b,
+    core::Tensor qkv{{token_num, local_q_kv_head_num, (int)size_per_head_}, dtype, hidden_state.device()};
+    dispatchMLACopyQKV(qkv.data<T>(),
+                       q.data<T>(),
+                       kv_a.data<T>(),
+                       kv_b.data<T>(),
                        token_num,
                        local_head_num_,
                        qk_nope_dim,
@@ -486,39 +379,27 @@ void UnifiedAttentionLayer<T>::forward_mla(const T* inputs, int token_num, const
                        stream_);
     sync_check_cuda_error();
 
-    deviceFree(q, stream_);
-    deviceFree(kv_a, stream_);
-    deviceFree(kv_b, stream_);
+    return qkv;
 }
 
 template<typename T>
-void UnifiedAttentionLayer<T>::qk_norm(T* qkv, int token_num, const WeightType& weights)
+void UnifiedAttentionLayer<T>::qk_norm(core::Tensor& qkv, const WeightType& weights)
 {
     check_cuda_error(cudaEventRecord(qkv_event_, stream_));
     check_cuda_error(cudaStreamWaitEvent(aux_stream_, qkv_event_));
 
     FT_CHECK(model_param_.attn_bias == false);
 
-    invokeQkRMSNorm(qkv_buf_,
-                    weights.qkv.output_dims,
-                    weights.q_a_layernorm,
-                    getTensorType<T>(),
-                    size_per_head_,
-                    local_head_num_,
-                    token_num,
-                    model_param_.norm_eps,
-                    stream_);
+    const auto token_num = qkv.shape(0);
+
+    auto qkv3 = qkv.view({token_num, -1, (int)size_per_head_});
+
+    auto q = qkv3.slice({0, 0, 0}, {-1, (int)local_head_num_, -1});
+    invokeRMSNormQK(q, weights.q_a_layernorm, model_param_.norm_eps, stream_);
     sync_check_cuda_error();
 
-    invokeQkRMSNorm(qkv_buf_ + size_per_head_ * local_head_num_,
-                    weights.qkv.output_dims,
-                    weights.kv_a_layernorm,
-                    getTensorType<T>(),
-                    size_per_head_,
-                    local_kv_head_num_,
-                    token_num,
-                    model_param_.norm_eps,
-                    aux_stream_);
+    auto k = qkv3.slice({0, (int)local_head_num_, 0}, {-1, (int)local_kv_head_num_, -1});
+    invokeRMSNormQK(k, weights.kv_a_layernorm, model_param_.norm_eps, aux_stream_);
     sync_check_cuda_error();
 
     check_cuda_error(cudaEventRecord(aux_event_, aux_stream_));

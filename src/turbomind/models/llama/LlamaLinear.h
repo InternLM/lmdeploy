@@ -2,10 +2,12 @@
 
 #pragma once
 
-#include "src/turbomind/models/llama/LlamaDenseWeight.h"
-#include "src/turbomind/utils/cublasMMWrapper.h"
 #include <istream>
 #include <ostream>
+
+#include "src/turbomind/core/tensor.h"
+#include "src/turbomind/models/llama/LlamaDenseWeight.h"
+#include "src/turbomind/utils/cublasMMWrapper.h"
 
 namespace turbomind {
 
@@ -43,6 +45,11 @@ public:
                      const LlamaDenseWeight<T>& weight,
                      Type                       type,
                      gemm::Context*             context);
+
+    core::Tensor forward(const core::Tensor&        input,  //
+                         const LlamaDenseWeight<T>& weight,
+                         Type                       type   = kGemm,
+                         core::Tensor*              output = nullptr);
 
     void set_measure(bool measure);
 

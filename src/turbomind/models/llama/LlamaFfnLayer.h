@@ -19,10 +19,11 @@
 
 #pragma once
 
+#include "src/turbomind/core/tensor.h"
+#include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
-#include "src/turbomind/utils/Tensor.h"
 
 namespace turbomind {
 
@@ -37,32 +38,23 @@ public:
     {
     }
 
-    ~LlamaFfnLayer()
-    {
-        freeBuffer();
-    }
+    struct ForwardParam {
+        core::Tensor             input;
+        core::Tensor             output;
+        const LlamaFfnWeight<T>* weights;
+        int                      layer_id;
+    };
 
-    void forward(TensorMap* output_tensors, const TensorMap* input_tensors, const LlamaFfnWeight<T>* weights);
+    void forward(ForwardParam&& param);
 
 private:
-    void allocateBuffer(
-        size_t token_num, int inter_size, size_t inter_buf_factor, size_t gating_lora_r, size_t inter_lora_r);
+    void activation(core::Tensor& gating, core::Tensor& inter);
 
-    void freeBuffer();
-
-    void activation(int token_num, int inter_size, bool is_chunked);
-
+private:
     const size_t          hidden_units_;
     cudaStream_t const    stream_;
     LlamaLinear<T>* const linear_;
     IAllocator* const     allocator_;
-    bool                  is_free_buffer_after_forward_{};
-
-    T* gating_buf_{};
-    T* inter_buf_{};
-    T* lora_buf_{};
-
-    bool is_allocate_buffer_{};
 };
 
 }  // namespace turbomind

@@ -1632,6 +1632,8 @@ void LlamaBatch<T>::InternalThreadEntry()
     // TM_LOG_INFO("[InternalThreadEntry] %d", (int)rank_);
     check_cuda_error(cudaSetDevice(device_id_));
 
+    core::ContextGuard guard{context_->core_stream, context_->core_allocator};
+
     // Initialize `AnomalyHandler`
     AnomalyHandler::instance().Init(tp_rank_, model_->vocab_size_padded_, 0, max_batch_size_, stream_);
 

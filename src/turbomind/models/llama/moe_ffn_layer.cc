@@ -166,17 +166,10 @@ void MoeFfnLayer<T>::forward(T* output, const T* input, int tokens, int layer_id
         }
 
         for (int i = 0; i < expert_num; ++i) {
-
             FT_CHECK(moe.experts[i].is_fused_silu == false);
-
             if (size_t count = h_offsets_[i + 1] - h_offsets_[i]) {
-                auto io = inout_buf_ + h_offsets_[i] * hidden_dim_;
-
-                TensorMap ffn_inputs{{"ffn_input", {MEMORY_GPU, dtype_, {count, hidden_dim_}, io}},
-                                     {"layer_id", {MEMORY_CPU, TYPE_INT32, {1}, &layer_id}}};
-                TensorMap ffn_outputs{{"ffn_output", {MEMORY_GPU, dtype_, {count, hidden_dim_}, io}}};
-
-                expert_ffn_->forward(&ffn_outputs, &ffn_inputs, &moe.experts[i]);
+                core::Tensor io{inout_buf_ + h_offsets_[i] * hidden_dim_, {(int)count, (int)hidden_dim_}, MEMORY_GPU};
+                expert_ffn_->forward({io, io, &moe.experts.at(i), layer_id});
             }
         }
     }

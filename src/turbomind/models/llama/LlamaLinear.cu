@@ -1,10 +1,10 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
+#include "src/turbomind/core/tensor.h"
 #include "src/turbomind/kernels/gemm/gemm.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/llama_decoder_kernels.h"
-#include <fstream>
 
 namespace turbomind {
 
@@ -270,6 +270,38 @@ void LlamaLinear<T>::forward_moe(T*                         output_data,
                                  gemm::Context*             context)
 {
     impl_->forward_moe(output_data, input_data, indexes, offsets, batch_size, weight, type, context);
+}
+
+template<class T>
+core::Tensor LlamaLinear<T>::forward(const core::Tensor&        input,  //
+                                     const LlamaDenseWeight<T>& weight,
+                                     Type                       type,
+                                     core::Tensor*              output)
+{
+    core::ssize_t output_dim = type == kFusedSiluFfn ? weight.output_dims / 2 : weight.output_dims;
+
+    core::Tensor in = input.view({-1, input.shape(-1)});
+    core::Tensor out;
+
+    if (output) {
+        out = output->view({in.shape(0), output_dim});
+    }
+    else {
+        out = core::Tensor_<T>({in.shape(0), output_dim}, input.device());
+    }
+
+    impl_->forward(out.data<T>(),  //
+                   {in.data<T>(), (int)in.stride(0)},
+                   in.shape(0),
+                   weight,
+                   type,
+                   nullptr,
+                   nullptr);
+
+    auto shape   = input.shape();
+    shape.back() = out.shape(-1);
+
+    return out.view(shape);
 }
 
 template<class T>

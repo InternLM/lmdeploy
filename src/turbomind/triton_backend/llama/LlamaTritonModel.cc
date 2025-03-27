@@ -490,6 +490,8 @@ void LlamaTritonModel<T>::createEngine(int device_id, int rank)
 
     auto ctx = std::make_unique<Context<T>>(device_id);
 
+    core::ContextGuard guard{ctx->core_stream, ctx->core_allocator};
+
     ctx->comm = createCommSplits(rank);
 
     const auto& engine_param = engine_params_.at(rank);

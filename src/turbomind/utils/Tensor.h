@@ -58,45 +58,47 @@ typedef enum datatype_enum
     TYPE_VOID,
 } DataType;
 
-template<typename T>
-DataType getTensorType()
+template<typename T_>
+constexpr DataType getTensorType()
 {
-    if (std::is_same<T, float>::value || std::is_same<T, const float>::value) {
+    using T = std::remove_cv_t<T_>;
+
+    if (std::is_same_v<T, float>) {
         return TYPE_FP32;
     }
-    else if (std::is_same<T, half>::value || std::is_same<T, const half>::value) {
+    else if (std::is_same_v<T, half>) {
         return TYPE_FP16;
     }
 #ifdef ENABLE_BF16
-    else if (std::is_same<T, __nv_bfloat16>::value || std::is_same<T, const __nv_bfloat16>::value) {
+    else if (std::is_same_v<T, __nv_bfloat16>) {
         return TYPE_BF16;
     }
 #endif
 #ifdef ENABLE_FP8
-    else if (std::is_same<T, __nv_fp8_e4m3>::value || std::is_same<T, const __nv_fp8_e4m3>::value) {
+    else if (std::is_same_v<T, __nv_fp8_e4m3>) {
         return TYPE_FP8_E4M3;
     }
 #endif
-    else if (std::is_same<T, int>::value || std::is_same<T, const int>::value) {
+    else if (std::is_same_v<T, int> || std::is_same_v<T, int32_t>) {
         return TYPE_INT32;
     }
-    else if (std::is_same<T, int8_t>::value || std::is_same<T, const int8_t>::value) {
+    else if (std::is_same_v<T, int8_t>) {
         return TYPE_INT8;
     }
-    else if (std::is_same<T, uint>::value || std::is_same<T, const uint>::value) {
+    else if (std::is_same_v<T, uint> || std::is_same_v<T, uint32_t>) {
         return TYPE_UINT32;
     }
-    else if (std::is_same<T, unsigned long>::value || std::is_same<T, const unsigned long>::value) {
+    else if (std::is_same_v<T, long long> || std::is_same_v<T, int64_t>) {
+        return TYPE_INT64;
+    }
+    else if (std::is_same_v<T, unsigned long long> || std::is_same_v<T, uint64_t>) {
         return TYPE_UINT64;
     }
-    else if (std::is_same<T, bool>::value || std::is_same<T, const bool>::value) {
+    else if (std::is_same_v<T, bool>) {
         return TYPE_BOOL;
     }
-    else if (std::is_same<T, char>::value || std::is_same<T, const char>::value) {
+    else if (std::is_same_v<T, char>) {
         return TYPE_BYTES;
-    }
-    else if (std::is_pointer_v<T> && sizeof(T) == sizeof(uint64_t)) {
-        return TYPE_UINT64;
     }
     else {
         return TYPE_INVALID;

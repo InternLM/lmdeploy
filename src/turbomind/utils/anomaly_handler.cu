@@ -378,10 +378,33 @@ void AnomalyHandler::FixLogits(T* logits, int batch_size, int level)
     impl_->invokeFixLogitsAnomaly(logits, batch_size, level);
 }
 
+int AnomalyHandler::level() noexcept
+{
+    return Impl::g_level;
+}
+
 template void AnomalyHandler::FixLogits(float*, int, int);
 template void AnomalyHandler::FixLogits(half*, int, int);
 #ifdef ENABLE_BF16
 template void AnomalyHandler::FixLogits(__nv_bfloat16*, int, int);
 #endif
+
+void DebugTensor(core::Tensor& tensor, const std::string& key, int level)
+{
+    auto invoke = [&](auto t) {
+        using T = decltype(t);
+        AnomalyHandler::instance().CountAndFix((T*)tensor.raw_data(), tensor.size(), key, level);
+    };
+    switch (tensor.dtype()) {
+        case TYPE_FP32:
+            return invoke(float{});
+        case TYPE_FP16:
+            return invoke(half{});
+        case TYPE_BF16:
+            return invoke(nv_bfloat16{});
+        default:
+            TM_CHECK(0) << "Not implemented.";
+    }
+}
 
 }  // namespace turbomind
