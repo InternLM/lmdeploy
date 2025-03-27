@@ -97,3 +97,9 @@ class DlinferOpsBackend(DefaultOpsBackend):
     def update_step_context(cls, step_context):
         """update step context."""
         raise NotImplementedError
+
+    @staticmethod
+    def support_ray():
+        """support ray."""
+        # return True
+        return False
