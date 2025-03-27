@@ -62,6 +62,7 @@ async def generate(request: Request):
             prefill_info = json.loads(first_line[5:])
             session_id = prefill_info['id']
             block_ids = prefill_info['cache_block_ids']
+            print(f"cache block ids: {block_ids}")
             remote_token_ids = prefill_info['choices'][0]['remote_token_ids']
 
             decode_data = client_data.copy()
