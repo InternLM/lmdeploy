@@ -25,10 +25,9 @@ class DistContext:
         return tp * dp
 
     @classmethod
-    def build(cls, rank: int = 0, tp: int = 1, dp: int = 1):
+    def build(cls, rank: int = 0, tp: int = 1, dp: int = 1, ccl_backend: str = 'nccl'):
         """build dist context."""
         from datetime import timedelta
-        gpu_backend = 'nccl'
         timeout = timedelta(days=35600)
 
         world_size = cls.get_world_size(tp, dp)
@@ -45,13 +44,13 @@ class DistContext:
         if tp > 1:
             tp_rank0 = rank // tp
             tp_ranks = list(range(tp_rank0, tp_rank0 + tp))
-            tp_gpu_group = dist.new_group(ranks=tp_ranks, timeout=timeout, backend=gpu_backend)
+            tp_gpu_group = dist.new_group(ranks=tp_ranks, timeout=timeout, backend=ccl_backend)
 
         # dp
         dp_gpu_group = None
         if dp > 1 and rank % tp == 0:
             dp_ranks = list(range(0, world_size, tp))
-            dp_gpu_group = dist.new_group(ranks=dp_ranks, timeout=timeout, backend=gpu_backend)
+            dp_gpu_group = dist.new_group(ranks=dp_ranks, timeout=timeout, backend=ccl_backend)
 
         context = DistContext(
             rank=rank,

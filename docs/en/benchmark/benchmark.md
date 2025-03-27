@@ -7,6 +7,12 @@ pip install lmdeploy
 # clone the repo to get the benchmark script
 git clone --depth=1 https://github.com/InternLM/lmdeploy
 cd lmdeploy
+# switch to the tag corresponding to the installed version:
+git fetch --tags
+# Check the installed lmdeploy version:
+pip show lmdeploy | grep Version
+# Then, check out the corresponding tag (replace <version> with the version string):
+git checkout <version>
 # download the test dataset
 wget https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split.json
 ```

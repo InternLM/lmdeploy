@@ -34,3 +34,9 @@ def get_backend(backend_type: str = None):
         device_mgr = get_device_manager()
         with device_mgr.context(device_ctx):
             return _get_backend()
+
+
+def init_backend(backend_type: str):
+    """init device backend."""
+    backend = get_backend(backend_type)
+    backend.init()
