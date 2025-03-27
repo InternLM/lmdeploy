@@ -7,10 +7,12 @@ import fire
 import torch
 from torch import nn
 
+import lmdeploy.pytorch.devices.device_manager as device_manager
 from lmdeploy.lite.apis.calibrate import LAYER_TYPE_MAP, NORM_TYPE_MAP, calibrate
 from lmdeploy.lite.quantization.awq import FC_FCS_MAP, NORM_FCS_MAP, awq_layers, skipped_module, smooth_layers
 from lmdeploy.lite.utils import collect_target_modules
 from lmdeploy.pytorch.check_env import try_import_deeplink
+from lmdeploy.pytorch.devices.device_manager import DeviceContext, DeviceManager
 from lmdeploy.pytorch.models import QLinear, QRMSNorm
 
 
@@ -28,6 +30,8 @@ def smooth_quant(model: str,
                  revision: str = None,
                  download_dir: str = None):
     try_import_deeplink(device)
+    device_ctx = DeviceContext(device_type=device)
+    device_manager._DEVICE_MANAGER = DeviceManager().set_context(device_ctx)
     if quant_dtype == 'fp8':
         quant_dtype = 'float8_e4m3fn'
 
