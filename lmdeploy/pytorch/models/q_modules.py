@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 
 import torch
 import torch.nn as nn
@@ -19,13 +19,15 @@ class QTensor:
     scale: torch.Tensor
     zero_point: torch.Tensor = None
 
+    def __post_init__(self):
+        self.fields = [field.name for field in fields(self)]
+
     def __getattr__(self, name: str):
         """Allows attribute access to be forwarded to the wrapped tensor when
         the attribute doesn't exist in QTensor."""
-        try:
+        if name in self.fields:
             return super().__getattr__(name)
-        except AttributeError:
-            return getattr(self.tensor, name)
+        return getattr(self.tensor, name)
 
 
 class QRMSNorm(nn.Module):

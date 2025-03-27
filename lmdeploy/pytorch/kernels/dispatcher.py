@@ -64,6 +64,7 @@ class FunctionDispatcher:
         self.func_name = func_name
         self.dispatched_func = self.load_and_call
         self.device_manager.register_context_callback(self.device_callback)
+        self.device_map = {'cuda': 'cuda', 'ascend': 'dlinfer', 'npu': 'dlinfer', 'maca': 'dlinfer', 'camb': 'dlinfer'}
 
     def device_callback(self, context: DeviceContext):
         """device context callback."""
@@ -71,17 +72,18 @@ class FunctionDispatcher:
 
     def load_func(self, device: str):
         """load function."""
+        device_type = self.device_map[device]
         try:
-            mod = importlib.import_module(f'lmdeploy.pytorch.kernels.{device}')
+            mod = importlib.import_module(f'lmdeploy.pytorch.kernels.{device_type}')
             func = getattr(mod, self.func_name)
-            self.impl_map[device] = func
+            self.impl_map[device_type] = func
         except Exception:
             logger.debug(f'Failed to load <{self.func_name}>'
-                         f' for <{device}>, '
+                         f' for <{device_type}>, '
                          'try load default implementation.')
             mod = importlib.import_module('lmdeploy.pytorch.kernels.default')
             if not hasattr(mod, self.func_name):
-                raise RuntimeError(f'<{self.func_name}> default and <{device}>'
+                raise RuntimeError(f'<{self.func_name}> default and <{device_type}>'
                                    ' implementation not exists.')
             func = getattr(mod, self.func_name)
             self.impl_map[device] = func
