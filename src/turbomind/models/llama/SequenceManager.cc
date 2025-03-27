@@ -82,6 +82,10 @@ const Sequence* SequenceManager::Get(uint64_t id)
             Erase(it);
         }
     }
+    else {
+        // TODO: multi-round chat, same id. when prefix_caching is ON, the second round can hit
+        // the kv cache block occupied in the first
+    }
     if (auto it = sequences_.find(id); it != sequences_.end()) {
         if (rank_ == 0) {
             TM_LOG_INFO("[SeqMgr][Get] ID %llu", id);
@@ -141,6 +145,7 @@ void SequenceManager::CachePrompt(const Sequences& sequences, int active_size)
         auto& seq = *sequences[i];
         if (seq.cache_len > seq.prompt.size()) {
             // seq prefill finished. We don't cache the prompt any longer
+            seq.prompt.clear();
             continue;
         }
         BlockIds                               block_ids;
@@ -150,7 +155,7 @@ void SequenceManager::CachePrompt(const Sequences& sequences, int active_size)
         int valid                                    = block_manager_->Verify(block_ids, block_unique_ids);
         if (rank_ == 0) {
             TM_LOG_INFO("[SeqMgr][CachePrompt] ID %llu, cached blocks %d, valid num %d", seq.id, block_ids.size(), valid);
-            TM_LOG_DEBUG("[SeqMgr][CachePrompt] ID %llu, cached block_ids %s, block_unique_ids %s",
+            TM_LOG_INFO("[SeqMgr][CachePrompt] ID %llu, cached block_ids %s, block_unique_ids %s",
                 seq.id,
                 serialize_vector(block_ids).c_str(),
                 serialize_vector(block_unique_ids).c_str());
@@ -174,7 +179,7 @@ void SequenceManager::CacheGeneration(const Sequence& seq)
     int valid                                    = block_manager_->Verify(block_ids, block_unique_ids);
     if (rank_ == 0) {
         TM_LOG_INFO("[SeqMgr][CacheGeneration] ID %llu, cached blocks %d, valid %d", seq.id, block_ids.size(), valid);
-        TM_LOG_DEBUG("[SeqMgr][CacheGeneration] ID %llu, cached block_ids %s, cached block_unique_ids %s",
+        TM_LOG_INFO("[SeqMgr][CacheGeneration] ID %llu, cached block_ids %s, cached block_unique_ids %s",
             seq.id,
             serialize_vector(block_ids).c_str(),
             serialize_vector(block_unique_ids).c_str());
@@ -450,7 +455,6 @@ void SequenceManager::PrefixMatch(Sequences& sequences)
         UniqueIds                              unique_ids;
         std::vector<std::shared_ptr<TrieNode>> matched_nodes;
         auto&                                  seq = const_cast<Sequence&>(*sequences[i]);
-
         if (seq.cache_len != 0) {
             // We only apply prefix-cache matching when seq.cache_len is 0,
             // which means this seq is a brand-new sequence.
@@ -466,13 +470,18 @@ void SequenceManager::PrefixMatch(Sequences& sequences)
         BlockIds matched_blocks(block_ids.begin(), block_ids.begin() + valid);
         block_manager_->Lock(matched_blocks);
         // block_manager_->Touch(matched_blocks);
-
+        if (!seq.blocks.empty()) {
+            // seq.cache_len = 0 but seq.blocks is not empty. It means this seq is a reused seq
+            // the new seq's ID is reused.
+            seq.blocks.clear();
+            seq.block_unique_ids.clear();
+        }
         seq.blocks.insert(seq.blocks.end(), block_ids.begin(), block_ids.begin() + valid);
         seq.block_unique_ids.insert(seq.block_unique_ids.end(), unique_ids.begin(), unique_ids.begin() + valid);
         seq.cache_len = valid * block_seq_len_;
         if (rank_ == 0) {
             TM_LOG_INFO("[SeqMgr][match] ID %llu, hit blocks %d, cache_len %d", seq.id, valid, seq.cache_len);
-            TM_LOG_DEBUG("[SeqMgr][match] ID %llu, hit block_ids %s, unique_ids %s",
+            TM_LOG_INFO("[SeqMgr][match] ID %llu, hit block_ids %s, unique_ids %s",
                         seq.id,
                         serialize_vector(block_ids).c_str(),
                         serialize_vector(unique_ids).c_str());
