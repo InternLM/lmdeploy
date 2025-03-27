@@ -707,7 +707,6 @@ class Engine:
             self._response(out.resp,
                            resp_type,
                            data=dict(token_ids=out.token_ids, logits=out.logits, cache_block_ids=out.cache_block_ids))
-            print(f"response: {dict(token_ids=out.token_ids, logits=out.logits, cache_block_ids=out.cache_block_ids)}")
 
         def __send_resps(step_outputs: List[InferOutput]):
             """send response callback."""
