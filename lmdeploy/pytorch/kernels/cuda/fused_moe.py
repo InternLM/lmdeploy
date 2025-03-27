@@ -280,7 +280,6 @@ def _get_start_end_kernel(
 ):
     """get start end kernel."""
     token_start = tl.program_id(0)
-    # token_stride = tl.num_programs(0)
 
     offs_exp = tl.arange(0, BLOCK_N)
     off_cum = offs_exp * stride_cum_exp + token_start * stride_cum_token
@@ -295,24 +294,24 @@ def _get_start_end_kernel(
     if token_start == 0:
         prev_cum_mask = mask_exp & (tl.arange(0, BLOCK_N) > 0)
     prev_cum = tl.load(cum_ptrs - stride_cum_token, mask=prev_cum_mask, other=0)
-    cur_cum = tl.load(cum_ptrs)
+    cur_cum = tl.load(cum_ptrs, mask=mask_exp)
 
     # store sorted idx
-    mask_exp = mask_exp & (cur_cum > prev_cum)
-    val_k = tl.load(val_k_ptrs)
+    mask_out = mask_exp & (cur_cum > prev_cum)
+    val_k = tl.load(val_k_ptrs, mask=mask_exp)
     val = token_id * topk + val_k
     out_ptrs = exp_out_ptr + prev_cum * stride_out
-    tl.store(out_ptrs, val, mask=mask_exp)
+    tl.store(out_ptrs, val, mask=mask_out)
 
     # fill start
     if token_id == 0:
         cur_start_ptrs = start_ptr + offs_exp
-        tl.store(cur_start_ptrs, prev_cum)
+        tl.store(cur_start_ptrs, prev_cum, mask=mask_exp)
 
     # fill end
     if token_id == num_tokens - 1:
         cur_end_ptrs = end_ptr + offs_exp
-        tl.store(cur_end_ptrs, cur_cum)
+        tl.store(cur_end_ptrs, cur_cum, mask=mask_exp)
 
 
 def get_start_end(exp_cum: torch.Tensor, exp_topk: torch.Tensor, topk: int):
@@ -355,7 +354,6 @@ def _get_sorted_idx(topk_ids: torch.Tensor, num_experts: int):
 
     # get expert mask   (num_experts, num_tokens)
     exp_mask, exp_topk = _get_exp_mask(topk_ids, num_experts)
-
     # get cumsum   (num_experts, num_tokens)
     exp_cum = exp_mask.flatten().cumsum(0).view_as(exp_mask)
 
