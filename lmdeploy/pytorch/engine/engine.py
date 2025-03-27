@@ -352,8 +352,8 @@ class Engine:
                                         return_logits=return_logits,
                                         multimodals=req.data.get('input_multimodals'),
                                         input_embeddings=req.data.get('input_embeddings'),
-                                        block_ids=req.data['block_ids'],
-                                        remote_token_ids=req.data['remote_token_ids'])
+                                        block_ids=req.data.get('block_ids'),
+                                        remote_token_ids=req.data.get('remote_token_ids'))
                 msg = next(iter(sess.sequences.values()))
                 __update_max_new_tokens(msg)
                 status = MessageStatus.WAITING
@@ -707,6 +707,7 @@ class Engine:
             self._response(out.resp,
                            resp_type,
                            data=dict(token_ids=out.token_ids, logits=out.logits, cache_block_ids=out.cache_block_ids))
+            print(f"response: {dict(token_ids=out.token_ids, logits=out.logits, cache_block_ids=out.cache_block_ids)}")
 
         def __send_resps(step_outputs: List[InferOutput]):
             """send response callback."""
@@ -758,7 +759,11 @@ class Engine:
                 for _, msg in enumerate(migration_running):
                     session_id = msg.session_id
                     msg.resp.type = ResponseType.SUCCESS
-                    out = InferOutput(session_id=session_id, resp=msg.resp, finish=False, token_ids=torch.tensor([0]))
+                    out = InferOutput(
+                        session_id=session_id,
+                        resp=msg.resp,
+                        finish=False,
+                        token_ids=torch.tensor(msg.token_ids))
                     outputs[session_id] = out
                     self._set_has_runable_event(has_runable_event)
                 resp_que.put_nowait(outputs)

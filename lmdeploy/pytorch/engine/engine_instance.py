@@ -144,12 +144,12 @@ class EngineInstance:
 
             if resp.type == ResponseType.SUCCESS:
                 token_ids = resp.data['token_ids'].tolist()
-                yield EngineOutput(resp.type, token_ids, len(token_ids))
+                yield EngineOutput(resp.type, token_ids, len(token_ids), cache_block_ids=resp.data.get("cache_block_ids"))
             elif resp.type == ResponseType.FINISH:
                 resp_data = resp.data
                 token_ids = resp_data['token_ids'].tolist()
                 logits = resp_data['logits']
-                yield EngineOutput(resp.type, token_ids, len(token_ids), logits=logits)
+                yield EngineOutput(resp.type, token_ids, len(token_ids), logits=logits, cache_block_ids=resp.data.get("cache_block_ids"))
                 break
             else:
                 yield EngineOutput(resp.type, [], 0)
