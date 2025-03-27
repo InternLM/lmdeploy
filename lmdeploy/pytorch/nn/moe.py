@@ -480,7 +480,6 @@ class FusedMoEBlockedF8(nn.Module):
         self.block_size = 128
         dist_ctx = get_dist_manager().current_context()
         self.ep_size, rank = get_ep_world_rank()
-        self.tp_size, rank = get_tp_world_rank()
         impl_builder = get_backend().get_layer_impl_builder(OpType.FusedMoEBlockedF8)
         self.impl = impl_builder.build(top_k,
                                        num_experts,
