@@ -4,7 +4,10 @@ from typing import Any, Dict, List, Tuple
 import torch
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
+from lmdeploy.pytorch.decorators import split_batch
+from lmdeploy.pytorch.distributed import get_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext
+from lmdeploy.pytorch.models.internvl import InternVLChatModel, InternVisionModel
 from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMeta
 from lmdeploy.utils import get_logger
 
@@ -117,6 +120,17 @@ class CUDAGraphRunner(GraphRunner):
         self.graph_pool_handle = torch.cuda.graph_pool_handle()
         self._runner_map: Dict[Any, CUDASingleGraphRunner] = dict()
 
+        self.compile_vit = False
+        if not self.backend_config.eager_mode and isinstance(self.model, InternVLChatModel):
+            world_size, _ = get_world_rank()
+            if world_size > 1:
+                torch._inductor.config.reorder_for_compute_comm_overlap = True
+                if isinstance(self.model.vision_model, InternVisionModel):
+                    self.model.vision_model.encoder.forward = split_batch(self.model.vision_model.encoder.forward, "inputs_embeds")
+            self.model.extract_feature = torch.compile(self.model.extract_feature, mode="max-autotune")
+            self.compile_vit = True
+            self.compiled = False
+
     def check_enable_graph(self):
         """check enable graph."""
         if self.backend_config.eager_mode:
@@ -133,8 +147,30 @@ class CUDAGraphRunner(GraphRunner):
         new_num_tokens = next_power_of_2(num_tokens)
         return (new_num_tokens, is_decoding)
 
+    def _is_decoding(self, attn_metadata: Any, **kwargs):
+        return attn_metadata.is_decoding
+
+    def _mark_dynamic_once(self, **kwargs):
+        """call torch._dynamo.mark_dynamic to avoid recompile"""
+        if self.compiled:
+            return
+
+        for tensor_name, dynamic_dims in self.model.compile_dynamic_args.items():
+            tensor = kwargs.get(tensor_name, None)
+            if tensor is None:
+                continue
+            torch._dynamo.mark_dynamic(tensor, dynamic_dims)
+        self.compiled = True
+
     def __call__(self, **kwargs):
         """call."""
+        if self.backend_config.eager_mode:
+            return self.model(**kwargs)
+
+        if self.compile_vit and not self._is_decoding(**kwargs):
+            self._mark_dynamic_once(**kwargs)
+            return self.model(**kwargs)
+
         enable_graph = self.enable_graph(**kwargs)
 
         if not enable_graph:

@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
+from lmdeploy.pytorch.decorators import enable_micro_batch
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
@@ -205,15 +206,23 @@ class InternVisionEncoderLayer(nn.Module):
         self.ls1 = nn.Parameter(torch.empty(self.embed_dim, dtype=dtype, device=device))
         self.ls2 = nn.Parameter(torch.empty(self.embed_dim, dtype=dtype, device=device))
 
+
+    @enable_micro_batch
+    def _attn(self, hidden_states):
+        hidden_states = hidden_states + self.attn(self.norm1(hidden_states).to(hidden_states[0].dtype)) * self.ls1
+        return hidden_states
+
+    @enable_micro_batch
+    def _mlp(self, hidden_states):
+        hidden_states = hidden_states + self.mlp(self.norm2(hidden_states).to(hidden_states.dtype)) * self.ls2
+        return hidden_states
+
     def forward(
         self,
-        hidden_states: torch.Tensor,
+        hidden_states,
     ):
-        """forward."""
-        hidden_states = hidden_states + self.attn(self.norm1(hidden_states).to(hidden_states.dtype)) * self.ls1
-
-        hidden_states = hidden_states + self.mlp(self.norm2(hidden_states).to(hidden_states.dtype)) * self.ls2
-
+        hidden_states = self._attn(hidden_states)
+        hidden_states = self._mlp(hidden_states)
         return hidden_states
 
 
@@ -305,6 +314,9 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
                                             'numerical instability. Please use BF16 instead.')
 
         self.input_processor = InternVLInputProcessor(self.config, dtype)
+
+        # for torch.compile, will call torch._dynamo.mark_dynamic to reduce recompile
+        self.compile_dynamic_args = {"pixel_values": [0]}
 
     def pixel_shuffle(self, x, scale_factor=0.5):
         n, w, h, c = x.size()
