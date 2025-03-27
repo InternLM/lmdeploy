@@ -192,7 +192,7 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& reqs, std::vector<Signa
     for (const auto& r : reqs) {
 
         if (rank_ == 0) {
-            TM_LOG_INFO("[ProcessInferRequests] Request for %ld received.", (long)r->id);
+            TM_LOG_INFO("[ProcessInferRequests] Request for %ld received", (long)r->id);
         }
 
         if (r->ec) {
@@ -207,7 +207,8 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& reqs, std::vector<Signa
             continue;
         }
 
-        auto ptr = r->session.start_flag ? sequence_manager_->Create(r->id) : sequence_manager_->Get(r->id);
+        // auto ptr = r->session.start_flag ? sequence_manager_->Create(r->id) : sequence_manager_->Get(r->id);
+        auto ptr = sequence_manager_->Get(r->id);
         if (!ptr) {
             signals.push_back([r] { UpdateState(*r, Request::kInvalid, 0); });
             continue;

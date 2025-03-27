@@ -48,13 +48,13 @@ std::tuple<BlockIds, UniqueIds, std::vector<std::shared_ptr<TrieNode>>> BlockTri
         curr_node = it->second;
         num_matched += block_seq_len_;
     }
-    return std::tuple(matched_blocks, matched_unique_ids, matched_nodes);
+    return std::make_tuple(matched_blocks, matched_unique_ids, matched_nodes);
 }
 
 std::tuple<BlockIds, UniqueIds, std::vector<std::shared_ptr<TrieNode>>> BlockTrie::cache(const Sequence&         seq,
                                                                                          const std::vector<int>& tokens)
 {
-    TM_LOG_INFO("[cache] session %llu, seq.blocks %d, tokens %d", seq.id, seq.blocks.size(), tokens.size());
+    TM_LOG_INFO("[BlockTrie][cache] session %llu, seq.blocks %d, tokens %d", seq.id, seq.blocks.size(), tokens.size());
     FT_CHECK(seq.status != Sequence::kCached);
     FT_CHECK(tokens.size() <= seq.blocks.size() * block_seq_len_);
 
@@ -82,7 +82,7 @@ std::tuple<BlockIds, UniqueIds, std::vector<std::shared_ptr<TrieNode>>> BlockTri
         auto it = curr_node->children.find(hash_key);
         if (it != curr_node->children.end()) {
             if (curr_tokens != it->second->tokens) {
-                TM_LOG_WARNING("hash key cache hit, but tokens are not the same");
+                TM_LOG_WARNING("[BlockTrie][cache] hash key cache hit, but tokens are not the same");
                 break;
             }
             curr_node                  = it->second;

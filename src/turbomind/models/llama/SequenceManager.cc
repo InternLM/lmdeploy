@@ -59,20 +59,33 @@ const Sequence* SequenceManager::Create(uint64_t id)
     auto     it = sequences_.find(id);
     if (it != sequences_.end()) {
         if (rank_ == 0) {
-            TM_LOG_WARNING("[SequenceManager][Create] Removing conflicting ID %ld", (long)id);
+            TM_LOG_WARNING("[SequenceManager][Create] Removing conflicting ID %llu", id);
         }
         Erase(it);
     }
     it = sequences_.emplace_hint(it, id, std::move(sequence));
+    if (rank_ == 0) {
+        TM_LOG_INFO("[SequenceManager][Create] ID %llu", id);
+    }
     return &it->second;
 }
 
 const Sequence* SequenceManager::Get(uint64_t id)
 {
     if (auto it = sequences_.find(id); it != sequences_.end()) {
+        if (rank_ == 0) {
+            TM_LOG_INFO("[SequenceManager][Get] ID %llu", id);
+        }
         return &it->second;
     }
-    return nullptr;
+    else {
+        Sequence sequence{id};
+        it = sequences_.emplace_hint(it, id, std::move(sequence));
+        if (rank_ == 0) {
+            TM_LOG_INFO("[SequenceManager][Create] ID %llu", id);
+        }
+        return &it->second;
+    }
 }
 
 bool SequenceManager::Contains(uint64_t id)
@@ -433,13 +446,6 @@ void SequenceManager::PrefixMatch(Sequences& sequences)
         }
         std::tie(block_ids, unique_ids, matched_nodes) = block_trie_->match(seq);
         const int valid                                = block_manager_->Verify(block_ids, unique_ids);
-        if (rank_ == 0) {
-            TM_LOG_INFO("[match] session %llu, matched block_ids %s, unique_ids %s",
-                        seq.id,
-                        serialize_vector(block_ids).c_str(),
-                        serialize_vector(unique_ids).c_str());
-            TM_LOG_INFO("[match] valid blocks %d, cache_len %d", valid, seq.cache_len);
-        }
         // remove invalid nodes from trie tree if there is any
         if (valid < block_ids.size()) {
             block_trie_->Remove(matched_nodes, valid);
@@ -451,6 +457,13 @@ void SequenceManager::PrefixMatch(Sequences& sequences)
         seq.blocks.insert(seq.blocks.end(), block_ids.begin(), block_ids.begin() + valid);
         seq.block_unique_ids.insert(seq.block_unique_ids.end(), unique_ids.begin(), unique_ids.begin() + valid);
         seq.cache_len = valid * block_seq_len_;
+        if (rank_ == 0) {
+            TM_LOG_INFO("[match] session %llu, matched block_ids %s, unique_ids %s",
+                        seq.id,
+                        serialize_vector(block_ids).c_str(),
+                        serialize_vector(unique_ids).c_str());
+            TM_LOG_INFO("[match] valid blocks %d, cache_len %d", valid, seq.cache_len);
+        }
     }
 }
 
