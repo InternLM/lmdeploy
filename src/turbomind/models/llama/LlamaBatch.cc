@@ -207,7 +207,6 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& reqs, std::vector<Signa
             continue;
         }
 
-        // auto ptr = r->session.start_flag ? sequence_manager_->Create(r->id) : sequence_manager_->Get(r->id);
         auto ptr = sequence_manager_->Get(r->id);
         if (!ptr) {
             signals.push_back([r] { UpdateState(*r, Request::kInvalid, 0); });
@@ -239,13 +238,6 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& reqs, std::vector<Signa
         state.sequences[idx] = ptr;
 
         auto& seq = *state.sequences[idx];
-
-        // if (step < seq.tokens.size()) {
-        //     // resize sequence tokens to match step
-        //     seq.tokens.resize(step);
-        //     seq.cache_len = std::min(seq.cache_len, step);
-        //     DropEmbeddings(seq);
-        // }
 
         const int* input_ids = r->inputs.getPtr<int>("input_ids");
 
