@@ -45,10 +45,6 @@ if (BUILD_TEST)
 
   set(CUTLASS_HEADER_DIR ${PROJECT_SOURCE_DIR}/3rdparty/cutlass/include)
   set(CUTLASS_EXTENSIONS_DIR ${PROJECT_SOURCE_DIR}/src/turbomind/cutlass_extensions/include)
-
-  # some tests depend on float sampling kernels / layers
-  # should be removed in the future
-  add_definitions("-DBUILD_TEST")
 endif()
 
 FetchContent_Declare(
