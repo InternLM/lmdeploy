@@ -192,7 +192,7 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& reqs, std::vector<Signa
     for (const auto& r : reqs) {
 
         if (rank_ == 0) {
-            TM_LOG_INFO("[ProcessInferRequests] Request for %ld received.", (long)r->id);
+            TM_LOG_INFO("[ProcessInferRequests] Request for %ld received", (long)r->id);
         }
 
         if (r->ec) {
@@ -207,7 +207,7 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& reqs, std::vector<Signa
             continue;
         }
 
-        auto ptr = r->session.start_flag ? sequence_manager_->Create(r->id) : sequence_manager_->Get(r->id);
+        auto ptr = sequence_manager_->Get(r->id);
         if (!ptr) {
             signals.push_back([r] { UpdateState(*r, Request::kInvalid, 0); });
             continue;
@@ -238,13 +238,6 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& reqs, std::vector<Signa
         state.sequences[idx] = ptr;
 
         auto& seq = *state.sequences[idx];
-
-        if (step < seq.tokens.size()) {
-            // resize sequence tokens to match step
-            seq.tokens.resize(step);
-            seq.cache_len = std::min(seq.cache_len, step);
-            DropEmbeddings(seq);
-        }
 
         const int* input_ids = r->inputs.getPtr<int>("input_ids");
 
@@ -1483,7 +1476,7 @@ void LlamaBatch<T>::Finish(GenerationState& g, std::vector<Signal>& signals)
     }
 
     // Cache computed blocks to block trie
-    sequence_manager_->CacheIfEnabled(state_->sequences, batch_size);
+    sequence_manager_->CachePrompt(state_->sequences, batch_size);
 
     if (debug_ && rank_ == 0) {
         for (int i = 0; i < batch_size; ++i) {
@@ -1549,14 +1542,13 @@ void LlamaBatch<T>::Finish(GenerationState& g, std::vector<Signal>& signals)
 }
 
 template<typename T>
-auto LlamaBatch<T>::Interrupt(int index, bool force_stop, bool force_end) -> Signal
+auto LlamaBatch<T>::Interrupt(int index, bool force_stop) -> Signal
 {
     if (rank_ == 0) {
-        TM_LOG_INFO("[Interrupt] slot %d, request %lu, stop %d, end %d",
+        TM_LOG_INFO("[Interrupt] slot %d, request %lu, stop %d",
                     index,
                     (long)state_->requests[index]->id,
-                    force_stop,
-                    force_end);
+                    force_stop);
     }
 
     if (debug_ && rank_ == 0) {
@@ -1570,11 +1562,11 @@ auto LlamaBatch<T>::Interrupt(int index, bool force_stop, bool force_end) -> Sig
         TM_LOG_INFO("[Interrupt] slot %d, tokens [%s]", index, ss.str().c_str());
     }
 
-    if (state_->requests[index]->session.end_flag || force_end) {
-        // Sequence is ending this round or a stop request is issued to end it
-        FT_CHECK(sequence_manager_->Erase(state_->requests[index]->id));
-    }
-    else {
+    // if (state_->requests[index]->session.end_flag || force_end) {
+    //     // Sequence is ending this round or a stop request is issued to end it
+    //     FT_CHECK(sequence_manager_->Erase(state_->requests[index]->id));
+    // }
+    // else {
         const int output_len = state_->h_context_length[index];
         auto&     seq        = *state_->sequences[index];
 
@@ -1584,6 +1576,8 @@ auto LlamaBatch<T>::Interrupt(int index, bool force_stop, bool force_end) -> Sig
         // output_ids is updated & synced in `Finish`
         const auto output_ids = state_->requests[index]->output_ids.getPtr<int>();
         std::copy_n(output_ids, output_len, seq.tokens.data());
+        // Cache the generated tokens of the sequence
+        sequence_manager_->CacheGeneration(seq);
 
         // Save random state in host memory
         seq.random_state.resize(sizeof(curandState_t));
@@ -1592,7 +1586,7 @@ auto LlamaBatch<T>::Interrupt(int index, bool force_stop, bool force_end) -> Sig
 
         // Set unlock flag for corresponding blocks, will be unlocked in the next `Materialize()`
         sequence_manager_->UpdateAndSetUnlock(seq);
-    }
+    // }
 
     state_->sequences[index] = nullptr;
 
