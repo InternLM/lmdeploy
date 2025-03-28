@@ -6,10 +6,13 @@ try:
 except ImportError:
     use_deepep = False
 
-from typing import Optional, Tuple
+from typing import List, Tuple
 
 import torch
 import torch.distributed as dist
+
+from ..default.token_dispatcher import AlltoAllTokenDispatcher
+from ..token_dispatcher import TokenDispatcherImpl
 
 _buffer_normal = None
 
@@ -33,45 +36,7 @@ def get_buffer_normal(group: dist.ProcessGroup, hidden_bytes: int):
     return _buffer_normal
 
 
-def permute(
-    tokens,
-    routing_map,
-):
-    """Copy from Megatron-Core moe for token permutation
-    https://github.com/NVIDIA/Megatron-
-    LM/blob/main/megatron/core/transformer/moe/moe_utils.py."""
-
-    num_tokens, _ = tokens.shape
-    num_experts = routing_map.shape[1]
-    routing_map = routing_map.bool().T.contiguous()
-    token_indices = (torch.arange(num_tokens, device=routing_map.device).unsqueeze(0).expand(num_experts, -1))
-    sorted_indices = token_indices.masked_select(routing_map)
-    permuted_input = tokens.index_select(0, sorted_indices)
-    return permuted_input, sorted_indices
-
-
-def unpermute(
-    permuted_tokens: torch.Tensor,
-    sorted_indices: torch.Tensor,
-    restore_shape: torch.Size,
-    probs: torch.Tensor = None,
-    routing_map: torch.Tensor = None,
-):
-    """Copy from Megatron-Core moe for token unpermutation
-    https://github.com/NVIDIA/Megatron-
-    LM/blob/main/megatron/core/transformer/moe/moe_utils.py."""
-
-    _, hidden = restore_shape
-    if probs is not None:
-        assert routing_map is not None, 'Mask must be provided to permute the probs.'
-        permuted_probs = probs.T.contiguous().masked_select(routing_map.T.contiguous())
-        permuted_tokens = permuted_tokens * permuted_probs.unsqueeze(-1)
-    output_tokens = torch.zeros(restore_shape, device=permuted_tokens.device, dtype=permuted_tokens.dtype)
-    output_tokens.scatter_add_(0, sorted_indices.unsqueeze(1).expand(-1, hidden), permuted_tokens)
-    return output_tokens
-
-
-class DeepEPDispatcher:
+class DeepEPTokenDispatcher(TokenDispatcherImpl):
     """Copy from Megatron-Core token_dispatcher MoEFlexTokenDispatcher
     https://github.com/NVIDIA/Megatron-
     LM/blob/main/megatron/core/transformer/moe/token_dispatcher.py."""
@@ -101,9 +66,9 @@ class DeepEPDispatcher:
         hidden_states: torch.Tensor,
         topk_idx: torch.Tensor,
         topk_weights: torch.Tensor,
-        num_experts: int,
+        expert_list: List[int] = None,
         previous_event=None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         self.hidden_shape = hidden_states.shape
         topk_idx = topk_idx.to(torch.int64)
         (
@@ -113,7 +78,7 @@ class DeepEPDispatcher:
             num_recv_tokens_per_expert_list,
             handle,
             event,
-        ) = self.dispatch_normal(hidden_states, topk_idx, topk_weights, num_experts, previous_event)
+        ) = self.dispatch_normal(hidden_states, topk_idx, topk_weights, self.num_experts, previous_event)
         self.tokens_per_expert = torch.tensor(
             num_recv_tokens_per_expert_list,
             device=hidden_states.device,
@@ -159,7 +124,7 @@ class DeepEPDispatcher:
         ) = self.buffer_normal.dispatch(
             x,
             topk_idx=topk_idx,
-            topk_weights=topk_weights,
+            topk_weights=topk_weights.to(torch.float32),
             num_tokens_per_rank=num_tokens_per_rank,
             num_tokens_per_rdma_rank=num_tokens_per_rdma_rank,
             is_token_in_rank=is_token_in_rank,
@@ -178,7 +143,7 @@ class DeepEPDispatcher:
             event,
         )
 
-    def combine(self, hidden_states: torch.Tensor) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    def combine(self, hidden_states: torch.Tensor) -> torch.Tensor:
         if hidden_states.shape[0] > 0:
             hidden_states = self.get_restored_hidden_states_by_experts(hidden_states)
         hidden_states, event = self.combine_normal(hidden_states, self.handle)
@@ -195,27 +160,6 @@ class DeepEPDispatcher:
         )
         return combined_x, event
 
-    def _indices_to_multihot(self, indices, probs):
-        batch_size = indices.shape[0]
-        multihot_routing_map = torch.zeros(
-            (batch_size, self.num_local_experts),
-            dtype=torch.long,
-            device=indices.device,
-        )
-
-        multihot_probs = torch.zeros(
-            (batch_size, self.num_local_experts),
-            dtype=torch.float,
-            device=indices.device,
-        )
-
-        mask = indices != -1
-        valid_indices = indices[mask]
-        row_indices = torch.arange(batch_size, device=indices.device).repeat_interleave(mask.sum(dim=1))
-        multihot_routing_map[row_indices, valid_indices] = 1
-        multihot_probs[row_indices, valid_indices] = probs[mask]
-        return multihot_routing_map.bool(), multihot_probs
-
     def get_dispached_metadata(self) -> torch.Tensor:
         return self.topk_idx, self.topk_weights
 
@@ -224,9 +168,10 @@ class DeepEPDispatcher:
         return self.tokens_per_expert
 
     def get_permuted_hidden_states_by_experts(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        self.dispatched_routing_map, self.topk_weights = self._indices_to_multihot(self.topk_idx, self.topk_weights)
+        self.dispatched_routing_map, self.topk_weights = super().indices_to_multihot(
+            self.topk_idx, self.topk_weights, self.num_experts)
         self.hidden_shape_before_permute = hidden_states.shape
-        hidden_states, self.reversed_mapping_for_combine = permute(
+        hidden_states, self.reversed_mapping_for_combine = super().permute(
             hidden_states,
             self.dispatched_routing_map,
         )
@@ -235,7 +180,7 @@ class DeepEPDispatcher:
     def get_restored_hidden_states_by_experts(self, hidden_states: torch.Tensor) -> torch.Tensor:
         input_dtype = hidden_states.dtype
         assert (self.topk_weights.dtype == torch.float32), 'DeepEP only supports float32 probs'
-        hidden_states = unpermute(
+        hidden_states = super().unpermute(
             hidden_states,
             self.reversed_mapping_for_combine,
             restore_shape=self.hidden_shape_before_permute,
@@ -243,3 +188,31 @@ class DeepEPDispatcher:
             probs=self.topk_weights,
         )
         return hidden_states.to(input_dtype)
+
+
+class TokenDispatcherBuilder:
+    """token dispatcher builder."""
+
+    @staticmethod
+    def build(
+        group,
+        num_experts,
+        num_local_experts,
+        hidden_size,
+        params_dtype,
+    ) -> TokenDispatcherImpl:
+        """build."""
+        if use_deepep is True:
+            return DeepEPTokenDispatcher(
+                group,
+                num_experts,
+                num_local_experts,
+                hidden_size,
+                params_dtype,
+            )
+        else:
+            return AlltoAllTokenDispatcher(
+                group,
+                num_experts,
+                num_local_experts,
+            )

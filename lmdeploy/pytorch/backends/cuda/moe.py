@@ -5,7 +5,7 @@ from typing import List
 import torch
 import torch.distributed as dist
 
-from lmdeploy.pytorch.backends.cuda.token_dispatcher import DeepEPDispatcher
+from lmdeploy.pytorch.backends.cuda.token_dispatcher import TokenDispatcherBuilder
 from lmdeploy.pytorch.kernels.cuda import fused_moe, fused_moe_w8a8
 from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import fused_moe_blocked_fp8
 from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
@@ -340,7 +340,7 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
                  block_size: int = 128,
                  out_dtype: torch.dtype = torch.bfloat16):
         super().__init__(top_k, num_experts, renormalize, block_size, out_dtype)
-        self.token_dispatcher = DeepEPDispatcher(
+        self.token_dispatcher = TokenDispatcherBuilder.build(
             group=ep_group,
             num_experts=self.num_experts,
             num_local_experts=self.num_experts // ep_size,
@@ -363,12 +363,14 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
         recv_hidden_states, recv_topk_ids, recv_topk_weights, tokens_per_expert = (self.token_dispatcher.dispatch(
             hidden_states,
             topk_ids,
-            topk_weights.to(torch.float32),
-            self.num_experts,
+            topk_weights,
+            expert_list,
         ))
         out_states = self.experts.forward(recv_hidden_states, tokens_per_expert, gate_up_weights, gate_up_scale,
                                           down_weights, down_scale)
         out_states = self.token_dispatcher.combine(out_states)
+        # print(f"zcx:out_states:{out_states}")
+        # raise RuntimeError()
         return out_states
 
 
