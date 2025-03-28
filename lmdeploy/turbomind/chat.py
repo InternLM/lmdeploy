@@ -9,13 +9,13 @@ from lmdeploy.messages import GenerationConfig, TurbomindEngineConfig
 from lmdeploy.model import ChatTemplateConfig
 from lmdeploy.serve.async_engine import get_names_from_model
 from lmdeploy.tokenizer import DetokenizeState
-from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_hf_gen_cfg
+from lmdeploy.utils import _get_and_verify_max_len, get_hf_gen_cfg, get_logger
 
 log_level = 'ERROR'
+logger = get_logger('lmdeploy')
+
 if os.getenv('TM_LOG_LEVEL') is None:
     os.environ['TM_LOG_LEVEL'] = log_level
-    from lmdeploy.utils import get_logger
-    logger = get_logger('lmdeploy')
     logger.setLevel(log_level)
 
 
@@ -30,16 +30,12 @@ def input_prompt(model_name):
     return '\n'.join(iter(input, sentinel))
 
 
-async def async_infer(generator, session_id, input_ids, gen_config, sequence_start, step, stream_output, tokenizer,
-                      state):
+async def async_infer(generator, session_id, input_ids, gen_config, stream_output, tokenizer, state):
     token_ids = input_ids.copy()
     prev_len = 0
     async for output in generator.async_stream_infer(session_id=session_id,
                                                      input_ids=input_ids,
                                                      gen_config=gen_config,
-                                                     sequence_start=sequence_start,
-                                                     sequence_end=False,
-                                                     step=step,
                                                      stream_output=stream_output):
         tokens = output.num_token
         if tokens > prev_len:
@@ -64,7 +60,7 @@ def main(model_path: str,
          cache_max_entry_count: float = 0.8,
          cache_block_seq_len: int = 64,
          rope_scaling_factor: float = 0.0,
-         enable_prefix_caching: bool = False,
+         enable_prefix_caching: bool = True,
          session_len: int = None,
          stream_output: bool = True,
          request_output_len: int = 1024,
@@ -116,7 +112,7 @@ def main(model_path: str,
     if chat_template_config.capability is None:
         chat_template_config.capability = cap
     print('chat_template_config:\n', chat_template_config, sep='', flush=True)
-    model = chat_template_config.chat_template
+    chat_template = chat_template_config.chat_template
 
     _, model_config = get_model_arch(model_path)
     session_len = _get_and_verify_max_len(model_config, session_len)
@@ -145,58 +141,35 @@ def main(model_path: str,
                                   top_p=top_p,
                                   temperature=temperature,
                                   repetition_penalty=repetition_penalty)
-    stop_words = _stop_words(model.stop_words, tokenizer)
-    gen_config.convert_stop_bad_words_to_ids(tokenizer)
-    if stop_words is not None:
-        stop_words = stop_words[0][0].tolist()
-    if gen_config.stop_token_ids is None:
-        gen_config.stop_token_ids = stop_words
+
     hf_gen_cfg = get_hf_gen_cfg(model_path)
     gen_config.update_from_hf_gen_cfg(hf_gen_cfg, tokenizer.eos_token_id)
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-    nth_round = 1
-    step = 0
     seed = random.getrandbits(64)
+    messages = []
     while True:
-        prompt = input_prompt(chat_template_name)
-        if prompt == 'exit':
+        user_input = input_prompt(chat_template_name)
+        if user_input == 'exit':
             exit(0)
-        elif prompt == 'end':
+        elif user_input == 'end':
             loop.run_until_complete(generator.async_end(session_id))
-            nth_round = 1
-            step = 0
             seed = random.getrandbits(64)
+            messages = []
         else:
-            prompt = model.get_prompt(prompt, nth_round == 1)
-            input_ids = tokenizer.encode(prompt, nth_round == 1)
+            messages.append(dict(role='user', content=user_input))
+            prompt = chat_template.messages2prompt(messages)
+            input_ids = tokenizer.encode(prompt)
             gen_config.random_seed = seed
 
-            if model.capability == 'chat':
-                sequence_start = (nth_round == 1)
-            else:
-                sequence_start = True
-                step = 0
-
-            if step + len(input_ids) + request_output_len >= tm_model.session_len:
-                print('WARNING: exceed session max length.'
-                      ' Please end the session.')
-                continue
-
-            print(f'{prompt}', end='', flush=True)
             state = DetokenizeState(len(input_ids))
 
-            coro = async_infer(generator, session_id, input_ids, gen_config, sequence_start, step, stream_output,
-                               tokenizer, state)
-            tokens = loop.run_until_complete(coro)
+            coro = async_infer(generator, session_id, input_ids, gen_config, stream_output, tokenizer, state)
+            loop.run_until_complete(coro)
 
-            # update step
-            step += len(input_ids) + tokens
             print()
-
-            nth_round += 1
 
 
 if __name__ == '__main__':

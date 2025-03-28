@@ -240,12 +240,12 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& reqs, std::vector<Signa
 
         auto& seq = *state.sequences[idx];
 
-        if (step < seq.tokens.size()) {
-            // resize sequence tokens to match step
-            seq.tokens.resize(step);
-            seq.cache_len = std::min(seq.cache_len, step);
-            DropEmbeddings(seq);
-        }
+        // if (step < seq.tokens.size()) {
+        //     // resize sequence tokens to match step
+        //     seq.tokens.resize(step);
+        //     seq.cache_len = std::min(seq.cache_len, step);
+        //     DropEmbeddings(seq);
+        // }
 
         const int* input_ids = r->inputs.getPtr<int>("input_ids");
 
