@@ -75,6 +75,7 @@ __device__ inline __nv_bfloat16 getMaxValue<__nv_bfloat16>()
 #if __CUDA_ARCH__ >= 800
     return __ushort_as_bfloat16((unsigned short)0x7F7FU);
 #endif
+    return {};
 }
 #endif
 

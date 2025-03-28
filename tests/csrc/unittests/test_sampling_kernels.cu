@@ -230,7 +230,7 @@ void filterCpu(int    batch_size,
             if (n != kept[i]) {
                 kept[i] = n;
                 for (int j = 0; j < n; j++) {
-                    sorted_logits[i * vocab_size + j] /= (sum_val + 1e-6f);
+                    sorted_logits[i * vocab_size + j] = (float)sorted_logits[i * vocab_size + j] / (sum_val + 1e-6f);
                 }
             }
         }
@@ -251,7 +251,7 @@ void filterCpu(int    batch_size,
             if (n != kept[i]) {
                 kept[i] = n;
                 for (int j = 0; j < n; j++) {
-                    sorted_logits[i * vocab_size + j] /= (sum_val + 1e-6f);
+                    sorted_logits[i * vocab_size + j] = (float)sorted_logits[i * vocab_size + j] / (sum_val + 1e-6f);
                 }
             }
         }

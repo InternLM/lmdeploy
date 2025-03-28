@@ -33,8 +33,7 @@ __global__ void applyTemperaturePenalty(T*          logits,
                                         const int   vocab_size,
                                         const int   vocab_size_padd)
 {
-    const bool IS_FP16   = std::is_same<T, half>::value;
-    const T    MAX_T_VAL = (IS_FP16) ? 65504.F : FLT_MAX;
+    const T MAX_T_VAL = getMaxValue<T>();
     for (int index = blockIdx.x * blockDim.x + threadIdx.x; index < m * vocab_size_padd;
          index += blockDim.x * gridDim.x) {
         T bias_val = bias == nullptr ? (T)(0.0f) : bias[index % vocab_size_padd];
@@ -126,9 +125,7 @@ __global__ void batchApplyTemperaturePenalty(T*           logits,
                                              const int    vocab_size,
                                              const int    vocab_size_padd)
 {
-    // TODO: Add macro or device function to get MAX_T_VAL.
-    const bool              IS_FP16   = std::is_same<T, half>::value;
-    const T                 MAX_T_VAL = (IS_FP16) ? 65504.F : FLT_MAX;
+    const T                 MAX_T_VAL = getMaxValue<T>();
     extern __shared__ float inv_temperatures[];
     if (threadIdx.x < batch_size) {
         inv_temperatures[threadIdx.x] = 1.0f / (temperatures[threadIdx.x] + 1e-6f);
@@ -139,12 +136,12 @@ __global__ void batchApplyTemperaturePenalty(T*           logits,
          index += blockDim.x * gridDim.x) {
         int batch_idx = index / vocab_size_padd;
         int vocab_idx = index % vocab_size_padd;
-        T   logit     = (vocab_idx < vocab_size) ? logits[index] : -MAX_T_VAL;
+        T   logit     = (vocab_idx < vocab_size) ? logits[index] : (T)-MAX_T_VAL;
         if (vocab_idx < vocab_size) {
             if (bias != nullptr) {
-                logit += bias[vocab_idx];
+                logit = (float)logit + (float)bias[vocab_idx];
             }
-            logit *= inv_temperatures[batch_idx];
+            logit = (float)logit * inv_temperatures[batch_idx];
         }
         logits[index] = logit;
     }
