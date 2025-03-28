@@ -30,6 +30,9 @@ class Qwen2VLModel(VisonModel):
         check_qwen_vl_deps_install()
         from transformers import AutoProcessor
         self.processor = AutoProcessor.from_pretrained(self.model_path)
+        tokenizer = self.processor.tokenizer
+        image_token = self.processor.image_token
+        self.image_token_id = tokenizer.encode(image_token)[-1]
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
         """refer to `super().preprocess()` for spec."""
