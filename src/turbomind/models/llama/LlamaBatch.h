@@ -98,7 +98,7 @@ public:
 
     void ComputeAndOutputLogits(T* hidden_states, int first, int last);
 
-    void OutputLogits(const float* logits, int first, int last, GenerationConfig::OutType out_type);
+    void OutputLogits(const T* logits, int first, int last, GenerationConfig::OutType out_type);
 
     void OutputLastHiddenState(const T* hidden_states, int first, int last);
 
@@ -250,17 +250,17 @@ private:
     int* init_ctx_lens_{};
     int* lora_mask_buf_{};  // lora
 
-    float* logits_buf_{};        // combined logits
-    float* local_logits_buf_{};  // tensor parallel local logits
-    float* context_logits_buf_{};
-    float* local_context_logits_buf_{};
+    T* logits_buf_{};        // combined logits
+    T* local_logits_buf_{};  // tensor parallel local logits
+    T* context_logits_buf_{};
+    T* local_context_logits_buf_{};
 
     size_t local_context_logits_buf_size_{};
 
-    float*    sampled_logprobs_{};
+    T*        sampled_logprobs_{};
     uint32_t* sampled_indexes_{};
     uint32_t* sampled_nums_{};
-    float*    h_sampled_logprobs_{};
+    T*        h_sampled_logprobs_{};
     uint32_t* h_sampled_indexes_{};
     uint32_t* h_sampled_nums_{};
 

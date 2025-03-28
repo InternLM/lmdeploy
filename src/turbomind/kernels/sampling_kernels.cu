@@ -19,7 +19,7 @@ __global__ void sampling(const T*       logits,
                          curandState_t* curandstate,
                          int*           output_ids,
                          int*           sequence_length,
-                         float*         sampled_logprobs,
+                         T*             sampled_logprobs,
                          uint32_t*      sampled_indexes,
                          uint32_t*      sampled_nums)
 {
@@ -92,11 +92,17 @@ void invokeSampling(SamplingParams& params, cudaStream_t stream)
                                                    params.curandstate,
                                                    params.output_ids,
                                                    params.sequence_length,
-                                                   params.sampled_logprobs,
+                                                   (T*)params.sampled_logprobs,
                                                    params.sampled_indexes,
                                                    params.sampled_nums);
 }
 
+#ifdef ENABLE_FP32
 template void invokeSampling<float>(SamplingParams& params, cudaStream_t stream);
+#endif
+template void invokeSampling<half>(SamplingParams& params, cudaStream_t stream);
+#ifdef ENABLE_BF16
+template void invokeSampling<nv_bfloat16>(SamplingParams& params, cudaStream_t stream);
+#endif
 
 }  // namespace turbomind

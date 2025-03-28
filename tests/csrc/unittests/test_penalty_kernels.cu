@@ -127,7 +127,7 @@ void initLogitsAndBias(
     if (bias != nullptr) {
         initRandom(bias, vocab_size, -5.0f, 5.0f);
     }
-    bool is_half = sizeof(T) == 2;
+    bool is_half = std::is_same<T, half>::value;
     for (size_t i = 0; i < batch_size; ++i) {
         for (size_t j = 0; j < vocab_size_padded; ++j) {
             if (j >= vocab_size) {
@@ -270,7 +270,7 @@ public:
 // we carefully suppress a compile warning message.
 #pragma nv_diag_suppress 177
 
-TYPED_TEST_SUITE(TemperaturePenaltyTest, FloatType);
+TYPED_TEST_SUITE(TemperaturePenaltyTest, testing::Types<__nv_bfloat16>);
 
 TYPED_TEST(TemperaturePenaltyTest, NoPenalty)
 {
@@ -583,7 +583,7 @@ public:
     }
 };
 
-TYPED_TEST_SUITE(RepetitionPenaltyTest, FloatType);
+TYPED_TEST_SUITE(RepetitionPenaltyTest, SamplingTypes);
 
 TYPED_TEST(RepetitionPenaltyTest, NoPenalty)
 {

@@ -53,15 +53,15 @@ bool checkSorted(int  batch_size,
         for (int j = 0; j < expected_kept[i]; j++) {
             int index = i * vocab_size + j;
             // soft check
-            if (std::abs(expected_logits[index] - output_logits[index]) > 1e-6
+            if (std::abs((float)expected_logits[index] - (float)output_logits[index]) > 1e-6
                 && expected_indices[index] != output_indices[index]) {
                 printf("batch=%d, ith=%d, expected=(%d, %.5f), output=(%d, %.5f)\n",
                        i,
                        j,
                        expected_indices[index],
-                       expected_logits[index],
+                       (float)expected_logits[index],
                        output_indices[index],
-                       output_logits[index]);
+                       (float)output_logits[index]);
                 return false;
             }
         }
@@ -69,23 +69,24 @@ bool checkSorted(int  batch_size,
     return true;
 }
 
-bool checkSample(int*   expected_output_ids,
-                 int*   output_ids,
-                 int    batch_size,
-                 float* expected_sampled_logprobs,
-                 int*   expected_sampled_indices,
-                 int*   expected_sampled_nums,
-                 float* output_sampled_logprobs,
-                 int*   output_sampled_indices,
-                 int*   output_sampled_nums)
+template<typename T>
+bool checkSample(int* expected_output_ids,
+                 int* output_ids,
+                 int  batch_size,
+                 T*   expected_sampled_logprobs,
+                 int* expected_sampled_indices,
+                 int* expected_sampled_nums,
+                 T*   output_sampled_logprobs,
+                 int* output_sampled_indices,
+                 int* output_sampled_nums)
 {
     for (int i = 0; i < batch_size; i++) {
-        if (expected_output_ids[i] != output_ids[i]) {
+        if (expected_sampled_nums[i] != output_sampled_nums[i]) {
+            printf("batch=%d, sampled_nums, cpu=%d, gpu=%d\n", i, expected_sampled_nums[i], output_sampled_nums[i]);
             return false;
         }
-
-        if (expected_sampled_nums[i] != output_sampled_nums[i]) {
-            printf("sampled_nums, cpu=%d, gpu=%d\n", expected_sampled_nums[i], output_sampled_nums[i]);
+        if (expected_output_ids[i] != output_ids[i]) {
+            printf("batch=%d, expected_output_ids=%d, output_ids=%d\n", i, expected_output_ids[i], output_ids[i]);
             return false;
         }
         for (int j = 0; j < expected_sampled_nums[i]; j++) {
@@ -120,7 +121,7 @@ void sampleCpu(int    batch_size,
                int*   kept,
                float* uniforms,
                int*   output_ids,
-               float* sampled_logprobs,
+               T*     sampled_logprobs,
                int*   sampled_indices,
                int*   sampled_nums)
 {
@@ -129,7 +130,7 @@ void sampleCpu(int    batch_size,
         int   selected = -1;
         float sum_val  = 0.f;
         for (int j = 0; j < kept[i]; j++) {
-            sum_val += logits[i * vocab_size + j];
+            sum_val += (float)logits[i * vocab_size + j];
             if (sum_val > uniforms[i]) {
                 selected      = j;
                 output_ids[i] = indices[i * vocab_size + j];
@@ -139,12 +140,13 @@ void sampleCpu(int    batch_size,
 
         if (sampled_logprobs && sampled_indices && sampled_nums) {
             for (int j = 0; j < min(kept[i], kMaxLogProb); ++j) {
-                sampled_logprobs[i * kMaxLogProb + j] = std::log(logits[i * vocab_size + j]);
+                sampled_logprobs[i * kMaxLogProb + j] = std::log((float)logits[i * vocab_size + j]);
                 sampled_indices[i * kMaxLogProb + j]  = indices[i * vocab_size + j];
             }
             if (kept[i] > kMaxLogProb && selected >= kMaxLogProb) {
-                sampled_logprobs[i * kMaxLogProb + kMaxLogProb - 1] = std::log(logits[i * vocab_size + selected]);
-                sampled_indices[i * kMaxLogProb + kMaxLogProb - 1]  = indices[i * vocab_size + selected];
+                sampled_logprobs[i * kMaxLogProb + kMaxLogProb - 1] =
+                    std::log((float)logits[i * vocab_size + selected]);
+                sampled_indices[i * kMaxLogProb + kMaxLogProb - 1] = indices[i * vocab_size + selected];
             }
             sampled_nums[i] = min(kept[i], kMaxLogProb);
         }
@@ -155,18 +157,18 @@ template<typename T>
 void softmax(T* input, int batch_size, int vocab_size, int* kept, T* output)
 {
     for (int i = 0; i < batch_size; i++) {
-        int offset  = i * vocab_size;
-        T   max_val = input[offset];
+        int   offset  = i * vocab_size;
+        float max_val = input[offset];
         for (int j = 0; j < kept[i]; j++) {
-            max_val = std::max(input[offset + j], max_val);
+            max_val = std::max((float)input[offset + j], max_val);
         }
-        T sum_val{};
+        float sum_val{};
         for (int j = 0; j < kept[i]; j++) {
             output[offset + j] = std::exp((float)input[offset + j] - max_val);
-            sum_val += output[offset + j];
+            sum_val += (float)output[offset + j];
         }
         for (int j = 0; j < kept[i]; j++) {
-            output[offset + j] /= sum_val;
+            output[offset + j] = (float)output[offset + j] / sum_val;
         }
     }
 }
@@ -186,7 +188,7 @@ void filterCpu(int    batch_size,
 {
     for (int i = 0; i < batch_size; i++) {
         // fill
-        std::vector<std::pair<T, int>> work(vocab_size);
+        std::vector<std::pair<float, int>> work(vocab_size);
         for (int j = 0; j < vocab_size; j++) {
             work[j] = {logits[i * vocab_size + j], j};
         }
@@ -207,7 +209,7 @@ void filterCpu(int    batch_size,
         // softmax
         softmax(sorted_logits + i * vocab_size, 1, vocab_size, kept + i, sorted_logits + i * vocab_size);
         if (top_ks && top_ks[i] == 0) {
-            if (top_ps && sorted_logits[i * vocab_size] > top_ps[i]) {
+            if (top_ps && (float)sorted_logits[i * vocab_size] > top_ps[i]) {
                 sorted_logits[i * vocab_size] = 1.f;
                 kept[i]                       = 1;
             }
@@ -219,7 +221,7 @@ void filterCpu(int    batch_size,
             float sum_val = 0;
             int   n       = kept[i];
             for (int j = 0; j < kept[i]; j++) {
-                sum_val += sorted_logits[i * vocab_size + j];
+                sum_val += (float)sorted_logits[i * vocab_size + j];
                 if (sum_val > topp) {
                     n = j + 1;
                     break;
@@ -228,7 +230,7 @@ void filterCpu(int    batch_size,
             if (n != kept[i]) {
                 kept[i] = n;
                 for (int j = 0; j < n; j++) {
-                    sorted_logits[i * vocab_size + j] /= (sum_val + 1e-6f);
+                    sorted_logits[i * vocab_size + j] = (float)sorted_logits[i * vocab_size + j] / (sum_val + 1e-6f);
                 }
             }
         }
@@ -236,20 +238,20 @@ void filterCpu(int    batch_size,
         // minp filter
         if (filter_minp && min_ps[i] != 0.f) {
             float minp      = min_ps[i];
-            float threshold = sorted_logits[i * vocab_size] * minp;
+            float threshold = (float)sorted_logits[i * vocab_size] * minp;
             float sum_val   = 0;
             int   n         = kept[i];
             for (int j = 0; j < kept[i]; j++) {
-                if (sorted_logits[i * vocab_size + j] < threshold) {
+                if ((float)sorted_logits[i * vocab_size + j] < threshold) {
                     n = j;
                     break;
                 }
-                sum_val += sorted_logits[i * vocab_size + j];
+                sum_val += (float)sorted_logits[i * vocab_size + j];
             }
             if (n != kept[i]) {
                 kept[i] = n;
                 for (int j = 0; j < n; j++) {
-                    sorted_logits[i * vocab_size + j] /= (sum_val + 1e-6f);
+                    sorted_logits[i * vocab_size + j] = (float)sorted_logits[i * vocab_size + j] / (sum_val + 1e-6f);
                 }
             }
         }
@@ -319,7 +321,11 @@ public:
         int*   d_top_ks         = (int*)allocator->malloc(sizeof(int) * batch_size);
         float* d_top_ps         = (float*)allocator->malloc(sizeof(float) * batch_size);
 
-        initRandom(logits.data(), batch_size * vocab_size, -200.0f, 200.0f);
+        float boundary = 1.f;
+        for (int x = vocab_size; x >= 10; x /= 10) {
+            boundary *= 10;
+        }
+        initRandom(logits.data(), batch_size * vocab_size, -boundary, boundary);
 
         std::fill_n(expected_kept.data(), batch_size, vocab_size);
 
@@ -377,7 +383,7 @@ public:
     }
 };
 
-TYPED_TEST_SUITE(TopKTopPSortTest, FloatType);
+TYPED_TEST_SUITE(TopKTopPSortTest, SamplingTypes);
 
 TYPED_TEST(TopKTopPSortTest, OnlyTopKBatch)
 {
@@ -441,7 +447,11 @@ public:
         float* d_top_ps         = (float*)allocator->malloc(sizeof(float) * batch_size);
         float* d_min_ps         = (float*)allocator->malloc(sizeof(float) * batch_size);
 
-        initRandom(logits.data(), batch_size * vocab_size, -200.0f, 200.0f);
+        float boundary = 1.f;
+        for (int x = vocab_size; x >= 10; x /= 10) {
+            boundary *= 10;
+        }
+        initRandom(logits.data(), batch_size * vocab_size, -boundary, boundary);
         std::fill_n(expected_kept.data(), batch_size, vocab_size);
 
         filterCpu(batch_size,
@@ -502,7 +512,7 @@ public:
     }
 };
 
-TYPED_TEST_SUITE(TopPMinPFilterTest, FloatType);
+TYPED_TEST_SUITE(TopPMinPFilterTest, SamplingTypes);
 
 TYPED_TEST(TopPMinPFilterTest, OnlyTopP)
 {
@@ -543,17 +553,17 @@ public:
         std::vector<int>   expected_output_ids(batch_size);
         std::vector<float> uniforms(batch_size);
 
-        std::vector<float> sampled_logprobs(batch_size * kMaxLogProb);
-        std::vector<int>   sampled_indexes(batch_size * kMaxLogProb);
-        std::vector<int>   sampled_nums(batch_size);
+        std::vector<T>   sampled_logprobs(batch_size * kMaxLogProb);
+        std::vector<int> sampled_indexes(batch_size * kMaxLogProb);
+        std::vector<int> sampled_nums(batch_size);
 
         // std::vector<T>     output_logits(batch_size * vocab_size);
         // std::vector<int>   output_indices(batch_size * vocab_size);
         // std::vector<int>   output_kept(batch_size);
-        std::vector<int>   output_ids(batch_size);
-        std::vector<float> output_sampled_logprobs(batch_size * kMaxLogProb);
-        std::vector<int>   output_sampled_indexes(batch_size * kMaxLogProb);
-        std::vector<int>   output_sampled_nums(batch_size);
+        std::vector<int> output_ids(batch_size);
+        std::vector<T>   output_sampled_logprobs(batch_size * kMaxLogProb);
+        std::vector<int> output_sampled_indexes(batch_size * kMaxLogProb);
+        std::vector<int> output_sampled_nums(batch_size);
 
         // device buffer
         T*             d_sorted_logits    = (T*)allocator->malloc(sizeof(T) * batch_size * vocab_size);
@@ -563,13 +573,17 @@ public:
         float*         d_min_ps           = (float*)allocator->malloc(sizeof(float) * batch_size);
         float*         d_uniforms         = (float*)(allocator->malloc(sizeof(float) * batch_size));
         int*           d_output_ids       = (int*)(allocator->malloc(sizeof(int) * batch_size));
-        float*         d_sampled_logprobs = (float*)(allocator->malloc(sizeof(float) * batch_size * kMaxLogProb));
+        T*             d_sampled_logprobs = (T*)(allocator->malloc(sizeof(T) * batch_size * kMaxLogProb));
         int*           d_sampled_indexes  = (int*)(allocator->malloc(sizeof(int) * batch_size * kMaxLogProb));
         int*           d_sampled_nums     = (int*)(allocator->malloc(sizeof(int) * batch_size));
         curandState_t* curand_states =
             reinterpret_cast<curandState_t*>(allocator->malloc(sizeof(curandState_t) * batch_size, false));
 
-        initRandom(logits.data(), batch_size * vocab_size, -3.0f, 3.0f);
+        float boundary = 1.f;
+        for (int x = vocab_size; x >= 10; x /= 10) {
+            boundary *= 10;
+        }
+        initRandom(logits.data(), batch_size * vocab_size, -boundary, boundary);
         std::fill_n(expected_kept.data(), batch_size, vocab_size);
 
         // sort & softmax
@@ -642,7 +656,7 @@ public:
     }
 };
 
-TYPED_TEST_SUITE(SamplingTest, FloatType);
+TYPED_TEST_SUITE(SamplingTest, SamplingTypes);
 
 TYPED_TEST(SamplingTest, Single)
 {

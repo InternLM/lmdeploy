@@ -153,7 +153,12 @@ void DynamicDecodeLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_
     }
 }
 
+#ifdef ENABLE_FP32
 template class DynamicDecodeLayer<float>;
-// template class DynamicDecodeLayer<half>;
+#endif
+template class DynamicDecodeLayer<half>;
+#ifdef ENABLE_BF16
+template class DynamicDecodeLayer<__nv_bfloat16>;
+#endif
 
 }  // namespace turbomind

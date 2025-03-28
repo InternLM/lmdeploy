@@ -91,9 +91,8 @@ __global__ void topKSortStage1(T*         logits,
     topk_tmp_id_buf += batch_id * BLOCKS_PER_BEAM * max_top_k + block_lane * k;
     topk_tmp_val_buf += batch_id * BLOCKS_PER_BEAM * max_top_k + block_lane * k;
 
-    TopK_2<T>  partial;
-    const bool IS_FP16   = std::is_same<T, half>::value;
-    const T    MAX_T_VAL = (IS_FP16) ? HALF_FLT_MAX : FLT_MAX;
+    TopK_2<T> partial;
+    const T   MAX_T_VAL = getMaxValue<T>();
 
     for (int ite = 0; ite < k; ite++) {
         partial.init();
@@ -108,7 +107,9 @@ __global__ void topKSortStage1(T*         logits,
         if (tid == 0) {
             topk_tmp_id_buf[ite]  = total.p;
             topk_tmp_val_buf[ite] = total.u;
-            logits[total.p]       = -MAX_T_VAL;
+            if (total.p != -1) {
+                logits[total.p] = -MAX_T_VAL;
+            }
         }
         __syncthreads();
     }
@@ -124,8 +125,7 @@ __global__ void topKSortStage2(const int* top_ks,
                                int*       sorted_indices,
                                int*       kept)
 {
-    const bool IS_FP16   = std::is_same<T, half>::value;
-    const T    MAX_T_VAL = (IS_FP16) ? HALF_FLT_MAX : FLT_MAX;
+    const T MAX_T_VAL = getMaxValue<T>();
 
     const int tid      = threadIdx.x;
     const int batch_id = blockIdx.x;
@@ -181,7 +181,7 @@ __global__ void topKSortStage2(const int* top_ks,
     float thread_sum = s_sum;
     topk_tmp_id_buf += batch_id * stride;
     for (int i = tid; i < k; i += BLOCK_SIZE) {
-        sorted_logits[i]  = s_val2[i] / thread_sum;
+        sorted_logits[i]  = (T)(s_val2[i] / thread_sum);
         sorted_indices[i] = topk_tmp_id_buf[s_id[i]];
     }
 }
@@ -243,6 +243,12 @@ void invokeTopKSortFilter(TopKSortFilterParams& params, cudaStream_t stream)
     }
 }
 
+#ifdef ENABLE_FP32
 template void invokeTopKSortFilter<float>(TopKSortFilterParams& params, cudaStream_t stream);
+#endif
+template void invokeTopKSortFilter<half>(TopKSortFilterParams& params, cudaStream_t stream);
+#ifdef ENABLE_BF16
+template void invokeTopKSortFilter<nv_bfloat16>(TopKSortFilterParams& params, cudaStream_t stream);
+#endif
 
 }  // namespace turbomind

@@ -224,7 +224,7 @@ void SamplingLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_tenso
         params.sequence_length =
             output_tensors->at("sequence_length", Tensor{MEMORY_GPU, TYPE_INVALID, {}, nullptr}).getPtr<int>();
         params.sampled_logprobs =
-            output_tensors->at("sampled_logprobs", Tensor{MEMORY_GPU, TYPE_INVALID, {}, nullptr}).getPtr<float>();
+            output_tensors->at("sampled_logprobs", Tensor{MEMORY_GPU, TYPE_INVALID, {}, nullptr}).getPtr<T>();
         params.sampled_indexes =
             output_tensors->at("sampled_indexes", Tensor{MEMORY_GPU, TYPE_INVALID, {}, nullptr}).getPtr<uint32_t>();
         params.sampled_nums =
@@ -285,6 +285,12 @@ void SamplingLayer<T>::setup(const size_t batch_size, const size_t beam_width, T
     TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
 }
 
+#ifdef ENABLE_FP32
 template class SamplingLayer<float>;
+#endif
+template class SamplingLayer<half>;
+#ifdef ENABLE_BF16
+template class SamplingLayer<nv_bfloat16>;
+#endif
 
 }  // namespace turbomind

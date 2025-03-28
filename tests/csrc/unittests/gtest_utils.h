@@ -32,6 +32,9 @@ bool almostEqual(float a, float b, float atol = 1e-5, float rtol = 1e-8)
     if (isnan(a) && isnan(b)) {
         return true;
     }
+    if (isinf(a) && isinf(b) && (a > 0 && b > 0 || a < 0 && b < 0)) {
+        return true;
+    }
     return fabs(a - b) <= (atol + rtol * fabs(b));
 }
 
@@ -156,6 +159,21 @@ inline T fma(T a, T b, T c)
     return static_cast<T>((float)a * (float)b + (float)c);
 }
 }
+
+#ifdef ENABLE_FP32
+#ifdef ENABLE_BF16
+typedef testing::Types<float, half, __nv_bfloat16> SamplingTypes;
+#else
+typedef testing::Types<float, half> SamplingTypes;
+#endif
+#else
+#ifdef ENABLE_BF16
+typedef testing::Types<half, __nv_bfloat16>        SamplingTypes;
+#else
+typedef testing::Types<half> SamplingTypes;
+#endif
+#endif
+
 typedef testing::Types<float> FloatType;
 typedef testing::Types<float, half> FloatAndHalfTypes;
 #ifndef ENABLE_BF16
