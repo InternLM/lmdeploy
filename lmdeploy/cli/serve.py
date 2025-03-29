@@ -165,6 +165,7 @@ class SubCliServe:
         quant_policy = ArgumentHelper.quant_policy(pt_group)
         ArgumentHelper.dp(pt_group)
         ArgumentHelper.dp_rank(pt_group)
+        ArgumentHelper.ep(pt_group)
 
         # turbomind args
         tb_group = parser.add_argument_group('TurboMind engine arguments')
@@ -296,6 +297,7 @@ class SubCliServe:
                                                  tp=args.tp,
                                                  dp=args.dp,
                                                  dp_rank=args.dp_rank,
+                                                 ep=args.ep,
                                                  max_batch_size=max_batch_size,
                                                  cache_max_entry_count=args.cache_max_entry_count,
                                                  block_size=args.cache_block_seq_len,
