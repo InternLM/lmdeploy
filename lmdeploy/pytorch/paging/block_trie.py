@@ -84,7 +84,7 @@ class BlockTrie:
         while num_matched + block_size < seq.num_all_ids:
             curr_tokens = seq.history_cache[num_matched:num_matched + block_size]
 
-            key = hash( ("random",tuple(curr_tokens)) )
+            key = hash(("random",tuple(curr_tokens)))
             if key not in curr.children:
                 break
 
@@ -132,7 +132,7 @@ class BlockTrie:
 
             block = logical_blocks[block_id]
 
-            hash_key = hash( ("random",tuple(curr_tokens)) )
+            hash_key = hash(("random",tuple(curr_tokens)))
             parent = node
             if hash_key in parent.children:
                 child = parent.children[hash_key]
