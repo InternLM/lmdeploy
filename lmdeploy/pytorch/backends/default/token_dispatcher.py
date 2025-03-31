@@ -23,23 +23,21 @@ class AlltoAllTokenDispatcher(TokenDispatcherImpl):
         self.tp_size = 1
         self.input_splits = None
         self.output_splits = None
-        self.permute_idx_device = torch.device('cuda')
-        input_chunk_idxs = torch.arange(self.num_experts, device=self.permute_idx_device)
+        input_chunk_idxs = torch.arange(self.num_experts, device=torch.device('cpu'))
         self.sort_input_by_local_experts = input_chunk_idxs.reshape(-1, self.num_local_experts).T.ravel()
         self.restore_output_by_local_experts = input_chunk_idxs.reshape(self.num_local_experts, -1).T.ravel()
 
-    def sort_chunks_by_idxs(self,
-                            input: torch.Tensor,
-                            split_sizes: torch.Tensor,
-                            sorted_idxs: torch.Tensor,
-                            fused: bool = False):
+    def sort_chunks_by_idxs(self, input: torch.Tensor, split_sizes: torch.Tensor, sorted_idxs: torch.Tensor):
         """Split and sort the input tensor based on the split_sizes and sorted
         indices."""
         input = torch.split(input, split_sizes.tolist(), dim=0)
         output = torch.cat([input[i] for i in sorted_idxs.tolist()], dim=0)
         return output
 
-    def all_to_all(self, group, input_, output_split_sizes_=None, input_split_sizes=None):
+    def all_to_all(self, group: torch.distributed.group, input_: torch.Tensor, output_split: torch.Tensor,
+                   input_split: torch.Tensor):
+        output_split_sizes_ = output_split.tolist()
+        input_split_sizes = input_split.tolist()
         output = input_.new_empty(
             size=[sum(output_split_sizes_)] + list(input_.size()[1:]),
             dtype=input_.dtype,
@@ -62,26 +60,23 @@ class AlltoAllTokenDispatcher(TokenDispatcherImpl):
 
         num_local_tokens_per_expert = routing_map.sum(dim=0).long()
         self.input_splits = (num_local_tokens_per_expert.reshape(self.ep_size, self.num_local_experts).sum(axis=1).to(
-            torch.device('cpu'), non_blocking=True).numpy())
+            torch.device('cpu'), non_blocking=True))
         dim_size = list(num_local_tokens_per_expert.size())
         dim_size[0] = dim_size[0] * torch.distributed.get_world_size(self.ep_group)
-        output = torch.empty(dim_size,
-                             dtype=num_local_tokens_per_expert.dtype,
-                             device=num_local_tokens_per_expert.device)
+        output = num_local_tokens_per_expert.new_empty(dim_size)
         torch.distributed.all_gather_into_tensor(output, num_local_tokens_per_expert.contiguous(), group=self.ep_group)
         num_global_tokens_per_expert = (output.reshape(self.ep_size, self.tp_size, self.num_experts).transpose(0, 1))
         num_global_tokens_per_local_expert = num_global_tokens_per_expert[:, :, local_expert_indices[0]:
                                                                           local_expert_indices[-1] + 1].contiguous()
         num_global_tokens_per_rank = num_global_tokens_per_local_expert.sum(axis=2)
-        self.output_splits = (num_global_tokens_per_rank[0].to(torch.device('cpu'), non_blocking=True).numpy())
+        self.output_splits = (num_global_tokens_per_rank[0].to(torch.device('cpu'), non_blocking=True))
         num_tokens_per_local_expert = num_global_tokens_per_local_expert.sum(dim=(0, 1))
         if self.num_local_experts > 1:
             self.num_global_tokens_per_local_expert = num_global_tokens_per_local_expert.view(
                 -1, self.num_local_experts)
 
             self.num_global_tokens_per_local_expert = num_global_tokens_per_local_expert.to(torch.device('cpu'),
-                                                                                            non_blocking=False)
-
+                                                                                            non_blocking=True)
         return num_tokens_per_local_expert
 
     def dispatch(self, hidden_states: torch.Tensor, topk_ids: torch.Tensor, probs: torch.Tensor,

@@ -369,8 +369,6 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
         out_states = self.experts.forward(recv_hidden_states, tokens_per_expert, gate_up_weights, gate_up_scale,
                                           down_weights, down_scale)
         out_states = self.token_dispatcher.combine(out_states)
-        # print(f"zcx:out_states:{out_states}")
-        # raise RuntimeError()
         return out_states
 
 
