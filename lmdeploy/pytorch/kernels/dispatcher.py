@@ -72,18 +72,17 @@ class FunctionDispatcher:
 
     def load_func(self, device: str):
         """load function."""
-        device_type = self.device_map[device]
         try:
-            mod = importlib.import_module(f'lmdeploy.pytorch.kernels.{device_type}')
+            mod = importlib.import_module(f'lmdeploy.pytorch.kernels.{device}')
             func = getattr(mod, self.func_name)
-            self.impl_map[device_type] = func
+            self.impl_map[device] = func
         except Exception:
             logger.debug(f'Failed to load <{self.func_name}>'
-                         f' for <{device_type}>, '
+                         f' for <{device}>, '
                          'try load default implementation.')
             mod = importlib.import_module('lmdeploy.pytorch.kernels.default')
             if not hasattr(mod, self.func_name):
-                raise RuntimeError(f'<{self.func_name}> default and <{device_type}>'
+                raise RuntimeError(f'<{self.func_name}> default and <{device}>'
                                    ' implementation not exists.')
             func = getattr(mod, self.func_name)
             self.impl_map[device] = func
