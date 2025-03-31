@@ -76,11 +76,6 @@ def pipeline(model_path: str,
     backend = 'pytorch' if type(backend_config) is PytorchEngineConfig else 'turbomind'
     logger.info(f'Using {backend} engine')
 
-    if task == 'vlm':
-        if backend_config and backend_config.enable_prefix_caching and backend == 'turbomind':
-            backend_config.enable_prefix_caching = False
-            logger.warning('VLM does not support prefix caching for turbomind engine.')
-
     return pipeline_class(model_path,
                           backend=backend,
                           backend_config=backend_config,

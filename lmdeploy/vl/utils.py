@@ -86,8 +86,13 @@ def load_image(image_url: Union[str, Image.Image]) -> Image.Image:
     return img
 
 
-def hash_image_data(**kwargs: object) -> str:
+# from https://github.com/vllm-project/vllm/blob/f0ef37233ea0ba5251edaea7362984110411e7eb/vllm/multimodal/hasher.py  # noqa: E501
+
+
+def hash_multimodal_data(multimodal_type: str = 'image', **multimodal_datas: object) -> str:
     """hash image related data."""
+
+    multimodal_datas['multimodal_type'] = multimodal_type
 
     def _convert_to_bytes(key: str, value: object):
         """recursively convert object to bytes."""
@@ -119,7 +124,7 @@ def hash_image_data(**kwargs: object) -> str:
             yield key_bytes, value_bytes
 
     hasher = blake3()
-    for k, v in kwargs.items():
+    for k, v in multimodal_datas.items():
         for k_bytes, v_bytes in _convert_to_bytes(k, v):
             hasher.update(k_bytes)
             hasher.update(v_bytes)

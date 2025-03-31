@@ -7,7 +7,7 @@ from transformers import AutoConfig, AutoModel, CLIPImageProcessor
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
 from lmdeploy.vl.model.utils import disable_logging
-from lmdeploy.vl.utils import hash_image_data
+from lmdeploy.vl.utils import hash_multimodal_data
 
 logger = get_logger('lmdeploy')
 
@@ -203,7 +203,7 @@ class InternVLVisionModel(VisonModel):
             pixel_values = self.processor(image, params)
             hash_value = None
             if self.enable_prefix_caching:
-                hash_value = hash_image_data(model_id=self.model_path, image=image, params=params)
+                hash_value = hash_multimodal_data(model_id=self.model_path, image=image, params=params)
             image_tokens = (pixel_values.shape[0] * self.image_tokens_per_patch)
             outputs.append(
                 dict(pixel_values=pixel_values,
