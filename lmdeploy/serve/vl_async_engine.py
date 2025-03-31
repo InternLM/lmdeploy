@@ -6,9 +6,8 @@ from typing import Dict, List, Literal, Optional, Tuple, Union
 import PIL
 
 from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig, VisionConfig
-from lmdeploy.pytorch.check_env import check_env_deeplink
 from lmdeploy.serve.async_engine import AsyncEngine
-from lmdeploy.utils import get_logger
+from lmdeploy.utils import get_logger, try_import_deeplink
 from lmdeploy.vl.engine import ImageEncoder
 from lmdeploy.vl.utils import load_image
 
@@ -27,7 +26,7 @@ class VLAsyncEngine(AsyncEngine):
                  vision_config: Optional[VisionConfig] = None,
                  **kwargs) -> None:
         if backend == 'pytorch':
-            check_env_deeplink(backend_config.device_type)
+            try_import_deeplink(backend_config.device_type)
         self.vl_encoder = ImageEncoder(model_path, backend, vision_config, backend_config=backend_config)
         super().__init__(model_path, backend=backend, backend_config=backend_config, **kwargs)
         if self.model_name == 'base':
