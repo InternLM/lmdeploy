@@ -223,23 +223,11 @@ struct AttentionUniversal {
 
         ApplyBias(vec_Q, vec_K, vec_V, params, head_idx, kv_head_idx, offset);
 
-        const float rope_base = params.rope_theta ? params.rope_theta[batch_idx] : params.rotary_embedding_base;
+        FastRoPE rope(params.rope_param, batch_idx, std::integral_constant<int, kVecSize>{});
         PRAGMA_UNROLL
         for (int c = 0; c < ITER_C; ++c) {
             const int di = offset.x + c * Map::kDeltaC;
-            FastRoPE  rope(di,
-                          params.rotary_embedding_dim,
-                          rope_base,
-                          params.rope_ti_scale,
-                          params.rope_scaling_factor,
-                          params.llama3_inv_scaling_factor,
-                          params.llama3_alpha,
-                          params.llama3_beta,
-                          params.yarn_ramp_inv_factor_div_2,
-                          params.yarn_ramp_inv_factor_mul_min,
-                          params.yarn_inv_scaling_factor,
-                          params.attention_scaling,
-                          std::integral_constant<int, kVecSize>{});
+            rope.init(di);
             PRAGMA_UNROLL
             for (int s = 0; s < ITER_S; ++s) {
                 const int ti = (offset.y + s * Map::kDeltaS) / CTA_H + query_idx + history_len;
@@ -259,7 +247,7 @@ struct AttentionUniversal {
                 LogNScaling logn_scaling(ti, params.max_position_embeddings);
                 PRAGMA_UNROLL
                 for (int c = 0; c < ITER_C; ++c) {
-                    logn_scaling.apply(vec_Q[c][s]);
+                    logn_scaling.apply(vec_Q[s][c]);
                 }
             }
         }

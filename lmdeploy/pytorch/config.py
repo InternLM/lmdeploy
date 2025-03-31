@@ -90,6 +90,35 @@ class CacheConfig:
 
 
 @dataclass
+class DistConfig:
+    dp: int = 1
+    tp: int = 1
+    ep: int = 1
+    dp_rank: int = 0
+    world_size: int = None
+    attn_config: 'DistConfig' = None
+
+    def __post_init__(self):
+        """post init."""
+        assert self.dp_rank < self.dp
+        assert self.dp >= 1
+        if self.dp == 1:
+            world_size = max(self.tp, self.ep)
+            attn_config = self
+        else:
+            world_size = self.dp
+            attn_config = DistConfig(dp=1, tp=1, ep=1, dp_rank=0)
+        self.world_size = world_size
+        self.attn_config = attn_config
+
+    def need_dummy_batch(self):
+        """need dummy batch."""
+        if self.dp == 1:
+            return False
+        return self.tp > 1 or self.ep > 1
+
+
+@dataclass
 class ModelConfig:
     """Config of model."""
 
@@ -119,7 +148,7 @@ class ModelConfig:
                         pretrained_model_name_or_path: str,
                         trust_remote_code: bool = True,
                         dtype: str = 'auto',
-                        tp: int = 1):
+                        dist_config: DistConfig = None):
         """Instantiate one of the configuration classes of the library from a
         pretrained model configuration.
 
@@ -135,12 +164,22 @@ class ModelConfig:
         if getattr(hf_config, 'model_type', None) in ['phi3']:
             # phi3 + trust_remote_code leads to error when tp.
             hf_config = AutoConfig.from_pretrained(pretrained_model_name_or_path)
-        return cls.from_hf_config(hf_config, pretrained_model_name_or_path, dtype=dtype, tp=tp)
+        return cls.from_hf_config(hf_config, pretrained_model_name_or_path, dtype=dtype, dist_config=dist_config)
 
     @classmethod
-    def from_hf_config(cls, hf_config: Any, model_path: str = None, dtype: str = 'auto', tp: int = 1):
+    def from_hf_config(cls,
+                       hf_config: Any,
+                       model_path: str = None,
+                       dtype: str = 'auto',
+                       dist_config: DistConfig = None):
         """from huggingface config."""
         from lmdeploy.pytorch.configurations import AutoModelConfigBuilder
+        if dist_config is None:
+            dist_config = DistConfig()
+        if dist_config.dp == 1:
+            tp = dist_config.tp
+        else:
+            tp = 1
 
         model_config = AutoModelConfigBuilder.build(hf_config, model_path, tp=tp)
 

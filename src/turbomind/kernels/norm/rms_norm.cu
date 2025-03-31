@@ -84,6 +84,10 @@ template<class T>
 void invokeRMSNorm(
     T* dst, int dst_ld, const T* src, int src_ld, const T* weights, int dims, int num, float eps, cudaStream_t st)
 {
+    if (num == 0) {
+        return;
+    }
+
     constexpr int vec_size = 16 / sizeof(T);
 
     constexpr int threads = 512;
@@ -347,6 +351,9 @@ void invokeResidualBiasRMSNorm(void*        hidden_states,
                                float        eps,
                                cudaStream_t st)
 {
+    if (num == 0) {
+        return;
+    }
     auto invoke = [&](auto t) {
         using T                = decltype(t);
         constexpr int vec_size = sizeof(uint4) / sizeof(T);

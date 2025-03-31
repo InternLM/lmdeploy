@@ -5,15 +5,16 @@ from datetime import timedelta
 
 import torch.distributed as dist
 
+from lmdeploy.pytorch.backends.selector import get_backend
+
 
 def find_available_port() -> bool:
     """find available port."""
-    port = 29500
-    while True:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            if s.connect_ex(('localhost', port)) != 0:
-                return port
-            port += 1
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('0.0.0.0', 0))
+        s.listen(1)
+        port = s.getsockname()[1]
+        return port
 
 
 def setup_master_addr(addr: str, port: str):
@@ -39,5 +40,7 @@ def init_process_group(rank: int, world_size: int):
     DIST_TIMEOUT = timedelta(days=35600)
     init_dist_environ(rank, world_size)
     os.environ.pop('TORCHELASTIC_USE_AGENT_STORE', None)
-    dist.init_process_group(backend='nccl', rank=rank, world_size=world_size, timeout=DIST_TIMEOUT)
+
+    ccl_backend = get_backend().ccl_backend()
+    dist.init_process_group(backend=ccl_backend, rank=rank, world_size=world_size, timeout=DIST_TIMEOUT)
     assert dist.is_initialized()
