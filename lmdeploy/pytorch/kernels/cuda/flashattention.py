@@ -399,10 +399,11 @@ def flash_attention_fwd(
 
     shared_kv = k_states.data_ptr() == v_states.data_ptr() and BLOCK_DK == BLOCK_DV
 
-    BLOCK_N = 32
     if _nv_cap[0] < 8:
+        BLOCK_N = 32
         BLOCK_M = max(16, 8192 // BLOCK_DK)
     else:
+        BLOCK_N = 64
         BLOCK_M = max(16, 16384 // BLOCK_DK)
     BLOCK_M = min(128, BLOCK_M)
     num_warps = 4
