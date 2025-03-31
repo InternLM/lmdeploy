@@ -149,9 +149,9 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
 
     auto state = std::make_shared<AtomicRequestState>();
 
-    if (param.session.start_flag) {
+    // if (param.session.start_flag) {
         session_id_ = param.session.id;
-    }
+    // }
 
     r->id            = param.session.id;
     r->session       = param.session;

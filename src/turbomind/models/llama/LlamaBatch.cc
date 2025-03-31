@@ -276,7 +276,7 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& reqs, std::vector<Signa
         }
 
         // copy input tokens to prompt for prefix matching
-        if (input_length && r->session.start_flag && !r->inputs.isExist("input_embedding_ranges")) {
+        if (input_length /*&& r->session.start_flag*/ && !r->inputs.isExist("input_embedding_ranges")) {
             // TODO: truncate prompt to enable prefix caching for VLM
             seq.prompt.resize(input_length);
             std::copy_n(input_ids, input_length, seq.prompt.data());
@@ -354,7 +354,7 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& reqs, std::vector<Signa
         }
 
         // compute rope scaling factor
-        if (r->session.start_flag) {
+        // if (r->session.start_flag) {
             seq.rope_theta = model_->attn_param_.rope.base;
             if (model_->attn_param_.rope.type == RopeType::kDynamic) {
                 auto scaling_factor = model_->attn_param_.rope.factor;
@@ -372,18 +372,18 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& reqs, std::vector<Signa
                     }
                 }
             }
-        }
+        // }
         state.h_rope_theta[idx] = seq.rope_theta;
 
-        if (r->session.start_flag) {
+        // if (r->session.start_flag) {
             // prepare to initialize random state for new sequence
             h_random_seed_[idx] = r->gen_cfg.random_seed;
-        }
-        else {
-            // Recover device states if not a new sequence
-            h_curand_state_[existing_idx.size()] = *(curandState_t*)seq.random_state.data();
-            existing_idx.push_back(idx);
-        }
+        // }
+        // else {
+        //     // Recover device states if not a new sequence
+        //     h_curand_state_[existing_idx.size()] = *(curandState_t*)seq.random_state.data();
+        //     existing_idx.push_back(idx);
+        // }
 
         // increment pointer
         idx++;
@@ -1278,7 +1278,7 @@ void LlamaBatch<T>::OutputLogits(const float* logits, int first, int last, Gener
 
     for (int i = first; i < last; ++i) {
 
-        const int    input_len = h_input_length_buf_[i];  // input lenght for this iter
+        const int    input_len = h_input_length_buf_[i];  // input length for this iter
         const float* src_ptr   = logits;
 
         logits += (is_all ? input_len : 1) * model_->vocab_size_padded_;
@@ -1507,9 +1507,9 @@ void LlamaBatch<T>::Finish(GenerationState& g, std::vector<Signal>& signals)
         for (int i = 0; i < batch_size - g.partial; ++i) {
             if (state_->h_finished[i]) {
                 ++g.finished_count;
-                if (!state_->requests[i]->session.end_flag) {
+                // if (!state_->requests[i]->session.end_flag) {
                     need_sync = true;
-                }
+                // }
             }
         }
         if (need_sync) {

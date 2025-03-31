@@ -82,8 +82,8 @@ struct SessionParam {
 
     int step;
 
-    bool start_flag;
-    bool end_flag;
+    // bool start_flag;
+    // bool end_flag;
     bool kill_flag;
 };
 

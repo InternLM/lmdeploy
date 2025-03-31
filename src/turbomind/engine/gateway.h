@@ -68,13 +68,13 @@ public:
     {
         int rank = -1;
 
-        if (!r->session.start_flag) {
-            // route to corresponding rank
-            rank = seqid2rank_.find(r->session.id);
-        }
-        else {
+        // if (!r->session.start_flag) {
+        //     // route to corresponding rank
+        //     rank = seqid2rank_.find(r->session.id);
+        // }
+        // else {
             rank = next_.fetch_add(1, std::memory_order_relaxed) % size_;
-        }
+        // }
 
         if (rank >= 0) {
             queues_[rank]->push({std::move(r)});
@@ -129,11 +129,11 @@ public:
 
         // Bind for stateful inference
         std::vector<uint64_t> bind_ids;
-        for (const auto& r : infer_reqs) {
-            if (r->session.start_flag && !r->session.end_flag) {  // started but not ended
-                bind_ids.push_back(r->session.id);
-            }
-        }
+        // for (const auto& r : infer_reqs) {
+        //     if (r->session.start_flag && !r->session.end_flag) {  // started but not ended
+        //         bind_ids.push_back(r->session.id);
+        //     }
+        // }
         if (!bind_ids.empty()) {
             seqid2rank_.bind(bind_ids, rank);
         }

@@ -575,7 +575,7 @@ class TurboMindInstance:
                                                 input_embedding_ranges=input_embedding_ranges,
                                                 gen_config=gen_config)
 
-        session = _tm.SessionParam(id=session_id, step=step, start=sequence_start, end=sequence_end)
+        session = _tm.SessionParam(id=session_id, step=step)
 
         inputs = _np_dict_to_tm_dict(inputs)
 
