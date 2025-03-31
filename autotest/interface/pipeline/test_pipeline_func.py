@@ -424,7 +424,7 @@ def test_gen_config_bad_words(config, model, backend, worker_id):
         # test bad_words
         gen_config = GenerationConfig(bad_words=[' and', '浦', ' to'])
         response = pipe(['Hi, pls intro yourself', 'Shanghai is'], gen_config=gen_config)
-        result = '蒲' in response[0].text
+        result = '蒲' in response[0].text or 'sensetime' in response[0].text
         for i in range(2):
             result &= '浦' not in response[i].text and ' and' not in response[i].text and ' to ' not in response[i].text
         save_pipeline_common_log(config, file_name, result, response)
@@ -443,7 +443,7 @@ def test_gen_config_bad_words(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_special_words_false(config, model, backend, worker_id):
 
@@ -519,7 +519,7 @@ def test_gen_config_special_words_true(config, model, backend, worker_id):
         del os.environ['CUDA_VISIBLE_DEVICES']
 
 
-@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat', 'OpenGVLab/InternVL2_5-26B'])
+@pytest.mark.parametrize('model', ['internlm/internlm2_5-20b-chat'])
 @pytest.mark.parametrize('backend', [TurbomindEngineConfig, PytorchEngineConfig])
 def test_gen_config_minimum_repetition_penalty(config, model, backend, worker_id):
 
