@@ -4,8 +4,9 @@
 
 #include "cub/block/block_reduce.cuh"
 
-#include "src/turbomind/comm/native/device_semaphore.h"
-#include "src/turbomind/comm/native/native_comm.h"
+#include "src/turbomind/comm/cuda_ipc/cuda_ipc_comm.h"
+#include "src/turbomind/comm/cuda_ipc/device_semaphore.h"
+#include "src/turbomind/comm/cuda_ipc/group_sum.h"
 
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
@@ -18,50 +19,20 @@
 
 namespace turbomind::comm {
 
-namespace detail {
-
-template<class Syncgroup>
-__device__ float GroupSum(const float val, int warps, Syncgroup syncgroup)
-{
-    const int warp_id = threadIdx.x / WARP_SIZE;
-    const int lane_id = threadIdx.x % WARP_SIZE;
-    float     sum     = val;
-    PRAGMA_UNROLL
-    for (int mask = WARP_SIZE / 2; mask >= 1; mask /= 2) {
-        sum += __shfl_xor_sync((uint32_t)-1, sum, mask);
-    }
-    __shared__ float smem[32];
-    // syncgroup();
-    if (lane_id == 0) {
-        smem[warp_id] = sum;
-    }
-    syncgroup();
-    for (int i = 1; i < warps; ++i) {
-        sum += smem[warp_id / warps * warps + i];
-    }
-    // sum = {};
-    // for (int i = 0; i < warps; ++i) {
-    //     sum += smem[warp_id / warps * warps + i];
-    // }
-    return sum;
-}
-
-}  // namespace detail
-
 template<class T, int vec_size, int block_dim, int groups, class Relaxed>
-__global__ void AllreduceResidualBiasRMSnorm_Simple_Pull(T*                                             buf,
-                                                         T*                                             res,
-                                                         const T*                                       bias,
-                                                         const T*                                       weights,
-                                                         Array<T*, kMaxNearPeers>                       near,
-                                                         mscclpp::SmDevice2DeviceSemaphoreDeviceHandle* semaphores,
-                                                         int                                            rank,
-                                                         int                                            peers,
-                                                         int                                            slice,
-                                                         int                                            count,
-                                                         int                                            vdim,
-                                                         float                                          inv_dim,
-                                                         float                                          eps,
+__global__ void AllreduceResidualBiasRMSnorm_Simple_Pull(T*                           buf,
+                                                         T*                           res,
+                                                         const T*                     bias,
+                                                         const T*                     weights,
+                                                         Array<T*, kMaxNearPeers>     near,
+                                                         mscclpp::D2DSemaphoreHandle* semaphores,
+                                                         int                          rank,
+                                                         int                          peers,
+                                                         int                          slice,
+                                                         int                          count,
+                                                         int                          vdim,
+                                                         float                        inv_dim,
+                                                         float                        eps,
                                                          constant<vec_size>,
                                                          constant<block_dim>,
                                                          constant<groups>,
@@ -194,19 +165,19 @@ __global__ void AllreduceResidualBiasRMSnorm_Simple_Pull(T*                     
 }
 
 template<class T, int vec_size, int block_dim, bool aligned, class Peers, class Relaxed>
-__global__ void AllreduceResidualBiasRMSnormKernel_Simple_v3(T*                                             buf,
-                                                             T*                                             res,
-                                                             const T*                                       bias,
-                                                             const T*                                       weights,
-                                                             Array<T*, kMaxNearPeers>                       chns,
-                                                             mscclpp::SmDevice2DeviceSemaphoreDeviceHandle* semaphores,
-                                                             int                                            rank,
-                                                             Peers                                          peers,
-                                                             int                                            slice,
-                                                             int                                            count,
-                                                             int                                            vdim,
-                                                             float                                          inv_dim,
-                                                             float                                          eps,
+__global__ void AllreduceResidualBiasRMSnormKernel_Simple_v3(T*                           buf,
+                                                             T*                           res,
+                                                             const T*                     bias,
+                                                             const T*                     weights,
+                                                             Array<T*, kMaxNearPeers>     chns,
+                                                             mscclpp::D2DSemaphoreHandle* semaphores,
+                                                             int                          rank,
+                                                             Peers                        peers,
+                                                             int                          slice,
+                                                             int                          count,
+                                                             int                          vdim,
+                                                             float                        inv_dim,
+                                                             float                        eps,
                                                              constant<vec_size>,
                                                              constant<block_dim>,
                                                              constant<aligned>,
@@ -315,21 +286,21 @@ __global__ void AllreduceResidualBiasRMSnormKernel_Simple_v3(T*                 
 }
 
 template<class T, int vec_size, int block_dim, int groups, class Peers, class Relaxed>
-__global__ void AllreduceResidualBiasRMSnorm_Simple_Push(T*                                             buf,
-                                                         T*                                             res,
-                                                         const T*                                       bias,
-                                                         const T*                                       weights,
-                                                         T*                                             scratch,
-                                                         Array<T*, kMaxNearPeers>                       near_buf,
-                                                         Array<T*, kMaxNearPeers>                       near_scratch,
-                                                         mscclpp::SmDevice2DeviceSemaphoreDeviceHandle* semaphores,
-                                                         int                                            rank,
-                                                         Peers                                          peers,
-                                                         int                                            slice,
-                                                         int                                            count,
-                                                         int                                            vdim,
-                                                         float                                          inv_dim,
-                                                         float                                          eps,
+__global__ void AllreduceResidualBiasRMSnorm_Simple_Push(T*                           buf,
+                                                         T*                           res,
+                                                         const T*                     bias,
+                                                         const T*                     weights,
+                                                         T*                           scratch,
+                                                         Array<T*, kMaxNearPeers>     near_buf,
+                                                         Array<T*, kMaxNearPeers>     near_scratch,
+                                                         mscclpp::D2DSemaphoreHandle* semaphores,
+                                                         int                          rank,
+                                                         Peers                        peers,
+                                                         int                          slice,
+                                                         int                          count,
+                                                         int                          vdim,
+                                                         float                        inv_dim,
+                                                         float                        eps,
                                                          constant<vec_size>,
                                                          constant<block_dim>,
                                                          constant<groups>,
@@ -441,58 +412,65 @@ __global__ void AllreduceResidualBiasRMSnorm_Simple_Push(T*                     
     }
 }
 
-void NativeComm::AllreduceResidualBiasRMSnorm(void*        hidden,
-                                              void*        residual,
-                                              const void*  bias,
-                                              const void*  weights,
-                                              float        eps,
-                                              int          dim,
-                                              int          token_num,
-                                              DataType     dtype,
-                                              cudaStream_t stream)
+void CudaIpcCommImpl::AllreduceResidualBiasRMSnorm(void*        hidden,
+                                                   void*        residual,
+                                                   const void*  bias,
+                                                   const void*  weights,
+                                                   float        eps,
+                                                   int          dim,
+                                                   int          token_num,
+                                                   DataType     dtype,
+                                                   int          group,
+                                                   cudaStream_t stream)
 {
 
     const size_t elemsize = get_elem_size(dtype);
     const size_t bytesize = elemsize * token_num * dim;
 
+    const int n_ranks = this->n_ranks(group);
+    const int rank    = this->rank(group);
+
+    auto semaphores = groups_.at(group).d2d_semaphores;
+
     auto invoke = [&](auto t, auto groups) {
         using T                 = decltype(t);
         constexpr int vec_size  = sizeof(uint4) / sizeof(T);
-        const int     slice     = (token_num + world_size_ - 1) / world_size_;
+        const int     slice     = (token_num + n_ranks - 1) / n_ranks;
         const int     count     = token_num;
         constexpr int block_dim = 1024;
         const int     max_ctas  = 48;
         const int     blocks    = std::min((slice + groups - 1) / groups, max_ctas);
         if (bytesize <= kScratchBuffSize && bytesize <= 6 << 20) {
-            AllreduceResidualBiasRMSnorm_Simple_Push<<<blocks, block_dim, 0, stream>>>((T*)hidden,
-                                                                                       (T*)residual,
-                                                                                       (const T*)bias,
-                                                                                       (const T*)weights,
-                                                                                       (T*)scratch_buff_,
-                                                                                       get_near((T*)hidden),
-                                                                                       get_near((T*)scratch_buff_),
-                                                                                       device_semaphores_,
-                                                                                       rank_,
-                                                                                       world_size_ - 1,
-                                                                                       slice,
-                                                                                       count,
-                                                                                       dim / vec_size,
-                                                                                       1.f / dim,
-                                                                                       eps,
-                                                                                       constant<vec_size>{},
-                                                                                       constant<block_dim>{},
-                                                                                       groups,
-                                                                                       std::false_type{});
+            AllreduceResidualBiasRMSnorm_Simple_Push<<<blocks, block_dim, 0, stream>>>(
+                (T*)hidden,
+                (T*)residual,
+                (const T*)bias,
+                (const T*)weights,
+                (T*)scratch_buff_,
+                get_symmetric((T*)hidden, group),
+                get_symmetric((T*)scratch_buff_, group),
+                semaphores,
+                rank,
+                n_ranks - 1,
+                slice,
+                count,
+                dim / vec_size,
+                1.f / dim,
+                eps,
+                constant<vec_size>{},
+                constant<block_dim>{},
+                groups,
+                std::false_type{});
         }
         else {
             AllreduceResidualBiasRMSnorm_Simple_Pull<<<blocks, block_dim, 0, stream>>>((T*)hidden,
                                                                                        (T*)residual,
                                                                                        (const T*)bias,
                                                                                        (const T*)weights,
-                                                                                       get_near((T*)hidden),
-                                                                                       device_semaphores_,
-                                                                                       rank_,
-                                                                                       world_size_ - 1,
+                                                                                       get_symmetric((T*)hidden, group),
+                                                                                       semaphores,
+                                                                                       rank,
+                                                                                       n_ranks - 1,
                                                                                        slice,
                                                                                        count,
                                                                                        dim / vec_size,
@@ -544,7 +522,7 @@ void NativeComm::AllreduceResidualBiasRMSnorm(void*        hidden,
     }
 
     // fallback
-    AllReduceSum(hidden, hidden, token_num * dim, dtype, stream);
+    AllReduceSum(hidden, hidden, token_num * dim, dtype, group, stream);
     invokeResidualBiasRMSNorm(hidden, residual, weights, bias, dtype, dim, token_num, eps, stream);
 }
 

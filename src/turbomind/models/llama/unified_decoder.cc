@@ -1,7 +1,10 @@
 
 
 #include <cuda_runtime.h>
+#include <iterator>
+#include <numeric>
 
+#include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/norm/rms_norm.h"
 #include "src/turbomind/models/llama/llama_decoder_kernels.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
@@ -17,25 +20,29 @@ namespace turbomind {
 
 template<class T>
 UnifiedDecoder<T>::UnifiedDecoder(const ModelParam&     model,
+                                  const EngineParam&    engine,
                                   const AttentionParam& attn,
                                   const MoeParam&       moe,
                                   const LoraParam&      lora,
                                   const Context<T>&     ctx):
     layer_num_(model.layer_num),
     hidden_units_(model.hidden_units),
+    attn_tp_size_(engine.attn_tp_size),
+    attn_dp_size_(engine.attn_dp_size),
+    attn_dp_rank_(engine.attn_dp_rank),
+    mlp_tp_size_(engine.mlp_tp_size),
+    attn_tp_group_(ctx.comm.d_tp_group),
     rmsnorm_eps_(model.norm_eps),
     stream_(ctx.stream),
     allocator_(ctx.allocator.get()),
-    tp_(ctx.comm.tp.get()),
+    d_comm_(ctx.comm.d_comm),
     dtype_(getTensorType<T>()),
     tune_layer_num_(model.tune_layer_num)
 {
-    const size_t tp_size = tp_ ? tp_->world_size() : 1;
-
-    attn_layer_ = std::make_unique<UnifiedAttentionLayer<T>>(model, attn, lora, tp_size, ctx);
+    attn_layer_ = std::make_unique<UnifiedAttentionLayer<T>>(model, attn, lora, attn_tp_size_, ctx);
 
     if (std::accumulate(moe.expert_num.begin(), moe.expert_num.end(), 0LL)) {
-        moe_ffn_layer_ = std::make_unique<MoeFfnLayer<T>>(model, moe, tp_size, ctx);
+        moe_ffn_layer_ = std::make_unique<MoeFfnLayer<T>>(model, moe, mlp_tp_size_, ctx);
     }
 
     if (std::accumulate(model.inter_size.begin(), model.inter_size.end(), 0LL)) {
@@ -94,12 +101,33 @@ void UnifiedDecoder<T>::forwardSelfAttn(T*                attn_io,
 }
 
 template<typename T>
-void UnifiedDecoder<T>::ReduceResidualBiasRMSnorm(
-    T* hidden_states, T* residual, const T* bias, const T* weight, int token_num)
+void UnifiedDecoder<T>::AllreduceResidualRMSnorm(T*         hidden_states,
+                                                 T*         residual,
+                                                 const T*   bias,
+                                                 const T*   weight,
+                                                 int        token_num,
+                                                 int        group0,
+                                                 int        group1,
+                                                 const int* local_token_nums)
 {
-    if (tp_) {
-        tp_->AllreduceResidualBiasRMSnorm(
-            hidden_states, residual, bias, weight, rmsnorm_eps_, hidden_units_, token_num, stream_);
+    if (0) {}
+    else if (group0 || group1) {
+        d_comm_->AllreduceResidualBiasRMSnormEx(hidden_states,
+                                                residual,
+                                                bias,
+                                                weight,
+                                                rmsnorm_eps_,
+                                                hidden_units_,
+                                                dtype_,
+                                                group0,
+                                                group1,
+                                                local_token_nums,
+                                                stream_);
+        sync_check_cuda_error();
+    }
+    else if (d_comm_) {
+        d_comm_->AllreduceResidualBiasRMSnorm(
+            hidden_states, residual, bias, weight, rmsnorm_eps_, hidden_units_, token_num, dtype_, 0, stream_);
         sync_check_cuda_error();
     }
     else {
@@ -139,8 +167,9 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
     const int* h_q_len = inputs->getPtr<int>("h_q_len");
     const int* h_k_len = inputs->getPtr<int>("h_k_len");
 
-    T* decoder_input_output    = inputs->getPtr<T>("decoder_input");
-    T* decoder_output          = outputs->getPtr<T>("decoder_output");
+    T* residual      = inputs->getPtr<T>("decoder_input");
+    T* hidden_states = outputs->getPtr<T>("decoder_output");
+
     T* last_token_hidden_units = outputs->getPtr<T>("last_token_hidden_units");
 
     {  // compute cumulative lengths
@@ -163,10 +192,26 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
 
     const int pf_offset = dc_batch_size;
 
+    /// Offset hidden states buffer for mixed DP
+    T*         global_hidden_states = hidden_states;
+    size_t     global_token_num     = token_num;
+    const int* local_token_nums     = inputs->getPtr<int>("local_token_nums", nullptr);
+    if (attn_dp_size_ > 1) {
+        FT_CHECK(local_token_nums);
+        std::vector cumul_token_nums(attn_dp_size_ + 1, 0);
+        std::inclusive_scan(local_token_nums, local_token_nums + attn_dp_size_, cumul_token_nums.begin() + 1);
+        hidden_states    = hidden_states + (size_t)cumul_token_nums[attn_dp_rank_] * hidden_units_;
+        global_token_num = cumul_token_nums.back();
+        // TM_LOG_ERROR("rank %d, global_token_num %d, offset %d",
+        //              attn_dp_rank_,
+        //              global_token_num,
+        //              cumul_token_nums[attn_dp_rank_]);
+    }
+
     /////////////////////////////////////////////
     /// RMSNorm
-    invokeRMSNorm(decoder_output,
-                  decoder_input_output,
+    invokeRMSNorm(hidden_states,
+                  residual,
                   weights->at(0)->self_attn_norm_weights,
                   hidden_units_,
                   token_num,
@@ -174,7 +219,7 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
                   stream_);
     sync_check_cuda_error();
 
-    count_and_fix(decoder_output, token_num * hidden_units_, Concat("norm0", 0), 2);
+    count_and_fix(hidden_states, token_num * hidden_units_, Concat("norm0", 0), 2);
 
     for (size_t layer = 0; layer < layer_num_; ++layer) {
 
@@ -185,7 +230,7 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
 
         /////////////////////////////////////////////
         /// self-attention
-        forwardSelfAttn(decoder_output,  //
+        forwardSelfAttn(hidden_states,  //
                         outputs,
                         inputs,
                         token_num,
@@ -193,32 +238,39 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
                         layer,
                         weights->at(layer));
 
-        count_and_fix(decoder_output, token_num * hidden_units_, Concat("attn_block", layer), 2);
+        count_and_fix(hidden_states, token_num * hidden_units_, Concat("attn_block", layer), 2);
 
-        ReduceResidualBiasRMSnorm(decoder_output,
-                                  decoder_input_output,
-                                  weights->at(layer)->self_attn_weights.output.bias,
-                                  weights->at(layer)->ffn_norm_weights,
-                                  token_num);
+        AllreduceResidualRMSnorm(global_hidden_states,
+                                 residual,
+                                 weights->at(layer)->self_attn_weights.output.bias,
+                                 weights->at(layer)->ffn_norm_weights,
+                                 token_num,
+                                 attn_tp_group_,
+                                 0,
+                                 local_token_nums);
 
-        count_and_fix(decoder_input_output, token_num * hidden_units_, Concat("residual0", layer), 2);
-        count_and_fix(decoder_output, token_num * hidden_units_, Concat("norm1", layer), 2);
+        count_and_fix(residual, token_num * hidden_units_, Concat("residual0", layer), 2);
+        count_and_fix(hidden_states, token_num * hidden_units_, Concat("norm1", layer), 2);
 
         ////////////////////////////////////////////
         /// feed-forward network
 
         const bool is_moe = !weights->at(layer)->moe_weights.experts.empty();
         if (is_moe) {
-            moe_ffn_layer_->forward(nullptr, decoder_output, token_num, layer, weights->at(layer)->moe_weights);
+            // Writes to internal buffer
+            moe_ffn_layer_->forward(
+                nullptr, global_hidden_states, global_token_num, layer, weights->at(layer)->moe_weights);
         }
 
         if (weights->at(layer)->ffn_weights.output.kernel) {
-            int       layer_id   = layer;  // int is needed
-            bool      all_reduce = !is_moe;
-            TensorMap ffn_inputs{{"ffn_input", {MEMORY_GPU, dtype_, {token_num, hidden_units_}, decoder_output}},
-                                 {"layer_id", {MEMORY_CPU, TYPE_INT32, {1}, &layer_id}},
-                                 {"all_reduce", {MEMORY_CPU, TYPE_BOOL, {1}, &all_reduce}}};
-            TensorMap ffn_outputs{{"ffn_output", {MEMORY_GPU, dtype_, {token_num, hidden_units_}, decoder_output}}};
+            int       layer_id = layer;  // int is needed
+            TensorMap ffn_inputs{
+                {"ffn_input", {MEMORY_GPU, dtype_, {global_token_num, hidden_units_}, global_hidden_states}},
+                {"layer_id", {MEMORY_CPU, TYPE_INT32, {1}, &layer_id}},
+            };
+            TensorMap ffn_outputs{
+                {"ffn_output", {MEMORY_GPU, dtype_, {global_token_num, hidden_units_}, global_hidden_states}},
+            };
             if (inputs->isExist("lora_mask")) {
                 ffn_inputs.insert({"lora_mask", inputs->at("lora_mask")});
             }
@@ -226,30 +278,34 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
         }
 
         if (is_moe) {
-            moe_ffn_layer_->reduce(decoder_output, token_num, (bool)ffn_layer_, layer, weights->at(layer)->moe_weights);
+            moe_ffn_layer_->reduce(
+                global_hidden_states, global_token_num, (bool)ffn_layer_, layer, weights->at(layer)->moe_weights);
         }
 
-        count_and_fix(decoder_output, token_num * hidden_units_, Concat("ffn_block", layer), 2);
+        count_and_fix(global_hidden_states, global_token_num * hidden_units_, Concat("ffn_block", layer), 2);
 
         const bool is_last_layer = layer == layer_num_ - 1;
 
         auto scale_weight = !is_last_layer ? weights->at(layer + 1)->self_attn_norm_weights :
                                              inputs->at("output_norm_weight").getPtr<T>();
 
-        ReduceResidualBiasRMSnorm(decoder_output,  //
-                                  decoder_input_output,
-                                  weights->at(layer)->ffn_weights.output.bias,
-                                  scale_weight,
-                                  token_num);
+        AllreduceResidualRMSnorm(global_hidden_states,
+                                 residual,
+                                 weights->at(layer)->ffn_weights.output.bias,
+                                 scale_weight,
+                                 token_num,
+                                 0,
+                                 attn_tp_group_,
+                                 local_token_nums);
         sync_check_cuda_error();
 
-        count_and_fix(decoder_input_output, token_num * hidden_units_, Concat("residual1", layer), 2);
-        count_and_fix(decoder_output, token_num * hidden_units_, Concat("norm0", layer + 1), 2);
+        count_and_fix(residual, token_num * hidden_units_, Concat("residual1", layer), 2);
+        count_and_fix(hidden_states, token_num * hidden_units_, Concat("norm0", layer + 1), 2);
     }
 
     if (dc_batch_size) {
         check_cuda_error(cudaMemcpyAsync(last_token_hidden_units,
-                                         decoder_output,
+                                         hidden_states,
                                          sizeof(T) * dc_batch_size * hidden_units_,
                                          cudaMemcpyDefault,
                                          stream_));
@@ -258,7 +314,7 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
 
     if (pf_batch_size) {
         invokeGetFeatureOfLastToken(last_token_hidden_units + pf_offset * hidden_units_,  //
-                                    decoder_output,
+                                    hidden_states,
                                     cu_q_len_ + pf_offset,
                                     hidden_units_,
                                     pf_batch_size,

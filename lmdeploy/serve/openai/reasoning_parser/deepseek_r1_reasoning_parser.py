@@ -51,8 +51,11 @@ class DeepSeekR1ReasoningParser(ReasoningParser):
         about what has previously been parsed and extracted (see constructor)
         """
         # Skip single special tokens
-        if len(delta_token_ids) == 1 and (delta_token_ids[0] in [self.think_start_token_id, self.think_end_token_id]):
-            return None
+        if len(delta_token_ids) == 1:
+            if delta_token_ids[0] == self.think_end_token_id:
+                return DeltaMessage(content='')
+            elif delta_token_ids[0] == self.think_start_token_id:
+                return None
 
         # Check if <think> is present in previous or delta.
         # Keep compatibility with models that don't generate <think> tokens.

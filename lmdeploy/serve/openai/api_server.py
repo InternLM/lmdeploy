@@ -476,7 +476,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                 previous_text = current_text
                 previous_token_ids = current_token_ids
             elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
-                logger.error('Please lanuch the api_server with --tool-parser if you want to use tool.')
+                logger.error('Please lanuch the api_server with --tool-call-parser if you want to use tool.')
             response_json = create_stream_response_json(index=0,
                                                         delta_message=delta_message,
                                                         finish_reason=res.finish_reason,
@@ -521,7 +521,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     elif VariableInterface.reasoning_parser is not None:
         reasoning_content, text = VariableInterface.reasoning_parser.extract_reasoning_content(text, request)
     elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
-        logger.error('Please lanuch the api_server with --tool-parser if you want to use tool.')
+        logger.error('Please lanuch the api_server with --tool-call-parser if you want to use tool.')
 
     logprobs = None
     if gen_logprobs and len(final_logprobs):
@@ -823,6 +823,9 @@ async def chat_interactive_v1(request: GenerateRequest, raw_request: Request = N
     - ignore_eos (bool): indicator for ignoring eos
     - skip_special_tokens (bool): Whether or not to remove special tokens
         in the decoding. Default to be True.
+    - spaces_between_special_tokens (bool): Whether or not to add spaces
+        around special tokens. The behavior of Fast tokenizers is to have
+        this to False. This is setup to True in slow tokenizers.
     - adapter_name (str): For slora inference. Choose which lora to do the
         inference.
     - min_new_tokens (int): To generate at least numbers of tokens.
@@ -867,6 +870,7 @@ async def chat_interactive_v1(request: GenerateRequest, raw_request: Request = N
                                   ignore_eos=request.ignore_eos,
                                   stop_words=request.stop,
                                   skip_special_tokens=request.skip_special_tokens,
+                                  spaces_between_special_tokens=request.spaces_between_special_tokens,
                                   min_new_tokens=request.min_new_tokens,
                                   min_p=request.min_p,
                                   random_seed=random_seed)

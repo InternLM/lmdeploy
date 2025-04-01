@@ -171,6 +171,7 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
   <li>GLM-4V (9B)</li>
   <li>Llama3.2-vision (11B, 90B)</li>
   <li>Molmo (7B-D,72B)</li>
+  <li>Gemma3 (1B - 27B)</li>
 </ul>
 </td>
 </tr>

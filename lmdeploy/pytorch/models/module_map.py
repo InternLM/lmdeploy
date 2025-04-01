@@ -61,6 +61,17 @@ MODULE_MAP.update({
     'Gemma2ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.GemmaForCausalLM',
 })
 
+# gemma3 text
+MODULE_MAP.update({
+    'Gemma3ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma.GemmaForCausalLM',
+})
+
+# gemma3 VL
+MODULE_MAP.update({
+    'Gemma3ForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.gemma3_vl.Gemma3ForConditionalGeneration',
+})
+
 # deepseek
 MODULE_MAP.update({
     'DeepseekForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.deepseek.DeepseekForCausalLM',
@@ -95,6 +106,16 @@ MODULE_MAP.update({
 # qwen2 moe
 MODULE_MAP.update({
     'Qwen2MoeForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen2_moe.Qwen2MoeForCausalLM',
+})
+
+# qwen3
+MODULE_MAP.update({
+    'Qwen3ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3.Qwen3ForCausalLM',
+})
+
+# qwen3 moe
+MODULE_MAP.update({
+    'Qwen3MoeForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_moe.Qwen3MoeForCausalLM',
 })
 
 # qwen2_vl

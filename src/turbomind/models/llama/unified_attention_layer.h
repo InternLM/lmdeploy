@@ -110,6 +110,8 @@ public:
 private:
     void forward_mla(const T* inputs, int token_num, const WeightType& weights);
 
+    void qk_norm(T* qkv, int token_num, const WeightType& weights);
+
 private:
     const size_t head_num_;
     const size_t kv_head_num_;
@@ -137,6 +139,8 @@ private:
     std::array<cudaStream_t, 2> streams_;
 
     RNG rng_;
+
+    RopeKernelParam rope_param_{};
 
     T*     qkv_buf_{};
     T*     q_buf_2_{};

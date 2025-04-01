@@ -99,6 +99,7 @@
 | Mono-InternVL<sup>\[1\]</sup>  |     2B      | MLLM |   Yes\*   |   Yes   |   Yes   |  -   |   -   |
 |            ChemVLM             |   8B-26B    | MLLM |    Yes    |   Yes   |   No    |  -   |   -   |
 |             Gemma2             |   9B-27B    | LLM  |    Yes    |   Yes   |   Yes   |  -   |   -   |
+|             Gemma3             |   1B-27B    | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
 |              GLM4              |     9B      | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 |             GLM-4V             |     9B      | MLLM |    Yes    |   Yes   |   Yes   |  No  |  Yes  |
 |           CodeGeeX4            |     9B      | LLM  |    Yes    |   Yes   |   Yes   |  -   |   -   |
@@ -124,6 +125,7 @@
 |  QWen1.5-MoE   |  A2.7B   | LLM  |       Yes        |        -         |      No      |
 |   QWen2(.5)    |    7B    | LLM  |       Yes        |       Yes        |      No      |
 |   QWen2-MoE    | A14.57B  | LLM  |       Yes        |        -         |      No      |
+|  DeepSeek-V2   |   16B    | LLM  |        No        |       Yes        |      No      |
 | InternVL(v1.5) |  2B-26B  | MLLM |       Yes        |        -         |     Yes      |
 |   InternVL2    |  1B-40B  | MLLM |       Yes        |       Yes        |     Yes      |
 |  CogVLM2-chat  |   19B    | MLLM |       Yes        |        No        |      -       |

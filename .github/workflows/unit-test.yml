@@ -73,6 +73,7 @@ jobs:
               -DUSE_NVTX=ON \
               -DSM=80 \
               -DCMAKE_CUDA_ARCHITECTURES=80 \
+              -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
               -DBUILD_TEST=OFF
           make -j$(nproc) && make install
       - name: Install lmdeploy

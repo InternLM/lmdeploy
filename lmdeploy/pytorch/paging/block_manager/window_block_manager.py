@@ -8,11 +8,6 @@ from .default_block_manager import DefaultBlockManager
 BlockTable = np.ndarray
 
 
-def _div_up(x, n):
-    """perform div up."""
-    return (x + n - 1) // n
-
-
 def _num_blocks_to_drop(seq: SchedulerSequence, window_size: int):
     """num blocks to free."""
     if seq.history_len <= window_size:
@@ -44,13 +39,10 @@ class WindowBlockManager(DefaultBlockManager):
         """get num required blocks."""
 
         # blocks is not enough
-        if obj.num_history_ids < self.window_size:
+        if obj.num_history_ids <= self.window_size:
             return super().num_required_blocks(obj, prealloc_size)
 
-        # we only keep history less than window_size
-        num_tokens = self.window_size + obj.num_token_ids + prealloc_size
-        num_all_blocks = _div_up(num_tokens, obj.block_size)
-        return max(0, num_all_blocks - len(obj.logical_blocks))
+        return super().num_required_blocks(obj, prealloc_size) - obj.num_ignored_history // obj.block_size
 
     def can_allocate(self, msg: SchedulerSequence, prealloc_size: int = 0):
         """Return if physical block can be allocated for given message."""

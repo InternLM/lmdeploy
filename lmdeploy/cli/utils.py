@@ -51,8 +51,7 @@ def get_lora_adapters(adapters: List[str]):
             assert '=' in pair, f'Multiple lora paths must in format of ' \
                                  f'xxx=yyy. But given: {pair}'
             name, path = pair.strip().split('=', 1)
-            assert name not in output, f'Multiple lora paths with ' \
-                                       f'repeated lora name: {name}'
+            assert name not in output, f'Multiple lora paths with repeated lora name: {name}'
             output[name] = path
     return output
 
@@ -151,6 +150,33 @@ class ArgumentHelper:
                                    type=int,
                                    default=1,
                                    help='GPU number used in tensor parallelism. Should be 2^n')
+
+    @staticmethod
+    def dp(parser):
+        """Add argument dp to parser."""
+
+        return parser.add_argument('--dp',
+                                   type=int,
+                                   default=1,
+                                   help='data parallelism. dp_rank is required when pytorch engine is used.')
+
+    @staticmethod
+    def ep(parser):
+        """Add argument ep to parser."""
+
+        return parser.add_argument('--ep',
+                                   type=int,
+                                   default=1,
+                                   help='expert parallelism. dp is required when pytorch engine is used.')
+
+    @staticmethod
+    def dp_rank(parser):
+        """add argument dp_rank to parser."""
+
+        return parser.add_argument('--dp-rank',
+                                   type=int,
+                                   default=0,
+                                   help='data parallelism rank, all ranks between 0 ~ dp should be created.')
 
     @staticmethod
     def session_id(parser):

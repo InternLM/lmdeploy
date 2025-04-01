@@ -4,6 +4,7 @@ import os.path as osp
 
 import torch
 
+from ..config import RopeParam
 from .base import INPUT_MODELS
 from .llama import LlamaModel, LlamaReader
 
@@ -64,6 +65,7 @@ class QwenModel(LlamaModel):
             hidden_units = config['hidden_size']
             num_layer = config['num_hidden_layers']
             norm_eps = config['layer_norm_epsilon']
+            kv_channels = config['kv_channels']
             rope_theta = float(config.get('rotary_emb_base', 10000.0))
             if 'num_key_value_heads' in config:
                 kv_head_num = config['num_key_value_heads']
@@ -75,7 +77,16 @@ class QwenModel(LlamaModel):
             use_logn_attn = int(config['use_logn_attn'])
             vocab_size = config['vocab_size']
             inter_size = config['intermediate_size']
-        return dict(num_layer=num_layer,
+            scaling_type = 'dynamic' if use_dynamic_ntk else 'default'
+            # need setting rope_scaling_factor in TurbomindEngineConfig if scaling_type is dynamic
+            rope_param = RopeParam(type=scaling_type,
+                                   base=rope_theta,
+                                   dim=kv_channels,
+                                   max_position_embeddings=seq_length,
+                                   factor=0)
+
+        return dict(size_per_head=kv_channels,
+                    num_layer=num_layer,
                     norm_eps=norm_eps,
                     hidden_units=hidden_units,
                     head_num=attn_head_num,
@@ -83,7 +94,7 @@ class QwenModel(LlamaModel):
                     vocab_size=vocab_size,
                     inter_size=inter_size,
                     attn_bias=1,
-                    rope_theta=rope_theta,
+                    rope_param=rope_param,
                     max_position_embeddings=seq_length,
                     use_dynamic_ntk=int(use_dynamic_ntk),
                     use_logn_attn=use_logn_attn)
@@ -151,5 +162,54 @@ class Qwen2MoeModel(LlamaModel):
         info['inter_size'] = cfg['shared_expert_intermediate_size']
         info['moe_shared_gate'] = True
         info['norm_topk_prob'] = cfg['norm_topk_prob']
-        info['attn_bias'] = 1
+        info['attn_bias'] = cfg.get('qkv_bias', 1)
+        return info
+
+
+class Qwen3Reader(LlamaReader):
+
+    def qk_norm(self, i: int):
+        result = []
+        for x in ['q', 'k']:
+            name = f'{self.attn_layer_prefix}.{i}.self_attn.{x}_norm.weight'
+            result.append(self.params.get(name))
+        return (*result, )
+
+
+@INPUT_MODELS.register_module(name='qwen3')
+class Qwen3Model(LlamaModel):
+    Reader = Qwen3Reader
+
+    def model_info(self):
+        cfg = self.model_config
+        info = super().model_info()
+        info.update(qk_norm=True, attn_bias=cfg.get('attention_bias', 0))
+        return info
+
+
+class Qwen3MoeReader(Qwen2MoeReader):
+
+    def qk_norm(self, i: int):
+        result = []
+        for x in ['q', 'k']:
+            name = f'{self.attn_layer_prefix}.{i}.self_attn.{x}_norm.weight'
+            result.append(self.params.get(name))
+        return (*result, )
+
+
+@INPUT_MODELS.register_module(name='qwen3-moe')
+class Qwen3MoeModel(LlamaModel):
+    Reader = Qwen3MoeReader
+
+    def model_info(self):
+        cfg = self.model_config
+        info = super().model_info()
+        info.update(
+            qk_norm=True,
+            expert_num=cfg.get('num_experts', 128),
+            experts_per_token=cfg.get('num_experts_per_tok', 8),
+            expert_inter_size=cfg.get('moe_intermediate_size', 768),
+            attn_bias=cfg.get('attention_bias', 0),
+            inter_size=0,  # no shared expert
+            norm_topk_prob=cfg.get('norm_topk_prob', False))
         return info

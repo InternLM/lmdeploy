@@ -20,26 +20,23 @@
 
 #pragma once
 
+#include <cuda_fp16.h>
+
+#include "src/turbomind/comm/device_comm.h"
 #include "src/turbomind/engine/gateway.h"
 #include "src/turbomind/models/llama/LlamaBatch.h"
 #include "src/turbomind/models/llama/LlamaWeight.h"
+#include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
-#include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
-#include <cuda_fp16.h>
 
-#include "src/turbomind/comm/comm.h"
+#include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
 
 namespace turbomind {
 
 template<typename T>
 class LlamaTritonModel: public AbstractTransformerModel {
 public:
-    LlamaTritonModel(size_t                                 tensor_para_size,
-                     size_t                                 pipeline_para_size,
-                     int                                    enable_custom_all_reduce,
-                     std::string                            model_dir,
-                     std::string                            config,
-                     std::function<std::shared_ptr<void>()> ffi_ctx_factory);
+    LlamaTritonModel(std::string model_dir, std::string config, std::function<std::shared_ptr<void>()> ffi_ctx_factory);
 
     ~LlamaTritonModel() override;
 
@@ -51,7 +48,7 @@ public:
 
     void processWeights(int deviceId, int rank) noexcept override;
 
-    void createEngine(int device_id, int rank) noexcept override;
+    void createEngine(int device_id, int rank) override;
 
     std::string toString() override;
     int         getTensorParaSize() override;
@@ -60,7 +57,7 @@ public:
 private:
     void handleMissingParams();
 
-    comm::Splits createCommSplits(int global_rank);
+    Communicators createCommSplits(int rank);
 
 private:
     ModelParam     model_param_;
@@ -68,20 +65,21 @@ private:
     MoeParam       moe_param_;
     LoraParam      lora_param_;
     EngineParam    engine_param_;
-    size_t         tensor_para_size_;
-    size_t         pipeline_para_size_;
+    size_t         comm_size_;
 
-    std::unique_ptr<comm::GroupId> group_id_;
+    std::vector<EngineParam> engine_params_;
 
-    std::shared_ptr<SharedState> shared_state_;
-    std::shared_ptr<Gateway>     gateway_;
+    std::string communicator_;  // communicator backend
+
+    std::vector<std::unique_ptr<comm::HostGroupId>> group_ids_;
+
+    std::shared_ptr<Gateway> gateway_;
 
     // Weights & engine instances for the ranks
     std::vector<std::shared_ptr<LlamaWeight<T>>> weights_;
     std::vector<std::shared_ptr<Engine<T>>>      engines_;
 
     bool is_fp16_;
-    int  enable_custom_all_reduce_ = 0;
 
     std::string model_name_;
     std::string model_dir_;

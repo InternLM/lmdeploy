@@ -66,6 +66,8 @@ UnifiedAttentionLayer<T>::UnifiedAttentionLayer(
     streams_[0] = stream_;
     streams_[1] = aux_stream_;
 
+    init_rope_kernel_param(param_.rope, rope_param_);
+
     allocateWorkspace();
 }
 
@@ -186,6 +188,10 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     T* attention_input = inputs->getPtr<T>("input_query");
     T* attention_out   = outputs->getPtr<T>("hidden_features");
 
+    if (token_num == 0) {
+        return;
+    }
+
     /////////////////////////////////////////////
     /// allocate buffers
     allocateBuffer(token_num,                                           // shared
@@ -211,6 +217,10 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
         linear_->forward(
             qkv_buf_, attention_input, token_num, weights->qkv, LlamaLinear<T>::kGemm, lora_buf_, lora_mask);
         sync_check_cuda_error();
+
+        if (model_param_.qk_norm) {
+            qk_norm(qkv_buf_, token_num, *weights);
+        }
     }
     else {
         forward_mla(attention_input, token_num, *weights);
@@ -286,10 +296,9 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
                                                          int(2 * sum_k_len * size_per_head_),
                                                          int(sum_k_len * size_per_head_)};
 
-        params.finished   = is_finished + offset;
-        params.cu_q_len   = cu_q_len + offset;
-        params.cu_k_len   = cu_k_len + offset;
-        params.rope_theta = rope_theta + offset;
+        params.finished = is_finished + offset;
+        params.cu_q_len = cu_q_len + offset;
+        params.cu_k_len = cu_k_len + offset;
 
         params.num_heads     = local_head_num_;
         params.num_kv_heads  = local_kv_head_num_;
@@ -304,53 +313,15 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
             params.inv_sqrt_dh /= std::sqrt((float)params.size_per_head);
         }
 
-        params.rotary_embedding_dim    = param_.rotary_embedding_dim;
-        params.rotary_embedding_base   = param_.rotary_embedding_base;
-        params.max_position_embeddings = param_.max_position_embeddings;
-        params.rope_scaling_factor     = param_.rope_scaling_factor;
-        params.attention_scaling       = 1.0;
-        params.rope_ti_scale           = 1.f;
-        if (param_.rope_scaling_type == "linear") {
-            params.rope_ti_scale /= param_.rope_scaling_factor;
+        // rotary embedding
+        if (rope_param_.type == RopeType::kDynamic) {
+            rope_param_.base = rope_theta + offset;
         }
-        if (param_.rope_scaling_type == "llama3") {
-            const double PI                   = 3.14159265358979323846;
-            float        inv_diff_freq_factor = 1.0 / (param_.high_freq_factor - param_.low_freq_factor);
-            params.llama3_inv_scaling_factor  = 1.0 / param_.rope_scaling_factor;
-            params.llama3_alpha = param_.original_max_position_embeddings / (2 * PI) * inv_diff_freq_factor;
-            params.llama3_beta  = param_.low_freq_factor * inv_diff_freq_factor;
-        }
-        if (param_.rope_scaling_type == "yarn") {
-            const double PI                  = 3.14159265358979323846;
-            auto         find_correction_dim = [&](float num_rotations) {
-                return (param_.rotary_embedding_dim
-                        * std::log(param_.max_position_embeddings / (num_rotations * 2 * PI)))
-                       / (2 * std::log(param_.rotary_embedding_base));
-            };
-            auto find_correction_range = [&](float low_rot, float high_rot, float& low, float& high) {
-                low  = std::floor(find_correction_dim(low_rot));
-                high = std::ceil(find_correction_dim(high_rot));
-                low  = std::max(low, 0.f);
-                high = std::min(high, param_.rotary_embedding_dim - 1.f);
-            };
-            float low, high;
-            find_correction_range(param_.beta_fast, param_.beta_slow, low, high);
-            // https://github.com/huggingface/transformers/blob/6c3f168b36882f0beebaa9121eafa1928ba29633/src/transformers/modeling_rope_utils.py#L216
-            if (low == high) {
-                high += 0.001f;
-            }
-            params.yarn_ramp_inv_factor_div_2   = 1.0 / (high - low) / 2.0;
-            params.yarn_ramp_inv_factor_mul_min = 1.0 / (high - low) * low;
-            params.yarn_inv_scaling_factor      = (1 - 1.0 / param_.rope_scaling_factor);
-            if (param_.attention_factor < 0) {
-                params.attention_scaling = 0.1 * std::log(param_.rope_scaling_factor) + 1.0;
-            }
-            else {
-                params.attention_scaling = param_.attention_factor;
-            }
-        }
+        params.rope_param = rope_param_;
 
-        params.use_logn_attn = param_.use_logn_attn;
+        // logn attn
+        params.use_logn_attn           = param_.use_logn_attn;
+        params.max_position_embeddings = param_.max_position_embeddings;
 
         // Decoding use only for now
         FT_CHECK(barriers_);
@@ -518,6 +489,40 @@ void UnifiedAttentionLayer<T>::forward_mla(const T* inputs, int token_num, const
     deviceFree(q, stream_);
     deviceFree(kv_a, stream_);
     deviceFree(kv_b, stream_);
+}
+
+template<typename T>
+void UnifiedAttentionLayer<T>::qk_norm(T* qkv, int token_num, const WeightType& weights)
+{
+    check_cuda_error(cudaEventRecord(qkv_event_, stream_));
+    check_cuda_error(cudaStreamWaitEvent(aux_stream_, qkv_event_));
+
+    FT_CHECK(model_param_.attn_bias == false);
+
+    invokeQkRMSNorm(qkv_buf_,
+                    weights.qkv.output_dims,
+                    weights.q_a_layernorm,
+                    getTensorType<T>(),
+                    size_per_head_,
+                    local_head_num_,
+                    token_num,
+                    model_param_.norm_eps,
+                    stream_);
+    sync_check_cuda_error();
+
+    invokeQkRMSNorm(qkv_buf_ + size_per_head_ * local_head_num_,
+                    weights.qkv.output_dims,
+                    weights.kv_a_layernorm,
+                    getTensorType<T>(),
+                    size_per_head_,
+                    local_kv_head_num_,
+                    token_num,
+                    model_param_.norm_eps,
+                    aux_stream_);
+    sync_check_cuda_error();
+
+    check_cuda_error(cudaEventRecord(aux_event_, aux_stream_));
+    check_cuda_error(cudaStreamWaitEvent(stream_, aux_event_));
 }
 
 #ifdef ENABLE_FP32

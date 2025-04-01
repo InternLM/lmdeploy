@@ -11,8 +11,10 @@ def flash_mla_available():
     # use flash_mla by default if it is installed
     use_flash_mla = False
     try:
-        import flash_mla_cuda  # noqa
-        if torch.cuda.get_device_properties(0).major >= 9:
+        # torch_npu device_properties doesn't have 'major' attribute
+        device_properties = torch.cuda.get_device_properties(0)
+        if hasattr(device_properties, 'major') and device_properties.major >= 9:
+            import flash_mla_cuda  # noqa
             use_flash_mla = True
     except ImportError:
         logger.warning('For higher performance, please install flash_mla https://github.com/deepseek-ai/FlashMLA')
