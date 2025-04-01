@@ -4,12 +4,13 @@ from typing import Any, Dict, List, Tuple
 import torch
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
-from lmdeploy.pytorch.decorators import split_batch
+from lmdeploy.pytorch.models.utils.micro_batch import split_batch
 from lmdeploy.pytorch.distributed import get_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext
 from lmdeploy.pytorch.models.internvl import InternVLChatModel, InternVisionModel
 from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMeta
 from lmdeploy.utils import get_logger
+from packaging import version
 
 from ..graph_runner import GraphRunner
 
@@ -123,13 +124,13 @@ class CUDAGraphRunner(GraphRunner):
         self.compile_vit = False
         if not self.backend_config.eager_mode and isinstance(self.model, InternVLChatModel):
             world_size, _ = get_world_rank()
-            if world_size > 1:
+            if version.parse(torch.__version__) >= version.parse('2.6.0') and torch.__world_size > 1:
                 torch._inductor.config.reorder_for_compute_comm_overlap = True
                 if isinstance(self.model.vision_model, InternVisionModel):
                     self.model.vision_model.encoder.forward = split_batch(self.model.vision_model.encoder.forward, "inputs_embeds")
             self.model.extract_feature = torch.compile(self.model.extract_feature, mode="max-autotune")
             self.compile_vit = True
-            self.compiled = False
+            self.has_compiled_vit = False
 
     def check_enable_graph(self):
         """check enable graph."""
@@ -152,7 +153,7 @@ class CUDAGraphRunner(GraphRunner):
 
     def _mark_dynamic_once(self, **kwargs):
         """call torch._dynamo.mark_dynamic to avoid recompile"""
-        if self.compiled:
+        if self.has_compiled_vit:
             return
 
         for tensor_name, dynamic_dims in self.model.compile_dynamic_args.items():
@@ -160,7 +161,7 @@ class CUDAGraphRunner(GraphRunner):
             if tensor is None:
                 continue
             torch._dynamo.mark_dynamic(tensor, dynamic_dims)
-        self.compiled = True
+        self.has_compiled_vit = True
 
     def __call__(self, **kwargs):
         """call."""
