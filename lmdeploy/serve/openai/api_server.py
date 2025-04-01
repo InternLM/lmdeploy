@@ -2,6 +2,7 @@
 # yapf: disable
 import asyncio
 import copy
+import json
 import os
 import time
 from functools import partial
@@ -16,6 +17,7 @@ from fastapi.security.http import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from lmdeploy.archs import get_task
+from lmdeploy.disagg.messages import MigrationRequest, RemoteEngineConfig, RDMAConnectRequest, RDMAInitRequest
 from lmdeploy.messages import GenerationConfig, LogitsProcessor, PytorchEngineConfig, TurbomindEngineConfig
 from lmdeploy.model import ChatTemplateConfig
 from lmdeploy.serve.async_engine import AsyncEngine
@@ -556,7 +558,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
 
 
 @router.post('/v1/completions', dependencies=[Depends(check_api_key)])
-async def completions_v1(request: CompletionRequest, raw_request: Request = None):
+async def completions_v1(raw_request: Request = None):
     """Completion API similar to OpenAI's API.
 
     Go to `https://platform.openai.com/docs/api-reference/completions/create`
@@ -597,6 +599,13 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
+    json_request = await raw_request.json()
+    request = CompletionRequest.model_validate(json_request)
+    migration_request = json_request.pop("migration_request", None)
+    with_cache = json_request.pop("with_cache", False)
+    if migration_request:
+        migration_request = MigrationRequest.model_validate(migration_request)
+
     if request.session_id == -1:
         VariableInterface.session_id += 1
         request.session_id = VariableInterface.session_id
@@ -629,7 +638,9 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
                                   stop_words=request.stop,
                                   skip_special_tokens=request.skip_special_tokens,
                                   random_seed=random_seed,
-                                  spaces_between_special_tokens=request.spaces_between_special_tokens)
+                                  spaces_between_special_tokens=request.spaces_between_special_tokens,
+                                  migration_request=migration_request,
+                                  with_cache=with_cache)
     generators = []
     for i in range(len(request.prompt)):
         result_generator = VariableInterface.async_engine.generate(
@@ -659,8 +670,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
             choices=[choice_data],
             usage=usage,
         )
-        response_json = response.model_dump_json()
-
+        response_json = response.model_dump()
         return response_json
 
     async def completion_stream_generator() -> AsyncGenerator[str, None]:
@@ -691,7 +701,10 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
                                                             finish_reason=res.finish_reason,
                                                             logprobs=logprobs,
                                                             usage=usage)
-                yield f'data: {response_json}\n\n'
+                if res.cache_block_ids is not None:
+                    response_json["cache_block_ids"] = res.cache_block_ids
+                    response_json["remote_token_ids"] = res.token_ids
+                yield f'data: {json.dumps(response_json)}\n\n'
         yield 'data: [DONE]\n\n'
 
     # Streaming response
@@ -788,6 +801,45 @@ async def encode(request: EncodeRequest, raw_request: Request = None):
             encoded.append(ids)
             length.append(len(ids))
         return EncodeResponse(input_ids=encoded, length=length)
+
+
+@router.get("/distserve/get_disagg_info")
+async def get_disagg_info():
+    engine = VariableInterface.async_engine.engine
+
+    response = RemoteEngineConfig(
+        tp_size=engine.engine_config.tp,
+        dp_size=None,
+        pp_size=None,
+        ep_size=None,
+        block_size=engine.engine_config.block_size,
+        num_cpu_blocks=engine.scheduler.block_manager.num_cpu_blocks,
+        num_gpu_blocks=engine.scheduler.block_manager.num_gpu_blocks,
+    )
+
+    return response.model_dump_json()
+
+""" PD Disaggregation API Begin """
+@router.post("/distserve/init_rdma_endpoint")
+async def init_rdma_link(rdma_init_config: RDMAInitRequest):
+    return VariableInterface.async_engine.init_rdma_link(
+        rdma_init_config.remote_engine_id, rdma_init_config.remote_engine_config
+    )
+
+
+@router.post("/distserve/rdma_connect")
+async def rdma_connect(rdma_connect_config: RDMAConnectRequest):
+    return VariableInterface.async_engine.rdma_connect(
+        rdma_connect_config.remote_engine_id, rdma_connect_config.remote_endpoint_info
+    )
+
+
+@router.post("/distserve/free_cache")
+async def free_cache(raw_request: Request) -> JSONResponse:
+    config = await raw_request.json()
+    session_id = int(config["session_id"])
+    VariableInterface.async_engine.free_cache(session_id)
+""" PD Disaggregation API End """
 
 
 @router.post('/v1/chat/interactive', dependencies=[Depends(check_api_key)])

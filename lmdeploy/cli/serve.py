@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-
+from lmdeploy.disagg.messages import EngineRole
 from lmdeploy.utils import get_max_batch_size
 
 from .cli import CLI
@@ -125,6 +125,13 @@ class SubCliServe:
                             'engine’s tasks once the maximum number of concurrent requests is '
                             'reached, regardless of any additional requests sent by clients '
                             'concurrently during that time. Default to None.')
+        parser.add_argument('--role',
+                            type=str,
+                            default='Hybrid',
+                            choices=['Hybrid', 'Prefill', 'Decode'],
+                            help='Hybrid for Non-Disaggregated Engine;'
+                                 'Prefill for Disaggregated Prefill Engine;'
+                                 'Decode fro Disaggregated Decode Engine;')
         # common args
         ArgumentHelper.backend(parser)
         ArgumentHelper.log_level(parser)
@@ -307,7 +314,8 @@ class SubCliServe:
                                                  device_type=args.device,
                                                  quant_policy=args.quant_policy,
                                                  eager_mode=args.eager_mode,
-                                                 max_prefill_token_num=args.max_prefill_token_num)
+                                                 max_prefill_token_num=args.max_prefill_token_num,
+                                                 role=EngineRole.__members__[args.role])
         else:
             from lmdeploy.messages import TurbomindEngineConfig
             backend_config = TurbomindEngineConfig(dtype=args.dtype,

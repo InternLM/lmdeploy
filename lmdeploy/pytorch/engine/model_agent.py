@@ -635,7 +635,7 @@ class BaseModelAgent(AutoModelAgent):
             attn_dist_cfg = dist_ctx.dist_config.attn_config
             tp = attn_dist_cfg.tp
 
-            self.cache_engine = CacheEngine(self.cache_config, self.model_config, world_size=tp)
+            self.cache_engine = CacheEngine(self.cache_config, self.model_config, rank=self.rank, world_size=tp)
 
     def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
         cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)

@@ -4,6 +4,9 @@ from typing import Dict, List, Literal, Tuple
 
 import torch
 
+from lmdeploy.disagg.messages import RemoteEngineConfig, MigrationExecutionInputs
+from lmdeploy.disagg.endpoint import EngineEndpoint, find_best_rdma_device
+
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.utils import get_logger
 
@@ -29,10 +32,11 @@ class CacheEngine:
         self,
         cache_config: CacheConfig,
         model_config: ModelConfig,
+        rank: int = 0,
         world_size: int = 1,
     ) -> None:
         self.world_size = world_size
-
+        self.rank = rank
         self.cache_config = cache_config
         self.model_config = model_config
 
@@ -51,6 +55,9 @@ class CacheEngine:
         self.local_gpu_cache = self.allocate_gpu_cache()
         self.local_cpu_cache = self.allocate_cpu_cache()
 
+        # RDMA Links for PD Disaggregation
+        self.links: Dict[int, EngineEndpoint] = {}
+
         # Initialize the stream for caching operations.
         self.cache_stream = torch.cuda.Stream()
         assert self.cache_stream != torch.cuda.current_stream()
@@ -59,6 +66,7 @@ class CacheEngine:
 
         logger.debug(f'Initialize cache engine with {cache_config.num_gpu_blocks}'
                      f' gpu blocks and {cache_config.num_cpu_blocks} cpu blocks.')
+
 
     @property
     def cpu_cache(self):
@@ -302,3 +310,70 @@ class CacheEngine:
 
         total = num_layers * (mem_key_block + mem_value_block)
         return total
+    
+    """ Metheds for PD Disaggregation Begin. """
+    def init_rdma_link(
+        self, remote_engine_id: int, remote_engine_config: RemoteEngineConfig
+    ):
+        device_name = find_best_rdma_device(self.rank)
+        self.links[remote_engine_id] = EngineEndpoint(
+            device_name,
+            remote_engine_config,
+            [
+                (
+                    "k",
+                    self.full_gpu_cache[0].data_ptr()
+                    + self.full_gpu_cache[0].storage_offset(),
+                    self.full_gpu_cache[0].numel() * self.full_gpu_cache[0].itemsize,
+                ),
+                (
+                    "v",
+                    self.full_gpu_cache[1].data_ptr()
+                    + self.full_gpu_cache[1].storage_offset(),
+                    self.full_gpu_cache[1].numel() * self.full_gpu_cache[1].itemsize,
+                ),
+            ],
+        )
+        return self.links[remote_engine_id].local_endpoint_info
+
+    def rdma_connect(self, remote_engine_id: int, remote_endpoint_info):
+        self.links[remote_engine_id].rdma_endpoint.connect_to(
+            remote_endpoint_info[self.rank]
+        )
+
+    async def migrate(self, migration_execution_inputs: MigrationExecutionInputs):
+        head_dim = self.model_config.get_head_size()
+        num_heads = self.model_config.num_key_value_heads // self.world_size
+        block_size = self.cache_config.block_size
+        length = (
+            head_dim * num_heads * block_size * self.model_config.dtype.itemsize
+        )
+        layer_stride = self.cache_config.num_gpu_blocks * length
+
+        for migration_exe_req in migration_execution_inputs.requests:
+            source_offset = []
+            target_offset = []
+            remote_engine_id = migration_exe_req[0]
+            blocks_to_migration = migration_exe_req[1]
+            layer_stride_remote = self.links[remote_engine_id].remote_engine_config.num_gpu_blocks * length
+            for (prefill_block_id, decode_block_id) in blocks_to_migration:
+                source_offset.extend(
+                    [
+                        decode_block_id * length + layer * layer_stride
+                        for layer in range(self.model_config.num_layers)
+                    ]
+                )
+                target_offset.extend(
+                    [
+                        prefill_block_id * length + layer * layer_stride_remote
+                        for layer in range(self.model_config.num_layers)
+                    ]
+                )
+
+                await self.links[remote_engine_id].rdma_endpoint.read_batch_async(
+                    "k", target_offset, source_offset, length
+                )
+                await self.links[remote_engine_id].rdma_endpoint.read_batch_async(
+                    "v", target_offset, source_offset, length
+                )
+    """ Metheds for PD Disaggregation End. """

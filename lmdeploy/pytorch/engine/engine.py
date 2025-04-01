@@ -4,11 +4,12 @@ import copy
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import torch
 
+from lmdeploy.disagg.messages import EngineRole, MigrationExecutionInputs
 from lmdeploy.messages import PytorchEngineConfig, ResponseType
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model, logging_timer
 
@@ -39,6 +40,10 @@ class InferOutput:
     meta: Any = None
     finish: bool = False
     logits: torch.Tensor = None
+
+    # send cache blocks back for migration in Disaggregated LLM Serving
+    # when Prefill Engine is Done.
+    cache_block_ids: List[int] = None
 
 
 def _tensorlize_block_offsets(block_offsets, dtype=torch.int32):
@@ -320,6 +325,7 @@ class Engine:
         # build configs
         scheduler_config = _build_scheduler_config(engine_config)
         cache_config = _build_cache_config(engine_config)
+        setattr(cache_config, "role", engine_config.role)
         backend_config = _build_backend_config(engine_config)
         dist_config = _build_dist_config(engine_config)
         self.should_execute_dummy_batch = dist_config.need_dummy_batch()
@@ -478,7 +484,12 @@ class Engine:
             resp = req.data.get('response', True)
             resp_type = ResponseType.SESSION_NOT_EXIST
             if session_id in self.scheduler.sessions:
-                self.scheduler.end_session(session_id)
+                if self.engine_config.role == EngineRole.Prefill:
+                    # reserve prefill KVCache until decode migration done.
+                    seqs = list(self.scheduler.sessions[session_id].sequences.values())
+                    seqs[0].status == MessageStatus.TO_BE_MIGRATED
+                else:
+                    self.scheduler.end_session(session_id)
                 resp_type = ResponseType.SUCCESS
             if resp:
                 self._response(req.resp, resp_type)
@@ -528,6 +539,7 @@ class Engine:
             sampling_param = req.data['sampling_param']
             return_logits = sampling_param.out_logits
             if len(sess.sequences) == 0:
+                migration_request = req.data.get('migration_request')
                 assert len(req.data['token_ids']) > 0, ('Empty input is not allowed.')
                 sess.add_sequence(
                     req.data['token_ids'],
@@ -535,11 +547,15 @@ class Engine:
                     adapter_name=req.data['adapter_name'],
                     return_logits=return_logits,
                     multimodals=req.data.get('input_multimodals'),
-                    input_embeddings=req.data.get('input_embeddings'),
+                    input_embeddings=req.data.get('input_embeddings',),
+                    migration_request=migration_request,
+                    resp_cache=req.data.get('with_cache')
                 )
                 msg = next(iter(sess.sequences.values()))
                 __update_max_new_tokens(msg)
                 scheduler.add_sequence(msg)
+                if migration_request:
+                    self.scheduler._set_message_status(msg, MessageStatus.WAITING_MIGRATION)
             else:
                 msg = next(iter(sess.sequences.values()))
                 msg.update_token_ids(
@@ -725,11 +741,16 @@ class Engine:
             if not finish and len(token_ids) == 0:
                 continue
             session_id = msg.session_id
+            if msg.resp_cache:
+                cache_block_ids = self.scheduler.block_manager.get_block_table(msg).tolist()
+            else:
+                cache_block_ids = None
             out = InferOutput(
                 session_id=session_id,
                 resp=msg.resp,
                 finish=finish,
-                token_ids=token_ids,
+                token_ids=token_ids.tolist(),
+                cache_block_ids=cache_block_ids
             )
             outputs[session_id] = out
 
@@ -885,7 +906,7 @@ class Engine:
         def __send_resp(out: InferOutput):
             """send response."""
             resp_type = (ResponseType.FINISH if out.finish else ResponseType.SUCCESS)
-            self._response(out.resp, resp_type, data=dict(token_ids=out.token_ids, logits=out.logits))
+            self._response(out.resp, resp_type, data=dict(token_ids=out.token_ids, logits=out.logits, cache_block_ids=out.cache_block_ids))
 
         def __send_resps(step_outputs: List[InferOutput]):
             """send response callback."""
@@ -903,6 +924,58 @@ class Engine:
                 resps = (await que.get()).values()
             await self._await_forward_event(forward_event)
             __send_resps(resps)
+
+    @torch.inference_mode()
+    async def _async_loop_migration(self, resp_que: asyncio.Queue, has_runable_event: asyncio.Event):
+        """async loop migration."""
+        while True:
+            migration_running = self.scheduler._schedule_migration()
+            if migration_running:
+                migration_execution_requests: List[
+                    Tuple[int, List[Tuple[int, int]]]
+                ] = []
+                for msg in migration_running:
+                    migration_request = msg.migration_request
+                    prefill_block_ids = migration_request.remote_block_ids
+                    decode_block_ids = list(
+                        self.scheduler.block_manager.get_block_table(msg=msg)
+                    )
+
+                    assert len(prefill_block_ids) == len(decode_block_ids)
+                    migration_execution_requests.append(
+                        (
+                            migration_request.remote_engine_id,
+                            list(zip(prefill_block_ids, decode_block_ids)),
+                        )
+                    )
+
+                migration_inputs = MigrationExecutionInputs(
+                    requests=migration_execution_requests
+                )
+                await self.executor.migrate(migration_inputs)
+
+                # generate output
+                outputs: Dict[int, InferOutput] = dict()
+                self.scheduler.lock_running(migration_running)
+                for _, msg in enumerate(migration_running):
+                    session_id = msg.session_id
+                    msg.resp.type = ResponseType.SUCCESS
+                    token_ids = [msg.migration_request.remote_token_id]
+                    out = InferOutput(
+                        session_id=session_id,
+                        resp=msg.resp,
+                        finish=False,
+                        token_ids=token_ids,
+                    )
+                    outputs[session_id] = out
+                    self.update_running(
+                        [msg], torch.tensor([token_ids]), [False], [None]
+                    )
+                resp_que.put_nowait(outputs)
+                self.scheduler.unlock_running(migration_running)
+                has_runable_event.set()
+            else:
+                await asyncio.sleep(0.01)
 
     @torch.inference_mode()
     async def _async_loop_main(
@@ -989,9 +1062,17 @@ class Engine:
             loop_send_resp = event_loop.create_task(self._async_loop_send_responses(resp_que, forward_event),
                                                     name='MainLoopResponse')
 
+            logger.info('Starting async task MigrationLoop.')
+            loop_migration = event_loop.create_task(
+                self._async_loop_migration(
+                    resp_que, has_runable_event=has_runable_event
+                ),
+                name="MainLoopMigration",
+            )
+
             # binding done callback
             loop_main = asyncio.current_task()
-            loop_tasks: List[asyncio.Task] = [loop_main, loop_msg_proc, loop_send_resp]
+            loop_tasks: List[asyncio.Task] = [loop_main, loop_migration, loop_msg_proc, loop_send_resp]
             self._add_loop_tasks_done_callback(loop_tasks)
             self._loop_main = loop_main
 

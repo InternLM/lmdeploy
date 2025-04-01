@@ -19,6 +19,7 @@ import tqdm
 
 from lmdeploy import Tokenizer
 from lmdeploy.archs import get_model_arch
+from lmdeploy.disagg.messages import RemoteEngineConfig
 from lmdeploy.logger import RequestLogger
 from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, Response, ResponseType, TurbomindEngineConfig
 from lmdeploy.model import MODELS, ChatTemplateConfig, best_match_model
@@ -58,6 +59,9 @@ class GenOut:
     logprobs: List[Dict[int, float]] = None
     logits: Any = None
     last_hidden_state: Any = None
+
+    # for disaggregation
+    cache_block_ids: List[int] = None
 
 
 def _gen_out_to_response(out: GenOut, index) -> Response:
@@ -586,14 +590,14 @@ class AsyncEngine(LogitsMixin):
     @asynccontextmanager
     async def safe_run(self, inst, session_id, **kwargs):
         generator = inst.async_stream_infer(session_id, **kwargs)
-        try:
-            yield generator
-        except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
-            logger.error(f'[safe_run] exception caught: {type(e).__name__} {e}')
-            # TODO: remove session_id from async cancel
-            await inst.async_cancel(session_id)
-        finally:
-            await generator.aclose()
+        # try:
+        yield generator
+        # except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
+        #     logger.error(f'[safe_run] exception caught: {type(e).__name__} {e}')
+        #     # TODO: remove session_id from async cancel
+        #     await inst.async_cancel(session_id)
+        # finally:
+        #     await generator.aclose()
 
     async def generate(
             self,
@@ -755,7 +759,7 @@ class AsyncEngine(LogitsMixin):
                         spaces_between_special_tokens=gen_config.spaces_between_special_tokens)
                     res = token_ids[ids_offset:]
 
-                    out = GenOut(response, history_len, input_len, gen_len, finish_reason, res)
+                    out = GenOut(response, history_len, input_len, gen_len, finish_reason, res, cache_block_ids=outputs.cache_block_ids)
 
                     if outputs.logprobs is not None:
                         log_offset = ids_offset - start_ids_offset
@@ -784,7 +788,7 @@ class AsyncEngine(LogitsMixin):
                     logger.info(f'session {session_id} finished, reason '
                                 f'"{finish_reason}", input_tokens '
                                 f'{len(input_ids)}, outupt_tokens {gen_len}')
-                    yield GenOut(response, self.id2step[session_id], len(input_ids), gen_len, finish_reason)
+                    yield GenOut(response, self.id2step[session_id], len(input_ids), gen_len, finish_reason, outputs.cache_block_ids)
                 else:
                     logger.error(f'session {session_id} finished, '
                                  'reason "error"')
@@ -878,3 +882,18 @@ class AsyncEngine(LogitsMixin):
             session.generator = None
 
         return session
+    
+    """ DistServe Async Engine API Begin """
+    def free_cache(self, session_id: int):
+        self.engine.scheduler.end_session(session_id)
+
+    def init_rdma_link(
+        self, remote_engine_id: int, remote_engine_config: RemoteEngineConfig
+    ):
+        return self.engine.executor.init_rdma_link(
+            remote_engine_id, remote_engine_config
+        )
+
+    def rdma_connect(self, remote_engine_id: int, remote_endpoint_info: List[str]):
+        return self.engine.executor.rdma_connect(remote_engine_id, remote_endpoint_info)
+    """ DistServe Async Engine API End """
