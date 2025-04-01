@@ -28,7 +28,8 @@ def get_device_str():
 
     if device_type == 'cuda':
         device_type = 'GPU'
-
+    if device_type == 'maca':
+        device_type = 'GPU'
     return device_type
 
 
