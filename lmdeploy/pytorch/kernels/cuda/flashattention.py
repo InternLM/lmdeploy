@@ -339,6 +339,38 @@ def _flash_prefill_fwd_kernel(
 _nv_cap = None
 
 
+def _kernel_meta_sm7x(BLOCK_DK):
+    num_warps = 4
+    num_stages = min(4, max(2, 768 // BLOCK_DK))
+    BLOCK_M = max(16, 8192 // BLOCK_DK)
+    BLOCK_N = 32
+    return BLOCK_M, BLOCK_N, num_warps, num_stages
+
+
+def _kernel_meta_sm8x(BLOCK_DK):
+    num_warps = 4
+    num_stages = min(4, max(2, 768 // BLOCK_DK))
+    BLOCK_M = max(16, 16384 // BLOCK_DK)
+    BLOCK_N = 64
+    if num_stages == 2:
+        num_warps = 8
+    if num_stages == 3:
+        BLOCK_N = 32
+    return BLOCK_M, BLOCK_N, num_warps, num_stages
+
+
+def _kernel_meta_sm9x(BLOCK_DK):
+    num_warps = 8
+    num_stages = min(4, max(2, 768 // BLOCK_DK))
+    BLOCK_M = max(16, 16384 // BLOCK_DK)
+    BLOCK_N = 64
+    if num_stages == 2:
+        BLOCK_N = 128
+    elif num_stages == 3:
+        num_warps = 4
+    return BLOCK_M, BLOCK_N, num_warps, num_stages
+
+
 def flash_attention_fwd(
     q_states: Tensor,
     k_states: Tensor,
@@ -399,21 +431,15 @@ def flash_attention_fwd(
 
     shared_kv = k_states.data_ptr() == v_states.data_ptr() and BLOCK_DK == BLOCK_DV
 
-    if _nv_cap[0] < 8:
-        BLOCK_N = 32
-        BLOCK_M = max(16, 8192 // BLOCK_DK)
-    else:
-        BLOCK_N = 64
-        BLOCK_M = max(16, 16384 // BLOCK_DK)
-    BLOCK_M = min(128, BLOCK_M)
     num_warps = 4
-    num_stages = min(4, max(2, 1024 // BLOCK_DK))
-    if BLOCK_DK >= 512:
-        num_stages = 2
-    elif BLOCK_DK >= 256:
-        num_stages = 3
+    if _nv_cap[0] < 8:
+        BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm7x(BLOCK_DK)
+    if _nv_cap[0] < 9:
+        BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm8x(BLOCK_DK)
     else:
-        num_stages = 4
+        BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm9x(BLOCK_DK)
+
+    BLOCK_M = min(128, BLOCK_M)
     _flash_prefill_fwd_kernel[grid](
         q_states,
         k_states,
