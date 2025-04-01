@@ -373,8 +373,9 @@ class AutoModelAgent:
                     f'num_tokens={inputs.input_ids.size(-1)}')
 
         is_decoding = inputs.is_decoding
+        eager_mode = self.backend_config.eager_mode
         if dp > 1:
-            if is_decoding:
+            if is_decoding and not eager_mode:
                 batch_size = inputs.seq_length.numel()
                 all_batch_sizes = torch.tensor([0] * dp, device='cuda')
                 lc_handle = dist.all_gather_into_tensor(all_batch_sizes,
@@ -397,7 +398,7 @@ class AutoModelAgent:
         self.stream.synchronize()
 
         if dp > 1:
-            if is_decoding:
+            if is_decoding and not eager_mode:
                 await __await_distworker(lc_handle)
                 padding_batch_size = all_batch_sizes.cpu().max().item()
                 meta = self.patched_model.get_meta()
