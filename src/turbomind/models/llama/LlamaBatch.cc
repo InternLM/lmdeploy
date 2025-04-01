@@ -1233,10 +1233,6 @@ void LlamaBatch<T>::ComputeAndOutputLogits(T* hidden_states, int first, int last
             }
         }
         token_num += h_input_length_buf_[i];
-        if (tp_rank_ == 0) {
-            TM_LOG_INFO("[compute_logits] ID %llu, cache_len %d, input_len %d, tokens %d, total tokens %d",
-                        s.id, s.cache_len, h_input_length_buf_[i], s.tokens.size(), token_num);
-        }
     }
 
     if (!found) {
@@ -1296,7 +1292,7 @@ void LlamaBatch<T>::OutputLogits(const float* logits, int first, int last, Gener
             auto dst_ptr = state_->requests[i]->outputs.getPtr<float>("logits");
 
             const int cache_len   = state_->sequences[i]->cache_len;
-            const int history_len = state_->sequences[i]->tokens.size();
+            const int history_len = state_->requests[i]->session.step;
 
             // ----------H------I-------P-----------
             //      C        C      C         C
@@ -1325,8 +1321,8 @@ void LlamaBatch<T>::OutputLogits(const float* logits, int first, int last, Gener
                 // Skip invalid tokens caused by cache miss
                 src_ptr += std::max(0, diff) * model_->vocab_size_padded_;
             }
-            // // Skip previous chunks
-            // dst_ptr += std::max(0, -diff) * model_->vocab_size_;
+            // Skip previous chunks
+            dst_ptr += std::max(0, -diff) * model_->vocab_size_;
 
             check_cuda_error(cudaMemcpy2DAsync(dst_ptr,
                                                sizeof(float) * model_->vocab_size_,
@@ -1336,7 +1332,6 @@ void LlamaBatch<T>::OutputLogits(const float* logits, int first, int last, Gener
                                                valid_len,
                                                cudaMemcpyDefault,
                                                stream_));
-            dst_ptr += valid_len * model_->vocab_size_;
         }
     }
 }
