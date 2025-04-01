@@ -111,7 +111,7 @@ class CudaGraphMixin:
             input_buffers['inputs_embeds'][:, :num_tokens] = inputs_embeds
 
         # create inputs
-        new_batch_size = next_power_of_2(batch_size)
+        new_batch_size = input_buffers['block_offsets'].size(0)
         attn_metadata.block_offsets = input_buffers['block_offsets'][:new_batch_size]
         attn_metadata.q_start_loc = input_buffers['q_start_loc'][:new_batch_size]
         attn_metadata.q_seqlens = input_buffers['q_seqlens'][:new_batch_size]
@@ -122,7 +122,7 @@ class CudaGraphMixin:
                 attn_metadata.kv_seqlens.to(torch.int32), self.config.num_attention_heads, 1)
             # here we use copy_ instead of = to avoid using new allocated mem for cuda graph
             input_buffers['tile_scheduler_metadata'].copy_(tile_scheduler_metadata)
-            input_buffers['num_splits'][:batch_size + 1].copy_(num_splits[:batch_size + 1])
+            input_buffers['num_splits'][:new_batch_size + 1].copy_(num_splits[:new_batch_size + 1])
             attn_metadata.tile_scheduler_metadata = input_buffers['tile_scheduler_metadata']
             attn_metadata.num_splits = input_buffers['num_splits']
 

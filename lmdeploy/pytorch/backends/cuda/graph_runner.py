@@ -180,3 +180,14 @@ class CUDAGraphRunner(GraphRunner):
     def reset(self):
         """remove all graphs to prevent hanging on exit."""
         self._runner_map.clear()
+
+    def update_inputs(self, inputs):
+        """update inputs."""
+        is_decoding = inputs.is_decoding
+        dp_meta = inputs.dp_meta
+        if is_decoding and dp_meta is not None:
+            meta = self.get_meta()
+            padding_batch_size = meta.padding_batch_size
+            tp_size = next_power_of_2(padding_batch_size)
+            dp_meta.tp_sizes = [tp_size] * len(dp_meta.tp_sizes)
+        return inputs

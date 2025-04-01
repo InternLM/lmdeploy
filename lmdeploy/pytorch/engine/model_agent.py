@@ -408,6 +408,7 @@ class AutoModelAgent:
                 sync_long_context = all_sync_flags.any()
                 logger.debug(f'sync_long_context={sync_long_context}')
             inputs.build_dp_meta()
+            inputs = self.patched_model.update_inputs(inputs)
         else:
             sync_long_context = False
 
