@@ -2,15 +2,15 @@
 from typing import Any, Dict, List, Tuple
 
 import torch
+from packaging import version
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
-from lmdeploy.pytorch.models.utils.micro_batch import split_batch
 from lmdeploy.pytorch.distributed import get_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext
-from lmdeploy.pytorch.models.internvl import InternVLChatModel, InternVisionModel
+from lmdeploy.pytorch.models.internvl import InternVisionModel, InternVLChatModel
 from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMeta
+from lmdeploy.pytorch.models.utils.micro_batch import split_batch
 from lmdeploy.utils import get_logger
-from packaging import version
 
 from ..graph_runner import GraphRunner
 
@@ -127,8 +127,9 @@ class CUDAGraphRunner(GraphRunner):
             if version.parse(torch.__version__) >= version.parse('2.6.0') and torch.__world_size > 1:
                 torch._inductor.config.reorder_for_compute_comm_overlap = True
                 if isinstance(self.model.vision_model, InternVisionModel):
-                    self.model.vision_model.encoder.forward = split_batch(self.model.vision_model.encoder.forward, "inputs_embeds")
-            self.model.extract_feature = torch.compile(self.model.extract_feature, mode="max-autotune")
+                    self.model.vision_model.encoder.forward = split_batch(self.model.vision_model.encoder.forward,
+                                                                          'inputs_embeds')
+            self.model.extract_feature = torch.compile(self.model.extract_feature, mode='max-autotune')
             self.compile_vit = True
             self.has_compiled_vit = False
 
@@ -152,7 +153,7 @@ class CUDAGraphRunner(GraphRunner):
         return attn_metadata.is_decoding
 
     def _mark_dynamic_once(self, **kwargs):
-        """call torch._dynamo.mark_dynamic to avoid recompile"""
+        """call torch._dynamo.mark_dynamic to avoid recompile."""
         if self.has_compiled_vit:
             return
 

@@ -4,6 +4,7 @@ import torch
 
 def enable_micro_batch(func):
     """Decorator to enable micro-batch computation."""
+
     def wrapper(self, hidden_states, *args, **kwargs):
         if isinstance(hidden_states, list):
             # Apply forward computation to each micro-batch
@@ -11,11 +12,14 @@ def enable_micro_batch(func):
         else:
             # If not a list, directly apply the forward computation
             return func(self, hidden_states, *args, **kwargs)
+
     return wrapper
 
 
 def split_batch(func, param_name, num_splits=2):
-    """Decorator to split along the 0th dimension into a specified number of chunks."""
+    """Decorator to split along the 0th dimension into a specified number of
+    chunks."""
+
     def wrapper(*args, **kwargs):
         inputs = kwargs.get(param_name, None)
         if inputs is not None:
@@ -23,4 +27,5 @@ def split_batch(func, param_name, num_splits=2):
             kwargs[param_name] = split_inputs
             results = func(*args, **kwargs)
         return torch.cat(results, dim=0)
+
     return wrapper
