@@ -320,7 +320,7 @@ void LlamaV2<T>::postDecodeEmbedding(T* logits, T* local_logits, const T* decode
         invoke_gemm(0, batch_size, local_logits, local_vocab_size, slice);
         sync_check_cuda_error();
         comm_->d_comm->AllGather(
-            local_logits + tp_rank_ * slice, local_logits, slice, getTensorType<float>(), comm_->d_tp_group, stream_);
+            local_logits + tp_rank_ * slice, local_logits, slice, getTensorType<T>(), comm_->d_tp_group, stream_);
         sync_check_cuda_error();
         invokeTransposeAxis01(logits, local_logits, tp_size_, batch_size, local_vocab_size, stream_);
         sync_check_cuda_error();
@@ -350,7 +350,7 @@ void LlamaV2<T>::postDecodeEmbedding(T* logits, T* local_logits, const T* decode
                                        local_vocab_size,
                                        local_vocab_size,
                                        n,
-                                       getTensorType<float>(),
+                                       getTensorType<T>(),
                                        {first == 0, first + n == batch_size},
                                        comm_->d_tp_group,
                                        comm_stream);
