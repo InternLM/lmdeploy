@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.security.http import HTTPAuthorizationCredentials, HTTPBearer
+from prometheus_client import make_asgi_app
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from lmdeploy.archs import get_task
@@ -500,7 +501,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     async for res in result_generator:
         if await raw_request.is_disconnected():
             # Abort the request if the client disconnects.
-            await VariableInterface.async_engine.stop_session(request.session_id)
+            await VariableInterface.async_engine.handle_exception(request.session_id)
             return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
         final_res = res
         text += res.response
@@ -715,7 +716,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         async for res in generator:
             if await raw_request.is_disconnected():
                 # Abort the request if the client disconnects.
-                await VariableInterface.async_engine.stop_session(request.session_id)
+                await VariableInterface.async_engine.handle_exception(request.session_id)
                 return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
             final_res = res
             text += res.response
@@ -842,7 +843,7 @@ async def chat_interactive_v1(request: GenerateRequest, raw_request: Request = N
     """
     if request.cancel:
         if request.session_id != -1:
-            await VariableInterface.async_engine.stop_session(request.session_id)
+            await VariableInterface.async_engine.handle_exception(request.session_id)
             return {'text': '', 'tokens': 0, 'input_tokens': 0, 'history_tokens': 0, 'finish_reason': 'stop'}
         else:
             return create_error_response(HTTPStatus.BAD_REQUEST, 'please set a session_id to cancel a request')
@@ -918,7 +919,7 @@ async def chat_interactive_v1(request: GenerateRequest, raw_request: Request = N
         async for out in generation:
             if await raw_request.is_disconnected():
                 # Abort the request if the client disconnects.
-                await async_engine.stop_session(request.session_id)
+                await async_engine.handle_exception(request.session_id)
                 return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
             text += out.response
             tokens = out.generate_token_len
@@ -1017,6 +1018,7 @@ def serve(model_path: str,
           proxy_url: Optional[str] = None,
           max_log_len: int = None,
           disable_fastapi_docs: bool = False,
+          metrics: bool = False,
           max_concurrent_requests: Optional[int] = None,
           reasoning_parser: Optional[str] = None,
           tool_call_parser: Optional[str] = None,
@@ -1064,6 +1066,7 @@ def serve(model_path: str,
         proxy_url (str): The proxy url to register the api_server.
         max_log_len (int): Max number of prompt characters or prompt tokens
             being printed in log. Default: Unlimited
+        metrics (bool): Whether log stats to prometheus.
         max_concurrent_requests: This refers to the number of concurrent
             requests that the server can handle. The server is designed to
             process the engine’s tasks once the maximum number of concurrent
@@ -1086,6 +1089,11 @@ def serve(model_path: str,
         app = FastAPI(docs_url='/')
 
     app.include_router(router)
+
+    if metrics is True:
+        # Add prometheus asgi middleware to route /metrics requests
+        metrics_app = make_asgi_app()
+        app.mount('/metrics', metrics_app)
 
     if allow_origins:
         app.add_middleware(
@@ -1118,6 +1126,7 @@ def serve(model_path: str,
                                                     backend_config=backend_config,
                                                     chat_template_config=chat_template_config,
                                                     max_log_len=max_log_len,
+                                                    metrics=metrics,
                                                     **kwargs)
     # set reasoning parser and tool parser
     set_parsers(reasoning_parser, tool_call_parser)
