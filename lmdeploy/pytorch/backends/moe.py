@@ -3,6 +3,7 @@ from abc import ABC, abstractmethod
 from typing import List
 
 import torch
+import torch.distributed as dist
 
 
 class SoftmaxTopKImpl(ABC):
@@ -142,6 +143,13 @@ class FusedMoEBlockedF8Builder(ABC):
 
     @staticmethod
     @abstractmethod
-    def build(top_k: int, num_experts: int, renormalize: bool = False, out_dtype: torch.dtype = torch.float16):
+    def build(top_k: int,
+              num_experts: int,
+              hidden_dim: int = 1,
+              renormalize: bool = False,
+              block_size: int = 128,
+              ep_size: int = 1,
+              ep_group: dist.ProcessGroup = None,
+              out_dtype: torch.dtype = torch.float16):
         """build from mlp."""
         raise NotImplementedError

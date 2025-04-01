@@ -87,7 +87,7 @@ def _build_dist_config(engine_config: PytorchEngineConfig):
     dist_config = DistConfig(
         dp=engine_config.dp,
         tp=engine_config.tp,
-        ep=1,
+        ep=engine_config.ep,
         dp_rank=engine_config.dp_rank,
     )
     return dist_config
