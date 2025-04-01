@@ -111,9 +111,9 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
     // Max possible length of a sequence, this depends on `history_len` which isn't available here, so `session_len`
     // is used instead
     const int max_seq_len = session_len_ + 1;
-    const int max_out_len = std::min(output_len, session_len_) + 1;
-    // This does not include histroy length in interactive mode
-    const int max_in_out_len = std::min(input_len + output_len, session_len_) + 1;
+    const int max_out_len = std::min(output_len, session_len_);
+    // This does not include history length in interactive mode
+    const int max_in_out_len = std::min(input_len + output_len, session_len_);
 
     for (auto& [k, v] : *param.tensors) {
         inputs_->emplace(k, v);
@@ -123,13 +123,15 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
     add(outputs_, "sequence_length", TYPE_INT32, MEMORY_CPU, 1);
 
     if (param.gen_cfg.output_logits) {
-        const int len = param.gen_cfg.output_logits == GenerationConfig::kAll ? max_in_out_len : max_out_len;
+        const int len = param.gen_cfg.output_logits == GenerationConfig::kAll ? max_in_out_len - param.session.step : max_out_len;
         add(outputs_, "logits", TYPE_FP32, MEMORY_CPU, len, vocab_size_);
+        TM_LOG_INFO("[ModelRequest][forward] ID %llu, output_logits len %d", param.session.id, len);
     }
 
     if (param.gen_cfg.output_last_hidden_state) {
-        const int len = param.gen_cfg.output_last_hidden_state == GenerationConfig::kAll ? max_in_out_len : max_out_len;
+        const int len = param.gen_cfg.output_last_hidden_state == GenerationConfig::kAll ? max_in_out_len - param.session.step : max_out_len;
         add(outputs_, "last_hidden_state", data_type_, MEMORY_CPU, len, hidden_dim_);
+        TM_LOG_INFO("[ModelRequest][forward] ID %llu, output_last_hidden_state len %d", param.session.id, len);
     }
 
     if (param.gen_cfg.output_logprobs) {

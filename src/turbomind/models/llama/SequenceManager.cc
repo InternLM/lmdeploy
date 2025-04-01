@@ -471,12 +471,17 @@ void SequenceManager::PrefixMatch(Sequences& sequences)
             // seq.cache_len is updated after every forward iter. Refer to `LlamaBatch::Forward`
             continue;
         }
+        if (seq.prefix_match_end_index < block_seq_len_) {
+            continue;
+        }
         std::tie(block_ids, unique_ids, matched_nodes) = block_trie_->Match(seq);
-        const int valid                                = block_manager_->Verify(block_ids, unique_ids);
+
+        int valid = block_manager_->Verify(block_ids, unique_ids);
         // remove invalid nodes from trie tree if there is any
         if (valid < block_ids.size()) {
             block_trie_->Remove(matched_nodes, valid);
         }
+        valid = std::min(valid, seq.prefix_match_end_index / block_seq_len_);
 
         BlockIds matched_ids(block_ids.begin(), block_ids.begin() + valid);
         block_manager_->Lock(matched_ids);

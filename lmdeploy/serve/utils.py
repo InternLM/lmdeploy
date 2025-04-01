@@ -70,7 +70,8 @@ class LogitsMixin:
                                          step=steps[i] if steps else 0) as gen:
                     async for outputs in gen:
                         pass
-                    logits[i] = outputs.logits[:input_len, :]
+                    logits[i] = outputs.logits[:input_len - steps[i], :]
+                    logger.info(f'logits[{i}].shape: {logits[i].shape}, input_len: {input_len}, step: {steps[i]}')
 
         session_ids = list(range(len(input_ids)))
         tasks = [_proc(i) for i in range(len(input_ids))]

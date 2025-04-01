@@ -224,24 +224,24 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& reqs, std::vector<Signa
             continue;
         }
 
-        const int step = [&] {
-            int s = r->session.step;
-            if (s < 0) {
-                s = ptr->tokens.size();
-            }
-            else if (s > ptr->tokens.size()) {
-                if (tp_rank_ == 0) {
-                    TM_LOG_WARNING("[ProcessInferRequests] Skipping invalid step (%d) setting for ID %lu", s, ptr->id);
-                }
-                s = ptr->tokens.size();
-            }
-            return s;
-        }();
+        // const int step = [&] {
+        //     int s = r->session.step;
+        //     if (s < 0) {
+        //         s = ptr->tokens.size();
+        //     }
+        //     else if (s > ptr->tokens.size()) {
+        //         if (tp_rank_ == 0) {
+        //             TM_LOG_WARNING("[ProcessInferRequests] Skipping invalid step (%d) setting for ID %lu", s, ptr->id);
+        //         }
+        //         s = ptr->tokens.size();
+        //     }
+        //     return s;
+        // }();
 
-        if (step + input_length > session_len_) {
-            signals.push_back([r] { UpdateState(*r, Request::kTooLong, 0); });
-            continue;
-        }
+        // if (step + input_length > session_len_) {
+        //     signals.push_back([r] { UpdateState(*r, Request::kTooLong, 0); });
+        //     continue;
+        // }
 
         FT_CHECK(!state.requests[idx]);
 
@@ -276,12 +276,16 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& reqs, std::vector<Signa
         }
 
         // copy input tokens to prompt for prefix matching
-        if (input_length /*&& r->session.start_flag*/ && !r->inputs.isExist("input_embedding_ranges")) {
-            // TODO: truncate prompt to enable prefix caching for VLM
+        if (input_length && !r->inputs.isExist("input_embedding_ranges")) {
             seq.prompt.resize(input_length);
             std::copy_n(input_ids, input_length, seq.prompt.data());
+            seq.prefix_match_end_index = input_length;
+            if (r->gen_cfg.output_logits || r->gen_cfg.output_last_hidden_state) {
+                // when output logits or output last hidden state, prefix match can only
+                // apply to prompts[0:step)
+                seq.prefix_match_end_index = r->session.step;
+            }
         }
-
         // copy input embeddings
         if (r->inputs.isExist("input_embedding_ranges")) {
             const auto range_tensor = r->inputs.at("input_embedding_ranges");
@@ -1221,14 +1225,18 @@ void LlamaBatch<T>::ComputeAndOutputLogits(T* hidden_states, int first, int last
     int  token_num = 0;
     bool found     = false;
     for (int i = first; i < last; ++i) {
+        const auto& s = *state_->sequences[i];
         if (state_->requests[i]->gen_cfg.output_logits == GenerationConfig::kAll) {
-            const auto& s = *state_->sequences[i];
             // Skip when the seq is filling missed cache only
             if (s.cache_len + h_input_length_buf_[i] > s.tokens.size()) {
                 found = true;
             }
         }
         token_num += h_input_length_buf_[i];
+        if (tp_rank_ == 0) {
+            TM_LOG_INFO("[compute_logits] ID %llu, cache_len %d, input_len %d, tokens %d, total tokens %d",
+                        s.id, s.cache_len, h_input_length_buf_[i], s.tokens.size(), token_num);
+        }
     }
 
     if (!found) {
@@ -1273,7 +1281,7 @@ void LlamaBatch<T>::ComputeAndOutputLogits(T* hidden_states, int first, int last
 template<typename T>
 void LlamaBatch<T>::OutputLogits(const float* logits, int first, int last, GenerationConfig::OutType out_type)
 {
-    // when `is_all` is true, logits only contains last token of the sequences
+    // when `is_all` is false, logits only contains last token of the sequences
     const bool is_all = out_type == GenerationConfig::kAll;
 
     for (int i = first; i < last; ++i) {
@@ -1298,16 +1306,16 @@ void LlamaBatch<T>::OutputLogits(const float* logits, int first, int last, Gener
 
             int diff = (history_len + offset) - cache_len;
 
-            const int valid_len = input_len - std::max(0, (history_len + offset) - cache_len);
+            const int valid_len = input_len - std::max(0, diff);
 
-            // TM_LOG_ERROR("%d %d   %d %d  %d  %d %d",
-            //              history_len,
-            //              offset,
-            //              cache_len,
-            //              input_len,
-            //              valid_len,
-            //              std::max(0, diff),
-            //              std::max(0, -diff));
+            TM_LOG_INFO("[output_logits] %d %d   %d %d  %d  %d %d",
+                         history_len,
+                         offset,
+                         cache_len,
+                         input_len,
+                         valid_len,
+                         std::max(0, diff),
+                         std::max(0, -diff));
 
             if (valid_len <= 0) {
                 continue;
@@ -1315,10 +1323,10 @@ void LlamaBatch<T>::OutputLogits(const float* logits, int first, int last, Gener
 
             if (is_all) {
                 // Skip invalid tokens caused by cache miss
-                src_ptr += std::max(0, (history_len + offset) - cache_len) * model_->vocab_size_padded_;
+                src_ptr += std::max(0, diff) * model_->vocab_size_padded_;
             }
-            // Skip previous chunks
-            dst_ptr += std::max(0, cache_len - (history_len + offset)) * model_->vocab_size_;
+            // // Skip previous chunks
+            // dst_ptr += std::max(0, -diff) * model_->vocab_size_;
 
             check_cuda_error(cudaMemcpy2DAsync(dst_ptr,
                                                sizeof(float) * model_->vocab_size_,
@@ -1328,6 +1336,7 @@ void LlamaBatch<T>::OutputLogits(const float* logits, int first, int last, Gener
                                                valid_len,
                                                cudaMemcpyDefault,
                                                stream_));
+            dst_ptr += valid_len * model_->vocab_size_;
         }
     }
 }

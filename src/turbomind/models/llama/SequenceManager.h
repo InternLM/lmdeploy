@@ -23,13 +23,15 @@ struct Sequence {
     BlockIds  blocks;
     UniqueIds block_unique_ids;
 
-    int input_length = 0;
+    int input_length = 0;  // the number of tokens to be processed in each forward iter
 
     mutable std::vector<int> prompt;
-
-    mutable std::vector<int> tokens;  // update by user
+    mutable std::vector<int> tokens;  // update by user or when the sequence is finished
 
     mutable int cache_len = 0;
+
+    // since which token of a sequence that prefix match won't apply
+    mutable int prefix_match_end_index = 0;
 
     // additional data kept round-to-round
     mutable std::vector<std::byte> random_state;  // update by user
