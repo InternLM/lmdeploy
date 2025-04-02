@@ -21,12 +21,6 @@ from ..moe import (FusedMoEBlockedF8Builder, FusedMoEBlockedF8Impl, FusedMoEBuil
                    FusedMoEW8A8Impl)
 
 logger = get_logger('lmdeploy')
-try:
-    from deep_gemm import get_col_major_tma_aligned_tensor, m_grouped_gemm_fp8_fp8_bf16_nt_masked
-    use_deep_gemm = True
-except ImportError:
-    use_deep_gemm = False
-    logger.warning('For higher performance, please install DeepGEMM https://github.com/deepseek-ai/DeepGEMM')
 
 
 class TritonFusedMoEImpl(FusedMoEImpl):
@@ -340,11 +334,11 @@ class DeepEPExpertsGroupedGEMM:
 
 
 class DeepEPExpertsDeepGEMM:
+    deep_gemm = None
 
     def __init__(self, num_experts: int, ep_size: int, block_size: int, out_dtype: torch.dtype = torch.bfloat16):
         self.num_experts = num_experts
         self.ep_size = ep_size
-        assert self.num_experts % self.ep_size == 0
         self.num_experts_per_partition = self.num_experts // self.ep_size
         self.block_size = block_size
         self.use_fp8_w8a8 = True
@@ -360,6 +354,7 @@ class DeepEPExpertsDeepGEMM:
         masked_m: torch.Tensor,
         expected_m: int,
     ):
+
         gate_up_weight_fp8 = (gate_up_weight, gate_up_scale)
         gate_down_weight_fp8 = (gate_down_weight, gate_down_scale)
         assert (hidden_states_fp8[0].size(0) % 4 == 0), f'TMA alignment error: {hidden_states_fp8[0].size(0)}'
@@ -367,8 +362,8 @@ class DeepEPExpertsDeepGEMM:
         n = gate_up_weight.size(1)
         expected_m = min(expected_m, m)
         gateup_output = torch.empty((num_groups, m, n), device=hidden_states_fp8[0].device, dtype=self.out_dtype)
-        m_grouped_gemm_fp8_fp8_bf16_nt_masked(hidden_states_fp8, gate_up_weight_fp8, gateup_output, masked_m,
-                                              expected_m)
+        DeepEPExpertsDeepGEMM.deep_gemm.m_grouped_gemm_fp8_fp8_bf16_nt_masked(hidden_states_fp8, gate_up_weight_fp8,
+                                                                              gateup_output, masked_m, expected_m)
         down_input = torch.empty((
             gateup_output.shape[0],
             gateup_output.shape[1],
@@ -396,10 +391,11 @@ class DeepEPExpertsDeepGEMM:
         n = gate_down_weight.size(1)
         down_input_fp8 = (
             down_input,
-            get_col_major_tma_aligned_tensor(down_input_scale),
+            DeepEPExpertsDeepGEMM.deep_gemm.get_col_major_tma_aligned_tensor(down_input_scale),
         )
         down_output = torch.empty((num_groups, m, n), device=down_input.device, dtype=self.out_dtype)
-        m_grouped_gemm_fp8_fp8_bf16_nt_masked(down_input_fp8, gate_down_weight_fp8, down_output, masked_m, expected_m)
+        DeepEPExpertsDeepGEMM.deep_gemm.m_grouped_gemm_fp8_fp8_bf16_nt_masked(down_input_fp8, gate_down_weight_fp8,
+                                                                              down_output, masked_m, expected_m)
         return down_output
 
 
@@ -502,6 +498,13 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
         self.hidden_dim = hidden_dim
         self.block_size = block_size
         self.out_dtype = out_dtype
+        try:
+            import deep_gemm
+            DeepEPExpertsDeepGEMM.deep_gemm = deep_gemm
+            self.use_deep_gemm = True
+        except ImportError:
+            self.use_deep_gemm = False
+            logger.warning('For higher performance, please install DeepGEMM https://github.com/deepseek-ai/DeepGEMM')
 
     def forward(self,
                 hidden_states: torch.Tensor,
@@ -516,7 +519,7 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
         topk_weights = _renormalize(topk_weights, self.renormalize)
         step_ctx = get_step_ctx_manager().current_context()
         moe = None
-        if step_ctx.is_decoding is False or use_deep_gemm is False:
+        if step_ctx.is_decoding is False or self.use_deep_gemm is False:
             moe = FusedMoENormal(self.ep_size, self.ep_group, self.num_experts, self.hidden_dim, self.block_size,
                                  self.out_dtype)
         else:

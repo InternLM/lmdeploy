@@ -55,9 +55,7 @@ def get_buffer_normal(group: dist.ProcessGroup, hidden_bytes: int):
 
     https://github.com/deepseek-ai/DeepEP?tab=readme-ov-file#example-use-in-model-training-or-inference-prefilling
     """
-
     global _buffer_normal
-
     num_nvl_bytes, num_rdma_bytes = 0, 0
     for config in (
             Buffer.get_dispatch_config(group.size()),
@@ -89,7 +87,7 @@ def get_buffer_low_latency(
 
     if (_buffer_low_latency is None or _buffer_low_latency.group != group or not _buffer_low_latency.low_latency_mode
             or _buffer_low_latency.num_rdma_bytes < num_rdma_bytes):
-        assert num_experts % group.size() == 0
+        assert num_experts % group.size() == 0, f'num_experts:{num_experts} must be divisible by ep_size:{group.size()}'
         _buffer_low_latency = Buffer(
             group,
             num_rdma_bytes=num_rdma_bytes,
