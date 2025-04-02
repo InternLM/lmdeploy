@@ -178,4 +178,39 @@ private:
     std::shared_ptr<AllocatorImpl> underlying_impl_;
 };
 
+class SimpleAllocator: public AllocatorImpl {
+public:
+    template<class Alloc, class Dealloc>
+    static Allocator Create(Alloc&& alloc, Dealloc&& dealloc, MemLoc device)
+    {
+        return Allocator{std::make_shared<SimpleAllocator>((Alloc&&)alloc, (Dealloc&&)dealloc, device)};
+    }
+
+    template<class Alloc, class Dealloc>
+    SimpleAllocator(Alloc&& alloc, Dealloc&& dealloc, MemLoc device):
+        alloc_{std::move(alloc)}, dealloc_{std ::move(dealloc)}, device_{device}
+    {
+    }
+
+    void* allocate(ssize_t size) override
+    {
+        return alloc_(size);
+    };
+
+    void deallocate(void* p, ssize_t size) override
+    {
+        return dealloc_(p, size);
+    }
+
+    MemoryLocation device() const noexcept override
+    {
+        return device_;
+    }
+
+private:
+    std::function<void*(ssize_t)>       alloc_;
+    std::function<void(void*, ssize_t)> dealloc_;
+    MemLoc                              device_;
+};
+
 }  // namespace turbomind::core

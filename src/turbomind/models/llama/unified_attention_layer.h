@@ -29,10 +29,23 @@
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
-#include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
+
+namespace attention {
+
+struct ForwardParam;
+
+void Initialize(ForwardParam& p, core::TensorMap& args, const core::Tensor& input, core::Tensor& output);
+
+void SetLayer(ForwardParam& p, const void* weights, int layer_id);
+
+void Finalize(ForwardParam& p);
+
+const int* d_cu_q_len(ForwardParam& p);
+
+}  // namespace attention
 
 template<typename T>
 class UnifiedAttentionLayer {
@@ -42,26 +55,9 @@ public:
     static constexpr int kMaxKVSplits        = 128;
     static constexpr int kMaxWorkspaceTokens = 4096;
 
-    // clang-format off
-    struct ForwardParam {
-        core::Tensor input;
-        core::Tensor output;
-        const WeightType* weights;
-        int decode_num;
-        int prefil_num;
-        int* h_q_len;
-        int* h_k_len;
-        int* cu_q_len;
-        int* cu_k_len;
-        int* h_cu_q_len;
-        int* h_cu_k_len;
-        bool* is_finished;
-        float* rope_base;
-        void** block_ptrs;
-        int* cu_block_count;
-        int layer_id;
-    };
-    // clang-format on
+    using ForwardParam = attention::ForwardParam;
+
+    std::shared_ptr<ForwardParam> CreateForwardParam(int max_batch_size);
 
     void allocateWorkspace();
     void freeWorkspace();
@@ -88,7 +84,7 @@ public:
                           size_t                tp_size,
                           const Context<T>&     context);
 
-    void forward(ForwardParam&& param);
+    void forward(ForwardParam& param);
 
     void prefill(T*                output,
                  T*                tmp_kv_buffer,

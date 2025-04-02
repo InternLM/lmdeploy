@@ -26,12 +26,14 @@
 
 #include "src/turbomind/comm/device_comm.h"
 #include "src/turbomind/comm/host_comm.h"
+#include "src/turbomind/core/allocator.h"
 #include "src/turbomind/engine/gateway.h"
 #include "src/turbomind/engine/model_request.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaV2.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
+#include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
@@ -490,7 +492,7 @@ void LlamaTritonModel<T>::createEngine(int device_id, int rank)
 
     auto ctx = std::make_unique<Context<T>>(device_id);
 
-    core::ContextGuard guard{ctx->core_stream, ctx->core_allocator};
+    core::ContextGuard guard{ctx->core_stream, ctx->core_allocator, core::Allocator{MEMORY_CPU_PINNED}};
 
     ctx->comm = createCommSplits(rank);
 

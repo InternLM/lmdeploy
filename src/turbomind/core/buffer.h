@@ -17,6 +17,9 @@ namespace turbomind::core {
 
 inline ssize_t get_byte_size(DataType dtype, ssize_t count = 1)
 {
+    if (!count) {
+        return 0;
+    }
     switch (dtype) {
         case TYPE_BOOL:
         case TYPE_UINT8:
@@ -38,13 +41,16 @@ inline ssize_t get_byte_size(DataType dtype, ssize_t count = 1)
         case TYPE_FP64:
             return 8 * count;
         default:
-            TM_CHECK(0) << "Not supported";
+            TM_CHECK(0) << "Not supported dtype: " << dtype;
             return -1;
     }
 }
 
 inline ssize_t get_elem_num(ssize_t byte_size, DataType dtype)
 {
+    if (!byte_size) {
+        return 0;
+    }
     switch (dtype) {
         case TYPE_BOOL:
         case TYPE_UINT8:
@@ -77,6 +83,12 @@ inline ssize_t get_elem_num(ssize_t byte_size, DataType dtype)
 class Buffer {
 public:
     Buffer(): data_{}, base_{}, size_{}, device_{}, dtype_{} {}
+
+    // Typed empty buffer
+    explicit Buffer(DataType dtype): Buffer()
+    {
+        dtype_ = dtype;
+    }
 
     // Reference into `data` buffer
     template<class T>
@@ -187,17 +199,6 @@ inline bool operator!=(const Buffer& a, const Buffer& b)
 }
 
 ///////////////////////////////////////////////////////////
-// copy
-
-void Copy(const Buffer& src, Buffer& dst);
-
-void Copy(const Buffer& src, Buffer&& dst);
-
-void Copy(const Buffer& src, Buffer& dst, const Stream& stream);
-
-void Copy(const Buffer& src, Buffer&& dst, const Stream& stream);
-
-///////////////////////////////////////////////////////////
 // fill
 
 void Fill(Buffer& b, const void* v);
@@ -211,6 +212,8 @@ void Fill(Buffer&& b, const void* v, const Stream& stream);
 template<class T>
 struct Buffer_: public Buffer {
 
+    Buffer_(): Buffer{getTensorType<T>()} {}
+
     Buffer_(T* data, ssize_t size, MemLoc device): Buffer{data, size, device} {}
 
     Buffer_(shared_ptr<void> data, ssize_t size, MemLoc device): Buffer{std::move(data), size, dtype_, device} {}
@@ -218,8 +221,6 @@ struct Buffer_: public Buffer {
     Buffer_(ssize_t size, Allocator& alloc): Buffer{size, dtype_, alloc} {}
 
     Buffer_(ssize_t size, MemLoc device): Buffer{size, dtype_, device} {}
-
-    Buffer_() = default;
 
     Buffer_(const Buffer_&)            = default;
     Buffer_& operator=(const Buffer_&) = default;
@@ -231,19 +232,9 @@ struct Buffer_: public Buffer {
     {
         *static_cast<Buffer*>(this) = ensure_dtype(b);
     }
-    Buffer_& operator=(const Buffer& b)
-    {
-        *static_cast<Buffer*>(this) = ensure_dtype(b);
-        return *this;
-    }
     Buffer_(Buffer&& b) noexcept
     {
         *static_cast<Buffer*>(this) = ensure_dtype(std::move(b));
-    }
-    Buffer_& operator=(Buffer&& b) noexcept
-    {
-        *static_cast<Buffer*>(this) = ensure_dtype(std::move(b));
-        return *this;
     }
 
     T* data()
@@ -254,6 +245,28 @@ struct Buffer_: public Buffer {
     const T* data() const
     {
         return static_cast<const T*>(raw_data());
+    }
+
+    T& operator[](ssize_t i)
+    {
+        return data()[i];
+    }
+
+    const T& operator[](ssize_t i) const
+    {
+        return data()[i];
+    }
+
+    T& at(ssize_t i)
+    {
+        TM_CHECK_LT(i, size());
+        return data()[i];
+    }
+
+    T& at(ssize_t i) const
+    {
+        TM_CHECK_LT(i, size());
+        return data()[i];
     }
 
     constexpr DataType dtype() const noexcept
@@ -271,5 +284,58 @@ private:
         return (U&&)u;
     }
 };
+
+template<class T>
+class Ref {
+public:
+    Ref(T& x): ref_{x} {}
+    Ref(T&& x): ref_{x} {}
+
+    operator T&()
+    {
+        return ref_;
+    }
+
+    T& get()
+    {
+        return ref_;
+    }
+
+private:
+    T& ref_;
+};
+
+void Copy(const Buffer& a, ssize_t n, Ref<Buffer> b_, const Stream& stream);
+
+void Copy(const Buffer& a, ssize_t n, Ref<Buffer> b_);
+
+void Copy(const Buffer& a, Ref<Buffer> b_, const Stream& stream);
+
+void Copy(const Buffer& a, Ref<Buffer> b_);
+
+// Static type checking
+template<class T>
+inline void Copy_(const Buffer_<T>& a, ssize_t n, Buffer_<T>& b_)
+{
+    Copy((const Buffer&)a, n, (Buffer&)b_);
+}
+
+std::byte* Copy(const std::byte* a, ssize_t n, std::byte* b, const Stream& stream);
+
+template<class T>
+inline T* Copy(const T* a, ssize_t n, T* b, const Stream& stream)
+{
+    return (T*)Copy((const std::byte*)a, sizeof(T) * n, (std::byte*)b, stream);
+}
+
+template<class T>
+inline T* Copy(const T* a, ssize_t n, T* b)
+{
+    return Copy(a, n, b, Context::stream());
+}
+
+void Clear(Ref<Buffer> b_, const Stream& stream);
+
+void Clear(Ref<Buffer> b_);
 
 }  // namespace turbomind::core

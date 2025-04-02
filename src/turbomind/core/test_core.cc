@@ -261,4 +261,10 @@ TEST_CASE("test tensor", "[tensor]")
         // empty Tensor has invalid type
         Tensor_<float> x = Tensor{};
     }
+    a = {};
+    x = {};
+
+    Tensor y = core::Buffer{100, TYPE_INT32, MEMORY_CPU};
+    REQUIRE(y.ndim() == 1);
+    REQUIRE(y.shape(0) == 100);
 }

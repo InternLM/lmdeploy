@@ -5,6 +5,25 @@
 
 namespace turbomind::core {
 
+Tensor& TensorMap::at(const std::string& key)
+{
+    auto it = find(key);
+    TM_CHECK(it != end()) << get_out_of_range_msg(key);
+    return it->second;
+}
+
+std::string TensorMap::get_out_of_range_msg(const std::string& key) const
+{
+    std::ostringstream oss;
+    oss << "Cannot find a tensor of name '" << key << "' in the tensor map (keys: ";
+    auto sep = "";
+    for (const auto& [k, _] : *this) {
+        oss << std::exchange(sep, ", ") << k;
+    }
+    oss << ")";
+    return oss.str();
+}
+
 #if 0
 
 void Copy(const Tensor& src, Tensor& dst, Stream& stream)

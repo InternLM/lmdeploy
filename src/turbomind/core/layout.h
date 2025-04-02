@@ -90,6 +90,24 @@ public:
         return a;
     }
 
+    ssize_t offset(const vector<ssize_t>& idxs) const
+    {
+        TM_CHECK((int)idxs.size() < rank());
+        ssize_t val = 0;
+        for (size_t i = 0; i < idxs.size(); ++i) {
+            TM_CHECK_LT(idxs[i], shape_[i]);
+            val += idxs[i] * stride_[i];
+        }
+        return val;
+    }
+
+    ssize_t offset(ssize_t idx0) const
+    {
+        TM_CHECK(rank());
+        TM_CHECK_LT(idx0, shape_[0]);
+        return stride_[0] * idx0;
+    }
+
     Layout coalesce() const noexcept;
 
     Layout view(vector<ssize_t> shape) const;

@@ -103,28 +103,28 @@ void Context::pop()
 Stream& Context::stream()
 {
     auto& stream_ = ContextStorage::instance().stream_;
-    TM_CHECK(!stream_.empty());
+    TM_CHECK(!stream_.empty()) << "No STREAM available in current context";
     return stream_.top();
 }
 
 Allocator& Context::host_alloc()
 {
     auto& host_alloc_ = ContextStorage::instance().host_alloc_;
-    TM_CHECK(!host_alloc_.empty());
+    TM_CHECK(!host_alloc_.empty()) << "No HOST memory allocator available in current context";
     return host_alloc_.top();
 }
 
 Allocator& Context::device_alloc()
 {
     auto& device_alloc_ = ContextStorage::instance().device_alloc_;
-    TM_CHECK(!device_alloc_.empty());
+    TM_CHECK(!device_alloc_.empty()) << "No DEVICE memory allocator available in current context";
     return device_alloc_.top();
 }
 
 Allocator& Context::pinned_alloc()
 {
     auto& pinned_alloc_ = ContextStorage::instance().pinned_alloc_;
-    TM_CHECK(!pinned_alloc_.empty());
+    TM_CHECK(!pinned_alloc_.empty()) << "No PINNED memory allocator available in current context";
     return pinned_alloc_.top();
 }
 

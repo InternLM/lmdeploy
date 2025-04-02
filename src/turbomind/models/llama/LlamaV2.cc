@@ -97,8 +97,6 @@ LlamaV2<T>::LlamaV2(const ModelParam&               model,
                                                                         allocator_,
                                                                         is_free_buffer_after_forward_,
                                                                         (cudaDeviceProp*)&ctx.cuda_device_prop);
-
-    unified_decoder_->allocateBuffer(max_batch_size);
 }
 
 template<typename T>
@@ -169,33 +167,37 @@ void LlamaV2<T>::updateEmbedding(T*               decoder_input,
 }
 
 template<typename T>
-void LlamaV2<T>::forwardUnified(T*               out,
-                                T*               decoder_output,
-                                T*               decoder_input,
-                                void**           block_ptrs,
-                                const int*       cu_block_cnts,
-                                const int*       input_ids,
-                                const int*       h_input_length,
-                                const int*       h_context_length,
-                                const float*     rope_theta,
-                                const bool*      finished,
-                                size_t           token_num,
-                                const int*       local_token_nums,
-                                int              dc_batch_size,
-                                int              pf_batch_size,
-                                int*             lora_mask,
-                                const Sequence** sequences)
+void LlamaV2<T>::Forward(Buffer_<int>     input_ids,
+                         core::Tensor     hidden_states_out,
+                         core::Tensor     decode_out,
+                         Buffer           kv_block_ptrs,
+                         Buffer           cu_block_nums,
+                         Buffer_<int>     h_input_length,
+                         Buffer_<int>     h_context_length,
+                         Buffer           rope_base,
+                         Buffer           finished,
+                         Buffer           local_token_nums,
+                         Buffer           lora_mask,
+                         int              decode_num,
+                         int              prefil_num,
+                         const Sequence** sequences)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
+    core::Tensor_<T> input_embeds;
+
+    const int token_num = input_ids.size();
+    const int bsz       = decode_out.shape(0);
+
     if (token_num) {
+        input_embeds = core::Tensor_<T>{{token_num, (int)hidden_units_}, MEMORY_GPU};
         if (tp_size_ == 1) {
-            invokeInputIdsEmbeddingLookupPosEncoding(decoder_input,
+            invokeInputIdsEmbeddingLookupPosEncoding(input_embeds.data(),
                                                      nullptr,  // processed somewhere else
                                                      weights_->pre_decoder_embedding_table,
                                                      static_cast<T*>(nullptr),
                                                      pPromptTuningParam<T>{},
-                                                     input_ids,
+                                                     input_ids.data(),
                                                      0,  // only used for position encoding
                                                      token_num,
                                                      token_num,
@@ -207,12 +209,15 @@ void LlamaV2<T>::forwardUnified(T*               out,
         else {
             const size_t local_hidden_units = hidden_units_ / tp_size_;
             const size_t slice              = token_num * local_hidden_units;
-            invokeInputIdsEmbeddingLookupPosEncoding(decoder_output + tp_rank_ * slice,
+
+            auto workspace = hidden_states_out.data<T>();
+
+            invokeInputIdsEmbeddingLookupPosEncoding(workspace + tp_rank_ * slice,
                                                      nullptr,  // processed somewhere else
                                                      weights_->pre_decoder_embedding_table,
                                                      static_cast<T*>(nullptr),
                                                      pPromptTuningParam<T>{},
-                                                     input_ids,
+                                                     input_ids.data(),
                                                      0,  // only used for position encoding
                                                      token_num,
                                                      token_num,
@@ -221,60 +226,51 @@ void LlamaV2<T>::forwardUnified(T*               out,
                                                      stream_);
             sync_check_cuda_error();
 
-            comm_->d_comm->AllGather(decoder_output + tp_rank_ * slice,
-                                     decoder_output,
-                                     slice,
-                                     getTensorType<T>(),
-                                     comm_->d_tp_group,
-                                     stream_);
+            comm_->d_comm->AllGather(
+                workspace + tp_rank_ * slice, workspace, slice, getTensorType<T>(), comm_->d_tp_group, stream_);
             sync_check_cuda_error();
 
             invokeInPlaceTranspose102(
-                decoder_input, decoder_output, tp_size_, token_num, local_hidden_units, false, stream_);
+                input_embeds.data(), workspace, tp_size_, token_num, local_hidden_units, false, stream_);
 
             sync_check_cuda_error();
         }
 
-        count_and_fix(decoder_input, token_num * hidden_units_, "embedding", 1);
+        count_and_fix(input_embeds.data(), token_num * hidden_units_, "embedding", 1);
     }
 
     bool have_embeddings = false;
     if (token_num) {
-        updateEmbedding(decoder_input,
-                        dc_batch_size + pf_batch_size,
-                        h_input_length,
+        // Copy input embeddings from corresponding sequences
+        updateEmbedding(input_embeds.data(),
+                        h_input_length.size(),
+                        h_input_length.data(),
                         sequences,
                         token_num,
-                        lora_mask,
+                        lora_mask ? lora_mask.data<int>() : nullptr,
                         &have_embeddings);
         sync_check_cuda_error();
     }
 
-    const auto   dtype = getTensorType<T>();
-    const size_t bsz   = dc_batch_size + pf_batch_size;
+    const auto dtype = getTensorType<T>();
 
-    TensorMap inputs{
-        {"decoder_input", {MEMORY_GPU, dtype, {token_num, hidden_units_}, decoder_input}},
-        {"output_norm_weight", {MEMORY_GPU, dtype, {hidden_units_}, weights_->output_norm_weight}},
-        {"h_q_len", {MEMORY_CPU, TYPE_INT32, {bsz}, h_input_length}},
-        {"h_k_len", {MEMORY_CPU, TYPE_INT32, {bsz}, h_context_length}},
-        {"finished", {MEMORY_GPU, TYPE_BOOL, {bsz}, finished}},
-        {"dc_batch_size", {MEMORY_CPU, TYPE_INT32, {1}, &dc_batch_size}},
-        {"pf_batch_size", {MEMORY_CPU, TYPE_INT32, {1}, &pf_batch_size}},
-        {"rope_theta", {MEMORY_GPU, TYPE_FP32, {hidden_units_}, rope_theta}},
-        {"cu_block_counts", {MEMORY_GPU, TYPE_INT32, {bsz}, cu_block_cnts}},
-        {"local_token_nums", {MEMORY_GPU, TYPE_INT32, {1}, local_token_nums}},
+    core::TensorMap args{
+        {"decoder_input", input_embeds},
+        {"decoder_output", hidden_states_out.view({-1, (int)hidden_units_})},
+        {"last_token_hidden_units", decode_out},
+        {"output_norm_weight", Buffer{weights_->output_norm_weight, (int)hidden_units_, MEMORY_GPU}},
+        {"h_q_len", h_input_length},
+        {"h_k_len", h_context_length},
+        {"finished", finished},
+        {"decode_num", Buffer{&decode_num, 1, MEMORY_CPU}},
+        {"prefil_num", Buffer{&prefil_num, 1, MEMORY_CPU}},
+        {"rope_base", rope_base},
+        {"cu_block_nums", cu_block_nums},
+        {"kv_block_ptrs", kv_block_ptrs},
+        {"local_token_nums", local_token_nums},
     };
 
-    TensorMap outputs{{"decoder_output", {MEMORY_GPU, dtype, {token_num, hidden_units_}, decoder_output}},
-                      {"block_ptrs", {MEMORY_GPU, TYPE_UINT64, {bsz}, block_ptrs}},
-                      {"last_token_hidden_units", {MEMORY_GPU, dtype, {bsz, hidden_units_}, out}}};
-
-    if (lora_mask != nullptr && have_embeddings) {
-        inputs.insert({"lora_mask", {MEMORY_GPU, TYPE_INT32, {token_num}, lora_mask}});
-    }
-
-    unified_decoder_->forward(&outputs, &inputs, &weights_->decoder_layer_weights);
+    unified_decoder_->Forward(args, weights_->decoder_layer_weights);
 }
 
 template<typename T>

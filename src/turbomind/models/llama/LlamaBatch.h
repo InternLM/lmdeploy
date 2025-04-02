@@ -19,15 +19,21 @@
 
 namespace turbomind {
 
+using core::Buffer;
+using core::Buffer_;
+using core::ssize_t;
+
 struct BatchState {
-    int*  h_prompt_length;  // history + input, ignore generated
-    int*  h_context_length;
-    bool* h_finished;
 
-    curandState_t* curand_state;
-    int*           output_ids;  // output ids in [B, S]
+    Buffer_<int>  h_prompt_length;  // history + input, ignore generated
+    Buffer_<int>  h_context_length;
+    Buffer_<bool> h_finished;
 
-    float* h_rope_theta;
+    core::Tensor_<char> curand_state;  // [n, sizeof(curandState_t)]
+
+    core::Tensor_<int> output_ids;  // output ids in [B, S]
+
+    Buffer_<float> h_rope_theta;
 
     std::vector<int> seq_len_limit;
 
@@ -65,11 +71,11 @@ struct GenerationState {
 template<typename T>
 class LlamaBatch {
 public:
-    void AllocateBuffer(size_t batch_size, size_t session_len, int cache_block_seq_len);
-    void AllocatePersistantBuffer(size_t max_batch_size, int cache_block_seq_len);
+    void AllocateBuffer(ssize_t batch_size, ssize_t session_len, int cache_block_seq_len);
+    void AllocatePersistantBuffer(ssize_t max_batch_size, int cache_block_seq_len);
 
-    void AllocCommBuffers();
-    void FreeCommBuffers();
+    void AllocSymmBuffers();
+    void FreeSymmBuffers();
 
     void FreeBuffer();
 
@@ -136,21 +142,6 @@ private:
 
     void CopyState(const std::vector<std::tuple<BatchState*, BatchState*, int, int>>& desc);
 
-    // analogs to `std::copy_n`
-    template<typename U>
-    U* Copy(const U* src, size_t count, U* dst)
-    {
-        check_cuda_error(cudaMemcpyAsync(dst, src, sizeof(U) * count, cudaMemcpyDefault, stream_));
-        return dst += count;
-    }
-
-    template<typename U>
-    U* Clear(U* data, size_t count)
-    {
-        check_cuda_error(cudaMemsetAsync(data, 0, sizeof(U) * count, stream_));
-        return data += count;
-    }
-
     template<class... Ts>
     void IndexedCopyImpl(const int* src_idx, const int* dst_idx, int count, const std::tuple<Ts*, Ts*, int>&... cpys)
     {
@@ -192,9 +183,9 @@ private:
         IndexedCopyImpl(nullptr, nullptr, count, cpys...);
     }
 
-    void* CommBufAlloc(size_t size, bool register_);
+    void* SymmAlloc(size_t size, bool register_);
 
-    void CommBufFree(void** ptr, bool deregister);
+    void SymmFree(void* ptr, size_t size, bool deregister);
 
     void DestroyCommunicators();
 
@@ -228,57 +219,60 @@ private:
 
     Communicators& comm_;
 
+    core::Allocator symm_alloc_;
+
     ///////////////////////////////////////////////////////////////////
     // k/v cache block buffers
-    int*       cu_block_counts_{};
-    uintptr_t* block_ptrs_{};
+    Buffer_<int>       cu_block_counts_{};
+    Buffer_<uintptr_t> block_ptrs_{};
 
     ////////////////////////////////////////////////////////////////////
     // context decoding temp buffers
-    T*   context_decoder_input_buf_{};
-    T*   context_decoder_output_buf_{};
-    int* context_decoder_ids_buf_{};
-    int* input_ids_buf_{};
+    core::Tensor_<T> context_decoder_input_buf_;
+    core::Tensor_<T> context_decoder_output_buf_;
+
+    Buffer_<int> context_decoder_ids_buf_{};
+
     // lengths
-    int* input_length_buf_{};    // input + cache missed length
-    int* context_length_buf_{};  // history length + input_length
-    int* init_context_length_{};
+    Buffer_<int> input_length_buf_;    // input + cache missed length
+    Buffer_<int> context_length_buf_;  // history length + input_length
+    Buffer_<int> init_context_length_;
 
-    T*   decoder_input_buf_{};
-    T*   decoder_output_buf_{};
-    int* sequence_lengths_{};  // current sequence length
-    int* init_ctx_lens_{};
-    int* lora_mask_buf_{};  // lora
+    core::Tensor_<T> decoder_output_buf_;
 
-    float* logits_buf_{};        // combined logits
-    float* local_logits_buf_{};  // tensor parallel local logits
-    float* context_logits_buf_{};
-    float* local_context_logits_buf_{};
+    Buffer_<int> sequence_lengths_;  // current sequence length
+    Buffer_<int> init_ctx_lens_;
+    Buffer_<int> lora_mask_buf_;  // lora
 
-    size_t local_context_logits_buf_size_{};
+    core::Tensor_<float> logits_buf_;        // combined logits
+    core::Tensor_<float> local_logits_buf_;  // tensor parallel local logits
 
-    float*    sampled_logprobs_{};
-    uint32_t* sampled_indexes_{};
-    uint32_t* sampled_nums_{};
-    float*    h_sampled_logprobs_{};
-    uint32_t* h_sampled_indexes_{};
-    uint32_t* h_sampled_nums_{};
+    core::Tensor_<float> context_logits_buf_;
+    core::Tensor_<float> local_context_logits_buf_;
 
-    float* rope_theta_{};
+    Buffer_<float>    sampled_logprobs_;
+    Buffer_<uint32_t> sampled_indexes_;
+    Buffer_<uint32_t> sampled_nums_;
+    Buffer_<float>    h_sampled_logprobs_;
+    Buffer_<uint32_t> h_sampled_indexes_;
+    Buffer_<uint32_t> h_sampled_nums_;
+
+    Buffer_<float> rope_theta_;
 
     // used by dynamic decoder
-    int*      token_ids_buf_{};  // all token IDs in [S, B], indexed using `step`
-    bool*     finished_buf_{};
-    uint32_t* seq_limit_len_{};
-    int*      h_end_ids_buf_{};
-    int*      d_end_ids_buf_{};
+    Buffer_<int>      token_ids_buf_;  // all token IDs in [S, B], indexed using `step`
+    Buffer_<bool>     finished_buf_;
+    Buffer_<uint32_t> seq_limit_len_;
+    Buffer_<int>      h_end_ids_buf_;
+    Buffer_<int>      d_end_ids_buf_;
 
     // pinned buffers
-    int*       h_input_ids_buf_{};
-    int*       h_input_length_buf_{};
-    uint32_t*  h_seq_limit_len_{};
-    int*       h_cu_block_counts_{};
-    uintptr_t* h_block_ptrs_{};
+    Buffer_<int>      h_output_ids_;
+    Buffer_<int>      h_input_length_buf_;
+    Buffer_<uint32_t> h_seq_limit_len_;
+
+    Buffer_<int>       h_cu_block_counts_;
+    Buffer_<uintptr_t> h_block_ptrs_;
 
     int*   h_min_length_{};
     int*   h_runtime_top_k_{};
@@ -291,11 +285,11 @@ private:
     int*   d_stop_words_{};  // [batch_size, 2, kMaxStopWordsLen]
     int*   d_bad_words_{};
 
-    unsigned long long* h_random_seed_{};
-    unsigned long long* d_random_seed_{};
+    Buffer_<unsigned long long> h_random_seed_;
+    Buffer_<unsigned long long> d_random_seed_;
 
-    curandState_t* h_curand_state_{};
-    curandState_t* d_curand_state_{};
+    core::Tensor_<char> h_curand_state_;  // [n, sizeof(curandState_t)]
+    core::Tensor_<char> d_curand_state_;
 
     std::array<BatchState, 3> states_{};
 
@@ -314,8 +308,6 @@ private:
     TensorMap outputs_;
 
     std::thread internal_thread_;
-
-    int* h_output_ids_{};
 };
 
 template<class T>

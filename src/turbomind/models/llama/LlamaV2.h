@@ -62,22 +62,20 @@ private:
                          int*             lora_mask,
                          bool*            have_embeddings);
 
-    void forwardUnified(T*               out,
-                        T*               decoder_output,
-                        T*               decoder_input,
-                        void**           block_ptrs,
-                        const int*       cu_block_cnts,
-                        const int*       input_ids,
-                        const int*       h_input_length,
-                        const int*       h_context_length,
-                        const float*     rope_theta,
-                        const bool*      finished,
-                        size_t           token_num,
-                        const int*       local_token_nums,
-                        int              dc_batch_size,
-                        int              pf_batch_size,
-                        int*             lora_mask,
-                        const Sequence** sequences);
+    void Forward(Buffer_<int>     input_ids,
+                 core::Tensor     hidden_states_out,
+                 core::Tensor     decode_out,
+                 Buffer           kv_block_ptrs,
+                 Buffer           cu_block_nums,
+                 Buffer_<int>     h_input_length,
+                 Buffer_<int>     h_context_length,
+                 Buffer           rope_base,
+                 Buffer           finished,
+                 Buffer           local_token_nums,
+                 Buffer           lora_mask,
+                 int              decode_num,
+                 int              prefil_num,
+                 const Sequence** sequences);
 
     void postDecodeEmbedding(float* logits, float* local_logits, const T* decoder_output, int batch_size);
 

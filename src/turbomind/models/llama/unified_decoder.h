@@ -15,8 +15,6 @@ namespace turbomind {
 template<typename T>
 class UnifiedDecoder {
 private:
-    void freeBuffer();
-
     const size_t layer_num_;
     const size_t hidden_units_;
 
@@ -37,21 +35,13 @@ private:
     const int      tune_layer_num_;
     bool           is_free_buffer_after_forward_{};
 
-    int* cu_q_len_{};
-    int* cu_k_len_{};
-
-    int* h_cu_q_len_{};
-    int* h_cu_k_len_{};
-
     std::unique_ptr<UnifiedAttentionLayer<T>> attn_layer_;
     std::unique_ptr<LlamaFfnLayer<T>>         ffn_layer_;
     std::unique_ptr<MoeFfnLayer<T>>           moe_ffn_layer_;
 
-    cudaEvent_t ev_h_cu_x_{};
-
     using WeightType = LlamaDecoderLayerWeight<T>;
 
-    typename UnifiedAttentionLayer<T>::ForwardParam InitAttnFwdParam(const TensorMap& inputs, const TensorMap& outputs);
+    std::shared_ptr<typename UnifiedAttentionLayer<T>::ForwardParam> attn_fwd_param_;
 
     void AllreduceResidualRMSnorm(T*         hidden_states,
                                   T*         residual,
@@ -70,11 +60,9 @@ public:
                    const LoraParam&      lora,
                    const Context<T>&     ctx);
 
-    void allocateBuffer(size_t max_batch_size);
-
     ~UnifiedDecoder();
 
-    void forward(TensorMap* outputs, const TensorMap* inputs, const std::vector<WeightType*>* weights);
+    void Forward(core::TensorMap& args, const std::vector<WeightType*>& weights);
 };
 
 }  // namespace turbomind

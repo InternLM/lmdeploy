@@ -1,5 +1,8 @@
 #pragma once
 
+#include <string>
+#include <unordered_map>
+
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/buffer.h"
 #include "src/turbomind/core/context.h"
@@ -24,6 +27,8 @@ public:
     {
         TM_CHECK_LE(layout_.cosize(), buffer_.size());
     }
+
+    Tensor(Buffer buffer): layout_{buffer.size()}, buffer_{buffer} {}
 
     template<class T>
     Tensor(T* data, Layout layout, MemLoc device): Tensor{Buffer{data, layout.cosize(), device}, layout}
@@ -194,19 +199,14 @@ struct Tensor_: public Tensor {
     {
         *static_cast<Tensor*>(this) = ensure_dtype(other);
     }
-    Tensor_& operator=(const Tensor& other)
-    {
-        *static_cast<Tensor*>(this) = ensure_dtype(other);
-        return *this;
-    }
     Tensor_(Tensor&& other) noexcept
     {
         *static_cast<Tensor*>(this) = ensure_dtype(std::move(other));
     }
-    Tensor_& operator=(Tensor&& other) noexcept
+
+    ssize_t offset(const vector<ssize_t>& idxs)
     {
-        *static_cast<Tensor*>(this) = ensure_dtype(std::move(other));
-        return *this;
+        return layout().offset(idxs);
     }
 
     T* data() noexcept
@@ -233,6 +233,21 @@ private:
         TM_CHECK_EQ(u.dtype(), dtype_);
         return (U&&)u;
     }
+};
+
+class TensorMap: public std::unordered_map<std::string, Tensor> {
+public:
+    using std::unordered_map<std::string, Tensor>::unordered_map;
+
+    Tensor& at(const std::string& key);
+
+    const Tensor& at(const std::string& key) const
+    {
+        return const_cast<TensorMap*>(this)->at(key);
+    }
+
+private:
+    std::string get_out_of_range_msg(const std::string& key) const;
 };
 
 }  // namespace turbomind::core

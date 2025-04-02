@@ -124,19 +124,28 @@ private:
 
 class Event {
 public:
+    Event() = default;
+
+    static Event create(bool timing = false)
+    {
+        Event e{};
+        e.impl_ = std::make_shared<EventImpl>(timing ? 0 : cudaEventDisableTiming);
+        return e;
+    }
+
     void Record(const Stream& stream)
     {
-        impl_->Record(stream);
+        TM_CHECK_NOTNULL(impl_)->Record(stream);
     }
 
     void Sync() const
     {
-        impl_->Sync();
+        TM_CHECK_NOTNULL(impl_)->Sync();
     }
 
     operator cudaEvent_t() const
     {
-        return impl_->handle();
+        return TM_CHECK_NOTNULL(impl_)->handle();
     }
 
     explicit operator bool() const noexcept

@@ -94,6 +94,9 @@ constexpr DataType getTensorType()
     else if (std::is_same_v<T, unsigned long long> || std::is_same_v<T, uint64_t>) {
         return TYPE_UINT64;
     }
+    else if (std::is_same_v<T, uintptr_t>) {
+        return TYPE_UINT64;
+    }
     else if (std::is_same_v<T, bool>) {
         return TYPE_BOOL;
     }
