@@ -186,7 +186,7 @@ class BlockTrie:
 
         if seq.history_multimodals is not None and len(seq.history_multimodals.mm_ranges) > 0:
             mm_ranges = list(seq.history_multimodals.mm_ranges)
-            mm_ranges = [data for data in mm_ranges if num_matched <= data[0]]
+            mm_ranges = [data for data in mm_ranges if num_matched < data[1]]
             if len(mm_ranges) == 0:
                 mm_ranges = None
 
@@ -350,7 +350,7 @@ class BlockTrie:
 
         if seq.history_multimodals is not None and len(seq.history_multimodals.mm_ranges) > 0:
             mm_ranges = list(seq.history_multimodals.mm_ranges)
-            mm_ranges = [data for data in mm_ranges if num_matched <= data[0]]
+            mm_ranges = [data for data in mm_ranges if num_matched < data[1]]
             if len(mm_ranges) == 0:
                 mm_ranges = None
 
