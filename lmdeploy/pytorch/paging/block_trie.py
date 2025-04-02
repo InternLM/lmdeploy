@@ -78,8 +78,8 @@ class Node:
     def __repr__(self):
         return (f'Node(hash_key={self.hash_key}, block={self.block}, '
                 f'num_matched={self.num_matched}, mm_hashes={self.mm_hashes}, '
-                f'num_children={len(self.children)}, parent={self.parent}, '
-                f'tokens={self.tokens}, num_children={len(self.children)})')
+                f'num_children={len(self.children)}, is_root={self.parent is None}, '
+                f'tokens={self.tokens})')
 
     __str__ = __repr__
 
@@ -219,7 +219,7 @@ class BlockTrie:
         if node is None:
             node = self.get_root(seq.adapter_name)
             logical_blocks.last_shared_node = node
-
+        logger.info(f'Allocate seq={seq}')
         num_matched = node.num_matched
         num_all_ids = seq.num_all_ids
 

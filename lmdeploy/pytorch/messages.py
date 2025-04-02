@@ -686,7 +686,8 @@ class SchedulerSequence:
                 f'return_logits={self.return_logits}, sampling_param={self.sampling_param}, '
                 f'num_history_tokens={self.history_len}, num_all_tokens={self.num_all_ids}, '
                 f'num_new_tokens={self.num_new_tokens}, all_token_ids={self.all_ids}, '
+                f'mm_ranges={self.history_multimodals.mm_ranges}, '
                 f'num_gpu_blocks={self.num_blocks}, gpu_blocks={self.logical_blocks.get_real_blocks()}, '
-                f'last_shared_node={getattr(self, "last_shared_node", None)})')
+                f'last_shared_node={getattr(self.logical_blocks, "last_shared_node", None)})')
 
     __str__ = __repr__
