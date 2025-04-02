@@ -122,9 +122,11 @@ class CUDAGraphRunner(GraphRunner):
         self._runner_map: Dict[Any, CUDASingleGraphRunner] = dict()
 
         self.compile_vit = False
-        if not self.backend_config.eager_mode and isinstance(self.model, InternVLChatModel):
+        torch_version = version.parse(torch.__version__)
+        if not self.backend_config.eager_mode and isinstance(
+                self.model, InternVLChatModel) and torch_version >= version.parse('2.5.0'):
             world_size, _ = get_world_rank()
-            if version.parse(torch.__version__) >= version.parse('2.6.0') and torch.__world_size > 1:
+            if torch_version >= version.parse('2.6.0') and world_size > 1:
                 torch._inductor.config.reorder_for_compute_comm_overlap = True
                 if isinstance(self.model.vision_model, InternVisionModel):
                     self.model.vision_model.encoder.forward = split_batch(self.model.vision_model.encoder.forward,
