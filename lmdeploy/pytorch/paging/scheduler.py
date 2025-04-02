@@ -79,7 +79,7 @@ class Scheduler:
         return list(seq_map.values())
 
     @property
-    def running_migrating(self):
+    def running_migration(self):
         """get migration sequence."""
         seq_map = self.seq_manager.get_sequences(MessageStatus.RUNNING_MIGRATION)
         return list(seq_map.values())

@@ -364,6 +364,9 @@ class Engine:
         self._start_loop()
         self._loop_main = None
 
+        # for migration loop management
+        self.migration_event = asyncio.Event()
+
     @classmethod
     def from_pretrained(cls,
                         pretrained_model_name_or_path: str,
@@ -556,6 +559,7 @@ class Engine:
                 scheduler.add_sequence(msg)
                 if migration_request:
                     self.scheduler._set_message_status(msg, MessageStatus.WAITING_MIGRATION)
+                    self.migration_event.set()
             else:
                 msg = next(iter(sess.sequences.values()))
                 msg.update_token_ids(
@@ -930,7 +934,9 @@ class Engine:
         """async loop migration."""
         while True:
             migration_running = self.scheduler._schedule_migration()
-            if migration_running:
+            if not self.scheduler.running_migration and self.scheduler.waiting_migration:
+                self.migration_event.wait()
+            else:
                 migration_execution_requests: List[
                     Tuple[int, List[Tuple[int, int]]]
                 ] = []
@@ -974,8 +980,6 @@ class Engine:
                 resp_que.put_nowait(outputs)
                 self.scheduler.unlock_running(migration_running)
                 has_runable_event.set()
-            else:
-                await asyncio.sleep(0.01)
 
     @torch.inference_mode()
     async def _async_loop_main(
