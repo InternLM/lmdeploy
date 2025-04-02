@@ -15,7 +15,7 @@ set(__USE_NCCL ${USE_NCCL})
 set(__BUILD_TEST ${BUILD_TEST})
 set(USE_NCCL OFF)
 set(BUILD_TEST OFF)
-set(USE_REDIS ON) # TODO remove, use tcp_store instead
+# set(USE_REDIS ON) # TODO remove, use tcp_store instead
 FetchContent_MakeAvailable(gloo)
 
 # gloo build doesn't add include directories as a target property...
@@ -28,11 +28,12 @@ set(BUILD_TEST ${__BUILD_TEST})
 
 add_library(gloo_comm STATIC
     gloo_comm.cc
-    # tcp_store.cc
+    tcp_store.cc
 )
 set_property(TARGET gloo_comm PROPERTY POSITION_INDEPENDENT_CODE ON)
-target_link_libraries(gloo_comm PRIVATE gloo logger)
+target_link_libraries(gloo_comm PUBLIC gloo logger)
 
-# TODO remove, use tcp_store instead
-include_directories(SYSTEM ${HIREDIS_INCLUDE_DIRS})
-target_link_libraries(gloo_comm PRIVATE ${HIREDIS_LIBRARIES})
+if(USE_REDIS)
+    include_directories(SYSTEM ${HIREDIS_INCLUDE_DIRS})
+    target_link_libraries(gloo_comm PRIVATE ${HIREDIS_LIBRARIES})
+endif()

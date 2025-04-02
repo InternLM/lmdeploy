@@ -12,11 +12,14 @@
 #include <gloo/math.h>
 #include <gloo/rendezvous/context.h>
 #include <gloo/rendezvous/prefix_store.h>
+#if GLOO_USE_REDIS
 #include <gloo/rendezvous/redis_store.h>
+#endif
 #include <gloo/rendezvous/store.h>
 #include <gloo/transport/tcp/attr.h>
 #include <gloo/transport/tcp/device.h>
 
+#include "src/turbomind/comm/gloo/tcp_store.h"
 #include "src/turbomind/comm/host_comm.h"
 #include "src/turbomind/utils/logger.h"
 
@@ -40,7 +43,7 @@ std::shared_ptr<::gloo::transport::Device> createGlooDevice()
 class Store: public ::gloo::rendezvous::PrefixStore {
 public:
     explicit Store(const std::string& host, int port, const std::string& prefix):
-        host_(host), port_(port), redis_store_(host_, port_), ::gloo::rendezvous::PrefixStore(prefix, redis_store_){};
+        host_(host), port_(port), store_(host_, port_), ::gloo::rendezvous::PrefixStore(prefix, store_){};
 
     ~Store() = default;
 
@@ -51,9 +54,13 @@ public:
     }
 
 public:
-    std::string                    host_;
-    int                            port_;
-    ::gloo::rendezvous::RedisStore redis_store_;
+    std::string host_;
+    int         port_;
+
+#if GLOO_USE_REDIS
+// ::gloo::rendezvous::RedisStore store_;
+#endif
+    TCPStore store_;
     using ::gloo::rendezvous::PrefixStore::prefix_;
 };
 
