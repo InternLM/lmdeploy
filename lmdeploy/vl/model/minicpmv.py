@@ -10,7 +10,7 @@ from transformers import AutoConfig, AutoModelForCausalLM
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
 from lmdeploy.vl.model.utils import disable_logging
-
+from lmdeploy.vl.utils import hash_multimodal_data
 logger = get_logger('lmdeploy')
 
 
@@ -140,7 +140,11 @@ class MiniCPMVModel(VisonModel):
                 if item['type'] == 'image':
                     image = item['image'].convert('RGB')
                     params = {k: v for k, v in item.items() if k not in {'type', 'image'}}
+                    hash_value = None
+                    if self.enable_prefix_caching:
+                        hash_value = hash_multimodal_data(model_id=self.model_path, image=image, params=params)
                     result = self._preprocess_func(image, params)
+                    result['hash_value'] = hash_value
                     outputs.append(result)
             messages[i].update(dict(preprocess=outputs))
         return messages

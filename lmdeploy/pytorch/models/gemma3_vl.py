@@ -105,13 +105,14 @@ class Gemma3VLInputProcessor(BaseModelInputProcessor):
             offset = input_mm['offset']
             image_token_id = input_mm['image_token_id']
             num_pad = input_mm['image_tokens']
+            hash_value = input_mm.get('hash_value', None)
             if isinstance(num_pad, torch.Tensor):
                 num_pad = num_pad.item()
 
             mm_data = MultiModalTensor(data=pixel_values,
                                        start=offset,
                                        end=offset + num_pad,
-                                       meta=dict(image_token_id=image_token_id))
+                                       meta=dict(image_token_id=image_token_id, hash_value=hash_value))
             input_imgs.append(mm_data)
 
         result = PreprocessInputResult(
