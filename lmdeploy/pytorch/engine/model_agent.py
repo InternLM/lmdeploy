@@ -77,10 +77,10 @@ def model_forward(
 def _batch_stopping_criteria(token_ids: torch.Tensor, stop_words: torch.Tensor, num_appendable_ids: torch.Tensor):
     """batched stopping criteria."""
     num_appendable_ids = num_appendable_ids - 1
-    # one more step to cache last token(stop word)
-    stopped = num_appendable_ids < 0
+    stopped = num_appendable_ids <= 0
     if stop_words is not None:
         sw_stopped = (token_ids[:, None] == stop_words).any(1)
+        stopped = stopped | sw_stopped
         one_ids = torch.clamp_max(num_appendable_ids, 0)
         num_appendable_ids = torch.where(sw_stopped, one_ids, num_appendable_ids)
     return stopped, num_appendable_ids
