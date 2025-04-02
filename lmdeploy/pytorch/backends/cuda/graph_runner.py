@@ -183,6 +183,8 @@ class CUDAGraphRunner(GraphRunner):
 
     def update_inputs(self, inputs):
         """update inputs."""
+        if self.backend_config.eager_mode:
+            return inputs
         is_decoding = inputs.is_decoding
         dp_meta = inputs.dp_meta
         if is_decoding and dp_meta is not None:
