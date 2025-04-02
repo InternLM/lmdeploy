@@ -15,15 +15,18 @@ from lmdeploy.pytorch.kernels.cuda.fused_moe import _renormalize
 from lmdeploy.pytorch.kernels.cuda.w8a8_triton_kernels import per_token_quant_int8
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 from lmdeploy.pytorch.models.q_modules import QTensor
+from lmdeploy.utils import get_logger
 
 from ..moe import (FusedMoEBlockedF8Builder, FusedMoEBlockedF8Impl, FusedMoEBuilder, FusedMoEImpl, FusedMoEW8A8Builder,
                    FusedMoEW8A8Impl)
 
+logger = get_logger('lmdeploy')
 try:
     from deep_gemm import get_col_major_tma_aligned_tensor, m_grouped_gemm_fp8_fp8_bf16_nt_masked
     use_deep_gemm = True
 except ImportError:
     use_deep_gemm = False
+    logger.warning('For higher performance, please install DeepGEMM https://github.com/deepseek-ai/DeepGEMM')
 
 
 class TritonFusedMoEImpl(FusedMoEImpl):
@@ -400,7 +403,7 @@ class DeepEPExpertsDeepGEMM:
         return down_output
 
 
-class FusedMoEBase:
+class FusedMoENormal:
 
     def __init__(self,
                  ep_size: int,
@@ -409,25 +412,14 @@ class FusedMoEBase:
                  hidden_dim: int,
                  block_size: int = 128,
                  out_dtype: torch.dtype = torch.bfloat16):
-        self.ep_size = ep_size
-        self.ep_group = ep_group
-        self.num_experts = num_experts
-        self.hidden_dim = hidden_dim
-        self.block_size = block_size
-
-        self.out_dtype = out_dtype
-
-
-class FusedMoENormal(FusedMoEBase):
-
-    def __init__(self,
-                 ep_size: int,
-                 ep_group: dist.ProcessGroup,
-                 num_experts: int,
-                 hidden_dim: int,
-                 block_size: int = 128,
-                 out_dtype: torch.dtype = torch.bfloat16):
-        super().__init__(ep_size, ep_group, num_experts, hidden_dim, block_size, out_dtype)
+        self.experts = DeepEPExpertsGroupedGEMM(num_experts, ep_size, [block_size, block_size])
+        self.token_dispatcher = TokenDispatcherBuilder.build(
+            group=ep_group,
+            num_experts=num_experts,
+            num_local_experts=num_experts // ep_size,
+            hidden_size=hidden_dim,
+            params_dtype=out_dtype,
+        )
 
     def forward(self,
                 hidden_states: torch.Tensor,
@@ -439,27 +431,19 @@ class FusedMoENormal(FusedMoEBase):
                 down_scale: torch.Tensor,
                 expert_list: List[int] = None):
         """forward."""
-        experts = DeepEPExpertsGroupedGEMM(self.num_experts, self.ep_size, [self.block_size, self.block_size])
-        token_dispatcher = TokenDispatcherBuilder.build(
-            group=self.ep_group,
-            num_experts=self.num_experts,
-            num_local_experts=self.num_experts // self.ep_size,
-            hidden_size=self.hidden_dim,
-            params_dtype=self.out_dtype,
-        )
-        recv_hidden_states, recv_topk_ids, recv_topk_weights, tokens_per_expert = (token_dispatcher.dispatch(
+        recv_hidden_states, recv_topk_ids, recv_topk_weights, tokens_per_expert = self.token_dispatcher.dispatch(
             hidden_states,
             topk_ids,
             topk_weights,
             expert_list,
-        ))
-        out_states = experts.forward(recv_hidden_states, tokens_per_expert, up_weights, up_scale, down_weights,
-                                     down_scale)
-        out_states = token_dispatcher.combine(out_states)
+        )
+        out_states = self.experts.forward(recv_hidden_states, tokens_per_expert, up_weights, up_scale, down_weights,
+                                          down_scale)
+        out_states = self.token_dispatcher.combine(out_states)
         return out_states
 
 
-class FusedMoELowLatency(FusedMoENormal):
+class FusedMoELowLatency:
 
     def __init__(self,
                  ep_size: int,
@@ -468,7 +452,15 @@ class FusedMoELowLatency(FusedMoENormal):
                  hidden_dim: int,
                  block_size: int = 128,
                  out_dtype: torch.dtype = torch.bfloat16):
-        super().__init__(ep_size, ep_group, num_experts, hidden_dim, block_size, out_dtype)
+        self.num_experts = num_experts
+        self.experts = DeepEPExpertsDeepGEMM(num_experts, ep_size, block_size, out_dtype)
+        self.token_dispatcher = DeepEPTokenDispatcherLowLatency(
+            group=ep_group,
+            num_experts=num_experts,
+            num_local_experts=num_experts // ep_size,
+            hidden_size=hidden_dim,
+            params_dtype=out_dtype,
+        )
 
     def forward(self,
                 hidden_states: torch.Tensor,
@@ -480,23 +472,15 @@ class FusedMoELowLatency(FusedMoENormal):
                 down_scale: torch.Tensor,
                 expert_list: List[int] = None):
         """forward."""
-        experts = DeepEPExpertsDeepGEMM(self.num_experts, self.ep_size, self.block_size, self.out_dtype)
-        token_dispatcher = DeepEPTokenDispatcherLowLatency(
-            group=self.ep_group,
-            num_experts=self.num_experts,
-            num_local_experts=self.num_experts // self.ep_size,
-            hidden_size=self.hidden_dim,
-            params_dtype=self.out_dtype,
-        )
-        recv_hidden_states, topk_idx, topk_weights, masked_m, expected_m = (token_dispatcher.dispatch(
+        recv_hidden_states, topk_idx, topk_weights, masked_m, expected_m = self.token_dispatcher.dispatch(
             hidden_states,
             topk_ids,
             topk_weights,
             self.num_experts,
-        ))
-        out_states = experts.forward(recv_hidden_states, up_weights, up_scale, down_weights, down_scale, masked_m,
-                                     expected_m)
-        out_states = token_dispatcher.combine(out_states, topk_idx, topk_weights)
+        )
+        out_states = self.experts.forward(recv_hidden_states, up_weights, up_scale, down_weights, down_scale, masked_m,
+                                          expected_m)
+        out_states = self.token_dispatcher.combine(out_states, topk_idx, topk_weights)
         return out_states
 
 

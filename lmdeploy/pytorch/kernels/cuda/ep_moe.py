@@ -320,45 +320,32 @@ def silu_and_mul_masked_post_quant_fwd(
     quant_group_size: int,
     masked_m: torch.Tensor,
 ):
-    """input shape [expert_num, token_num_padded, hidden_dim] output shape.
-
-    [expert_num, token_num_padded, hidden_dim // 2], dtype fp8 output_scale [expert_num token_num_paddded, hidden_dim //
-    2 // 128] dtype float32 quant_group_size  int, masked_m shape [expert_num],
-    """
-
     assert input.is_contiguous()
     assert output.dtype == torch.float8_e4m3fn
     assert output.is_contiguous()
     assert len(input.shape) == 3
     assert input.shape[0] == masked_m.shape[0]
     assert input.shape[-1] % 2 == 0
-
     size_n = input.shape[-1] // 2
     assert size_n % quant_group_size == 0
-
     expert_num = len(masked_m)
-
     if expert_num < 4:
         BLOCK_NUM_PER_EXPERT = 64
     else:
         BLOCK_NUM_PER_EXPERT = 32
-
     BLOCK_N = quant_group_size
     num_warps = 1
     NUM_STAGES = 6
     hidden_dim_split_block_num = triton.cdiv(size_n, BLOCK_N)
     assert BLOCK_N % quant_group_size == 0
-
     grid = (
         hidden_dim_split_block_num,
         BLOCK_NUM_PER_EXPERT,
         expert_num,
     )
-
     finfo = torch.finfo(torch.float8_e4m3fn)
     fp8_max = finfo.max
     fp8_min = -fp8_max
-
     _silu_and_mul_post_quant_kernel[grid](
         input,
         *input.stride(),
@@ -374,4 +361,3 @@ def silu_and_mul_masked_post_quant_fwd(
         NUM_STAGE=NUM_STAGES,
         num_warps=num_warps,
     )
-    return
