@@ -1,12 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 try:
     from deep_ep import Buffer
-
     use_deepep = True
 except ImportError:
     use_deepep = False
 
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import torch
 import torch.distributed as dist
@@ -15,14 +14,18 @@ from ..default.token_dispatcher import AlltoAllTokenDispatcher
 from ..token_dispatcher import TokenDispatcherImpl
 
 _buffer_normal = None
+_buffer_low_latency = None
+_buffer_common = None
 
 
-def get_buffer_normal(group: dist.ProcessGroup, hidden_bytes: int):
-    """Copy from DeepEP example usage in model inference prefilling.
-
-    https://github.com/deepseek-ai/DeepEP?tab=readme-ov-file#example-use-in-model-training-or-inference-prefilling
-    """
-    global _buffer_normal
+def get_buffer_common(
+    group: dist.ProcessGroup,
+    num_max_dispatch_tokens_per_rank: int,
+    hidden: int,
+    num_experts: int,
+    hidden_bytes: int,
+):
+    global _buffer_common
     num_nvl_bytes, num_rdma_bytes = 0, 0
     for config in (
             Buffer.get_dispatch_config(group.size()),
@@ -30,10 +33,70 @@ def get_buffer_normal(group: dist.ProcessGroup, hidden_bytes: int):
     ):
         num_nvl_bytes = max(config.get_nvl_buffer_size_hint(hidden_bytes, group.size()), num_nvl_bytes)
         num_rdma_bytes = max(config.get_rdma_buffer_size_hint(hidden_bytes, group.size()), num_rdma_bytes)
+
+    num_rdma_bytes = max(
+        Buffer.get_low_latency_rdma_size_hint(num_max_dispatch_tokens_per_rank, hidden, group.size(), num_experts),
+        num_rdma_bytes)
+
+    if (_buffer_common is None or _buffer_common.group != group or _buffer_common.num_nvl_bytes < num_nvl_bytes
+            or _buffer_common.num_rdma_bytes < num_rdma_bytes):
+        _buffer_common = Buffer(
+            group,
+            num_nvl_bytes=num_nvl_bytes,
+            num_rdma_bytes=num_rdma_bytes,
+            low_latency_mode=True,
+            num_qps_per_rank=num_experts // group.size(),
+        )
+    return _buffer_common
+
+
+def get_buffer_normal(group: dist.ProcessGroup, hidden_bytes: int):
+    """Copy from DeepEP example usage in model inference prefilling.
+
+    https://github.com/deepseek-ai/DeepEP?tab=readme-ov-file#example-use-in-model-training-or-inference-prefilling
+    """
+
+    global _buffer_normal
+
+    num_nvl_bytes, num_rdma_bytes = 0, 0
+    for config in (
+            Buffer.get_dispatch_config(group.size()),
+            Buffer.get_combine_config(group.size()),
+    ):
+        num_nvl_bytes = max(config.get_nvl_buffer_size_hint(hidden_bytes, group.size()), num_nvl_bytes)
+        num_rdma_bytes = max(config.get_rdma_buffer_size_hint(hidden_bytes, group.size()), num_rdma_bytes)
+
     if (_buffer_normal is None or _buffer_normal.group != group or _buffer_normal.num_nvl_bytes < num_nvl_bytes
             or _buffer_normal.num_rdma_bytes < num_rdma_bytes):
         _buffer_normal = Buffer(group, num_nvl_bytes, num_rdma_bytes)
     return _buffer_normal
+
+
+def get_buffer_low_latency(
+    group: dist.ProcessGroup,
+    num_max_dispatch_tokens_per_rank: int,
+    hidden: int,
+    num_experts: int,
+):
+    """Copy from DeepEP example usage in model inference decoding.
+
+    https://github.com/deepseek-ai/DeepEP?tab=readme-ov-file#example-use-in-inference-decoding
+    """
+
+    global _buffer_low_latency
+    num_rdma_bytes = Buffer.get_low_latency_rdma_size_hint(num_max_dispatch_tokens_per_rank, hidden, group.size(),
+                                                           num_experts)
+
+    if (_buffer_low_latency is None or _buffer_low_latency.group != group or not _buffer_low_latency.low_latency_mode
+            or _buffer_low_latency.num_rdma_bytes < num_rdma_bytes):
+        assert num_experts % group.size() == 0
+        _buffer_low_latency = Buffer(
+            group,
+            num_rdma_bytes=num_rdma_bytes,
+            low_latency_mode=True,
+            num_qps_per_rank=num_experts // group.size(),
+        )
+    return _buffer_low_latency
 
 
 class DeepEPTokenDispatcher(TokenDispatcherImpl):
@@ -48,6 +111,7 @@ class DeepEPTokenDispatcher(TokenDispatcherImpl):
         num_local_experts: int = None,
         hidden_size: int = None,
         params_dtype: torch.dtype = None,
+        num_max_dispatch_tokens_per_rank=128,
     ):
         self.group = group
         self.num_experts = num_experts
@@ -59,7 +123,11 @@ class DeepEPTokenDispatcher(TokenDispatcherImpl):
         if not use_deepep:
             raise ImportError('DeepEP is not installed. Please install DeepEP package from '
                               'https://github.com/deepseek-ai/deepep.')
-        self.buffer_normal = get_buffer_normal(self.group, self.hidden_size * self.params_bytes)
+        self.buffer_normal = get_buffer_common(self.group,
+                                               num_max_dispatch_tokens_per_rank,
+                                               self.hidden_size,
+                                               self.num_experts,
+                                               hidden_bytes=self.hidden_size * self.params_bytes)
 
     def dispatch(
         self,
@@ -160,9 +228,6 @@ class DeepEPTokenDispatcher(TokenDispatcherImpl):
         )
         return combined_x, event
 
-    def get_dispached_metadata(self) -> torch.Tensor:
-        return self.topk_idx, self.topk_weights
-
     def get_number_of_tokens_per_expert(self) -> torch.Tensor:
         """Get the number of tokens per expert."""
         return self.tokens_per_expert
@@ -188,6 +253,81 @@ class DeepEPTokenDispatcher(TokenDispatcherImpl):
             probs=self.topk_weights,
         )
         return hidden_states.to(input_dtype)
+
+
+class DeepEPTokenDispatcherLowLatency(TokenDispatcherImpl):
+
+    def __init__(
+        self,
+        group: torch.distributed.ProcessGroup,
+        num_experts: int = None,
+        num_local_experts: int = None,
+        hidden_size: int = None,
+        params_dtype: torch.dtype = None,
+        return_recv_hook: bool = False,
+    ):
+        if not use_deepep:
+            raise ImportError('DeepEP is not installed. Please install DeepEP package from '
+                              'https://github.com/deepseek-ai/deepep.')
+        self.group = group
+        self.num_experts = num_experts
+        self.num_local_experts = num_local_experts
+        self.hidden_size = hidden_size
+        self.params_bytes = params_dtype.itemsize
+        self.handle = None
+        self.num_max_dispatch_tokens_per_rank = 128
+        self.buffer_low_latency = get_buffer_common(self.group,
+                                                    self.num_max_dispatch_tokens_per_rank,
+                                                    self.hidden_size,
+                                                    self.num_experts,
+                                                    hidden_bytes=self.hidden_size * self.params_bytes)
+        self.return_recv_hook = return_recv_hook
+
+    def dispatch(
+        self,
+        hidden_states: torch.Tensor,
+        topk_idx: torch.Tensor,
+        topk_weights: torch.Tensor,
+        num_experts: int,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        topk_idx = topk_idx.to(torch.int64)
+        expected_m = (hidden_states.shape[0] * self.buffer_low_latency.group_size * topk_idx.shape[1] +
+                      num_experts) // num_experts
+
+        packed_recv_hidden, masked_m, self.handle, event, hook = (self.buffer_low_latency.low_latency_dispatch(
+            hidden_states,
+            topk_idx,
+            self.num_max_dispatch_tokens_per_rank,
+            num_experts,
+            use_fp8=True,
+            async_finish=not self.return_recv_hook,
+            return_recv_hook=self.return_recv_hook,
+        ))
+        hook() if self.return_recv_hook else event.current_stream_wait()
+        return (
+            packed_recv_hidden,
+            topk_idx,
+            topk_weights,
+            masked_m,
+            expected_m,
+        )
+
+    def combine(
+        self,
+        hidden_states: torch.Tensor,
+        topk_idx: torch.Tensor,
+        topk_weights: torch.Tensor,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        combined_hidden_states, event, hook = (self.buffer_low_latency.low_latency_combine(
+            hidden_states,
+            topk_idx,
+            topk_weights.to(torch.float32),
+            self.handle,
+            async_finish=not self.return_recv_hook,
+            return_recv_hook=self.return_recv_hook,
+        ))
+        hook() if self.return_recv_hook else event.current_stream_wait()
+        return combined_hidden_states
 
 
 class TokenDispatcherBuilder:
