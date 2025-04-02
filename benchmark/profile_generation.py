@@ -18,7 +18,7 @@ from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, TurbomindEn
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 
-get_logger('lmdeploy').setLevel('ERROR')
+get_logger('lmdeploy').setLevel('WARNING')
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
 

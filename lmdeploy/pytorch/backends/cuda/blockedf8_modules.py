@@ -92,6 +92,7 @@ class DeepGemmLinearBlockedF8Impl(LinearBlockedF8Impl):
         input_quant, input_scale = quant_fp8_tma(x, self.block_size, dtype=weight.dtype)
 
         out = deep_gemm_fp8(input_quant, input_scale, weight, scale, out_dtype=x.dtype)
+        out = out[:x.size(0)]
         if bias is not None:
             out += bias
 
