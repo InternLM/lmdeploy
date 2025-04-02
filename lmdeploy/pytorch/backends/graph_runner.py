@@ -83,3 +83,6 @@ class GraphRunner:
     def get_meta(self):
         """get graphrunner meta."""
         return self._runner_meta
+
+    def update_inputs(self, inputs):
+        return inputs
