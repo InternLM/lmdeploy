@@ -64,10 +64,10 @@ class GLM4VisionModel(VisonModel):
                 if self.enable_prefix_caching:
                     hash_value = hash_multimodal_data(model_id=self.model_path, image=image)
                 data = dict(pixel_values=pixel_value,
-                     image_size=image.size,
-                     image_tokens=self.n_token_per_image,
-                     hash_value=hash_value,
-                     image_token_id=self.image_token_id)
+                            image_size=image.size,
+                            image_tokens=self.n_token_per_image,
+                            hash_value=hash_value,
+                            image_token_id=self.image_token_id)
                 outputs.append(data)
         messages.append(dict(role='preprocess', content=outputs))
         return messages

@@ -11,6 +11,7 @@ from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
 from lmdeploy.vl.model.utils import disable_logging
 from lmdeploy.vl.utils import hash_multimodal_data
+
 logger = get_logger('lmdeploy')
 
 

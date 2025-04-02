@@ -97,14 +97,12 @@ class DeepSeek2VisionModel(VisonModel):
         messages.append(
             dict(role='preprocess',
                  content=[
-                     dict(
-                         pixel_values=prepare.images,
-                         image_tokens=prepare.num_image_tokens[0],
-                         image_token_id=self.image_processor.image_token_id,
-                         image_size=self.image_processor.image_size,
-                         images_spatial_crop=prepare.images_spatial_crop,
-                         hash_value=hash_value
-                     )
+                     dict(pixel_values=prepare.images,
+                          image_tokens=prepare.num_image_tokens[0],
+                          image_token_id=self.image_processor.image_token_id,
+                          image_size=self.image_processor.image_size,
+                          images_spatial_crop=prepare.images_spatial_crop,
+                          hash_value=hash_value)
                  ]))
         return messages
 

@@ -934,7 +934,9 @@ class Qwen2VLInputProcessor(BaseModelInputProcessor):
             mm_data = MultiModalTensor(data=pixel_values,
                                        start=start,
                                        end=start + num_pad,
-                                       meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id, hash_value=hash_value))
+                                       meta=dict(grid_thw=image_grid_thw,
+                                                 image_token_id=image_token_id,
+                                                 hash_value=hash_value))
             input_imgs.append(mm_data)
 
         result = PreprocessInputResult(

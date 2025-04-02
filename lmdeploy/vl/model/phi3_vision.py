@@ -7,6 +7,7 @@ from transformers import AutoProcessor
 from lmdeploy.vl.model.llava_hf import VISION_MODELS, LlavaHfVisionModel
 from lmdeploy.vl.utils import hash_multimodal_data
 
+
 @VISION_MODELS.register_module()
 class Phi3VisionModel(LlavaHfVisionModel):
     """Phi3-vision model."""
@@ -39,7 +40,11 @@ class Phi3VisionModel(LlavaHfVisionModel):
                 hash_value = hash_multimodal_data(model_id=self.model_path, image=image, params=params)
             result = self.processor.image_processor([image], return_tensors='pt')
             image_tokens = result['num_img_tokens']
-            result.update(dict(image_size=image.size, image_tokens=image_tokens, image_token_id=self.image_token_id, hash_value=hash_value))
+            result.update(
+                dict(image_size=image.size,
+                     image_tokens=image_tokens,
+                     image_token_id=self.image_token_id,
+                     hash_value=hash_value))
             outputs.append(result)
         messages.append(dict(role='preprocess', content=outputs))
         return messages

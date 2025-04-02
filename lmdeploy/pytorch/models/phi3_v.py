@@ -387,7 +387,9 @@ class Phi3VInputProcessor(BaseModelInputProcessor):
             mm_data = MultiModalTensor(data=pixel_values,
                                        start=offset,
                                        end=offset + num_pad,
-                                       meta=dict(image_sizes=image_sizes, image_token_id=image_token_id, hash_value=hash_value))
+                                       meta=dict(image_sizes=image_sizes,
+                                                 image_token_id=image_token_id,
+                                                 hash_value=hash_value))
             input_imgs.append(mm_data)
 
         result = PreprocessInputResult(

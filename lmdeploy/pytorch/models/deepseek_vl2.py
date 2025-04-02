@@ -109,7 +109,7 @@ class DeepseekVLV2ForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
                  dtype: torch.dtype = None,
                  device: torch.device = None):
         super().__init__()
-        
+
         self.ctx_mgr = ctx_mgr
 
         # ----------- vision encoder ------------

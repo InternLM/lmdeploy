@@ -6,6 +6,7 @@ import torch
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
 from lmdeploy.vl.utils import hash_multimodal_data
 
+
 def check_qwen_vl_deps_install():
     """check qwen_vl_utils."""
     try:
@@ -49,7 +50,11 @@ class Qwen2VLModel(VisonModel):
             result = self.processor.image_processor(images=image_inputs, videos=None, return_tensors='pt')
             merge_length = self.processor.image_processor.merge_size**2
             image_tokens = result['image_grid_thw'].prod(dim=1) // merge_length
-            result.update(dict(image_size=image.size, image_tokens=image_tokens, image_token_id=self.image_token_id, hash_value=hash_value))
+            result.update(
+                dict(image_size=image.size,
+                     image_tokens=image_tokens,
+                     image_token_id=self.image_token_id,
+                     hash_value=hash_value))
             outputs.append(result)
         messages.append(dict(role='preprocess', content=outputs))
         return messages
