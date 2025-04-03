@@ -228,7 +228,7 @@ class BaseChatTemplate(BaseModel):
             role = message['role']
             content = get_text(message['content'])
             ret += f'{box_map[role]}{content}{eox_map[role]}'
-        if len(messages) and messages[-1]['role'] == 'assistant':
+        if len(messages) and messages[-1]['role'] == 'assistant' and len(eox_map['assistant']) > 0:
             return ret[:-len(eox_map['assistant'])]  # prefix of response
         ret += f'{self.assistant}'
         return ret
