@@ -239,6 +239,11 @@ invokeTransposeAxis01(int* out, int* in, const int dim0, const int dim1, const i
 template void
 invokeTransposeAxis01(uint16_t* out, uint16_t* in, const int dim0, const int dim1, const int dim2, cudaStream_t stream);
 
+#ifdef ENABLE_BF16
+template void invokeTransposeAxis01(
+    __nv_bfloat16* out, __nv_bfloat16* in, const int dim0, const int dim1, const int dim2, cudaStream_t stream);
+#endif
+
 template<typename T>
 __global__ void transposeAxis01(T* out, T* in, const int* in_skipping_dim1, const int dim0, const int dim1)
 {
