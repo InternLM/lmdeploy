@@ -6,4 +6,4 @@ cmake .. -A x64 -T "v142,cuda=$env:CUDA_PATH" `
     -DCMAKE_CUDA_FLAGS="-lineinfo" `
     -DUSE_NVTX=ON `
     -DBUILD_TEST="$env:BUILD_TEST" `
-    -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+    -DCMAKE_POLICY_VERSION_MINIMUM="3.5"
