@@ -2,14 +2,10 @@
 from typing import Any, Dict, List, Tuple
 
 import torch
-from packaging import version
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
-from lmdeploy.pytorch.distributed import get_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext
-from lmdeploy.pytorch.models.internvl import InternVisionModel, InternVLChatModel
 from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMeta
-from lmdeploy.pytorch.models.utils.micro_batch import split_batch
 from lmdeploy.utils import get_logger
 
 from ..graph_runner import GraphRunner
@@ -120,20 +116,7 @@ class CUDAGraphRunner(GraphRunner):
 
         self.graph_pool_handle = torch.cuda.graph_pool_handle()
         self._runner_map: Dict[Any, CUDASingleGraphRunner] = dict()
-
-        self.compile_vit = False
-        torch_version = version.parse(torch.__version__)
-        if not self.backend_config.eager_mode and isinstance(
-                self.model, InternVLChatModel) and torch_version >= version.parse('2.5.0'):
-            world_size, _ = get_world_rank()
-            if torch_version >= version.parse('2.6.0') and world_size > 1:
-                torch._inductor.config.reorder_for_compute_comm_overlap = True
-                if isinstance(self.model.vision_model, InternVisionModel):
-                    self.model.vision_model.encoder.forward = split_batch(self.model.vision_model.encoder.forward,
-                                                                          'inputs_embeds')
-            self.model.extract_feature = torch.compile(self.model.extract_feature, mode='max-autotune')
-            self.compile_vit = True
-            self.has_compiled_vit = False
+        self.has_try_compile_model: bool = False
 
     def check_enable_graph(self):
         """check enable graph."""
@@ -141,6 +124,16 @@ class CUDAGraphRunner(GraphRunner):
             return _false
 
         return getattr(self.model, 'support_cuda_graph', _false)
+
+    def _try_compile_model_once(self):
+        if self.has_try_compile_model:
+            return
+
+        if hasattr(self.model, 'compile_model'):
+            method = getattr(self.model, 'compile_model')
+            method()
+
+        self.has_try_compile_model = True
 
     def get_graph_key(self, input_ids: torch.Tensor, position_ids: torch.Tensor, past_key_values: List,
                       attn_metadata: Any, inputs_embeds: torch.Tensor, **kwargs):
@@ -151,29 +144,10 @@ class CUDAGraphRunner(GraphRunner):
         new_num_tokens = next_power_of_2(num_tokens)
         return (new_num_tokens, is_decoding)
 
-    def _is_decoding(self, attn_metadata: Any, **kwargs):
-        return attn_metadata.is_decoding
-
-    def _mark_dynamic_once(self, **kwargs):
-        """call torch._dynamo.mark_dynamic to avoid recompile."""
-        if self.has_compiled_vit:
-            return
-
-        for tensor_name, dynamic_dims in self.model.compile_dynamic_args.items():
-            tensor = kwargs.get(tensor_name, None)
-            if tensor is None:
-                continue
-            torch._dynamo.mark_dynamic(tensor, dynamic_dims)
-        self.has_compiled_vit = True
-
     def __call__(self, **kwargs):
         """call."""
-        if self.backend_config.eager_mode:
-            return self.model(**kwargs)
-
-        if self.compile_vit and not self._is_decoding(**kwargs):
-            self._mark_dynamic_once(**kwargs)
-            return self.model(**kwargs)
+        if not self.backend_config.eager_mode:
+            self._try_compile_model_once()
 
         enable_graph = self.enable_graph(**kwargs)
 

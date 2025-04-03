@@ -4,12 +4,15 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import torch
 import torch.nn.functional as F
+from packaging import version
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
+from lmdeploy.pytorch.backends.selector import get_backend
+from lmdeploy.pytorch.distributed import get_world_rank
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.models.utils.micro_batch import enable_micro_batch
+from lmdeploy.pytorch.models.utils.micro_batch import enable_micro_batch, split_batch
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
 from lmdeploy.pytorch.nn import LayerNorm, RMSNorm
 from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_qkv_proj, build_rowwise_linear
@@ -314,8 +317,32 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
 
         self.input_processor = InternVLInputProcessor(self.config, dtype)
 
-        # for torch.compile, will call torch._dynamo.mark_dynamic to reduce recompile
-        self.compile_dynamic_args = {'pixel_values': [0]}
+        self.compile_vit = False
+        if get_backend().get_name() == 'cuda':
+            self.compile_model()
+
+    def compile_model(self):
+        torch_version = version.parse(torch.__version__)
+        if torch_version < version.parse('2.5.0'):
+            return
+
+        world_size, _ = get_world_rank()
+        if torch_version >= version.parse('2.6.0') and world_size > 1:
+            torch._inductor.config.reorder_for_compute_comm_overlap = True
+            if isinstance(self.vision_model, InternVisionModel):
+                self.vision_model.encoder.forward = split_batch(self.vision_model.encoder.forward, 'inputs_embeds')
+
+        self.extract_feature = torch.compile(self.extract_feature, mode='max-autotune')
+        self.compile_vit = True
+        self.has_compiled_vit = False
+
+    def _mark_dynamic_once(self, pixel_values, dims):
+        """call torch._dynamo.mark_dynamic to avoid recompile."""
+        if not self.compile_vit or self.has_compiled_vit or pixel_values is None:
+            return
+
+        torch._dynamo.mark_dynamic(pixel_values, dims)
+        self.has_compiled_vit = True
 
     def pixel_shuffle(self, x, scale_factor=0.5):
         n, w, h, c = x.size()
@@ -361,6 +388,7 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
     ):
         if inputs_embeds is None and pixel_values is not None:
             # extract feature
+            self._mark_dynamic_once(pixel_values, [0])
             vit_embeds = self.extract_feature(pixel_values)
             lang_embeds = self.language_model.get_input_embeddings()(input_ids)
             lang_embeds.masked_scatter_(image_mask[..., None], vit_embeds)
