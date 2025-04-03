@@ -223,8 +223,7 @@ class TurboMind:
         # pack `self.config` and `self.engine_config` into a dict
         self.config_dict = self.config.to_dict()
         self.config_dict.update(dict(engine_config=asdict(self.engine_config)))
-        logger.info(f'turbomind model config:\n\n'
-                    f'{json.dumps(self.config_dict, indent=2)}')
+        logger.info(f'turbomind model config:\n\n{json.dumps(self.config_dict, indent=2)}')
 
     def _from_hf(self, model_source: ModelSource, model_path: str, engine_config: TurbomindEngineConfig):
         """Load model which is in hf format."""
@@ -526,15 +525,8 @@ class TurboMindInstance:
     async def async_cancel(self, session_id: int = None):
         self.model_inst.cancel()
 
-    def async_end_cb(self, fut: asyncio.Future, status: int):
-        """executing on engine's signaling thread."""
-        logger.info(f'[async_end_cb] session ended, status = {status}')
-        fut.get_loop().call_soon_threadsafe(fut.set_result, status)
-
     async def async_end(self, session_id):
-        fut = asyncio.get_running_loop().create_future()
-        self.model_inst.end(partial(self.async_end_cb, fut), session_id)
-        await fut
+        pass
 
     def async_signal_cb(self, s: StreamingSemaphore):
         """executing on engine's signaling thread."""

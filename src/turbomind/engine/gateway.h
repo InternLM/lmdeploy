@@ -68,13 +68,7 @@ public:
     {
         int rank = -1;
 
-        // if (!r->session.start_flag) {
-        //     // route to corresponding rank
-        //     rank = seqid2rank_.find(r->session.id);
-        // }
-        // else {
-            rank = next_.fetch_add(1, std::memory_order_relaxed) % size_;
-        // }
+        rank = next_.fetch_add(1, std::memory_order_relaxed) % size_;
 
         if (rank >= 0) {
             queues_[rank]->push({std::move(r)});

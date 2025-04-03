@@ -304,8 +304,8 @@ PYBIND11_MODULE(_turbomind, m)
     py::class_<ft::SessionParam>(m, "SessionParam")
         .def(py::init([](uint64_t id, int step) {
                  ft::SessionParam param{};
-                 param.id         = id;
-                 param.step       = step;
+                 param.id   = id;
+                 param.step = step;
                  return param;
              }),
              "id"_a,

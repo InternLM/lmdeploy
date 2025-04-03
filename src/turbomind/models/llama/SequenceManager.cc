@@ -51,6 +51,7 @@ SequenceManager::SequenceManager(size_t             layer_num,
     if (enable_prefix_caching) {
         block_trie_ = std::make_shared<BlockTrie>(block_config.block_len_);
     }
+    TM_LOG_WARNING("[SegMgr] prefix caching is %s", enable_prefix_caching ? "enabled" : "disabled");
 }
 
 const Sequence* SequenceManager::Create(uint64_t id)
@@ -87,7 +88,7 @@ const Sequence* SequenceManager::Get(uint64_t id)
             if (rank_ == 0) {
                 TM_LOG_INFO("[SeqMgr][Get] Reuse ID %llu, reset the mutable variables of the sequence", id);
             }
-            auto &seq = it->second;
+            auto& seq = it->second;
             seq.prompt.clear();
             seq.tokens.clear();
             seq.cache_len = 0;
@@ -163,10 +164,10 @@ void SequenceManager::CachePrompt(const Sequences& sequences, int active_size)
                         block_ids.size(),
                         seq.prompt.size(),
                         valid);
-            TM_LOG_INFO("[SeqMgr][CachePrompt] ID %llu, cached block_ids %s, unique_ids %s",
-                seq.id,
-                vector2string(block_ids).c_str(),
-                vector2string(block_unique_ids).c_str());
+            TM_LOG_DEBUG("[SeqMgr][CachePrompt] ID %llu, cached block_ids %s, unique_ids %s",
+                         seq.id,
+                         vector2string(block_ids).c_str(),
+                         vector2string(block_unique_ids).c_str());
         }
         // remove invalid nodes from trie tree if there is any
         if (valid < block_ids.size()) {
@@ -191,10 +192,10 @@ void SequenceManager::CacheGeneration(const Sequence& seq)
                     block_ids.size(),
                     seq.tokens.size(),
                     valid);
-        TM_LOG_INFO("[SeqMgr][CacheGeneration] ID %llu, cached block_ids %s, unique_ids %s",
-            seq.id,
-            vector2string(block_ids).c_str(),
-            vector2string(block_unique_ids).c_str());
+        TM_LOG_DEBUG("[SeqMgr][CacheGeneration] ID %llu, cached block_ids %s, unique_ids %s",
+                     seq.id,
+                     vector2string(block_ids).c_str(),
+                     vector2string(block_unique_ids).c_str());
     }
     // remove invalid nodes from trie tree if there is any
     if (valid < block_ids.size()) {
@@ -498,16 +499,18 @@ void SequenceManager::PrefixMatch(Sequences& sequences)
             // seq.cache_len == 0 but seq.blocks is not empty. It means the new seq reuses an older seq's ID
             // So we should UNLOCK the unmatched blocks and reset seq.blocks as matched_blockes
             BlockIds unmatched_ids;
-            std::set_difference(seq.blocks.begin(), seq.blocks.end(), matched_ids.begin(), matched_ids.end(),
+            std::set_difference(seq.blocks.begin(),
+                                seq.blocks.end(),
+                                matched_ids.begin(),
+                                matched_ids.end(),
                                 std::inserter(unmatched_ids, unmatched_ids.begin()));
             block_manager_->Unlock(unmatched_ids);
             seq.blocks.clear();
             seq.block_unique_ids.clear();
             if (rank_ == 0) {
                 TM_LOG_INFO("[SegMgr][match] ID %llu, unlock unmatched blocks %d", seq.id, unmatched_ids.size());
-                TM_LOG_INFO("[SegMgr][match] ID %llu, unmatched block_ids %s",
-                             seq.id,
-                             vector2string(unmatched_ids).c_str());
+                TM_LOG_DEBUG(
+                    "[SegMgr][match] ID %llu, unmatched block_ids %s", seq.id, vector2string(unmatched_ids).c_str());
             }
         }
         seq.cache_len = valid * block_seq_len_;
@@ -518,7 +521,7 @@ void SequenceManager::PrefixMatch(Sequences& sequences)
                         seq.id,
                         seq.blocks.size(),
                         seq.cache_len);
-            TM_LOG_INFO("[SeqMgr][match] ID %llu, after matching, block_ids %s, unique_ids %s",
+            TM_LOG_DEBUG("[SeqMgr][match] ID %llu, after matching, block_ids %s, unique_ids %s",
                         seq.id,
                         vector2string(seq.blocks).c_str(),
                         vector2string(seq.block_unique_ids).c_str());

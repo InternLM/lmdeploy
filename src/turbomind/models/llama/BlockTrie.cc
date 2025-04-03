@@ -54,7 +54,6 @@ std::tuple<BlockIds, UniqueIds, std::vector<std::shared_ptr<TrieNode>>> BlockTri
 std::tuple<BlockIds, UniqueIds, std::vector<std::shared_ptr<TrieNode>>> BlockTrie::Cache(const Sequence&         seq,
                                                                                          const std::vector<int>& tokens)
 {
-    TM_LOG_INFO("[BlockTrie][cache] session %llu, seq.blocks %d, tokens %d", seq.id, seq.blocks.size(), tokens.size());
     FT_CHECK(seq.status != Sequence::kCached);
     FT_CHECK(tokens.size() <= seq.blocks.size() * block_seq_len_);
 

@@ -224,25 +224,6 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& reqs, std::vector<Signa
             continue;
         }
 
-        // const int step = [&] {
-        //     int s = r->session.step;
-        //     if (s < 0) {
-        //         s = ptr->tokens.size();
-        //     }
-        //     else if (s > ptr->tokens.size()) {
-        //         if (tp_rank_ == 0) {
-        //             TM_LOG_WARNING("[ProcessInferRequests] Skipping invalid step (%d) setting for ID %lu", s, ptr->id);
-        //         }
-        //         s = ptr->tokens.size();
-        //     }
-        //     return s;
-        // }();
-
-        // if (step + input_length > session_len_) {
-        //     signals.push_back([r] { UpdateState(*r, Request::kTooLong, 0); });
-        //     continue;
-        // }
-
         FT_CHECK(!state.requests[idx]);
 
         state.requests[idx]  = r;
@@ -358,36 +339,26 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& reqs, std::vector<Signa
         }
 
         // compute rope scaling factor
-        // if (r->session.start_flag) {
-            seq.rope_theta = model_->attn_param_.rope.base;
-            if (model_->attn_param_.rope.type == RopeType::kDynamic) {
-                auto scaling_factor = model_->attn_param_.rope.factor;
-                if (scaling_factor >= 1.f) {  // infer by current context length
-                    auto max_seq_len = state.h_context_length[idx];
-                    auto max_pos_emb = model_->attn_param_.rope.max_position_embeddings;
-                    if (max_seq_len > max_pos_emb) {
-                        scaling_factor = scaling_factor * max_seq_len / max_pos_emb - (scaling_factor - 1);
-                        float rope_dim = model_->attn_param_.rope.dim;
-                        seq.rope_theta *= powf(scaling_factor, rope_dim / (rope_dim - 2.f));
-                        TM_LOG_INFO("[ProcessInferRequests] %ld rope_scaling_factor: %f, rope_theta = %f",
-                                    (long)seq.id,
-                                    scaling_factor,
-                                    seq.rope_theta);
-                    }
+        seq.rope_theta = model_->attn_param_.rope.base;
+        if (model_->attn_param_.rope.type == RopeType::kDynamic) {
+            auto scaling_factor = model_->attn_param_.rope.factor;
+            if (scaling_factor >= 1.f) {  // infer by current context length
+                auto max_seq_len = state.h_context_length[idx];
+                auto max_pos_emb = model_->attn_param_.rope.max_position_embeddings;
+                if (max_seq_len > max_pos_emb) {
+                    scaling_factor = scaling_factor * max_seq_len / max_pos_emb - (scaling_factor - 1);
+                    float rope_dim = model_->attn_param_.rope.dim;
+                    seq.rope_theta *= powf(scaling_factor, rope_dim / (rope_dim - 2.f));
+                    TM_LOG_INFO("[ProcessInferRequests] %ld rope_scaling_factor: %f, rope_theta = %f",
+                                (long)seq.id,
+                                scaling_factor,
+                                seq.rope_theta);
                 }
             }
-        // }
+        }
         state.h_rope_theta[idx] = seq.rope_theta;
 
-        // if (r->session.start_flag) {
-            // prepare to initialize random state for new sequence
-            h_random_seed_[idx] = r->gen_cfg.random_seed;
-        // }
-        // else {
-        //     // Recover device states if not a new sequence
-        //     h_curand_state_[existing_idx.size()] = *(curandState_t*)seq.random_state.data();
-        //     existing_idx.push_back(idx);
-        // }
+        h_random_seed_[idx] = r->gen_cfg.random_seed;
 
         // increment pointer
         idx++;
@@ -1304,7 +1275,7 @@ void LlamaBatch<T>::OutputLogits(const float* logits, int first, int last, Gener
 
             const int valid_len = input_len - std::max(0, diff);
 
-            TM_LOG_INFO("[output_logits] %d %d   %d %d  %d  %d %d",
+            TM_LOG_DEBUG("[output_logits] %d %d   %d %d  %d  %d %d",
                          history_len,
                          offset,
                          cache_len,
@@ -1511,9 +1482,7 @@ void LlamaBatch<T>::Finish(GenerationState& g, std::vector<Signal>& signals)
         for (int i = 0; i < batch_size - g.partial; ++i) {
             if (state_->h_finished[i]) {
                 ++g.finished_count;
-                // if (!state_->requests[i]->session.end_flag) {
-                    need_sync = true;
-                // }
+                need_sync = true;
             }
         }
         if (need_sync) {
@@ -1558,10 +1527,7 @@ template<typename T>
 auto LlamaBatch<T>::Interrupt(int index, bool force_stop) -> Signal
 {
     if (tp_rank_ == 0) {
-        TM_LOG_INFO("[Interrupt] slot %d, request %lu, stop %d",
-                    index,
-                    (long)state_->requests[index]->id,
-                    force_stop);
+        TM_LOG_INFO("[Interrupt] slot %d, request %llu, stop %d", index, state_->requests[index]->id, force_stop);
     }
 
     if (debug_ && tp_rank_ == 0) {
@@ -1575,31 +1541,26 @@ auto LlamaBatch<T>::Interrupt(int index, bool force_stop) -> Signal
         TM_LOG_INFO("[Interrupt] slot %d, tokens [%s]", index, ss.str().c_str());
     }
 
-    // if (state_->requests[index]->session.end_flag || force_end) {
-    //     // Sequence is ending this round or a stop request is issued to end it
-    //     FT_CHECK(sequence_manager_->Erase(state_->requests[index]->id));
-    // }
-    // else {
-        const int output_len = state_->h_context_length[index];
-        auto&     seq        = *state_->sequences[index];
 
-        // Update token IDs
-        seq.tokens.resize(output_len);
+    const int output_len = state_->h_context_length[index];
+    auto&     seq        = *state_->sequences[index];
 
-        // output_ids is updated & synced in `Finish`
-        const auto output_ids = state_->requests[index]->output_ids.getPtr<int>();
-        std::copy_n(output_ids, output_len, seq.tokens.data());
-        // Cache the generated tokens of the sequence
-        sequence_manager_->CacheGeneration(seq);
+    // Update token IDs
+    seq.tokens.resize(output_len);
 
-        // Save random state in host memory
-        seq.random_state.resize(sizeof(curandState_t));
-        // This async copy must be synchronized by the caller
-        Copy(state_->curand_state + index, 1, (curandState_t*)seq.random_state.data());
+    // output_ids is updated & synced in `Finish`
+    const auto output_ids = state_->requests[index]->output_ids.getPtr<int>();
+    std::copy_n(output_ids, output_len, seq.tokens.data());
+    // Cache the generated tokens of the sequence
+    sequence_manager_->CacheGeneration(seq);
 
-        // Set unlock flag for corresponding blocks, will be unlocked in the next `Materialize()`
-        sequence_manager_->UpdateAndSetUnlock(seq);
-    // }
+    // Save random state in host memory
+    seq.random_state.resize(sizeof(curandState_t));
+    // This async copy must be synchronized by the caller
+    Copy(state_->curand_state + index, 1, (curandState_t*)seq.random_state.data());
+
+    // Set unlock flag for corresponding blocks, will be unlocked in the next `Materialize()`
+    sequence_manager_->UpdateAndSetUnlock(seq);
 
     state_->sequences[index] = nullptr;
 
