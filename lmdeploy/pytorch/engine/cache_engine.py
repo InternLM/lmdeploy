@@ -4,8 +4,7 @@ from typing import Dict, List, Literal, Tuple
 
 import torch
 
-from lmdeploy.disagg.messages import RemoteEngineConfig, MigrationExecutionInputs
-from lmdeploy.disagg.endpoint import EngineEndpoint, find_best_rdma_device
+from lmdeploy.disagg.messages import EngineRole, MigrationExecutionInputs, RemoteEngineConfig
 
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.utils import get_logger
@@ -56,7 +55,11 @@ class CacheEngine:
         self.local_cpu_cache = self.allocate_cpu_cache()
 
         # RDMA Links for PD Disaggregation
-        self.links: Dict[int, EngineEndpoint] = {}
+        if self.cache_config.role in [EngineRole.Prefill, EngineRole.Decode]:
+            from lmdeploy.disagg.endpoint import EngineEndpoint
+            self.links: Dict[int, EngineEndpoint] = {}
+        else:
+            self.links = None
 
         # Initialize the stream for caching operations.
         self.cache_stream = torch.cuda.Stream()
