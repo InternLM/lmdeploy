@@ -68,7 +68,7 @@ def pipeline(model_path: str,
             if backend_config is not None else None
         model_path = get_model(model_path, download_dir, revision)
 
-    task, pipeline_class = get_task(model_path)
+    _, pipeline_class = get_task(model_path)
 
     if type(backend_config) is not PytorchEngineConfig:
         # set auto backend mode

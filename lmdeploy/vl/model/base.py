@@ -14,6 +14,7 @@ VISION_MODELS = Registry('vision_model')
 class VisonModel(ABC):
     """Visual model which extract image feature."""
     _arch: Union[str, List[str]] = None
+    support_prefix_caching: bool = True
 
     def __init__(self,
                  model_path: str,

@@ -5,7 +5,6 @@ from transformers import AutoConfig
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
-from lmdeploy.vl.utils import hash_multimodal_data
 
 logger = get_logger('lmdeploy')
 
@@ -15,6 +14,7 @@ class GLM4VisionModel(VisonModel):
     """glm-4v-9b vision model."""
 
     _arch = ['ChatGLMModel', 'ChatGLMForConditionalGeneration']
+    support_prefix_caching: bool = False
 
     @classmethod
     def match(cls, config: AutoConfig):
@@ -60,13 +60,9 @@ class GLM4VisionModel(VisonModel):
             images = [x.convert('RGB') for x in images]
             pixel_values = [self.image_transform(x) for x in images]
             for image, pixel_value in zip(images, pixel_values):
-                hash_value = None
-                if self.enable_prefix_caching:
-                    hash_value = hash_multimodal_data(model_id=self.model_path, image=image)
                 data = dict(pixel_values=pixel_value,
                             image_size=image.size,
                             image_tokens=self.n_token_per_image,
-                            hash_value=hash_value,
                             image_token_id=self.image_token_id)
                 outputs.append(data)
         messages.append(dict(role='preprocess', content=outputs))

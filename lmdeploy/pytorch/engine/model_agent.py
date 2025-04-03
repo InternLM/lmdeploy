@@ -249,7 +249,10 @@ class AutoModelAgent:
                 return await self.async_forward(inputs, swap_in_map=dict(), swap_out_map=dict(), copy_map=dict())
             else:
                 swap_done = True
-                return await self.async_forward(inputs, swap_in_map=swap_in_map, swap_out_map=swap_out_map, copy_map=copy_map)
+                return await self.async_forward(inputs,
+                                                swap_in_map=swap_in_map,
+                                                swap_out_map=swap_out_map,
+                                                copy_map=copy_map)
 
         async def __long_context_single_forward(new_inputs, max_seqlen: int):
             """one large sequence."""

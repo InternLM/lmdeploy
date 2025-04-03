@@ -3,7 +3,6 @@ from typing import Dict, List
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
-from lmdeploy.vl.utils import hash_multimodal_data
 
 logger = get_logger('lmdeploy')
 
@@ -13,6 +12,7 @@ class CogVLMVisionModel(VisonModel):
     """CogVLM vision model."""
 
     _arch = 'CogVLMForCausalLM'
+    support_prefix_caching: bool = False
 
     def build_preprocessor(self):
         from torchvision import transforms
@@ -47,14 +47,10 @@ class CogVLMVisionModel(VisonModel):
         for image, params in images:
             image = image.convert('RGB')
             pixel_values = self.image_transform(image)
-            hash_value = None
-            if self.enable_prefix_caching:
-                hash_value = hash_multimodal_data(model_id=self.model_path, image=image, params=params)
             outputs.append(
                 dict(pixel_values=pixel_values,
                      image_size=image.size,
                      image_tokens=self.n_token_per_image,
-                     hash_value=hash_value,
                      image_token_id=self.image_token_id))
         messages.append(dict(role='preprocess', content=outputs))
         return messages
