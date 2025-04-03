@@ -871,9 +871,7 @@ class DeepseekV2DecoderLayer(nn.Module):
             attn_metadata=attn_metadata,
         )
 
-        # Fully Connected
         hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
-        # yield for attn1, dis (+share), dis_wait, moe, comb, (+share) comb_wait, (+share) attn0
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
         topk_weights, topk_ids = self.mlp.gate(hidden_states)
@@ -881,8 +879,8 @@ class DeepseekV2DecoderLayer(nn.Module):
         exports = self.mlp.experts
         exports_impl = self.mlp.experts.impl
         topk_weights = exports_impl.renormalize_fn(topk_weights, exports_impl.renormalize)
-        topk_ids = topk_ids.to(torch.int64)
         topk_weights = topk_weights.to(torch.float32)
+        topk_ids = topk_ids.to(torch.int64)
         hidden_shape = hidden_states.shape
         shared_states = None
 
@@ -948,23 +946,24 @@ class DeepseekV2DecoderLayer(nn.Module):
             # yield for dis + share, dis_wait
             yield
             event.current_stream_wait()
-            moe.token_dispatcher.handle = handle
             # yield for dis_wait, moe
             yield
+            moe.token_dispatcher.handle = handle
             expected_m = (hidden_shape[0] * moe.token_dispatcher.buffer_low_latency.group_size * topk_ids.shape[1] +
                           moe.token_dispatcher.num_experts) // moe.token_dispatcher.num_experts
             out_states = moe.experts.forward(recv_hidden_states, exports.gate_up.weight, exports.gate_up.scale,
                                              exports.down.weight, exports.down.scale, recv_expert_count, expected_m)
+            # yield for moe, comb
             yield
             out_states, event, hook = moe.token_dispatcher.combine_async(out_states, topk_ids, topk_weights,
                                                                          moe.token_dispatcher.handle, True)
-            # yield for comb, comb_wait,
+            # yield for comb, comb_wait
             yield
             event.current_stream_wait()
-            moe.token_dispatcher.handle = None
             # yield for comb_wait, (+share) attn0
             yield
-            out_states.view(hidden_shape), shared_states
+            moe.token_dispatcher.handle = None
+            out_states.view(hidden_shape)
 
         if shared_states is not None:
             out_states += shared_states
@@ -1144,28 +1143,6 @@ class DeepseekV2Model(nn.Module):
                                                                                 residual=residual,
                                                                                 attn_metadata=attn_metadata,
                                                                                 tag=tag)
-        return hidden_states, residual
-
-    def forward_checklayers(
-        self,
-        hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
-        residual: Optional[torch.Tensor] = None,
-        attn_metadata: Any = None,
-        start_idx: int = -1,
-        end_idx: int = -1,
-        tag: Any = None,
-    ):
-        assert start_idx >= 0 and start_idx < len(self.layers) and end_idx > 0 and end_idx <= len(self.layers),\
-            f'forward_check None !!! start_idx:{start_idx},end_idx:{end_idx}, layer num:{len(self.layers)}'
-        for idx in range(start_idx, end_idx):
-            past_key_value = past_key_values[idx]
-            hidden_states, residual = self.layers[idx].forward(hidden_states,
-                                                               rotary_pos_emb=rotary_pos_emb,
-                                                               past_key_value=past_key_value,
-                                                               residual=residual,
-                                                               attn_metadata=attn_metadata)
         return hidden_states, residual
 
     def get_input_embeddings(self):
