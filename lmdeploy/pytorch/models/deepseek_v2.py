@@ -10,9 +10,8 @@ import torch.nn.functional as F
 from torch import nn
 
 import lmdeploy.pytorch.distributed as dist
-from lmdeploy.pytorch.backends.cuda.moe import FusedMoELowLatency, FusedMoENormal
 from lmdeploy.pytorch.distributed import get_dist_manager, get_tp_world_rank
-from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
+from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager, get_step_ctx_manager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
 from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_down_linear, build_gateup_linear, build_o_proj,
                                         build_rowwise_linear)
@@ -175,17 +174,15 @@ def execute_batch(inputs: list, fn, delta_stages: int = 0, exec_type: ExecType =
 def get_new_meta(attn_metadata, start_idx: int, end_idx: int):
     new_attn_metadata = deepcopy(attn_metadata)
     new_attn_metadata.block_offsets = attn_metadata.block_offsets[start_idx:end_idx, ...]
-    q_start_loc = int(attn_metadata.q_start_loc[start_idx].item())
-    new_attn_metadata.q_start_loc = attn_metadata.q_start_loc[start_idx:end_idx] - q_start_loc
-    k_start_loc = int(attn_metadata.kv_start_loc[start_idx].item()) if attn_metadata.kv_start_loc is not None else 0
-    new_attn_metadata.kv_start_loc = attn_metadata.kv_start_loc[start_idx:end_idx] - k_start_loc \
-        if attn_metadata.kv_start_loc is not None else None
+    new_attn_metadata.q_start_loc = attn_metadata.q_start_loc[start_idx:end_idx] - attn_metadata.q_start_loc[start_idx]
+    new_attn_metadata.kv_start_loc = attn_metadata.kv_start_loc[start_idx:end_idx] - \
+        attn_metadata.kv_start_loc[start_idx] if attn_metadata.kv_start_loc is not None else None
     new_attn_metadata.q_seqlens = attn_metadata.q_seqlens[start_idx:end_idx]
     new_attn_metadata.kv_seqlens = attn_metadata.kv_seqlens[start_idx:end_idx] \
         if attn_metadata.kv_seqlens is not None else None
     new_attn_metadata.kv_flatten_size = sum(new_attn_metadata.kv_seqlens.tolist()) \
         if attn_metadata.kv_flatten_size is not None else None
-    return new_attn_metadata, q_start_loc, k_start_loc
+    return new_attn_metadata
 
 
 def get_new_rotary_pos_emb(rotary_pos_emb, start_loc, end_loc):
@@ -200,20 +197,15 @@ def get_new_input(hidden_states, rotary_pos_emb, past_key_values, residual, attn
     new_rotary_pos_emb = get_new_rotary_pos_emb(rotary_pos_emb, start_loc, end_loc)
     new_past_key_values = past_key_values
     new_residual = residual[:, start_loc:end_loc, :].contiguous() if residual is not None else None
-    new_attn_metadata, _, _ = get_new_meta(attn_metadata, start_idx, end_idx)
+    new_attn_metadata = get_new_meta(attn_metadata, start_idx, end_idx)
     return new_hidden_states, new_rotary_pos_emb, new_past_key_values, new_residual, new_attn_metadata
 
 
-def split_seqlens_and_startloc(attn_metadata, num=2):
-    """split seqlens and startloc, support 2 only."""
+def get_split_flags(attn_metadata, num=2):
+    """split flags for seqlens and startloc, support 2 only."""
     assert num == 2
     q_start_loc = attn_metadata.q_start_loc.tolist()
     q_seqlens = attn_metadata.q_seqlens.tolist()
-    kv_start_loc = attn_metadata.kv_start_loc.tolist() if attn_metadata.kv_start_loc is not None else None
-    kv_seqlens = attn_metadata.kv_seqlens.tolist() if attn_metadata.kv_seqlens is not None else None
-    assert len(q_start_loc) == len(q_seqlens)
-    assert len(q_start_loc) >= 2
-    assert len(q_seqlens) >= 2
     total_len = sum(q_seqlens)
     min_diff = total_len
     split_flag = 1
@@ -222,17 +214,19 @@ def split_seqlens_and_startloc(attn_metadata, num=2):
         if diff < min_diff:
             min_diff = diff
             split_flag = idx
-    q_start_loc_a = q_start_loc[:split_flag]
-    q_start_loc_b = q_start_loc[split_flag:]
-    q_seqlens_a = q_seqlens[:split_flag]
-    q_seqlens_b = q_seqlens[split_flag:]
-    kv_start_loc_a = kv_start_loc[:split_flag] if kv_start_loc is not None else None
-    kv_start_loc_b = kv_start_loc[split_flag:] if kv_start_loc is not None else None
-    kv_seqlens_a = kv_seqlens[:split_flag] if kv_seqlens is not None else None
-    kv_seqlens_b = kv_seqlens[split_flag:] if kv_seqlens is not None else None
-    assert sum(q_seqlens_a) + sum(q_seqlens_b) == total_len
-    return (q_seqlens, q_seqlens_a, q_seqlens_b, q_start_loc, q_start_loc_a, q_start_loc_b, kv_seqlens, kv_seqlens_a,
-            kv_seqlens_b, kv_start_loc, kv_start_loc_a, kv_start_loc_b)
+    flag_a = {
+        'start_idx': 0,
+        'end_idx': split_flag,
+        'start_loc': q_start_loc[0],
+        'end_loc': q_start_loc[split_flag],
+    }
+    flag_b = {
+        'start_idx': split_flag,
+        'end_idx': len(q_seqlens),
+        'start_loc': q_start_loc[split_flag],
+        'end_loc': q_start_loc[-1] + q_seqlens[-1],
+    }
+    return [flag_a, flag_b]
 
 
 def split_input(hidden_states,
@@ -257,52 +251,38 @@ def split_input(hidden_states,
         }
         extern_tag = 'D' if attn_metadata.is_decoding else 'P'
         return [input], ExecType.One, 0, extern_tag
-    # two batch or more
-    assert num == 2
-    (q_seqlens, q_seqlens_a, q_seqlens_b, q_start_loc, q_start_loc_a, q_start_loc_b, kv_seqlens, kv_seqlens_a,
-     kv_seqlens_b, kv_start_loc, kv_start_loc_a, kv_start_loc_b) = split_seqlens_and_startloc(attn_metadata, 2)
-
-    start_idx_a = 0
-    end_idx_a = len(q_seqlens_a)
-    start_idx_b = end_idx_a
-    end_idx_b = len(q_seqlens)
-
-    hidden_states_a, rotary_pos_emb_a, past_key_values_a, residual_a, attn_metadata_a = get_new_input(
-        hidden_states, rotary_pos_emb, past_key_values, residual, attn_metadata, start_idx_a, end_idx_a,
-        q_start_loc_a[0], q_start_loc_a[-1] + q_seqlens_a[-1])
-    hidden_states_b, rotary_pos_emb_b, past_key_values_b, residual_b, attn_metadata_b = get_new_input(
-        hidden_states, rotary_pos_emb, past_key_values, residual, attn_metadata, start_idx_b, end_idx_b,
-        q_start_loc_b[0], q_start_loc_b[-1] + q_seqlens_b[-1])
-
-    input_a = {
-        'hidden_states': hidden_states_a,
-        'rotary_pos_emb': rotary_pos_emb_a,
-        'past_key_values': past_key_values,
-        'residual': residual_a,
-        'attn_metadata': attn_metadata_a,
-        'start_idx': moe_start_idx,
-        'end_idx': moe_end_idx
-    }
-    input_b = {
-        'hidden_states': hidden_states_b,
-        'rotary_pos_emb': rotary_pos_emb_b,
-        'past_key_values': past_key_values,
-        'residual': residual_b,
-        'attn_metadata': attn_metadata_b,
-        'start_idx': moe_start_idx,
-        'end_idx': moe_end_idx
-    }
-
-    if attn_metadata.is_decoding:
-        exec_type = ExecType.TwoDecode
-        delta_stages = 0
-        extern_tag = 'D'
     else:
-        exec_type = ExecType.TwoPrefill
-        delta_stages = 0
-        extern_tag = 'P'
+        # two batch or more
+        assert num == 2
+        flag_list = get_step_ctx_manager().current_context().twomicrobatch_splitflags
 
-    return [input_a, input_b], exec_type, delta_stages, extern_tag
+        inputs = []
+        for flag in flag_list:
+            (hidden_states_splited, rotary_pos_emb_splited, past_key_values_splited, residual_splited,
+             attn_metadata_splited) = get_new_input(hidden_states, rotary_pos_emb, past_key_values, residual,
+                                                    attn_metadata, flag['start_idx'], flag['end_idx'],
+                                                    flag['start_loc'], flag['end_loc'])
+            input = {
+                'hidden_states': hidden_states_splited,
+                'rotary_pos_emb': rotary_pos_emb_splited,
+                'past_key_values': past_key_values,
+                'residual': residual_splited,
+                'attn_metadata': attn_metadata_splited,
+                'start_idx': moe_start_idx,
+                'end_idx': moe_end_idx
+            }
+            inputs.append(input)
+
+        if attn_metadata.is_decoding:
+            exec_type = ExecType.TwoDecode
+            delta_stages = 0
+            extern_tag = 'D'
+        else:
+            exec_type = ExecType.TwoPrefill
+            delta_stages = 0
+            extern_tag = 'P'
+
+        return inputs, exec_type, delta_stages, extern_tag
 
 
 def merge_output(output_list):
@@ -871,9 +851,7 @@ class DeepseekV2DecoderLayer(nn.Module):
             attn_metadata=attn_metadata,
         )
 
-        # Fully Connected
         hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
-        # yield for attn1, dis (+share), dis_wait, moe, comb, (+share) comb_wait, (+share) attn0
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
         topk_weights, topk_ids = self.mlp.gate(hidden_states)
@@ -881,15 +859,14 @@ class DeepseekV2DecoderLayer(nn.Module):
         exports = self.mlp.experts
         exports_impl = self.mlp.experts.impl
         topk_weights = exports_impl.renormalize_fn(topk_weights, exports_impl.renormalize)
-        topk_ids = topk_ids.to(torch.int64)
         topk_weights = topk_weights.to(torch.float32)
+        topk_ids = topk_ids.to(torch.int64)
         hidden_shape = hidden_states.shape
         shared_states = None
 
         is_decoding = attn_metadata.is_decoding
+        moe = exports_impl.moe_build(is_decoding)
         if not is_decoding:
-            moe = FusedMoENormal(exports_impl.ep_size, exports_impl.ep_group, exports_impl.num_experts,
-                                 exports_impl.hidden_dim, exports_impl.block_size, exports_impl.out_dtype)
             # yield for attn1, dis
             yield
             previous_event = moe.token_dispatcher.buffer_normal.capture()
@@ -937,8 +914,6 @@ class DeepseekV2DecoderLayer(nn.Module):
             moe.token_dispatcher.handle = None
             out_states.view(hidden_shape)
         else:
-            moe = FusedMoELowLatency(exports_impl.ep_size, exports_impl.ep_group, exports_impl.num_experts,
-                                     exports_impl.hidden_dim, exports_impl.block_size, exports_impl.out_dtype)
             # yield for attn1, dis + share
             yield
             recv_hidden_states, recv_expert_count, handle, event, hook = moe.token_dispatcher.dispatch_async(
@@ -948,23 +923,24 @@ class DeepseekV2DecoderLayer(nn.Module):
             # yield for dis + share, dis_wait
             yield
             event.current_stream_wait()
-            moe.token_dispatcher.handle = handle
             # yield for dis_wait, moe
             yield
+            moe.token_dispatcher.handle = handle
             expected_m = (hidden_shape[0] * moe.token_dispatcher.buffer_low_latency.group_size * topk_ids.shape[1] +
                           moe.token_dispatcher.num_experts) // moe.token_dispatcher.num_experts
             out_states = moe.experts.forward(recv_hidden_states, exports.gate_up.weight, exports.gate_up.scale,
                                              exports.down.weight, exports.down.scale, recv_expert_count, expected_m)
+            # yield for moe, comb
             yield
             out_states, event, hook = moe.token_dispatcher.combine_async(out_states, topk_ids, topk_weights,
                                                                          moe.token_dispatcher.handle, True)
-            # yield for comb, comb_wait,
+            # yield for comb, comb_wait
             yield
             event.current_stream_wait()
-            moe.token_dispatcher.handle = None
             # yield for comb_wait, (+share) attn0
             yield
-            out_states.view(hidden_shape), shared_states
+            moe.token_dispatcher.handle = None
+            out_states.view(hidden_shape)
 
         if shared_states is not None:
             out_states += shared_states
@@ -1072,18 +1048,9 @@ class DeepseekV2Model(nn.Module):
         inputs_embeds: Optional[torch.FloatTensor] = None,
     ):
         """forward_twomicrobatch."""
-        # twobatch or onebatch
-        if attn_metadata.q_start_loc.size(dim=0) < 2:
-            disable_num = torch.tensor(1, dtype=torch.int32, device=input_ids.device)
-        else:
-            disable_num = torch.tensor(0, dtype=torch.int32, device=input_ids.device)
-        ep_group = get_dist_manager().current_context().ep_gpu_group
-        dist.all_reduce(disable_num, op=dist.ReduceOp.SUM, group=ep_group)
-        enable_twomicrobatch = disable_num.item() == 0
 
         assert self.config.moe_layer_freq == 1
         moe_start_idx = min(self.config.first_k_dense_replace, len(self.layers))
-        enable_twomicrobatch = enable_twomicrobatch and moe_start_idx < len(self.layers)
 
         # embed and mlplayers
         if inputs_embeds is None:
@@ -1104,23 +1071,24 @@ class DeepseekV2Model(nn.Module):
                 attn_metadata=attn_metadata,
             )
 
-        # run two micro batch
-        num = 2 if enable_twomicrobatch else 1
-        input_list, exec_type, delta_stages, extern_tag = split_input(hidden_states,
-                                                                      rotary_pos_emb,
-                                                                      past_key_values,
-                                                                      residual,
-                                                                      attn_metadata,
-                                                                      moe_start_idx,
-                                                                      len(self.layers),
-                                                                      num=num)
+        if moe_start_idx < len(self.layers):
+            # run two micro batch
+            num = 2
+            input_list, exec_type, delta_stages, extern_tag = split_input(hidden_states,
+                                                                          rotary_pos_emb,
+                                                                          past_key_values,
+                                                                          residual,
+                                                                          attn_metadata,
+                                                                          moe_start_idx,
+                                                                          len(self.layers),
+                                                                          num=num)
 
-        output_list = execute_batch(inputs=input_list,
-                                    fn=self.forward_yieldlayers,
-                                    delta_stages=delta_stages,
-                                    exec_type=exec_type,
-                                    extern_tag=extern_tag)
-        hidden_states, residual = merge_output(output_list)
+            output_list = execute_batch(inputs=input_list,
+                                        fn=self.forward_yieldlayers,
+                                        delta_stages=delta_stages,
+                                        exec_type=exec_type,
+                                        extern_tag=extern_tag)
+            hidden_states, residual = merge_output(output_list)
 
         hidden_states, _ = self.norm(hidden_states, residual)
 
@@ -1144,28 +1112,6 @@ class DeepseekV2Model(nn.Module):
                                                                                 residual=residual,
                                                                                 attn_metadata=attn_metadata,
                                                                                 tag=tag)
-        return hidden_states, residual
-
-    def forward_checklayers(
-        self,
-        hidden_states: torch.Tensor,
-        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
-        residual: Optional[torch.Tensor] = None,
-        attn_metadata: Any = None,
-        start_idx: int = -1,
-        end_idx: int = -1,
-        tag: Any = None,
-    ):
-        assert start_idx >= 0 and start_idx < len(self.layers) and end_idx > 0 and end_idx <= len(self.layers),\
-            f'forward_check None !!! start_idx:{start_idx},end_idx:{end_idx}, layer num:{len(self.layers)}'
-        for idx in range(start_idx, end_idx):
-            past_key_value = past_key_values[idx]
-            hidden_states, residual = self.layers[idx].forward(hidden_states,
-                                                               rotary_pos_emb=rotary_pos_emb,
-                                                               past_key_value=past_key_value,
-                                                               residual=residual,
-                                                               attn_metadata=attn_metadata)
         return hidden_states, residual
 
     def get_input_embeddings(self):
@@ -1205,7 +1151,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
         inputs_embeds: torch.Tensor = None,
         **kwargs,
     ):
-        if self.enable_twomicrobatch:
+        if get_step_ctx_manager().current_context().enable_twomicrobatch:
             hidden_states = self.model.forward_twomicrobatch(
                 input_ids=input_ids,
                 position_ids=position_ids,
@@ -1242,6 +1188,19 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
         position_ids = context.position_ids
         attn_metadata = context.attn_metadata
 
+        # twobatch or onebatch
+        if self.enable_twomicrobatch:
+            if attn_metadata.q_start_loc.size(dim=0) < 2:
+                disable_num = torch.tensor(1, dtype=torch.int32, device=input_ids.device)
+            else:
+                disable_num = torch.tensor(0, dtype=torch.int32, device=input_ids.device)
+            ep_group = get_dist_manager().current_context().ep_gpu_group
+            dist.all_reduce(disable_num, op=dist.ReduceOp.SUM, group=ep_group)
+            step_ctx = get_step_ctx_manager().current_context()
+            enable_twomicrobatch = disable_num.item() == 0
+            if enable_twomicrobatch:
+                step_ctx.enable_twomicrobatch = True
+                step_ctx.twomicrobatch_splitflags = get_split_flags(attn_metadata, num=2)
         return dict(
             input_ids=input_ids,
             position_ids=position_ids,

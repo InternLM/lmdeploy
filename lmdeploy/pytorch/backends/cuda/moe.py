@@ -519,16 +519,19 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
         """forward."""
         topk_weights = self.renormalize_fn(topk_weights, self.renormalize)
         step_ctx = get_step_ctx_manager().current_context()
-        moe = None
-        if step_ctx.is_decoding is False or self.use_deep_gemm is False:
-            moe = FusedMoENormal(self.ep_size, self.ep_group, self.num_experts, self.hidden_dim, self.block_size,
-                                 self.out_dtype)
-        else:
-            moe = FusedMoELowLatency(self.ep_size, self.ep_group, self.num_experts, self.hidden_dim, self.block_size,
-                                     self.out_dtype)
+        low_latency_mode = step_ctx.is_decoding and self.use_deep_gemm
+        moe = self.moe_build(low_latency_mode)
         out_states = moe.forward(hidden_states, topk_weights, topk_ids, gate_up_weights, gate_up_scale, down_weights,
                                  down_scale, expert_list)
         return out_states
+
+    def moe_build(self, low_latency_mode: bool = False):
+        if low_latency_mode:
+            return FusedMoELowLatency(self.ep_size, self.ep_group, self.num_experts, self.hidden_dim, self.block_size,
+                                      self.out_dtype)
+        else:
+            return FusedMoENormal(self.ep_size, self.ep_group, self.num_experts, self.hidden_dim, self.block_size,
+                                  self.out_dtype)
 
 
 class TritonFusedMoEBlockedF8Builder(FusedMoEBlockedF8Builder):

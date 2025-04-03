@@ -8,14 +8,7 @@ from .base import BaseChecker
 class DistChecker(BaseChecker):
     """check dist environment."""
 
-    def __init__(self,
-                 tp: int,
-                 dp: int,
-                 ep: int,
-                 distributed_executor_backend: str,
-                 enable_twomicrobatch: bool,
-                 device_type: str,
-                 logger=None):
+    def __init__(self, tp: int, dp: int, ep: int, distributed_executor_backend: str, device_type: str, logger=None):
         super().__init__(logger)
         self.tp = tp
         self.dp = dp
@@ -23,7 +16,6 @@ class DistChecker(BaseChecker):
         self.dist_config = DistConfig(dp=dp, tp=tp, ep=ep)
         self.world_size = self.dist_config.world_size
         self.distributed_executor_backend = distributed_executor_backend
-        self.enable_twomicrobatch = enable_twomicrobatch
         self.device_type = device_type
 
     def check(self):
