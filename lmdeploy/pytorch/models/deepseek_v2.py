@@ -22,8 +22,6 @@ from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
 
-ENABLE_TWO = True
-
 
 # twomicrobatch
 class ExecType(Enum):
@@ -1196,6 +1194,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                                             dtype=dtype,
                                             device=device)
         self._load_buffers = dict()
+        self.enable_twomicrobatch = get_dist_manager().current_context().dist_config.enable_twomicrobatch
 
     def forward(
         self,
@@ -1206,7 +1205,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
         inputs_embeds: torch.Tensor = None,
         **kwargs,
     ):
-        if ENABLE_TWO:
+        if self.enable_twomicrobatch:
             hidden_states = self.model.forward_twomicrobatch(
                 input_ids=input_ids,
                 position_ids=position_ids,

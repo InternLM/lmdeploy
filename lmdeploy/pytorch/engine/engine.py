@@ -84,12 +84,11 @@ def _build_backend_config(engine_config: PytorchEngineConfig):
 
 def _build_dist_config(engine_config: PytorchEngineConfig):
     """build dist config."""
-    dist_config = DistConfig(
-        dp=engine_config.dp,
-        tp=engine_config.tp,
-        ep=engine_config.ep,
-        dp_rank=engine_config.dp_rank,
-    )
+    dist_config = DistConfig(dp=engine_config.dp,
+                             tp=engine_config.tp,
+                             ep=engine_config.ep,
+                             dp_rank=engine_config.dp_rank,
+                             enable_twomicrobatch=engine_config.enable_twomicrobatch)
     return dist_config
 
 
