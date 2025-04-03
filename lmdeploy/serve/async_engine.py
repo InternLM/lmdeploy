@@ -590,14 +590,14 @@ class AsyncEngine(LogitsMixin):
     @asynccontextmanager
     async def safe_run(self, inst, session_id, **kwargs):
         generator = inst.async_stream_infer(session_id, **kwargs)
-        # try:
-        yield generator
-        # except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
-        #     logger.error(f'[safe_run] exception caught: {type(e).__name__} {e}')
-        #     # TODO: remove session_id from async cancel
-        #     await inst.async_cancel(session_id)
-        # finally:
-        #     await generator.aclose()
+        try:
+            yield generator
+        except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
+            logger.error(f'[safe_run] exception caught: {type(e).__name__} {e}')
+            # TODO: remove session_id from async cancel
+            await inst.async_cancel(session_id)
+        finally:
+            await generator.aclose()
 
     async def generate(
             self,
