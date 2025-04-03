@@ -1,19 +1,32 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import functools
+
 import torch
 
 
-def enable_micro_batch(func):
-    """Decorator to enable micro-batch computation."""
+def enable_micro_batch(param_name):
+    """Decorator factory to enable micro-batch computation."""
 
-    def wrapper(self, hidden_states, *args, **kwargs):
-        if isinstance(hidden_states, list):
-            # Apply forward computation to each micro-batch
-            return [func(self, hs, *args, **kwargs) for hs in hidden_states]
-        else:
-            # If not a list, directly apply the forward computation
-            return func(self, hidden_states, *args, **kwargs)
+    def decorator(func):
 
-    return wrapper
+        @functools.wraps(func)
+        def wrapper(self, *args, **kwargs):
+            inputs = kwargs.get(param_name, None)
+            if isinstance(inputs, list):
+                # Apply forward computation to each micro-batch
+                results = []
+                for input in inputs:
+                    kwargs[param_name] = input
+                    result = func(self, *args, **kwargs)
+                    results.append(result)
+                return results
+            else:
+                # If not a list, directly apply the forward computation
+                return func(self, *args, **kwargs)
+
+        return wrapper
+
+    return decorator
 
 
 def split_batch(func, param_name, num_splits=2):
@@ -26,6 +39,8 @@ def split_batch(func, param_name, num_splits=2):
             split_inputs = list(torch.chunk(inputs, num_splits, dim=0))
             kwargs[param_name] = split_inputs
             results = func(*args, **kwargs)
-        return torch.cat(results, dim=0)
+            return torch.cat(results, dim=0)
+        else:
+            return func(*args, **kwargs)
 
     return wrapper

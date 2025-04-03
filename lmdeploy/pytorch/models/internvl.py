@@ -206,12 +206,12 @@ class InternVisionEncoderLayer(nn.Module):
         self.ls1 = nn.Parameter(torch.empty(self.embed_dim, dtype=dtype, device=device))
         self.ls2 = nn.Parameter(torch.empty(self.embed_dim, dtype=dtype, device=device))
 
-    @enable_micro_batch
+    @enable_micro_batch(param_name='hidden_states')
     def _attn(self, hidden_states):
         hidden_states = hidden_states + self.attn(self.norm1(hidden_states).to(hidden_states[0].dtype)) * self.ls1
         return hidden_states
 
-    @enable_micro_batch
+    @enable_micro_batch(param_name='hidden_states')
     def _mlp(self, hidden_states):
         hidden_states = hidden_states + self.mlp(self.norm2(hidden_states).to(hidden_states.dtype)) * self.ls2
         return hidden_states
