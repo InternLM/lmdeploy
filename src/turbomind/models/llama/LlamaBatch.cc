@@ -1541,7 +1541,6 @@ auto LlamaBatch<T>::Interrupt(int index, bool force_stop) -> Signal
         TM_LOG_INFO("[Interrupt] slot %d, tokens [%s]", index, ss.str().c_str());
     }
 
-
     const int output_len = state_->h_context_length[index];
     auto&     seq        = *state_->sequences[index];
 

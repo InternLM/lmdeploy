@@ -522,9 +522,9 @@ void SequenceManager::PrefixMatch(Sequences& sequences)
                         seq.blocks.size(),
                         seq.cache_len);
             TM_LOG_DEBUG("[SeqMgr][match] ID %llu, after matching, block_ids %s, unique_ids %s",
-                        seq.id,
-                        vector2string(seq.blocks).c_str(),
-                        vector2string(seq.block_unique_ids).c_str());
+                         seq.id,
+                         vector2string(seq.blocks).c_str(),
+                         vector2string(seq.block_unique_ids).c_str());
         }
     }
 }
