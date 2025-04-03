@@ -1,6 +1,6 @@
 from typing import List, Tuple
 
-from slime import avaliable_nic, RDMAEndpoint
+from dlslime import avaliable_nic, RDMAEndpoint
 
 from lmdeploy.disagg.messages import RemoteEngineConfig
 
