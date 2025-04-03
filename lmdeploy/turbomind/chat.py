@@ -155,7 +155,6 @@ def main(model_path: str,
         if user_input == 'exit':
             exit(0)
         elif user_input == 'end':
-            loop.run_until_complete(generator.async_end(session_id))
             seed = random.getrandbits(64)
             messages = []
         else:
