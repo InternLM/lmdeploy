@@ -45,39 +45,85 @@ class LogitsMixin:
     async def _async_get_logits(self,
                                 input_ids,
                                 steps: List[int] = None,
+                                max_input_len: int = None,
                                 sequence_start: bool = True,
                                 sequence_end: bool = True) -> List[torch.Tensor]:
         assert input_ids and all(isinstance(_, List) for _ in input_ids)
         assert steps is None or (len(steps) == len(input_ids))
 
+        steps = steps or [0] * len(input_ids)
+        max_input_len = max_input_len or max([len(x) for x in input_ids])
+
+        if self.backend == 'turbomind':
+            logits = await self._async_get_logits_by_turbomind(input_ids, steps, max_input_len)
+        else:
+            logits = await self._async_get_logits_by_pytorch(input_ids, steps, max_input_len, sequence_start,
+                                                             sequence_end)
+        return logits
+
+    async def _async_get_logits_by_turbomind(self, input_ids, steps, max_input_len):
+        assert len(input_ids) == len(steps)
+
+        if any(s != 0 for s in steps):
+            assert self.backend_config.enable_prefix_caching, 'please enable prefix caching'
+        assert all(s % self.backend_config.cache_block_seq_len == 0 for s in steps)
+
+        logits = [None] * len(input_ids)
+        gen_config = GenerationConfig(max_new_tokens=1, output_logits='all', do_sample=False)
+
+        async def _proc(i):
+            async with self.model_inst(session_id=i) as inst:
+                token_ids = input_ids[i][:steps[i] + max_input_len]
+                input_len = len(token_ids)
+                async with self.safe_run(inst,
+                                         session_id=i,
+                                         input_ids=token_ids,
+                                         gen_config=gen_config,
+                                         stream_output=False,
+                                         step=steps[i]) as gen:
+                    async for outputs in gen:
+                        pass
+                    logits[i] = outputs.logits[:input_len - steps[i], :]
+
+        tasks = [_proc(i) for i in range(len(input_ids))]
+        await asyncio.gather(*tasks)
+
+        return logits
+
+    async def _async_get_logits_by_pytorch(self,
+                                           input_ids: List[List[int]],
+                                           steps: List[int],
+                                           max_input_len: int,
+                                           sequence_start: bool = True,
+                                           sequence_end: bool = True):
         logits = [None] * len(input_ids)
 
         async def _proc(i):
             async with self.model_inst(session_id=i) as inst:
-                input_len = len(input_ids[i])
-                # TODO(lvhan): Fix the ugly code later on
-                max_new_tokens = 1 if self.backend == 'turbomind' else 0
+                token_ids = input_ids[i][steps[i]:steps[i] + max_input_len]
+                input_len = len(token_ids)
                 # The reason to set `top_k=1` is that pt engine crashes at top_k sampling stage
                 # when perform inference on a reward model.
-                gen_config = GenerationConfig(max_new_tokens=max_new_tokens, output_logits='all', top_k=1)
+                gen_config = GenerationConfig(max_new_tokens=0, output_logits='all', top_k=1)
                 async with self.safe_run(inst,
                                          session_id=i,
-                                         input_ids=input_ids[i],
+                                         input_ids=token_ids,
                                          gen_config=gen_config,
                                          stream_output=False,
                                          sequence_start=sequence_start,
                                          sequence_end=sequence_end,
-                                         step=steps[i] if steps else 0) as gen:
+                                         step=steps[i]) as gen:
                     async for outputs in gen:
                         pass
-                    logits[i] = outputs.logits[:input_len - steps[i], :]
-                    logger.info(f'logits[{i}].shape: {logits[i].shape}, input_len: {input_len}, step: {steps[i]}')
+                    logits[i] = outputs.logits[:input_len, :]
 
         session_ids = list(range(len(input_ids)))
         tasks = [_proc(i) for i in range(len(input_ids))]
         await asyncio.gather(*tasks)
-
-        return logits, session_ids
+        if sequence_end:
+            for i in session_ids:
+                await self.end_session(i)
+        return logits
 
     def get_ppl(self, input_ids: Union[List[int], List[List[int]]]) -> List[float]:
         """Get perplexity scores given a list of input tokens that have to be
@@ -95,10 +141,7 @@ class LogitsMixin:
             input_ids = [input_ids]
         assert all(len(_) > 1 for _ in input_ids)
 
-        # TODO: a better way to determine `max_input_len`, at most allocate
-        # 2G mem for logits with shape [bs, max_input_len, vocab_size]
-        vocab_size = self.hf_tm_cfg.vocab_size
-        max_input_len = 2 * 1024**3 // (vocab_size * 4)
+        max_input_len = self.backend_config.max_prefill_token_num
         sizes = [len(_) for _ in input_ids]
         result = []
         sorted_index_values = sorted(list(enumerate(sizes)), key=lambda x: x[1], reverse=True)
@@ -110,17 +153,13 @@ class LogitsMixin:
             logger.info(f'start: {start}, end: {end}')
             if start == end:
                 _input_ids = input_ids[indices[start]]
-                res, session_ids = self._get_long_text_ppl(input_ids=_input_ids, max_input_len=max_input_len)
+                res = self._get_long_text_ppl(input_ids=_input_ids, max_input_len=max_input_len)
                 result.append(res)
             else:
                 _input_ids = [input_ids[indices[i]] for i in range(start, end)]
-                res, session_ids = self._get_ppl(
-                    input_ids=_input_ids,
-                    max_input_len=max_input_len,
-                )
+                steps = [0] * len(_input_ids)
+                res, _ = self._get_ppl(input_ids=_input_ids, steps=steps, max_input_len=max_input_len)
                 result.extend(res)
-            for session_id in session_ids:
-                self.end_session(session_id)
         output = list(range(len(result)))
         for index, sorted_index in enumerate(indices):
             output[sorted_index] = result[index]
@@ -156,57 +195,37 @@ class LogitsMixin:
 
         losses = []
         target_counts = []
-        session_ids = []
         for i in range(0, seq_len, max_input_len):
-            token_ids = input_ids[i:i + max_input_len]
-            step = [i]
-            # shift token_ids by 1 to the left
-            target_ids = input_ids[i + 1:i + 1 + max_input_len]
-            loss, session_ids = self._get_ppl(input_ids=[token_ids],
-                                              max_input_len=len(token_ids),
-                                              target_ids=[target_ids],
-                                              steps=step,
-                                              sequence_start=(i == 0),
-                                              sequence_end=False)
+            loss, target_count = self._get_ppl(input_ids=[input_ids],
+                                               steps=[i],
+                                               max_input_len=max_input_len,
+                                               sequence_start=(i == 0),
+                                               sequence_end=False)
             losses.extend(loss)
-            target_counts.append(len(target_ids))
+            target_counts.extend(target_count)
         losses = [loss * target_count for loss, target_count in zip(losses, target_counts)]
         loss_sum = sum(losses)
         target_count = sum(target_counts)
-        return loss_sum / target_count, session_ids
+        return loss_sum / target_count
 
-    def _get_ppl(self,
-                 input_ids,
-                 max_input_len,
-                 target_ids=None,
-                 steps=None,
-                 sequence_start: bool = True,
-                 sequence_end: bool = True):
-        assert (isinstance(input_ids, List) and all(isinstance(_, List) for _ in input_ids))
-        assert steps is None or len(steps) == len(input_ids)
-        assert target_ids is None or len(target_ids) == len(input_ids)
+    def _get_ppl(self, input_ids, steps, max_input_len, sequence_start: bool = True, sequence_end: bool = True):
+        assert isinstance(steps, List) and len(steps) == len(input_ids)
 
-        lens = [len(_) for _ in input_ids]
-        total_len = sum(lens)
-        assert sum(lens) <= max_input_len
-
-        logger.info(f'get_ppl: bs: {len(input_ids)}, lens: {lens}, '
-                    f'total_len: {total_len}, steps: {steps}')
         torch.cuda.empty_cache()
 
-        logits, session_ids = self._run(coro=self._async_get_logits(
-            input_ids=input_ids, steps=steps, sequence_start=sequence_start, sequence_end=sequence_end)).result()
+        logits = self._run(coro=self._async_get_logits(input_ids=input_ids,
+                                                       steps=steps,
+                                                       max_input_len=max_input_len,
+                                                       sequence_start=sequence_start,
+                                                       sequence_end=sequence_end)).result()
         padding_token_id = -100
-        if target_ids is None:
-            target_ids = [x[1:] + [padding_token_id] for x in input_ids]
-        else:
-            target_ids = [
-                target_ids[i] + [padding_token_id] if len(target_ids[i]) < len(input_ids[i]) else target_ids[i]
-                for i in range(len(input_ids))
-            ]
-        target_ids = [torch.Tensor(torch.LongTensor(_target_ids)) for _target_ids in target_ids]
+        # shift token_ids by 1 to the left
+        target_ids = [s[steps[i] + 1:steps[i] + 1 + max_input_len] for i, s in enumerate(input_ids)]
+        target_ids = [t + [padding_token_id] if len(t) < max_input_len else t for t in target_ids]
+        target_ids = [torch.Tensor(torch.LongTensor(t)) for t in target_ids]
 
         result = []
+        target_counts = []
         for _logits, _target_ids in zip(logits, target_ids):
             _logits = _logits.float()
             vocab_size = _logits.shape[-1]
@@ -222,5 +241,6 @@ class LogitsMixin:
             loss = flat_loss_matrix.sum()
             target_count = target_mask.sum()
             result.append(loss.item() / target_count.item())
+            target_counts.append(target_count)
         logger.info(f'ppl result: {result}')
-        return result, session_ids
+        return result, target_counts

@@ -489,7 +489,7 @@ void SequenceManager::PrefixMatch(Sequences& sequences)
         // block_manager_->Touch(matched_ids);
         if (rank_ == 0) {
             TM_LOG_INFO("[SeqMgr][match] ID %llu, hit blocks %d, cache_len %d", seq.id, valid, seq.cache_len);
-            TM_LOG_INFO("[SeqMgr][match] ID %llu, hit block_ids %s, unique_ids %s",
+            TM_LOG_DEBUG("[SeqMgr][match] ID %llu, hit block_ids %s, unique_ids %s",
                         seq.id,
                         vector2string(block_ids).c_str(),
                         vector2string(unique_ids).c_str());
