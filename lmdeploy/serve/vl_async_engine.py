@@ -211,10 +211,6 @@ class VLAsyncEngine(AsyncEngine):
         _prompts = self._convert_prompts(prompts)
         sess = super().chat(_prompts, *args, **kwargs)
 
-        # recover prompts & history
-        sess._prompt = prompts
-        last_round = sess.history[-1]
-        sess.history[-1] = (prompts, last_round[-1])
         return sess
 
     @classmethod
