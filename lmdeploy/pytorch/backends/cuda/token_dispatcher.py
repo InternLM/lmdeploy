@@ -209,6 +209,56 @@ class DeepEPTokenDispatcher(TokenDispatcherImpl):
             event,
         )
 
+    def dispatch_normal_async(self,
+                              x: torch.Tensor,
+                              topk_idx: torch.Tensor,
+                              topk_weights: torch.Tensor,
+                              num_experts: int,
+                              previous_event=None,
+                              async_finish=True):
+        (
+            num_tokens_per_rank,
+            num_tokens_per_rdma_rank,
+            num_tokens_per_expert,
+            is_token_in_rank,
+            previous_event,
+        ) = self.buffer_normal.get_dispatch_layout(
+            topk_idx,
+            num_experts,
+            previous_event=previous_event,
+            async_finish=async_finish,
+            allocate_on_comm_stream=previous_event is not None and async_finish,
+        )
+
+        (
+            recv_x,
+            recv_topk_idx,
+            recv_topk_weights,
+            num_recv_tokens_per_expert_list,
+            handle,
+            event,
+        ) = self.buffer_normal.dispatch(
+            x,
+            topk_idx=topk_idx,
+            topk_weights=topk_weights,
+            num_tokens_per_rank=num_tokens_per_rank,
+            num_tokens_per_rdma_rank=num_tokens_per_rdma_rank,
+            is_token_in_rank=is_token_in_rank,
+            num_tokens_per_expert=num_tokens_per_expert,
+            previous_event=previous_event,
+            async_finish=async_finish,
+            allocate_on_comm_stream=previous_event is not None and async_finish,
+        )
+
+        return (
+            recv_x,
+            recv_topk_idx,
+            recv_topk_weights,
+            num_recv_tokens_per_expert_list,
+            handle,
+            event,
+        )
+
     def combine(self, hidden_states: torch.Tensor) -> torch.Tensor:
         if hidden_states.shape[0] > 0:
             hidden_states = self.get_restored_hidden_states_by_experts(hidden_states)
@@ -223,6 +273,16 @@ class DeepEPTokenDispatcher(TokenDispatcherImpl):
             async_finish=False,
             previous_event=previous_event,
             allocate_on_comm_stream=False,
+        )
+        return combined_x, event
+
+    def combine_normal_async(self, x: torch.Tensor, handle: Tuple, previous_event=None, async_finish=True):
+        combined_x, _, event = self.buffer_normal.combine(
+            x,
+            handle,
+            async_finish=async_finish,
+            previous_event=previous_event,
+            allocate_on_comm_stream=previous_event is not None and async_finish,
         )
         return combined_x, event
 
@@ -310,6 +370,26 @@ class DeepEPTokenDispatcherLowLatency(TokenDispatcherImpl):
             expected_m,
         )
 
+    def dispatch_async(
+        self,
+        hidden_states: torch.Tensor,
+        topk_idx: torch.Tensor,
+        num_experts: int,
+        use_fp8: bool,
+        async_finish: bool,
+    ):
+        assert topk_idx.dtype == torch.int64
+        recv_hidden_states, recv_expert_count, handle, event, hook = (self.buffer_low_latency.low_latency_dispatch(
+            hidden_states,
+            topk_idx,
+            self.num_max_dispatch_tokens_per_rank,
+            num_experts,
+            use_fp8,
+            async_finish=async_finish,
+            return_recv_hook=not async_finish,
+        ))
+        return recv_hidden_states, recv_expert_count, handle, event, hook
+
     def combine(
         self,
         hidden_states: torch.Tensor,
@@ -326,6 +406,26 @@ class DeepEPTokenDispatcherLowLatency(TokenDispatcherImpl):
         ))
         hook() if self.return_recv_hook else event.current_stream_wait()
         return combined_hidden_states
+
+    def combine_async(
+        self,
+        hidden_states: torch.Tensor,
+        topk_idx: torch.Tensor,
+        topk_weights: torch.Tensor,
+        handle: Tuple,
+        async_finish: bool,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        assert topk_idx.dtype == torch.int64
+        assert topk_weights.dtype == torch.float32
+        combined_hidden_states, event, hook = self.buffer_low_latency.low_latency_combine(
+            hidden_states,
+            topk_idx,
+            topk_weights,
+            handle,
+            async_finish=async_finish,
+            return_recv_hook=not async_finish,
+        )
+        return combined_hidden_states, event, hook
 
 
 class TokenDispatcherBuilder:

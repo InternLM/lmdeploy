@@ -95,6 +95,7 @@ class DistConfig:
     tp: int = 1
     ep: int = 1
     dp_rank: int = 0
+    enable_twomicrobatch: bool = False
     world_size: int = None
     attn_config: 'DistConfig' = None
 

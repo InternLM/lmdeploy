@@ -505,6 +505,7 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
         except ImportError:
             self.use_deep_gemm = False
             logger.warning('For higher performance, please install DeepGEMM https://github.com/deepseek-ai/DeepGEMM')
+        self.renormalize_fn = _renormalize
 
     def forward(self,
                 hidden_states: torch.Tensor,
@@ -516,7 +517,7 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
                 down_scale: torch.Tensor,
                 expert_list: List[int] = None):
         """forward."""
-        topk_weights = _renormalize(topk_weights, self.renormalize)
+        topk_weights = self.renormalize_fn(topk_weights, self.renormalize)
         step_ctx = get_step_ctx_manager().current_context()
         moe = None
         if step_ctx.is_decoding is False or self.use_deep_gemm is False:

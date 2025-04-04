@@ -519,3 +519,12 @@ class ArgumentHelper:
                                    default='nccl',
                                    choices=['nccl', 'native'],
                                    help='Communication backend for multi-GPU inference')
+
+    @staticmethod
+    def enable_twomicrobatch(parser):
+        """Add argument enable_twomicrobatch to parser."""
+
+        return parser.add_argument('--enable-twomicrobatch',
+                                   type=bool,
+                                   default=False,
+                                   help='enable twomicrobatch for specified model')

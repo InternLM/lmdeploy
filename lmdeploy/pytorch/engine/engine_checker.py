@@ -67,6 +67,7 @@ class EngineChecker(BaseChecker):
                                    engine_config.dp,
                                    engine_config.ep,
                                    engine_config.distributed_executor_backend,
+                                   engine_config.enable_twomicrobatch,
                                    device_type=engine_config.device_type,
                                    logger=logger)
         self.register_required_checker(dist_checker)
