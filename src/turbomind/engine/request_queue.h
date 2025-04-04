@@ -28,18 +28,6 @@ public:
         cv_.notify_one();
     }
 
-    void kill(std::shared_ptr<Request> r)
-    {
-        {
-            std::lock_guard lock{mutex_};
-            if (closed_) {
-                throw std::runtime_error("Queue is clsoed");
-            }
-            kill_.push_back(std::move(r));
-        }
-        cv_.notify_one();
-    }
-
     int try_pop(std::vector<std::shared_ptr<Request>>& rs, int max_rs_size, int max_count)
     {
         std::lock_guard lock{mutex_};
@@ -58,7 +46,6 @@ public:
     }
 
     bool pop(std::vector<std::shared_ptr<Request>>& infer_reqs,
-             std::vector<std::shared_ptr<Request>>& kill_reqs,
              unsigned                               max_infer,
              bool                                   blocking,
              bool&                                  abort)
@@ -69,8 +56,8 @@ public:
 
         if (blocking) {
             cv_.wait(lock, [this] {
-                return !(queue_.empty() && kill_.empty())                      //
-                       || flag_->load(std::memory_order_relaxed) == expected_  //
+                return !(queue_.empty())
+                       || flag_->load(std::memory_order_relaxed) == expected_
                        || closed_;
             });
             if (closed_) {
@@ -92,9 +79,6 @@ public:
             }
             queue_.pop_front();
         }
-
-        kill_reqs.insert(kill_reqs.end(), kill_.begin(), kill_.end());
-        kill_.clear();
 
         return is_first;
     }
@@ -128,8 +112,6 @@ private:
 
     std::pmr::list<std::shared_ptr<Request>> queue_;
     std::pmr::unsynchronized_pool_resource   pool_;
-
-    std::vector<std::shared_ptr<Request>> kill_;
 
     std::mutex              mutex_;
     std::condition_variable cv_;

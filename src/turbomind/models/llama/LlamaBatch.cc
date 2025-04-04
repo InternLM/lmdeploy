@@ -94,7 +94,7 @@ void DropEmbeddings(const Sequence& seq)
 }
 
 template<typename T>
-void LlamaBatch<T>::DisableInvalidRequests(Requests& infer_reqs, Requests& kill_reqs)
+void LlamaBatch<T>::DisableInvalidRequests(Requests& infer_reqs)
 {
     NvtxScope _("disable invalid");
 
@@ -123,10 +123,7 @@ void LlamaBatch<T>::DisableInvalidRequests(Requests& infer_reqs, Requests& kill_
         }
     }
 
-    count(kill_reqs);
     count(infer_reqs);
-
-    validate(kill_reqs, "kill");
     validate(infer_reqs, "infer");
 
     // New requests that never get a chance to start
@@ -165,26 +162,6 @@ void LlamaBatch<T>::ProcessCancelRequests(std::vector<int>& indices, std::vector
     if (count) {
         // Still need this sync after `Interrupt`?
         check_cuda_error(cudaStreamSynchronize(stream_));
-    }
-}
-
-template<class T>
-void LlamaBatch<T>::ProcessKillRequests(const Requests& kill_reqs, std::vector<Signal>& signals)
-{
-    for (auto& r : kill_reqs) {
-        if (r) {
-            int ec = r->ec;
-            if (!ec) {
-                if (!sequence_manager_->Erase(r->id)) {
-                    ec = Request::kInvalid;
-                }
-            }
-            signals.push_back([=] {
-                if (r->end_cb) {
-                    r->end_cb(ec);
-                }
-            });
-        }
     }
 }
 
@@ -1575,7 +1552,6 @@ namespace {
 
 struct RequestData {
     std::vector<std::shared_ptr<Request>> infer;  // incoming inference request
-    std::vector<std::shared_ptr<Request>> kill;   // incoming kill request
 
     std::vector<int> cancel;  // canceled indices in current batch
     bool             abort;
@@ -1605,10 +1581,10 @@ void LlamaBatch<T>::InternalThreadEntry()
                 const int  free_slot_count = max_batch_size_ - state_->size + g.finished_count;
                 const bool is_empty        = (free_slot_count == max_batch_size_);
                 // Block if batch is empty AND no silbings are ready
-                gateway_->pop(req->infer, req->kill, free_slot_count, is_empty, req->abort, dp_rank_);
+                gateway_->pop(req->infer, free_slot_count, is_empty, req->abort, dp_rank_);
             }
             // Mark reqs to the same session_id as invalid (which are dangerous to the engine)
-            DisableInvalidRequests(req->infer, req->kill);
+            DisableInvalidRequests(req->infer);
             FindCanceledIndices(req->cancel);
         }
 
@@ -1627,8 +1603,6 @@ void LlamaBatch<T>::InternalThreadEntry()
         }
 
         std::vector<Signal> signals;
-
-        ProcessKillRequests(req->kill, signals);
 
         // Shared `priority` field will be assigned by rank-0
         ProcessInferRequests(req->infer, signals);

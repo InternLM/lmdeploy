@@ -38,8 +38,6 @@ class LogitsMixin:
         logits, session_ids = self._run(coro=self._async_get_logits(input_ids=input_ids)).result()
         logits = [x.squeeze() for x in logits]
         scores = [x[-1].cpu().item() for x in logits]
-        for session_id in session_ids:
-            self.end_session(session_id)
         return scores
 
     async def _async_get_logits(self,

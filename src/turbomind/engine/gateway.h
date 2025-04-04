@@ -82,14 +82,12 @@ public:
     }
 
     void pop(std::vector<std::shared_ptr<Request>>& infer_reqs,
-             std::vector<std::shared_ptr<Request>>& kill_reqs,
              unsigned                               max_infer,
              bool                                   blocking,
              bool&                                  abort,
              int                                    rank)
     {
         infer_reqs.clear();
-        kill_reqs.clear();
 
         [&] {
             for (int i = 0; i < size_; ++i) {
@@ -104,7 +102,7 @@ public:
 
         blocking = blocking && infer_reqs.empty();
 
-        if (queues_[rank]->pop(infer_reqs, kill_reqs, max_infer, blocking, abort)) {
+        if (queues_[rank]->pop(infer_reqs, max_infer, blocking, abort)) {
             const int group_id = rank / group_size_;
             // Wake all siblings
             for (int i = group_id * group_size_; i < (group_id + 1) * group_size_; ++i) {
@@ -132,14 +130,6 @@ public:
             seqid2rank_.bind(bind_ids, rank);
         }
 
-        // Unbind for stateful kill
-        std::vector<uint64_t> unbind_ids;
-        for (const auto& r : kill_reqs) {
-            unbind_ids.push_back(r->session.id);
-        }
-        if (!unbind_ids.empty()) {
-            seqid2rank_.unbind(unbind_ids, rank);
-        }
     }
 
     void cancel(std::shared_ptr<Request> r)
@@ -152,19 +142,6 @@ public:
         }
         else {
             // request is picked up by engine
-        }
-    }
-
-    void kill(std::shared_ptr<Request> r)
-    {
-        if (auto rank = seqid2rank_.find(r->session.id); rank >= 0) {
-            queues_[rank]->kill(std::move(r));
-        }
-        else {
-            TM_LOG_ERROR("[Gateway] Failed to find a binded queue for %lu", r->session.id);
-            notify({[r = std::move(r)] {  //
-                UpdateState(*r, Request::kInvalid, 0);
-            }});
         }
     }
 

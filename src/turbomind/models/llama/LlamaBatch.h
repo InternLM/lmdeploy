@@ -76,9 +76,7 @@ public:
     using Requests = std::vector<std::shared_ptr<Request>>;
     using Signal   = std::function<void()>;
 
-    void DisableInvalidRequests(Requests& infer_reqs, Requests& kill_reqs);
-
-    void ProcessKillRequests(const Requests& reqs, std::vector<Signal>& signals);
+    void DisableInvalidRequests(Requests& infer_reqs);
 
     void ProcessInferRequests(const Requests& reqs, std::vector<Signal>& signals);
 

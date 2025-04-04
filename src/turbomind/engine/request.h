@@ -81,10 +81,6 @@ struct SessionParam {
     uint64_t id;
 
     int step;
-
-    // bool start_flag;
-    // bool end_flag;
-    bool kill_flag;
 };
 
 struct RequestState {
