@@ -698,12 +698,13 @@ class Engine:
             if msg.status != MessageStatus.LOCKED:
                 continue
             update_token = token
+
+            # fill token
+            msg.update_token_ids(update_token, model_meta=model_meta)
+            msg.num_new_tokens += 1
             if stop:
                 update_token = _EMPTY_TOKEN
-            else:
-                msg.num_new_tokens += 1
-            msg.update_token_ids(update_token, model_meta=model_meta)
-            if stop:
+                msg.update_token_ids(update_token, model_meta=model_meta)
                 msg.status = MessageStatus.STOPPED
 
     def _make_infer_outputs(self, next_token_ids: torch.LongTensor, running: SeqList, logits: torch.Tensor,

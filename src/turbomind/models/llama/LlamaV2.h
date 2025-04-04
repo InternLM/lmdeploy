@@ -79,7 +79,7 @@ private:
                         int*             lora_mask,
                         const Sequence** sequences);
 
-    void postDecodeEmbedding(float* logits, float* local_logits, const T* decoder_output, int batch_size);
+    void postDecodeEmbedding(T* logits, T* local_logits, const T* decoder_output, int batch_size);
 
     void dynamicDecode(int*            token_ids,
                        bool*           finished,
@@ -88,7 +88,7 @@ private:
                        curandState_t*  curand_state,
                        TensorMap*      inputs,
                        TensorMap*      outputs,
-                       const float*    logits,
+                       const T*        logits,
                        const uint32_t* seq_limit_len,
                        const int*      context_length,
                        int             step,
@@ -131,8 +131,8 @@ private:
     const bool is_free_buffer_after_forward_;
     const bool debug_;
 
-    std::unique_ptr<UnifiedDecoder<T>>         unified_decoder_;
-    std::unique_ptr<DynamicDecodeLayer<float>> dynamic_decode_layer_;
+    std::unique_ptr<UnifiedDecoder<T>>     unified_decoder_;
+    std::unique_ptr<DynamicDecodeLayer<T>> dynamic_decode_layer_;
 };
 
 }  // namespace turbomind
