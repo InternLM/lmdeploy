@@ -4,19 +4,26 @@ import functools
 import torch
 
 
-def enable_micro_batch(param_name):
+def enable_micro_batch(param_name, index=-1):
     """Decorator factory to enable micro-batch computation."""
 
     def decorator(func):
 
         @functools.wraps(func)
         def wrapper(self, *args, **kwargs):
-            inputs = kwargs.get(param_name, None)
+            if index != -1 and len(args) > index:
+                inputs = args[index]
+            else:
+                inputs = kwargs.get(param_name, None)
+
             if isinstance(inputs, list):
                 # Apply forward computation to each micro-batch
                 results = []
                 for input in inputs:
-                    kwargs[param_name] = input
+                    if index != -1 and len(args) > index:
+                        args = args[0:index] + (input, ) + args[index + 1:]
+                    else:
+                        kwargs[param_name] = input
                     result = func(self, *args, **kwargs)
                     results.append(result)
                 return results
@@ -29,15 +36,23 @@ def enable_micro_batch(param_name):
     return decorator
 
 
-def split_batch(func, param_name, num_splits=2):
+def split_batch(func, param_name, index=-1, num_splits=2):
     """Decorator to split along the 0th dimension into a specified number of
     chunks."""
 
     def wrapper(*args, **kwargs):
-        inputs = kwargs.get(param_name, None)
+        if index != -1 and len(args) > index:
+            inputs = args[index]
+        else:
+            inputs = kwargs.get(param_name, None)
+
         if inputs is not None:
             split_inputs = list(torch.chunk(inputs, num_splits, dim=0))
-            kwargs[param_name] = split_inputs
+            if index != -1 and len(args) > index:
+                args = args[0:index] + (split_inputs, ) + args[index + 1:]
+            else:
+                kwargs[param_name] = split_inputs
+
             results = func(*args, **kwargs)
             return torch.cat(results, dim=0)
         else:

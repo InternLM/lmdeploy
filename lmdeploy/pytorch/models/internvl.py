@@ -8,7 +8,6 @@ from packaging import version
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
-from lmdeploy.pytorch.backends.selector import get_backend
 from lmdeploy.pytorch.distributed import get_world_rank
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
@@ -209,12 +208,12 @@ class InternVisionEncoderLayer(nn.Module):
         self.ls1 = nn.Parameter(torch.empty(self.embed_dim, dtype=dtype, device=device))
         self.ls2 = nn.Parameter(torch.empty(self.embed_dim, dtype=dtype, device=device))
 
-    @enable_micro_batch(param_name='hidden_states')
+    @enable_micro_batch(param_name='hidden_states', index=0)
     def _attn(self, hidden_states):
         hidden_states = hidden_states + self.attn(self.norm1(hidden_states).to(hidden_states[0].dtype)) * self.ls1
         return hidden_states
 
-    @enable_micro_batch(param_name='hidden_states')
+    @enable_micro_batch(param_name='hidden_states', index=0)
     def _mlp(self, hidden_states):
         hidden_states = hidden_states + self.mlp(self.norm2(hidden_states).to(hidden_states.dtype)) * self.ls2
         return hidden_states
@@ -318,8 +317,6 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
         self.input_processor = InternVLInputProcessor(self.config, dtype)
 
         self.compile_vit = False
-        if get_backend().get_name() == 'cuda':
-            self.compile_model()
 
     def compile_model(self):
         torch_version = version.parse(torch.__version__)
@@ -330,7 +327,9 @@ class InternVLChatModel(nn.Module, DeployModelMixin, CudaGraphMixin):
         if torch_version >= version.parse('2.6.0') and world_size > 1:
             torch._inductor.config.reorder_for_compute_comm_overlap = True
             if isinstance(self.vision_model, InternVisionModel):
-                self.vision_model.encoder.forward = split_batch(self.vision_model.encoder.forward, 'inputs_embeds')
+                self.vision_model.encoder.forward = split_batch(self.vision_model.encoder.forward,
+                                                                'inputs_embeds',
+                                                                index=0)
 
         self.extract_feature = torch.compile(self.extract_feature, mode='max-autotune')
         self.compile_vit = True

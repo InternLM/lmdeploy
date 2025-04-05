@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Tuple
 
 import torch
 
+from lmdeploy.pytorch.backends.selector import get_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.pytorch.model_inputs import StepContext
 from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMeta
@@ -146,7 +147,7 @@ class CUDAGraphRunner(GraphRunner):
 
     def __call__(self, **kwargs):
         """call."""
-        if not self.backend_config.eager_mode:
+        if not self.backend_config.eager_mode and get_backend().get_name() == 'cuda':
             self._try_compile_model_once()
 
         enable_graph = self.enable_graph(**kwargs)
