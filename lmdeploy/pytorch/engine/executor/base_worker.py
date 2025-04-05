@@ -1,6 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
-from typing import Any, Dict
+from typing import Any, Dict, List
+
+from lmdeploy.disagg.messages import RemoteEngineConfig, MigrationExecutionInputs
 
 from lmdeploy.pytorch.backends.selector import get_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, ModelConfig
@@ -159,3 +161,21 @@ class WorkerWrapperBase:
     def release(self):
         """stop engine loop."""
         self.model_agent.release()
+
+    """ PD Disaggregation API Begin """
+    def init_rdma_link(
+        self, remote_engine_id: int, remote_engine_config: RemoteEngineConfig
+    ):
+        return self.model_agent.cache_engine.init_rdma_link(
+            remote_engine_id, remote_engine_config
+        )
+
+    def rdma_connect(self, remote_engine_id, remote_endpoint_info: List[str]):
+        return self.model_agent.cache_engine.rdma_connect(
+            remote_engine_id, remote_endpoint_info
+        )
+
+    async def migrate(self, inputs: MigrationExecutionInputs):
+        ret = await self.model_agent.cache_engine.migrate(inputs)
+        return ret
+    """ PD Disaggregation API End """
