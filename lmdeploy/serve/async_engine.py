@@ -12,7 +12,7 @@ from functools import partial
 from itertools import count
 from queue import Queue
 from threading import Thread
-from typing import Any, AsyncIterator, Dict, Iterator, List, Literal, Optional, Tuple, Union
+from typing import Any, AsyncIterator, Dict, Iterator, List, Literal, Optional, Union
 
 import torch
 import tqdm
@@ -93,30 +93,19 @@ class Session:
     """Session for AsyncEngine.chat.
 
     Args:
-        _id (int): session_id for internal use.
-        _step (int): the offset of the k/v cache for internal use.
-        _prompt (Any): input prompt for internal use.
-        _response (Reaponse): model output for prompt.
-        _engine (Any): engine for internal use.
-        history (List[Any, str]): chat history.
+        _id (int): session_id for internal use
+        _engine (Any): engine for internal use
+        _response (Reaponse): model output for prompt
+        _gen_config (GenerationConfig): the generation config
+        messages (List[Dict]): chat history in openai format
     """
 
     def __init__(self, session_id: int, engine: Any, gen_config: GenerationConfig = None):
         self._id: int = session_id
         self._engine = engine
-        self._step: int = 0
-        self._prompt: Any = None
         self._response: Response = None
         self._gen_config = gen_config
-        self.history: List[Tuple[Any, str]] = []
-
-    def _merge_response(self, resp: Response, step: Union[Response, GenOut]):
-        """merge response."""
-        resp.text += step.text if isinstance(step, Response) else step.response
-        resp.input_token_len = step.input_token_len
-        resp.generate_token_len = step.generate_token_len
-        resp.finish_reason = step.finish_reason
-        return resp
+        self.messages: List[Dict] = []
 
     @property
     def response(self) -> Response:
@@ -128,14 +117,7 @@ class Session:
         if self._engine:
             self._engine._run(coro=self._engine.end_session(self._id)).result()
             self._engine = None
-
-    def __repr__(self) -> str:
-        res = ''
-        for user, assistant in self.history:
-            if isinstance(user, list):
-                user = str(user)
-            res += f'USER:\n{user}\nASSISTANT:\n{assistant}\n'
-        return res
+        self.messages = []
 
     def __enter__(self):
         return self
@@ -821,7 +803,7 @@ class AsyncEngine(LogitsMixin):
         return Session(self._run(fn=lambda: next(self._session_id)).result(), engine=self, gen_config=gen_config)
 
     def chat(self,
-             prompt: str,
+             prompt: Union[List[Dict], str],
              session=None,
              gen_config: Optional[GenerationConfig] = None,
              stream_response=False,
@@ -829,7 +811,7 @@ class AsyncEngine(LogitsMixin):
         """Chat.
 
         Args:
-            prompt (str): prompt
+            prompt (Union[List[Dict], str]): it can be an openai-like message or a string
             session (Session): the chat session
             gen_config (GenerationConfig | None): a instance of
                 GenerationConfig. Default to None.
@@ -840,16 +822,19 @@ class AsyncEngine(LogitsMixin):
         if session is None:
             session = self.session()
 
-        # sync & init
-        session._prompt = prompt
+        if isinstance(prompt, str):
+            session.messages.append(dict(role='user', content=prompt))
+        elif isinstance(prompt, List) and all(isinstance(_, Dict) for _ in prompt):
+            session.messages.extend(prompt)
+        else:
+            raise ValueError(f'unsupported prompt: {prompt}')
+
         session._response = None
 
-        sequence_start = session._step == 0
-
-        generator = self.infer(prompt,
+        generator = self.infer(session.messages,
                                gen_config,
-                               sequence_start=sequence_start,
-                               sequence_end=False,
+                               sequence_start=True,
+                               sequence_end=True,
                                session_id=session._id,
                                stream_response=stream_response,
                                multiplex=True)
@@ -865,8 +850,10 @@ class AsyncEngine(LogitsMixin):
                 raise
             else:
                 session._response = resp
-                session._step += resp.generate_token_len + resp.input_token_len
-                session.history.append((session._prompt, resp.text))
+                session.messages.append(dict(role='user', content=resp.text))
+                # Since prefix caching is used to substitute interactive mode, the context step should be
+                # reset after each round
+                self.id2step[session._id] = 0
 
         if stream_response:
             session.generator = _gen()
