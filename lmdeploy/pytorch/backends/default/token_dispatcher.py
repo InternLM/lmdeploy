@@ -1,6 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Tuple
-
 import torch
 
 from ..token_dispatcher import TokenDispatcherImpl
@@ -79,8 +77,7 @@ class AlltoAllTokenDispatcher(TokenDispatcherImpl):
                                                                                             non_blocking=True)
         return num_tokens_per_local_expert
 
-    def dispatch(self, hidden_states: torch.Tensor, topk_ids: torch.Tensor, probs: torch.Tensor,
-                 local_expert_indices) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def dispatch(self, hidden_states: torch.Tensor, topk_ids: torch.Tensor, probs: torch.Tensor, local_expert_indices):
         self.hidden_shape = hidden_states.shape
         self.topk_ids = topk_ids
         self.routing_map, self.topk_weights = super().indices_to_multihot(topk_ids, probs, self.num_experts)
@@ -103,9 +100,14 @@ class AlltoAllTokenDispatcher(TokenDispatcherImpl):
                 self.num_global_tokens_per_local_expert.ravel(),
                 self.sort_input_by_local_experts,
             )
-        return global_input_tokens, None, None, tokens_per_expert
+        seg_indptr = torch.cat([
+            torch.zeros(1, device=tokens_per_expert.device, dtype=tokens_per_expert.dtype),
+            torch.cumsum(tokens_per_expert, dim=0),
+        ])
+        reorder_topk_ids = torch.repeat_interleave(tokens_per_expert)
+        return global_input_tokens, None, None, reorder_topk_ids, seg_indptr
 
-    def combine(self, hidden_states: torch.Tensor) -> torch.Tensor:
+    def combine(self, hidden_states: torch.Tensor, topk_idx: torch.Tensor, topk_weights: torch.Tensor) -> torch.Tensor:
         if self.num_local_experts > 1:
             hidden_states = self.sort_chunks_by_idxs(
                 hidden_states,
