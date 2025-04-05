@@ -175,6 +175,17 @@ class CudaOpsBackend(DefaultOpsBackend):
                            backend_config: BackendConfig, device: torch.device):
         """build graph runner."""
         from .graph_runner import CUDAGraphRunner
+        from .warmup_manager import WarmupMeta, get_warmup_manager
+
+        # warmup ops.
+        warmup_meta = WarmupMeta(
+            max_num_tokens=cache_config.max_prefill_token_num,
+            max_batch_size=cache_config.max_batches,
+            dtype=model_config.dtype,
+        )
+        get_warmup_manager().warmup(warmup_meta)
+
+        # make graph runner.
         return CUDAGraphRunner(model, model_config, cache_config, backend_config, device)
 
     @staticmethod
