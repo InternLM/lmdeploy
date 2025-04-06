@@ -14,6 +14,7 @@ class EngineRole(enum.Enum):
 class MigrationBackend(enum.Enum):
     DLSlime = enum.auto()
     Mooncake = enum.auto()
+    InfiniStore = enum.auto()
 
 
 class DisaggEngineConfig(BaseModel):

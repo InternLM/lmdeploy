@@ -135,7 +135,7 @@ class SubCliServe:
         parser.add_argument('--migration-backend',
                             type=str,
                             default='DLSlime',
-                            choices=['DLSlime', 'Mooncake'],
+                            choices=['DLSlime', 'Mooncake', 'InfiniStore'],
                             help='kvcache migration management backend when PD disaggregation')
         parser.add_argument('--migration-protocol',
                             type=str,
