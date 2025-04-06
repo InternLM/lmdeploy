@@ -11,7 +11,12 @@ class EngineRole(enum.Enum):
     Decode = enum.auto()
 
 
-class RemoteEngineConfig(BaseModel):
+class MigrationBackend(enum.Enum):
+    DLSlime = enum.auto()
+    Mooncake = enum.auto()
+
+
+class DisaggEngineConfig(BaseModel):
     # parallel config
     tp_size: int
     ep_size: Optional[int]
@@ -24,15 +29,53 @@ class RemoteEngineConfig(BaseModel):
     num_gpu_blocks: int
 
 
+class MigrationTransportProtocol(enum.Enum):
+    # Generate Transport Protocol
+    TCP = enum.auto()
+    # Engine with IB or RoCE NICs
+    RDMA = enum.auto()
+    # Engine with high device-to-device link
+    NVLINK = enum.auto()
+
+
+class TCPInitRequest(BaseModel):
+    pass
+
+
 class RDMAInitRequest(BaseModel):
-    remote_engine_id: int
-    remote_engine_config: RemoteEngineConfig
+    device_name: Optional[str] = None
+    ib_port: int = 1
     link_type: str = "Ethernet"
 
 
-class RDMAConnectRequest(BaseModel):
+class NVLinkInitRequest(BaseModel):
+    pass
+
+
+class MigrationInitRequest(BaseModel):
     remote_engine_id: int
-    remote_endpoint_info: List[str]
+    remote_engine_config: DisaggEngineConfig
+    protocol: MigrationTransportProtocol
+
+    rank: Optional[int] = None
+
+    tcp_init_request: Optional[TCPInitRequest] = None
+    rdma_init_request: Optional[RDMAInitRequest] = None
+    nvlink_init_request: Optional[NVLinkInitRequest] = None
+
+
+class MigrationRegisterMemoryRequest(BaseModel):
+    protocol: MigrationTransportProtocol
+    remote_engine_id: int
+    mr_key: str
+    addr: int
+    length: int
+
+
+class MigrationConnectionRequest(BaseModel):
+    protocol: MigrationTransportProtocol
+    remote_engine_id: int
+    remote_endpoint_info: str
 
 
 class MigrationRequest(BaseModel):
@@ -42,7 +85,16 @@ class MigrationRequest(BaseModel):
     remote_block_ids: List[int]
 
 
-class MigrationExecutionInputs(BaseModel):
+class MigrationExecutionBatch(BaseModel):
     """Input of the Migration."""
 
     requests: List[Tuple[int, List[Tuple[int, int]]]] = []
+
+
+class MigrationAssignment(BaseModel):
+    protocol: MigrationTransportProtocol
+    remote_engine_id: int
+    mr_key: str
+    target_offset: List[int]
+    source_offset: List[int]
+    length: int

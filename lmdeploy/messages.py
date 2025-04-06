@@ -11,6 +11,8 @@ from .utils import get_logger
 
 from lmdeploy.disagg.messages import (
     EngineRole,
+    MigrationBackend,
+    MigrationTransportProtocol,
     MigrationRequest,
 )
 
@@ -330,8 +332,10 @@ class PytorchEngineConfig:
     revision: str = None
     quant_policy: Literal[0, 4, 8] = 0
     distributed_executor_backend: str = None
-    
+
     role: EngineRole = EngineRole.Hybrid
+    migration_backend: MigrationBackend = MigrationBackend.DLSlime
+    migration_protocol: MigrationTransportProtocol = MigrationTransportProtocol.RDMA
 
     def __post_init__(self):
         """Check input validation."""

@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 import torch
 
-from lmdeploy.disagg.messages import EngineRole, MigrationExecutionInputs
+from lmdeploy.disagg.messages import EngineRole, MigrationExecutionBatch
 from lmdeploy.messages import PytorchEngineConfig, ResponseType
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model, logging_timer
 
@@ -326,6 +326,8 @@ class Engine:
         scheduler_config = _build_scheduler_config(engine_config)
         cache_config = _build_cache_config(engine_config)
         setattr(cache_config, "role", engine_config.role)
+        setattr(cache_config, "migration_backend", engine_config.migration_backend)
+        setattr(cache_config, "migration_protocol", engine_config.migration_protocol)
         backend_config = _build_backend_config(engine_config)
         dist_config = _build_dist_config(engine_config)
         self.should_execute_dummy_batch = dist_config.need_dummy_batch()
@@ -955,7 +957,7 @@ class Engine:
                         )
                     )
 
-                migration_inputs = MigrationExecutionInputs(
+                migration_inputs = MigrationExecutionBatch(
                     requests=migration_execution_requests
                 )
                 await self.executor.migrate(migration_inputs)

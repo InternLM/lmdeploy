@@ -17,7 +17,12 @@ from fastapi.security.http import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from lmdeploy.archs import get_task
-from lmdeploy.disagg.messages import MigrationRequest, RemoteEngineConfig, RDMAConnectRequest, RDMAInitRequest
+from lmdeploy.disagg.messages import (
+    MigrationRequest,
+    DisaggEngineConfig,
+    MigrationInitRequest,
+    MigrationConnectionRequest,
+)
 from lmdeploy.messages import GenerationConfig, LogitsProcessor, PytorchEngineConfig, TurbomindEngineConfig
 from lmdeploy.model import ChatTemplateConfig
 from lmdeploy.serve.async_engine import AsyncEngine
@@ -803,11 +808,11 @@ async def encode(request: EncodeRequest, raw_request: Request = None):
         return EncodeResponse(input_ids=encoded, length=length)
 
 
-@router.get("/distserve/get_disagg_info")
-async def get_disagg_info():
+@router.get("/distserve/engine_info")
+async def engine_info():
     engine = VariableInterface.async_engine.engine
 
-    response = RemoteEngineConfig(
+    response = DisaggEngineConfig(
         tp_size=engine.engine_config.tp,
         dp_size=None,
         pp_size=None,
@@ -820,18 +825,14 @@ async def get_disagg_info():
     return response.model_dump_json()
 
 """ PD Disaggregation API Begin """
-@router.post("/distserve/init_rdma_endpoint")
-async def init_rdma_link(rdma_init_config: RDMAInitRequest):
-    return VariableInterface.async_engine.init_rdma_link(
-        rdma_init_config.remote_engine_id, rdma_init_config.remote_engine_config
-    )
+@router.post("/distserve/p2p_initialize")
+async def p2p_initialize(init_request: MigrationInitRequest):
+    return VariableInterface.async_engine.p2p_initialize(init_request)
 
 
-@router.post("/distserve/rdma_connect")
-async def rdma_connect(rdma_connect_config: RDMAConnectRequest):
-    return VariableInterface.async_engine.rdma_connect(
-        rdma_connect_config.remote_engine_id, rdma_connect_config.remote_endpoint_info
-    )
+@router.post("/distserve/p2p_connect")
+async def p2p_connect(conn_request: List[MigrationConnectionRequest]):
+    return VariableInterface.async_engine.p2p_connect(conn_request)
 
 
 @router.post("/distserve/free_cache")

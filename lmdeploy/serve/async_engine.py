@@ -19,7 +19,11 @@ import tqdm
 
 from lmdeploy import Tokenizer
 from lmdeploy.archs import get_model_arch
-from lmdeploy.disagg.messages import RemoteEngineConfig
+from lmdeploy.disagg.messages import (
+    MigrationInitRequest,
+    MigrationConnectionRequest,
+    MigrationExecutionBatch
+)
 from lmdeploy.logger import RequestLogger
 from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, Response, ResponseType, TurbomindEngineConfig
 from lmdeploy.model import MODELS, ChatTemplateConfig, best_match_model
@@ -887,13 +891,9 @@ class AsyncEngine(LogitsMixin):
     def free_cache(self, session_id: int):
         self.engine.scheduler.end_session(session_id)
 
-    def init_rdma_link(
-        self, remote_engine_id: int, remote_engine_config: RemoteEngineConfig
-    ):
-        return self.engine.executor.init_rdma_link(
-            remote_engine_id, remote_engine_config
-        )
+    def p2p_initialize(self, init_request: MigrationInitRequest):
+        return self.engine.executor.p2p_initialize(init_request)
 
-    def rdma_connect(self, remote_engine_id: int, remote_endpoint_info: List[str]):
-        return self.engine.executor.rdma_connect(remote_engine_id, remote_endpoint_info)
+    def p2p_connect(self, conn_request: List[MigrationConnectionRequest]):
+        return self.engine.executor.p2p_connect(conn_request)
     """ DistServe Async Engine API End """

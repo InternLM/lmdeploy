@@ -14,8 +14,8 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from lmdeploy.serve.openai.api_server import VariableInterface
-from lmdeploy.disagg.conn_manager import pd_consolidation
-from lmdeploy.disagg.messages import MigrationRequest
+from lmdeploy.disagg.conn import pd_consolidation
+from lmdeploy.disagg.messages import MigrationRequest, MigrationTransportProtocol
 
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
@@ -148,19 +148,36 @@ def parse_args():
         help="指定 decode 的 endpoint 列表，例如 --decode-endpoint http://example3.com http://example4.com",
     )
 
-    args = parser.parse_args()
-    return args
-
-
-def init_migration(args):
-    global engine_snapshot
-    engine_snapshot = EngineSnapshot(
-        prefill_endpoints=args.prefill_endpoint, decode_endpoints=args.decode_endpoint
+    parser.add_argument(
+        "--migration-protocol",
+        type=str,
+        choices=["TCP", "RDMA", "NVLINK"],
+        default="RDMA"
     )
 
-    for p_idx, prefill_endpoint in enumerate(args.prefill_endpoint):
-        for d_idx, decode_endpoint in enumerate(args.decode_endpoint):
-            pd_consolidation(p_idx, prefill_endpoint, d_idx, decode_endpoint)
+    parser.add_argument(
+        "--rdma-link-type",
+        type=str,
+        choices=["Ethernet", "IB"],
+        default="Ethernet"
+    )
+
+    return parser.parse_args()
+
+
+def init_migration(router_args):
+    global engine_snapshot
+    engine_snapshot = EngineSnapshot(
+        prefill_endpoints=router_args.prefill_endpoint,
+        decode_endpoints=router_args.decode_endpoint,
+    )
+
+    for p_idx, prefill_endpoint in enumerate(router_args.prefill_endpoint):
+        for d_idx, decode_endpoint in enumerate(router_args.decode_endpoint):
+            pd_consolidation(
+                (p_idx, d_idx),
+                (prefill_endpoint, decode_endpoint),
+                rdma_link_type=router_args.rdma_link_type)
 
 
 if __name__ == "__main__":

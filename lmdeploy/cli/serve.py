@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from lmdeploy.disagg.messages import EngineRole
+from lmdeploy.disagg.messages import EngineRole, MigrationBackend, MigrationTransportProtocol
 from lmdeploy.utils import get_max_batch_size
 
 from .cli import CLI
@@ -132,6 +132,16 @@ class SubCliServe:
                             help='Hybrid for Non-Disaggregated Engine;'
                                  'Prefill for Disaggregated Prefill Engine;'
                                  'Decode fro Disaggregated Decode Engine;')
+        parser.add_argument('--migration-backend',
+                            type=str,
+                            default='DLSlime',
+                            choices=['DLSlime', 'Mooncake'],
+                            help='kvcache migration management backend when PD disaggregation')
+        parser.add_argument('--migration-protocol',
+                            type=str,
+                            default='RDMA',
+                            choices=['TCP', 'RDMA', 'NVLINK'],
+                            help='kvcache migration protocol')
         # common args
         ArgumentHelper.backend(parser)
         ArgumentHelper.log_level(parser)
@@ -315,7 +325,9 @@ class SubCliServe:
                                                  quant_policy=args.quant_policy,
                                                  eager_mode=args.eager_mode,
                                                  max_prefill_token_num=args.max_prefill_token_num,
-                                                 role=EngineRole.__members__[args.role])
+                                                 role=EngineRole.__members__[args.role],
+                                                 migration_backend=MigrationBackend.__members__[args.migration_backend],
+                                                 migration_protocol=MigrationTransportProtocol.__members__[args.migration_protocol])
         else:
             from lmdeploy.messages import TurbomindEngineConfig
             backend_config = TurbomindEngineConfig(dtype=args.dtype,

@@ -4,7 +4,17 @@ from typing import Dict, List, Literal, Tuple
 
 import torch
 
-from lmdeploy.disagg.messages import EngineRole, MigrationExecutionInputs, RemoteEngineConfig
+from lmdeploy.disagg.messages import (
+    EngineRole,
+    MigrationInitRequest,
+    MigrationRegisterMemoryRequest,
+    MigrationConnectionRequest,
+    MigrationExecutionBatch,
+    MigrationAssignment,
+)
+
+from lmdeploy.disagg.backend.base import MigrationBackendImpl
+from lmdeploy.disagg.backend.backend import MIGRATION_BACKENDS
 
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.utils import get_logger
@@ -54,12 +64,8 @@ class CacheEngine:
         self.local_gpu_cache = self.allocate_gpu_cache()
         self.local_cpu_cache = self.allocate_cpu_cache()
 
-        # RDMA Links for PD Disaggregation
         if self.cache_config.role in [EngineRole.Prefill, EngineRole.Decode]:
-            from lmdeploy.disagg.endpoint import EngineEndpoint
-            self.links: Dict[int, EngineEndpoint] = {}
-        else:
-            self.links = None
+            self.migration_backend_impl: MigrationBackendImpl = MIGRATION_BACKENDS[self.cache_config.migration_backend]()
 
         # Initialize the stream for caching operations.
         self.cache_stream = torch.cuda.Stream()
@@ -313,70 +319,65 @@ class CacheEngine:
 
         total = num_layers * (mem_key_block + mem_value_block)
         return total
-    
+
     """ Metheds for PD Disaggregation Begin. """
-    def init_rdma_link(
-        self, remote_engine_id: int, remote_engine_config: RemoteEngineConfig
-    ):
-        device_name = find_best_rdma_device(self.rank)
-        self.links[remote_engine_id] = EngineEndpoint(
-            device_name,
-            remote_engine_config,
-            [
-                (
-                    "k",
-                    self.full_gpu_cache[0].data_ptr()
-                    + self.full_gpu_cache[0].storage_offset(),
-                    self.full_gpu_cache[0].numel() * self.full_gpu_cache[0].itemsize,
-                ),
-                (
-                    "v",
-                    self.full_gpu_cache[1].data_ptr()
-                    + self.full_gpu_cache[1].storage_offset(),
-                    self.full_gpu_cache[1].numel() * self.full_gpu_cache[1].itemsize,
-                ),
-            ],
-        )
-        return self.links[remote_engine_id].local_endpoint_info
+    def p2p_initialize(self, migration_init_request: MigrationInitRequest):
+        migration_init_request.rank = self.rank
+        self.migration_backend_impl.p2p_initialize(migration_init_request)
+        for i, t in enumerate(self.full_gpu_cache):
+            register_mr_request = MigrationRegisterMemoryRequest(
+                protocol=self.cache_config.migration_protocol,
+                remote_engine_id=migration_init_request.remote_engine_id,
+                mr_key=str(i),
+                addr=t.data_ptr() + t.storage_offset(),
+                length=t.numel() * t.itemsize
+            )
+            self.migration_backend_impl.register_memory_region(register_mr_request)
+        return self.migration_backend_impl.endpoint_info(
+            migration_init_request.remote_engine_id,
+            migration_init_request.protocol)
 
-    def rdma_connect(self, remote_engine_id: int, remote_endpoint_info):
-        self.links[remote_engine_id].rdma_endpoint.connect_to(
-            remote_endpoint_info[self.rank]
-        )
+    def p2p_connect(self, migration_conn_request: MigrationConnectionRequest):
+        self.migration_backend_impl.p2p_connect(migration_conn_request[self.rank])
 
-    async def migrate(self, migration_execution_inputs: MigrationExecutionInputs):
-        head_dim = self.model_config.get_head_size()
-        num_heads = self.model_config.num_key_value_heads // self.world_size
-        block_size = self.cache_config.block_size
-        length = (
-            head_dim * num_heads * block_size * self.model_config.dtype.itemsize
-        )
-        layer_stride = self.cache_config.num_gpu_blocks * length
+    async def migrate(self, migration_execution_inputs: MigrationExecutionBatch):
+        def get_assignment_len():
+            head_dim = self.model_config.get_head_size()
+            num_heads = self.model_config.num_key_value_heads // self.world_size
+            block_size = self.cache_config.block_size
+            return head_dim * num_heads * block_size * self.model_config.dtype.itemsize
+
+        assignment_len = get_assignment_len()
+        layer_stride = self.cache_config.num_gpu_blocks * assignment_len
+
+        def get_offset(block_ids, assignment_len, layer_stride, remote_layer_stride):
+            target_offset = [
+                block_id[0] * assignment_len + layer * remote_layer_stride
+                for layer in range(self.model_config.num_layers)
+                for block_id in block_ids
+            ]
+            source_offset = [
+                block_id[1] * assignment_len + layer * layer_stride
+                for layer in range(self.model_config.num_layers)
+                for block_id in block_ids
+            ]
+            return target_offset, source_offset
 
         for migration_exe_req in migration_execution_inputs.requests:
-            source_offset = []
-            target_offset = []
             remote_engine_id = migration_exe_req[0]
             blocks_to_migration = migration_exe_req[1]
-            layer_stride_remote = self.links[remote_engine_id].remote_engine_config.num_gpu_blocks * length
-            for (prefill_block_id, decode_block_id) in blocks_to_migration:
-                source_offset.extend(
-                    [
-                        decode_block_id * length + layer * layer_stride
-                        for layer in range(self.model_config.num_layers)
-                    ]
-                )
-                target_offset.extend(
-                    [
-                        prefill_block_id * length + layer * layer_stride_remote
-                        for layer in range(self.model_config.num_layers)
-                    ]
-                )
+            remote_layer_stride = self.migration_backend_impl.links[remote_engine_id].remote_engine_config.num_gpu_blocks * assignment_len
+            target_offset, source_offset = get_offset(blocks_to_migration, assignment_len, layer_stride, remote_layer_stride)
 
-                await self.links[remote_engine_id].rdma_endpoint.read_batch_async(
-                    "k", target_offset, source_offset, length
-                )
-                await self.links[remote_engine_id].rdma_endpoint.read_batch_async(
-                    "v", target_offset, source_offset, length
+            for i, _ in enumerate(self.full_gpu_cache):
+                await self.migration_backend_impl.p2p_migrate(
+                    MigrationAssignment(
+                        protocol=self.cache_config.migration_protocol,
+                        remote_engine_id=remote_engine_id,
+                        mr_key=str(i),
+                        target_offset=target_offset,
+                        source_offset=source_offset,
+                        length=assignment_len
+                    )
                 )
     """ Metheds for PD Disaggregation End. """

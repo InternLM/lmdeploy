@@ -2,7 +2,11 @@
 import asyncio
 from typing import Any, Dict, List
 
-from lmdeploy.disagg.messages import RemoteEngineConfig, MigrationExecutionInputs
+from lmdeploy.disagg.messages import (
+    MigrationInitRequest,
+    MigrationConnectionRequest,
+    MigrationExecutionBatch,
+)
 
 from lmdeploy.pytorch.backends.selector import get_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, ModelConfig
@@ -163,19 +167,12 @@ class WorkerWrapperBase:
         self.model_agent.release()
 
     """ PD Disaggregation API Begin """
-    def init_rdma_link(
-        self, remote_engine_id: int, remote_engine_config: RemoteEngineConfig
-    ):
-        return self.model_agent.cache_engine.init_rdma_link(
-            remote_engine_id, remote_engine_config
-        )
+    def p2p_initialize(self, init_request: MigrationInitRequest):
+        return self.model_agent.cache_engine.p2p_initialize(init_request)
 
-    def rdma_connect(self, remote_engine_id, remote_endpoint_info: List[str]):
-        return self.model_agent.cache_engine.rdma_connect(
-            remote_engine_id, remote_endpoint_info
-        )
+    def p2p_connect(self, conn_request: List[MigrationConnectionRequest]):
+        return self.model_agent.cache_engine.p2p_connect(conn_request)
 
-    async def migrate(self, inputs: MigrationExecutionInputs):
-        ret = await self.model_agent.cache_engine.migrate(inputs)
-        return ret
+    async def migrate(self, inputs: MigrationExecutionBatch):
+        return await self.model_agent.cache_engine.migrate(inputs)
     """ PD Disaggregation API End """

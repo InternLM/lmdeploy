@@ -3,7 +3,7 @@
 import asyncio
 from typing import Any, Dict, List
 
-from lmdeploy.disagg.messages import MigrationExecutionInputs, RemoteEngineConfig
+from lmdeploy.disagg.messages import MigrationExecutionBatch, DisaggEngineConfig
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, ModelConfig
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine
 from lmdeploy.utils import get_logger
@@ -92,15 +92,15 @@ class ExecutorBase:
         raise NotImplementedError('Not Implemented')
     
     """ PD Disaggregation API Begin """
-    def init_rdma_link(self, remote_engine_id: int, remote_engine_config: RemoteEngineConfig):
+    def p2p_initialize(self, remote_engine_id: int, remote_engine_config: DisaggEngineConfig):
         """init rdma link."""
         raise NotImplementedError('Not implemented')
 
-    def rdma_connect(self, remote_engine_id: int, remote_endpoint_info: List[str]):
+    def p2p_connect(self, remote_engine_id: int, remote_endpoint_info: List[str]):
         """rdma_connect."""
         raise NotImplementedError('Not Implemented')
     
-    async def migrate(self, inputs):
+    async def migrate(self, batch):
         """KV Cache Migration."""
         raise NotImplementedError('Not Implemented')
     """ PD Disaggregation API End """
