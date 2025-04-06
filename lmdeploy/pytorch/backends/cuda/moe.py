@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from typing import List
+from typing import List, Optional
 
 import torch
 import torch.distributed as dist
@@ -438,6 +438,40 @@ class FusedMoENormal:
         out_states = self.token_dispatcher.combine(out_states)
         return out_states
 
+    def capture(self):
+        return self.token_dispatcher.buffer_normal.capture()
+
+    def wait(self, event):
+        event.current_stream_wait()
+
+    def dispatch_async(self,
+                       x: torch.Tensor,
+                       topk_idx: torch.Tensor,
+                       topk_weights: torch.Tensor,
+                       num_experts: Optional[int] = None,
+                       previous_event=None,
+                       async_finish=True):
+        return self.token_dispatcher.dispatch_normal_async(x, topk_idx, topk_weights, num_experts, previous_event,
+                                                           async_finish)
+
+    def combine_async(self, x: torch.Tensor, handle: tuple, previous_event=None, async_finish=True):
+        return self.token_dispatcher.combine_normal_async(x, handle, previous_event, async_finish)
+
+    def save_for_combine(self, recv_hidden_states, recv_topk_idx, recv_topk_weights, recv_tokens_per_expert_list,
+                         handle):
+        return self.token_dispatcher.save_for_combine(recv_hidden_states, recv_topk_idx, recv_topk_weights,
+                                                      recv_tokens_per_expert_list, handle)
+
+    def release(self):
+        return self.token_dispatcher.release()
+
+    def moe_forward(self, recv_hidden_states, up_weight, up_scale, down_weight, down_scale):
+        recv_hidden_states = self.token_dispatcher.get_permuted_hidden_states_by_experts(recv_hidden_states)
+        recv_hidden_states = self.experts.forward(recv_hidden_states, self.token_dispatcher.tokens_per_expert,
+                                                  up_weight, up_scale, down_weight, down_scale)
+        recv_hidden_states = self.token_dispatcher.get_restored_hidden_states_by_experts(recv_hidden_states)
+        return recv_hidden_states
+
 
 class FusedMoELowLatency:
 
@@ -479,6 +513,42 @@ class FusedMoELowLatency:
         out_states = self.token_dispatcher.combine(out_states, topk_idx, topk_weights)
         return out_states
 
+    def wait(self, event):
+        event.current_stream_wait()
+
+    def dispatch_async(
+        self,
+        hidden_states: torch.Tensor,
+        topk_idx: torch.Tensor,
+        num_experts: Optional[int] = None,
+        use_fp8: bool = True,
+        async_finish: bool = True,
+    ):
+        return self.token_dispatcher.dispatch_async(hidden_states, topk_idx, num_experts, use_fp8, async_finish)
+
+    def combine_async(
+        self,
+        hidden_states: torch.Tensor,
+        topk_idx: torch.Tensor,
+        topk_weights: torch.Tensor,
+        handle: tuple,
+        async_finish: bool,
+    ):
+        return self.token_dispatcher.combine_async(hidden_states, topk_idx, topk_weights, handle, async_finish)
+
+    def save_for_combine(self, recv_hidden_states, recv_topk_idx, recv_topk_weights, recv_tokens_per_expert_list,
+                         handle):
+        return self.token_dispatcher.save_for_combine(recv_hidden_states, recv_topk_idx, recv_topk_weights,
+                                                      recv_tokens_per_expert_list, handle)
+
+    def moe_forward(self, recv_hidden_states, recv_expert_count, hidden_shape, topk_ids, up_weight, up_scale,
+                    down_weight, down_scale):
+        expected_m = (hidden_shape[0] * self.token_dispatcher.buffer_low_latency.group_size * topk_ids.shape[1] +
+                      self.token_dispatcher.num_experts) // self.token_dispatcher.num_experts
+        out_states = self.experts.forward(recv_hidden_states, up_weight, up_scale, down_weight, down_scale,
+                                          recv_expert_count, expected_m)
+        return out_states
+
 
 class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
 
@@ -505,7 +575,6 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
         except ImportError:
             self.use_deep_gemm = False
             logger.warning('For higher performance, please install DeepGEMM https://github.com/deepseek-ai/DeepGEMM')
-        self.renormalize_fn = _renormalize
 
     def forward(self,
                 hidden_states: torch.Tensor,
@@ -517,13 +586,16 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
                 down_scale: torch.Tensor,
                 expert_list: List[int] = None):
         """forward."""
-        topk_weights = self.renormalize_fn(topk_weights, self.renormalize)
+        topk_weights = self.do_renormalize(topk_weights)
         step_ctx = get_step_ctx_manager().current_context()
         low_latency_mode = step_ctx.is_decoding and self.use_deep_gemm
         moe = self.moe_build(low_latency_mode)
         out_states = moe.forward(hidden_states, topk_weights, topk_ids, gate_up_weights, gate_up_scale, down_weights,
                                  down_scale, expert_list)
         return out_states
+
+    def do_renormalize(self, topk_weights):
+        return _renormalize(topk_weights, self.renormalize)
 
     def moe_build(self, low_latency_mode: bool = False):
         if low_latency_mode:

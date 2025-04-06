@@ -857,19 +857,19 @@ class DeepseekV2DecoderLayer(nn.Module):
         topk_weights, topk_ids = self.mlp.gate(hidden_states)
 
         exports = self.mlp.experts
-        exports_impl = self.mlp.experts.impl
-        topk_weights = exports_impl.renormalize_fn(topk_weights, exports_impl.renormalize)
+        topk_weights = exports.renormalize(topk_weights)
         topk_weights = topk_weights.to(torch.float32)
         topk_ids = topk_ids.to(torch.int64)
+        up_weight, up_scale, down_weight, down_scale = exports.get_weight()
         hidden_shape = hidden_states.shape
         shared_states = None
 
         is_decoding = attn_metadata.is_decoding
-        moe = exports_impl.moe_build(is_decoding)
+        moe = exports.moe_build(is_decoding)
         if not is_decoding:
             # yield for attn1, dis
             yield
-            previous_event = moe.token_dispatcher.buffer_normal.capture()
+            previous_event = moe.capture()
             (
                 recv_hidden_states,
                 recv_topk_idx,
@@ -877,69 +877,61 @@ class DeepseekV2DecoderLayer(nn.Module):
                 recv_tokens_per_expert_list,
                 handle,
                 event,
-            ) = moe.token_dispatcher.dispatch_normal_async(hidden_states, topk_ids, topk_weights,
-                                                           moe.token_dispatcher.num_experts, previous_event, True)
+            ) = moe.dispatch_async(hidden_states,
+                                   topk_ids,
+                                   topk_weights,
+                                   previous_event=previous_event,
+                                   async_finish=True)
             # yield for dis, dis_wait
             yield
-            event.current_stream_wait()
+            moe.wait(event)
             # yield for dis_wait, moe
             yield
-            moe.token_dispatcher.tokens_per_expert = torch.tensor(
-                recv_tokens_per_expert_list,
-                device=hidden_states.device,
-                dtype=torch.int64,
-            )
-            moe.token_dispatcher.handle = handle
-            moe.token_dispatcher.topk_idx = recv_topk_idx
-            moe.token_dispatcher.topk_weights = recv_topk_weights
+            moe.save_for_combine(recv_hidden_states, recv_topk_idx, recv_topk_weights, recv_tokens_per_expert_list,
+                                 handle)
 
             if recv_hidden_states.shape[0] > 0:
-                recv_hidden_states = moe.token_dispatcher.get_permuted_hidden_states_by_experts(recv_hidden_states)
-                recv_hidden_states = moe.experts.forward(recv_hidden_states, moe.token_dispatcher.tokens_per_expert,
-                                                         exports.gate_up.weight, exports.gate_up.scale,
-                                                         exports.down.weight, exports.down.scale)
-                recv_hidden_states = moe.token_dispatcher.get_restored_hidden_states_by_experts(recv_hidden_states)
+                recv_hidden_states = moe.moe_forward(recv_hidden_states, up_weight, up_scale, down_weight, down_scale)
             # yield for moe, comb
             yield
-            previous_event = moe.token_dispatcher.buffer_normal.capture()
-            out_states, event = moe.token_dispatcher.combine_normal_async(recv_hidden_states, handle, previous_event,
-                                                                          True)
+            previous_event = moe.capture()
+            out_states, event = moe.combine_async(recv_hidden_states,
+                                                  handle,
+                                                  previous_event=previous_event,
+                                                  async_finish=True)
             # yield for comb, (+share) comb_wait
             yield
             if self.mlp.shared_experts is not None:
                 shared_states = self.mlp.shared_experts(hidden_states)
-            event.current_stream_wait()
+            moe.wait(event)
             # yield for (+share) comb_wait, (+share) attn0
             yield
-            moe.token_dispatcher.handle = None
+            moe.release()
             out_states.view(hidden_shape)
         else:
             # yield for attn1, dis + share
             yield
-            recv_hidden_states, recv_expert_count, handle, event, hook = moe.token_dispatcher.dispatch_async(
-                hidden_states, topk_ids, moe.token_dispatcher.num_experts, use_fp8=True, async_finish=True)
+            recv_hidden_states, recv_expert_count, handle, event, hook = moe.dispatch_async(hidden_states,
+                                                                                            topk_ids,
+                                                                                            use_fp8=True,
+                                                                                            async_finish=True)
             if self.mlp.shared_experts is not None:
                 shared_states = self.mlp.shared_experts(hidden_states)
             # yield for dis + share, dis_wait
             yield
-            event.current_stream_wait()
+            moe.wait(event)
             # yield for dis_wait, moe
             yield
-            moe.token_dispatcher.handle = handle
-            expected_m = (hidden_shape[0] * moe.token_dispatcher.buffer_low_latency.group_size * topk_ids.shape[1] +
-                          moe.token_dispatcher.num_experts) // moe.token_dispatcher.num_experts
-            out_states = moe.experts.forward(recv_hidden_states, exports.gate_up.weight, exports.gate_up.scale,
-                                             exports.down.weight, exports.down.scale, recv_expert_count, expected_m)
+            out_states = moe.moe_forward(recv_hidden_states, recv_expert_count, hidden_shape, topk_ids, up_weight,
+                                         up_scale, down_weight, down_scale)
             # yield for moe, comb
             yield
-            out_states, event, hook = moe.token_dispatcher.combine_async(out_states, topk_ids, topk_weights,
-                                                                         moe.token_dispatcher.handle, True)
+            out_states, event, hook = moe.combine_async(out_states, topk_ids, topk_weights, handle, True)
             # yield for comb, comb_wait
             yield
-            event.current_stream_wait()
+            moe.wait(event)
             # yield for comb_wait, (+share) attn0
             yield
-            moe.token_dispatcher.handle = None
             out_states.view(hidden_shape)
 
         if shared_states is not None:
@@ -1048,7 +1040,6 @@ class DeepseekV2Model(nn.Module):
         inputs_embeds: Optional[torch.FloatTensor] = None,
     ):
         """forward_twomicrobatch."""
-
         assert self.config.moe_layer_freq == 1
         moe_start_idx = min(self.config.first_k_dense_replace, len(self.layers))
 

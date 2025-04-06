@@ -213,7 +213,7 @@ class DeepEPTokenDispatcher(TokenDispatcherImpl):
                               x: torch.Tensor,
                               topk_idx: torch.Tensor,
                               topk_weights: torch.Tensor,
-                              num_experts: int,
+                              num_experts: Optional[int] = None,
                               previous_event=None,
                               async_finish=True):
         (
@@ -224,7 +224,7 @@ class DeepEPTokenDispatcher(TokenDispatcherImpl):
             previous_event,
         ) = self.buffer_normal.get_dispatch_layout(
             topk_idx,
-            num_experts,
+            num_experts=self.num_experts if num_experts is None else num_experts,
             previous_event=previous_event,
             async_finish=async_finish,
             allocate_on_comm_stream=previous_event is not None and async_finish,
@@ -285,6 +285,25 @@ class DeepEPTokenDispatcher(TokenDispatcherImpl):
             allocate_on_comm_stream=previous_event is not None and async_finish,
         )
         return combined_x, event
+
+    def save_for_combine(self, recv_hidden_states, recv_topk_idx, recv_topk_weights, recv_tokens_per_expert_list,
+                         handle):
+        self.tokens_per_expert = torch.tensor(
+            recv_tokens_per_expert_list,
+            device=recv_hidden_states.device,
+            dtype=torch.int64,
+        )
+        self.handle = handle
+        self.topk_idx = recv_topk_idx
+        self.topk_weights = recv_topk_weights
+        return True
+
+    def release(self):
+        self.tokens_per_expert = None
+        self.handle = None
+        self.handletopk_idx = None
+        self.handletopk_weights = None
+        return True
 
     def get_number_of_tokens_per_expert(self) -> torch.Tensor:
         """Get the number of tokens per expert."""
@@ -374,17 +393,17 @@ class DeepEPTokenDispatcherLowLatency(TokenDispatcherImpl):
         self,
         hidden_states: torch.Tensor,
         topk_idx: torch.Tensor,
-        num_experts: int,
-        use_fp8: bool,
-        async_finish: bool,
+        num_experts: Optional[int] = None,
+        use_fp8: bool = True,
+        async_finish: bool = True,
     ):
         assert topk_idx.dtype == torch.int64
         recv_hidden_states, recv_expert_count, handle, event, hook = (self.buffer_low_latency.low_latency_dispatch(
             hidden_states,
             topk_idx,
             self.num_max_dispatch_tokens_per_rank,
-            num_experts,
-            use_fp8,
+            num_experts=self.num_experts if num_experts is None else num_experts,
+            use_fp8=use_fp8,
             async_finish=async_finish,
             return_recv_hook=not async_finish,
         ))

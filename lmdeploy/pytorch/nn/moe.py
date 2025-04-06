@@ -546,6 +546,15 @@ class FusedMoEBlockedF8(nn.Module):
             ret = _moe_reduce(ret, False)
         return ret
 
+    def renormalize(self, topk_weights):
+        return self.impl.do_renormalize(topk_weights)
+
+    def moe_build(self, low_latency_mode: bool = False):
+        return self.impl.moe_build(low_latency_mode)
+
+    def get_weight(self):
+        return self.gate_up.weight, self.gate_up.scale, self.down.weight, self.down.scale
+
 
 def build_fused_moe(
     hidden_dim: int,
