@@ -34,7 +34,7 @@ class DLSlimeMigrationManagement:
                 ib_port=init_request.rdma_init_request.ib_port,
                 link_type=init_request.rdma_init_request.link_type
             )
-    
+
     def register_memory_region(self, register_mr_request: MigrationRegisterMemoryRequest):
         self.endpoint[register_mr_request.protocol].register_memory_region(
             register_mr_request.mr_key,
@@ -46,7 +46,14 @@ class DLSlimeMigrationManagement:
         self.endpoint[connect_request.protocol].connect_to(connect_request.remote_endpoint_info)
 
     async def p2p_migrate(self, assignment: MigrationAssignment):
-        await self.endpoint[assignment.protocol].read_batch_async(assignment.mr_key, assignment.target_offset, assignment.source_offset, assignment.length)
+        max_batch = 8192
+        for i in range(0, len(assignment.target_offset), max_batch):
+            await self.endpoint[assignment.protocol].read_batch_async(
+                assignment.mr_key,
+                assignment.target_offset[i: i+max_batch],
+                assignment.source_offset[i: i+max_batch],
+                assignment.length
+            )
 
 
 @register_migration_backend(MigrationBackend.DLSlime)
