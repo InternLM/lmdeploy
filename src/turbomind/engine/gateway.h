@@ -81,11 +81,8 @@ public:
         }
     }
 
-    void pop(std::vector<std::shared_ptr<Request>>& infer_reqs,
-             unsigned                               max_infer,
-             bool                                   blocking,
-             bool&                                  abort,
-             int                                    rank)
+    void
+    pop(std::vector<std::shared_ptr<Request>>& infer_reqs, unsigned max_infer, bool blocking, bool& abort, int rank)
     {
         infer_reqs.clear();
 
@@ -129,7 +126,6 @@ public:
         if (!bind_ids.empty()) {
             seqid2rank_.bind(bind_ids, rank);
         }
-
     }
 
     void cancel(std::shared_ptr<Request> r)

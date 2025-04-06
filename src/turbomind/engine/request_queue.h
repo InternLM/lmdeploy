@@ -45,10 +45,7 @@ public:
         return count;
     }
 
-    bool pop(std::vector<std::shared_ptr<Request>>& infer_reqs,
-             unsigned                               max_infer,
-             bool                                   blocking,
-             bool&                                  abort)
+    bool pop(std::vector<std::shared_ptr<Request>>& infer_reqs, unsigned max_infer, bool blocking, bool& abort)
     {
         std::unique_lock lock{mutex_};
 
@@ -56,9 +53,7 @@ public:
 
         if (blocking) {
             cv_.wait(lock, [this] {
-                return !(queue_.empty())
-                       || flag_->load(std::memory_order_relaxed) == expected_
-                       || closed_;
+                return !(queue_.empty()) || flag_->load(std::memory_order_relaxed) == expected_ || closed_;
             });
             if (closed_) {
                 abort = true;
