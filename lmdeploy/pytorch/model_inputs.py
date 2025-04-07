@@ -335,7 +335,6 @@ class StepContext:
     kv_quant_policy: Literal[0, 4, 8] = 0
     model_metas: List[Dict[str, Any]] = None
     dp_meta: DPMeta = None
-    enable_twomicrobatch: bool = False
     twomicrobatch_splitflags: Optional[List[Dict]] = None
 
     _outputs: Dict = field(default_factory=dict)

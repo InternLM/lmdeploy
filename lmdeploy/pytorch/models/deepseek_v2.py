@@ -15,7 +15,7 @@ from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager, get_s
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
 from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_down_linear, build_gateup_linear, build_o_proj,
                                         build_rowwise_linear)
-from lmdeploy.pytorch.nn.moe import SoftmaxTopK, build_fused_moe
+from lmdeploy.pytorch.nn.moe import MoeType, SoftmaxTopK, build_fused_moe
 from lmdeploy.pytorch.nn.rotary_embedding import YarnParameters
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
@@ -852,97 +852,58 @@ class DeepseekV2DecoderLayer(nn.Module):
         )
 
         hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
+
+        # MOE
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
-        topk_weights, topk_ids = self.mlp.gate(hidden_states)
+        topk_weights, topk_idx = self.mlp.gate(hidden_states)
 
-        exports = self.mlp.experts
-        topk_weights = exports.renormalize(topk_weights)
+        topk_weights = self.mlp.experts.renormalize(topk_weights)
         topk_weights = topk_weights.to(torch.float32)
-        topk_ids = topk_ids.to(torch.int64)
-        up_weight, up_scale, down_weight, down_scale = exports.get_weight()
+        topk_idx = topk_idx.to(torch.int64)
         hidden_shape = hidden_states.shape
         shared_states = None
 
         is_decoding = attn_metadata.is_decoding
-        moe = exports.moe_build(is_decoding)
-        if not is_decoding:
-            # yield for attn1, dis
-            yield
-            previous_event = moe.capture()
-            (
-                recv_hidden_states,
-                recv_topk_idx,
-                recv_topk_weights,
-                recv_tokens_per_expert_list,
-                handle,
-                event,
-            ) = moe.dispatch_async(hidden_states,
-                                   topk_ids,
-                                   topk_weights,
-                                   previous_event=previous_event,
-                                   async_finish=True)
-            # yield for dis, dis_wait
-            yield
-            moe.wait(event)
-            # yield for dis_wait, moe
-            yield
-            moe.save_for_combine(recv_hidden_states, recv_topk_idx, recv_topk_weights, recv_tokens_per_expert_list,
-                                 handle)
+        state = {
+            'hidden_states': hidden_states,
+            'topk_idx': topk_idx,
+            'topk_weights': topk_weights,
+            'raw_hidden_shape': hidden_shape,
+            'moe_type': MoeType.DSAsyncDecode if is_decoding else MoeType.DSAsyncPrefill,
+        }
 
-            if recv_hidden_states.shape[0] > 0:
-                recv_hidden_states = moe.moe_forward(recv_hidden_states, up_weight, up_scale, down_weight, down_scale)
-            # yield for moe, comb
-            yield
-            previous_event = moe.capture()
-            out_states, event = moe.combine_async(recv_hidden_states,
-                                                  handle,
-                                                  previous_event=previous_event,
-                                                  async_finish=True)
-            # yield for comb, (+share) comb_wait
-            yield
-            if self.mlp.shared_experts is not None:
-                shared_states = self.mlp.shared_experts(hidden_states)
-            moe.wait(event)
-            # yield for (+share) comb_wait, (+share) attn0
-            yield
-            moe.release()
-            out_states.view(hidden_shape)
-        else:
-            # yield for attn1, dis + share
-            yield
-            recv_hidden_states, recv_expert_count, handle, event, hook = moe.dispatch_async(hidden_states,
-                                                                                            topk_ids,
-                                                                                            use_fp8=True,
-                                                                                            async_finish=True)
-            if self.mlp.shared_experts is not None:
-                shared_states = self.mlp.shared_experts(hidden_states)
-            # yield for dis + share, dis_wait
-            yield
-            moe.wait(event)
-            # yield for dis_wait, moe
-            yield
-            out_states = moe.moe_forward(recv_hidden_states, recv_expert_count, hidden_shape, topk_ids, up_weight,
-                                         up_scale, down_weight, down_scale)
-            # yield for moe, comb
-            yield
-            out_states, event, hook = moe.combine_async(out_states, topk_ids, topk_weights, handle, True)
-            # yield for comb, comb_wait
-            yield
-            moe.wait(event)
-            # yield for comb_wait, (+share) attn0
-            yield
-            out_states.view(hidden_shape)
-
+        # yield for attn1, dis (+share)
+        yield
+        recv_state = self.mlp.experts.dispatch(state)
+        if self.mlp.shared_experts is not None and is_decoding:
+            shared_states = self.mlp.shared_experts(hidden_states)
+        # yield for dis, dis_wait
+        yield
+        self.mlp.experts.wait(recv_state)
+        # yield for dis_wait, moe
+        yield
+        gemm_state = self.mlp.experts.gemm(recv_state)
+        # yield for moe, comb
+        yield
+        out_state = self.mlp.experts.combine(gemm_state)
+        # yield for comb, (+share) comb_wait
+        yield
+        if self.mlp.shared_experts is not None and not is_decoding:
+            shared_states = self.mlp.shared_experts(hidden_states)
+        self.mlp.experts.wait(out_state)
+        # yield for (+share) comb_wait, (+share) attn0
+        yield
+        out_hidden_states = out_state['hidden_states'].view(hidden_shape)
         if shared_states is not None:
-            out_states += shared_states
+            out_hidden_states += shared_states
         elif self.mlp.shared_experts is not None:
             shared_states = self.mlp.shared_experts(hidden_states)
-            out_states += shared_states
+            out_hidden_states += shared_states
         else:
             pass
-        out_states = out_states.reshape(batch_size, sequence_length, -1)
-        outputs = (out_states, residual)
+        out_hidden_states = out_hidden_states.reshape(batch_size, sequence_length, -1)
+        outputs = (out_hidden_states, residual)
         return outputs
 
 
@@ -1142,7 +1103,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
         inputs_embeds: torch.Tensor = None,
         **kwargs,
     ):
-        if get_step_ctx_manager().current_context().enable_twomicrobatch:
+        if get_step_ctx_manager().current_context().twomicrobatch_splitflags is not None:
             hidden_states = self.model.forward_twomicrobatch(
                 input_ids=input_ids,
                 position_ids=position_ids,
@@ -1190,7 +1151,6 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             step_ctx = get_step_ctx_manager().current_context()
             enable_twomicrobatch = disable_num.item() == 0
             if enable_twomicrobatch:
-                step_ctx.enable_twomicrobatch = True
                 step_ctx.twomicrobatch_splitflags = get_split_flags(attn_metadata, num=2)
         return dict(
             input_ids=input_ids,
