@@ -30,3 +30,11 @@ class MigrationBackendImpl:
     async def p2p_migrate(self, assignment: MigrationAssignment):
         raise NotImplementedError
 
+    @abstractmethod
+    async def store(self, assignment: MigrationAssignment):
+        raise NotImplementedError
+
+    @abstractmethod
+    async def load(self, assignment: MigrationAssignment):
+        raise NotImplementedError
+

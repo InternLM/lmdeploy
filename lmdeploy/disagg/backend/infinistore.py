@@ -27,3 +27,9 @@ class MooncakeBackend(MigrationBackendImpl):
 
     async def p2p_migrate(self, assignment: MigrationAssignment):
         raise NotImplementedError
+
+    async def store(self, assignment: MigrationAssignment):
+        raise NotImplementedError
+
+    async def load(self, assignment: MigrationAssignment):
+        raise NotImplementedError

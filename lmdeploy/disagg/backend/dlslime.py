@@ -75,3 +75,9 @@ class DLSlimeBackend(MigrationBackendImpl):
 
     async def p2p_migrate(self, assignment: MigrationAssignment):
         await self.links[assignment.remote_engine_id].p2p_migrate(assignment)
+
+    async def store(self, assignment: MigrationAssignment):
+        raise NotImplementedError
+
+    async def load(self, assignment: MigrationAssignment):
+        raise NotImplementedError
