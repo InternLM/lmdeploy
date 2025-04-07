@@ -99,9 +99,9 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
     // Max possible length of a sequence, this depends on `history_len` which isn't available here, so `session_len`
     // is used instead
     const int max_seq_len = session_len_ + 1;
-    const int max_out_len = std::min(output_len, session_len_);
+    const int max_out_len = std::min(output_len, session_len_) + 1;
     // This does not include history length in interactive mode
-    const int max_in_out_len = std::min(input_len + output_len, session_len_);
+    const int max_in_out_len = std::min(input_len + output_len, session_len_) + 1;
 
     for (auto& [k, v] : *param.tensors) {
         inputs_->emplace(k, v);
