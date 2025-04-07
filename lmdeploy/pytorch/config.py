@@ -76,7 +76,7 @@ class CacheConfig:
     window_size: int = -1
     cache_max_entry_count: float = 0.8
     max_prefill_token_num: int = 4096
-    enable_prefix_caching: bool = False
+    enable_prefix_caching: bool = True
     quant_policy: Literal[0, 4, 8] = 0
     device_type: str = 'cuda'
 

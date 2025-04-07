@@ -104,7 +104,7 @@ class CLI(object):
         tp_act = ArgumentHelper.tp(pt_group)
         session_len_act = ArgumentHelper.session_len(pt_group)
         cache_max_entry_act = ArgumentHelper.cache_max_entry_count(pt_group)
-        prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
+        prefix_caching_act = ArgumentHelper.disable_prefix_caching(pt_group)
         quant_policy = ArgumentHelper.quant_policy(pt_group)
 
         # turbomind args
@@ -237,7 +237,7 @@ class CLI(object):
                                                 session_len=args.session_len,
                                                 cache_max_entry_count=args.cache_max_entry_count,
                                                 adapters=adapters,
-                                                enable_prefix_caching=args.enable_prefix_caching,
+                                                enable_prefix_caching=not args.disable_prefix_caching,
                                                 device_type=args.device,
                                                 eager_mode=args.eager_mode,
                                                 quant_policy=args.quant_policy)

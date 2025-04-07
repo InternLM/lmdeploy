@@ -209,7 +209,7 @@ def parse_args():
     session_len_act = ArgumentHelper.session_len(pt_group, default=4096)
     cache_count_act = ArgumentHelper.cache_max_entry_count(pt_group)
     cache_block_seq_len_act = ArgumentHelper.cache_block_seq_len(pt_group)
-    prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
+    prefix_caching_act = ArgumentHelper.disable_prefix_caching(pt_group)
     quant_policy_act = ArgumentHelper.quant_policy(pt_group, default=0)
     dtype_act = ArgumentHelper.dtype(pt_group)
 
@@ -248,7 +248,7 @@ def main():
             quant_policy=args.quant_policy,
             num_tokens_per_iter=args.num_tokens_per_iter,
             max_prefill_iters=args.max_prefill_iters,
-            enable_prefix_caching=args.enable_prefix_caching,
+            enable_prefix_caching=not args.disable_prefix_caching,
             dtype=args.dtype,
             communicator=args.communicator,
         )
@@ -260,7 +260,7 @@ def main():
             max_batch_size=args.concurrency,
             tp=args.tp,
             eager_mode=args.eager_mode,
-            enable_prefix_caching=args.enable_prefix_caching,
+            enable_prefix_caching=not args.disable_prefix_caching,
             quant_policy=args.quant_policy,
             dtype=args.dtype,
             distributed_executor_backend=args.distributed_executor_backend,
