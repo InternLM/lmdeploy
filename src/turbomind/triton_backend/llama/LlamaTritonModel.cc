@@ -433,20 +433,11 @@ void LlamaTritonModel::createSharedWeights(int device_id, int rank)
     // }
 }
 
-std::unordered_map<std::string, Tensor> LlamaTritonModel::getParams(int device_id, int rank)
+core::TensorMap LlamaTritonModel::getParams(int device_id, int rank)
 {
     check_cuda_error(cudaSetDevice(device_id));
 
-    core::TensorMap tmp = TM_CHECK_NOTNULL(weights_[rank])->getParams();
-
-    std::unordered_map<std::string, Tensor> output;
-
-    for (auto& [k, v] : tmp) {
-        std::vector<size_t> shape{v.shape().begin(), v.shape().end()};
-        output.emplace(k, Tensor{v.device().type, v.dtype(), shape, v.raw_data()});
-    }
-
-    return output;
+    return TM_CHECK_NOTNULL(weights_[rank])->getParams();
 }
 
 void LlamaTritonModel::processWeights(int device_id, int rank)

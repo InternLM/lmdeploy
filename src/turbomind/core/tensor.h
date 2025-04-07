@@ -35,6 +35,11 @@ public:
     {
     }
 
+    Tensor(std::shared_ptr<void> data, Layout layout, DataType dtype, MemLoc device):
+        Tensor{Buffer{data, layout.cosize(), dtype, device}, layout}
+    {
+    }
+
     template<class T>
     Tensor(T* data, Layout layout, MemLoc device): Tensor{Buffer{data, layout.cosize(), device}, layout}
     {
@@ -264,6 +269,11 @@ public:
     const Tensor& at(const std::string& key) const
     {
         return const_cast<TensorMap*>(this)->at(key);
+    }
+
+    bool contains(const std::string& key) const
+    {
+        return find(key) != end();
     }
 
 private:

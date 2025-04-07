@@ -210,7 +210,7 @@ void LlamaBatch::ProcessInferRequests(const Requests& reqs, std::vector<Signal>&
             continue;
         }
 
-        const int input_length = r->inputs.at("input_ids").shape[0];
+        const int input_length = r->inputs.at("input_ids").shape(0);
 
         if (input_length > session_len_) {
             signals.push_back([r] { UpdateState(*r, Request::kTooLong, 0); });
@@ -256,13 +256,13 @@ void LlamaBatch::ProcessInferRequests(const Requests& reqs, std::vector<Signal>&
             DropEmbeddings(seq);
         }
 
-        const int* input_ids = r->inputs.getPtr<int>("input_ids");
+        const int* input_ids = r->inputs.at("input_ids").data<int>();
 
         {
             // `output_ids` contains all token ids of the sequences
             const auto output_ids_base = state.output_ids.data() + session_len_ * idx;
             auto       d_output_ids    = output_ids_base;
-            auto       h_output_ids    = r->output_ids.getPtr<int>();
+            auto       h_output_ids    = r->output_ids.data();
             // copy history tokens
             if (!seq.tokens.empty()) {
                 d_output_ids = core::Copy(seq.tokens.data(), seq.tokens.size(), d_output_ids);
@@ -282,7 +282,7 @@ void LlamaBatch::ProcessInferRequests(const Requests& reqs, std::vector<Signal>&
         }
 
         // copy input tokens to prompt for prefix matching
-        if (input_length && r->session.start_flag && !r->inputs.isExist("input_embedding_ranges")) {
+        if (input_length && r->session.start_flag && !r->inputs.contains("input_embedding_ranges")) {
             // TODO: truncate prompt to enable prefix caching for VLM
             seq.prompt.resize(input_length);
             std::copy_n(input_ids, input_length, seq.prompt.data());
@@ -291,16 +291,16 @@ void LlamaBatch::ProcessInferRequests(const Requests& reqs, std::vector<Signal>&
         const int elem_size = core::get_byte_size(data_type_);
 
         // copy input embeddings
-        if (r->inputs.isExist("input_embedding_ranges")) {
-            const auto range_tensor = r->inputs.at("input_embedding_ranges");
-            const auto emb_tensor   = r->inputs.at("input_embeddings");
-            const int* ranges       = range_tensor.getPtr<int>();
+        if (r->inputs.contains("input_embedding_ranges")) {
+            const auto& range_tensor = r->inputs.at("input_embedding_ranges");
+            const auto& emb_tensor   = r->inputs.at("input_embeddings");
+            const int*  ranges       = range_tensor.data<int>();
 
             auto check_embeddings = [&](int& num_valid_embeddings) {
-                if (range_tensor.shape.size() != 3 || range_tensor.shape[2] % 2 != 0) {
+                if (range_tensor.ndim() != 3 || range_tensor.shape(2) % 2 != 0) {
                     return false;
                 }
-                int embedding_count  = range_tensor.shape[1];
+                int embedding_count  = range_tensor.shape(1);
                 int embedding_length = 0;
                 int pre_end          = -1;
 
@@ -312,7 +312,7 @@ void LlamaBatch::ProcessInferRequests(const Requests& reqs, std::vector<Signal>&
                         break;
                     }
                     if (begin >= end || end > input_length || begin < pre_end
-                        || embedding_length * model_->hidden_units_ * elem_size > emb_tensor.shape[1]) {
+                        || embedding_length * model_->hidden_units_ * elem_size > emb_tensor.shape(1)) {
                         return false;
                     }
                     pre_end              = end;
@@ -323,20 +323,17 @@ void LlamaBatch::ProcessInferRequests(const Requests& reqs, std::vector<Signal>&
 
             int num_valid_embeddings = 0;
             if (!check_embeddings(num_valid_embeddings)) {
-                TM_LOG_WARNING("[ImageFeature] Skip invalid input embeddings, id = %ld, input_length = %d, "
-                               "input embeddings = %s, range_tensor = %s",
+                TM_LOG_WARNING("[ImageFeature] Skip invalid input embeddings, id = %ld, input_length = %d",
                                (long)seq.id,
-                               input_length,
-                               emb_tensor.toString().c_str(),
-                               range_tensor.toString().c_str());
+                               input_length);
             }
             else {
-                const char* emb_tensor_ptr = emb_tensor.getPtr<char>();
+                const std::byte* emb_tensor_ptr = (const std::byte*)emb_tensor.raw_data();
                 for (size_t i = 0; i < num_valid_embeddings; i++) {
                     int    begin = ranges[i * 2];
                     int    end   = ranges[i * 2 + 1];
                     size_t count = (end - begin) * model_->hidden_units_ * elem_size;
-                    seq.input_embeddings.emplace_back((std::byte*)emb_tensor_ptr, (std::byte*)(emb_tensor_ptr + count));
+                    seq.input_embeddings.emplace_back(emb_tensor_ptr, emb_tensor_ptr + count);
                     seq.input_embedding_ranges.emplace_back(begin + seq.tokens.size(), end + seq.tokens.size());
                     emb_tensor_ptr += count;
                 }
@@ -1203,7 +1200,7 @@ void LlamaBatch::OutputLogits(const float* logits, int first, int last, Generati
 
         if (state_->requests[i]->gen_cfg.output_logits == out_type) {
 
-            auto dst_ptr = state_->requests[i]->outputs.getPtr<float>("logits");
+            auto dst_ptr = state_->requests[i]->outputs.at("logits").data<float>();
 
             const int cache_len   = state_->sequences[i]->cache_len;
             const int history_len = state_->sequences[i]->tokens.size();
@@ -1212,7 +1209,7 @@ void LlamaBatch::OutputLogits(const float* logits, int first, int last, Generati
             //      C        C      C         C
 
             // offset to the last token prompt
-            const int offset = is_all ? 0 : state_->requests[i]->inputs.at("input_ids").shape[0] - 1;
+            const int offset = is_all ? 0 : state_->requests[i]->inputs.at("input_ids").shape(0) - 1;
 
             int diff = (history_len + offset) - cache_len;
 
@@ -1262,14 +1259,13 @@ void LlamaBatch::OutputLastHiddenState(const core::Tensor& hidden_states, int fi
 
             const bool is_all = out_type == GenerationConfig::kAll;
 
-            auto&        dst = state_->requests[i]->outputs.at("last_hidden_state");
-            core::Buffer dst_buf{dst.getPtr<void>(), (core::ssize_t)dst.size(), dst.where};
+            auto& dst_buf = state_->requests[i]->outputs.at("last_hidden_state").buffer();
 
             const int cache_len   = state_->sequences[i]->cache_len;
             const int history_len = state_->sequences[i]->tokens.size();
 
             // offset to the last prompt token
-            const int offset = is_all ? 0 : state_->requests[i]->inputs.at("input_ids").shape[0] - 1;
+            const int offset = is_all ? 0 : state_->requests[i]->inputs.at("input_ids").shape(0) - 1;
 
             const int valid_len = input_len - std::max(0, (history_len + offset) - cache_len);
 
@@ -1348,9 +1344,9 @@ void LlamaBatch::Finish(GenerationState& g, std::vector<Signal>& signals)
         uint32_t* sampled_nums_ptr     = h_sampled_nums_.data();
         for (int i = 0; i < batch_size - g.partial; ++i) {
             if (state_->requests[i] && state_->requests[i]->gen_cfg.output_logprobs) {
-                auto logprob_vals    = state_->requests[i]->outputs.getPtr<float>("logprob_vals");
-                auto logprob_indexes = state_->requests[i]->outputs.getPtr<uint32_t>("logprob_indexes");
-                auto logprob_nums    = state_->requests[i]->outputs.getPtr<uint32_t>("logprob_nums");
+                auto logprob_vals    = state_->requests[i]->outputs.at("logprob_vals").data<float>();
+                auto logprob_indexes = state_->requests[i]->outputs.at("logprob_indexes").data<int32_t>();
+                auto logprob_nums    = state_->requests[i]->outputs.at("logprob_nums").data<int32_t>();
 
                 int offset = state_->h_context_length[i] - state_->h_prompt_length[i] - 1;
                 std::copy(sampled_logprobs_ptr,
@@ -1372,8 +1368,8 @@ void LlamaBatch::Finish(GenerationState& g, std::vector<Signal>& signals)
         NvtxScope scope("output_ids");
         for (int i = 0; i < batch_size - g.partial; ++i) {
             if (auto& r = state_->requests[i]) {
-                auto      output_ids  = static_cast<int*>(r->output_ids.data);
-                auto      output_len  = static_cast<int*>(r->sequence_length.data);
+                auto      output_ids  = r->output_ids.data();
+                auto      output_len  = r->sequence_length.data();
                 const int count       = state_->h_context_length[i];
                 output_ids[count - 1] = h_output_ids_[i];
                 *output_len           = count;
@@ -1426,7 +1422,7 @@ void LlamaBatch::Finish(GenerationState& g, std::vector<Signal>& signals)
                 FT_CHECK(!r);
             }
             else if (r->stream_output && tp_rank_ == 0) {
-                const auto seq_len = r->sequence_length.getVal<int>();
+                const auto seq_len = *r->sequence_length.data();
                 // Create signals by copying the request handles for non-finished streaming requests
                 signals.push_back([this, r, seq_len] {  //
                     UpdateState(*r, Request::kOk, seq_len);
@@ -1480,7 +1476,7 @@ auto LlamaBatch::Interrupt(int index, bool force_stop, bool force_end) -> Signal
         seq.tokens.resize(output_len);
 
         // output_ids is updated & synced in `Finish`
-        const auto output_ids = state_->requests[index]->output_ids.getPtr<int>();
+        const auto output_ids = state_->requests[index]->output_ids.data();
         std::copy_n(output_ids, output_len, seq.tokens.data());
 
         // Save random state in host memory
@@ -1496,7 +1492,7 @@ auto LlamaBatch::Interrupt(int index, bool force_stop, bool force_end) -> Signal
 
     auto ec = std::exchange(state_->errors[index], Request::kOk);
 
-    const auto len = state_->requests[index]->sequence_length.getVal<int>();
+    const auto len = *state_->requests[index]->sequence_length.data();
     // move the request handle into the signal
     return [this, len, force_stop, r = std::move(state_->requests[index])] {  //
         UpdateState(*r, force_stop ? Request::kCancel : Request::kFinish, len);
