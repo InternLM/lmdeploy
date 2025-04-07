@@ -26,7 +26,6 @@ add_library(LlamaTritonBackend STATIC ${llama_triton_backend_files})
 set_property(TARGET LlamaTritonBackend PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 target_link_libraries(LlamaTritonBackend PUBLIC
-        TransformerTritonBackend
         Llama
         device_comm
         host_comm

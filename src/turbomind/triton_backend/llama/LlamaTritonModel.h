@@ -25,13 +25,14 @@
 #include <unordered_map>
 
 #include "src/turbomind/comm/device_comm.h"
+
 #include "src/turbomind/engine/gateway.h"
+#include "src/turbomind/engine/model_request.h"
+
 #include "src/turbomind/models/llama/LlamaBatch.h"
 #include "src/turbomind/models/llama/LlamaWeight.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
-
-#include "src/turbomind/triton_backend/transformer_triton_backend.hpp"
 
 namespace turbomind {
 
