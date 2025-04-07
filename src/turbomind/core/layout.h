@@ -114,6 +114,24 @@ public:
 
     std::pair<Layout, ssize_t> slice(const vector<ssize_t>& base, vector<ssize_t> shape) const;
 
+    Layout squeeze(int dim) const
+    {
+        if (rank() == 1 || shape(dim) != 1) {
+            return *this;
+        }
+        Layout a;
+        a.shape_.reserve(rank() - 1);
+        a.stride_.reserve(rank() - 1);
+        for (int i = 0; i < rank(); ++i) {
+            if (i != dim) {
+                a.shape_.push_back(shape_[i]);
+                a.stride_.push_back(stride_[i]);
+            }
+        }
+        a.size_ = size_;
+        return a;
+    }
+
     friend std::ostream& operator<<(std::ostream& os, const Layout& x);
 
 private:

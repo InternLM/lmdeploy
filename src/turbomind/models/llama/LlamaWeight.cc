@@ -19,25 +19,29 @@
 // https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/models/multi_gpu_gpt/ParallelGptWeight.cc
 
 #include "src/turbomind/models/llama/LlamaWeight.h"
+#include "src/turbomind/core/allocator.h"
+#include "src/turbomind/core/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
+#include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/memory_utils.h"
 #include <cuda_runtime.h>
 
 namespace turbomind {
 
-template<typename T>
-LlamaWeight<T>::LlamaWeight(const ModelParam&  model,
-                            const EngineParam& engine_param,
-                            const LoraParam&   lora_param,
-                            const MoeParam&    moe_param):
+LlamaWeight::LlamaWeight(DataType           data_type,
+                         const ModelParam&  model,
+                         const EngineParam& engine_param,
+                         const LoraParam&   lora_param,
+                         const MoeParam&    moe_param):
     hidden_units_(model.hidden_units),
     inter_size_(model.inter_size),
     vocab_size_(model.vocab_size),
     vocab_size_padded_(model.vocab_size),
     embedding_size_(model.embedding_size),
     num_layer_(model.layer_num),
-    weight_type_(model.weight_type),
+    data_type_{data_type},
+    weight_type_{model.weight_type},
     tp_size_(engine_param.attn_tp_size),
     tp_rank_(engine_param.attn_tp_rank)
 {
@@ -51,105 +55,76 @@ LlamaWeight<T>::LlamaWeight(const ModelParam&  model,
     }
     FT_CHECK(hidden_units_ % tp_size_ == 0);
 
-    check_cuda_error(cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking));
+    stream_ = core::Stream::create();
+    alloca_ = core::Allocator{stream_, false};
+
+    core::ContextGuard guard = context();
 
     decoder_layer_weights.reserve(num_layer_);
     for (unsigned l = 0; l < num_layer_; ++l) {
         decoder_layer_weights.emplace_back(
-            new LlamaDecoderLayerWeight<T>(l, model, engine_param, lora_param, moe_param));
-        decoder_layer_weights.back()->malloc(stream_);
+            new LlamaDecoderLayerWeight(data_type, l, model, engine_param, lora_param, moe_param));
+        decoder_layer_weights.back()->malloc();
     }
 
-    FT_CHECK(vocab_size_padded_ % tp_size_ == 0);
-    deviceMalloc((T**)&pre_decoder_embedding_table, embedding_size_ * hidden_units_ / tp_size_, stream_);
-    deviceMalloc((T**)&output_norm_weight, hidden_units_, stream_);
-    deviceMalloc((T**)&post_decoder_embedding_kernel, hidden_units_ * vocab_size_padded_ / tp_size_, stream_);
+    TM_CHECK_EQ(vocab_size_padded_ % tp_size_, 0);
+    TM_CHECK_EQ(hidden_units_ % tp_size_, 0);
 
-    // Wait for allocations
-    check_cuda_error(cudaStreamSynchronize(stream_));
+    pre_decoder_embedding  = core::Tensor{{embedding_size_, hidden_units_ / tp_size_}, data_type_, MEMORY_GPU};
+    post_decoder_embedding = core::Tensor{{hidden_units_, vocab_size_padded_ / tp_size_}, data_type_, MEMORY_GPU};
+
+    output_norm_weight = core::Buffer{hidden_units_, data_type_, MEMORY_GPU};
 }
 
-template<typename T>
-LlamaWeight<T>::~LlamaWeight()
+LlamaWeight::~LlamaWeight()
 {
-    deviceFree(pre_decoder_embedding_table, stream_);
-    deviceFree(output_norm_weight, stream_);
-    deviceFree(post_decoder_embedding_kernel, stream_);
+    core::ContextGuard guard = context();
+
+    pre_decoder_embedding  = {};
+    post_decoder_embedding = {};
+    output_norm_weight     = {};
 
     for (auto& p : decoder_layer_weights) {
-        p->free(stream_);
+        p->free();
         delete p;
     }
 
     decoder_layer_weights.clear();
 
     // Wait for deallocations
-    check_cuda_error(cudaStreamSynchronize(stream_));
-    check_cuda_error(cudaStreamDestroy(stream_));
-    stream_ = {};
+    core::Context::stream().Sync();
 }
 
-template<typename T>
-void LlamaWeight<T>::loadModel(std::string dir_path)
+core::ContextGuard LlamaWeight::context() const
 {
-    FtCudaDataType model_file_type = FtCudaDataType::FP16;
-    if (weight_type_ == WeightType::kBF16) {
-        model_file_type = FtCudaDataType::BF16;
-    }
-    dir_path += '/';
-
-    loadWeightFromBin((T*)pre_decoder_embedding_table,
-                      {embedding_size_ * hidden_units_ / tp_size_},
-                      dir_path + "tok_embeddings." + std::to_string(tp_rank_) + ".weight",
-                      model_file_type);
-
-    loadWeightFromBin((T*)output_norm_weight, {hidden_units_}, dir_path + "norm.weight", model_file_type);
-
-    loadWeightFromBin((T*)post_decoder_embedding_kernel,
-                      {hidden_units_ * vocab_size_padded_ / tp_size_},
-                      dir_path + "output." + std::to_string(tp_rank_) + ".weight",
-                      model_file_type);
-
-    for (unsigned layer = 0; layer < num_layer_; ++layer) {
-        decoder_layer_weights[layer]->loadModel(dir_path + "layers." + std::to_string(layer), model_file_type);
-    }
+    return core::ContextGuard{stream_, alloca_};
 }
 
-template<typename T>
-TensorMap LlamaWeight<T>::getParams()
+core::TensorMap LlamaWeight::getParams()
 {
-    TensorMap output;
+    core::TensorMap output;
 
-    output.insert("tok_embeddings." + std::to_string(tp_rank_) + ".weight",
-                  Tensor{MEMORY_GPU,
-                         getTensorType<T>(),
-                         {embedding_size_ * hidden_units_ / tp_size_ * sizeof(T)},
-                         pre_decoder_embedding_table});
+    output.emplace("tok_embeddings." + std::to_string(tp_rank_) + ".weight", pre_decoder_embedding);
+    output.emplace("output." + std::to_string(tp_rank_) + ".weight", post_decoder_embedding);
 
-    output.insert("norm.weight",
-                  Tensor{MEMORY_GPU, getTensorType<T>(), {hidden_units_ * sizeof(T)}, output_norm_weight});
-
-    output.insert("output." + std::to_string(tp_rank_) + ".weight",
-                  Tensor{MEMORY_GPU,
-                         getTensorType<T>(),
-                         {hidden_units_ * vocab_size_padded_ * sizeof(T) / tp_size_},
-                         post_decoder_embedding_kernel});
+    output.emplace("norm.weight", output_norm_weight);
 
     // transformer layers
     for (size_t i = 0; i < num_layer_; i++) {
-        std::string prefix = fmtstr("layers.%d", i);
-        TensorMap   layeri = decoder_layer_weights[i]->getParams(prefix);
-        for (auto [name, tensor] : layeri) {
-            output.insert(name, tensor);
+        std::string     prefix = fmtstr("layers.%d", i);
+        core::TensorMap layer  = decoder_layer_weights[i]->getParams(prefix);
+        for (auto& kv : layer) {
+            output.insert(std::move(kv));
         }
     }
 
     return output;
 }
 
-template<typename T>
-void LlamaWeight<T>::prepare(const cudaDeviceProp& prop)
+void LlamaWeight::prepare(const cudaDeviceProp& prop)
 {
+    core::ContextGuard guard = context();
+
     const auto workspace_size = [&] {
         size_t size{};
         for (const auto& layer : decoder_layer_weights) {
@@ -158,31 +133,21 @@ void LlamaWeight<T>::prepare(const cudaDeviceProp& prop)
         return size;
     }();
 
-    char* workspace{};
-
     TM_LOG_INFO("[LlamaWeight<T>::prepare] workspace size: %d", workspace_size);
 
     // Wait for the weights to be filled externally
     check_cuda_error(cudaDeviceSynchronize());
 
+    auto stream = core::Context::stream().handle();
+
+    core::Buffer_<char> workspace;
+
     if (workspace_size) {
-        deviceMalloc((char**)&workspace, workspace_size, stream_);
+        workspace = core::Buffer_<char>(workspace_size, MEMORY_GPU);
     }
     for (auto& layer : decoder_layer_weights) {
-        layer->prepare(workspace, workspace_size, prop, stream_);
+        layer->prepare(workspace.data(), workspace_size, prop, stream);
     }
-
-    deviceFree(workspace, stream_);
-
-    check_cuda_error(cudaStreamSynchronize(stream_));
 }
-
-#ifdef ENABLE_FP32
-template struct LlamaWeight<float>;
-#endif
-template struct LlamaWeight<half>;
-#ifdef ENABLE_BF16
-template struct LlamaWeight<__nv_bfloat16>;
-#endif
 
 }  // namespace turbomind

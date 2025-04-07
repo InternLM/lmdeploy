@@ -727,28 +727,14 @@ void invokeInPlaceTranspose102(
     transpose102<<<grid, block, 0, stream>>>(data, workspace, dim0, dim1, dim2);
 }
 
-#ifdef ENABLE_FP8
-template void invokeInPlaceTranspose102(__nv_fp8_e4m3* data,
-                                        __nv_fp8_e4m3* workspace,
-                                        const int      dim0,
-                                        const int      dim1,
-                                        const int      dim2,
-                                        bool           copy,
-                                        cudaStream_t   stream);
-#endif  // ENABLE_FP8
-#ifdef ENABLE_BF16
-template void invokeInPlaceTranspose102(__nv_bfloat16* data,
-                                        __nv_bfloat16* workspace,
-                                        const int      dim0,
-                                        const int      dim1,
-                                        const int      dim2,
-                                        bool           copy,
-                                        cudaStream_t   stream);
-#endif  // ENABLE_BF16
-template void invokeInPlaceTranspose102(
-    half* data, half* workspace, const int dim0, const int dim1, const int dim2, bool copy, cudaStream_t stream);
-template void invokeInPlaceTranspose102(
-    float* data, float* workspace, const int dim0, const int dim1, const int dim2, bool copy, cudaStream_t stream);
+template void invokeInPlaceTranspose102(uint16_t*    data,
+                                        uint16_t*    workspace,
+                                        const int    dim0,
+                                        const int    dim1,
+                                        const int    dim2,
+                                        bool         copy,
+                                        cudaStream_t stream);
+
 
 template<typename T>
 void __global__ multiplyScale(T* tensor, float scale, const size_t size)

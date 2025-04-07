@@ -21,89 +21,63 @@
 #include "src/turbomind/kernels/activation_kernels.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/anomaly_handler.h"
-#include "src/turbomind/utils/nvtx_utils.h"
 
 namespace turbomind {
 
-template<typename T>
-void LlamaFfnLayer<T>::activation(core::Tensor& gating, core::Tensor& inter)
+void LlamaFfnLayer::activation(core::Tensor& gating, core::Tensor& inter, cudaStream_t stream)
 {
-    FT_CHECK(gating.shape() == inter.shape());
-    FT_CHECK(gating.ndim() == 2);
-    FT_CHECK(gating.stride(0) == inter.stride(0));
-    const auto stride     = gating.stride(0);
-    const auto [num, dim] = gating.shapes(0, 1);
-    invokeGenericActivation_v2<SiluActivation>(gating.data<T>(), inter.data<T>(), stride, num, dim, stream_);
+    // Code for dispatching activation types
+    invokeGenericActivation_v3<SiluActivation>(gating, inter, stream);
 }
 
-template<typename T>
-void LlamaFfnLayer<T>::forward(ForwardParam&& param)
+void LlamaFfnLayer::forward(ForwardParam param)
 {
     NvtxScope scope("ffn");
 
-    const auto token_num     = param.input.shape(0);
-    const auto weights       = param.weights;
-    const int  layer_id      = param.layer_id;
-    const int  inter_size    = weights->inter_size;
-    const bool is_fused_silu = weights->fused_gating_intermediate.kernel && weights->is_fused_silu;
+    const auto& mlp = *param.weights;
+
+    const int token_num  = param.input.shape(0);
+    const int inter_size = mlp.inter_size;
+    const int layer_id   = param.layer_id;
+
+    const auto stream = core::Context::stream().handle();
 
     core::Tensor gating;
     core::Tensor inter;
 
-    if (weights->fused_gating_intermediate.kernel) {
-        NvtxScope scope("fused_silu_ffn");
+    if (mlp.fused_gating_intermediate.weight) {
+        const auto type = mlp.is_fused_silu ? LlamaLinear::kFusedSiluFfn : LlamaLinear::kGemm;
 
-        const auto type = weights->is_fused_silu ? LlamaLinear<T>::kFusedSiluFfn : LlamaLinear<T>::kGemm;
-
-        auto mix = linear_->forward(param.input, weights->fused_gating_intermediate, type);
+        auto mix = linear_.forward(param.input, mlp.fused_gating_intermediate, type);
         sync_check_cuda_error();
 
         gating = mix.slice({0, 0}, {(int)token_num, inter_size});
-
-        if (!weights->is_fused_silu) {
+        if (!mlp.is_fused_silu) {
             inter = mix.slice({0, inter_size}, {(ssize_t)token_num, inter_size});
         }
     }
     else {
-        FT_CHECK(weights->gating.lora.r + weights->intermediate.lora.r == 0);
+        gating = linear_.forward(param.input, mlp.gating, LlamaLinear::kGemm);
+        sync_check_cuda_error();
+        TM_DEBUG_TENSOR(gating, Concat("w1", layer_id), 3);
 
-        {  // w1(x)
-            NvtxScope scope("w1");
-            gating = linear_->forward(param.input, weights->gating, LlamaLinear<T>::kGemm);
-            sync_check_cuda_error();
-        }
-        count_and_fix(gating.data<T>(), token_num * weights->gating.output_dims, Concat("w1", layer_id), 3);
-
-        {  // w3(x)
-            NvtxScope scope("w3");
-            inter = linear_->forward(param.input, weights->intermediate, LlamaLinear<T>::kGemm);
-            sync_check_cuda_error();
-        }
-        count_and_fix(inter.data<T>(), token_num * weights->intermediate.output_dims, Concat("w3", layer_id), 3);
+        inter = linear_.forward(param.input, mlp.intermediate, LlamaLinear::kGemm);
+        sync_check_cuda_error();
+        TM_DEBUG_TENSOR(inter, Concat("w3", layer_id), 3);
     }
 
-    if (!weights->is_fused_silu) {
+    if (!mlp.is_fused_silu) {
         // silu(w1(x)) * w3(x)
-        activation(gating, inter);
+        activation(gating, inter, stream);
         sync_check_cuda_error();
-        count_and_fix(gating.data<T>(), token_num * weights->output.input_dims, Concat("act", layer_id), 3);
+        TM_DEBUG_TENSOR(gating, Concat("act", layer_id), 3);
     }
 
     {  // w2(x)
         NvtxScope scope("w2");
-        (void)linear_->forward(gating, weights->output, LlamaLinear<T>::kGemm, &param.output);
+        (void)linear_.forward(gating, mlp.output, LlamaLinear::kGemm, &param.output);
         sync_check_cuda_error();
     }
-
-    count_and_fix((T*)param.output.raw_data(), token_num * weights->output.output_dims, Concat("w2", layer_id), 3);
 }
-
-#ifdef ENABLE_FP32
-template class LlamaFfnLayer<float>;
-#endif
-template class LlamaFfnLayer<half>;
-#ifdef ENABLE_BF16
-template class LlamaFfnLayer<__nv_bfloat16>;
-#endif
 
 }  // namespace turbomind

@@ -47,10 +47,9 @@ const int* d_cu_q_len(ForwardParam& p);
 
 }  // namespace attention
 
-template<typename T>
 class UnifiedAttentionLayer {
 public:
-    using WeightType = LlamaAttentionWeight<T>;
+    using WeightType = LlamaAttentionWeight;
 
     static constexpr int kMaxKVSplits        = 128;
     static constexpr int kMaxWorkspaceTokens = 4096;
@@ -59,90 +58,41 @@ public:
 
     std::shared_ptr<ForwardParam> CreateForwardParam(int max_batch_size);
 
-    void allocateWorkspace();
-    void freeWorkspace();
-
-    ~UnifiedAttentionLayer()
-    {
-        freeWorkspace();
-
-        for (auto& s : streams_) {
-            s = {};
-        }
-
-        check_cuda_error(cudaEventDestroy(aux_event_));
-        check_cuda_error(cudaEventDestroy(qkv_event_));
-        check_cuda_error(cudaStreamDestroy(aux_stream_));
-
-        aux_event_ = qkv_event_ = {};
-        aux_stream_             = {};
-    }
+    ~UnifiedAttentionLayer();
 
     UnifiedAttentionLayer(const ModelParam&     model,
                           const AttentionParam& attn,
                           const LoraParam&      lora,
-                          size_t                tp_size,
-                          const Context<T>&     context);
+                          int                   tp_size,
+                          const Context&        context);
 
     void forward(ForwardParam& param);
-
-    void prefill(T*                output,
-                 T*                tmp_kv_buffer,
-                 const T*          qkv,
-                 void**            block_ptrs,
-                 const int*        cu_q_len,
-                 const int*        cu_k_len,
-                 const int*        input_length,
-                 const int*        context_length,
-                 const int*        cu_block_count,
-                 const bool*       is_finished,
-                 const float*      rope_theta,
-                 int               pf_batch_size,
-                 int               pf_num_token,
-                 size_t            layer_offset,
-                 int               pf_max_q_len,
-                 int               pf_max_k_len,
-                 int               pf_session_len,
-                 const WeightType* weights);
-
-    void decode(T*                output,
-                const T*          qkv,
-                void**            block_ptrs,
-                const int*        cu_q_len,
-                const int*        cu_block_count,
-                const int*        input_length,
-                const int*        context_length,
-                const bool*       is_finished,
-                const float*      rope_theta,
-                size_t            layer_offset,
-                int               batch_size,
-                int               dc_sum_seq_len,
-                int               dc_max_seq_len,
-                int               max_split_k,
-                const WeightType* weights);
 
 private:
     core::Tensor forward_mla(const core::Tensor& hidden_state, const WeightType& weights);
 
+    /// TODO: dropping the `T` here requires deep refactor of attention dispatch
+    template<class T>
+    core::Tensor core_attention(core::Tensor& qkv, const ForwardParam& p, const WeightType& weights);
+
     void qk_norm(core::Tensor& qkv, const WeightType& weights);
 
 private:
-    const size_t head_num_;
-    const size_t kv_head_num_;
-    const size_t size_per_head_;
-    const size_t hidden_units_;
-    const size_t local_head_num_;
-    const size_t local_kv_head_num_;
+    const int head_num_;
+    const int kv_head_num_;
+    const int size_per_head_;
+    const int hidden_units_;
+    const int local_head_num_;
+    const int local_kv_head_num_;
 
     const AttentionParam param_;
     const ModelParam     model_param_;
     const LoraParam      lora_param_;
-    const Context<T>&    context_;
+    const Context&       context_;
 
-    cudaStream_t const    stream_;
-    LlamaLinear<T>* const linear_;
-    IAllocator* const     allocator_;
-    const int             arch_{};
+    cudaStream_t const stream_;
+    LlamaLinear&       linear_;
+    const int          arch_{};
 
     cudaStream_t aux_stream_;
     cudaEvent_t  qkv_event_;
@@ -154,13 +104,11 @@ private:
 
     RopeKernelParam rope_param_{};
 
-    float* partial_M_{};
-    float* partial_L_{};
-    float* partial_O_{};
-    int*   split_cnt_{};
-    int*   barriers_{};  // always zero
-
-    bool is_allocate_workspace_ = false;
+    core::Tensor_<float> partial_M_;
+    core::Tensor_<float> partial_L_;
+    core::Tensor_<float> partial_O_;
+    core::Tensor_<int>   split_cnt_;
+    core::Tensor_<int>   barriers_;  // always zero
 };
 
 }  // namespace turbomind

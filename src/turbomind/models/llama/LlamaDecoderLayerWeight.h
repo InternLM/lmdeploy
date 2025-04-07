@@ -26,56 +26,57 @@
 
 namespace turbomind {
 
-template<typename T>
 struct LlamaDecoderLayerWeight {
 public:
     LlamaDecoderLayerWeight() = delete;
 
-    LlamaDecoderLayerWeight(int                layer_id,
+    LlamaDecoderLayerWeight(DataType           data_type,
+                            int                layer_id,
                             const ModelParam&  model,
                             const EngineParam& engine,
                             const LoraParam&   lora_param,
                             const MoeParam&    moe_param);
 
     ~LlamaDecoderLayerWeight();
-    LlamaDecoderLayerWeight(const LlamaDecoderLayerWeight&) = delete;
+    LlamaDecoderLayerWeight(const LlamaDecoderLayerWeight&)            = delete;
     LlamaDecoderLayerWeight& operator=(const LlamaDecoderLayerWeight&) = delete;
 
-    void loadModel(std::string dir_path, FtCudaDataType model_file_type);
-
-    TensorMap getParams(std::string prefix);
+    core::TensorMap getParams(std::string prefix);
 
     void prepare(void* workspace, size_t size, const cudaDeviceProp& prop, cudaStream_t st);
 
     size_t workspace_size() const noexcept;
 
-    void malloc(cudaStream_t st);
+    void malloc();
 
-    void free(cudaStream_t st);
+    void free();
 
-    T* self_attn_norm_weights{};
-    T* ffn_norm_weights{};
+    core::Buffer self_attn_norm;
+    core::Buffer ffn_norm;
 
-    LlamaAttentionWeight<T> self_attn_weights{};
+    LlamaAttentionWeight self_attn_weights{};
 
-    LlamaFfnWeight<T> ffn_weights{};
-    MoeFfnWeight<T>   moe_weights{};
+    LlamaFfnWeight ffn_weights{};
+    MoeFfnWeight   moe_weights{};
 
 private:
-    size_t     head_num_;
-    size_t     kv_head_num_;
-    size_t     size_per_head_;
-    size_t     hidden_units_;
-    size_t     inter_size_;
-    WeightType weight_type_;
-    size_t     bit_size_;
-    bool       attn_bias_;
-    size_t     attn_tp_size_;
-    size_t     attn_tp_rank_;
-    size_t     mlp_tp_size_;
-    size_t     mlp_tp_rank_;
-    bool       is_maintain_buffer_ = false;
-    bool       fused_up_and_gate_;
+    int head_num_;
+    int kv_head_num_;
+    int size_per_head_;
+    int hidden_units_;
+    int inter_size_;
+
+    DataType data_type_;
+    DataType weight_type_;
+
+    int  bit_size_;
+    bool attn_bias_;
+    int  attn_tp_size_;
+    int  attn_tp_rank_;
+    int  mlp_tp_size_;
+    int  mlp_tp_rank_;
+    bool is_maintain_buffer_ = false;
+    bool fused_up_and_gate_;
 };
 
 }  // namespace turbomind

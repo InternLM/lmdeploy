@@ -48,7 +48,6 @@ struct BatchState {
     int size;
 };
 
-template<typename T>
 class LlamaV2;
 
 struct GenerationState {
@@ -68,7 +67,6 @@ struct GenerationState {
     int finished_count;
 };
 
-template<typename T>
 class LlamaBatch {
 public:
     void AllocateBuffer(ssize_t batch_size, ssize_t session_len, int cache_block_seq_len);
@@ -102,24 +100,25 @@ public:
 
     [[nodiscard]] Signal Interrupt(int index, bool force_stop = false, bool force_end = false);
 
-    void ComputeAndOutputLogits(T* hidden_states, int first, int last);
+    void ComputeAndOutputLogits(const core::Tensor& hidden_states, int first, int last);
 
     void OutputLogits(const float* logits, int first, int last, GenerationConfig::OutType out_type);
 
-    void OutputLastHiddenState(const T* hidden_states, int first, int last);
+    void OutputLastHiddenState(const core::Tensor& hidden_states, int first, int last);
 
-    explicit LlamaBatch(const EngineParam&          param,
-                        std::unique_ptr<LlamaV2<T>> model,
-                        std::unique_ptr<Context<T>> ctx,
-                        std::shared_ptr<Gateway>    gateway,
-                        int                         device_id,
-                        int                         dp_rank);
+    explicit LlamaBatch(DataType                 data_type,
+                        const EngineParam&       param,
+                        std::unique_ptr<LlamaV2> model,
+                        std::unique_ptr<Context> ctx,
+                        std::shared_ptr<Gateway> gateway,
+                        int                      device_id,
+                        int                      dp_rank);
 
     ~LlamaBatch();
 
     void Start();
 
-    LlamaV2<T>& model() noexcept
+    LlamaV2& model() noexcept
     {
         return *model_;
     }
@@ -213,8 +212,8 @@ private:
 
     int session_len_;  // May be truncated in ctor
 
-    std::unique_ptr<Context<T>>      context_;
-    std::unique_ptr<LlamaV2<T>>      model_;
+    std::unique_ptr<Context>         context_;
+    std::unique_ptr<LlamaV2>         model_;
     std::unique_ptr<SequenceManager> sequence_manager_;
 
     Communicators& comm_;
@@ -228,8 +227,8 @@ private:
 
     ////////////////////////////////////////////////////////////////////
     // context decoding temp buffers
-    core::Tensor_<T> context_decoder_input_buf_;
-    core::Tensor_<T> context_decoder_output_buf_;
+    core::Tensor context_decoder_input_buf_;
+    core::Tensor context_decoder_output_buf_;
 
     Buffer_<int> context_decoder_ids_buf_{};
 
@@ -238,17 +237,17 @@ private:
     Buffer_<int> context_length_buf_;  // history length + input_length
     Buffer_<int> init_context_length_;
 
-    core::Tensor_<T> decoder_output_buf_;
+    core::Tensor decoder_output_buf_;
 
     Buffer_<int> sequence_lengths_;  // current sequence length
     Buffer_<int> init_ctx_lens_;
     Buffer_<int> lora_mask_buf_;  // lora
 
-    core::Tensor_<float> logits_buf_;        // combined logits
-    core::Tensor_<float> local_logits_buf_;  // tensor parallel local logits
+    core::Tensor logits_buf_;        // combined logits
+    core::Tensor local_logits_buf_;  // tensor parallel local logits
 
-    core::Tensor_<float> context_logits_buf_;
-    core::Tensor_<float> local_context_logits_buf_;
+    core::Tensor context_logits_buf_;
+    core::Tensor local_context_logits_buf_;
 
     Buffer_<float>    sampled_logprobs_;
     Buffer_<uint32_t> sampled_indexes_;
@@ -310,7 +309,6 @@ private:
     std::thread internal_thread_;
 };
 
-template<class T>
-using Engine = LlamaBatch<T>;
+using Engine = LlamaBatch;
 
 }  // namespace turbomind

@@ -34,19 +34,21 @@
 
 namespace turbomind {
 
-template<typename T>
+class LlamaBatch;
+
 class LlamaV2 {
 public:
     ~LlamaV2();
 
-    LlamaV2(const ModelParam&               model,
-            const EngineParam&              engine,
-            const AttentionParam&           attn,
-            const MoeParam&                 moe,
-            const LoraParam&                lora,
-            const Context<T>&               ctx,
-            int                             max_batch_size,
-            std::shared_ptr<LlamaWeight<T>> weights);
+    LlamaV2(DataType                     dtype,
+            const ModelParam&            model,
+            const EngineParam&           engine,
+            const AttentionParam&        attn,
+            const MoeParam&              moe,
+            const LoraParam&             lora,
+            const Context&               ctx,
+            int                          max_batch_size,
+            std::shared_ptr<LlamaWeight> weights);
 
     size_t vocab_size() const noexcept
     {
@@ -54,7 +56,7 @@ public:
     }
 
 private:
-    void updateEmbedding(T*               decoder_input,
+    void updateEmbedding(char*            decoder_input,
                          const int        bsz,
                          const int*       h_input_length,
                          const Sequence** sequences,
@@ -77,7 +79,7 @@ private:
                  int              prefil_num,
                  const Sequence** sequences);
 
-    void postDecodeEmbedding(float* logits, float* local_logits, const T* decoder_output, int batch_size);
+    void postDecodeEmbedding(float* logits, float* local_logits, const void* decoder_output, int batch_size);
 
     void dynamicDecode(int*            token_ids,
                        bool*           finished,
@@ -96,7 +98,9 @@ private:
                        size_t          batch_size);
 
 private:
-    friend class LlamaBatch<T>;
+    friend class LlamaBatch;
+
+    const DataType dtype_;
 
     const ModelParam     param_;
     const AttentionParam attn_param_;
@@ -116,20 +120,20 @@ private:
     const size_t local_head_num_;
     const size_t local_kv_head_num_;
 
-    const std::shared_ptr<LlamaWeight<T>> weights_{};
+    const std::shared_ptr<LlamaWeight> weights_;
 
-    // Refs into `Context<T>`, make the pointer constant (not the pointed objects)
+    // Refs into `Context`, make the pointer constant (not the pointed objects)
     cudaStream_t const     stream_;
     cublasMMWrapper* const cublas_wrapper_;
     IAllocator* const      allocator_;
-    LlamaLinear<T>* const  linear_;
+    LlamaLinear* const     linear_;
 
     bool use_allgather_2d_{false};
 
     const bool is_free_buffer_after_forward_;
     const bool debug_;
 
-    std::unique_ptr<UnifiedDecoder<T>>         unified_decoder_;
+    std::unique_ptr<UnifiedDecoder>            unified_decoder_;
     std::unique_ptr<DynamicDecodeLayer<float>> dynamic_decode_layer_;
 };
 

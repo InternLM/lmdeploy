@@ -1,14 +1,17 @@
 
-#include "src/turbomind/utils/anomaly_handler.h"
-#include "src/turbomind/utils/cuda_utils.h"
-#include "src/turbomind/utils/logger.h"
-#include "src/turbomind/utils/memory_utils.h"
+
 #include <cmath>
 #include <cub/block/block_reduce.cuh>
 #include <optional>
 #include <string>
 #include <thrust/device_vector.h>
 #include <thrust/host_vector.h>
+
+#include "src/turbomind/models/llama/llama_utils.h"
+#include "src/turbomind/utils/anomaly_handler.h"
+#include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/logger.h"
+#include "src/turbomind/utils/memory_utils.h"
 
 namespace turbomind {
 
@@ -394,6 +397,7 @@ void DebugTensor(core::Tensor& tensor, const std::string& key, int level)
     auto invoke = [&](auto t) {
         using T = decltype(t);
         AnomalyHandler::instance().CountAndFix((T*)tensor.raw_data(), tensor.size(), key, level);
+        // Compare((T*)tensor.raw_data(), tensor.size(), key, compare_mode, core::Context::stream().handle());
     };
     switch (tensor.dtype()) {
         case TYPE_FP32:

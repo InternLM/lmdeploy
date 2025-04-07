@@ -414,7 +414,7 @@ PYBIND11_MODULE(_turbomind, m)
                         auto num_element = std::accumulate(
                             (*src)->shape.begin(), (*src)->shape.end(), 1LL, std::multiplies<int64_t>());
                         auto num_bytes = num_element * dlmt->dl_tensor.dtype.bits / 8;
-                        ft::FT_CHECK(self->shape.size() == 1 && num_bytes == self->shape[0]);
+                        TM_CHECK_EQ(self->sizeBytes(), num_bytes);
                         safe_memcpy(const_cast<void*>(self->data), (*src)->data, num_bytes);
                         break;
                     }
@@ -507,62 +507,63 @@ PYBIND11_MODULE(_turbomind, m)
             "session_id"_a);
 
     // transformer model
-    using ft::AbstractTransformerModel;
     using ft::LlamaTritonModel;
-    py::class_<AbstractTransformerModel, std::shared_ptr<AbstractTransformerModel>>(m, "AbstractTransformerModel")
+    py::class_<LlamaTritonModel, std::shared_ptr<LlamaTritonModel>>(m, "AbstractTransformerModel")
         .def_static(
             "create_llama_model",
             [](std::string model_dir,
                std::string config,
-               std::string data_type) -> std::shared_ptr<AbstractTransformerModel> {
+               std::string weight_type) -> std::shared_ptr<LlamaTritonModel> {
                 auto gil_factory = [] {  //
                     // erase the type
                     return std::static_pointer_cast<void>(std::make_shared<ScopedGIL>());
                 };
-                auto no_gil_deleter = [](AbstractTransformerModel* ptr) {
+                auto no_gil_deleter = [](LlamaTritonModel* ptr) {
                     pybind11::gil_scoped_release release;
                     delete ptr;
                 };
 
-                if (data_type == "half" || data_type == "fp16" || data_type == "float16" || data_type == "int4") {
-                    std::shared_ptr<LlamaTritonModel<half>> model(
-                        new LlamaTritonModel<half>(model_dir, config, gil_factory), no_gil_deleter);
-                    return model;
+                turbomind::DataType data_type{};
+
+                if (weight_type == "half" || weight_type == "fp16" || weight_type == "float16"
+                    || weight_type == "int4") {
+                    data_type = turbomind::TYPE_FP16;
                 }
-                else if (data_type == "bf16" || data_type == "bfloat16") {
+                else if (weight_type == "bf16" || weight_type == "bfloat16") {
 #ifdef ENABLE_BF16
-                    std::shared_ptr<LlamaTritonModel<__nv_bfloat16>> model(
-                        new LlamaTritonModel<__nv_bfloat16>(model_dir, config, gil_factory), no_gil_deleter);
-                    return model;
+                    data_type = turbomind::TYPE_BF16;
 #else
                     throw std::runtime_error("Error: turbomind has not been built with bf16 support.");
 #endif
                 }
                 else {
 #ifdef ENABLE_FP32
-                    auto model = std::make_shared<LlamaTritonModel<float>>(model_dir, config, gil_factory);
-                    return model;
+                    data_type = turbomind::TYPE_FP32;
 #else
                     throw std::runtime_error("Error: turbomind has not been built with fp32 support.");
 #endif
                 }
+
+                std::shared_ptr<LlamaTritonModel> model(new LlamaTritonModel(data_type, model_dir, config, gil_factory),
+                                                        no_gil_deleter);
+                return model;
             },
             "model_dir"_a,
-            "config"_a    = "",
-            "data_type"_a = "half")
+            "config"_a      = "",
+            "weight_type"_a = "half")
         .def(
             "create_model_instance",
-            [](AbstractTransformerModel* model, int deviceId) { return model->createModelInstance(deviceId); },
+            [](LlamaTritonModel* model, int deviceId) { return model->createModelInstance(deviceId); },
             py::call_guard<py::gil_scoped_release>(),
             "device_id"_a)
         .def("create_shared_weights",
-             &AbstractTransformerModel::createSharedWeights,
+             &LlamaTritonModel::createSharedWeights,
              py::call_guard<py::gil_scoped_release>(),
              "device_id"_a,
              "rank"_a)
         .def(
             "get_params",
-            [](AbstractTransformerModel* model, int deviceId, int rank) {
+            [](LlamaTritonModel* model, int deviceId, int rank) {
                 auto      output = model->getParams(deviceId, rank);
                 TensorMap ret;
                 for (const auto& [k, v] : output) {
@@ -576,18 +577,18 @@ PYBIND11_MODULE(_turbomind, m)
             "rank"_a)
         .def(
             "process_weight",
-            [](AbstractTransformerModel* model, int deviceId, int rank) { model->processWeights(deviceId, rank); },
+            [](LlamaTritonModel* model, int deviceId, int rank) { model->processWeights(deviceId, rank); },
             py::call_guard<py::gil_scoped_release>(),
             "device_id"_a,
             "rank"_a)
         .def(
             "create_engine",
-            [](AbstractTransformerModel* model, int deviceId, int rank) { model->createEngine(deviceId, rank); },
+            [](LlamaTritonModel* model, int deviceId, int rank) { model->createEngine(deviceId, rank); },
             py::call_guard<py::gil_scoped_release>(),
             "device_id"_a,
             "rank"_a)
-        .def("__str__", &AbstractTransformerModel::toString)
-        .def("__repr__", &AbstractTransformerModel::toString)
-        .def("get_tensor_para_size", &AbstractTransformerModel::getTensorParaSize)
-        .def("get_pipeline_para_size", &AbstractTransformerModel::getPipelineParaSize);
+        .def("__str__", &LlamaTritonModel::toString)
+        .def("__repr__", &LlamaTritonModel::toString)
+        .def("get_tensor_para_size", &LlamaTritonModel::getTensorParaSize)
+        .def("get_pipeline_para_size", &LlamaTritonModel::getPipelineParaSize);
 }

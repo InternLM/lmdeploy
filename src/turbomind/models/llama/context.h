@@ -12,6 +12,7 @@
 #include "src/turbomind/comm/device_comm.h"
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
+#include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
 
@@ -27,7 +28,6 @@ struct Communicators {
 };
 
 // Execution context for the model
-template<class T>
 struct Context {
     core::Stream                                    core_stream;
     core::Allocator                                 core_allocator;
@@ -38,11 +38,11 @@ struct Context {
     std::unique_ptr<cublasAlgoMap>                  cublas_algo_map;
     std::unique_ptr<std::mutex>                     cublas_wrapper_mutex;
     std::unique_ptr<cublasMMWrapper>                cublas_wrapper;
-    std::unique_ptr<LlamaLinear<T>>                 linear;
+    std::unique_ptr<LlamaLinear>                    linear;
     Communicators                                   comm;
     cudaDeviceProp                                  cuda_device_prop;
 
-    Context(int device_id)
+    Context(DataType data_type, int device_id)
     {
         core_stream    = core::Stream::create();
         core_allocator = core::Allocator(core_stream, false);
@@ -65,23 +65,16 @@ struct Context {
         cublas_wrapper_mutex = std::make_unique<std::mutex>();
         cublas_wrapper       = std::make_unique<cublasMMWrapper>(
             cublas_handle, cublasLt_handle, stream, cublas_algo_map.get(), cublas_wrapper_mutex.get(), allocator.get());
-        linear = std::make_unique<LlamaLinear<T>>(cublas_wrapper.get(), stream);
+        linear = std::make_unique<LlamaLinear>(cublas_wrapper.get(), stream);
 
         check_cuda_error(cudaGetDeviceProperties(&cuda_device_prop, device_id));
 
-        if (std::is_same<T, half>::value) {
+        if (data_type == TYPE_FP16) {
             cublas_wrapper->setGemmConfig(CUDA_R_16F, CUDA_R_16F, CUDA_R_16F, CUDA_R_32F);
         }
-#ifdef ENABLE_FP32
-        else if (std::is_same<T, float>::value) {
-            cublas_wrapper->setFP32GemmConfig();
-        }
-#endif
-#ifdef ENABLE_BF16
-        else if (std::is_same<T, __nv_bfloat16>::value) {
+        else if (data_type == TYPE_BF16) {
             cublas_wrapper->setBF16GemmConfig();
         }
-#endif
     }
 
     ~Context()

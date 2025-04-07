@@ -12,14 +12,12 @@
 
 namespace turbomind {
 
-template<class T>
 class MoeFfnLayer {
 public:
-    MoeFfnLayer(ModelParam model, const MoeParam& param, size_t tp_size, const Context<T>& ctx):
+    MoeFfnLayer(ModelParam model, const MoeParam& param, size_t tp_size, const Context& ctx):
         inter_size_(param.inter_size / tp_size),
         hidden_dim_(model.hidden_units),
         param_(param),
-        dtype_(getTensorType<T>()),
         stream_(ctx.stream),
         cublas_(ctx.cublas_wrapper.get()),
         linear_(ctx.linear.get()),
@@ -33,7 +31,7 @@ public:
                 max_expert_num, param.experts_per_token, ctx.cuda_device_prop, stream_);
         }
         else {
-            expert_ffn_ = std::make_unique<LlamaFfnLayer<T>>(model, ctx);
+            expert_ffn_ = std::make_unique<LlamaFfnLayer>(model, ctx);
         }
 
         h_offsets_ = (int*)allocator_->malloc(sizeof(int) * (max_expert_num + 1), false, true);
@@ -51,36 +49,40 @@ public:
         FreeBuffer();
     }
 
-    void forward(T* output, const T* input, int tokens, int layer_id, const MoeFfnWeight<T>& moe);
+    struct ForwardParam {
+        core::Tensor        output;
+        core::Tensor        input;
+        core::Tensor        temp;
+        float               scale;
+        int                 layer_id;
+        const MoeFfnWeight* weight;
+    };
 
-    void reduce(T* output, int tokens, float output_scale, int layer_id, const MoeFfnWeight<T>& moe);
+    void Forward(ForwardParam& p);
 
-    void gate(float* logits, const T* input, int tokens, const LlamaDenseWeight<T>& weight);
+    void Combine(ForwardParam& p);
+
+private:
+    core::Tensor_<float> Gate(const core::Tensor& input, const LlamaDenseWeight& gate);
 
     void dump_logits(int token_num, int layer_id, int expert_num);
 
-private:
-    const size_t           inter_size_;
-    const size_t           hidden_dim_;
+    const int              inter_size_;
+    const int              hidden_dim_;
     const MoeParam         param_;
-    const DataType         dtype_;
     cudaStream_t const     stream_;
     cublasMMWrapper* const cublas_;
-    LlamaLinear<T>* const  linear_;
+    LlamaLinear* const     linear_;
     IAllocator* const      allocator_;
 
-    std::unique_ptr<LlamaFfnLayer<T>>     expert_ffn_;
+    std::unique_ptr<LlamaFfnLayer>        expert_ffn_;
     std::unique_ptr<gemm::MoeGemmContext> context_;
 
     int* h_offsets_{};
 
     char* workspace_{};
 
-    T* inout_buf_{};  // [n * e, hidden_dim]
-    T* inter_buf_{};  // [n * e, inter_size]
-
-    float* logits_{};
-    int*   masks_{};
+    int* masks_{};
 
     int*   f2n_{};
     int*   en2f_{};

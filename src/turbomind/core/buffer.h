@@ -97,6 +97,11 @@ public:
     {
     }
 
+    Buffer(void* data, ssize_t size, DataType dtype, MemoryLocation device):
+        data_{data, [](auto) {}}, base_{}, size_{size}, device_{device}, dtype_{dtype}
+    {
+    }
+
     // Share ownership of `data`
     Buffer(shared_ptr<void> data, ssize_t size, DataType dtype, MemoryLocation device):
         data_{std::move(data)}, base_{}, size_{size}, device_{device}, dtype_{dtype}
@@ -116,7 +121,7 @@ public:
     template<class T>
     T* data()
     {
-        TM_CHECK(getTensorType<T>() == dtype_);
+        TM_CHECK_EQ(getTensorType<T>(), dtype_);
         return static_cast<T*>(raw_data());
     }
 
@@ -126,14 +131,20 @@ public:
         return const_cast<Buffer*>(this)->data<T>();
     }
 
-    void* raw_data()
+    void* raw_data(ssize_t offset = 0)
     {
-        return (char*)data_.get() + get_byte_size(dtype_, base_);
+        return TM_CHECK_NOTNULL((char*)data_.get()) + get_byte_size(dtype_, base_ + offset);
     }
 
-    const void* raw_data() const
+    const void* raw_data(ssize_t offset = 0) const
     {
-        return const_cast<Buffer*>(this)->raw_data();
+        return const_cast<Buffer*>(this)->raw_data(offset);
+    }
+
+    template<class T = void>
+    T* unsafe_data() const
+    {
+        return (T*)((char*)data_.get() + get_byte_size(dtype_, base_));
     }
 
     DataType dtype() const
@@ -320,12 +331,12 @@ inline void Copy_(const Buffer_<T>& a, ssize_t n, Buffer_<T>& b_)
     Copy((const Buffer&)a, n, (Buffer&)b_);
 }
 
-std::byte* Copy(const std::byte* a, ssize_t n, std::byte* b, const Stream& stream);
+void* Copy(const void* a, ssize_t n, void* b, const Stream& stream);
 
 template<class T>
 inline T* Copy(const T* a, ssize_t n, T* b, const Stream& stream)
 {
-    return (T*)Copy((const std::byte*)a, sizeof(T) * n, (std::byte*)b, stream);
+    return (T*)Copy((const void*)a, sizeof(T) * n, (void*)b, stream);
 }
 
 template<class T>

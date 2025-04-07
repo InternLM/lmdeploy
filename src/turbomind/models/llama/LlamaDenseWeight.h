@@ -19,9 +19,12 @@
 
 #pragma once
 
+#include "src/turbomind/core/buffer.h"
+#include "src/turbomind/core/tensor.h"
+
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/models/llama/llama_params.h"
-#include "src/turbomind/models/llama/weight_type.h"
+#include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/memory_utils.h"
 #include <cuda_bf16.h>
@@ -44,250 +47,223 @@ struct LoraWeight {
     void*      b;
 };
 
-template<typename T>
 struct LlamaDenseWeight {
-    size_t     input_dims  = 0;
-    size_t     output_dims = 0;
-    WeightType type;  // uninitialized
-    void*      kernel       = nullptr;
-    T*         bias         = nullptr;
-    T*         scales       = nullptr;
-    T*         zeros        = nullptr;
-    T*         scales_zeros = nullptr;
-    int        group_size   = 1;
+
+    int input_dim  = 0;
+    int output_dim = 0;
+    int group_size = 1;
+
+    DataType data_type;
+    DataType weight_type;
+
+    core::Tensor weight;
+    core::Buffer bias;
+
+    core::Tensor scales;
+    core::Tensor zeros;
+
+    core::Tensor scales_zeros;
 
     LoraWeight lora;
 
     gemm::MatrixLayout k_desc;
     gemm::MatrixLayout q_desc;
 
-    LlamaDenseWeight(): type{}, lora{}, k_desc{}, q_desc{} {}
+    LlamaDenseWeight(): data_type{}, weight_type{}, lora{}, k_desc{}, q_desc{} {}
 
-    LlamaDenseWeight(size_t input_dim, size_t output_dim, WeightType type, int group_size): LlamaDenseWeight{}
+    LlamaDenseWeight(int input_dim, int output_dim, DataType data_type, DataType weight_type, int group_size):
+        LlamaDenseWeight{}
     {
-        this->input_dims  = input_dim;
-        this->output_dims = output_dim;
-        this->type        = type;
+        this->data_type   = data_type;
+        this->weight_type = weight_type;
+        this->input_dim   = input_dim;
+        this->output_dim  = output_dim;
         this->group_size  = group_size;
     }
 
-    size_t kernel_size() const noexcept
-    {
-        return getBitSize(type) * input_dims * output_dims / 8;
-    }
-
-    size_t bias_size() const noexcept
-    {
-        return sizeof(T) * output_dims;
-    }
-
-    size_t scales_size() const noexcept
-    {
-        return sizeof(T) * input_dims / group_size * output_dims;
-    }
-
-    std::pair<size_t, size_t> lora_size() const noexcept
-    {
-        return {sizeof(T) * input_dims * lora.r, sizeof(T) * lora.r * output_dims};
-    }
-
-    void malloc(cudaStream_t st, bool with_bias = false)
+    void malloc(bool with_bias = false)
     {
         if (with_bias) {
-            deviceMalloc((T**)&bias, output_dims, st);
-        }
-        const size_t bit_size = getBitSize(type);
-        if (bit_size >= 16) {  // fp16, fp32
-            deviceMalloc((T**)&kernel, input_dims * output_dims, st);
-        }
-        else {  // int8, int4
-            const int factor = sizeof(float) * 8 / bit_size;
-            FT_CHECK(input_dims % factor == 0);
-            deviceMalloc((int**)&kernel, input_dims * output_dims / factor, st);
-            deviceMalloc((T**)&scales, input_dims / group_size * output_dims, st);
-            deviceMalloc((T**)&zeros, input_dims / group_size * output_dims, st);
+            bias = core::Buffer{output_dim, data_type, MEMORY_GPU};
         }
 
-        if (lora.r > 0) {
-            deviceMalloc((T**)&lora.a, input_dims * lora.r, st);
-            deviceMalloc((T**)&lora.b, lora.r * output_dims, st);
+        weight = core::Tensor({input_dim, output_dim}, weight_type, MEMORY_GPU);
+
+        if (auto wbits = core::get_byte_size(weight_type, 8); wbits <= 8) {
+            TM_CHECK_EQ(input_dim % group_size, 0);
+            scales = core::Tensor{{input_dim / group_size, output_dim}, data_type, MEMORY_GPU};
+            zeros  = core::Tensor{{input_dim / group_size, output_dim}, data_type, MEMORY_GPU};
         }
     }
 
-    void free(cudaStream_t st)
+    void free()
     {
-        deviceFree(kernel, st);
-        deviceFree(bias, st);
-        deviceFree(scales, st);
-        deviceFree(zeros, st);
-        deviceFree(lora.a, st);
-        deviceFree(lora.b, st);
+        bias   = {};
+        weight = {};
+        scales = {};
+        zeros  = {};
     }
 };
 
-template<typename T>
 struct LlamaAttentionWeight {
 
     LlamaAttentionWeight() = default;
 
-    LlamaAttentionWeight(size_t     hidden_dim,
-                         size_t     head_dim,
-                         size_t     head_num,
-                         size_t     kv_head_num,
-                         MLAParam   mla,
-                         bool       bias,
-                         bool       qk_norm,
-                         size_t     tp,
-                         WeightType weight_type,
-                         int        group_size)
+    LlamaAttentionWeight(int      hidden_dim,
+                         int      head_dim,
+                         int      head_num,
+                         int      kv_head_num,
+                         MLAParam mla,
+                         bool     bias,
+                         bool     qk_norm,
+                         int      tp,
+                         DataType data_type,
+                         DataType weight_type,
+                         int      group_size)
     {
-        this->bias     = bias;
-        this->head_dim = head_dim;
-        this->qk_norm  = qk_norm;
+        this->bias        = bias;
+        this->head_dim    = head_dim;
+        this->qk_norm     = qk_norm;
+        this->data_type   = data_type;
+        this->weight_type = weight_type;
 
         if (mla.kv_lora_rank == 0) {
-            qkv = {hidden_dim, (head_num + 2 * kv_head_num) * head_dim / tp, weight_type, group_size};
+            qkv = {hidden_dim, (head_num + 2 * kv_head_num) * head_dim / tp, data_type, weight_type, group_size};
         }
         else {
             const int qk_nope_dim = head_dim - mla.qk_rope_dim;
             if (mla.q_lora_rank) {
-                q_a_proj = {hidden_dim, mla.q_lora_rank, weight_type, group_size};
-                q_b_proj = {mla.q_lora_rank, head_num * head_dim / tp, weight_type, group_size};
+                q_a_proj = {hidden_dim, mla.q_lora_rank, data_type, weight_type, group_size};
+                q_b_proj = {mla.q_lora_rank, head_num * head_dim / tp, data_type, weight_type, group_size};
             }
             else {
-                q_proj = {hidden_dim, head_num * head_dim / tp, weight_type, group_size};
+                q_proj = {hidden_dim, head_num * head_dim / tp, data_type, weight_type, group_size};
             }
-            kv_a_proj = {hidden_dim, mla.kv_lora_rank + mla.qk_rope_dim, weight_type, group_size};
-            kv_b_proj = {mla.kv_lora_rank, head_num * (qk_nope_dim + mla.v_head_dim) / tp, weight_type, group_size};
+            kv_a_proj = {hidden_dim, mla.kv_lora_rank + mla.qk_rope_dim, data_type, weight_type, group_size};
+            kv_b_proj = {
+                mla.kv_lora_rank, head_num * (qk_nope_dim + mla.v_head_dim) / tp, data_type, weight_type, group_size};
         }
-        output = {(head_num * head_dim) / tp, hidden_dim, weight_type, group_size};
+        output = {(head_num * head_dim) / tp, hidden_dim, data_type, weight_type, group_size};
     }
 
-    void malloc(cudaStream_t st)
+    void malloc()
     {
-        if (qkv.output_dims) {
-            qkv.malloc(st, bias);
+        if (qkv.output_dim) {
+            qkv.malloc(bias);
             if (qk_norm) {
-                deviceMalloc((T**)&q_a_layernorm, head_dim, st);
-                deviceMalloc((T**)&kv_a_layernorm, head_dim, st);
+                q_a_layernorm  = core::Buffer{head_dim, data_type, MEMORY_GPU};
+                kv_a_layernorm = core::Buffer{head_dim, data_type, MEMORY_GPU};
             }
         }
         else {  // MLA
-            if (q_proj.output_dims) {
-                q_proj.malloc(st);
+            if (q_proj.output_dim) {
+                q_proj.malloc();
             }
             else {
-                q_a_proj.malloc(st);
-                q_b_proj.malloc(st);
-                deviceMalloc((T**)&q_a_layernorm, q_b_proj.input_dims, st);
+                q_a_proj.malloc();
+                q_b_proj.malloc();
+                q_a_layernorm = core::Buffer{q_b_proj.input_dim, data_type, MEMORY_GPU};
             }
-            kv_a_proj.malloc(st);
-            kv_b_proj.malloc(st);
-            deviceMalloc((T**)&kv_a_layernorm, kv_b_proj.input_dims, st);
+            kv_a_proj.malloc();
+            kv_b_proj.malloc();
+            kv_a_layernorm = core::Buffer{kv_b_proj.input_dim, data_type, MEMORY_GPU};
         }
-        output.malloc(st, bias);
+        output.malloc(bias);
     }
 
-    void free(cudaStream_t st)
+    void free()
     {
-        qkv.free(st);
-        q_proj.free(st);
-        q_a_proj.free(st);
-        q_b_proj.free(st);
-        kv_a_proj.free(st);
-        kv_b_proj.free(st);
-        output.free(st);
-        deviceFree(q_a_layernorm, st);
-        deviceFree(kv_a_layernorm, st);
+        qkv.free();
+        q_proj.free();
+        q_a_proj.free();
+        q_b_proj.free();
+        kv_a_proj.free();
+        kv_b_proj.free();
+        output.free();
+        q_a_layernorm  = {};
+        kv_a_layernorm = {};
     }
 
     int  head_dim{};
     bool bias{};
     bool qk_norm{};
 
-    LlamaDenseWeight<T> qkv;
-    LlamaDenseWeight<T> output;
+    DataType data_type{};
+    DataType weight_type{};
 
-    LlamaDenseWeight<T> q_proj;
-    LlamaDenseWeight<T> q_a_proj;
-    LlamaDenseWeight<T> q_b_proj;
-    LlamaDenseWeight<T> kv_a_proj;
-    LlamaDenseWeight<T> kv_b_proj;
+    LlamaDenseWeight qkv;
+    LlamaDenseWeight output;
 
-    T* q_a_layernorm{};
-    T* kv_a_layernorm{};
+    LlamaDenseWeight q_proj;
+    LlamaDenseWeight q_a_proj;
+    LlamaDenseWeight q_b_proj;
+    LlamaDenseWeight kv_a_proj;
+    LlamaDenseWeight kv_b_proj;
+
+    core::Buffer q_a_layernorm;
+    core::Buffer kv_a_layernorm;
 };
 
-template<typename T>
 struct LlamaFfnWeight {
 
     LlamaFfnWeight() = default;
 
-    LlamaFfnWeight(
-        size_t hidden_dim, size_t inter_size, size_t tp, WeightType weight_type, int group_size, bool fuse_silu_act)
+    LlamaFfnWeight(int      hidden_dim,
+                   int      inter_size,
+                   int      tp,
+                   DataType data_type,
+                   DataType weight_type,
+                   int      group_size,
+                   bool     fuse_silu_act)
     {
-        inter_size /= tp;
+        TM_CHECK_EQ(inter_size % tp, 0);
 
         this->inter_size = inter_size;
 
-        gating.input_dims  = hidden_dim;
-        gating.output_dims = inter_size;
-        gating.type        = weight_type;
-        gating.group_size  = group_size;
+        gating       = {hidden_dim, inter_size, data_type, weight_type, group_size};
+        intermediate = {hidden_dim, inter_size, data_type, weight_type, group_size};
 
-        intermediate.input_dims  = hidden_dim;
-        intermediate.output_dims = inter_size;
-        intermediate.type        = weight_type;
-        intermediate.group_size  = group_size;
+        fused_gating_intermediate = {hidden_dim, inter_size * 2, data_type, weight_type, group_size};
+        is_fused_silu             = fuse_silu_act;
 
-        fused_gating_intermediate.input_dims  = hidden_dim;
-        fused_gating_intermediate.output_dims = inter_size * 2;
-        fused_gating_intermediate.type        = weight_type;
-        fused_gating_intermediate.group_size  = group_size;
-
-        is_fused_silu = fuse_silu_act;
-
-        output.input_dims  = inter_size;
-        output.output_dims = hidden_dim;
-        output.type        = weight_type;
-        output.group_size  = group_size;
+        output = {inter_size, hidden_dim, data_type, weight_type, group_size};
     }
 
-    void malloc(cudaStream_t st)
+    void malloc()
     {
-        gating.malloc(st);
-        intermediate.malloc(st);
-        output.malloc(st);
+        gating.malloc();
+        intermediate.malloc();
+        output.malloc();
     }
 
-    void free(cudaStream_t st)
+    void free()
     {
-        gating.free(st);
-        intermediate.free(st);
-        output.free(st);
-        fused_gating_intermediate.free(st);
+        gating.free();
+        intermediate.free();
+        output.free();
+        fused_gating_intermediate.free();
     }
 
-    LlamaDenseWeight<T> gating;
-    LlamaDenseWeight<T> intermediate;
-    LlamaDenseWeight<T> output;
-    LlamaDenseWeight<T> fused_gating_intermediate;
+    LlamaDenseWeight gating;
+    LlamaDenseWeight intermediate;
+    LlamaDenseWeight output;
+    LlamaDenseWeight fused_gating_intermediate;
 
     int  inter_size{};
     bool is_fused_silu{};
 };
 
-template<class T>
 struct MoeFfnWeight {
 
     MoeFfnWeight() = default;
 
     MoeFfnWeight(int             layer_id,
                  const MoeParam& param,
-                 size_t          hidden_dim,
-                 WeightType      weight_type,
+                 int             hidden_dim,
+                 DataType        data_type,
+                 DataType        weight_type,
                  int             group_size,
-                 size_t          tp,
+                 int             tp,
                  bool            fuse_silu_act)
     {
 
@@ -303,10 +279,7 @@ struct MoeFfnWeight {
 
         // printf("%d %d %d\n", (int)hidden_dim, (int)param.inter_size, (int)expert_num);
 
-        gate.input_dims  = hidden_dim;
-        gate.output_dims = expert_num;
-        gate.type        = get_default_weight_type<T>();
-        gate.group_size  = group_size;
+        gate = {hidden_dim, expert_num, data_type, data_type, 1};
 
         experts.resize(expert_num);
 
@@ -315,48 +288,42 @@ struct MoeFfnWeight {
 
         for (auto& e : experts) {
             // inter size is divided by tp in `FfnWeight`
-            e = LlamaFfnWeight<T>{hidden_dim, (size_t)param.inter_size, tp, weight_type, group_size, fuse_silu_act};
+            e = LlamaFfnWeight{hidden_dim, param.inter_size, tp, data_type, weight_type, group_size, fuse_silu_act};
         }
 
         if (param.shared_gate) {
-            shared_gate.input_dims  = hidden_dim;
-            shared_gate.output_dims = 1;
-            shared_gate.type        = get_default_weight_type<T>();
-            gate.group_size         = group_size;
-        }
-        else {
-            shared_gate = {};
+            shared_gate = {hidden_dim, 1, data_type, data_type, 1};
         }
     }
 
-    void malloc(cudaStream_t st)
+    void malloc()
     {
-        gate.malloc(st);
-        if (shared_gate.output_dims) {
-            shared_gate.malloc(st);
+        gate.malloc();
+        if (shared_gate.output_dim) {
+            shared_gate.malloc();
         }
         for (auto& e : experts) {
-            e.malloc(st);
+            e.malloc();
         }
     }
 
-    void free(cudaStream_t st)
+    void free()
     {
-        gate.free(st);
-        shared_gate.free(st);
+        gate.free();
+        shared_gate.free();
         for (auto& e : experts) {
-            e.free(st);
+            e.free();
         }
-        block.free(st);
+        block.free();
     }
 
-    LlamaDenseWeight<T>            gate;
-    std::vector<LlamaFfnWeight<T>> experts;
+    LlamaDenseWeight            gate;
+    std::vector<LlamaFfnWeight> experts;
 
-    LlamaDenseWeight<T> shared_gate;
+    LlamaDenseWeight shared_gate;
 
     // reference into `experts`
-    LlamaFfnWeight<T> block;
+    LlamaFfnWeight block;
 
     MoeParam::Method method{};
 };

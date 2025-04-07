@@ -161,7 +161,11 @@ inline int64_t get_size(DataType type, int64_t size)
 }
 
 template<class T>
-struct get_data_type {
+struct get_data_type {};
+
+template<>
+struct get_data_type<float> {
+    static constexpr auto value = DataType::F32;
 };
 
 template<>

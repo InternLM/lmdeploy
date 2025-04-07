@@ -27,34 +27,27 @@
 
 namespace turbomind {
 
-template<typename T>
 class LlamaFfnLayer {
 public:
-    LlamaFfnLayer(const ModelParam& model, const Context<T>& ctx):
-        hidden_units_(model.hidden_units),
-        stream_(ctx.stream),
-        linear_(ctx.linear.get()),
-        allocator_(ctx.allocator.get())
+    LlamaFfnLayer(const ModelParam& model, const Context& ctx): hidden_units_(model.hidden_units), linear_(*ctx.linear)
     {
     }
 
     struct ForwardParam {
-        core::Tensor             input;
-        core::Tensor             output;
-        const LlamaFfnWeight<T>* weights;
-        int                      layer_id;
+        core::Tensor          input;
+        core::Tensor          output;
+        const LlamaFfnWeight* weights;
+        int                   layer_id;
     };
 
-    void forward(ForwardParam&& param);
+    void forward(ForwardParam param);
 
 private:
-    void activation(core::Tensor& gating, core::Tensor& inter);
+    void activation(core::Tensor& gating, core::Tensor& inter, cudaStream_t stream);
 
 private:
-    const size_t          hidden_units_;
-    cudaStream_t const    stream_;
-    LlamaLinear<T>* const linear_;
-    IAllocator* const     allocator_;
+    const size_t hidden_units_;
+    LlamaLinear& linear_;
 };
 
 }  // namespace turbomind

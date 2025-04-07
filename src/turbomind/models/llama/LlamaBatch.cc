@@ -22,6 +22,7 @@
 #include "src/turbomind/comm/device_comm.h"
 #include "src/turbomind/comm/host_comm.h"
 #include "src/turbomind/core/allocator.h"
+#include "src/turbomind/core/buffer.h"
 #include "src/turbomind/core/context.h"
 #include "src/turbomind/core/tensor.h"
 #include "src/turbomind/macro.h"
@@ -96,8 +97,7 @@ void DropEmbeddings(const Sequence& seq)
     seq.input_embedding_ranges.resize(sz);
 }
 
-template<typename T>
-void LlamaBatch<T>::DisableInvalidRequests(Requests& infer_reqs, Requests& kill_reqs)
+void LlamaBatch::DisableInvalidRequests(Requests& infer_reqs, Requests& kill_reqs)
 {
     NvtxScope _("disable invalid");
 
@@ -140,8 +140,7 @@ void LlamaBatch<T>::DisableInvalidRequests(Requests& infer_reqs, Requests& kill_
     }
 }
 
-template<class T>
-void LlamaBatch<T>::FindCanceledIndices(std::vector<int>& indices)
+void LlamaBatch::FindCanceledIndices(std::vector<int>& indices)
 {
     for (int i = 0; i < state_->size; ++i) {  // current batch
         const auto& r = state_->requests[i];
@@ -151,8 +150,7 @@ void LlamaBatch<T>::FindCanceledIndices(std::vector<int>& indices)
     }
 }
 
-template<class T>
-void LlamaBatch<T>::ProcessCancelRequests(std::vector<int>& indices, std::vector<Signal>& signals)
+void LlamaBatch::ProcessCancelRequests(std::vector<int>& indices, std::vector<Signal>& signals)
 {
     int count = 0;
 
@@ -171,8 +169,7 @@ void LlamaBatch<T>::ProcessCancelRequests(std::vector<int>& indices, std::vector
     }
 }
 
-template<class T>
-void LlamaBatch<T>::ProcessKillRequests(const Requests& kill_reqs, std::vector<Signal>& signals)
+void LlamaBatch::ProcessKillRequests(const Requests& kill_reqs, std::vector<Signal>& signals)
 {
     for (auto& r : kill_reqs) {
         if (r) {
@@ -191,8 +188,7 @@ void LlamaBatch<T>::ProcessKillRequests(const Requests& kill_reqs, std::vector<S
     }
 }
 
-template<typename T>
-void LlamaBatch<T>::ProcessInferRequests(const Requests& reqs, std::vector<Signal>& signals)
+void LlamaBatch::ProcessInferRequests(const Requests& reqs, std::vector<Signal>& signals)
 {
     NvtxScope scope("infer_request");
     auto&     state = *incoming_;
@@ -292,6 +288,8 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& reqs, std::vector<Signa
             std::copy_n(input_ids, input_length, seq.prompt.data());
         }
 
+        const int elem_size = core::get_byte_size(data_type_);
+
         // copy input embeddings
         if (r->inputs.isExist("input_embedding_ranges")) {
             const auto range_tensor = r->inputs.at("input_embedding_ranges");
@@ -314,7 +312,7 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& reqs, std::vector<Signa
                         break;
                     }
                     if (begin >= end || end > input_length || begin < pre_end
-                        || embedding_length * model_->hidden_units_ * sizeof(T) > emb_tensor.shape[1]) {
+                        || embedding_length * model_->hidden_units_ * elem_size > emb_tensor.shape[1]) {
                         return false;
                     }
                     pre_end              = end;
@@ -337,7 +335,7 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& reqs, std::vector<Signa
                 for (size_t i = 0; i < num_valid_embeddings; i++) {
                     int    begin = ranges[i * 2];
                     int    end   = ranges[i * 2 + 1];
-                    size_t count = (end - begin) * model_->hidden_units_ * sizeof(T);
+                    size_t count = (end - begin) * model_->hidden_units_ * elem_size;
                     seq.input_embeddings.emplace_back((std::byte*)emb_tensor_ptr, (std::byte*)(emb_tensor_ptr + count));
                     seq.input_embedding_ranges.emplace_back(begin + seq.tokens.size(), end + seq.tokens.size());
                     emb_tensor_ptr += count;
@@ -421,10 +419,9 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& reqs, std::vector<Signa
     }
 }
 
-template<typename T>
-int LlamaBatch<T>::AdjustMaxInputCount(GenerationState&                    g,
-                                       const std::vector<const Sequence*>& sequences,
-                                       const std::vector<int>&             context_length)
+int LlamaBatch::AdjustMaxInputCount(GenerationState&                    g,
+                                    const std::vector<const Sequence*>& sequences,
+                                    const std::vector<int>&             context_length)
 {
     int input_count = 0;
     for (int i = 0; i < sequences.size(); ++i) {
@@ -454,8 +451,7 @@ int LlamaBatch<T>::AdjustMaxInputCount(GenerationState&                    g,
     return input_count;
 }
 
-template<typename T>
-void LlamaBatch<T>::Initialize(GenerationState& g)
+void LlamaBatch::Initialize(GenerationState& g)
 {
     NvtxScope                                scope("initialize");
     std::vector<const Sequence*>             sequences;
@@ -633,8 +629,7 @@ void LlamaBatch<T>::Initialize(GenerationState& g)
     }
 }
 
-template<typename T>
-void LlamaBatch<T>::CopyState(const std::vector<std::tuple<BatchState*, BatchState*, int, int>>& desc)
+void LlamaBatch::CopyState(const std::vector<std::tuple<BatchState*, BatchState*, int, int>>& desc)
 {
     if (desc.empty()) {
         return;
@@ -694,8 +689,7 @@ void LlamaBatch<T>::CopyState(const std::vector<std::tuple<BatchState*, BatchSta
     }
 }
 
-template<typename T>
-void LlamaBatch<T>::AllocateBuffer(ssize_t batch_size, ssize_t session_len, int cache_block_seq_len)
+void LlamaBatch::AllocateBuffer(ssize_t batch_size, ssize_t session_len, int cache_block_seq_len)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     const ssize_t batchxbeam = batch_size;
@@ -708,10 +702,10 @@ void LlamaBatch<T>::AllocateBuffer(ssize_t batch_size, ssize_t session_len, int 
     const ssize_t max_batch_block_count =
         batch_size * ((session_len + cache_block_seq_len - 1) / cache_block_seq_len) + 1;
 
-    context_decoder_input_buf_ = {{max_forward_token_num_, hidden_units}, MEMORY_GPU};
+    context_decoder_input_buf_ = {{max_forward_token_num_, hidden_units}, data_type_, MEMORY_GPU};
     context_decoder_ids_buf_   = {max_forward_token_num_, MEMORY_GPU};
 
-    decoder_output_buf_ = {{batchxbeam, hidden_units}, MEMORY_GPU};
+    decoder_output_buf_ = {{batchxbeam, hidden_units}, data_type_, MEMORY_GPU};
 
     input_length_buf_    = {batchxbeam, MEMORY_GPU};
     context_length_buf_  = {batchxbeam, MEMORY_GPU};
@@ -723,7 +717,7 @@ void LlamaBatch<T>::AllocateBuffer(ssize_t batch_size, ssize_t session_len, int 
     block_ptrs_      = {max_batch_block_count, MEMORY_GPU};
 
     if (!logits_buf_) {  // may be alias of local_logits_buf_
-        logits_buf_ = {{batchxbeam, vocab_size}, MEMORY_GPU};
+        logits_buf_ = {{batchxbeam, vocab_size}, TYPE_FP32, MEMORY_GPU};
     }
 
     sampled_logprobs_ = {batchxbeam * kMaxLogProb, MEMORY_GPU};
@@ -740,8 +734,7 @@ void LlamaBatch<T>::AllocateBuffer(ssize_t batch_size, ssize_t session_len, int 
     is_allocate_buffer_ = true;
 }
 
-template<typename T>
-void LlamaBatch<T>::AllocatePersistantBuffer(ssize_t max_batch_size, int cache_block_seq_len)
+void LlamaBatch::AllocatePersistantBuffer(ssize_t max_batch_size, int cache_block_seq_len)
 {
     d_stop_words_ =
         (int*)allocator_->reMalloc(d_stop_words_, sizeof(int) * max_batch_size * 2 * kMaxStopBadWordsLen, true);
@@ -809,8 +802,7 @@ void LlamaBatch<T>::AllocatePersistantBuffer(ssize_t max_batch_size, int cache_b
     is_allocate_persistant_buffer_ = true;
 }
 
-template<class T>
-void LlamaBatch<T>::AllocSymmBuffers()
+void LlamaBatch::AllocSymmBuffers()
 {
     core::ContextGuard guard{symm_alloc_};
 
@@ -821,26 +813,26 @@ void LlamaBatch<T>::AllocSymmBuffers()
     const ssize_t max_fwd_token_num = ((size_t)max_forward_token_num_ + tp_size_ - 1) / tp_size_ * tp_size_;
 
     /// TODO: rename this to hidden_states
-    context_decoder_output_buf_ = {{max_fwd_token_num, param_.attn_dp_size, hidden_units}, MEMORY_GPU};
+    context_decoder_output_buf_ =
+        core::Tensor{{max_fwd_token_num, param_.attn_dp_size, hidden_units}, data_type_, MEMORY_GPU};
 
-    local_logits_buf_ = {{max_batch_size_, vocab_size_padded}, MEMORY_GPU};
+    local_logits_buf_ = core::Tensor{{max_batch_size_, vocab_size_padded}, TYPE_FP32, MEMORY_GPU};
 
     if (model_->use_allgather_2d_) {
         // Reference into `local_logits_buf_`
-        logits_buf_ = {local_logits_buf_.data(), local_logits_buf_.layout(), local_logits_buf_.device()};
+        logits_buf_ = core::Tensor{
+            local_logits_buf_.raw_data(), local_logits_buf_.layout(), TYPE_FP32, local_logits_buf_.device()};
     }
 }
 
-template<class T>
-void LlamaBatch<T>::FreeSymmBuffers()
+void LlamaBatch::FreeSymmBuffers()
 {
     context_decoder_output_buf_ = {};
     local_logits_buf_           = {};
     local_context_logits_buf_   = {};
 }
 
-template<typename T>
-void LlamaBatch<T>::FreeBuffer()
+void LlamaBatch::FreeBuffer()
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
@@ -853,8 +845,7 @@ void LlamaBatch<T>::FreeBuffer()
     }
 }
 
-template<typename T>
-LlamaBatch<T>::~LlamaBatch()
+LlamaBatch::~LlamaBatch()
 {
     TM_LOG_DEBUG("~LlamaBatch()");
 
@@ -871,13 +862,13 @@ LlamaBatch<T>::~LlamaBatch()
     context_.reset();  // This destroy all objects in context except for `stream`
 }
 
-template<typename T>
-LlamaBatch<T>::LlamaBatch(const EngineParam&          param,
-                          std::unique_ptr<LlamaV2<T>> model,  // ! This is moved
-                          std::unique_ptr<Context<T>> ctx,    // ! This is moved
-                          std::shared_ptr<Gateway>    gateway,
-                          int                         device_id,
-                          int                         dp_rank):
+LlamaBatch::LlamaBatch(DataType                 data_type,
+                       const EngineParam&       param,
+                       std::unique_ptr<LlamaV2> model,  // ! This is moved
+                       std::unique_ptr<Context> ctx,    // ! This is moved
+                       std::shared_ptr<Gateway> gateway,
+                       int                      device_id,
+                       int                      dp_rank):
     param_(param),
     gateway_(gateway),
     max_batch_size_(param.max_batch_size),
@@ -889,7 +880,7 @@ LlamaBatch<T>::LlamaBatch(const EngineParam&          param,
     dp_rank_(dp_rank),
     tp_size_(model->tp_size_),
     tp_rank_(model->tp_rank_),
-    data_type_(getTensorType<T>()),
+    data_type_(data_type),
     debug_(isDebug()),
     stream_(ctx->stream),
     allocator_(ctx->allocator.get()),
@@ -901,14 +892,16 @@ LlamaBatch<T>::LlamaBatch(const EngineParam&          param,
 {
     const auto cache_block_seq_len = model_->attn_param_.cache_block_seq_len;
 
+    const int dbits = core::get_byte_size(data_type, 8);
+
     const auto quant_policy = model_->param_.quant_policy;
-    const int  elem_bits    = quant_policy ? quant_policy : bitsof<T>;
+    const int  elem_bits    = quant_policy ? quant_policy : dbits;
 
     SequenceManager::BlockConfig block_config{
         (int)model_->size_per_head_,
         (int)model_->local_kv_head_num_,
         cache_block_seq_len,
-        elem_bits == bitsof<T> ? 0 : bitsof<T>,
+        elem_bits == dbits ? 0 : dbits,
         elem_bits,
     };
 
@@ -964,8 +957,7 @@ LlamaBatch<T>::LlamaBatch(const EngineParam&          param,
     check_cuda_error(cudaStreamSynchronize(stream_));
 }
 
-template<typename T>
-void LlamaBatch<T>::InitializeSampling(const GenerationState& g)
+void LlamaBatch::InitializeSampling(const GenerationState& g)
 {
     NvtxScope _("InitSampling");
     const int batch_size = state_->active_size - g.partial;
@@ -1141,8 +1133,7 @@ void LlamaBatch<T>::InitializeSampling(const GenerationState& g)
     sync_check_cuda_error();
 }
 
-template<class T>
-void LlamaBatch<T>::ComputeAndOutputLogits(T* hidden_states, int first, int last)
+void LlamaBatch::ComputeAndOutputLogits(const core::Tensor& hidden_states, int first, int last)
 {
     int  token_num = 0;
     bool found     = false;
@@ -1177,24 +1168,28 @@ void LlamaBatch<T>::ComputeAndOutputLogits(T* hidden_states, int first, int last
     if (model_->use_allgather_2d_) {
         // No intermediate transpose needed
         // Reference into `local_context_logits_buf_`
-        context_logits_buf_ = core::Tensor_<float>{
-            local_context_logits_buf_.data(), local_context_logits_buf_.layout(), local_context_logits_buf_.device()};
+        context_logits_buf_ = core::Tensor{local_context_logits_buf_.raw_data(),
+                                           local_context_logits_buf_.layout(),
+                                           TYPE_FP32,
+                                           local_context_logits_buf_.device()};
     }
     else {
-        context_logits_buf_ = core::Tensor_<float>{{token_num, vocab_size_padded}, MEMORY_GPU};
+        context_logits_buf_ = core::Tensor{{token_num, vocab_size_padded}, TYPE_FP32, MEMORY_GPU};
     }
 
-    model_->postDecodeEmbedding(context_logits_buf_.data(), local_context_logits_buf_.data(), hidden_states, token_num);
+    model_->postDecodeEmbedding(context_logits_buf_.data<float>(),
+                                local_context_logits_buf_.data<float>(),
+                                hidden_states.raw_data(),
+                                token_num);
 
     if (tp_rank_ != 0) {
         return;
     }
 
-    OutputLogits(context_logits_buf_.data(), first, last, GenerationConfig::kAll);
+    OutputLogits(context_logits_buf_.data<float>(), first, last, GenerationConfig::kAll);
 }
 
-template<typename T>
-void LlamaBatch<T>::OutputLogits(const float* logits, int first, int last, GenerationConfig::OutType out_type)
+void LlamaBatch::OutputLogits(const float* logits, int first, int last, GenerationConfig::OutType out_type)
 {
     // when `is_all` is true, logits only contains last token of the sequences
     const bool is_all = out_type == GenerationConfig::kAll;
@@ -1255,21 +1250,20 @@ void LlamaBatch<T>::OutputLogits(const float* logits, int first, int last, Gener
     }
 }
 
-template<class T>
-void LlamaBatch<T>::OutputLastHiddenState(const T* hidden_states, int first, int last)
+void LlamaBatch::OutputLastHiddenState(const core::Tensor& hidden_states, int first, int last)
 {
+    const auto& src_buf = hidden_states.buffer();
+    int         base    = 0;
+
     for (int i = first; i < last; ++i) {
-
         const int input_len = h_input_length_buf_[i];  // input lenght for this iter
-        const T*  src_ptr   = hidden_states;
-
-        hidden_states += input_len * model_->hidden_units_;
 
         if (auto out_type = state_->requests[i]->gen_cfg.output_last_hidden_state) {
 
             const bool is_all = out_type == GenerationConfig::kAll;
 
-            T* dst_ptr = state_->requests[i]->outputs.getPtr<T>("last_hidden_state");
+            auto&        dst = state_->requests[i]->outputs.at("last_hidden_state");
+            core::Buffer dst_buf{dst.getPtr<void>(), (core::ssize_t)dst.size(), dst.where};
 
             const int cache_len   = state_->sequences[i]->cache_len;
             const int history_len = state_->sequences[i]->tokens.size();
@@ -1281,22 +1275,24 @@ void LlamaBatch<T>::OutputLastHiddenState(const T* hidden_states, int first, int
 
             // TM_LOG_ERROR("%d %d %d %d %d", history_len, offset, cache_len, input_len, valid_len);
 
-            if (valid_len <= 0) {
-                continue;
+            if (valid_len > 0) {
+                // Skip invalid tokens caused by cache miss
+                int src_base = std::max(0, (history_len + offset) - cache_len) + base;
+                // Skip previous chunks
+                int dst_base = std::max(0, cache_len - (history_len + offset));
+
+                core::Copy(src_buf.raw_data(src_base * model_->hidden_units_),
+                           valid_len * model_->hidden_units_,
+                           dst_buf.raw_data(dst_base * model_->hidden_units_));
             }
-
-            // Skip invalid tokens caused by cache miss
-            src_ptr += std::max(0, (history_len + offset) - cache_len) * model_->hidden_units_;
-            // Skip previous chunks
-            dst_ptr += std::max(0, cache_len - (history_len + offset)) * model_->hidden_units_;
-
-            core::Copy(src_ptr, valid_len * model_->hidden_units_, dst_ptr);
         }
+
+        // hidden_states += input_len * model_->hidden_units_;
+        base += input_len;
     }
 }
 
-template<typename T>
-void LlamaBatch<T>::Finish(GenerationState& g, std::vector<Signal>& signals)
+void LlamaBatch::Finish(GenerationState& g, std::vector<Signal>& signals)
 {
     NvtxScope scope("Finish");
     const int batch_size = state_->active_size;
@@ -1451,8 +1447,7 @@ void LlamaBatch<T>::Finish(GenerationState& g, std::vector<Signal>& signals)
     }
 }
 
-template<typename T>
-auto LlamaBatch<T>::Interrupt(int index, bool force_stop, bool force_end) -> Signal
+auto LlamaBatch::Interrupt(int index, bool force_stop, bool force_end) -> Signal
 {
     if (tp_rank_ == 0) {
         TM_LOG_INFO("[Interrupt] slot %d, request %lu, stop %d, end %d",
@@ -1520,8 +1515,7 @@ struct RequestData {
 
 }  // namespace
 
-template<typename T>
-void LlamaBatch<T>::InternalThreadEntry()
+void LlamaBatch::InternalThreadEntry()
 {
     // TM_LOG_INFO("[InternalThreadEntry] %d", (int)rank_);
     check_cuda_error(cudaSetDevice(device_id_));
@@ -1609,8 +1603,7 @@ void LlamaBatch<T>::InternalThreadEntry()
     DestroyCommunicators();
 }
 
-template<typename T>
-void LlamaBatch<T>::Start()
+void LlamaBatch::Start()
 {
     TM_LOG_INFO("LlamaBatch<T>::Start()");
     internal_thread_ = std::thread([this] {
@@ -1624,8 +1617,7 @@ void LlamaBatch<T>::Start()
     });
 }
 
-template<typename T>
-bool LlamaBatch<T>::Forward(GenerationState& g)
+bool LlamaBatch::Forward(GenerationState& g)
 {
     NvtxScope _("Forward");
 
@@ -1736,8 +1728,10 @@ bool LlamaBatch<T>::Forward(GenerationState& g)
         auto local_token_nums = AllGather(comm_.h_dp_group, sum_q);
         auto global_token_num = std::accumulate(local_token_nums.begin(), local_token_nums.end(), 0);
 
-        model_->Forward(context_decoder_ids_buf_.slice(0, sum_q),                // temp
-                        context_decoder_output_buf_.slice(0, global_token_num),  // temp
+        auto hidden_states = context_decoder_output_buf_.slice(0, global_token_num);
+
+        model_->Forward(context_decoder_ids_buf_.slice(0, sum_q),  // temp
+                        hidden_states,                             // temp
                         decoder_output_buf_.slice(first, mini_batch_size),
                         block_ptrs_,
                         cu_block_counts_.slice(first, mini_batch_size + 1),
@@ -1751,17 +1745,19 @@ bool LlamaBatch<T>::Forward(GenerationState& g)
                         pf_batch_size,
                         state_->sequences.data() + first);
 
-        ComputeAndOutputLogits(context_decoder_output_buf_.data(), first, last);
-        OutputLastHiddenState(context_decoder_output_buf_.data(), first, last);
+        ComputeAndOutputLogits(context_decoder_output_buf_, first, last);
+        OutputLastHiddenState(context_decoder_output_buf_, first, last);
     }
 
     if (active_size > g.partial) {
-        model_->postDecodeEmbedding(
-            logits_buf_.data(), local_logits_buf_.data(), decoder_output_buf_.data(), active_size - g.partial);
+        model_->postDecodeEmbedding(logits_buf_.data<float>(),
+                                    local_logits_buf_.data<float>(),
+                                    decoder_output_buf_.raw_data(),
+                                    active_size - g.partial);
 
-        AnomalyHandler::instance().FixLogits(logits_buf_.data(), active_size - g.partial, 1);
+        AnomalyHandler::instance().FixLogits(logits_buf_.data<float>(), active_size - g.partial, 1);
 
-        OutputLogits(logits_buf_.data(), 0, active_size - g.partial, GenerationConfig::kGeneration);
+        OutputLogits(logits_buf_.data<float>(), 0, active_size - g.partial, GenerationConfig::kGeneration);
 
         FT_CHECK(g.step >= 0);
 
@@ -1777,7 +1773,7 @@ bool LlamaBatch<T>::Forward(GenerationState& g)
                               (curandState_t*)state_->curand_state.data(),
                               &inputs_,
                               &outputs_,
-                              logits_buf_.data(),
+                              logits_buf_.data<float>(),
                               seq_limit_len_.data(),
                               init_context_length_.data(),
                               g.step,
@@ -1845,11 +1841,10 @@ std::string Join(First first, Last last, const std::string& delim)
     return oss.str();
 }
 
-template<class T>
 struct TuningContext {
-    LlamaLinear<T>& linear_;
-    cudaStream_t    stream_;
-    TuningContext(LlamaLinear<T>& linear, cudaStream_t stream): linear_{linear}, stream_{stream}
+    LlamaLinear& linear_;
+    cudaStream_t stream_;
+    TuningContext(LlamaLinear& linear, cudaStream_t stream): linear_{linear}, stream_{stream}
     {
         isTuning() = true;
         linear_.set_measure(true);
@@ -1863,8 +1858,7 @@ struct TuningContext {
 
 }  // namespace
 
-template<class T>
-void LlamaBatch<T>::Warmup()
+void LlamaBatch::Warmup()
 {
     auto& linear = *context_->linear;
     if (auto str = std::getenv("TM_GEMM_IMPORT")) {
@@ -1915,6 +1909,7 @@ void LlamaBatch<T>::Warmup()
 
             const auto bsz = 1;
 
+            // A single sequence containing `token_num` prefill tokens
             model_->Forward(context_decoder_ids_buf_.slice(0, token_num),
                             context_decoder_output_buf_.slice(0, token_num * param_.attn_dp_size),
                             decoder_output_buf_.slice(0, bsz),
@@ -1952,8 +1947,7 @@ void LlamaBatch<T>::Warmup()
     }
 }
 
-template<class T>
-void* LlamaBatch<T>::SymmAlloc(size_t size, bool register_)
+void* LlamaBatch::SymmAlloc(size_t size, bool register_)
 {
     if (auto& comm = model_->comm_->d_comm) {
         auto ptr = comm->Allocate(size);
@@ -1967,8 +1961,7 @@ void* LlamaBatch<T>::SymmAlloc(size_t size, bool register_)
     }
 }
 
-template<class T>
-void LlamaBatch<T>::SymmFree(void* ptr, size_t size, bool deregister)
+void LlamaBatch::SymmFree(void* ptr, size_t size, bool deregister)
 {
     if (!ptr) {
         return;
@@ -1984,8 +1977,7 @@ void LlamaBatch<T>::SymmFree(void* ptr, size_t size, bool deregister)
     }
 }
 
-template<class T>
-void LlamaBatch<T>::DestroyCommunicators()
+void LlamaBatch::DestroyCommunicators()
 {
     cudaStreamSynchronize(stream_);
     comm_.h_comm->Sync();
@@ -1999,13 +1991,5 @@ void LlamaBatch<T>::DestroyCommunicators()
     cudaStreamSynchronize(stream_);
     comm_.h_comm->Sync();
 }
-
-template class LlamaBatch<half>;
-#ifdef ENABLE_FP32
-template class LlamaBatch<float>;
-#endif
-#ifdef ENABLE_BF16
-template class LlamaBatch<__nv_bfloat16>;
-#endif
 
 }  // namespace turbomind

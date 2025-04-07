@@ -30,9 +30,19 @@ public:
 
     Tensor(Buffer buffer): layout_{buffer.size()}, buffer_{buffer} {}
 
+    Tensor(void* data, Layout layout, DataType dtype, MemLoc device):
+        Tensor{Buffer{data, layout.cosize(), dtype, device}, layout}
+    {
+    }
+
     template<class T>
     Tensor(T* data, Layout layout, MemLoc device): Tensor{Buffer{data, layout.cosize(), device}, layout}
     {
+    }
+
+    static Tensor empty_like(const Tensor& tensor, std::optional<MemLoc> device = {})
+    {
+        return Tensor{tensor.layout_, tensor.dtype(), device ? *device : tensor.device()};
     }
 
     Buffer& buffer() noexcept
@@ -58,6 +68,11 @@ public:
     ssize_t size() const noexcept
     {
         return layout_.size();
+    }
+
+    ssize_t byte_size() const noexcept
+    {
+        return get_byte_size(dtype(), size());
     }
 
     explicit operator bool() const noexcept
@@ -128,7 +143,7 @@ public:
         return layout().is_contiguous();
     }
 
-    Tensor slice(std::vector<ssize_t> base, std::vector<ssize_t> shape)
+    Tensor slice(std::vector<ssize_t> base, std::vector<ssize_t> shape) const
     {
         auto&& [layout, offset] = layout_.slice(base, std::move(shape));
         const auto cosize       = layout.cosize();
@@ -136,13 +151,18 @@ public:
     }
 
     // The outermost dimension
-    Tensor slice(ssize_t base, ssize_t size = 1)
+    Tensor slice(ssize_t base, ssize_t size = 1) const
     {
         vector<ssize_t> bases(shape().size());
         bases.front() = base;
         vector<ssize_t> sizes{this->shape()};
         sizes.front() = size;
         return slice(bases, sizes);
+    }
+
+    Tensor squeeze(int dim) const
+    {
+        return Tensor{buffer_, layout_.squeeze(dim)};
     }
 
     int ndim() const noexcept

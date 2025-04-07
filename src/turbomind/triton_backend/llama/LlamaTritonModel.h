@@ -21,6 +21,8 @@
 #pragma once
 
 #include <cuda_fp16.h>
+#include <string>
+#include <unordered_map>
 
 #include "src/turbomind/comm/device_comm.h"
 #include "src/turbomind/engine/gateway.h"
@@ -33,26 +35,29 @@
 
 namespace turbomind {
 
-template<typename T>
-class LlamaTritonModel: public AbstractTransformerModel {
+class LlamaTritonModel {
 public:
-    LlamaTritonModel(std::string model_dir, std::string config, std::function<std::shared_ptr<void>()> ffi_ctx_factory);
+    LlamaTritonModel(DataType                               dtype,
+                     std::string                            model_dir,
+                     std::string                            config,
+                     std::function<std::shared_ptr<void>()> ffi_ctx_factory);
 
-    ~LlamaTritonModel() override;
+    ~LlamaTritonModel();
 
-    std::unique_ptr<ModelRequest> createModelInstance(int deviceId) override;
+    std::unique_ptr<ModelRequest> createModelInstance(int deviceId);
 
-    void createSharedWeights(int deviceId, int rank) noexcept override;
+    void createSharedWeights(int deviceId, int rank);
 
-    std::unordered_map<std::string, Tensor> getParams(int deviceId, int rank) noexcept override;
+    std::unordered_map<std::string, Tensor> getParams(int deviceId, int rank);
 
-    void processWeights(int deviceId, int rank) noexcept override;
+    void processWeights(int deviceId, int rank);
 
-    void createEngine(int device_id, int rank) override;
+    void createEngine(int device_id, int rank);
 
-    std::string toString() override;
-    int         getTensorParaSize() override;
-    int         getPipelineParaSize() override;
+    std::string toString();
+
+    int getTensorParaSize();
+    int getPipelineParaSize();
 
 private:
     void handleMissingParams();
@@ -60,6 +65,7 @@ private:
     Communicators createCommSplits(int rank);
 
 private:
+    DataType       dtype_;
     ModelParam     model_param_;
     AttentionParam attn_param_;
     MoeParam       moe_param_;
@@ -76,8 +82,8 @@ private:
     std::shared_ptr<Gateway> gateway_;
 
     // Weights & engine instances for the ranks
-    std::vector<std::shared_ptr<LlamaWeight<T>>> weights_;
-    std::vector<std::shared_ptr<Engine<T>>>      engines_;
+    std::vector<std::shared_ptr<LlamaWeight>> weights_;
+    std::vector<std::shared_ptr<Engine>>      engines_;
 
     bool is_fp16_;
 

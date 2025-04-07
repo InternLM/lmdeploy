@@ -12,7 +12,6 @@
 
 namespace turbomind {
 
-template<typename T>
 class UnifiedDecoder {
 private:
     const size_t layer_num_;
@@ -31,26 +30,25 @@ private:
 
     comm::DeviceCommImpl* const d_comm_;
 
-    const DataType dtype_;
-    const int      tune_layer_num_;
-    bool           is_free_buffer_after_forward_{};
+    const int tune_layer_num_;
+    bool      is_free_buffer_after_forward_{};
 
-    std::unique_ptr<UnifiedAttentionLayer<T>> attn_layer_;
-    std::unique_ptr<LlamaFfnLayer<T>>         ffn_layer_;
-    std::unique_ptr<MoeFfnLayer<T>>           moe_ffn_layer_;
+    std::unique_ptr<UnifiedAttentionLayer> attn_layer_;
+    std::unique_ptr<LlamaFfnLayer>         ffn_layer_;
+    std::unique_ptr<MoeFfnLayer>           moe_ffn_layer_;
 
-    using WeightType = LlamaDecoderLayerWeight<T>;
+    using WeightType = LlamaDecoderLayerWeight;
 
-    std::shared_ptr<typename UnifiedAttentionLayer<T>::ForwardParam> attn_fwd_param_;
+    std::shared_ptr<UnifiedAttentionLayer::ForwardParam> attn_fwd_param_;
 
-    void AllreduceResidualRMSnorm(T*         hidden_states,
-                                  T*         residual,
-                                  const T*   bias,
-                                  const T*   weight,
-                                  int        token_num,
-                                  int        t0,
-                                  int        t1,
-                                  const int* local_token_nums);
+    void AllreduceResidualRMSnorm(core::Tensor&       hidden_states,
+                                  core::Tensor&       residual,
+                                  const core::Buffer& bias,
+                                  const core::Buffer& weight,
+                                  int                 token_num,
+                                  int                 t0,
+                                  int                 t1,
+                                  const int*          local_token_nums);
 
 public:
     UnifiedDecoder(const ModelParam&     model,
@@ -58,7 +56,7 @@ public:
                    const AttentionParam& attn,
                    const MoeParam&       moe,
                    const LoraParam&      lora,
-                   const Context<T>&     ctx);
+                   const Context&        ctx);
 
     ~UnifiedDecoder();
 

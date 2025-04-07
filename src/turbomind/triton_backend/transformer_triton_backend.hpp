@@ -29,6 +29,7 @@
 #include <sys/time.h>
 #endif
 
+#include "src/turbomind/core/tensor.h"
 #include "src/turbomind/utils/Tensor.h"
 
 #include "src/turbomind/engine/model_request.h"
@@ -40,46 +41,46 @@ using triton_stream_cb_t = std::function<void(std::shared_ptr<std::unordered_map
 struct AbstractTransformerModel;
 struct AbstractTransformerModelInstance;
 
-struct AbstractTransformerModelInstance {
-    virtual ~AbstractTransformerModelInstance() = default;
+// struct AbstractTransformerModelInstance {
+//     virtual ~AbstractTransformerModelInstance() = default;
 
-    virtual std::shared_ptr<std::unordered_map<std::string, Tensor>>
-    forward(std::shared_ptr<std::unordered_map<std::string, Tensor>> input_tensors) = 0;
+//     virtual std::shared_ptr<std::unordered_map<std::string, Tensor>>
+//     forward(std::shared_ptr<std::unordered_map<std::string, Tensor>> input_tensors) = 0;
 
-    void registerCallback(triton_stream_cb_t cb, void* ctx)
-    {
-        stream_cb_  = cb;
-        stream_ctx_ = ctx;
-    }
+//     void registerCallback(triton_stream_cb_t cb, void* ctx)
+//     {
+//         stream_cb_  = cb;
+//         stream_ctx_ = ctx;
+//     }
 
-    void unRegisterCallback()
-    {
-        stream_cb_  = nullptr;
-        stream_ctx_ = nullptr;
-    }
+//     void unRegisterCallback()
+//     {
+//         stream_cb_  = nullptr;
+//         stream_ctx_ = nullptr;
+//     }
 
-    triton_stream_cb_t stream_cb_  = nullptr;
-    void*              stream_ctx_ = nullptr;
-};
+//     triton_stream_cb_t stream_cb_  = nullptr;
+//     void*              stream_ctx_ = nullptr;
+// };
 
-struct AbstractTransformerModel {
+// struct AbstractTransformerModel {
 
-    virtual ~AbstractTransformerModel() = default;
+//     virtual ~AbstractTransformerModel() = default;
 
-    virtual std::unique_ptr<ModelRequest> createModelInstance(int deviceId) = 0;
+//     virtual std::unique_ptr<ModelRequest> createModelInstance(int deviceId) = 0;
 
-    virtual void createSharedWeights(int deviceId, int rank) = 0;
+//     virtual void createSharedWeights(int deviceId, int rank) = 0;
 
-    virtual std::unordered_map<std::string, Tensor> getParams(int deviceId, int rank) = 0;
+//     virtual core::TensorMap getParams(int deviceId, int rank) = 0;
 
-    virtual void processWeights(int deviceId, int rank) = 0;
+//     virtual void processWeights(int deviceId, int rank) = 0;
 
-    virtual void createEngine(int device_id, int rank) = 0;
+//     virtual void createEngine(int device_id, int rank) = 0;
 
-    virtual std::string toString() = 0;
+//     virtual std::string toString() = 0;
 
-    virtual int getTensorParaSize()   = 0;
-    virtual int getPipelineParaSize() = 0;
-};
+//     virtual int getTensorParaSize()   = 0;
+//     virtual int getPipelineParaSize() = 0;
+// };
 
 }  // namespace turbomind

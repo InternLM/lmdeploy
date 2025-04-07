@@ -61,10 +61,10 @@ void Copy(const Buffer& a, Ref<Buffer> b_)
     Copy(a, b_, Context::stream());
 }
 
-std::byte* Copy(const std::byte* a, ssize_t n, std::byte* b, const Stream& stream)
+void* Copy(const void* a, ssize_t n, void* b, const Stream& stream)
 {
     check_cuda_error(cudaMemcpyAsync(b, a, n, cudaMemcpyDefault, stream.handle()));
-    return b + n;
+    return (char*)b + n;
 }
 
 void Clear(Ref<Buffer> b_, const Stream& stream)
