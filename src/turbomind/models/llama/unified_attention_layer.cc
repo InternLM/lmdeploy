@@ -279,7 +279,7 @@ void UnifiedAttentionLayer::forward(ForwardParam& p)
 
     //////////////////////////////////////////////
     /// output gemm <Bs,HD> -> <Bs,HD>
-    (void)linear_.forward(attn, weights.output, LlamaLinear::kGemm, &p.output);
+    (void)linear_.forward(attn, weights.output, LlamaLinear::kGemm, p.output);
     sync_check_cuda_error();
 }
 

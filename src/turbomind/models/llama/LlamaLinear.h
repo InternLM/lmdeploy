@@ -22,10 +22,10 @@ public:
 
     LlamaLinear(cublasMMWrapper* cublas_wrapper, cudaStream_t stream);
 
-    core::Tensor forward(const core::Tensor&     input,  //
-                         const LlamaDenseWeight& weight,
-                         Type                    type   = kGemm,
-                         core::Tensor*           output = {});
+    core::Tensor forward(const core::Tensor&         input,
+                         const LlamaDenseWeight&     weight,
+                         Type                        type   = kGemm,
+                         std::optional<core::Tensor> output = {});
 
     void forward_moe(core::Tensor&           output,
                      const core::Tensor&     input,

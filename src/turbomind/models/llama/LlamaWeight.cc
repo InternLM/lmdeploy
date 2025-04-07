@@ -18,14 +18,16 @@
 // Modified from
 // https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/models/multi_gpu_gpt/ParallelGptWeight.cc
 
-#include "src/turbomind/models/llama/LlamaWeight.h"
+#include <cuda_runtime.h>
+
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/context.h"
+#include "src/turbomind/models/llama/LlamaDenseWeight.h"
+#include "src/turbomind/models/llama/LlamaWeight.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/memory_utils.h"
-#include <cuda_runtime.h>
 
 namespace turbomind {
 
@@ -70,8 +72,11 @@ LlamaWeight::LlamaWeight(DataType           data_type,
     TM_CHECK_EQ(vocab_size_padded_ % tp_size_, 0);
     TM_CHECK_EQ(hidden_units_ % tp_size_, 0);
 
-    pre_decoder_embedding  = core::Tensor{{embedding_size_, hidden_units_ / tp_size_}, data_type_, MEMORY_GPU};
-    post_decoder_embedding = core::Tensor{{hidden_units_, vocab_size_padded_ / tp_size_}, data_type_, MEMORY_GPU};
+    pre_decoder_embedding = LlamaDenseWeight{embedding_size_, hidden_units_ / tp_size_, data_type, data_type, 1};
+    pre_decoder_embedding.malloc();
+
+    post_decoder_embedding = LlamaDenseWeight{hidden_units_, vocab_size_padded_ / tp_size_, data_type, data_type, 1};
+    post_decoder_embedding.malloc();
 
     output_norm_weight = core::Buffer{hidden_units_, data_type_, MEMORY_GPU};
 }
@@ -104,8 +109,8 @@ core::TensorMap LlamaWeight::getParams()
 {
     core::TensorMap output;
 
-    output.emplace("tok_embeddings." + std::to_string(tp_rank_) + ".weight", pre_decoder_embedding);
-    output.emplace("output." + std::to_string(tp_rank_) + ".weight", post_decoder_embedding);
+    output.emplace("tok_embeddings." + std::to_string(tp_rank_) + ".weight", pre_decoder_embedding.weight);
+    output.emplace("output." + std::to_string(tp_rank_) + ".weight", post_decoder_embedding.weight);
 
     output.emplace("norm.weight", output_norm_weight);
 

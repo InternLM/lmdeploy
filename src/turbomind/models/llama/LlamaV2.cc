@@ -28,6 +28,7 @@
 #include "src/turbomind/core/typecvt.h"
 #include "src/turbomind/macro.h"
 
+#include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/LlamaV2.h"
 #include "src/turbomind/models/llama/LlamaWeight.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
@@ -191,20 +192,21 @@ void LlamaV2::Forward(Buffer_<int>     input_ids,
     const int bsz       = decode_out.shape(0);
 
     if (token_num) {
+        const auto& embedding_table = weights_->pre_decoder_embedding.weight;
+        TM_CHECK_EQ(embedding_table.shape(1) * tp_size_, hidden_units_);
         input_embeds = core::Tensor{{token_num, (int)hidden_units_}, dtype_, MEMORY_GPU};
-
         if (tp_size_ == 1) {
-            invokeEmbeddingLookup(input_embeds, input_ids, weights_->pre_decoder_embedding, stream_);
+            invokeEmbeddingLookup(input_embeds, input_ids, embedding_table, stream_);
             sync_check_cuda_error();
         }
         else {
 
-            const auto   local_hidden_units = weights_->pre_decoder_embedding.shape(1);
+            const auto   local_hidden_units = embedding_table.shape(1);
             core::Tensor temp{hidden_states_out.buffer(), {tp_size_, token_num, local_hidden_units}};
 
             auto local = temp.slice(tp_rank_);
 
-            invokeEmbeddingLookup(local, input_ids, weights_->pre_decoder_embedding, stream_);
+            invokeEmbeddingLookup(local, input_ids, embedding_table, stream_);
             sync_check_cuda_error();
 
             comm_->d_comm->AllGather(
@@ -268,38 +270,16 @@ void LlamaV2::postDecodeEmbedding(float* logits, float* local_logits, const void
 
     const core::Tensor src{const_cast<void*>(decoder_output), {batch_size, (int)hidden_units_}, dtype_, MEMORY_GPU};
 
-    // auto invoke_gemm = [&](int first, int n, auto C, size_t batch_stride_C, size_t rank_stride_C) {
-    auto invoke_gemm = [&](core::Ref<core::Tensor> dst_) {
-        auto& dst = dst_.get();
-        cublas_wrapper_->Gemm(CUBLAS_OP_T,
-                              CUBLAS_OP_N,
-                              local_vocab_size,  // m
-                              src.shape(0),
-                              hidden_units_,  // k
-                              &alpha,
-                              weights_->post_decoder_embedding.raw_data(),
-                              data_type,
-                              hidden_units_,   // k
-                              src.raw_data(),  // decoder_output + first * hidden_units_,
-                              data_type,
-                              hidden_units_,  // k
-                              &beta,
-                              dst.raw_data(),  // C + first * batch_stride_C + tp_rank_ * rank_stride_C,
-                              to_cuda_dtype(dst.dtype()),
-                              dst.stride(0),
-                              CUDA_R_32F,
-                              cublasGemmAlgo_t(-1));
-    };
-
     if (tp_size_ == 1) {
-        invoke_gemm(core::Tensor{logits, {batch_size, (int)vocab_size_padded_}, MEMORY_GPU});
+        core::Tensor out{logits, {batch_size, (int)vocab_size_padded_}, MEMORY_GPU};
+        linear_->forward(src, weights_->post_decoder_embedding, LlamaLinear::kGemm, out);
         sync_check_cuda_error();
     }
     else if (use_allgather_2d_ == false) {
         FT_CHECK(logits != local_logits);
         core::Tensor logits_{local_logits, {tp_size_, batch_size, (int)local_vocab_size}, MEMORY_GPU};
         core::Tensor local = logits_.slice({tp_rank_, 0, 0}, {1, -1, -1});
-        invoke_gemm(local.squeeze(0));
+        linear_->forward(src, weights_->post_decoder_embedding, LlamaLinear::kGemm, local.squeeze(0));
         sync_check_cuda_error();
         comm_->d_comm->AllGather(
             local.raw_data(), local_logits, local.size(), local.dtype(), comm_->d_tp_group, stream_);
@@ -311,7 +291,7 @@ void LlamaV2::postDecodeEmbedding(float* logits, float* local_logits, const void
         FT_CHECK(logits == local_logits);
         core::Tensor logits_{logits, {batch_size, tp_size_, (int)local_vocab_size}, MEMORY_GPU};
         core::Tensor local = logits_.slice({0, tp_rank_, 0}, {-1, 1, -1});
-        invoke_gemm(local.squeeze(1));
+        linear_->forward(src, weights_->post_decoder_embedding, LlamaLinear::kGemm, local.squeeze(1));
         sync_check_cuda_error();
         comm_->d_comm->AllGather2D(local.raw_data(),
                                    logits_.raw_data(),

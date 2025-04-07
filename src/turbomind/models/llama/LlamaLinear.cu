@@ -237,10 +237,10 @@ LlamaLinear::LlamaLinear(cublasMMWrapper* cublas_wrapper, cudaStream_t stream):
 {
 }
 
-core::Tensor LlamaLinear::forward(const core::Tensor&     input,  //
-                                  const LlamaDenseWeight& dense,
-                                  Type                    type,
-                                  core::Tensor*           output)
+core::Tensor LlamaLinear::forward(const core::Tensor&         input,  //
+                                  const LlamaDenseWeight&     dense,
+                                  Type                        type,
+                                  std::optional<core::Tensor> output)
 {
     core::ssize_t output_dim = type == kFusedSiluFfn ? dense.output_dim / 2 : dense.output_dim;
 

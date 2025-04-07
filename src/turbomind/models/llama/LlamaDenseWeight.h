@@ -81,6 +81,11 @@ struct LlamaDenseWeight {
         this->group_size  = group_size;
     }
 
+    explicit operator bool() const noexcept
+    {
+        return static_cast<bool>(weight);
+    }
+
     void malloc(bool with_bias = false)
     {
         if (with_bias) {
@@ -267,7 +272,7 @@ struct MoeFfnWeight {
                  bool            fuse_silu_act)
     {
 
-        if (param.expert_num.size() <= layer_id) {
+        if ((int)param.expert_num.size() <= layer_id) {
             return;
         }
 

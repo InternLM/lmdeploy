@@ -75,7 +75,7 @@ void LlamaFfnLayer::forward(ForwardParam param)
 
     {  // w2(x)
         NvtxScope scope("w2");
-        (void)linear_.forward(gating, mlp.output, LlamaLinear::kGemm, &param.output);
+        linear_.forward(gating, mlp.output, LlamaLinear::kGemm, param.output);
         sync_check_cuda_error();
     }
 }

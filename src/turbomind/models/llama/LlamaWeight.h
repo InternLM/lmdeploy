@@ -22,6 +22,7 @@
 
 #include "src/turbomind/core/context.h"
 #include "src/turbomind/models/llama/LlamaDecoderLayerWeight.h"
+#include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/llama_params.h"
 
 namespace turbomind {
@@ -48,8 +49,8 @@ struct LlamaWeight {
 
     std::vector<LlamaDecoderLayerWeight*> decoder_layer_weights;
 
-    core::Tensor pre_decoder_embedding;
-    core::Tensor post_decoder_embedding;
+    LlamaDenseWeight pre_decoder_embedding;
+    LlamaDenseWeight post_decoder_embedding;
 
     core::Buffer output_norm_weight;
 
