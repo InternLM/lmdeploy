@@ -27,7 +27,7 @@
 
 namespace turbomind {
 
-struct LlamaWeight {
+struct LlamaWeight: core::Module {
     LlamaWeight() = default;
 
     LlamaWeight(DataType           data_type,
@@ -41,8 +41,6 @@ struct LlamaWeight {
     LlamaWeight(const LlamaWeight&)            = delete;
     LlamaWeight& operator=(const LlamaWeight&) = delete;
 
-    core::TensorMap getParams();
-
     void prepare(const cudaDeviceProp& prop);
 
     core::ContextGuard context() const;
@@ -52,7 +50,7 @@ struct LlamaWeight {
     LlamaDenseWeight pre_decoder_embedding;
     LlamaDenseWeight post_decoder_embedding;
 
-    core::Buffer output_norm_weight;
+    core::Tensor output_norm_weight;
 
 private:
     int hidden_units_;

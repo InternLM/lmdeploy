@@ -62,23 +62,23 @@ LlamaWeight::LlamaWeight(DataType           data_type,
 
     core::ContextGuard guard = context();
 
-    decoder_layer_weights.reserve(num_layer_);
-    for (unsigned l = 0; l < num_layer_; ++l) {
-        decoder_layer_weights.emplace_back(
-            new LlamaDecoderLayerWeight(data_type, l, model, engine_param, lora_param, moe_param));
-        decoder_layer_weights.back()->malloc();
-    }
-
     TM_CHECK_EQ(vocab_size_padded_ % tp_size_, 0);
     TM_CHECK_EQ(hidden_units_ % tp_size_, 0);
 
-    pre_decoder_embedding = LlamaDenseWeight{embedding_size_, hidden_units_ / tp_size_, data_type, data_type, 1};
-    pre_decoder_embedding.malloc();
+    pre_decoder_embedding.emplace(embedding_size_, hidden_units_ / tp_size_, data_type, false, data_type, 1);
+    post_decoder_embedding.emplace(hidden_units_, vocab_size_padded_ / tp_size_, data_type, false, data_type, 1);
+    register_module("tok_embeddings", pre_decoder_embedding, tp_rank_);
+    register_module("output", post_decoder_embedding, tp_rank_);
 
-    post_decoder_embedding = LlamaDenseWeight{hidden_units_, vocab_size_padded_ / tp_size_, data_type, data_type, 1};
-    post_decoder_embedding.malloc();
+    decoder_layer_weights.reserve(num_layer_);
+    for (int i = 0; i < num_layer_; ++i) {
+        decoder_layer_weights.emplace_back(
+            new LlamaDecoderLayerWeight(data_type, i, model, engine_param, lora_param, moe_param));
+        register_module("layers", *decoder_layer_weights.back(), i);
+    }
 
-    output_norm_weight = core::Buffer{hidden_units_, data_type_, MEMORY_GPU};
+    output_norm_weight = core::Tensor{{hidden_units_}, data_type_, MEMORY_GPU};
+    register_parameter("norm.weight", output_norm_weight);
 }
 
 LlamaWeight::~LlamaWeight()
@@ -90,7 +90,6 @@ LlamaWeight::~LlamaWeight()
     output_norm_weight     = {};
 
     for (auto& p : decoder_layer_weights) {
-        p->free();
         delete p;
     }
 
@@ -103,27 +102,6 @@ LlamaWeight::~LlamaWeight()
 core::ContextGuard LlamaWeight::context() const
 {
     return core::ContextGuard{stream_, alloca_};
-}
-
-core::TensorMap LlamaWeight::getParams()
-{
-    core::TensorMap output;
-
-    output.emplace("tok_embeddings." + std::to_string(tp_rank_) + ".weight", pre_decoder_embedding.weight);
-    output.emplace("output." + std::to_string(tp_rank_) + ".weight", post_decoder_embedding.weight);
-
-    output.emplace("norm.weight", output_norm_weight);
-
-    // transformer layers
-    for (size_t i = 0; i < num_layer_; i++) {
-        std::string     prefix = fmtstr("layers.%d", i);
-        core::TensorMap layer  = decoder_layer_weights[i]->getParams(prefix);
-        for (auto& kv : layer) {
-            output.insert(std::move(kv));
-        }
-    }
-
-    return output;
 }
 
 void LlamaWeight::prepare(const cudaDeviceProp& prop)

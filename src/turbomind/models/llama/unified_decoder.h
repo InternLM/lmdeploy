@@ -43,8 +43,8 @@ private:
 
     void AllreduceResidualRMSnorm(core::Tensor&       hidden_states,
                                   core::Tensor&       residual,
-                                  const core::Buffer& bias,
-                                  const core::Buffer& weight,
+                                  const core::Tensor& bias,
+                                  const core::Tensor& weight,
                                   int                 token_num,
                                   int                 t0,
                                   int                 t1,

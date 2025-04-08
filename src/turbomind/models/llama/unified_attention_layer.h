@@ -39,7 +39,7 @@ struct ForwardParam;
 
 void Initialize(ForwardParam& p, core::TensorMap& args, const core::Tensor& input, core::Tensor& output);
 
-void SetLayer(ForwardParam& p, const void* weights, int layer_id);
+void SetLayer(ForwardParam& p, const LlamaAttentionWeight* weights, int layer_id);
 
 void Finalize(ForwardParam& p);
 

@@ -170,10 +170,10 @@ void MoeFfnLayer::Forward(ForwardParam& p)
         }
 
         for (int i = 0; i < expert_num; ++i) {
-            FT_CHECK(moe.experts[i].is_fused_silu == false);
+            FT_CHECK(moe.experts[i]->is_fused_silu == false);
             if (int count = h_offsets_[i + 1] - h_offsets_[i]) {
                 auto io = p.temp.slice({h_offsets_[i], 0}, {count, -1});
-                expert_ffn_->forward({io, io, &moe.experts.at(i), p.layer_id});
+                expert_ffn_->forward({io, io, moe.experts.at(i).get(), p.layer_id});
             }
         }
     }

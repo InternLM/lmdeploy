@@ -109,7 +109,7 @@ struct ForwardParam {
     core::Buffer_<int>       cu_block_nums;
     core::Buffer_<uintptr_t> kv_block_ptrs;
 
-    const void* weights;
+    const LlamaAttentionWeight* weights;
 
     core::Event event;
 
@@ -123,7 +123,7 @@ void Initialize(ForwardParam& p, core::TensorMap& args, const core::Tensor& inpu
     p.Init(args, input, output);
 }
 
-void SetLayer(ForwardParam& p, const void* weights, int layer_id)
+void SetLayer(ForwardParam& p, const LlamaAttentionWeight* weights, int layer_id)
 {
     p.weights  = weights;
     p.layer_id = layer_id;
@@ -235,7 +235,7 @@ void UnifiedAttentionLayer::forward(ForwardParam& p)
 
     const int layer_id = p.layer_id;
 
-    const auto& weights = *(const WeightType*)p.weights;
+    const auto& weights = *p.weights;
 
     // [L, 2, H, s, D]
     const size_t layer_offset = layer_id * 2 * local_kv_head_num_ * param_.cache_block_seq_len * size_per_head_;
@@ -313,7 +313,7 @@ core::Tensor UnifiedAttentionLayer::core_attention(core::Tensor& qkv, const Forw
         params.stride = (local_head_num_ + 2 * local_kv_head_num_) * size_per_head_;
 
         if (weights.qkv.bias) {
-            params.q_bias = weights.qkv.bias.unsafe_data<T>();
+            params.q_bias = weights.qkv.bias.buffer().unsafe_data<T>();
             params.k_bias = params.q_bias + local_head_num_ * size_per_head_;
             params.v_bias = params.k_bias + local_kv_head_num_ * size_per_head_;
         }

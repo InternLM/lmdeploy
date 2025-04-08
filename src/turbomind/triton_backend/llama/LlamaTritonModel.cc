@@ -435,9 +435,7 @@ void LlamaTritonModel::createSharedWeights(int device_id, int rank)
 
 core::TensorMap LlamaTritonModel::getParams(int device_id, int rank)
 {
-    check_cuda_error(cudaSetDevice(device_id));
-
-    return TM_CHECK_NOTNULL(weights_[rank])->getParams();
+    return TM_CHECK_NOTNULL(weights_[rank])->get_parameters();
 }
 
 void LlamaTritonModel::processWeights(int device_id, int rank)

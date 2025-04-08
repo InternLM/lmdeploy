@@ -55,8 +55,8 @@ UnifiedDecoder::~UnifiedDecoder() = default;
 
 void UnifiedDecoder::AllreduceResidualRMSnorm(core::Tensor&       hidden_states,
                                               core::Tensor&       residual,
-                                              const core::Buffer& bias,
-                                              const core::Buffer& weight,
+                                              const core::Tensor& bias,
+                                              const core::Tensor& weight,
                                               int                 token_num,
                                               int                 group0,
                                               int                 group1,
@@ -68,7 +68,7 @@ void UnifiedDecoder::AllreduceResidualRMSnorm(core::Tensor&       hidden_states,
     else if (group0 || group1) {
         d_comm_->AllreduceResidualBiasRMSnormEx(hidden_states.raw_data(),
                                                 residual.raw_data(),
-                                                bias.unsafe_data(),
+                                                bias.buffer().unsafe_data(),
                                                 weight.raw_data(),
                                                 rmsnorm_eps_,
                                                 hidden_units_,
@@ -82,7 +82,7 @@ void UnifiedDecoder::AllreduceResidualRMSnorm(core::Tensor&       hidden_states,
     else if (d_comm_) {
         d_comm_->AllreduceResidualBiasRMSnorm(hidden_states.raw_data(),
                                               residual.raw_data(),
-                                              bias.unsafe_data(),
+                                              bias.buffer().unsafe_data(),
                                               weight.raw_data(),
                                               rmsnorm_eps_,
                                               hidden_units_,
@@ -96,7 +96,7 @@ void UnifiedDecoder::AllreduceResidualRMSnorm(core::Tensor&       hidden_states,
         invokeResidualBiasRMSNorm(hidden_states.raw_data(),
                                   residual.raw_data(),
                                   weight.raw_data(),
-                                  bias.unsafe_data(),
+                                  bias.buffer().unsafe_data(),
                                   dtype,
                                   hidden_units_,
                                   token_num,
@@ -170,14 +170,14 @@ void UnifiedDecoder::Forward(core::TensorMap& args, const std::vector<WeightType
 
         /////////////////////////////////////////////
         /// self-attention
-        SetLayer(*attn_fwd_param_, &weights.at(layer)->self_attn_weights, layer);
+        SetLayer(*attn_fwd_param_, weights.at(layer)->self_attn_weights.get(), layer);
         attn_layer_->forward(*attn_fwd_param_);
 
         TM_DEBUG_TENSOR(local_hidden_states, Concat("attn_block", layer), 1);
 
         AllreduceResidualRMSnorm(global_hidden_states,
                                  local_residual,
-                                 weights.at(layer)->self_attn_weights.output.bias,
+                                 weights.at(layer)->self_attn_weights->output.bias,
                                  weights.at(layer)->ffn_norm,
                                  local_token_num,
                                  attn_tp_group_,
@@ -192,22 +192,22 @@ void UnifiedDecoder::Forward(core::TensorMap& args, const std::vector<WeightType
 
         std::optional<MoeFfnLayer::ForwardParam> moe_fwd_param;
 
-        if (!weights.at(layer)->moe_weights.experts.empty()) {
+        if (weights.at(layer)->moe_weights) {
             moe_fwd_param = MoeFfnLayer::ForwardParam{global_hidden_states,
                                                       global_hidden_states,
                                                       {},
                                                       ffn_layer_ ? 1.f : 0.f,
                                                       (int)layer,
-                                                      &weights.at(layer)->moe_weights};
+                                                      weights.at(layer)->moe_weights.get()};
         }
 
         if (moe_fwd_param) {
             moe_ffn_layer_->Forward(*moe_fwd_param);
         }
 
-        if (weights.at(layer)->ffn_weights.output.weight) {
+        if (weights.at(layer)->ffn_weights) {
             ffn_layer_->forward(
-                {global_hidden_states, global_hidden_states, &weights.at(layer)->ffn_weights, (int)layer});
+                {global_hidden_states, global_hidden_states, weights.at(layer)->ffn_weights.get(), (int)layer});
         }
 
         if (moe_fwd_param) {
@@ -218,11 +218,11 @@ void UnifiedDecoder::Forward(core::TensorMap& args, const std::vector<WeightType
 
         const bool last = layer == layer_num_ - 1;
 
-        auto& scale_weight = !last ? weights.at(layer + 1)->self_attn_norm : args.at("output_norm_weight").buffer();
+        auto& scale_weight = !last ? weights.at(layer + 1)->self_attn_norm : args.at("output_norm_weight");
 
         AllreduceResidualRMSnorm(global_hidden_states,
                                  local_residual,
-                                 weights.at(layer)->ffn_weights.output.bias,
+                                 weights.at(layer)->ffn_weights->output.bias,
                                  scale_weight,
                                  local_token_num,
                                  0,
@@ -260,9 +260,6 @@ void UnifiedDecoder::Forward(core::TensorMap& args, const std::vector<WeightType
     }
 
     Finalize(*attn_fwd_param_);
-
-    // core::Context::stream().Sync();
-    // TM_CHECK(0);
 }
 
 }  // namespace turbomind

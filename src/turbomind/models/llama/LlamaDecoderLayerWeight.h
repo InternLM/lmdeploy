@@ -26,7 +26,7 @@
 
 namespace turbomind {
 
-struct LlamaDecoderLayerWeight {
+struct LlamaDecoderLayerWeight: core::Module {
 public:
     LlamaDecoderLayerWeight() = delete;
 
@@ -41,23 +41,17 @@ public:
     LlamaDecoderLayerWeight(const LlamaDecoderLayerWeight&)            = delete;
     LlamaDecoderLayerWeight& operator=(const LlamaDecoderLayerWeight&) = delete;
 
-    core::TensorMap getParams(std::string prefix);
-
     void prepare(void* workspace, size_t size, const cudaDeviceProp& prop, cudaStream_t st);
 
     size_t workspace_size() const noexcept;
 
-    void malloc();
+    core::Tensor self_attn_norm;
+    core::Tensor ffn_norm;
 
-    void free();
+    std::unique_ptr<LlamaAttentionWeight> self_attn_weights;
 
-    core::Buffer self_attn_norm;
-    core::Buffer ffn_norm;
-
-    LlamaAttentionWeight self_attn_weights{};
-
-    LlamaFfnWeight ffn_weights{};
-    MoeFfnWeight   moe_weights{};
+    std::unique_ptr<LlamaFfnWeight> ffn_weights;
+    std::unique_ptr<MoeFfnWeight>   moe_weights;
 
 private:
     int head_num_;

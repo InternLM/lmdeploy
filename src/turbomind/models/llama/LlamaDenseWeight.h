@@ -20,6 +20,7 @@
 #pragma once
 
 #include "src/turbomind/core/buffer.h"
+#include "src/turbomind/core/module.h"
 #include "src/turbomind/core/tensor.h"
 
 #include "src/turbomind/kernels/gemm/types.h"
@@ -47,7 +48,23 @@ struct LoraWeight {
     void*      b;
 };
 
-struct LlamaDenseWeight {
+struct LlamaDenseWeight: public core::Module {
+
+    LlamaDenseWeight(): data_type{}, weight_type{}, lora{}, k_desc{}, q_desc{} {}
+
+    void emplace(int input_dim, int output_dim, DataType data_type, bool bias, DataType weight_type, int group_size);
+
+    LlamaDenseWeight& operator=(std::nullptr_t)
+    {
+        this->~LlamaDenseWeight();
+        new (this) LlamaDenseWeight{};
+        return *this;
+    }
+
+    operator bool() const noexcept
+    {
+        return static_cast<bool>(weight);
+    }
 
     int input_dim  = 0;
     int output_dim = 0;
@@ -57,7 +74,7 @@ struct LlamaDenseWeight {
     DataType weight_type;
 
     core::Tensor weight;
-    core::Buffer bias;
+    core::Tensor bias;
 
     core::Tensor scales;
     core::Tensor zeros;
@@ -68,49 +85,9 @@ struct LlamaDenseWeight {
 
     gemm::MatrixLayout k_desc;
     gemm::MatrixLayout q_desc;
-
-    LlamaDenseWeight(): data_type{}, weight_type{}, lora{}, k_desc{}, q_desc{} {}
-
-    LlamaDenseWeight(int input_dim, int output_dim, DataType data_type, DataType weight_type, int group_size):
-        LlamaDenseWeight{}
-    {
-        this->data_type   = data_type;
-        this->weight_type = weight_type;
-        this->input_dim   = input_dim;
-        this->output_dim  = output_dim;
-        this->group_size  = group_size;
-    }
-
-    explicit operator bool() const noexcept
-    {
-        return static_cast<bool>(weight);
-    }
-
-    void malloc(bool with_bias = false)
-    {
-        if (with_bias) {
-            bias = core::Buffer{output_dim, data_type, MEMORY_GPU};
-        }
-
-        weight = core::Tensor({input_dim, output_dim}, weight_type, MEMORY_GPU);
-
-        if (auto wbits = core::get_byte_size(weight_type, 8); wbits <= 8) {
-            TM_CHECK_EQ(input_dim % group_size, 0);
-            scales = core::Tensor{{input_dim / group_size, output_dim}, data_type, MEMORY_GPU};
-            zeros  = core::Tensor{{input_dim / group_size, output_dim}, data_type, MEMORY_GPU};
-        }
-    }
-
-    void free()
-    {
-        bias   = {};
-        weight = {};
-        scales = {};
-        zeros  = {};
-    }
 };
 
-struct LlamaAttentionWeight {
+struct LlamaAttentionWeight: public core::Module {
 
     LlamaAttentionWeight() = default;
 
@@ -121,80 +98,11 @@ struct LlamaAttentionWeight {
                          MLAParam mla,
                          bool     bias,
                          bool     qk_norm,
-                         int      tp,
+                         int      tp_size,
+                         int      tp_rank,
                          DataType data_type,
                          DataType weight_type,
-                         int      group_size)
-    {
-        this->bias        = bias;
-        this->head_dim    = head_dim;
-        this->qk_norm     = qk_norm;
-        this->data_type   = data_type;
-        this->weight_type = weight_type;
-
-        if (mla.kv_lora_rank == 0) {
-            qkv = {hidden_dim, (head_num + 2 * kv_head_num) * head_dim / tp, data_type, weight_type, group_size};
-        }
-        else {
-            const int qk_nope_dim = head_dim - mla.qk_rope_dim;
-            if (mla.q_lora_rank) {
-                q_a_proj = {hidden_dim, mla.q_lora_rank, data_type, weight_type, group_size};
-                q_b_proj = {mla.q_lora_rank, head_num * head_dim / tp, data_type, weight_type, group_size};
-            }
-            else {
-                q_proj = {hidden_dim, head_num * head_dim / tp, data_type, weight_type, group_size};
-            }
-            kv_a_proj = {hidden_dim, mla.kv_lora_rank + mla.qk_rope_dim, data_type, weight_type, group_size};
-            kv_b_proj = {
-                mla.kv_lora_rank, head_num * (qk_nope_dim + mla.v_head_dim) / tp, data_type, weight_type, group_size};
-        }
-        output = {(head_num * head_dim) / tp, hidden_dim, data_type, weight_type, group_size};
-    }
-
-    void malloc()
-    {
-        if (qkv.output_dim) {
-            qkv.malloc(bias);
-            if (qk_norm) {
-                q_a_layernorm  = core::Buffer{head_dim, data_type, MEMORY_GPU};
-                kv_a_layernorm = core::Buffer{head_dim, data_type, MEMORY_GPU};
-            }
-        }
-        else {  // MLA
-            if (q_proj.output_dim) {
-                q_proj.malloc();
-            }
-            else {
-                q_a_proj.malloc();
-                q_b_proj.malloc();
-                q_a_layernorm = core::Buffer{q_b_proj.input_dim, data_type, MEMORY_GPU};
-            }
-            kv_a_proj.malloc();
-            kv_b_proj.malloc();
-            kv_a_layernorm = core::Buffer{kv_b_proj.input_dim, data_type, MEMORY_GPU};
-        }
-        output.malloc(bias);
-    }
-
-    void free()
-    {
-        qkv.free();
-        q_proj.free();
-        q_a_proj.free();
-        q_b_proj.free();
-        kv_a_proj.free();
-        kv_b_proj.free();
-        output.free();
-        q_a_layernorm  = {};
-        kv_a_layernorm = {};
-    }
-
-    int  head_dim{};
-    bool bias{};
-    bool qk_norm{};
-
-    DataType data_type{};
-    DataType weight_type{};
+                         int      group_size);
 
     LlamaDenseWeight qkv;
     LlamaDenseWeight output;
@@ -205,49 +113,22 @@ struct LlamaAttentionWeight {
     LlamaDenseWeight kv_a_proj;
     LlamaDenseWeight kv_b_proj;
 
-    core::Buffer q_a_layernorm;
-    core::Buffer kv_a_layernorm;
+    core::Tensor q_a_layernorm;
+    core::Tensor kv_a_layernorm;
 };
 
-struct LlamaFfnWeight {
+struct LlamaFfnWeight: core::Module {
 
     LlamaFfnWeight() = default;
 
     LlamaFfnWeight(int      hidden_dim,
                    int      inter_size,
-                   int      tp,
+                   int      tp_size,
+                   int      tp_rank,
                    DataType data_type,
                    DataType weight_type,
                    int      group_size,
-                   bool     fuse_silu_act)
-    {
-        TM_CHECK_EQ(inter_size % tp, 0);
-
-        this->inter_size = inter_size;
-
-        gating       = {hidden_dim, inter_size, data_type, weight_type, group_size};
-        intermediate = {hidden_dim, inter_size, data_type, weight_type, group_size};
-
-        fused_gating_intermediate = {hidden_dim, inter_size * 2, data_type, weight_type, group_size};
-        is_fused_silu             = fuse_silu_act;
-
-        output = {inter_size, hidden_dim, data_type, weight_type, group_size};
-    }
-
-    void malloc()
-    {
-        gating.malloc();
-        intermediate.malloc();
-        output.malloc();
-    }
-
-    void free()
-    {
-        gating.free();
-        intermediate.free();
-        output.free();
-        fused_gating_intermediate.free();
-    }
+                   bool     fuse_silu_act);
 
     LlamaDenseWeight gating;
     LlamaDenseWeight intermediate;
@@ -258,7 +139,7 @@ struct LlamaFfnWeight {
     bool is_fused_silu{};
 };
 
-struct MoeFfnWeight {
+struct MoeFfnWeight: core::Module {
 
     MoeFfnWeight() = default;
 
@@ -268,64 +149,14 @@ struct MoeFfnWeight {
                  DataType        data_type,
                  DataType        weight_type,
                  int             group_size,
-                 int             tp,
-                 bool            fuse_silu_act)
-    {
+                 int             tp_size,
+                 int             tp_rank,
+                 bool            fuse_silu_act);
 
-        if ((int)param.expert_num.size() <= layer_id) {
-            return;
-        }
-
-        const int expert_num = param.expert_num[layer_id];
-
-        if (expert_num == 0) {
-            return;
-        }
-
-        // printf("%d %d %d\n", (int)hidden_dim, (int)param.inter_size, (int)expert_num);
-
-        gate = {hidden_dim, expert_num, data_type, data_type, 1};
-
-        experts.resize(expert_num);
-
-        method        = param.method;
-        fuse_silu_act = fuse_silu_act && method == MoeParam::kFused;
-
-        for (auto& e : experts) {
-            // inter size is divided by tp in `FfnWeight`
-            e = LlamaFfnWeight{hidden_dim, param.inter_size, tp, data_type, weight_type, group_size, fuse_silu_act};
-        }
-
-        if (param.shared_gate) {
-            shared_gate = {hidden_dim, 1, data_type, data_type, 1};
-        }
-    }
-
-    void malloc()
-    {
-        gate.malloc();
-        if (shared_gate.output_dim) {
-            shared_gate.malloc();
-        }
-        for (auto& e : experts) {
-            e.malloc();
-        }
-    }
-
-    void free()
-    {
-        gate.free();
-        shared_gate.free();
-        for (auto& e : experts) {
-            e.free();
-        }
-        block.free();
-    }
-
-    LlamaDenseWeight            gate;
-    std::vector<LlamaFfnWeight> experts;
-
+    LlamaDenseWeight gate;
     LlamaDenseWeight shared_gate;
+
+    std::vector<std::unique_ptr<LlamaFfnWeight>> experts;
 
     // reference into `experts`
     LlamaFfnWeight block;

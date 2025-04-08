@@ -13,6 +13,7 @@ add_library(Llama STATIC
         BlockTrie.cc
         SequenceManager.cc
         LlamaWeight.cc
+        LlamaDenseWeight.cc
         LlamaDecoderLayerWeight.cc
         LlamaFfnLayer.cc
         moe_ffn_layer.cc

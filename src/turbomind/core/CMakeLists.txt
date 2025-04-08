@@ -13,6 +13,7 @@ add_library(core STATIC
         layout.cc
         tensor.cc
         tensor.cu
+        module.cc
         typecvt.cc)
 target_link_libraries(core PRIVATE CUDA::cudart CUDA::cuda_driver)
 set_property(TARGET core PROPERTY POSITION_INDEPENDENT_CODE ON)

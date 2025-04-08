@@ -84,11 +84,12 @@ __global__ void RMSNorm(T*       dst,
 
 }  // namespace kernel
 
-void invokeRMSNorm(core::Tensor& out, const core::Tensor& x, const void* w, float eps, cudaStream_t st)
+void invokeRMSNorm(core::Tensor& out, const core::Tensor& x, const core::Tensor& w, float eps, cudaStream_t st)
 {
     TM_CHECK(x.ndim() == 2);
     TM_CHECK(out.shape() == x.shape());
     TM_CHECK(out.dtype() == x.dtype());
+    TM_CHECK(w.dtype() == x.dtype() && w.shape(-1) == x.shape(-1));
 
     if (x.size() == 0) {
         return;
@@ -108,7 +109,7 @@ void invokeRMSNorm(core::Tensor& out, const core::Tensor& x, const void* w, floa
                                                                                  out.stride(0),
                                                                                  (const T*)x.raw_data(),
                                                                                  x.stride(0),
-                                                                                 (const T*)w,
+                                                                                 (const T*)w.raw_data(),
                                                                                  dim,
                                                                                  num,
                                                                                  eps,
@@ -227,7 +228,7 @@ void invokeQkRMSNorm(void*        data,
     }
 }
 
-void invokeRMSNormQK(core::Tensor& x, const void* w, float eps, cudaStream_t st)
+void invokeRMSNormQK(core::Tensor& x, const core::Tensor& w, float eps, cudaStream_t st)
 {
     TM_CHECK(x.ndim() == 3);
 
@@ -253,7 +254,7 @@ void invokeRMSNormQK(core::Tensor& x, const void* w, float eps, cudaStream_t st)
         const int grid_dim  = cdiv(threads, block_dim);
 
         kernel::RMSNormQK<T, float, vec_size, max_dim><<<grid_dim, block_dim, 0, st>>>(
-            (T*)data, stride, (const T*)w, head_dim, head_num, token_num, eps, 1.f / head_dim);
+            (T*)data, stride, (const T*)w.raw_data(), head_dim, head_num, token_num, eps, 1.f / head_dim);
     };
 
     constexpr constant<128> max_dim{};
