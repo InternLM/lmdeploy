@@ -119,6 +119,12 @@ class Session:
             self._engine = None
         self.messages = []
 
+    def stop(self):
+        """stop the session while tokens are being generated."""
+        if self._engine:
+            self._engine._run(coro=self._engine.stop_session(self._id)).result()
+            self.messages = []
+
     def __enter__(self):
         return self
 

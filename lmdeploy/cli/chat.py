@@ -11,8 +11,12 @@ def input_prompt():
     sentinel = ''  # ends when this string is seen
     return '\n'.join(iter(input, sentinel))
 
-    
+
 def build_pipe(model_path, backend, **kwargs):
+    # set enable_prefix_cache
+    disable_prefix_cache = kwargs.pop('disable_prefix_cache', False)
+    kwargs.update(enable_prefix_caching=not disable_prefix_cache)
+    # set engine config
     engine_config = None
     if backend == 'turbomind':
         engine_config = TurbomindEngineConfig()
@@ -24,11 +28,11 @@ def build_pipe(model_path, backend, **kwargs):
         for key, value in kwargs.items():
             if hasattr(PytorchEngineConfig, key):
                 setattr(engine_config, key, value)
-        if kwargs.get("adapters", None):
+        if kwargs.get('adapters', None):
             from .utils import get_lora_adapters
             adapters = get_lora_adapters(kwargs['adapters'])
             engine_config.adapters = adapters
-
+    # set chat template config
     chat_template = kwargs.get('chat_template', None)
     chat_template_config = None
     if chat_template:
@@ -61,16 +65,20 @@ def main(model_path, backend, **kwargs):
                 try:
                     prompt = input_prompt()
                 except KeyboardInterrupt:
-                    if not sess._step:
-                        quit = True
-                    print()
+                    quit = True
+                    break
+                if prompt == 'end':
+                    break
+                if prompt == 'exit':
+                    quit = True
                     break
                 resps = sess(prompt)
                 try:
                     for resp in resps:
                         print(resp.text, end='', flush=True)
-                    sess.messages.append(role='assistant', content=resp.text)
+                    sess.messages.append(dict(role='assistant', content=resp.text))
                 except KeyboardInterrupt:
+                    sess.stop()
                     pass
                 finally:
                     print()
