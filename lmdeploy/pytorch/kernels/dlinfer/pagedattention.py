@@ -21,7 +21,6 @@ def prefill_attention(
     block_size: int,
     num_q_heads: int,
     num_kv_heads: int,
-    head_size: int,
     head_size_v: int,
     attn_mask: Sequence[Optional[Tensor]],
     softmax_scale: Optional[float],
@@ -43,8 +42,6 @@ def prefill_attention(
             max_q_seq_len,
             num_q_heads,
             num_kv_heads,
-            head_size,
-            head_size_v,
             attn_mask,
             softmax_scale=softmax_scale,
             attn_output=attn_output,
@@ -66,9 +63,8 @@ def prefill_attention(
             max_kv_seq_len,
             num_q_heads,
             num_kv_heads,
-            head_size,
-            head_size_v,
             attn_mask,
+            head_size_v=head_size_v,
             softmax_scale=softmax_scale,
             attn_output=attn_output,
             kv_scales=kv_scales,
@@ -88,7 +84,6 @@ def paged_token_attention(
     block_size,
     num_q_heads,
     num_kv_heads,
-    head_size,
     head_size_v,
     softmax_scale: Optional[float],
     kv_scales: Optional[Tensor],
@@ -105,8 +100,7 @@ def paged_token_attention(
         max_kv_seq_len,
         num_q_heads,
         num_kv_heads,
-        head_size,
-        head_size_v,
+        head_size_v=head_size_v,
         softmax_scale=softmax_scale,
         attn_output=attn_output,
         kv_scales=kv_scales,
@@ -138,7 +132,7 @@ def paged_attention_fwd(
     kv_zeros: Optional[Tensor] = None,
     quant_bits: Optional[int] = 0,
 ):
-    _, num_q_heads, head_size = query_states.shape
+    num_q_heads = query_states.shape[1]
     _, num_kv_heads, head_size_v = value_states.shape
     if not is_decoding:
         return prefill_attention(
@@ -158,7 +152,6 @@ def paged_attention_fwd(
             block_size,
             num_q_heads,
             num_kv_heads,
-            head_size,
             head_size_v,
             attn_mask,
             softmax_scale,
@@ -179,7 +172,6 @@ def paged_attention_fwd(
             block_size,
             num_q_heads,
             num_kv_heads,
-            head_size,
             head_size_v,
             softmax_scale=softmax_scale,
             kv_scales=kv_scales,

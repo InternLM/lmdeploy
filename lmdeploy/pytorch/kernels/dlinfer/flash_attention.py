@@ -18,8 +18,8 @@ def flash_attention_fwd(
     logit_softcapping: float = None,
     causal: bool = True,
 ):
-    _, num_q_heads, head_size = query_states.shape
-    _, num_kv_heads, head_size_v = value_states.shape
+    num_q_heads = query_states.shape[1]
+    num_kv_heads = value_states.shape[1]
     return ext_ops.prefill_attention(
         query_states,
         key_states,
@@ -32,8 +32,6 @@ def flash_attention_fwd(
         max_q_seqlen,
         num_q_heads,
         num_kv_heads,
-        head_size,
-        head_size_v,
         attn_mask=[],
         softmax_scale=sm_scale,
         attn_output=attn_output,
