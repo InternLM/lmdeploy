@@ -7,12 +7,13 @@
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/llama_decoder_kernels.h"
 #include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 
 struct LlamaLinear::Impl {
 
-    Impl(cublasMMWrapper* cublas_wrapper, cudaStream_t stream): cublas_wrapper_(cublas_wrapper), stream_(stream)
+    explicit Impl(cudaStream_t stream): stream_(stream)
     {
         workspace_ = {};
 
@@ -22,10 +23,19 @@ struct LlamaLinear::Impl {
         check_cuda_error(cudaMallocAsync(&workspace_.barriers, workspace_.barriers_size, stream_));
         check_cuda_error(cudaMallocAsync(&workspace_.partials, workspace_.partials_size, stream_));
         check_cuda_error(cudaMemsetAsync(workspace_.barriers, 0, workspace_.barriers_size, stream_));
+
+        check_cuda_error(cublasCreate(&cublas_));
+        check_cuda_error(cublasSetStream(cublas_, stream_));
+        check_cuda_error(cublasSetWorkspace(cublas_, workspace_.partials, workspace_.partials_size));
+
+        if (0) {
+            check_cuda_error(cublasSetMathMode(cublas_, CUBLAS_MATH_DISALLOW_REDUCED_PRECISION_REDUCTION));
+        }
     }
 
     ~Impl()
     {
+        cublasDestroy(cublas_);
         cudaFreeAsync(workspace_.barriers, stream_);
         cudaFreeAsync(workspace_.partials, stream_);
         workspace_ = {};
@@ -68,24 +78,25 @@ struct LlamaLinear::Impl {
         const float alpha = 1.f;
         const float beta  = 0.f;
 
-        cublas_wrapper_->Gemm(transa,
-                              transb,
-                              m,
-                              n,
-                              k,
-                              &alpha,
-                              weight.raw_data(),
-                              to_cuda_dtype(weight.dtype()),
-                              weight.stride(0) * weight.stride(1),  // one of these is 1
-                              input.raw_data(),
-                              to_cuda_dtype(input.dtype()),
-                              input.stride(0) * input.stride(1),  // one of these is 1
-                              &beta,
-                              output.raw_data(),
-                              to_cuda_dtype(output.dtype()),
-                              output.stride(0) * input.stride(1),  // one of these is 1
-                              CUDA_R_32F,
-                              CUBLAS_GEMM_DEFAULT);
+        check_cuda_error(cublasGemmEx(cublas_,
+                                      transa,
+                                      transb,
+                                      m,
+                                      n,
+                                      k,
+                                      &alpha,
+                                      weight.raw_data(),
+                                      to_cuda_dtype(weight.dtype()),
+                                      weight.stride(0) * weight.stride(1),  // one of these is 1
+                                      input.raw_data(),
+                                      to_cuda_dtype(input.dtype()),
+                                      input.stride(0) * input.stride(1),  // one of these is 1
+                                      &beta,
+                                      output.raw_data(),
+                                      to_cuda_dtype(output.dtype()),
+                                      output.stride(0) * output.stride(1),  // one of these is 1
+                                      CUDA_R_32F,
+                                      CUBLAS_GEMM_DEFAULT_TENSOR_OP));
     }
 
     void forwardInt4(core::Tensor& output, const core::Tensor& input, const LlamaDenseWeight& dense, Type type)
@@ -224,7 +235,8 @@ struct LlamaLinear::Impl {
         }
     }
 
-    cublasMMWrapper*     cublas_wrapper_;
+    // cublasMMWrapper*     cublas_wrapper_;
+    cublasHandle_t       cublas_;
     gemm::Gemm           gemm_;
     gemm::DispatchPolicy dispatch_policy_{gemm::DispatchPolicy::kDefault};
     cudaStream_t         stream_{};
@@ -232,10 +244,7 @@ struct LlamaLinear::Impl {
     gemm::Workspace workspace_;
 };
 
-LlamaLinear::LlamaLinear(cublasMMWrapper* cublas_wrapper, cudaStream_t stream):
-    impl_{std::make_shared<Impl>(cublas_wrapper, stream)}
-{
-}
+LlamaLinear::LlamaLinear(cudaStream_t stream): impl_{std::make_shared<Impl>(stream)} {}
 
 core::Tensor LlamaLinear::forward(const core::Tensor&         input,  //
                                   const LlamaDenseWeight&     dense,

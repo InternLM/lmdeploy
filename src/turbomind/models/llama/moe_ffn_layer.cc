@@ -55,24 +55,7 @@ core::Tensor_<float> MoeFfnLayer::Gate(const core::Tensor& input, const LlamaDen
     const float          alpha = 1.f;
     const float          beta  = 0.f;
     core::Tensor_<float> logits{{input.shape(0), weight.shape(1)}, MEMORY_GPU};
-    cublas_->Gemm(CUBLAS_OP_N,
-                  CUBLAS_OP_N,
-                  gate.output_dim,
-                  input.shape(0),
-                  input.shape(1),
-                  &alpha,
-                  weight.raw_data(),
-                  to_cuda_dtype(weight.dtype()),
-                  weight.stride(0),
-                  input.raw_data(),
-                  to_cuda_dtype(input.dtype()),
-                  hidden_dim_,
-                  &beta,
-                  logits.data(),
-                  CUDA_R_32F,
-                  logits.stride(0),
-                  CUDA_R_32F,
-                  CUBLAS_GEMM_DEFAULT);
+    linear_->forward(input, gate, LlamaLinear::kGemm, logits);
     sync_check_cuda_error();
     return logits;
 }

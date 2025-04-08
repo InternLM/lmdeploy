@@ -123,10 +123,9 @@ private:
     const std::shared_ptr<LlamaWeight> weights_;
 
     // Refs into `Context`, make the pointer constant (not the pointed objects)
-    cudaStream_t const     stream_;
-    cublasMMWrapper* const cublas_wrapper_;
-    IAllocator* const      allocator_;
-    LlamaLinear* const     linear_;
+    cudaStream_t const stream_;
+    IAllocator* const  allocator_;
+    LlamaLinear* const linear_;
 
     bool use_allgather_2d_{false};
 

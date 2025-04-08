@@ -19,7 +19,6 @@ public:
         hidden_dim_(model.hidden_units),
         param_(param),
         stream_(ctx.stream),
-        cublas_(ctx.cublas_wrapper.get()),
         linear_(ctx.linear.get()),
         allocator_(ctx.allocator.get())
     {
@@ -67,13 +66,12 @@ private:
 
     void dump_logits(int token_num, int layer_id, int expert_num);
 
-    const int              inter_size_;
-    const int              hidden_dim_;
-    const MoeParam         param_;
-    cudaStream_t const     stream_;
-    cublasMMWrapper* const cublas_;
-    LlamaLinear* const     linear_;
-    IAllocator* const      allocator_;
+    const int          inter_size_;
+    const int          hidden_dim_;
+    const MoeParam     param_;
+    cudaStream_t const stream_;
+    LlamaLinear* const linear_;
+    IAllocator* const  allocator_;
 
     std::unique_ptr<LlamaFfnLayer>        expert_ffn_;
     std::unique_ptr<gemm::MoeGemmContext> context_;

@@ -14,7 +14,6 @@
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/allocator.h"
-#include "src/turbomind/utils/cublasMMWrapper.h"
 
 namespace turbomind {
 
@@ -33,11 +32,6 @@ struct Context {
     core::Allocator                                 core_allocator;
     cudaStream_t                                    stream;
     std::unique_ptr<Allocator<AllocatorType::CUDA>> allocator;
-    cublasHandle_t                                  cublas_handle;
-    cublasLtHandle_t                                cublasLt_handle;
-    std::unique_ptr<cublasAlgoMap>                  cublas_algo_map;
-    std::unique_ptr<std::mutex>                     cublas_wrapper_mutex;
-    std::unique_ptr<cublasMMWrapper>                cublas_wrapper;
     std::unique_ptr<LlamaLinear>                    linear;
     Communicators                                   comm;
     cudaDeviceProp                                  cuda_device_prop;
@@ -52,43 +46,14 @@ struct Context {
         allocator = std::make_unique<Allocator<AllocatorType::CUDA>>(device_id, false);
         allocator->setStream(stream);
 
-        cublasCreate(&cublas_handle);
-        cublasLtCreate(&cublasLt_handle);
-        cublasSetStream(cublas_handle, stream);
-
-        if (0) {
-            cublasSetWorkspace(cublas_handle, nullptr, 0);
-            cublasSetMathMode(cublas_handle, CUBLAS_MATH_DISALLOW_REDUCED_PRECISION_REDUCTION);
-        }
-
-        cublas_algo_map      = std::make_unique<cublasAlgoMap>("gemm_config.in");
-        cublas_wrapper_mutex = std::make_unique<std::mutex>();
-        cublas_wrapper       = std::make_unique<cublasMMWrapper>(
-            cublas_handle, cublasLt_handle, stream, cublas_algo_map.get(), cublas_wrapper_mutex.get(), allocator.get());
-        linear = std::make_unique<LlamaLinear>(cublas_wrapper.get(), stream);
+        linear = std::make_unique<LlamaLinear>(stream);
 
         check_cuda_error(cudaGetDeviceProperties(&cuda_device_prop, device_id));
-
-        if (data_type == TYPE_FP16) {
-            cublas_wrapper->setGemmConfig(CUDA_R_16F, CUDA_R_16F, CUDA_R_16F, CUDA_R_32F);
-        }
-        else if (data_type == TYPE_BF16) {
-            cublas_wrapper->setBF16GemmConfig();
-        }
     }
 
     ~Context()
     {
         linear.reset();
-        cublas_wrapper.reset();
-        cublas_algo_map.reset();
-
-        cublasDestroy(cublas_handle);
-        cublas_handle = {};
-
-        cublasLtDestroy(cublasLt_handle);
-        cublasLt_handle = {};
-
         allocator.reset();
 
         // `comm` destroyed by infer threads collectively

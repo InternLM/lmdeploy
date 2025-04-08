@@ -13,14 +13,13 @@ namespace turbomind {
 
 class LlamaLinear {
 public:
-    enum Type
-    {
+    enum Type {
         kGemm,
         kFusedSiluFfn,
         kFusedAdd
     };
 
-    LlamaLinear(cublasMMWrapper* cublas_wrapper, cudaStream_t stream);
+    explicit LlamaLinear(cudaStream_t stream);
 
     core::Tensor forward(const core::Tensor&         input,
                          const LlamaDenseWeight&     weight,

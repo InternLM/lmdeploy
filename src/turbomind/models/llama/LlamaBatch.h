@@ -206,9 +206,8 @@ private:
     const bool     debug_;
 
     // Refs into `Context<T>`
-    cudaStream_t const     stream_{};
-    cublasMMWrapper* const cublas_wrapper_{};
-    IAllocator* const      allocator_{};
+    cudaStream_t const stream_{};
+    IAllocator* const  allocator_{};
 
     int session_len_;  // May be truncated in ctor
 
