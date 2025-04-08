@@ -521,10 +521,10 @@ class ArgumentHelper:
                                    help='Communication backend for multi-GPU inference')
 
     @staticmethod
-    def enable_twomicrobatch(parser):
-        """Add argument enable_twomicrobatch to parser."""
+    def enable_microbatch(parser):
+        """Add argument enable_microbatch to parser."""
 
-        return parser.add_argument('--enable-twomicrobatch',
+        return parser.add_argument('--enable-microbatch',
                                    type=bool,
                                    default=False,
-                                   help='enable twomicrobatch for specified model')
+                                   help='enable microbatch for specified model')

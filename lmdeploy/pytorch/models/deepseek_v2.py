@@ -22,7 +22,7 @@ from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 from .utils.cudagraph import CudaGraphMixin
 
 
-# twomicrobatch
+# microbatch
 class ExecType(Enum):
     """batch ecex type."""
     One = auto()
@@ -254,7 +254,7 @@ def split_input(hidden_states,
     else:
         # two batch or more
         assert num == 2
-        flag_list = get_step_ctx_manager().current_context().twomicrobatch_splitflags
+        flag_list = get_step_ctx_manager().current_context().microbatch_splitflags
 
         inputs = []
         for flag in flag_list:
@@ -992,7 +992,7 @@ class DeepseekV2Model(nn.Module):
 
         return hidden_states
 
-    def forward_twomicrobatch(
+    def forward_microbatch(
         self,
         input_ids: torch.LongTensor = None,
         position_ids: Optional[torch.LongTensor] = None,
@@ -1000,7 +1000,7 @@ class DeepseekV2Model(nn.Module):
         attn_metadata: Any = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
     ):
-        """forward_twomicrobatch."""
+        """forward_microbatch."""
         assert self.config.moe_layer_freq == 1
         moe_start_idx = min(self.config.first_k_dense_replace, len(self.layers))
 
@@ -1092,7 +1092,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                                             dtype=dtype,
                                             device=device)
         self._load_buffers = dict()
-        self.enable_twomicrobatch = get_dist_manager().current_context().dist_config.enable_twomicrobatch
+        self.enable_microbatch = get_dist_manager().current_context().dist_config.enable_microbatch
 
     def forward(
         self,
@@ -1103,8 +1103,8 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
         inputs_embeds: torch.Tensor = None,
         **kwargs,
     ):
-        if get_step_ctx_manager().current_context().twomicrobatch_splitflags is not None:
-            hidden_states = self.model.forward_twomicrobatch(
+        if get_step_ctx_manager().current_context().microbatch_splitflags is not None:
+            hidden_states = self.model.forward_microbatch(
                 input_ids=input_ids,
                 position_ids=position_ids,
                 past_key_values=past_key_values,
@@ -1141,7 +1141,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
         attn_metadata = context.attn_metadata
 
         # twobatch or onebatch
-        if self.enable_twomicrobatch:
+        if self.enable_microbatch:
             if attn_metadata.q_start_loc.size(dim=0) < 2:
                 disable_num = torch.tensor(1, dtype=torch.int32, device=input_ids.device)
             else:
@@ -1149,9 +1149,9 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             ep_group = get_dist_manager().current_context().ep_gpu_group
             dist.all_reduce(disable_num, op=dist.ReduceOp.SUM, group=ep_group)
             step_ctx = get_step_ctx_manager().current_context()
-            enable_twomicrobatch = disable_num.item() == 0
-            if enable_twomicrobatch:
-                step_ctx.twomicrobatch_splitflags = get_split_flags(attn_metadata, num=2)
+            enable_microbatch = disable_num.item() == 0
+            if enable_microbatch:
+                step_ctx.microbatch_splitflags = get_split_flags(attn_metadata, num=2)
         return dict(
             input_ids=input_ids,
             position_ids=position_ids,
