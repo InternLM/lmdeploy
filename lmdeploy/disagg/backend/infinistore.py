@@ -12,7 +12,7 @@ from lmdeploy.disagg.backend.base import MigrationBackendImpl
 
 
 @register_migration_backend(MigrationBackend.InfiniStore)
-class MooncakeBackend(MigrationBackendImpl):
+class InfiniStoreBackend(MigrationBackendImpl):
     def p2p_initialize(self, init_request: MigrationInitRequest):
         raise NotImplementedError
 
