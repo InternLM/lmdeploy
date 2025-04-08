@@ -10,9 +10,6 @@ from typing import List, Optional, Tuple
 import torch
 import torch.distributed as dist
 
-from lmdeploy.pytorch.kernels.cuda.ep_moe import (deepep_permute_triton_kernel, deepep_post_reorder_triton_kernel,
-                                                  deepep_run_moe_deep_preprocess)
-
 from ..default.token_dispatcher import AlltoAllTokenDispatcher
 from ..token_dispatcher import TokenDispatcherImpl
 
@@ -105,24 +102,22 @@ class DeepEPTokenDispatcher(TokenDispatcherImpl):
     https://github.com/NVIDIA/Megatron-
     LM/blob/main/megatron/core/transformer/moe/token_dispatcher.py."""
 
-    def __init__(self,
-                 group: torch.distributed.ProcessGroup,
-                 top_k: int,
-                 num_experts: int = None,
-                 num_local_experts: int = None,
-                 hidden_size: int = None,
-                 params_dtype: torch.dtype = None,
-                 num_max_dispatch_tokens_per_rank=128,
-                 async_finish: bool = True):
+    def __init__(
+        self,
+        group: torch.distributed.ProcessGroup,
+        num_experts: int = None,
+        num_local_experts: int = None,
+        hidden_size: int = None,
+        params_dtype: torch.dtype = None,
+        num_max_dispatch_tokens_per_rank=128,
+    ):
         self.group = group
-        self.top_k = top_k
         self.num_experts = num_experts
         self.num_local_experts = num_local_experts
         self.hidden_size = hidden_size
         self.params_bytes = params_dtype.itemsize
         # Handle used for combine operation
         self.handle = None
-        self.async_finish = async_finish
         if not use_deepep:
             raise ImportError('DeepEP is not installed. Please install DeepEP package from '
                               'https://github.com/deepseek-ai/deepep.')
@@ -132,32 +127,6 @@ class DeepEPTokenDispatcher(TokenDispatcherImpl):
                                                self.num_experts,
                                                hidden_bytes=self.hidden_size * self.params_bytes)
 
-    def permute(
-        self,
-        hidden_states: torch.Tensor,
-        topk_idx: torch.Tensor,
-        fp8_dtype: Optional[torch.dtype] = None,
-        use_fp8_w8a8: bool = False,
-        use_block_quant: bool = False,
-    ):
-        reorder_topk_ids, self.src2dst, seg_indptr = deepep_run_moe_deep_preprocess(topk_idx, self.num_experts)
-        num_total_tokens = reorder_topk_ids.numel()
-        gateup_input = torch.empty(
-            (int(num_total_tokens), hidden_states.shape[1]),
-            device=hidden_states.device,
-            dtype=(fp8_dtype if (use_fp8_w8a8 and not use_block_quant) else hidden_states.dtype),
-        )
-        deepep_permute_triton_kernel[(hidden_states.shape[0], )](
-            hidden_states,
-            gateup_input,
-            self.src2dst,
-            topk_idx,
-            self.top_k,
-            hidden_states.shape[1],
-            BLOCK_SIZE=512,
-        )
-        return reorder_topk_ids, seg_indptr, gateup_input
-
     def dispatch(
         self,
         hidden_states: torch.Tensor,
@@ -165,22 +134,29 @@ class DeepEPTokenDispatcher(TokenDispatcherImpl):
         topk_weights: torch.Tensor,
         expert_list: List[int] = None,
         previous_event=None,
-    ):
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         self.hidden_shape = hidden_states.shape
         topk_idx = topk_idx.to(torch.int64)
         (
             hidden_states,
             topk_idx,
             topk_weights,
-            _,
+            num_recv_tokens_per_expert_list,
+            handle,
             event,
         ) = self.dispatch_normal(hidden_states, topk_idx, topk_weights, self.num_experts, previous_event)
-        event.current_stream_wait() if self.async_finish else ()
+        self.tokens_per_expert = torch.tensor(
+            num_recv_tokens_per_expert_list,
+            device=hidden_states.device,
+            dtype=torch.int64,
+        )
+        tokens_per_expert = self.get_number_of_tokens_per_expert()
+        self.handle = handle
+        self.topk_idx = topk_idx
+        self.topk_weights = topk_weights
         if hidden_states.shape[0] > 0:
-            reorder_topk_ids, seg_indptr, hidden_states = self.permute(hidden_states,
-                                                                       topk_idx,
-                                                                       fp8_dtype=hidden_states.dtype)
-        return hidden_states, topk_idx, topk_weights, reorder_topk_ids, seg_indptr
+            hidden_states = self.get_permuted_hidden_states_by_experts(hidden_states)
+        return hidden_states, topk_idx, topk_weights, tokens_per_expert
 
     def dispatch_normal(
         self,
@@ -200,15 +176,16 @@ class DeepEPTokenDispatcher(TokenDispatcherImpl):
             topk_idx,
             num_experts,
             previous_event=previous_event,
-            async_finish=self.async_finish,
-            allocate_on_comm_stream=previous_event is not None,
+            async_finish=False,
+            allocate_on_comm_stream=False,
         )
+
         (
             recv_x,
             recv_topk_idx,
             recv_topk_weights,
             num_recv_tokens_per_expert_list,
-            self.handle,
+            handle,
             event,
         ) = self.buffer_normal.dispatch(
             x,
@@ -219,51 +196,61 @@ class DeepEPTokenDispatcher(TokenDispatcherImpl):
             is_token_in_rank=is_token_in_rank,
             num_tokens_per_expert=num_tokens_per_expert,
             previous_event=previous_event,
-            async_finish=self.async_finish,
-            allocate_on_comm_stream=(previous_event is not None) and self.async_finish,
+            async_finish=False,
+            allocate_on_comm_stream=False,
         )
+
         return (
             recv_x,
             recv_topk_idx,
             recv_topk_weights,
             num_recv_tokens_per_expert_list,
+            handle,
             event,
         )
 
-    def combine(self, hidden_states: torch.Tensor, topk_idx: torch.Tensor, topk_weights: torch.Tensor) -> torch.Tensor:
+    def combine(self, hidden_states: torch.Tensor) -> torch.Tensor:
         if hidden_states.shape[0] > 0:
-            num_tokens = self.src2dst.shape[0] // self.top_k
-            output = torch.empty(
-                (num_tokens, hidden_states.shape[1]),
-                device=hidden_states.device,
-                dtype=hidden_states.dtype,
-            )
-            deepep_post_reorder_triton_kernel[(num_tokens, )](
-                hidden_states,
-                output,
-                self.src2dst,
-                topk_idx,
-                topk_weights,
-                self.top_k,
-                hidden_states.shape[1],
-                BLOCK_SIZE=512,
-            )
-        else:
-            output = torch.zeros(
-                (0, hidden_states.shape[1]),
-                device=hidden_states.device,
-                dtype=hidden_states.dtype,
-            )
-        previous_event = Buffer.capture() if self.async_finish else None
-        output, _, event = self.buffer_normal.combine(
-            output,
-            self.handle,
-            async_finish=self.async_finish,
+            hidden_states = self.get_restored_hidden_states_by_experts(hidden_states)
+        hidden_states, event = self.combine_normal(hidden_states, self.handle)
+        self.handle = None
+        return hidden_states.view(self.hidden_shape)
+
+    def combine_normal(self, x: torch.Tensor, handle: Tuple, previous_event=None):
+        combined_x, _, event = self.buffer_normal.combine(
+            x,
+            handle,
+            async_finish=False,
             previous_event=previous_event,
-            allocate_on_comm_stream=previous_event is not None,
+            allocate_on_comm_stream=False,
         )
-        event.current_stream_wait() if self.async_finish else ()
-        return output.view(self.hidden_shape)
+        return combined_x, event
+
+    def get_number_of_tokens_per_expert(self) -> torch.Tensor:
+        """Get the number of tokens per expert."""
+        return self.tokens_per_expert
+
+    def get_permuted_hidden_states_by_experts(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        self.dispatched_routing_map, self.topk_weights = super().indices_to_multihot(
+            self.topk_idx, self.topk_weights, self.num_experts)
+        self.hidden_shape_before_permute = hidden_states.shape
+        hidden_states, self.reversed_mapping_for_combine = super().permute(
+            hidden_states,
+            self.dispatched_routing_map,
+        )
+        return hidden_states
+
+    def get_restored_hidden_states_by_experts(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        input_dtype = hidden_states.dtype
+        assert (self.topk_weights.dtype == torch.float32), 'DeepEP only supports float32 probs'
+        hidden_states = super().unpermute(
+            hidden_states,
+            self.reversed_mapping_for_combine,
+            restore_shape=self.hidden_shape_before_permute,
+            routing_map=self.dispatched_routing_map,
+            probs=self.topk_weights,
+        )
+        return hidden_states.to(input_dtype)
 
 
 class DeepEPTokenDispatcherLowLatency(TokenDispatcherImpl):
@@ -347,7 +334,6 @@ class TokenDispatcherBuilder:
     @staticmethod
     def build(
         group,
-        top_k,
         num_experts,
         num_local_experts,
         hidden_size,
@@ -357,7 +343,6 @@ class TokenDispatcherBuilder:
         if use_deepep is True:
             return DeepEPTokenDispatcher(
                 group,
-                top_k,
                 num_experts,
                 num_local_experts,
                 hidden_size,

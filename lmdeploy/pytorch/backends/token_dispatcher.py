@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
+from typing import Tuple
 
 import torch
 
@@ -61,11 +62,12 @@ class TokenDispatcherImpl(ABC):
         return multihot_routing_map, multihot_probs
 
     @abstractmethod
-    def dispatch(self, hidden_states: torch.Tensor, probs: torch.Tensor, topk_ids: torch.Tensor, local_expert_indices):
+    def dispatch(self, hidden_states: torch.Tensor, probs: torch.Tensor, topk_ids: torch.Tensor,
+                 local_expert_indices) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """dispatch."""
         raise NotImplementedError
 
     @abstractmethod
-    def combine(self, hidden_states: torch.Tensor, topk_idx: torch.Tensor, topk_weights: torch.Tensor) -> torch.Tensor:
+    def combine(self, hidden_states: torch.Tensor) -> torch.Tensor:
         """combine."""
         raise NotImplementedError
