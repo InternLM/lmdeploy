@@ -78,10 +78,7 @@ class AscendOpsBackend(DlinferOpsBackend):
         head_size: int,
         dtype: torch.dtype,
     ) -> Tuple[int, ...]:
-        if AscendOpsBackend.enable_graph:
-            return (block_size, num_heads, head_size)
-        else:
-            return (block_size, num_heads * head_size)
+        return (block_size, num_heads, head_size)
 
     @staticmethod
     def get_v_block_shape(
@@ -90,10 +87,7 @@ class AscendOpsBackend(DlinferOpsBackend):
         head_size: int,
         dtype: torch.dtype,
     ) -> Tuple[int, ...]:
-        if AscendOpsBackend.enable_graph:
-            return (block_size, num_heads, head_size)
-        else:
-            return (block_size, num_heads * head_size)
+        return (block_size, num_heads, head_size)
 
     @classmethod
     def update_step_context(cls, step_context):
