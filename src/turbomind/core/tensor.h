@@ -165,6 +165,11 @@ public:
         return slice(bases, sizes);
     }
 
+    Tensor borrow() const
+    {
+        return Tensor{buffer_.borrow(), layout_};
+    }
+
     Tensor squeeze(int dim) const
     {
         return Tensor{buffer_, layout_.squeeze(dim)};

@@ -63,7 +63,6 @@ void UnifiedDecoder::AllreduceResidualRMSnorm(core::Tensor&       hidden_states,
                                               const int*          local_token_nums)
 {
     const auto dtype = hidden_states.dtype();
-    TM_CHECK(!d_comm_);
     if (0) {}
     else if (group0 || group1) {
         d_comm_->AllreduceResidualBiasRMSnormEx(hidden_states.raw_data(),

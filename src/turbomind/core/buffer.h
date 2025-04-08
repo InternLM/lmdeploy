@@ -182,6 +182,11 @@ public:
 
     Buffer slice(ssize_t base, ssize_t size) const;
 
+    Buffer borrow() const
+    {
+        return Buffer{const_cast<void*>(raw_data()), size_, dtype_, device_};
+    }
+
     friend bool operator==(const Buffer& a, const Buffer& b);
 
     friend bool operator!=(const Buffer& a, const Buffer& b);
