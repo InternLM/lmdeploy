@@ -180,6 +180,9 @@ class DeepEPTokenDispatcher(TokenDispatcherImpl):
             reorder_topk_ids, seg_indptr, hidden_states = self.permute(hidden_states,
                                                                        topk_idx,
                                                                        fp8_dtype=hidden_states.dtype)
+        else:
+            reorder_topk_ids = torch.empty((0, ), device=hidden_states.device, dtype=torch.int64)
+            seg_indptr = torch.zeros((self.num_experts + 1, ), device=hidden_states.device, dtype=torch.int64)
         return hidden_states, topk_idx, topk_weights, reorder_topk_ids, seg_indptr
 
     def dispatch_normal(
