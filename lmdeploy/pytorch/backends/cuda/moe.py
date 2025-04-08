@@ -326,6 +326,13 @@ class DeepEPExpertsGroupedGEMM:
                 scale_b=gate_down_scale,
                 block_shape=self.block_shape,
             )
+        else:
+            down_output = torch.empty(
+                hidden_states.shape[0],
+                gate_down_weight.shape[1],
+                device=hidden_states.device,
+                dtype=hidden_states.dtype,
+            )
         return down_output
 
 
