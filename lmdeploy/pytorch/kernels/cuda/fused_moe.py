@@ -199,70 +199,168 @@ def fused_moe_kernel_launcher(
 
 
 @triton.jit
-def _start_end_kernel(TopkIdx, SortedIdx, ExpStart, ExpEnd, len_sorted_idx: int, num_experts: tl.constexpr,
-                      BLOCK: tl.constexpr):
-    """start end kernel."""
-    exp_id = tl.program_id(0)
-    exp_start = -1
-    cnt = 0
+def _get_exp_mask_kernel(
+    a_ptr,
+    o_mask_ptr,
+    o_k_ptr,
+    stride_a_token: tl.constexpr,
+    stride_a_exp: tl.constexpr,
+    stride_o_exp,
+    stride_o_token: tl.constexpr,
+    topk: tl.constexpr,
+    num_experts: tl.constexpr,
+    BLOCK_NA: tl.constexpr,
+    BLOCK_NO: tl.constexpr,
+):
+    token_id = tl.program_id(0)
 
-    s_off = tl.arange(0, BLOCK)
+    offs_n = tl.arange(0, BLOCK_NA)
+    mask_n = offs_n < topk
+    a_ptrs = a_ptr + token_id * stride_a_token + offs_n * stride_a_exp
+    a = tl.load(a_ptrs, mask=mask_n)
 
-    # find start
-    for sidx_start in range(0, len_sorted_idx, BLOCK):
-        sidx_off = sidx_start + s_off
-        sidx_mask = sidx_off < len_sorted_idx
-        sidx = tl.load(SortedIdx + sidx_off, mask=sidx_mask, other=0)
-        tidx = tl.load(TopkIdx + sidx, mask=sidx_mask, other=num_experts)
-        tidx_mask = tidx == exp_id
-        cnt += tl.sum(tidx_mask.to(tl.int32))
-        if cnt > 0 and exp_start < 0:
-            exp_start = sidx_start + tl.argmax(tidx_mask, axis=0)
+    # fill zeros
+    offs_no = tl.arange(0, BLOCK_NO)
+    mask_no = offs_no < num_experts
+    o_ptrs = o_mask_ptr + token_id * stride_o_token + offs_no * stride_o_exp
+    tl.store(o_ptrs, 0, mask=mask_no)
 
-    if exp_start < 0:
-        exp_start *= 0
-    exp_end = exp_start + cnt
-    tl.store(ExpStart + exp_id, exp_start)
-    tl.store(ExpEnd + exp_id, exp_end)
+    # fill a
+    o_ptrs = o_mask_ptr + token_id * stride_o_token + a * stride_o_exp
+    tl.store(o_ptrs, 1, mask=mask_n)
+
+    # fill kid
+    ok_ptrs = o_k_ptr + token_id * stride_o_token + a * stride_o_exp
+    tl.store(ok_ptrs, offs_n, mask=mask_n)
 
 
-def get_start_end(topk_idx: torch.Tensor, sorted_idx: torch.Tensor, num_experts: int):
-    """get start and end.
+def _get_exp_mask(topk_ids: torch.Tensor, num_experts: int):
+    """get exp mask."""
+    assert topk_ids.dim() == 2
+    M, topk = topk_ids.shape
+    assert topk <= num_experts
 
-    same process as:
-    >>> exp_tok_cnt = F.one_hot(flatten_topk_ids, num_classes=E).sum(0)
-    >>> exp_end = exp_tok_cnt.cumsum(0)
-    >>> exp_start = exp_end - exp_tok_cnt
-    """
-    start_end = sorted_idx.new_empty(2, num_experts)
+    out_mask = topk_ids.new_empty((num_experts, M))
+    out_k = topk_ids.new_empty((num_experts, M))
+    BLOCK_NA = triton.next_power_of_2(topk)
+    BLOCK_NO = triton.next_power_of_2(num_experts)
+
+    grid = (M, )
+    _get_exp_mask_kernel[grid](
+        topk_ids,
+        out_mask,
+        out_k,
+        stride_a_token=topk_ids.stride(0),
+        stride_a_exp=topk_ids.stride(1),
+        stride_o_exp=out_mask.stride(0),
+        stride_o_token=out_mask.stride(1),
+        topk=topk,
+        num_experts=num_experts,
+        BLOCK_NA=BLOCK_NA,
+        BLOCK_NO=BLOCK_NO,
+        num_warps=1,
+    )
+    return out_mask, out_k
+
+
+@triton.jit
+def _get_start_end_kernel(
+    exp_cum_ptr,
+    exp_topk_ptr,
+    exp_out_ptr,
+    start_ptr,
+    end_ptr,
+    stride_cum_exp,
+    stride_cum_token: tl.constexpr,
+    stride_out: tl.constexpr,
+    num_tokens,
+    num_experts: tl.constexpr,
+    topk: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+):
+    """get start end kernel."""
+    token_start = tl.program_id(0)
+
+    offs_exp = tl.arange(0, BLOCK_N)
+    off_cum = offs_exp * stride_cum_exp + token_start * stride_cum_token
+    cum_ptrs = exp_cum_ptr + off_cum
+    val_k_ptrs = exp_topk_ptr + off_cum
+
+    mask_exp = offs_exp < num_experts
+
+    # get prev and cur cum
+    token_id = token_start
+    prev_cum_mask = mask_exp
+    if token_start == 0:
+        prev_cum_mask = mask_exp & (tl.arange(0, BLOCK_N) > 0)
+    prev_cum = tl.load(cum_ptrs - stride_cum_token, mask=prev_cum_mask, other=0)
+    cur_cum = tl.load(cum_ptrs, mask=mask_exp)
+
+    # store sorted idx
+    mask_out = mask_exp & (cur_cum > prev_cum)
+    val_k = tl.load(val_k_ptrs, mask=mask_exp)
+    val = token_id * topk + val_k
+    out_ptrs = exp_out_ptr + prev_cum * stride_out
+    tl.store(out_ptrs, val, mask=mask_out)
+
+    # fill start
+    if token_id == 0:
+        cur_start_ptrs = start_ptr + offs_exp
+        tl.store(cur_start_ptrs, prev_cum, mask=mask_exp)
+
+    # fill end
+    if token_id == num_tokens - 1:
+        cur_end_ptrs = end_ptr + offs_exp
+        tl.store(cur_end_ptrs, cur_cum, mask=mask_exp)
+
+
+def get_start_end(exp_cum: torch.Tensor, exp_topk: torch.Tensor, topk: int):
+    """get start end."""
+    num_experts, num_tokens = exp_cum.shape
+
+    start_end = exp_cum.new_empty(2, num_experts)
     exp_start = start_end[0, :]
     exp_end = start_end[1, :]
 
-    BLOCK = 128
-    kernel_meta = get_kernel_meta(topk_idx)
-    _start_end_kernel[(num_experts, )](
-        topk_idx,
-        sorted_idx,
+    out = exp_cum.new_empty((num_tokens * topk))
+
+    num_warps = 1
+
+    BLOCK_N = triton.next_power_of_2(num_experts)
+    grid = (num_tokens, )
+
+    _get_start_end_kernel[grid](
+        exp_cum,
+        exp_topk,
+        out,
         exp_start,
         exp_end,
-        len_sorted_idx=sorted_idx.numel(),
+        stride_cum_exp=exp_cum.stride(0),
+        stride_cum_token=exp_cum.stride(1),
+        stride_out=out.stride(0),
+        num_tokens=num_tokens,
         num_experts=num_experts,
-        BLOCK=BLOCK,
-        num_warps=4,
-        num_stages=1,
-        **kernel_meta,
+        topk=topk,
+        BLOCK_N=BLOCK_N,
+        num_warps=num_warps,
     )
-
-    return exp_start, exp_end
+    return out, exp_start, exp_end
 
 
 def _get_sorted_idx(topk_ids: torch.Tensor, num_experts: int):
     """get sorted idx."""
-    flatten_topk_ids = topk_ids.flatten()
-    sorted_idx = flatten_topk_ids.argsort()
+    assert topk_ids.dim() == 2
+    _, topk = topk_ids.shape
 
-    exp_start, exp_end = get_start_end(flatten_topk_ids, sorted_idx, num_experts)
-    return sorted_idx, exp_start, exp_end
+    # get expert mask   (num_experts, num_tokens)
+    exp_mask, exp_topk = _get_exp_mask(topk_ids, num_experts)
+    # get cumsum   (num_experts, num_tokens)
+    exp_cum = exp_mask.flatten().cumsum(0).view_as(exp_mask)
+
+    # get sort idx and start/end
+    sorted_idx, start, end = get_start_end(exp_cum, exp_topk, topk)
+
+    return sorted_idx, start, end
 
 
 def _renormalize(topk_weights: torch.Tensor, renormalize: bool):
