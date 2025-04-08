@@ -253,9 +253,13 @@ class DeepEPExpertsGroupedGEMM:
         self.block_shape = block_shape
         self.use_fp8_w8a8 = True
 
-    def forward(self, hidden_states: torch.Tensor, reorder_topk_ids: torch.Tensor, seg_indptr: torch.Tensor,
-                gate_up_weight: torch.Tensor, gate_up_scale: torch.Tensor, gate_down_weight: torch.Tensor,
-                gate_down_scale: torch.Tensor):
+    def forward(self, hidden_states: torch.Tensor, tokens_per_expert: torch.Tensor, gate_up_weight: torch.Tensor,
+                gate_up_scale: torch.Tensor, gate_down_weight: torch.Tensor, gate_down_scale: torch.Tensor):
+        seg_indptr_cur_rank = torch.cat([
+            torch.zeros(1, device=tokens_per_expert.device, dtype=tokens_per_expert.dtype),
+            torch.cumsum(tokens_per_expert, dim=0),
+        ])
+        reorder_topk_ids = torch.repeat_interleave(tokens_per_expert)
         weight_indices_cur_rank = torch.arange(
             0,
             self.num_experts_per_partition,
@@ -271,21 +275,20 @@ class DeepEPExpertsGroupedGEMM:
             dtype=hidden_states.dtype,
         )
         if hidden_states.shape[0] > 0:
-            input, input_scale = quant_fp8(hidden_states, self.block_shape[0], dtype=gate_up_weight.dtype)
+            input, input_scale = quant_fp8(hidden_states, 128, dtype=gate_up_weight.dtype)
             gateup_output = grouped_gemm_triton(
                 a=input,
                 b=gate_up_weight,
                 c=gateup_output,
                 batch_size=self.num_experts_per_partition,
                 weight_column_major=True,
-                seg_indptr=seg_indptr,
+                seg_indptr=seg_indptr_cur_rank,
                 weight_indices=weight_indices_cur_rank,
                 use_fp8_w8a8=self.use_fp8_w8a8,
                 scale_a=input_scale,
                 scale_b=gate_up_scale,
                 block_shape=self.block_shape,
             )
-            input, input_scale = None, None
 
         # Act
         down_input = torch.empty(
@@ -304,22 +307,23 @@ class DeepEPExpertsGroupedGEMM:
             self.num_experts_per_partition - 1,
             BLOCK_SIZE=512,
         )
-        gateup_output = None
+
+        # GroupGemm-1
+        down_output = torch.empty(
+            down_input.shape[0],
+            gate_down_weight.shape[1],
+            device=hidden_states.device,
+            dtype=hidden_states.dtype,
+        )
         if down_input.shape[0] > 0:
-            down_input, down_input_scale = quant_fp8(down_input, self.block_shape[0], dtype=gate_down_weight.dtype)
-            down_output = torch.empty(
-                hidden_states.shape[0],
-                gate_down_weight.shape[1],
-                device=hidden_states.device,
-                dtype=hidden_states.dtype,
-            )
+            down_input, down_input_scale = quant_fp8(down_input, 128, dtype=gate_down_weight.dtype)
             down_output = grouped_gemm_triton(
                 a=down_input,
                 b=gate_down_weight,
                 c=down_output,
                 batch_size=self.num_experts_per_partition,
                 weight_column_major=True,
-                seg_indptr=seg_indptr,
+                seg_indptr=seg_indptr_cur_rank,
                 weight_indices=weight_indices_cur_rank,
                 use_fp8_w8a8=self.use_fp8_w8a8,
                 scale_a=down_input_scale,
@@ -400,7 +404,6 @@ class FusedMoENormal:
     def __init__(self,
                  ep_size: int,
                  ep_group: dist.ProcessGroup,
-                 top_k: int,
                  num_experts: int,
                  hidden_dim: int,
                  block_size: int = 128,
@@ -408,7 +411,6 @@ class FusedMoENormal:
         self.experts = DeepEPExpertsGroupedGEMM(num_experts, ep_size, [block_size, block_size])
         self.token_dispatcher = TokenDispatcherBuilder.build(
             group=ep_group,
-            top_k=top_k,
             num_experts=num_experts,
             num_local_experts=num_experts // ep_size,
             hidden_size=hidden_dim,
@@ -425,21 +427,15 @@ class FusedMoENormal:
                 down_scale: torch.Tensor,
                 expert_list: List[int] = None):
         """forward."""
-        (
-            recv_hidden_states,
-            recv_topk_ids,
-            recv_topk_weights,
-            reorder_topk_ids,
-            seg_indptr,
-        ) = self.token_dispatcher.dispatch(
+        recv_hidden_states, recv_topk_ids, recv_topk_weights, tokens_per_expert = self.token_dispatcher.dispatch(
             hidden_states,
             topk_ids,
             topk_weights,
             expert_list,
         )
-        out_states = self.experts.forward(recv_hidden_states, reorder_topk_ids, seg_indptr, up_weights, up_scale,
-                                          down_weights, down_scale)
-        out_states = self.token_dispatcher.combine(out_states, recv_topk_ids, recv_topk_weights)
+        out_states = self.experts.forward(recv_hidden_states, tokens_per_expert, up_weights, up_scale, down_weights,
+                                          down_scale)
+        out_states = self.token_dispatcher.combine(out_states)
         return out_states
 
 
@@ -524,8 +520,8 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
         step_ctx = get_step_ctx_manager().current_context()
         moe = None
         if step_ctx.is_decoding is False or self.use_deep_gemm is False:
-            moe = FusedMoENormal(self.ep_size, self.ep_group, self.top_k, self.num_experts, self.hidden_dim,
-                                 self.block_size, self.out_dtype)
+            moe = FusedMoENormal(self.ep_size, self.ep_group, self.num_experts, self.hidden_dim, self.block_size,
+                                 self.out_dtype)
         else:
             moe = FusedMoELowLatency(self.ep_size, self.ep_group, self.num_experts, self.hidden_dim, self.block_size,
                                      self.out_dtype)
