@@ -70,11 +70,12 @@ class LogitsMixin:
         gen_config = GenerationConfig(max_new_tokens=1, output_logits='all', do_sample=False)
 
         async def _proc(i):
-            async with self.model_inst(session_id=i) as inst:
+            session_id = next(self._session_id)
+            async with self.model_inst(session_id=session_id) as inst:
                 token_ids = input_ids[i][:steps[i] + max_input_len]
                 input_len = len(token_ids)
                 async with self.safe_run(inst,
-                                         session_id=i,
+                                         session_id=session_id,
                                          input_ids=token_ids,
                                          gen_config=gen_config,
                                          stream_output=False,
@@ -97,14 +98,15 @@ class LogitsMixin:
         logits = [None] * len(input_ids)
 
         async def _proc(i):
-            async with self.model_inst(session_id=i) as inst:
+            session_id = next(self._session_id)
+            async with self.model_inst(session_id=session_id) as inst:
                 token_ids = input_ids[i][steps[i]:steps[i] + max_input_len]
                 input_len = len(token_ids)
                 # The reason to set `top_k=1` is that pt engine crashes at top_k sampling stage
                 # when perform inference on a reward model.
                 gen_config = GenerationConfig(max_new_tokens=0, output_logits='all', top_k=1)
                 async with self.safe_run(inst,
-                                         session_id=i,
+                                         session_id=session_id,
                                          input_ids=token_ids,
                                          gen_config=gen_config,
                                          stream_output=False,

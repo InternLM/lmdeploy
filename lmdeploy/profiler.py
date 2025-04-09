@@ -1,29 +1,32 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import csv
 import time
-from typing import List
+from itertools import count
+from typing import List, Optional
 
 import numpy as np
 
 
 class Session:
 
-    UNKNOWN = 0
-    SUCCESS = 1
-    FAIL = 2
+    UNKNOWN: int = 0
+    SUCCESS: int = 1
+    FAIL: int = 2
+    ID = count(0)
 
-    def __init__(self, input_len, req_output_len):
+    def __init__(self, input_len: int, req_output_len: int, session_id: Optional[int] = None):
         self.ts = []
         self.ns = []
         self.input_len = input_len
         self.req_output_len = req_output_len
         self.status = Session.UNKNOWN
+        self.id = session_id if session_id else next(Session.ID)
 
-    def tick(self, n_token):
+    def tick(self, n_token: int):
         self.ts.append(time.perf_counter())
         self.ns.append(n_token)
 
-    def finish(self, status):
+    def finish(self, status: int):
         self.status = status
 
 
@@ -33,6 +36,7 @@ class Profiler:
         self.sessions: List[Session] = []
         self.stream_output = stream_output
         self.percentages = percentages
+        self.session_id = count(0)
 
     def new_session(self, *args, **kwargs):
         sess = Session(*args, **kwargs)
