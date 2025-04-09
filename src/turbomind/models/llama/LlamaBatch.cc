@@ -1630,6 +1630,7 @@ struct RequestData {
 
 }  // namespace
 
+#ifdef BUILD_MULTI_GPU
 namespace comm {
 
 void serialize(std::ostream& os, const RequestData& req)
@@ -1694,6 +1695,8 @@ void deserialize(std::shared_ptr<RequestData>* req, int n, const std::vector<cha
 }
 
 }  // namespace comm
+
+#endif  // BUILD_MULTI_GPU
 
 template<typename T>
 void LlamaBatch<T>::InternalThreadEntry()

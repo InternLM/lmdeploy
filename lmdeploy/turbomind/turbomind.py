@@ -120,6 +120,7 @@ def update_parallel_config(cfg: TurbomindEngineConfig):
     # for simplicity, each node has dp
     assert cfg.outer_dp_size * cfg.attn_dp_size % cfg.nnodes == 0
 
+
 class TurboMind:
     """LMDeploy's inference engine.
 
