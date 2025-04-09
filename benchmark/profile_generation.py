@@ -324,7 +324,7 @@ def parse_args():
     cache_count_act = ArgumentHelper.cache_max_entry_count(pt_group)
     cache_block_seq_len_act = ArgumentHelper.cache_block_seq_len(pt_group)
     session_len_act = ArgumentHelper.session_len(pt_group, default=2048)
-    prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
+    prefix_caching_act = ArgumentHelper.disable_prefix_caching(pt_group)
     rope_scaling_factor_act = ArgumentHelper.rope_scaling_factor(pt_group)
     dtype_act = ArgumentHelper.dtype(pt_group)
 
@@ -390,7 +390,7 @@ def main():
                     session_len=session_len,
                     rope_scaling_factor=args.rope_scaling_factor,
                     tp=args.tp,
-                    enable_prefix_caching=args.enable_prefix_caching,
+                    enable_prefix_caching=not args.disable_prefix_caching,
                     dtype=args.dtype,
                 )
             elif args.backend == 'pytorch':
@@ -400,7 +400,7 @@ def main():
                     session_len=session_len,
                     tp=args.tp,
                     eager_mode=args.eager_mode,
-                    enable_prefix_caching=args.enable_prefix_caching,
+                    enable_prefix_caching=not args.disable_prefix_caching,
                     dtype=args.dtype,
                 )
             gen_config = GenerationConfig(top_k=args.top_k,

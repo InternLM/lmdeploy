@@ -453,13 +453,13 @@ class ArgumentHelper:
                                    'be ignored')
 
     @staticmethod
-    def enable_prefix_caching(parser):
+    def disable_prefix_caching(parser):
         """Add argument enable_prefix_caching to parser."""
 
-        return parser.add_argument('--enable-prefix-caching',
+        return parser.add_argument('--disable-prefix-caching',
                                    action='store_true',
                                    default=False,
-                                   help='Enable cache and match prefix')
+                                   help='Disable prefix caching')
 
     @staticmethod
     def num_tokens_per_iter(parser):
