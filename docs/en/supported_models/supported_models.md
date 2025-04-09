@@ -61,6 +61,7 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |            Llama3.1            |   8B, 70B   | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |            Llama3.2            |   1B, 3B    | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |          Llama3.2-VL           |  11B, 90B   | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
+|             Llama4             |     17B     | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
 |            InternLM            |  7B - 20B   | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |           InternLM2            |  7B - 20B   | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |          InternLM2.5           |     7B      | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
