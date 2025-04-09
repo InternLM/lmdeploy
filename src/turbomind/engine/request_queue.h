@@ -78,10 +78,10 @@ public:
                        || flag_->load(std::memory_order_relaxed) == expected_  //
                        || closed_;
             });
-            if (closed_) {
-                abort = true;
-                return false;
-            }
+        }
+        if (closed_) {
+            abort = true;
+            return false;
         }
 
         bool is_first = false;

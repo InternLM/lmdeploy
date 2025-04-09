@@ -94,6 +94,12 @@ struct EngineParam {
     int attn_tp_rank;
     int mlp_tp_size;
     int mlp_tp_rank;
+
+    // multi-node
+    int              nnodes;
+    int              node_rank;
+    int              ngpus_per_node;
+    std::vector<int> devices;
 };
 
 enum class LoraPolicy : int

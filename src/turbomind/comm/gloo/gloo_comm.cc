@@ -76,14 +76,8 @@ public:
     {
         std::lock_guard<std::mutex> lock(mutex_);
 
-        // TODO: use param instead of env
-        auto get = [](const std::string& key, const std::string& default_value) {
-            const char* value = std::getenv(key.c_str());
-            return value ? std::string(value) : default_value;
-        };
-
-        std::string host = get("STORE_ADDR", "127.0.0.1");
-        int         port = std::stoi(get("STORE_PORT", "6800"));
+        std::string host = std::getenv("LMDEPLOY_DP_MASTER_ADDR");
+        int         port = std::stoi(std::getenv("LMDEPLOY_DP_MASTER_PORT"));
 
         std::stringstream ss;
         ss << host << STORE_INFO_DELIM << port << STORE_INFO_DELIM << prefix_++;

@@ -1716,8 +1716,17 @@ void LlamaBatch<T>::InternalThreadEntry()
                 NvtxScope  _("pop");
                 const int  free_slot_count = max_batch_size_ - state_->size + g.finished_count;
                 const bool is_empty        = (free_slot_count == max_batch_size_);
-                // Block if batch is empty AND no silbings are ready
-                gateway_->pop(req->infer, req->kill, free_slot_count, is_empty, req->abort, dp_rank_);
+                // Block if batch is empty AND no silbings are ready AND comm in same node
+                const bool blocking = is_empty && comm_.h_comm->is_same_process();
+                int        wait     = 0;
+                do {
+                    gateway_->pop(req->infer, req->kill, free_slot_count, blocking, req->abort, dp_rank_);
+                    if (!comm_.h_comm->is_same_process()) {
+                        bool empty_pop = req->infer.size() == 0 && req->kill.size() == 0 && req->abort == false;
+                        wait           = is_empty && empty_pop;
+                        wait           = AllReduce(comm_.h_comm, wait, comm::RedOp::kSum) == comm_.h_comm->n_ranks();
+                    }
+                } while (wait);
             }
             // Mark reqs to the same session_id as invalid (which are dangerous to the engine)
             DisableInvalidRequests(req->infer, req->kill);
@@ -1730,8 +1739,13 @@ void LlamaBatch<T>::InternalThreadEntry()
         // 2. Broadcast `ec` from rank-0
         // shared_state_->barrier->wait();
         // comm_.h_comm->Sync(comm_.h_comm_tp_group);
+        if (comm_.h_tp_group->n_ranks() > 1) {
+            Broadcast(comm_.h_tp_group, req, 0);
+        }
 
-        Broadcast(comm_.h_tp_group, req, 0);
+        if (!comm_.h_comm->is_same_process()) {
+            req->abort = AllReduce(comm_.h_comm, (int)req->abort, comm::RedOp::kSum) > 0;
+        }
 
         if (req->abort) {
             TM_LOG_INFO("[InternalThreadEntry] stop requested.");

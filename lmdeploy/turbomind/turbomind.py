@@ -4,6 +4,7 @@ import asyncio
 import copy
 import json
 import math
+import os
 import os.path as osp
 import sys
 from collections import defaultdict
@@ -81,6 +82,17 @@ def complete_parallel_config(cfg: TurbomindEngineConfig):
 
 
 def update_parallel_config(cfg: TurbomindEngineConfig):
+    # multi-node, use torchrun environment variables
+    if cfg.nnodes > 1:
+        rank = int(os.environ['RANK'])
+        local_rank = int(os.environ['LOCAL_RANK'])
+        local_world_size = int(os.environ['LOCAL_WORLD_SIZE'])
+        assert local_rank == 0, 'only support init engine on local_rank 0'
+        cfg.node_rank = rank // local_world_size
+        cfg.ngpus_per_node = cfg.ngpus_per_node or local_world_size
+        cfg.device_num = cfg.ngpus_per_node * cfg.nnodes
+        cfg.devices = cfg.devices or list(range(cfg.ngpus_per_node))
+
     if not complete_parallel_config(cfg):
         total = cfg.dp * cfg.tp
         if not cfg.device_num:
@@ -101,6 +113,12 @@ def update_parallel_config(cfg: TurbomindEngineConfig):
     assert cfg.attn_dp_size * cfg.attn_tp_size == cfg.mlp_dp_size * cfg.mlp_tp_size
     assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.outer_dp_size == cfg.device_num
 
+    # update devices
+    if cfg.nnodes == 1:
+        cfg.devices = cfg.devices if cfg.devices else list(range(cfg.device_num))
+        cfg.ngpus_per_node = cfg.ngpus_per_node or len(cfg.devices)
+    # for simplicity, each node has dp
+    assert cfg.outer_dp_size * cfg.attn_dp_size % cfg.nnodes == 0
 
 class TurboMind:
     """LMDeploy's inference engine.
@@ -137,8 +155,13 @@ class TurboMind:
             f' greater than 0, but got {_engine_config.max_batch_size}'
 
         update_parallel_config(_engine_config)
+        if _engine_config.nnodes > 1 and _engine_config.node_rank == 0:
+            from torch.distributed import TCPStore
+            master_addr = os.environ.get('LMDEPLOY_DP_MASTER_ADDR')
+            master_port = os.environ.get('LMDEPLOY_DP_MASTER_PORT')
+            self.store = TCPStore(host_name=master_addr, port=int(master_port), is_master=True)
 
-        self.gpu_count = _engine_config.device_num
+        self.gpu_count = len(_engine_config.devices)
 
         self.tokenizer = tokenizer
         if model_source == ModelSource.WORKSPACE:
@@ -164,9 +187,8 @@ class TurboMind:
         """Allocate weight buffer, load params if from_workspace."""
 
         # TODO: support mpi
-        self.node_id = 0
-        self.node_num = 1
-        torch.cuda.synchronize()
+        engine_cfg = self.config_dict['engine_config']
+        self.node_id = engine_cfg['node_rank']
 
         # create weight
         def _create_weight_func(device_id):
@@ -321,6 +343,8 @@ class TurboMind:
     def close(self):
         if self.model_comm is not None:
             self.model_comm = None
+        if hasattr(self, 'store'):
+            del self.store
 
     def create_instance(self, cuda_stream_id=0):
         """Create a turbomind instance.
@@ -426,11 +450,6 @@ class TurboMindInstance:
     def __init__(self, tm_model: TurboMind, config: TurbomindModelConfig, cuda_stream_id: int = 0):
         self.tm_model = tm_model
         self.cuda_stream_id = cuda_stream_id
-
-        self.node_id = tm_model.node_id
-        self.gpu_count = tm_model.gpu_count
-
-        self.session_len = tm_model.session_len
 
         # create model instances
         self.model_inst = self._create_model_instance(0)
