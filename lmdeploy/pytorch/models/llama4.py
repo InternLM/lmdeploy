@@ -28,7 +28,6 @@ class Llama4TextAttention(nn.Module):
                  dtype: torch.dtype = None,
                  device: torch.device = None):
         super().__init__()
-        quantization_config = getattr(config, 'quantization_config', None)
 
         self.config = config
         self.layer_idx = layer_idx
@@ -51,7 +50,6 @@ class Llama4TextAttention(nn.Module):
             num_kv_heads=self.num_key_value_heads,
             head_size=self.head_dim,
             bias=self.attn_bias,
-            quant_config=quantization_config,
             dtype=dtype,
             device=device,
         )
@@ -69,7 +67,6 @@ class Llama4TextAttention(nn.Module):
         self.o_proj = build_rowwise_linear(config.num_attention_heads * self.head_dim,
                                            config.hidden_size,
                                            bias=self.attn_bias,
-                                           quant_config=quantization_config,
                                            dtype=dtype,
                                            device=device,
                                            is_tp=True)
@@ -142,14 +139,12 @@ class Llama4TextMLP(nn.Module):
             intermediate_size = config.intermediate_size
 
         self.config = config
-        quantization_config = getattr(config, 'quantization_config', None)
 
         mlp_bias = False
         mlp_args = dict(
             bias=mlp_bias,
             dtype=dtype,
             device=device,
-            quant_config=quantization_config,
             is_tp=is_tp,
         )
         # gate up
@@ -835,11 +830,29 @@ class Llama4ForConditionalGeneration(nn.Module, CudaGraphMixin):
 
         self.multi_modal_projector = Llama4MultiModalProjector(config, dtype=dtype, device=device)
 
+        self._update_quant_config(config)
         self.language_model = Llama4ForCausalLM(config.text_config, ctx_mgr, dtype=dtype, device=device)
         self.vocab_size = config.text_config.vocab_size
         self.pad_token_id = self.config.pad_token_id if self.config.pad_token_id is not None else -1
 
         self.input_processor = Llama4InputProcessor(config, dtype)
+
+    @staticmethod
+    def _update_quant_config(config: Llama4Config):
+        """update quant config."""
+        quant_config = getattr(config, 'quantization_config', None)
+
+        if quant_config is None:
+            return config
+
+        quantization_config = dict(
+            quant_dtype='float8_e4m3fn',
+            quant_method='smooth_quant',
+        )
+        text_config = config.text_config
+        setattr(text_config, 'quantization_config', quantization_config)
+
+        return config
 
     def get_image_features(
         self,
@@ -930,6 +943,45 @@ class Llama4ForConditionalGeneration(nn.Module, CudaGraphMixin):
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
         """load weights."""
+
+        def _load_experts_bf16(name, loaded_weight):
+            if '.gate_up_proj' in name:
+                loaded_weight = loaded_weight.to(device)
+                name = name.replace('.gate_up_proj', '.gate_up.weight')
+                param = params_dict[name]
+                for exp_id in range(num_experts):
+                    weight_gate, weight_up = loaded_weight[exp_id].chunk(2, -1)
+                    load_weight(param, weight_gate.t(), expert_id=exp_id, shard_id='gate')
+                    load_weight(param, weight_up.t(), expert_id=exp_id, shard_id='up')
+            elif '.down_proj' in name:
+                loaded_weight = loaded_weight.to(device)
+                name = name.replace('.down_proj', '.down.weight')
+                param = params_dict[name]
+                for exp_id in range(num_experts):
+                    weight = loaded_weight[exp_id].t()
+                    load_weight(param, weight, expert_id=exp_id, shard_id='down')
+
+        def _load_experts_fp8(name, loaded_weight):
+            name = name.replace('.weight_scale', '.scale')
+            for (param_name, weight_name, expert_id, shard_id) in expert_params_mapping:
+                if weight_name not in name:
+                    continue
+                name = name.replace(weight_name, param_name)
+                param = params_dict[name]
+                load_weight(param, loaded_weight, expert_id=expert_id, shard_id=shard_id)
+                break
+            else:
+                param = params_dict[name]
+                load_weight(param, loaded_weight)
+
+        def _load_experts(name, loaded_weight):
+            """load experts weight."""
+            quantization_config = getattr(self.config, 'quantization_config', None)
+            if quantization_config is None:
+                _load_experts_bf16(name, loaded_weight)
+            else:
+                _load_experts_fp8(name, loaded_weight)
+
         # modify from vllm
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)
@@ -941,6 +993,12 @@ class Llama4ForConditionalGeneration(nn.Module, CudaGraphMixin):
         ]
 
         num_experts = self.config.text_config.num_local_experts
+        expert_params_mapping = []
+        for exp_id in range(num_experts):
+            gate_param = ('.experts.gate_up', f'.experts.{exp_id}.gate_proj', exp_id, 'gate')
+            up_param = ('.experts.gate_up', f'.experts.{exp_id}.up_proj', exp_id, 'up')
+            down_param = ('.experts.down', f'.experts.{exp_id}.down_proj', exp_id, 'down')
+            expert_params_mapping += [gate_param, up_param, down_param]
 
         params_dict = dict(self.named_parameters())
         device = next(iter(params_dict.values())).device
@@ -953,21 +1011,7 @@ class Llama4ForConditionalGeneration(nn.Module, CudaGraphMixin):
                 continue
 
             if '.experts' in name:
-                if '.gate_up_proj' in name:
-                    loaded_weight = loaded_weight.to(device)
-                    name = name.replace('.gate_up_proj', '.gate_up.weight')
-                    param = params_dict[name]
-                    for exp_id in range(num_experts):
-                        weight_gate, weight_up = loaded_weight[exp_id].chunk(2, -1)
-                        load_weight(param, weight_gate.t(), expert_id=exp_id, shard_id='gate')
-                        load_weight(param, weight_up.t(), expert_id=exp_id, shard_id='up')
-                elif '.down_proj' in name:
-                    loaded_weight = loaded_weight.to(device)
-                    name = name.replace('.down_proj', '.down.weight')
-                    param = params_dict[name]
-                    for exp_id in range(num_experts):
-                        weight = loaded_weight[exp_id].t()
-                        load_weight(param, weight, expert_id=exp_id, shard_id='down')
+                _load_experts(name, loaded_weight)
             else:
                 for (param_name, weight_name, shard_id) in stacked_params_mapping:
                     if weight_name not in name:
