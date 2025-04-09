@@ -88,8 +88,6 @@ public:
 
     [[nodiscard]] const Sequence* Create(uint64_t id);
 
-    [[nodiscard]] const Sequence* Get(uint64_t id);
-
     [[nodiscard]] bool Contains(uint64_t id);
 
     [[nodiscard]] bool Erase(uint64_t id);

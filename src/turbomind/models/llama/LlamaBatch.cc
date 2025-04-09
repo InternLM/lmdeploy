@@ -195,7 +195,7 @@ void LlamaBatch<T>::ProcessInferRequests(const Requests& reqs, std::vector<Signa
             continue;
         }
 
-        auto ptr = sequence_manager_->Get(r->id);
+        auto ptr = sequence_manager_->Create(r->id);
         if (!ptr) {
             signals.push_back([r] { UpdateState(*r, Request::kInvalid, 0); });
             continue;
@@ -1538,6 +1538,8 @@ auto LlamaBatch<T>::Interrupt(int index, bool force_stop) -> Signal
     sequence_manager_->UpdateAndSetUnlock(seq);
 
     state_->sequences[index] = nullptr;
+
+    FT_CHECK(sequence_manager_->Erase(state_->requests[index]->id));
 
     auto ec = std::exchange(state_->errors[index], Request::kOk);
 

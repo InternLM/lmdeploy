@@ -111,7 +111,7 @@ void BlockTrie::Remove(const std::vector<std::shared_ptr<TrieNode>>& nodes, int 
     if (nodes.empty() || valid_size < 1) {
         return;
     }
-    // visit nodes in reverse order
+    // visit and remove nodes in reverse order
     for (int idx = nodes.size() - 1; idx >= valid_size; --idx) {
         auto child  = nodes[idx];
         auto parent = nodes[idx - 1];

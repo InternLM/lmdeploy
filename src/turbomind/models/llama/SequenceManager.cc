@@ -71,42 +71,6 @@ const Sequence* SequenceManager::Create(uint64_t id)
     return &it->second;
 }
 
-const Sequence* SequenceManager::Get(uint64_t id)
-{
-    auto it = sequences_.find(id);
-    if (!block_trie_) {
-        // when prefix_caching is not enabled, check if the id exists. If so, remove the older one
-        if (it != sequences_.end()) {
-            if (rank_ == 0) {
-                TM_LOG_INFO("[SeqMgr][Get] Removing conflicting ID %llu", id);
-            }
-            Erase(it);
-        }
-    }
-    else {
-        if (it != sequences_.end()) {
-            if (rank_ == 0) {
-                TM_LOG_INFO("[SeqMgr][Get] Reuse ID %llu, reset the mutable variables of the sequence", id);
-            }
-            auto& seq = it->second;
-            seq.prompt.clear();
-            seq.tokens.clear();
-            seq.cache_len = 0;
-            seq.random_state.clear();
-            seq.rope_theta = 0.f;
-            seq.input_embeddings.clear();
-            seq.input_embedding_ranges.clear();
-            return &it->second;
-        }
-    }
-    Sequence sequence{id};
-    it = sequences_.emplace_hint(it, id, std::move(sequence));
-    if (rank_ == 0) {
-        TM_LOG_INFO("[SeqMgr][Get] Create ID %llu", id);
-    }
-    return &it->second;
-}
-
 bool SequenceManager::Contains(uint64_t id)
 {
     return sequences_.find(id) != sequences_.end();
@@ -122,14 +86,18 @@ void SequenceManager::Erase(std::map<uint64_t, Sequence>::iterator& it)
     else {
         UpdateAndSetUnlock(seq);
     }
-
-    it = sequences_.erase(it);
-    if (block_trie_) {
+    // if prefix cache enabled, blocks will be shared by sequences, cannot be freed immediately
+    if (!block_trie_) {
+        freed_.insert(freed_.end(), seq.blocks.begin(), seq.blocks.end());
+    }
+    else {
+        // prune the invalid nodes in the tree
         auto is_valid = [this](int block_id, uint64_t block_unique_id) -> bool {
             return this->block_manager_->unique_id(block_id) == block_unique_id;
         };
         block_trie_->Prune(is_valid);
     }
+    (void)sequences_.erase(it);
 }
 
 bool SequenceManager::Erase(uint64_t id)
@@ -169,7 +137,7 @@ void SequenceManager::CachePrompt(const Sequences& sequences, int active_size)
                          vector2string(block_ids).c_str(),
                          vector2string(block_unique_ids).c_str());
         }
-        // remove invalid nodes from trie tree if there is any
+        // remove invalid nodes from the path in the trie tree if there is any
         if (valid < block_ids.size()) {
             block_trie_->Remove(nodes, valid);
         }
@@ -197,7 +165,7 @@ void SequenceManager::CacheGeneration(const Sequence& seq)
                      vector2string(block_ids).c_str(),
                      vector2string(block_unique_ids).c_str());
     }
-    // remove invalid nodes from trie tree if there is any
+    // remove invalid nodes from the path in the trie tree if there is any
     if (valid < block_ids.size()) {
         block_trie_->Remove(nodes, valid);
     }
@@ -478,7 +446,7 @@ void SequenceManager::PrefixMatch(Sequences& sequences)
         std::tie(block_ids, unique_ids, matched_nodes) = block_trie_->Match(seq);
 
         int valid = block_manager_->Verify(block_ids, unique_ids);
-        // remove invalid nodes from trie tree if there is any
+        // remove invalid nodes from the path in the trie tree if there is any
         if (valid < block_ids.size()) {
             block_trie_->Remove(matched_nodes, valid);
         }
@@ -495,24 +463,7 @@ void SequenceManager::PrefixMatch(Sequences& sequences)
                          vector2string(unique_ids).c_str());
         }
 
-        if (!seq.blocks.empty()) {
-            // seq.cache_len == 0 but seq.blocks is not empty. It means the new seq reuses an older seq's ID
-            // So we should UNLOCK the unmatched blocks and reset seq.blocks as matched_blockes
-            BlockIds unmatched_ids;
-            std::set_difference(seq.blocks.begin(),
-                                seq.blocks.end(),
-                                matched_ids.begin(),
-                                matched_ids.end(),
-                                std::inserter(unmatched_ids, unmatched_ids.begin()));
-            block_manager_->Unlock(unmatched_ids);
-            seq.blocks.clear();
-            seq.block_unique_ids.clear();
-            if (rank_ == 0) {
-                TM_LOG_INFO("[SegMgr][match] ID %llu, unlock unmatched blocks %d", seq.id, unmatched_ids.size());
-                TM_LOG_DEBUG(
-                    "[SegMgr][match] ID %llu, unmatched block_ids %s", seq.id, vector2string(unmatched_ids).c_str());
-            }
-        }
+        FT_CHECK(seq.blocks.empty());
         seq.cache_len = valid * block_seq_len_;
         seq.blocks.insert(seq.blocks.end(), block_ids.begin(), block_ids.begin() + valid);
         seq.block_unique_ids.insert(seq.block_unique_ids.end(), unique_ids.begin(), unique_ids.begin() + valid);

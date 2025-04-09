@@ -38,7 +38,11 @@ def build_pipe(model_path, backend, **kwargs):
     if chat_template:
         chat_template_config = ChatTemplateConfig(model_name=chat_template)
 
-    pipe = pipeline(model_path, backend_config=engine_config, chat_template_config=chat_template_config, **kwargs)
+    pipe = pipeline(model_path,
+                    backend_config=engine_config,
+                    chat_template_config=chat_template_config,
+                    log_level='ERROR',
+                    **kwargs)
     return pipe
 
 
@@ -68,6 +72,7 @@ def main(model_path, backend, **kwargs):
                     quit = True
                     break
                 if prompt == 'end':
+                    sess.close()
                     break
                 if prompt == 'exit':
                     quit = True
@@ -79,10 +84,10 @@ def main(model_path, backend, **kwargs):
                     sess.messages.append(dict(role='assistant', content=resp.text))
                 except KeyboardInterrupt:
                     sess.stop()
-                    pass
                 finally:
-                    print()
+                    print('\ncancelling the conversation')
         if quit:
+            print('exiting...')
             break
 
 
