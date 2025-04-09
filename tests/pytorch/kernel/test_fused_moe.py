@@ -37,11 +37,11 @@ class TestFusedMoEKernelLauncher:
 
     @pytest.fixture
     def num_experts(self):
-        yield 4
+        yield 64
 
     @pytest.fixture
     def top_k(self):
-        yield 2
+        yield 6
 
     @pytest.fixture
     def A(self, M, K, device, dtype):
@@ -165,11 +165,11 @@ class TestFusedMoe:
 
     @pytest.fixture
     def num_experts(self):
-        yield 4
+        yield 64
 
     @pytest.fixture
     def top_k(self):
-        yield 2
+        yield 6
 
     @pytest.fixture
     def renormalize(self):

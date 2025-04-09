@@ -349,7 +349,7 @@ void LlamaV2::dynamicDecode(int*            token_ids,
     int local_batch_size = (int)batch_size;
 
     std::unordered_map<std::string, Tensor> dynamic_decode_input_tensors{
-        {"logits", {MEMORY_GPU, TYPE_FP32, {batch_size, (size_t)1, vocab_size_padded_}, logits}},
+        {"logits", {MEMORY_GPU, getTensorType<T>(), {batch_size, (size_t)1, vocab_size_padded_}, logits}},
         {"step", {MEMORY_CPU, TYPE_INT32, {1}, &step}},
         {"max_input_length", {MEMORY_CPU, TYPE_INT32, {1}, &max_context_len}},
         {"sequence_limit_length", {MEMORY_GPU, TYPE_UINT32, {batch_size}, seq_limit_len}},

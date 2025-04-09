@@ -64,7 +64,8 @@ class EngineChecker(BaseChecker):
 
         # dist
         dist_checker = DistChecker(engine_config.tp,
-                                   1,
+                                   engine_config.dp,
+                                   engine_config.ep,
                                    engine_config.distributed_executor_backend,
                                    device_type=engine_config.device_type,
                                    logger=logger)

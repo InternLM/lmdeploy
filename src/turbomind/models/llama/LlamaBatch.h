@@ -102,7 +102,7 @@ public:
 
     void ComputeAndOutputLogits(const core::Tensor& hidden_states, int first, int last);
 
-    void OutputLogits(const float* logits, int first, int last, GenerationConfig::OutType out_type);
+    void OutputLogits(const T* logits, int first, int last, GenerationConfig::OutType out_type);
 
     void OutputLastHiddenState(const core::Tensor& hidden_states, int first, int last);
 

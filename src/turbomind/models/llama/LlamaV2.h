@@ -88,7 +88,7 @@ private:
                        curandState_t*  curand_state,
                        TensorMap*      inputs,
                        TensorMap*      outputs,
-                       const float*    logits,
+                       const T*        logits,
                        const uint32_t* seq_limit_len,
                        const int*      context_length,
                        int             step,

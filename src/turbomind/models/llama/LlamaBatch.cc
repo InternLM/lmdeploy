@@ -1192,8 +1192,8 @@ void LlamaBatch::OutputLogits(const float* logits, int first, int last, Generati
 
     for (int i = first; i < last; ++i) {
 
-        const int    input_len = h_input_length_buf_[i];  // input lenght for this iter
-        const float* src_ptr   = logits;
+        const int input_len = h_input_length_buf_[i];  // input lenght for this iter
+        const T*  src_ptr   = logits;
 
         logits += (is_all ? input_len : 1) * model_->vocab_size_padded_;
 
@@ -1235,10 +1235,10 @@ void LlamaBatch::OutputLogits(const float* logits, int first, int last, Generati
             dst_ptr += std::max(0, cache_len - (history_len + offset)) * model_->vocab_size_;
 
             check_cuda_error(cudaMemcpy2DAsync(dst_ptr,
-                                               sizeof(float) * model_->vocab_size_,
+                                               sizeof(T) * model_->vocab_size_,
                                                src_ptr,
-                                               sizeof(float) * model_->vocab_size_padded_,
-                                               sizeof(float) * model_->vocab_size_,
+                                               sizeof(T) * model_->vocab_size_padded_,
+                                               sizeof(T) * model_->vocab_size_,
                                                valid_len,
                                                cudaMemcpyDefault,
                                                stream_));
