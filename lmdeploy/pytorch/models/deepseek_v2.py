@@ -204,28 +204,43 @@ def get_new_input(hidden_states, rotary_pos_emb, past_key_values, residual, attn
 def get_split_flags(attn_metadata, num=2):
     """split flags for seqlens and startloc, support 2 only."""
     assert num == 2
-    q_start_loc = attn_metadata.q_start_loc.tolist()
-    q_seqlens = attn_metadata.q_seqlens.tolist()
-    total_len = sum(q_seqlens)
-    min_diff = total_len
-    split_flag = 1
-    for idx in range(1, len(q_seqlens)):
-        diff = abs(sum(q_seqlens[:idx]) - sum(q_seqlens[idx:]))
-        if diff < min_diff:
-            min_diff = diff
-            split_flag = idx
-    flag_a = {
-        'start_idx': 0,
-        'end_idx': split_flag,
-        'start_loc': q_start_loc[0],
-        'end_loc': q_start_loc[split_flag],
-    }
-    flag_b = {
-        'start_idx': split_flag,
-        'end_idx': len(q_seqlens),
-        'start_loc': q_start_loc[split_flag],
-        'end_loc': q_start_loc[-1] + q_seqlens[-1],
-    }
+    if attn_metadata.is_decoding:
+        batch_size = attn_metadata.q_start_loc.numel()
+        flag_a = {
+            'start_idx': 0,
+            'end_idx': batch_size // 2,
+            'start_loc': 0,
+            'end_loc': batch_size // 2,
+        }
+        flag_b = {
+            'start_idx': batch_size // 2,
+            'end_idx': batch_size,
+            'start_loc': batch_size // 2,
+            'end_loc': batch_size,
+        }
+    else:
+        q_start_loc = attn_metadata.q_start_loc.tolist()
+        q_seqlens = attn_metadata.q_seqlens.tolist()
+        total_len = sum(q_seqlens)
+        min_diff = total_len
+        split_flag = 1
+        for idx in range(1, len(q_seqlens)):
+            diff = abs(sum(q_seqlens[:idx]) - sum(q_seqlens[idx:]))
+            if diff < min_diff:
+                min_diff = diff
+                split_flag = idx
+        flag_a = {
+            'start_idx': 0,
+            'end_idx': split_flag,
+            'start_loc': q_start_loc[0],
+            'end_loc': q_start_loc[split_flag],
+        }
+        flag_b = {
+            'start_idx': split_flag,
+            'end_idx': len(q_seqlens),
+            'start_loc': q_start_loc[split_flag],
+            'end_loc': q_start_loc[-1] + q_seqlens[-1],
+        }
     return [flag_a, flag_b]
 
 
@@ -253,8 +268,7 @@ def split_input(hidden_states,
         return [input], ExecType.One, 0, extern_tag
     else:
         # two batch or more
-        assert num == 2
-        flag_list = get_step_ctx_manager().current_context().microbatch_splitflags
+        flag_list = get_split_flags(attn_metadata, num=num)
 
         inputs = []
         for flag in flag_list:
@@ -292,7 +306,7 @@ def merge_output(output_list):
     # two batch or more
     hidden_states = torch.concat([output[0] for output in output_list], dim=1)
     residual = None
-    if output_list[0][0] is not None:
+    if output_list[0][1] is not None:
         residual = torch.concat([output[1] for output in output_list], dim=1)
     return hidden_states, residual
 
@@ -835,6 +849,8 @@ class DeepseekV2DecoderLayer(nn.Module):
         tag: Any = None,
     ):
         """forward_yield."""
+        is_decoding = attn_metadata.is_decoding
+
         if residual is None:
             residual = hidden_states
             hidden_states = self.input_layernorm(hidden_states)
@@ -864,7 +880,6 @@ class DeepseekV2DecoderLayer(nn.Module):
         hidden_shape = hidden_states.shape
         shared_states = None
 
-        is_decoding = attn_metadata.is_decoding
         state = {
             'hidden_states': hidden_states,
             'topk_idx': topk_idx,
@@ -1103,7 +1118,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
         inputs_embeds: torch.Tensor = None,
         **kwargs,
     ):
-        if get_step_ctx_manager().current_context().microbatch_splitflags is not None:
+        if get_step_ctx_manager().current_context().enable_microbatch:
             hidden_states = self.model.forward_microbatch(
                 input_ids=input_ids,
                 position_ids=position_ids,
@@ -1149,9 +1164,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             ep_group = get_dist_manager().current_context().ep_gpu_group
             dist.all_reduce(disable_num, op=dist.ReduceOp.SUM, group=ep_group)
             step_ctx = get_step_ctx_manager().current_context()
-            enable_microbatch = disable_num.item() == 0
-            if enable_microbatch:
-                step_ctx.microbatch_splitflags = get_split_flags(attn_metadata, num=2)
+            step_ctx.enable_microbatch = disable_num.item() == 0
         return dict(
             input_ids=input_ids,
             position_ids=position_ids,

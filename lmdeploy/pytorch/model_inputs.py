@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal
 
 import torch
 
@@ -335,7 +335,7 @@ class StepContext:
     kv_quant_policy: Literal[0, 4, 8] = 0
     model_metas: List[Dict[str, Any]] = None
     dp_meta: DPMeta = None
-    microbatch_splitflags: Optional[List[Dict]] = None
+    enable_microbatch: bool = False
 
     _outputs: Dict = field(default_factory=dict)
 
