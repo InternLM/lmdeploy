@@ -108,7 +108,7 @@ class BlockTrie:
     @logging_timer('BlockTrie_Match', logger)
     def match(self, seq: SchedulerSequence):
         """match sequence and cache."""
-        if not self.enable:
+        if seq.return_logits or not self.enable:
             return
 
         block_size = self.block_size
