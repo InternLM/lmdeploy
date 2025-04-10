@@ -19,14 +19,6 @@
 
 namespace turbomind {
 
-struct SharedState {
-    std::vector<std::shared_ptr<Request>> infer_reqs;
-    std::vector<std::shared_ptr<Request>> kill_reqs;
-    std::shared_ptr<Barrier>              barrier;
-    bool                                  abort;
-    std::atomic<size_t>                   free_size{std::numeric_limits<size_t>::max()};
-};
-
 struct BatchState {
     int*  h_prompt_length;  // history + input, ignore generated
     int*  h_context_length;
@@ -84,7 +76,7 @@ public:
     using Requests = std::vector<std::shared_ptr<Request>>;
     using Signal   = std::function<void()>;
 
-    void DisableConflictRequests(Requests& infer_reqs, Requests& kill_reqs);
+    void DisableInvalidRequests(Requests& infer_reqs, Requests& kill_reqs);
 
     void ProcessKillRequests(const Requests& reqs, std::vector<Signal>& signals);
 
@@ -106,16 +98,16 @@ public:
 
     void ComputeAndOutputLogits(T* hidden_states, int first, int last);
 
-    void OutputLogits(const float* logits, int first, int last, GenerationConfig::OutType out_type);
+    void OutputLogits(const T* logits, int first, int last, GenerationConfig::OutType out_type);
 
     void OutputLastHiddenState(const T* hidden_states, int first, int last);
 
-    explicit LlamaBatch(const EngineParam&           param,
-                        std::unique_ptr<LlamaV2<T>>  model,
-                        std::unique_ptr<Context<T>>  ctx,
-                        std::shared_ptr<SharedState> state,
-                        std::shared_ptr<Gateway>     gateway,
-                        int                          device_id);
+    explicit LlamaBatch(const EngineParam&          param,
+                        std::unique_ptr<LlamaV2<T>> model,
+                        std::unique_ptr<Context<T>> ctx,
+                        std::shared_ptr<Gateway>    gateway,
+                        int                         device_id,
+                        int                         dp_rank);
 
     ~LlamaBatch();
 
@@ -134,9 +126,9 @@ public:
     void Warmup();
 
 private:
-    void BroadcastCancelFlags();
+    void FindCanceledIndices(std::vector<int>& indices);
 
-    void ProcessCancelRequests(std::vector<Signal>& signals);
+    void ProcessCancelRequests(std::vector<int>& indices, std::vector<Signal>& signals);
 
     void InternalThreadEntry();
 
@@ -209,8 +201,7 @@ private:
 private:
     const EngineParam param_;
 
-    const std::shared_ptr<Gateway>     gateway_;
-    const std::shared_ptr<SharedState> shared_state_;
+    const std::shared_ptr<Gateway> gateway_;
 
     const int      max_batch_size_;
     const int      max_forward_token_num_;
@@ -218,8 +209,9 @@ private:
     const int      num_tokens_per_iter_;
     const int      max_prefill_iters_;
     const int      device_id_;
+    const int      dp_rank_;
     const int      tp_size_;
-    const int      rank_;  //  tp rank
+    const int      tp_rank_;
     const DataType data_type_;
     const bool     debug_;
 
@@ -233,6 +225,8 @@ private:
     std::unique_ptr<Context<T>>      context_;
     std::unique_ptr<LlamaV2<T>>      model_;
     std::unique_ptr<SequenceManager> sequence_manager_;
+
+    Communicators& comm_;
 
     ///////////////////////////////////////////////////////////////////
     // k/v cache block buffers
@@ -256,17 +250,17 @@ private:
     int* init_ctx_lens_{};
     int* lora_mask_buf_{};  // lora
 
-    float* logits_buf_{};        // combined logits
-    float* local_logits_buf_{};  // tensor parallel local logits
-    float* context_logits_buf_{};
-    float* local_context_logits_buf_{};
+    T* logits_buf_{};        // combined logits
+    T* local_logits_buf_{};  // tensor parallel local logits
+    T* context_logits_buf_{};
+    T* local_context_logits_buf_{};
 
     size_t local_context_logits_buf_size_{};
 
-    float*    sampled_logprobs_{};
+    T*        sampled_logprobs_{};
     uint32_t* sampled_indexes_{};
     uint32_t* sampled_nums_{};
-    float*    h_sampled_logprobs_{};
+    T*        h_sampled_logprobs_{};
     uint32_t* h_sampled_indexes_{};
     uint32_t* h_sampled_nums_{};
 
@@ -308,8 +302,6 @@ private:
     BatchState* state_{};
     BatchState* back_{};
     BatchState* incoming_{};
-
-    uint64_t request_count_{0};
 
     // hard limits for persistent buffers
     static constexpr int kMaxStopBadWordsLen = 32;

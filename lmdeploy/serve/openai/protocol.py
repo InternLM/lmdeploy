@@ -238,7 +238,7 @@ class ChatCompletionResponseStreamChoice(BaseModel):
     index: int
     delta: DeltaMessage
     logprobs: Optional[ChoiceLogprobs] = None
-    finish_reason: Optional[Literal['stop', 'length', 'tool_calls']] = None
+    finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error']] = None
 
 
 class ChatCompletionStreamResponse(BaseModel):
@@ -283,7 +283,7 @@ class CompletionResponseChoice(BaseModel):
     index: int
     text: str
     logprobs: Optional[LogProbs] = None
-    finish_reason: Optional[Literal['stop', 'length']] = None
+    finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error']] = None
 
 
 class CompletionResponse(BaseModel):
@@ -301,7 +301,7 @@ class CompletionResponseStreamChoice(BaseModel):
     index: int
     text: str
     logprobs: Optional[LogProbs] = None
-    finish_reason: Optional[Literal['stop', 'length']] = None
+    finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error']] = None
 
 
 class CompletionStreamResponse(BaseModel):
@@ -357,6 +357,7 @@ class GenerateRequest(BaseModel):
     repetition_penalty: float = 1.0
     ignore_eos: bool = False
     skip_special_tokens: Optional[bool] = True
+    spaces_between_special_tokens: Optional[bool] = True
     cancel: Optional[bool] = False  # cancel a responding request
     adapter_name: Optional[str] = Field(default=None, examples=[None])
     seed: Optional[int] = None
@@ -370,4 +371,4 @@ class GenerateResponse(BaseModel):
     tokens: int
     input_tokens: int
     history_tokens: int
-    finish_reason: Optional[Literal['stop', 'length']] = None
+    finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error']] = None

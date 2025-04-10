@@ -21,11 +21,12 @@
 
 #pragma once
 
-#include "src/turbomind/comm/comm.h"
+#include "src/turbomind/comm/device_comm.h"
 #include "src/turbomind/layers/DynamicDecodeLayer.h"
 #include "src/turbomind/models/llama/LlamaBatch.h"
 #include "src/turbomind/models/llama/LlamaWeight.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
+#include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/llama/unified_decoder.h"
 #include "src/turbomind/utils/allocator.h"
@@ -39,6 +40,7 @@ public:
     ~LlamaV2();
 
     LlamaV2(const ModelParam&               model,
+            const EngineParam&              engine,
             const AttentionParam&           attn,
             const MoeParam&                 moe,
             const LoraParam&                lora,
@@ -52,8 +54,6 @@ public:
     }
 
 private:
-    void embeddingLookup(T* embeddings, const int* token_ids_buf, int batch_size, int step);
-
     void updateEmbedding(T*               decoder_input,
                          const int        bsz,
                          const int*       h_input_length,
@@ -73,12 +73,13 @@ private:
                         const float*     rope_theta,
                         const bool*      finished,
                         size_t           token_num,
+                        const int*       local_token_nums,
                         int              dc_batch_size,
                         int              pf_batch_size,
                         int*             lora_mask,
                         const Sequence** sequences);
 
-    void postDecodeEmbedding(float* logits, float* local_logits, const T* decoder_output, int batch_size);
+    void postDecodeEmbedding(T* logits, T* local_logits, const T* decoder_output, int batch_size);
 
     void dynamicDecode(int*            token_ids,
                        bool*           finished,
@@ -87,7 +88,7 @@ private:
                        curandState_t*  curand_state,
                        TensorMap*      inputs,
                        TensorMap*      outputs,
-                       const float*    logits,
+                       const T*        logits,
                        const uint32_t* seq_limit_len,
                        const int*      context_length,
                        int             step,
@@ -103,7 +104,7 @@ private:
     const AttentionParam attn_param_;
     const LoraParam      lora_param_;
 
-    const comm::Splits* const comm_;
+    const Communicators* const comm_;
 
     const int    tp_size_;
     const int    tp_rank_;
@@ -130,8 +131,8 @@ private:
     const bool is_free_buffer_after_forward_;
     const bool debug_;
 
-    std::unique_ptr<UnifiedDecoder<T>>         unified_decoder_;
-    std::unique_ptr<DynamicDecodeLayer<float>> dynamic_decode_layer_;
+    std::unique_ptr<UnifiedDecoder<T>>     unified_decoder_;
+    std::unique_ptr<DynamicDecodeLayer<T>> dynamic_decode_layer_;
 };
 
 }  // namespace turbomind

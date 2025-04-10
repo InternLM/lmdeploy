@@ -10,7 +10,7 @@ from torch import nn
 
 from lmdeploy.lite.quantization.awq import FC_FCS_MAP, NORM_FCS_MAP, awq_layers, quant_weights, smooth_layers
 from lmdeploy.lite.utils import collect_target_modules
-from lmdeploy.pytorch.check_env import try_import_deeplink
+from lmdeploy.utils import try_import_deeplink
 
 from .calibrate import LAYER_TYPE_MAP, calibrate
 

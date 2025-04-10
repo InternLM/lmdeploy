@@ -12,6 +12,19 @@ from ..default import DefaultOpsBackend
 logger = get_logger('lmdeploy')
 
 
+def _update_meta_flashmla(attn_metadata, step_context):
+    """update meta for flashmla."""
+    import flash_mla_cuda
+    tile_scheduler_metadata, num_splits = flash_mla_cuda.get_mla_metadata(attn_metadata.kv_seqlens.to(torch.int32),
+                                                                          step_context.model_config.num_attention_heads,
+                                                                          1)
+    attn_metadata.tile_scheduler_metadata = tile_scheduler_metadata
+    attn_metadata.num_splits = num_splits
+
+    if attn_metadata.block_offsets.dtype != torch.int32:
+        attn_metadata.block_offsets = attn_metadata.block_offsets.to(torch.int32)
+
+
 class CudaOpsBackend(DefaultOpsBackend):
     """cuda layer backend."""
 
@@ -127,11 +140,7 @@ class CudaOpsBackend(DefaultOpsBackend):
         )
         if getattr(step_context.model_config, 'use_flash_mla', False) is True:
             if step_context.is_decoding is True:
-                import flash_mla_cuda
-                tile_scheduler_metadata, num_splits = flash_mla_cuda.get_mla_metadata(
-                    attn_metadata.kv_seqlens.to(torch.int32), step_context.model_config.num_attention_heads, 1)
-                attn_metadata.tile_scheduler_metadata = tile_scheduler_metadata
-                attn_metadata.num_splits = num_splits
+                _update_meta_flashmla(attn_metadata, step_context)
 
         cross_seqlens = step_context.cross_seqlens
         cross_kv_seqlens = step_context.cross_kv_seqlens
@@ -166,6 +175,17 @@ class CudaOpsBackend(DefaultOpsBackend):
                            backend_config: BackendConfig, device: torch.device):
         """build graph runner."""
         from .graph_runner import CUDAGraphRunner
+        from .warmup_manager import WarmupMeta, get_warmup_manager
+
+        # warmup ops.
+        warmup_meta = WarmupMeta(
+            max_num_tokens=cache_config.max_prefill_token_num,
+            max_batch_size=cache_config.max_batches,
+            dtype=model_config.dtype,
+        )
+        get_warmup_manager().warmup(warmup_meta)
+
+        # make graph runner.
         return CUDAGraphRunner(model, model_config, cache_config, backend_config, device)
 
     @staticmethod

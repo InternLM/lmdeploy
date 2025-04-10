@@ -427,6 +427,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         previous_token_ids = []
         current_token_ids = []
         delta_token_ids = []
+        streaming_tools = False
         async for res in result_generator:
             logprobs, usage = None, None
             if gen_logprobs and res.logprobs:
@@ -441,7 +442,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                 )
             delta_message = DeltaMessage(role='assistant', content=res.response)
             if request.tool_choice != 'none' and VariableInterface.tool_parser is not None:
-                if res.finish_reason == 'stop':
+                if res.finish_reason == 'stop' and streaming_tools is True:
                     res.finish_reason = 'tool_calls'
                 current_text = current_text + res.response
                 delta_token_ids = res.token_ids if res.token_ids is not None else []
@@ -457,6 +458,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                 if tool_delta is not None:
                     delta_message.tool_calls = tool_delta.tool_calls
                     delta_message.content = tool_delta.content
+                    if isinstance(tool_delta.tool_calls, List) and len(tool_delta.tool_calls):
+                        streaming_tools = True
                 previous_text = current_text
                 previous_token_ids = current_token_ids
             elif VariableInterface.reasoning_parser is not None:
@@ -476,7 +479,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                 previous_text = current_text
                 previous_token_ids = current_token_ids
             elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
-                logger.error('Please lanuch the api_server with --tool-parser if you want to use tool.')
+                logger.error('Please lanuch the api_server with --tool-call-parser if you want to use tool.')
             response_json = create_stream_response_json(index=0,
                                                         delta_message=delta_message,
                                                         finish_reason=res.finish_reason,
@@ -509,11 +512,13 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     tool_calls = None
     reasoning_content = None
     if request.tool_choice != 'none' and VariableInterface.tool_parser is not None:
-        if final_res.finish_reason == 'stop':
-            final_res.finish_reason = 'tool_calls'
         try:  # TODO add json_schema guidance to turbomind
             tool_call_info = VariableInterface.tool_parser.extract_tool_calls(text, request=request)
             text, tool_calls = tool_call_info.content, tool_call_info.tool_calls
+            if isinstance(tool_calls, List) and len(tool_calls):
+                if final_res.finish_reason == 'stop':
+                    final_res.finish_reason = 'tool_calls'
+
         except Exception as e:
             logger.error(f'Failed to parse {text}. Exception: {e}.')
             return create_error_response(HTTPStatus.BAD_REQUEST, 'Failed to parse fc related info to json format!')
@@ -521,7 +526,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     elif VariableInterface.reasoning_parser is not None:
         reasoning_content, text = VariableInterface.reasoning_parser.extract_reasoning_content(text, request)
     elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
-        logger.error('Please lanuch the api_server with --tool-parser if you want to use tool.')
+        logger.error('Please lanuch the api_server with --tool-call-parser if you want to use tool.')
 
     logprobs = None
     if gen_logprobs and len(final_logprobs):
@@ -823,6 +828,9 @@ async def chat_interactive_v1(request: GenerateRequest, raw_request: Request = N
     - ignore_eos (bool): indicator for ignoring eos
     - skip_special_tokens (bool): Whether or not to remove special tokens
         in the decoding. Default to be True.
+    - spaces_between_special_tokens (bool): Whether or not to add spaces
+        around special tokens. The behavior of Fast tokenizers is to have
+        this to False. This is setup to True in slow tokenizers.
     - adapter_name (str): For slora inference. Choose which lora to do the
         inference.
     - min_new_tokens (int): To generate at least numbers of tokens.
@@ -867,6 +875,7 @@ async def chat_interactive_v1(request: GenerateRequest, raw_request: Request = N
                                   ignore_eos=request.ignore_eos,
                                   stop_words=request.stop,
                                   skip_special_tokens=request.skip_special_tokens,
+                                  spaces_between_special_tokens=request.spaces_between_special_tokens,
                                   min_new_tokens=request.min_new_tokens,
                                   min_p=request.min_p,
                                   random_seed=random_seed)

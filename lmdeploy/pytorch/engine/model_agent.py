@@ -7,13 +7,13 @@ from typing import Any, Dict
 import torch
 import torch.distributed as dist
 
-from lmdeploy.utils import get_logger, logging_timer
+from lmdeploy.utils import get_logger
 
 from ..backends import get_backend
 from ..config import BackendConfig, CacheConfig, ModelConfig
 from ..devices import DeviceContext, get_device_manager
 from ..distributed import DistContext, get_dist_manager
-from ..model_inputs import ModelInputs
+from ..model_inputs import ModelInputs, step_ctx_manager
 from ..models.patch import add_adapters, build_patched_model, update_custom_module_map
 from ..utils import get_gpu_memory
 from ..weight_loader.model_weight_loader import load_model_weights
@@ -47,18 +47,16 @@ def model_forward(
     model: torch.nn.Module,
     inputs: ModelInputs,
     cache_engine: CacheEngine,
-    world_size: int = 1,
     stream: torch.cuda.Stream = None,
 ):
     """perform model forward."""
     stream = stream or torch.cuda.current_stream()
-    with torch.cuda.stream(stream):
+    with torch.cuda.stream(stream), step_ctx_manager(model.ctx_mgr):
         # forward
         ctx_mgr = model.ctx_mgr
         context = ctx_mgr.build_context(
             inputs=inputs,
             model_config=cache_engine.model_config,
-            world_size=world_size,
             kv_caches=cache_engine.gpu_cache,
             kv_quant_policy=cache_engine.cache_config.quant_policy,
         )
@@ -79,13 +77,24 @@ def model_forward(
 def _batch_stopping_criteria(token_ids: torch.Tensor, stop_words: torch.Tensor, num_appendable_ids: torch.Tensor):
     """batched stopping criteria."""
     num_appendable_ids = num_appendable_ids - 1
-    # one more step to cache last token(stop word)
-    stopped = num_appendable_ids < 0
+    stopped = num_appendable_ids <= 0
     if stop_words is not None:
         sw_stopped = (token_ids[:, None] == stop_words).any(1)
+        stopped = stopped | sw_stopped
         one_ids = torch.clamp_max(num_appendable_ids, 0)
         num_appendable_ids = torch.where(sw_stopped, one_ids, num_appendable_ids)
     return stopped, num_appendable_ids
+
+
+def _try_to_cuda(val, non_blocking: bool = False):
+    if val is None:
+        return val
+    elif isinstance(val, torch.Tensor):
+        return val.cuda(non_blocking=non_blocking)
+    elif hasattr(val, 'to_device'):
+        return val.to_device('cuda', non_blocking=non_blocking)
+    else:
+        raise RuntimeError(f'Can not cast {type(val)} to cuda.')
 
 
 SwapMap = Dict[int, int]
@@ -122,6 +131,9 @@ class AutoModelAgent:
         dist_mgr = get_dist_manager()
         with device_mgr.context(self.device_ctx), dist_mgr.context(self.dist_ctx):
             yield
+
+    def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
+        raise NotImplementedError('NotImplemented.')
 
     async def async_forward(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
         """model forward.
@@ -172,8 +184,25 @@ class AutoModelAgent:
             gpu_mem_physical_free, _ = get_gpu_memory()
             return gpu_mem_physical_free
 
-    async def _async_model_forward(self, inputs: ModelInputs, swap_in_map: Dict, swap_out_map: Dict,
-                                   return_logits: bool):
+    def warmup(self):
+        """warmup."""
+        # TODO: disable for now, do not remove the comments.
+
+        # # warmup prefill
+        # with self.all_context():
+        #     inputs = ModelInputs.make_dummy(1, False, device='cuda')
+        #     self._forward_impl(inputs, swap_in_map=dict(), swap_out_map=dict())
+        #     inputs = ModelInputs.make_dummy(self.cache_config.max_batches, True, device='cuda')
+        #     self._forward_impl(inputs, swap_in_map=dict(), swap_out_map=dict())
+
+    async def _async_model_forward(
+        self,
+        inputs: ModelInputs,
+        swap_in_map: Dict,
+        swap_out_map: Dict,
+        return_logits: bool,
+        sync_long_context: bool,
+    ):
         """model forward."""
         max_prefill_token_num = self.cache_config.max_prefill_token_num
         swap_done = False
@@ -219,18 +248,15 @@ class AutoModelAgent:
                 swap_done = True
                 return await self.async_forward(inputs, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
 
-        async def __long_context_single_forward(inputs):
+        async def __long_context_single_forward(new_inputs, max_seqlen: int):
             """one large sequence."""
-            seq_len = inputs.seq_length
-            max_seq_len = inputs.seq_length[0]
-            batch_size = seq_len.size(0)
-            assert batch_size == 1
-
-            new_inputs = inputs.split(max_prefill_token_num)
-
+            dist_ctx = get_dist_manager().current_context()
+            dp = dist_ctx.dp
             model_metas = new_inputs[0].model_metas
-            output_gather = _OutputGather(max_seq_len)
+            output_gather = _OutputGather(max_seqlen)
             for inp in new_inputs:
+                if dp > 1:
+                    inp.build_dp_meta()
                 inp.model_metas = model_metas
                 tmp_out = await __forward(inp)
                 model_metas = tmp_out.get('model_metas')
@@ -239,25 +265,50 @@ class AutoModelAgent:
             tmp_out['hidden_states'] = output_gather.get_output()
             return tmp_out
 
-        if inputs.input_ids.numel() <= max_prefill_token_num:
+        # make long context inputs
+        is_long_context = inputs.input_ids.numel() > max_prefill_token_num
+        max_seqlen = 0
+        if is_long_context:
+            seq_len = inputs.seq_length
+            batch_size = seq_len.size(0)
+            assert batch_size == 1, 'Do not support batched long context.'
+            max_seqlen = inputs.seq_length[0]
+            inputs = inputs.split(max_prefill_token_num)
+
+        # get num dummy loop
+        dummy_loop = 0
+        if sync_long_context:
+            forward_loop = 1
+            if is_long_context:
+                forward_loop = len(inputs)
+            max_loop = torch.tensor(forward_loop, device='cuda')
+            dist.all_reduce(max_loop, op=dist.ReduceOp.MAX)
+            dummy_loop = max_loop - forward_loop
+
+        if not is_long_context:
             ret = await __forward(inputs)
             if not return_logits and not inputs.is_decoding:
                 last_token_loc = inputs.seq_length.cumsum(0) - 1
                 ret['hidden_states'] = ret['hidden_states'][:, last_token_loc]
         else:
-            ret = await __long_context_single_forward(inputs)
-            if not return_logits and not inputs.is_decoding:
+            ret = await __long_context_single_forward(inputs, max_seqlen)
+            if not return_logits:
                 last_token_loc = [-1]
                 ret['hidden_states'] = ret['hidden_states'][:, last_token_loc]
             else:
                 ret['hidden_states'] = ret['hidden_states'].to('cuda')
+
+        # compute dummy loop
+        if dummy_loop > 0:
+            dummy_inputs = ModelInputs.make_dummy(1, False, 'cuda')
+        for _ in range(dummy_loop):
+            await __forward(dummy_inputs)
 
         hidden_states = ret.pop('hidden_states')
         logits = self.get_logits(hidden_states)
         ret['logits'] = logits
         return ret
 
-    @logging_timer('SamplingLogits', logger)
     async def async_sampling_logits(self, logits: torch.Tensor, all_ids: torch.Tensor, guided_input_ids: torch.Tensor,
                                     sampling_inputs: SamplingInputs, inputs: ModelInputs, ignore_eos: torch.Tensor):
         """sampling logits."""
@@ -278,11 +329,21 @@ class AutoModelAgent:
 
         return next_token_ids
 
-    async def _async_step_background(self, inputs: ModelInputs, swap_in_map: Dict, swap_out_map: Dict,
-                                     all_ids: torch.Tensor, guided_input_ids: torch.Tensor,
-                                     sampling_inputs: SamplingInputs, num_appendable_ids: torch.LongTensor,
-                                     num_ignore_eos: torch.LongTensor, loop_count: int, return_logits: bool,
-                                     output_que: asyncio.Queue):
+    async def _async_step_background(
+        self,
+        inputs: ModelInputs,
+        swap_in_map: Dict,
+        swap_out_map: Dict,
+        loop_count: int,
+        all_ids: torch.Tensor = None,
+        guided_input_ids: torch.Tensor = None,
+        sampling_inputs: SamplingInputs = None,
+        num_appendable_ids: torch.LongTensor = None,
+        num_ignore_eos: torch.LongTensor = None,
+        return_logits: bool = False,
+        is_dummy: bool = False,
+        sync_long_context: bool = False,
+    ):
         """asyc forward task."""
 
         def __update_inputs(next_token_ids):
@@ -296,38 +357,85 @@ class AutoModelAgent:
             if sampling_inputs.random_offsets is not None:
                 sampling_inputs.random_offsets += 1
 
-        logger.debug('<ForwardTask>: '
-                     f'batch_size={inputs.seq_length.size(0)} '
-                     f'num_tokens={inputs.input_ids.size(-1)}')
-        non_blocking = True
-        inputs = inputs.to_device('cuda', non_blocking=non_blocking)
-        is_decoding = inputs.is_decoding
-        if all_ids is not None:
-            all_ids = all_ids.cuda(non_blocking=non_blocking)
-        if guided_input_ids is not None:
-            guided_input_ids = guided_input_ids.cuda(non_blocking=non_blocking)
-        sampling_inputs = sampling_inputs.to_device('cuda', non_blocking=non_blocking)
-        num_appendable_ids = num_appendable_ids.cuda(non_blocking=non_blocking)
-        num_ignore_eos = num_ignore_eos.cuda(non_blocking=non_blocking)
-
-        self.stream.synchronize()
+        async def __await_distworker(worker, timeout: float = 0.001):
+            while not worker.is_completed():
+                await asyncio.sleep(timeout)
+            worker.wait()
 
         # dist tools
         dist_ctx = get_dist_manager().current_context()
         rank = dist_ctx.rank
         tp = dist_ctx.tp
+        dp = dist_ctx.dp
+
+        logger.info(f'<ForwardTask> rank[{rank}]: '
+                    f'batch_size={inputs.seq_length.size(0)} '
+                    f'num_tokens={inputs.input_ids.size(-1)}')
+
+        is_decoding = inputs.is_decoding
+        eager_mode = self.backend_config.eager_mode
+        if dp > 1:
+            if is_decoding and not eager_mode:
+                batch_size = inputs.seq_length.numel()
+                all_batch_sizes = torch.tensor([0] * dp, device='cuda')
+                lc_handle = dist.all_gather_into_tensor(all_batch_sizes,
+                                                        all_batch_sizes.new_tensor(batch_size),
+                                                        async_op=True)
+            else:
+                all_sync_flags = torch.tensor([False] * dp, device='cuda')
+                lc_handle = dist.all_gather_into_tensor(all_sync_flags,
+                                                        torch.tensor(sync_long_context, device='cuda'),
+                                                        async_op=True)
+
+        non_blocking = True
+        inputs = _try_to_cuda(inputs, non_blocking=non_blocking)
+        all_ids = _try_to_cuda(all_ids, non_blocking=non_blocking)
+        guided_input_ids = _try_to_cuda(guided_input_ids, non_blocking=non_blocking)
+        sampling_inputs = _try_to_cuda(sampling_inputs, non_blocking=non_blocking)
+        num_appendable_ids = _try_to_cuda(num_appendable_ids, non_blocking=non_blocking)
+        num_ignore_eos = _try_to_cuda(num_ignore_eos, non_blocking=non_blocking)
+
+        self.stream.synchronize()
+
+        if dp > 1:
+            if is_decoding and not eager_mode:
+                await __await_distworker(lc_handle)
+                padding_batch_size = all_batch_sizes.cpu().max().item()
+                meta = self.patched_model.get_meta()
+                meta.padding_batch_size = padding_batch_size
+                logger.debug(f'padding_batch_size={padding_batch_size}')
+            else:
+                await __await_distworker(lc_handle)
+                sync_long_context = all_sync_flags.any()
+                logger.debug(f'sync_long_context={sync_long_context}')
+            inputs.build_dp_meta()
+            inputs = self.patched_model.update_inputs(inputs)
+        else:
+            sync_long_context = False
+
+        need_output = dp > 1 or rank % tp == 0
 
         for idx in range(loop_count):
             # inference
-            output = await self._async_model_forward(inputs,
-                                                     swap_in_map=swap_in_map,
-                                                     swap_out_map=swap_out_map,
-                                                     return_logits=return_logits)
+            logger.debug(f'<ForwardTask> rank[{rank}]: model forward [{idx}].')
+            output = await self._async_model_forward(
+                inputs,
+                swap_in_map=swap_in_map,
+                swap_out_map=swap_out_map,
+                return_logits=return_logits,
+                sync_long_context=sync_long_context,
+            )
             logits = output['logits']
             logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
 
-            if rank % tp == 0:
+            if is_dummy:
+                self._out_que.put_nowait(None)
+                continue
+
+            need_broadcast_next = (dp == 1 and tp > 1 and idx < loop_count - 1)
+            if need_output:
                 # sampling
+                logger.debug(f'<ForwardTask> rank[{rank}]: Sampling [{idx}].')
                 next_token_ids = await self.async_sampling_logits(logits, all_ids, guided_input_ids, sampling_inputs,
                                                                   inputs, num_ignore_eos > 0)
                 num_ignore_eos = num_ignore_eos - 1
@@ -339,13 +447,14 @@ class AutoModelAgent:
                 next_token_ids = torch.empty_like(num_ignore_eos)
                 stopped = None
 
-            if tp > 1 and idx < loop_count - 1:
+            if need_broadcast_next:
+                logger.debug(f'<ForwardTask> rank[{rank}]: synchornize token ids [{idx}]')
                 tp_gpu_group = dist_ctx.tp_gpu_group
                 dist.broadcast(next_token_ids, src=rank // tp * tp, group=tp_gpu_group)
 
             # send output
             model_metas = output.get('model_metas')
-            if rank % tp == 0:
+            if need_output:
                 event = torch.cuda.Event()
                 event.record()
                 output = dict(next_token_ids=next_token_ids,
@@ -353,7 +462,8 @@ class AutoModelAgent:
                               stopped=stopped,
                               model_metas=model_metas,
                               event=event)
-                output_que.put_nowait(output)
+                logger.debug(f'<ForwardTask> rank[{rank}]: Output [{idx}]')
+                self._out_que.put_nowait(output)
 
             # update for next loop
             if is_decoding and idx < loop_count - 1:
@@ -371,10 +481,7 @@ class AutoModelAgent:
 
                 if forward_event is not None:
                     forward_event.clear()
-                await self._async_step_background(
-                    **forward_inputs,
-                    output_que=self._out_que,
-                )
+                await self._async_step_background(**forward_inputs, )
                 if forward_event is not None:
                     forward_event.set()
 
@@ -411,6 +518,15 @@ class AutoModelAgent:
             if not self._background_task.done():
                 self._background_task.cancel()
 
+    async def stop_async(self):
+        if self._background_task is not None:
+            if not self._background_task.done():
+                self._background_task.cancel()
+                try:
+                    await self._background_task
+                except asyncio.CancelledError:
+                    logger.debug('ModelAgent background task cancelled.')
+
     def set_forward_inputs(self, inputs):
         """set forward inputs."""
         assert self._in_que is not None, ('Please start backendground task before forward.')
@@ -420,6 +536,9 @@ class AutoModelAgent:
         """async get output."""
         assert self._out_que is not None, ('Please start backendground task before forward.')
         out = await self._out_que.get()
+        if out is None:
+            return dict()
+
         event = out.pop('event')
         while not event.query():
             await asyncio.sleep(0.001)
@@ -514,7 +633,11 @@ class BaseModelAgent(AutoModelAgent):
     def build_cache_engine(self):
         """build cache engine."""
         with self.all_context():
-            self.cache_engine = CacheEngine(self.cache_config, self.model_config, self.tp_rank, world_size=self.tp)
+            dist_ctx = self.dist_ctx
+            attn_dist_cfg = dist_ctx.dist_config.attn_config
+            tp = attn_dist_cfg.tp
+
+            self.cache_engine = CacheEngine(self.cache_config, self.model_config, world_size=tp)
 
     def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
         cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
@@ -522,7 +645,6 @@ class BaseModelAgent(AutoModelAgent):
             self.patched_model,
             inputs,
             self.cache_engine,
-            world_size=1,
             stream=self.stream,
         )
         return output

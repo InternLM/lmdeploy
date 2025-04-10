@@ -216,6 +216,13 @@ class TurbomindEngineConfig:
     dtype: str = 'auto'
     model_format: Optional[str] = None
     tp: int = 1
+    dp: int = 1
+    device_num: int = None
+    attn_tp_size: int = None
+    attn_dp_size: int = None
+    mlp_tp_size: int = None
+    mlp_dp_size: int = None
+    outer_dp_size: int = None
     session_len: Optional[int] = None
     max_batch_size: int = None
     cache_max_entry_count: float = 0.8
@@ -255,6 +262,9 @@ class PytorchEngineConfig:
             The `auto` option will use FP16 precision for FP32 and FP16
             models, and BF16 precision for BF16 models.
         tp (int): Tensor Parallelism. default 1.
+        dp (int): Data Parallelism. default 1.
+        dp_rank (int): rank of dp.
+        ep (int): Expert Parallelism. default 1.
         session_len (int): Max session length. Default None.
         max_batch_size (int): Max batch size. If it is not specified,
             the engine will automatically set it according to the device
@@ -290,6 +300,9 @@ class PytorchEngineConfig:
     """
     dtype: str = 'auto'
     tp: int = 1
+    dp: int = 1
+    dp_rank: int = 0
+    ep: int = 1
     session_len: int = None
     max_batch_size: int = None
     cache_max_entry_count: float = 0.8
@@ -313,6 +326,8 @@ class PytorchEngineConfig:
         """Check input validation."""
         assert self.dtype in ['auto', 'float16', 'bfloat16']
         assert self.tp >= 1, 'invalid tp'
+        assert self.dp >= 1, 'invalid dp'
+        assert self.ep >= 1, 'invalid ep'
         assert 0 < self.cache_max_entry_count < 1, \
             'invalid cache_max_entry_count'
         assert self.num_cpu_blocks >= 0, 'invalid num_cpu_blocks'

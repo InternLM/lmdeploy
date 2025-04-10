@@ -136,11 +136,15 @@ struct LlamaAttentionWeight {
                          size_t     kv_head_num,
                          MLAParam   mla,
                          bool       bias,
+                         bool       qk_norm,
                          size_t     tp,
                          WeightType weight_type,
                          int        group_size)
     {
-        this->bias = bias;
+        this->bias     = bias;
+        this->head_dim = head_dim;
+        this->qk_norm  = qk_norm;
+
         if (mla.kv_lora_rank == 0) {
             qkv = {hidden_dim, (head_num + 2 * kv_head_num) * head_dim / tp, weight_type, group_size};
         }
@@ -163,8 +167,12 @@ struct LlamaAttentionWeight {
     {
         if (qkv.output_dims) {
             qkv.malloc(st, bias);
+            if (qk_norm) {
+                deviceMalloc((T**)&q_a_layernorm, head_dim, st);
+                deviceMalloc((T**)&kv_a_layernorm, head_dim, st);
+            }
         }
-        else {
+        else {  // MLA
             if (q_proj.output_dims) {
                 q_proj.malloc(st);
             }
@@ -193,9 +201,12 @@ struct LlamaAttentionWeight {
         deviceFree(kv_a_layernorm, st);
     }
 
+    int  head_dim{};
+    bool bias{};
+    bool qk_norm{};
+
     LlamaDenseWeight<T> qkv;
     LlamaDenseWeight<T> output;
-    bool                bias{};
 
     LlamaDenseWeight<T> q_proj;
     LlamaDenseWeight<T> q_a_proj;

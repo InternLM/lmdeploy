@@ -1,10 +1,16 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from dataclasses import dataclass
 from typing import List
 
 import torch
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.pytorch.model_inputs import StepContext
+
+
+@dataclass
+class GraphRunnerMeta:
+    padding_batch_size: int = None
 
 
 class GraphRunner:
@@ -18,6 +24,7 @@ class GraphRunner:
         self.model_config = model_config
         self.cache_config = cache_config
         self.backend_config = backend_config
+        self._runner_meta = GraphRunnerMeta()
 
     def __call__(self, **kwargs):
         """call graph runner forward."""
@@ -72,3 +79,10 @@ class GraphRunner:
     def reset(self):
         """remove all graphs to prevent hanging on exit."""
         pass
+
+    def get_meta(self):
+        """get graphrunner meta."""
+        return self._runner_meta
+
+    def update_inputs(self, inputs):
+        return inputs

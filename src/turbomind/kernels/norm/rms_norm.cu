@@ -1,10 +1,16 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
+#include <stdexcept>
+
 #include "cub/block/block_reduce.cuh"
 
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
+#include "src/turbomind/kernels/core/math.h"
+#include "src/turbomind/kernels/core/meta.h"
+
 #include "src/turbomind/kernels/norm/rms_norm.h"
+#include "src/turbomind/utils/Tensor.h"
 
 namespace turbomind {
 
@@ -78,6 +84,10 @@ template<class T>
 void invokeRMSNorm(
     T* dst, int dst_ld, const T* src, int src_ld, const T* weights, int dims, int num, float eps, cudaStream_t st)
 {
+    if (num == 0) {
+        return;
+    }
+
     constexpr int vec_size = 16 / sizeof(T);
 
     constexpr int threads = 512;
@@ -114,6 +124,104 @@ template void invokeRMSNorm(nv_bfloat16*       dst,
                             float              eps,
                             cudaStream_t       st);
 #endif
+
+template<class T, class A, int vec_size, int max_dim>
+__global__ void QkRMSNormKernel(T*       data,  //
+                                int      ld,
+                                const T* weight,
+                                int      dim,
+                                int      n,
+                                int      token_num,
+                                float    eps,
+                                float    inv_dim)
+{
+    static_assert((max_dim & (max_dim - 1)) == 0);
+
+    constexpr int thr_per_qk = max_dim / vec_size;
+
+    const int bi = (threadIdx.x + blockIdx.x * blockDim.x) / thr_per_qk;
+    const int di = threadIdx.x % thr_per_qk * vec_size;
+    const int ti = bi / n;
+    const int hi = bi % n;
+
+    if (bi >= token_num * n) {
+        return;
+    }
+
+    data += ti * ld + hi * dim;
+
+    Array<T, vec_size> vec{};
+    if (di < dim) {
+        Load(vec, &data[di]);
+    }
+
+    using namespace ops;
+    auto acc = cast<A>(vec);
+    acc      = acc * acc;
+
+    float sum{};
+    PRAGMA_UNROLL
+    for (int i = 0; i < vec_size; ++i) {
+        sum += acc[i];
+    }
+
+    PRAGMA_UNROLL
+    for (int mask = thr_per_qk / 2; mask >= 1; mask /= 2) {
+        sum += __shfl_xor_sync((uint32_t)-1, sum, mask);
+    }
+
+    sum = rsqrtf(sum * inv_dim + eps);
+
+    Array<T, vec_size> w;
+    if (di < dim) {
+        Ldg(w, &weight[di]);
+        PRAGMA_UNROLL
+        for (int i = 0; i < vec_size; ++i) {
+            vec[i] = (T)((float)vec[i] * sum) * w[i];
+        }
+        Store(&data[di], vec);
+    }
+}
+
+void invokeQkRMSNorm(void*        data,
+                     int          ld,
+                     const void*  weight,
+                     DataType     dtype,
+                     int          head_dim,
+                     int          n,
+                     int          token_num,
+                     float        eps,
+                     cudaStream_t stream)
+{
+    auto invoke = [&](auto t, auto max_dim_t) {
+        using T = decltype(t);
+
+        constexpr int vec_size   = sizeof(uint4) / sizeof(T);
+        constexpr int max_dim    = max_dim_t.value;
+        constexpr int thr_per_qk = max_dim / vec_size;
+
+        FT_CHECK(head_dim % vec_size == 0);
+
+        const int threads   = thr_per_qk * n * (int64_t)token_num;
+        const int block_dim = 512;
+        const int grid_dim  = cdiv(threads, block_dim);
+
+        QkRMSNormKernel<T, float, vec_size, max_dim><<<grid_dim, block_dim, 0, stream>>>(
+            (T*)data, ld, (const T*)weight, head_dim, n, token_num, eps, 1.f / head_dim);
+    };
+
+    constexpr constant<128> max_dim{};
+    FT_CHECK(head_dim <= max_dim);
+
+    switch (dtype) {
+        case TYPE_FP16:
+            return invoke(half{}, max_dim);
+        case TYPE_BF16:
+            return invoke(nv_bfloat16{}, max_dim);
+        default:
+            throw std::runtime_error("not implemented");
+    }
+}
 
 // r' <- r + (h + b)
 // h' <- norm(r') * w
@@ -243,6 +351,9 @@ void invokeResidualBiasRMSNorm(void*        hidden_states,
                                float        eps,
                                cudaStream_t st)
 {
+    if (num == 0) {
+        return;
+    }
     auto invoke = [&](auto t) {
         using T                = decltype(t);
         constexpr int vec_size = sizeof(uint4) / sizeof(T);

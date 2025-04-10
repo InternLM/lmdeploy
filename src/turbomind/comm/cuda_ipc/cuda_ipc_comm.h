@@ -4,9 +4,9 @@
 
 #include <unordered_map>
 
-#include "src/turbomind/comm/comm.h"
-#include "src/turbomind/comm/native/bootstrap.h"
-#include "src/turbomind/comm/native/mscclpp.h"
+#include "src/turbomind/comm/cuda_ipc/mscclpp.h"
+#include "src/turbomind/comm/device_comm.h"
+#include "src/turbomind/comm/host_comm.h"
 
 #include "src/turbomind/kernels/core/array.h"
 
@@ -15,19 +15,30 @@
 
 namespace turbomind::comm {
 
+static constexpr int kMaxRanks     = 8;
 static constexpr int kMaxNearPeers = 7;
 
-class NativeComm: public Comm {
+class CudaIpcCommImpl: public DeviceCommImpl {
 public:
-    static constexpr int kPacketBuffSize  = 8 << 20;
-    static constexpr int kScratchBuffSize = 8 << 20;
+    static constexpr int kPacketBuffSize  = 8 << 20;  // 8 MB
+    static constexpr int kScratchBuffSize = 8 << 20;  // 8 MB
     static constexpr int kChannelsPerConn = 64;
 
-    ~NativeComm() override;
+    ~CudaIpcCommImpl() override;
 
-    NativeComm(std::shared_ptr<LocalBootstrap> bootstrap);
+    explicit CudaIpcCommImpl(HostComm h_comm);
 
     void Initialize();
+
+    int n_ranks(int group) const override
+    {
+        return groups_.at(group).l2g.size();
+    }
+
+    int rank(int group) const override
+    {
+        return groups_.at(group).g2l.at(global_rank_);
+    }
 
     void* Allocate(size_t size) override;
 
@@ -37,11 +48,15 @@ public:
 
     void Deregister(void* ptr) override;
 
+    int Split(int color, int key, int group) override;
+
     int Query(QueryAttr attr) const noexcept override;
 
-    void AllReduceSum(const void* sendbuff, void* recvbuff, size_t count, DataType type, cudaStream_t stream) override;
+    void AllReduceSum(
+        const void* sendbuff, void* recvbuff, size_t count, DataType type, int group, cudaStream_t stream) override;
 
-    void AllGather(const void* sendbuff, void* recvbuff, size_t sendcount, DataType type, cudaStream_t stream) override;
+    void AllGather(
+        const void* sendbuff, void* recvbuff, size_t sendcount, DataType type, int group, cudaStream_t stream) override;
 
     void AllreduceResidualBiasRMSnorm(void*        hidden,
                                       void*        residual,
@@ -51,7 +66,20 @@ public:
                                       int          dim,
                                       int          token_num,
                                       DataType     dtype,
+                                      int          group,
                                       cudaStream_t stream) override;
+
+    void AllreduceResidualBiasRMSnormEx(void*        hidden,
+                                        void*        residual,
+                                        const void*  bias,
+                                        const void*  weights,
+                                        float        eps,
+                                        int          dim,
+                                        DataType     type,
+                                        int          group0,
+                                        int          group1,
+                                        const int*   local_token_nums,
+                                        cudaStream_t stream) override;
 
     void AllGather2D(const void*  sendbuff,
                      void*        recvbuff,
@@ -61,13 +89,18 @@ public:
                      int          height,
                      DataType     type,
                      int2         flags,
+                     int          group,
                      cudaStream_t stream) override;
 
 private:
+    uint64_t* create_semaphore_buffer();
+
+    mscclpp::D2DSemaphoreHandle* init_semaphores(const std::vector<uint64_t*>& buffers, int group);
+
     template<class T>
-    inline Array<T*, kMaxNearPeers> get_near(T* ptr)
+    inline Array<T*, kMaxNearPeers> get_symmetric(T* ptr, int group)
     {
-        auto                     src = get_near_impl(ptr);
+        auto                     src = get_symmetric_impl(ptr, group);
         Array<T*, kMaxNearPeers> dst;
         for (int i = 0; i < dst.size(); ++i) {
             dst[i] = static_cast<T*>(src[i]);
@@ -75,10 +108,13 @@ private:
         return dst;
     }
 
-    Array<void*, kMaxNearPeers> get_near_impl(void* ptr);
+    Array<void*, kMaxNearPeers> get_symmetric_impl(void* ptr, int group);
 
 private:
-    std::shared_ptr<LocalBootstrap> bootstrap_;
+    HostComm h_comm_;
+
+    int global_n_ranks_;
+    int global_rank_;
 
     std::vector<int> ordinals_;
 
@@ -87,9 +123,6 @@ private:
     void*    packet_buff_{};
     void*    scratch_buff_{};
     uint32_t flag_{1};
-
-    uint64_t*                                      device_semaphore_data_{};
-    mscclpp::SmDevice2DeviceSemaphoreDeviceHandle* device_semaphores_;
 
     struct Allocation {
         CUmemGenericAllocationHandle handle;
@@ -101,9 +134,18 @@ private:
     std::vector<CUmemAccessDesc> alloc_access_descs_{};
 
     std::unordered_map<void*, Allocation> allocations_;
-};
 
-std::vector<std::unique_ptr<Comm>> CreateNativeComm(const std::vector<int>& devices);
+    struct Group {
+        std::vector<int> l2g;
+        std::vector<int> g2l;
+
+        uint64_t* d2d_semaphore_data;
+
+        mscclpp::D2DSemaphoreHandle* d2d_semaphores;
+    };
+
+    std::vector<Group> groups_;
+};
 
 struct Rank {
     int                     rank;

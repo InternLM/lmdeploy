@@ -66,6 +66,7 @@ class CUDASingleGraphRunner:
 
     def capture(self, **kwargs):
         """capture graph."""
+        logger.debug(f'Capturing graph with meta: {self.meta}')
         self.meta.input_buffers = self.model.make_buffers_cudagraph(self.meta, **kwargs)
         padded_kwargs = self.model.fill_buffers_cudagraph(self.meta, **kwargs)
         context = self.ctx_mgr.current_context()
@@ -130,7 +131,11 @@ class CUDAGraphRunner(GraphRunner):
         context = self.ctx_mgr.current_context()
         is_decoding = context.is_decoding
         num_tokens = input_ids.numel()
-        new_num_tokens = next_power_of_2(num_tokens)
+        meta = self.get_meta()
+        if meta.padding_batch_size is None:
+            new_num_tokens = next_power_of_2(num_tokens)
+        else:
+            new_num_tokens = next_power_of_2(meta.padding_batch_size)
         return (new_num_tokens, is_decoding)
 
     def __call__(self, **kwargs):
@@ -175,3 +180,16 @@ class CUDAGraphRunner(GraphRunner):
     def reset(self):
         """remove all graphs to prevent hanging on exit."""
         self._runner_map.clear()
+
+    def update_inputs(self, inputs):
+        """update inputs."""
+        if self.backend_config.eager_mode:
+            return inputs
+        is_decoding = inputs.is_decoding
+        dp_meta = inputs.dp_meta
+        if is_decoding and dp_meta is not None:
+            meta = self.get_meta()
+            padding_batch_size = meta.padding_batch_size
+            tp_size = next_power_of_2(padding_batch_size)
+            dp_meta.tp_sizes = [tp_size] * len(dp_meta.tp_sizes)
+        return inputs

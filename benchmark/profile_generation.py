@@ -18,7 +18,7 @@ from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, TurbomindEn
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 
-get_logger('lmdeploy').setLevel('ERROR')
+get_logger('lmdeploy').setLevel('WARNING')
 os.environ['TM_LOG_LEVEL'] = 'ERROR'
 
 
@@ -147,6 +147,8 @@ def profile_throughput(model_path: str, concurrency: int, input_seqlen: int,
 
     _end = time.perf_counter()
     elapsed_time = _end - _start
+
+    tm_model.close()
 
     token_latency_stats = []
     while not que.empty():
