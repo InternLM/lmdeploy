@@ -20,7 +20,7 @@ def check_trans_version():
     installed_version = transformers.__version__
     assert version.parse(installed_version) >= version.parse(min_version), (
         f'llama4 requires transformers version >= {min_version}, '
-        f'but found version: {installed_version}. Please downgrade.')
+        f'but found version: {installed_version}. Please upgrade.')
 
 
 @VISION_MODELS.register_module()
