@@ -385,7 +385,7 @@ class RayExecutor(ExecutorBase):
                 self.collective_rpc('release', timeout=5.0)
                 logger.debug('RayExecutor workers released.')
             except ray.exceptions.GetTimeoutError:
-                logger.debug('Ray release timeout.')
+                logger.info('Ray release timeout.')
 
             try:
                 self.collective_rpc('exit')
