@@ -78,10 +78,7 @@ class AscendOpsBackend(DlinferOpsBackend):
         head_size: int,
         dtype: torch.dtype,
     ) -> Tuple[int, ...]:
-        return (
-            block_size,
-            num_heads * head_size,
-        )
+        return (block_size, num_heads, head_size)
 
     @staticmethod
     def get_v_block_shape(
@@ -90,10 +87,7 @@ class AscendOpsBackend(DlinferOpsBackend):
         head_size: int,
         dtype: torch.dtype,
     ) -> Tuple[int, ...]:
-        return (
-            block_size,
-            num_heads * head_size,
-        )
+        return (block_size, num_heads, head_size)
 
     @classmethod
     def update_step_context(cls, step_context):
@@ -108,7 +102,7 @@ class AscendOpsBackend(DlinferOpsBackend):
             return cls.total_slots
 
         kv_start_indices, attention_mask = [], []
-        block_num, block_size, _ = step_context.kv_caches[0][0].shape
+        block_num, block_size, *_ = step_context.kv_caches[0][0].shape
         is_unpaged_prefill = False
         if not step_context.is_decoding:
             is_unpaged_prefill = \
