@@ -82,14 +82,15 @@ def complete_parallel_config(cfg: TurbomindEngineConfig):
 
 
 def update_parallel_config(cfg: TurbomindEngineConfig):
-    # multi-node, use torchrun environment variables
     if cfg.nnodes > 1:
-        rank = int(os.environ['RANK'])
-        local_rank = int(os.environ['LOCAL_RANK'])
-        local_world_size = int(os.environ['LOCAL_WORLD_SIZE'])
-        assert local_rank == 0, 'only support init engine on local_rank 0'
-        cfg.node_rank = rank // local_world_size
-        cfg.ngpus_per_node = cfg.ngpus_per_node or local_world_size
+        # multi-node, use torchrun environment variables
+        # rank = int(os.environ['RANK'])
+        # local_rank = int(os.environ['LOCAL_RANK'])
+        # local_world_size = int(os.environ['LOCAL_WORLD_SIZE'])
+        # assert local_rank == 0, 'only support init engine on local_rank 0'
+        # cfg.node_rank = rank // local_world_size
+        # cfg.ngpus_per_node = cfg.ngpus_per_node or local_world_size
+        assert cfg.ngpus_per_node is not None
         cfg.device_num = cfg.ngpus_per_node * cfg.nnodes
         cfg.devices = cfg.devices or list(range(cfg.ngpus_per_node))
 
@@ -160,6 +161,8 @@ class TurboMind:
             from torch.distributed import TCPStore
             master_addr = os.environ.get('LMDEPLOY_DP_MASTER_ADDR')
             master_port = os.environ.get('LMDEPLOY_DP_MASTER_PORT')
+            assert master_addr is not None and master_port is not None, \
+                'LMDEPLOY_DP_MASTER_ADDR and LMDEPLOY_DP_MASTER_PORT should be set when using multi-node'
             self.store = TCPStore(host_name=master_addr, port=int(master_port), is_master=True)
 
         self.gpu_count = len(_engine_config.devices)
