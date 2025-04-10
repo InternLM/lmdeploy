@@ -2,6 +2,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <sstream>
+#include <iostream>
 
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/utils/logger.h"
@@ -74,13 +75,15 @@ CheckErrorStream::CheckErrorStream(const char* file, int line, const char* expr,
 
 void CheckErrorStream::Report()
 {
-    TM_LOG_ERROR(oss_->str().c_str());
+    // ! Be aware of `%` in expr
+    std::cerr << "[TM][FATAL] " << oss_->str() << "\n";
     std::abort();
 }
 
 void ReportNullError(const char* file, int line, const char* expr)
 {
-    TM_LOG_ERROR("%s(%d): '%s' Must be non NULL", StripSrcPrefix(file).c_str(), line, expr);
+    // ! Be aware of `%` in expr
+    std::cerr << "[TM][FATAL] " << StripSrcPrefix(file) << "(" << line << "): '" << expr << "' Must be non NULL\n"; 
     std::abort();
 }
 

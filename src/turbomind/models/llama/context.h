@@ -13,7 +13,6 @@
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/utils/Tensor.h"
-#include "src/turbomind/utils/allocator.h"
 
 namespace turbomind {
 
@@ -28,23 +27,19 @@ struct Communicators {
 
 // Execution context for the model
 struct Context {
-    core::Stream                                    core_stream;
-    core::Allocator                                 core_allocator;
-    cudaStream_t                                    stream;
-    std::unique_ptr<Allocator<AllocatorType::CUDA>> allocator;
-    std::unique_ptr<LlamaLinear>                    linear;
-    Communicators                                   comm;
-    cudaDeviceProp                                  cuda_device_prop;
+    core::Stream                 core_stream;
+    core::Allocator              allocator;
+    cudaStream_t                 stream;
+    std::unique_ptr<LlamaLinear> linear;
+    Communicators                comm;
+    cudaDeviceProp               cuda_device_prop;
 
     Context(DataType data_type, int device_id)
     {
-        core_stream    = core::Stream::create();
-        core_allocator = core::Allocator(core_stream, false);
+        core_stream = core::Stream::create();
+        allocator   = core::Allocator(core_stream, false);
 
         stream = core_stream.handle();
-
-        allocator = std::make_unique<Allocator<AllocatorType::CUDA>>(device_id, false);
-        allocator->setStream(stream);
 
         linear = std::make_unique<LlamaLinear>(stream);
 
@@ -54,7 +49,6 @@ struct Context {
     ~Context()
     {
         linear.reset();
-        allocator.reset();
 
         // `comm` destroyed by infer threads collectively
     }

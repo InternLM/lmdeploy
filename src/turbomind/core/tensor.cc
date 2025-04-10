@@ -24,6 +24,15 @@ std::string TensorMap::get_out_of_range_msg(const std::string& key) const
     return oss.str();
 }
 
+Tensor* TensorMap::try_(const std::string& key)
+{
+    auto it = find(key);
+    if (it != end()) {
+        return &it->second;
+    }
+    return nullptr;
+}
+
 #if 0
 
 void Copy(const Tensor& src, Tensor& dst, Stream& stream)

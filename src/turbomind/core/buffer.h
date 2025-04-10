@@ -263,6 +263,26 @@ struct Buffer_: public Buffer {
         return static_cast<const T*>(raw_data());
     }
 
+    T* begin()
+    {
+        return data();
+    }
+
+    const T* begin() const
+    {
+        return data();
+    }
+
+    T* end()
+    {
+        return begin() + size();
+    }
+
+    const T* end() const
+    {
+        return begin() + size();
+    }
+
     T& operator[](ssize_t i)
     {
         return data()[i];

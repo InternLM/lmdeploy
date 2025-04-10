@@ -7,7 +7,6 @@
 
 #include "src/turbomind/core/tensor.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
-#include "src/turbomind/utils/cublasMMWrapper.h"
 
 namespace turbomind {
 

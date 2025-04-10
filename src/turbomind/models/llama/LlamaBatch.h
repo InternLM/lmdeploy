@@ -7,14 +7,11 @@
 #include "src/turbomind/engine/gateway.h"
 #include "src/turbomind/engine/request.h"
 
-#include "src/turbomind/models/llama/Barrier.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_params.h"
 
-#include "src/turbomind/utils/allocator.h"
-#include "src/turbomind/utils/cublasMMWrapper.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
@@ -70,7 +67,6 @@ struct GenerationState {
 class LlamaBatch {
 public:
     void AllocateBuffer(ssize_t batch_size, ssize_t session_len, int cache_block_seq_len);
-    void AllocatePersistantBuffer(ssize_t max_batch_size, int cache_block_seq_len);
 
     void AllocSymmBuffers();
     void FreeSymmBuffers();
@@ -102,7 +98,7 @@ public:
 
     void ComputeAndOutputLogits(const core::Tensor& hidden_states, int first, int last);
 
-    void OutputLogits(const T* logits, int first, int last, GenerationConfig::OutType out_type);
+    void OutputLogits(const core::Tensor& logits, int first, int last, GenerationConfig::OutType out_type);
 
     void OutputLastHiddenState(const core::Tensor& hidden_states, int first, int last);
 
@@ -207,7 +203,6 @@ private:
 
     // Refs into `Context<T>`
     cudaStream_t const stream_{};
-    IAllocator* const  allocator_{};
 
     int session_len_;  // May be truncated in ctor
 
@@ -221,32 +216,26 @@ private:
 
     ///////////////////////////////////////////////////////////////////
     // k/v cache block buffers
-    Buffer_<int>       cu_block_counts_{};
-    Buffer_<uintptr_t> block_ptrs_{};
+    Buffer_<int>       cu_block_counts_;
+    Buffer_<uintptr_t> block_ptrs_;
 
     ////////////////////////////////////////////////////////////////////
     // context decoding temp buffers
-    core::Tensor context_decoder_input_buf_;
-    core::Tensor context_decoder_output_buf_;
+    core::Tensor symm_hidden_states_buf_;
+    core::Tensor symm_logits_buf_;
 
-    Buffer_<int> context_decoder_ids_buf_{};
+    core::Tensor decoder_output_buf_;
+
+    Buffer_<int> input_ids_buf_;
 
     // lengths
     Buffer_<int> input_length_buf_;    // input + cache missed length
     Buffer_<int> context_length_buf_;  // history length + input_length
     Buffer_<int> init_context_length_;
 
-    core::Tensor decoder_output_buf_;
-
     Buffer_<int> sequence_lengths_;  // current sequence length
     Buffer_<int> init_ctx_lens_;
     Buffer_<int> lora_mask_buf_;  // lora
-
-    core::Tensor logits_buf_;        // combined logits
-    core::Tensor local_logits_buf_;  // tensor parallel local logits
-
-    core::Tensor context_logits_buf_;
-    core::Tensor local_context_logits_buf_;
 
     Buffer_<float>    sampled_logprobs_;
     Buffer_<uint32_t> sampled_indexes_;
@@ -258,30 +247,17 @@ private:
     Buffer_<float> rope_theta_;
 
     // used by dynamic decoder
-    Buffer_<int>      token_ids_buf_;  // all token IDs in [S, B], indexed using `step`
-    Buffer_<bool>     finished_buf_;
-    Buffer_<uint32_t> seq_limit_len_;
-    Buffer_<int>      h_end_ids_buf_;
-    Buffer_<int>      d_end_ids_buf_;
+    Buffer_<int>  token_ids_buf_;  // all token IDs in [S, B], indexed using `step`
+    Buffer_<bool> finished_buf_;
+    Buffer_<int>  seq_limit_len_;
 
     // pinned buffers
-    Buffer_<int>      h_output_ids_;
-    Buffer_<int>      h_input_length_buf_;
-    Buffer_<uint32_t> h_seq_limit_len_;
+    Buffer_<int> h_output_ids_;
+    Buffer_<int> h_input_length_buf_;
+    Buffer_<int> h_seq_limit_len_;
 
     Buffer_<int>       h_cu_block_counts_;
     Buffer_<uintptr_t> h_block_ptrs_;
-
-    int*   h_min_length_{};
-    int*   h_runtime_top_k_{};
-    float* h_runtime_top_p_{};
-    float* h_runtime_min_p_{};
-    float* h_temperature_{};
-    float* h_repetition_penalty_{};
-    int*   h_stop_words_{};  // [batch_size, 2, kMaxStopWordsLen]
-    int*   h_bad_words_{};
-    int*   d_stop_words_{};  // [batch_size, 2, kMaxStopWordsLen]
-    int*   d_bad_words_{};
 
     Buffer_<unsigned long long> h_random_seed_;
     Buffer_<unsigned long long> d_random_seed_;
@@ -298,12 +274,6 @@ private:
     // hard limits for persistent buffers
     static constexpr int kMaxStopBadWordsLen = 32;
     static constexpr int kMaxEndIdsSize      = 32;
-
-    bool is_allocate_persistant_buffer_ = false;
-    bool is_allocate_buffer_            = false;
-
-    TensorMap inputs_;
-    TensorMap outputs_;
 
     std::thread internal_thread_;
 };

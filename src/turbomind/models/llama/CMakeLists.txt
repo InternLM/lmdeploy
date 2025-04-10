@@ -28,8 +28,8 @@ set_property(TARGET Llama PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(Llama PUBLIC CUDA::cudart
         engine
         gemm2
+        CUDA::cublas
         rms_norm
-        cublasMMWrapper
         DynamicDecodeLayer
         activation_kernels
         attention
@@ -41,15 +41,3 @@ target_link_libraries(Llama PUBLIC CUDA::cudart
         cuda_utils
         logger
         anomaly_handler)
-
-
-add_executable(llama_gemm llama_gemm.cc)
-target_link_libraries(llama_gemm PUBLIC CUDA::cudart gpt_gemm_func memory_utils cuda_utils logger)
-
-install(TARGETS llama_gemm DESTINATION ${CMAKE_SOURCE_DIR}/lmdeploy/bin)
-
-# find_package(Catch2 3 QUIET)
-# if (Catch2_FOUND)
-#         add_executable(test_cache_manager test_cache_manager.cc)
-#         target_link_libraries(test_cache_manager PRIVATE Llama Catch2::Catch2WithMain)
-# endif ()

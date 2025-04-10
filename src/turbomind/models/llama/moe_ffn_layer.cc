@@ -1,59 +1,57 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include "src/turbomind/models/llama/moe_ffn_layer.h"
-#include "src/turbomind/core/typecvt.h"
 #include "src/turbomind/kernels/activation_kernels.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/cuda_utils.h"
-#include "src/turbomind/utils/monotonic.h"
 #include "src/turbomind/utils/nvtx_utils.h"
 #include "src/turbomind/utils/string_utils.h"
 #include <cublasLt.h>
 #include <cuda_runtime.h>
-#include <iomanip>
 
 namespace turbomind {
 
-void MoeFfnLayer::AllocateBuffer(size_t tokens, size_t padded, size_t expert_num, size_t inter_buf_factor)
+MoeFfnLayer::MoeFfnLayer(const ModelParam& model, const MoeParam& param, const EngineParam& engine, const Context& ctx):
+    inter_size_(param.inter_size / engine.mlp_tp_size),
+    hidden_dim_(model.hidden_units),
+    param_(param),
+    stream_(ctx.stream),
+    linear_(ctx.linear.get())
 {
-    char* base = 0;
+    FT_CHECK(!param.expert_num.empty());
 
-    auto allocate = [&](void* base) {
-        Monotonic alloc{base};
-        alloc(&masks_, expert_num * padded);
-        alloc(&f2n_, param_.experts_per_token * tokens);
-        alloc(&en2f_, param_.experts_per_token * tokens);
-        alloc(&scales_, param_.experts_per_token * tokens);
-        alloc(&shared_scales_, tokens);
-        return (char*)alloc.ptr() - (char*)base;
-    };
+    const int max_expert_num = *std::max_element(param.expert_num.begin(), param.expert_num.end());
 
-    const auto workspace_size = allocate(0);
+    if (param_.method == MoeParam::kFused) {
+        context_ = std::make_unique<gemm::MoeGemmContext>(
+            max_expert_num, param.experts_per_token, ctx.cuda_device_prop, stream_);
+    }
+    else {
+        expert_ffn_ = std::make_unique<LlamaFfnLayer>(model, ctx);
+    }
 
-    workspace_ = (char*)allocator_->reMalloc(workspace_, workspace_size);
+    h_offsets_ = {max_expert_num + 1, MEMORY_CPU_PINNED};
 
-    allocate(workspace_);
-}
+    const int max_token_num = engine.max_forward_token_num;
+    const int pad_token_num = (max_token_num + kMoeGateVecSize - 1) / kMoeGateVecSize * kMoeGateVecSize;
 
-void MoeFfnLayer::FreeBuffer()
-{
-    allocator_->free((void**)&workspace_);
+    masks_   = {max_expert_num * pad_token_num, MEMORY_GPU};
+    f2n_     = {param_.experts_per_token * max_token_num, MEMORY_GPU};
+    en2f_    = {param_.experts_per_token * max_token_num, MEMORY_GPU};
+    scales_  = {param_.experts_per_token * max_token_num, MEMORY_GPU};
+    offsets_ = {max_expert_num + 1, MEMORY_GPU};
+    accum_   = {max_expert_num * kMoeGateMaxTiles, MEMORY_GPU};
 
-    allocator_->free((void**)&accum_);
-    allocator_->free((void**)&offsets_);
-
-    allocator_->free((void**)&h_offsets_, true);
+    shared_scales_ = {max_token_num, MEMORY_GPU};
 }
 
 core::Tensor_<float> MoeFfnLayer::Gate(const core::Tensor& input, const LlamaDenseWeight& gate)
 {
     auto& weight = gate.weight;
     TM_CHECK_EQ(input.shape(1), weight.shape(0));
-    const float          alpha = 1.f;
-    const float          beta  = 0.f;
     core::Tensor_<float> logits{{input.shape(0), weight.shape(1)}, MEMORY_GPU};
     linear_->forward(input, gate, LlamaLinear::kGemm, logits);
     sync_check_cuda_error();
@@ -70,28 +68,14 @@ void MoeFfnLayer::Forward(ForwardParam& p)
 
     FT_CHECK(expert_num);
 
-    const size_t inter_buf_factor = [&] {
-        if (param_.method == MoeParam::kNaive) {
-            return 0;  // managed by ffn
-        }
-        else if (moe.block.is_fused_silu) {
-            return 1;
-        }
-        else {
-            return 2;
-        }
-    }();
-
-    AllocateBuffer(tokens, padded, expert_num, inter_buf_factor);
-
     auto logits = Gate(p.input, moe.gate);
 
     // if (tensor_para_.rank_ == 0) {
     //     Compare(logits_, tokens * expert_num, Concat("logit", layer_id), compare_mode, stream_);
     // }
 
-    check_cuda_error(cudaMemsetAsync(accum_, 0, sizeof(int) * expert_num * kMoeGateMaxTiles, stream_));
-    check_cuda_error(cudaMemsetAsync(masks_, -1, sizeof(int8_t) * expert_num * padded, stream_));
+    check_cuda_error(cudaMemsetAsync(accum_.data(), 0, sizeof(int) * expert_num * kMoeGateMaxTiles, stream_));
+    check_cuda_error(cudaMemsetAsync(masks_.data(), -1, sizeof(int8_t) * expert_num * padded, stream_));
 
     // dump_logits(tokens, layer_id);
 
@@ -104,12 +88,12 @@ void MoeFfnLayer::Forward(ForwardParam& p)
     }
 
     /// TODO: fix illegal memory access even if NaN are present in logits
-    invokeMoeGate_V2(f2n_,
-                     en2f_,
-                     offsets_,
-                     scales_,
-                     masks_,
-                     accum_,
+    invokeMoeGate_V2(f2n_.data(),
+                     en2f_.data(),
+                     offsets_.data(),
+                     scales_.data(),
+                     masks_.data(),
+                     accum_.data(),
                      logits.data(),
                      tokens,
                      padded,
@@ -132,19 +116,19 @@ void MoeFfnLayer::Forward(ForwardParam& p)
         for (int i = 0; i < expert_num; ++i) {
             h_offsets_[i + 1] = h_offsets_[i] + cnt[i];
         }
-        check_cuda_error(
-            cudaMemcpyAsync(offsets_, h_offsets_, sizeof(int) * (expert_num + 1), cudaMemcpyDefault, stream_));
+        check_cuda_error(cudaMemcpyAsync(
+            offsets_.data(), h_offsets_.data(), sizeof(int) * (expert_num + 1), cudaMemcpyDefault, stream_));
     }
 
     p.temp = core::Tensor{{tokens * param_.experts_per_token, hidden_dim_}, p.input.dtype(), p.input.device()};
 
     if (param_.method == MoeParam::kNaive) {
 
-        invokeMoeDispatch(p.temp, p.input, f2n_, param_.experts_per_token, stream_);
+        invokeMoeDispatch(p.temp, p.input, f2n_.data(), param_.experts_per_token, stream_);
         sync_check_cuda_error();
 
-        check_cuda_error(
-            cudaMemcpyAsync(h_offsets_, offsets_, sizeof(int) * (expert_num + 1), cudaMemcpyDefault, stream_));
+        check_cuda_error(cudaMemcpyAsync(
+            h_offsets_.data(), offsets_.data(), sizeof(int) * (expert_num + 1), cudaMemcpyDefault, stream_));
 
         check_cuda_error(cudaStreamSynchronize(stream_));
 
@@ -161,7 +145,7 @@ void MoeFfnLayer::Forward(ForwardParam& p)
         }
     }
     else {
-        context_->update(expert_num, param_.experts_per_token, offsets_);
+        context_->update(expert_num, param_.experts_per_token, offsets_.data());
 
         auto& block = moe.block;
 
@@ -170,8 +154,8 @@ void MoeFfnLayer::Forward(ForwardParam& p)
 
         linear_->forward_moe(inter,
                              p.input,
-                             f2n_,
-                             offsets_,
+                             f2n_.data(),
+                             offsets_.data(),
                              block.fused_gating_intermediate,
                              block.is_fused_silu ? LlamaLinear::kFusedSiluFfn : LlamaLinear::kGemm,
                              context_.get());
@@ -187,12 +171,11 @@ void MoeFfnLayer::Forward(ForwardParam& p)
         linear_->forward_moe(p.temp,
                              inter.slice({0, 0}, {-1, inter_size_}),
                              nullptr,
-                             offsets_,
+                             offsets_.data(),
                              block.output,
                              LlamaLinear::kGemm,
                              context_.get());
         sync_check_cuda_error();
-        auto mode1 = kCmpRead;
     }
 }
 
@@ -208,8 +191,8 @@ void MoeFfnLayer::Combine(ForwardParam& p)
 
     invokeMoeCombine(p.output,
                      p.temp,
-                     scales_,
-                     en2f_,
+                     scales_.data(),
+                     en2f_.data(),
                      shared_scales ? shared_scales.data() : nullptr,
                      param_.experts_per_token,
                      p.scale,

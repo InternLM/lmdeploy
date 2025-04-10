@@ -7,46 +7,12 @@
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaFfnLayer.h"
 #include "src/turbomind/models/llama/llama_params.h"
-#include "src/turbomind/utils/cublasMMWrapper.h"
-#include <algorithm>
 
 namespace turbomind {
 
 class MoeFfnLayer {
 public:
-    MoeFfnLayer(ModelParam model, const MoeParam& param, size_t tp_size, const Context& ctx):
-        inter_size_(param.inter_size / tp_size),
-        hidden_dim_(model.hidden_units),
-        param_(param),
-        stream_(ctx.stream),
-        linear_(ctx.linear.get()),
-        allocator_(ctx.allocator.get())
-    {
-        FT_CHECK(!param.expert_num.empty());
-        const int max_expert_num = *std::max_element(param.expert_num.begin(), param.expert_num.end());
-
-        if (param_.method == MoeParam::kFused) {
-            context_ = std::make_unique<gemm::MoeGemmContext>(
-                max_expert_num, param.experts_per_token, ctx.cuda_device_prop, stream_);
-        }
-        else {
-            expert_ffn_ = std::make_unique<LlamaFfnLayer>(model, ctx);
-        }
-
-        h_offsets_ = (int*)allocator_->malloc(sizeof(int) * (max_expert_num + 1), false, true);
-
-        offsets_ = (int*)allocator_->malloc(sizeof(int) * (max_expert_num + 1));
-        accum_   = (int*)allocator_->malloc(sizeof(int) * max_expert_num * kMoeGateMaxTiles);
-    }
-
-    void AllocateBuffer(size_t tokens, size_t padded, size_t expert_num, size_t inter_buf_factor);
-
-    void FreeBuffer();
-
-    ~MoeFfnLayer()
-    {
-        FreeBuffer();
-    }
+    MoeFfnLayer(const ModelParam& model, const MoeParam& param, const EngineParam& engine, const Context& ctx);
 
     struct ForwardParam {
         core::Tensor        output;
@@ -66,30 +32,25 @@ private:
 
     void dump_logits(int token_num, int layer_id, int expert_num);
 
-    const int          inter_size_;
-    const int          hidden_dim_;
-    const MoeParam     param_;
+    const int      inter_size_;
+    const int      hidden_dim_;
+    const MoeParam param_;
+
     cudaStream_t const stream_;
     LlamaLinear* const linear_;
-    IAllocator* const  allocator_;
 
     std::unique_ptr<LlamaFfnLayer>        expert_ffn_;
     std::unique_ptr<gemm::MoeGemmContext> context_;
 
-    int* h_offsets_{};
+    core::Buffer_<int> h_offsets_;
 
-    char* workspace_{};
-
-    int* masks_{};
-
-    int*   f2n_{};
-    int*   en2f_{};
-    float* scales_{};
-
-    float* shared_scales_{};
-
-    int* accum_{};
-    int* offsets_{};
+    core::Buffer_<int>   masks_;
+    core::Buffer_<int>   f2n_;
+    core::Buffer_<int>   en2f_;
+    core::Buffer_<float> scales_;
+    core::Buffer_<float> shared_scales_;
+    core::Buffer_<int>   accum_;
+    core::Buffer_<int>   offsets_;
 };
 
 }  // namespace turbomind

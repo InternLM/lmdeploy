@@ -20,10 +20,10 @@
 
 #include <cctype>
 #include <optional>
+#include <string>
 
 #include <cuda_runtime.h>
-#include <string>
-#include <unordered_map>
+
 #include <yaml-cpp/yaml.h>
 
 #include "src/turbomind/comm/device_comm.h"
@@ -38,7 +38,6 @@
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/utils/Tensor.h"
-#include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 #include "src/turbomind/triton_backend/llama/LlamaTritonModel.h"
@@ -178,12 +177,6 @@ void LlamaTritonModel::handleMissingParams()
         TM_LOG_WARNING("[LlamaTritonModel] `session_len` is not set, default to %d.", (int)engine_param_.session_len);
     }
 
-    if (!engine_param_.max_prefill_token_num) {
-        engine_param_.max_prefill_token_num = 8192;
-        TM_LOG_WARNING("[LlamaTritonModel] `max_prefill_token_num` is not set, default to %d.",
-                       (int)engine_param_.max_prefill_token_num);
-    }
-
     if (!engine_param_.max_context_token_num) {
         engine_param_.max_context_token_num = engine_param_.session_len;
         TM_LOG_WARNING("[LlamaTritonModel] `max_context_token_num` is not set, default to %d.",
@@ -308,8 +301,10 @@ LlamaTritonModel::LlamaTritonModel(DataType                               dtype,
     // rotary embedding parameters
     parse_rope_param(attention_reader["rope_param"], attn_param_.rope);
 
-    engine_param_.max_batch_size        = engine_reader["max_batch_size"].as<int>(0);
-    engine_param_.max_prefill_token_num = engine_reader["max_prefill_token_num"].as<int>(0);
+    engine_param_.max_batch_size = engine_reader["max_batch_size"].as<int>(0);
+    auto max_forward_token_num   = engine_reader["max_prefill_token_num"].as<int>(0);
+    max_forward_token_num += engine_param_.max_batch_size;
+
     engine_param_.max_context_token_num = engine_reader["max_context_token_num"].as<int>(0);
     engine_param_.session_len           = model_reader["session_len"].as<int>(0);
 
@@ -328,6 +323,11 @@ LlamaTritonModel::LlamaTritonModel(DataType                               dtype,
     engine_param_.attn_tp_rank  = 0;
     engine_param_.mlp_tp_size   = engine_reader["mlp_tp_size"].as<int>();
     engine_param_.mlp_tp_rank   = 0;
+
+    {
+        auto tp                             = engine_param_.attn_tp_size;
+        engine_param_.max_forward_token_num = ((size_t)max_forward_token_num + tp - 1) / tp * tp;
+    }
 
     comm_size_ = engine_param_.attn_dp_size * engine_param_.attn_tp_size;
     FT_CHECK(engine_param_.mlp_tp_size == comm_size_);
@@ -480,7 +480,7 @@ void LlamaTritonModel::createEngine(int device_id, int rank)
 
     auto ctx = std::make_unique<Context>(dtype_, device_id);
 
-    core::ContextGuard guard{ctx->core_stream, ctx->core_allocator, core::Allocator{MEMORY_CPU_PINNED}};
+    core::ContextGuard guard{ctx->core_stream, ctx->allocator, core::Allocator{MEMORY_CPU_PINNED}};
 
     ctx->comm = createCommSplits(rank);
 
@@ -549,7 +549,6 @@ std::string LlamaTritonModel::toString()
        << "\nnum_layer: " << model_param_.layer_num << "\nvocab_size: " << model_param_.vocab_size
        << "\nattn_bias: " << model_param_.attn_bias << "\nqk_norm: " << model_param_.qk_norm
        << "\nmax_batch_size: " << engine_param_.max_batch_size
-       << "\nmax_prefill_token_num: " << engine_param_.max_prefill_token_num
        << "\nmax_context_token_num: " << engine_param_.max_context_token_num
        << "\nnum_tokens_per_iter: " << engine_param_.num_tokens_per_iter
        << "\nmax_prefill_iters: " << engine_param_.max_prefill_iters << "\nsession_len: " << engine_param_.session_len

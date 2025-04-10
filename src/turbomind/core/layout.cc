@@ -81,7 +81,7 @@ Layout Layout::view(vector<ssize_t> shape) const
     }
     auto new_size = std::accumulate(shape.begin(), shape.end(), ssize_t{1}, std::multiplies<>{});
     if (wildcard != shape.end()) {
-        TM_CHECK_EQ(size_ % new_size, 0);
+        TM_CHECK(size_ % new_size == 0) << size_ << " % " << new_size;
         *wildcard = size_ / new_size;
     }
     else {

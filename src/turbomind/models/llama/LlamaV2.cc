@@ -79,9 +79,7 @@ LlamaV2::LlamaV2(DataType                     dtype,
     local_kv_head_num_(model.kv_head_num / engine.attn_tp_size),
     weights_(std::move(weights)),
     stream_(ctx.stream),
-    allocator_(ctx.allocator.get()),
     linear_(ctx.linear.get()),
-    is_free_buffer_after_forward_(false),
     debug_(isDebug())
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
@@ -92,19 +90,8 @@ LlamaV2::LlamaV2(DataType                     dtype,
 
     unified_decoder_ = std::make_unique<UnifiedDecoder>(model, engine, attn, moe, lora, ctx);
 
-    dynamic_decode_layer_ = std::make_unique<DynamicDecodeLayer<float>>(vocab_size_,
-                                                                        vocab_size_padded_,
-                                                                        stream_,
-                                                                        nullptr,
-                                                                        allocator_,
-                                                                        is_free_buffer_after_forward_,
-                                                                        (cudaDeviceProp*)&ctx.cuda_device_prop);
-}
-
-LlamaV2::~LlamaV2()
-{
-    dynamic_decode_layer_.reset();
-    unified_decoder_.reset();
+    dynamic_decode_ = std::make_unique<DynamicDecodeLayer>(
+        dtype_, max_batch_size, vocab_size_, vocab_size_padded_, stream_, &ctx.cuda_device_prop);
 }
 
 void LlamaV2::updateEmbedding(char*            decoder_input,
@@ -170,7 +157,7 @@ void LlamaV2::updateEmbedding(char*            decoder_input,
 
 void LlamaV2::Forward(Buffer_<int>     input_ids,
                       core::Tensor     hidden_states_out,
-                      core::Tensor     decode_out,
+                      core::Tensor     decoder_out,
                       Buffer           kv_block_ptrs,
                       Buffer           cu_block_nums,
                       Buffer_<int>     h_input_length,
@@ -263,7 +250,7 @@ void LlamaV2::Forward(Buffer_<int>     input_ids,
 
     core::TensorMap args{{"decoder_input", input_embeds},
                          {"decoder_output", hidden_states_out.view({-1, (int)hidden_units_}).borrow()},
-                         {"last_token_hidden_units", decode_out},
+                         {"last_token_hidden_units", decoder_out},
                          {"output_norm_weight", weights_->output_norm_weight},
                          {"h_q_len", h_input_length},
                          {"h_k_len", h_context_length},
@@ -278,115 +265,98 @@ void LlamaV2::Forward(Buffer_<int>     input_ids,
     unified_decoder_->Forward(args, weights_->decoder_layer_weights);
 }
 
-void LlamaV2::postDecodeEmbedding(float* logits, float* local_logits, const void* decoder_output, int batch_size)
+core::Tensor LlamaV2::postDecodeEmbedding(const core::Tensor& features, Buffer local_logits)
 {
     NvtxScope scope("postDecodeEmbedding");
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
     cudaDataType_t data_type = to_cuda_dtype(dtype_);
-    float          alpha     = 1.f;
-    float          beta      = 0.f;
-    FT_CHECK(vocab_size_padded_ % tp_size_ == 0);
-    const size_t local_vocab_size = vocab_size_padded_ / tp_size_;
 
-    const core::Tensor src{const_cast<void*>(decoder_output), {batch_size, (int)hidden_units_}, dtype_, MEMORY_GPU};
+    TM_CHECK(vocab_size_padded_ % tp_size_ == 0) << vocab_size_padded_ << " " << tp_size_;
+
+    const int bsz              = features.shape(0);
+    const int local_vocab_size = vocab_size_padded_ / tp_size_;
 
     if (tp_size_ == 1) {
-        core::Tensor out{logits, {batch_size, (int)vocab_size_padded_}, MEMORY_GPU};
-        linear_->forward(src, weights_->post_decoder_embedding, LlamaLinear::kGemm, out);
+        core::Tensor logits{local_logits, {bsz, (int)vocab_size_padded_}};
+        linear_->forward(features, weights_->post_decoder_embedding, LlamaLinear::kGemm, logits);
         sync_check_cuda_error();
+
+        TM_DEBUG_TENSOR(logits, "logits", 1);
+        return logits;
     }
     else if (use_allgather_2d_) {
-        FT_CHECK(logits == local_logits);
-        core::Tensor logits_{logits, {batch_size, tp_size_, (int)local_vocab_size}, MEMORY_GPU};
-        core::Tensor local = logits_.slice({0, tp_rank_, 0}, {-1, 1, -1});
-        linear_->forward(src, weights_->post_decoder_embedding, LlamaLinear::kGemm, local.squeeze(1));
+        core::Tensor logits{local_logits, {bsz, tp_size_, local_vocab_size}};
+        core::Tensor local = logits.slice({0, tp_rank_, 0}, {-1, 1, -1});
+        linear_->forward(features, weights_->post_decoder_embedding, LlamaLinear::kGemm, local.squeeze(1));
         sync_check_cuda_error();
         comm_->d_comm->AllGather2D(local.raw_data(),
-                                   logits_.raw_data(),
+                                   logits.raw_data(),
                                    vocab_size_padded_,
                                    local_vocab_size,
                                    local_vocab_size,
-                                   batch_size,
-                                   logits_.dtype(),
+                                   bsz,
+                                   logits.dtype(),
                                    {true, true},
                                    comm_->d_tp_group,
                                    stream_);
         sync_check_cuda_error();
+        return logits.view({bsz, -1});
     }
     else {
-        FT_CHECK(logits != local_logits);
-        core::Tensor logits_{local_logits, {tp_size_, batch_size, (int)local_vocab_size}, MEMORY_GPU};
-        core::Tensor local = logits_.slice({tp_rank_, 0, 0}, {1, -1, -1});
-        linear_->forward(src, weights_->post_decoder_embedding, LlamaLinear::kGemm, local.squeeze(0));
+        core::Tensor logits{local_logits, {tp_size_, bsz, local_vocab_size}};
+        core::Tensor local = logits.slice({tp_rank_, 0, 0}, {1, -1, -1});
+        linear_->forward(features, weights_->post_decoder_embedding, LlamaLinear::kGemm, local.squeeze(0));
         sync_check_cuda_error();
         comm_->d_comm->AllGather(
-            local.raw_data(), local_logits, local.size(), local.dtype(), comm_->d_tp_group, stream_);
+            local.raw_data(), logits.raw_data(), local.size(), local.dtype(), comm_->d_tp_group, stream_);
         sync_check_cuda_error();
-        invokeTransposeAxis01(logits, local_logits, tp_size_, batch_size, local_vocab_size, stream_);
+        core::Tensor out{{bsz, (int)vocab_size_padded_}, features.dtype(), features.device()};
+        invokeTransposeAxis01(
+            (uint16_t*)out.raw_data(), (uint16_t*)local.raw_data(), tp_size_, bsz, local_vocab_size, stream_);
         sync_check_cuda_error();
+        return out;
     }
 }
 
-void LlamaV2::dynamicDecode(int*            token_ids,
-                            bool*           finished,
-                            int*            sequence_length,
-                            bool*           should_stop,
-                            curandState_t*  curand_state,
-                            TensorMap*      inputs,
-                            TensorMap*      outputs,
-                            const float*    logits,
-                            const uint32_t* seq_limit_len,
-                            const int*      context_length,
-                            int             step,
-                            int             ite,
-                            size_t          max_context_len,
-                            size_t          token_ids_len,
-                            size_t          batch_size)
+void LlamaV2::dynamicDecode(Buffer       token_ids,
+                            Buffer       finished,
+                            Buffer       sequence_length,
+                            core::Tensor curand_state,
+                            core::Tensor logits,
+                            Buffer       seq_limit_len,
+                            Buffer       init_context_length,
+                            Buffer       context_length,
+                            Buffer       prompt_length,
+                            Buffer       sampled_logprobs,
+                            Buffer       sampled_indexes,
+                            Buffer       sampled_nums,
+                            int          step,
+                            int          max_context_len)
 {
     NvtxScope scope("dynamicDecode");
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
-    int local_batch_size = (int)batch_size;
-
-    std::unordered_map<std::string, Tensor> dynamic_decode_input_tensors{
-        {"logits", {MEMORY_GPU, getTensorType<T>(), {batch_size, (size_t)1, vocab_size_padded_}, logits}},
-        {"step", {MEMORY_CPU, TYPE_INT32, {1}, &step}},
-        {"max_input_length", {MEMORY_CPU, TYPE_INT32, {1}, &max_context_len}},
-        {"sequence_limit_length", {MEMORY_GPU, TYPE_UINT32, {batch_size}, seq_limit_len}},
-        {"input_lengths", {MEMORY_GPU, TYPE_INT32, {batch_size, 1}, context_length}},
-        {"ite", {MEMORY_CPU, TYPE_UINT32, {1}, &ite}},
-        {"local_batch_size", {MEMORY_CPU, TYPE_INT32, {1}, &local_batch_size}},
+    core::TensorMap args{
+        {"logits", logits},
+        {"step", Buffer{&step, 1, MEMORY_CPU}},
+        {"max_input_length", Buffer{&max_context_len, 1, MEMORY_CPU}},
+        {"sequence_limit_length", seq_limit_len},
+        {"init_context_length", init_context_length},
+        {"context_length", context_length},
+        {"prompt_length", prompt_length},
+        {"output_ids", token_ids},             // inout
+        {"finished", finished},                // inout
+        {"sequence_length", sequence_length},  // inout
+        {"curand_state", curand_state},        // inout
     };
 
-    const std::vector<std::string> optional_inputs{"end_ids",
-                                                   "stop_words_list",
-                                                   "bad_words_list",
-                                                   "runtime_top_k",
-                                                   "runtime_top_p",
-                                                   "temperature",
-                                                   "repetition_penalty"};
-    for (const auto& key : optional_inputs) {
-        if (inputs->isExist(key)) {
-            dynamic_decode_input_tensors.insert({key, inputs->at(key)});
-        }
+    if (sampled_logprobs) {
+        args.emplace("sampled_logprobs", sampled_logprobs);
+        args.emplace("sampled_indexes", sampled_indexes);
+        args.emplace("sampled_nums", sampled_nums);
     }
 
-    std::unordered_map<std::string, Tensor> dynamic_decode_output_tensors{
-        {"output_ids", {MEMORY_GPU, TYPE_INT32, {token_ids_len, batch_size, 1U}, token_ids}},
-        {"finished", {MEMORY_GPU, TYPE_BOOL, {batch_size}, finished}},
-        {"sequence_length", {MEMORY_GPU, TYPE_INT32, {batch_size}, sequence_length}},
-        {"should_stop", {MEMORY_CPU, TYPE_BOOL, {1}, should_stop}},
-        {"curand_state", {MEMORY_GPU, TYPE_VOID, {batch_size}, curand_state}}};
-
-    const std::vector<std::string> optional_outputs{
-        "cum_log_probs", "output_log_probs", "sampled_indexes", "sampled_logprobs", "sampled_nums"};
-    for (const auto& key : optional_outputs) {
-        if (outputs->isExist(key)) {
-            dynamic_decode_output_tensors.insert({key, outputs->at(key)});
-        }
-    }
-
-    dynamic_decode_layer_->forward(&dynamic_decode_output_tensors, &dynamic_decode_input_tensors);
+    dynamic_decode_->Forward(args);
 }
 
 }  // namespace turbomind

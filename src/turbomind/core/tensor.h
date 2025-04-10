@@ -276,6 +276,13 @@ public:
         return const_cast<TensorMap*>(this)->at(key);
     }
 
+    Tensor* try_(const std::string& key);
+
+    const Tensor* try_(const std::string& key) const
+    {
+        return const_cast<TensorMap*>(this)->try_(key);
+    }
+
     bool contains(const std::string& key) const
     {
         return find(key) != end();

@@ -1,9 +1,10 @@
 
 
-#include <cuda_runtime.h>
 #include <iterator>
 #include <numeric>
 #include <optional>
+
+#include <cuda_runtime.h>
 
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/norm/rms_norm.h"
@@ -34,7 +35,6 @@ UnifiedDecoder::UnifiedDecoder(const ModelParam&     model,
     attn_tp_group_(ctx.comm.d_tp_group),
     rmsnorm_eps_(model.norm_eps),
     stream_(ctx.stream),
-    allocator_(ctx.allocator.get()),
     d_comm_(ctx.comm.d_comm),
     tune_layer_num_(model.tune_layer_num)
 {
@@ -43,15 +43,13 @@ UnifiedDecoder::UnifiedDecoder(const ModelParam&     model,
     attn_fwd_param_ = attn_layer_->CreateForwardParam(engine.max_batch_size);
 
     if (std::accumulate(moe.expert_num.begin(), moe.expert_num.end(), 0LL)) {
-        moe_ffn_layer_ = std::make_unique<MoeFfnLayer>(model, moe, mlp_tp_size_, ctx);
+        moe_ffn_layer_ = std::make_unique<MoeFfnLayer>(model, moe, engine, ctx);
     }
 
     if (std::accumulate(model.inter_size.begin(), model.inter_size.end(), 0LL)) {
         ffn_layer_ = std::make_unique<LlamaFfnLayer>(model, ctx);
     }
 }
-
-UnifiedDecoder::~UnifiedDecoder() = default;
 
 void UnifiedDecoder::AllreduceResidualRMSnorm(core::Tensor&       hidden_states,
                                               core::Tensor&       residual,
@@ -153,12 +151,12 @@ void UnifiedDecoder::Forward(core::TensorMap& args, const std::vector<WeightType
     Initialize(*attn_fwd_param_, args, local_hidden_states, local_hidden_states);
 
     TM_DEBUG_TENSOR(local_residual, "res", 1);
-    TM_DEBUG_TENSOR(weights.at(0)->self_attn_norm, "norm_weight", 1);
+    TM_DEBUG_TENSOR(weights.at(0)->self_attn_norm, "norm_weight", 2);
 
     invokeRMSNorm(local_hidden_states, local_residual, weights.at(0)->self_attn_norm, rmsnorm_eps_, stream_);
     sync_check_cuda_error();
 
-    TM_DEBUG_TENSOR(local_hidden_states, Concat("norm0", 0), 1);
+    TM_DEBUG_TENSOR(local_hidden_states, Concat("norm0", 0), 2);
 
     for (size_t layer = 0; layer < layer_num_; ++layer) {
 
@@ -172,7 +170,7 @@ void UnifiedDecoder::Forward(core::TensorMap& args, const std::vector<WeightType
         SetLayer(*attn_fwd_param_, weights.at(layer)->self_attn_weights.get(), layer);
         attn_layer_->forward(*attn_fwd_param_);
 
-        TM_DEBUG_TENSOR(local_hidden_states, Concat("attn_block", layer), 1);
+        TM_DEBUG_TENSOR(local_hidden_states, Concat("attn_block", layer), 2);
 
         AllreduceResidualRMSnorm(global_hidden_states,
                                  local_residual,
@@ -258,7 +256,15 @@ void UnifiedDecoder::Forward(core::TensorMap& args, const std::vector<WeightType
         // TM_DEBUG_RAW(last_token_hidden_units + decode_num * hidden_units_, prefil_num * hidden_units_, "pf_out", 2);
     }
 
+    core::Buffer out(
+        (void*)last_token_hidden_units, (decode_num + prefil_num) * hidden_units_, local_residual.dtype(), MEMORY_GPU);
+
+    TM_DEBUG_TENSOR(out, "out", 1);
+
     Finalize(*attn_fwd_param_);
+
+    // cudaStreamSynchronize(stream_);
+    // std::abort();
 }
 
 }  // namespace turbomind

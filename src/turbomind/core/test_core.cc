@@ -4,11 +4,9 @@
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/context.h"
 #include "src/turbomind/core/tensor.h"
-
-#include "catch2/catch_test_macros.hpp"
 #include "src/turbomind/utils/Tensor.h"
 
-#include <glog/logging.h>
+#include "catch2/catch_test_macros.hpp"
 
 using namespace turbomind;
 
@@ -167,6 +165,14 @@ TEST_CASE("test basic buffer", "[buffer]")
     Buffer z = Buffer_<int>(1024, MEMORY_CPU);
 
     x = z;
+
+    for (int i = 0; i < z.size(); ++i) {
+        x[i] = i;
+    }
+
+    std::vector<int> ref(1024);
+    std::iota(ref.begin(), ref.end(), 0);
+    REQUIRE(std::vector(x.begin(), x.end()) == ref);
 }
 
 TEST_CASE("test buffer view", "[buffer]")

@@ -29,8 +29,6 @@
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/llama/unified_decoder.h"
-#include "src/turbomind/utils/allocator.h"
-#include "src/turbomind/utils/cublasMMWrapper.h"
 
 namespace turbomind {
 
@@ -38,8 +36,6 @@ class LlamaBatch;
 
 class LlamaV2 {
 public:
-    ~LlamaV2();
-
     LlamaV2(DataType                     dtype,
             const ModelParam&            model,
             const EngineParam&           engine,
@@ -66,7 +62,7 @@ private:
 
     void Forward(Buffer_<int>     input_ids,
                  core::Tensor     hidden_states_out,
-                 core::Tensor     decode_out,
+                 core::Tensor     decoder_out,
                  Buffer           kv_block_ptrs,
                  Buffer           cu_block_nums,
                  Buffer_<int>     h_input_length,
@@ -79,23 +75,22 @@ private:
                  int              prefil_num,
                  const Sequence** sequences);
 
-    void postDecodeEmbedding(float* logits, float* local_logits, const void* decoder_output, int batch_size);
+    core::Tensor postDecodeEmbedding(const core::Tensor& features, Buffer local_logits);
 
-    void dynamicDecode(int*            token_ids,
-                       bool*           finished,
-                       int*            sequence_length,
-                       bool*           should_stop,
-                       curandState_t*  curand_state,
-                       TensorMap*      inputs,
-                       TensorMap*      outputs,
-                       const T*        logits,
-                       const uint32_t* seq_limit_len,
-                       const int*      context_length,
-                       int             step,
-                       int             ite,
-                       size_t          max_context_len,
-                       size_t          token_ids_len,
-                       size_t          batch_size);
+    void dynamicDecode(Buffer       token_ids,
+                       Buffer       finished,
+                       Buffer       sequence_length,
+                       core::Tensor curand_state,
+                       core::Tensor logits,
+                       Buffer       seq_limit_len,
+                       Buffer       init_context_length,
+                       Buffer       context_length,
+                       Buffer       prompt_length,
+                       Buffer       sampled_logprobs,  // <- indicator
+                       Buffer       sampled_indexes,
+                       Buffer       sampled_nums,
+                       int          step,
+                       int          max_context_len);
 
 private:
     friend class LlamaBatch;
@@ -124,16 +119,14 @@ private:
 
     // Refs into `Context`, make the pointer constant (not the pointed objects)
     cudaStream_t const stream_;
-    IAllocator* const  allocator_;
     LlamaLinear* const linear_;
 
     bool use_allgather_2d_{false};
 
-    const bool is_free_buffer_after_forward_;
     const bool debug_;
 
-    std::unique_ptr<UnifiedDecoder>            unified_decoder_;
-    std::unique_ptr<DynamicDecodeLayer<float>> dynamic_decode_layer_;
+    std::unique_ptr<UnifiedDecoder>     unified_decoder_;
+    std::unique_ptr<DynamicDecodeLayer> dynamic_decode_;
 };
 
 }  // namespace turbomind
