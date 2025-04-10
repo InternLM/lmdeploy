@@ -1985,7 +1985,7 @@ class Llama4(BaseChatTemplate):
                  eosys='<|eot|>',
                  eoh='<|eot|>',
                  eoa='<|eot|>',
-                 separator='\n',
+                 separator='',
                  stop_words=['<|end_of_text|>', '<|eom|>', '<|eot|>'],
                  **kwargs):
         super().__init__(system=system,
