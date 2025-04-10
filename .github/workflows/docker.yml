@@ -80,7 +80,12 @@ jobs:
           echo $TAG
           docker build . -f docker/Dockerfile -t ${TAG} --build-arg CUDA_VERSION=${CUDA_VERSION}
           docker push $TAG
-      - name: Push docker image latest-cu12 as latest
+      - name: Build and push cu12 Docker image for DeepSeek series
+        if: endsWith(env.TAG, 'cu12') == true
+        run: |
+          docker build . -f docker/DeepSeek_Dockerfile -t $TAG-deepseek
+          docker push $TAG-deepseek
+      - name: Push Docker image latest-cu12 as latest
         if: endsWith(env.TAG, 'latest-cu12') == true
         run: |
           export latest_TAG=${TAG_PREFIX}:latest
