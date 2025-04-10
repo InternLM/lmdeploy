@@ -28,6 +28,19 @@ ______________________________________________________________________
 
 For output lengths of 16k and 32k, we decrease the total prompt numbers to shorten the execution time.
 
+### v0.7.2 + `f24497f`
+
+| max bsz | prompt no | input-len | output-len | input token throughput (tok/s) | output token throughput (tok/s) |
+| ------- | :-------: | :-------: | :--------: | :----------------------------: | :-----------------------------: |
+| 128     |   2000    |   2048    |    1024    |            8264.56             |             4064.52             |
+| 128     |   2000    |   2048    |    2048    |            6065.50             |             6017.63             |
+| 128     |   2000    |   2048    |    4096    |            3666.99             |             7199.48             |
+| 128     |   2000    |   2048    |    8192    |            1972.46             |             8010.31             |
+| 128     |   2000    |   2048    |   16384    |             993.55             |             7764.91             |
+| 128     |   2000    |   2048    |   32768    |             438.00             |             6956.78             |
+
+NOTE: This performance data is measured using 4 nodes (DP32 + EP32), whereas the previous results were recorded using 2 nodes (TP16).
+
 ## User guide
 
 ______________________________________________________________________
