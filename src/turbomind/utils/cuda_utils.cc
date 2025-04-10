@@ -16,7 +16,6 @@
 
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/macro.h"
-#include "src/turbomind/utils/cuda_fp8_utils.h"
 #include <regex>
 
 namespace turbomind {

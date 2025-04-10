@@ -18,7 +18,6 @@
 
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
-#include "src/turbomind/utils/cuda_fp8_utils.h"
 #include "src/turbomind/utils/memory_utils.h"
 
 namespace turbomind {

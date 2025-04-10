@@ -18,7 +18,6 @@
 
 #include "src/turbomind/macro.h"
 #include "src/turbomind/utils/cuda_bf16_wrapper.h"
-#include "src/turbomind/utils/cuda_fp8_utils.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/string_utils.h"
 
