@@ -147,6 +147,10 @@ struct Request {
         kFinish   = 7,
         kCancel   = 8,
     };
+
+    // data holder(tensor) for inter-process
+    using TensorMap_ = std::unordered_map<std::string, ManagedTensor>;
+    TensorMap_ ipc_buffer;
 };
 
 inline void UpdateState(Request& r, int status, int seq_len)
