@@ -14,10 +14,10 @@ from .block_manager import BaseBlockManager
 logger = get_logger('lmdeploy')
 
 
-def hash_block_tokens(tokens: np.ndarray, mm_hashes=None):
+def hash_block_tokens(tokens: np.ndarray, mm_hashes: Tuple[str] = None):
     """hash func."""
     if mm_hashes is None:
-        mm_hashes = ('None', )
+        mm_hashes = 'random'
     hash_data = (mm_hashes, tuple(tokens))
     hash_key = hash(hash_data)
     return hash_key

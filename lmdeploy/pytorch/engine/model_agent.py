@@ -79,10 +79,10 @@ def model_forward(
 def _batch_stopping_criteria(token_ids: torch.Tensor, stop_words: torch.Tensor, num_appendable_ids: torch.Tensor):
     """batched stopping criteria."""
     num_appendable_ids = num_appendable_ids - 1
-    # one more step to cache last token(stop word)
-    stopped = num_appendable_ids < 0
+    stopped = num_appendable_ids <= 0
     if stop_words is not None:
         sw_stopped = (token_ids[:, None] == stop_words).any(1)
+        stopped = stopped | sw_stopped
         one_ids = torch.clamp_max(num_appendable_ids, 0)
         num_appendable_ids = torch.where(sw_stopped, one_ids, num_appendable_ids)
     return stopped, num_appendable_ids
@@ -380,8 +380,9 @@ class AutoModelAgent:
                     f'num_tokens={inputs.input_ids.size(-1)}')
 
         is_decoding = inputs.is_decoding
+        eager_mode = self.backend_config.eager_mode
         if dp > 1:
-            if is_decoding:
+            if is_decoding and not eager_mode:
                 batch_size = inputs.seq_length.numel()
                 all_batch_sizes = torch.tensor([0] * dp, device='cuda')
                 lc_handle = dist.all_gather_into_tensor(all_batch_sizes,
@@ -404,7 +405,7 @@ class AutoModelAgent:
         self.stream.synchronize()
 
         if dp > 1:
-            if is_decoding:
+            if is_decoding and not eager_mode:
                 await __await_distworker(lc_handle)
                 padding_batch_size = all_batch_sizes.cpu().max().item()
                 meta = self.patched_model.get_meta()
@@ -415,6 +416,7 @@ class AutoModelAgent:
                 sync_long_context = all_sync_flags.any()
                 logger.debug(f'sync_long_context={sync_long_context}')
             inputs.build_dp_meta()
+            inputs = self.patched_model.update_inputs(inputs)
         else:
             sync_long_context = False
 

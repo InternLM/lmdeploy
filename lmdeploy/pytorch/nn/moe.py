@@ -5,7 +5,7 @@ import torch
 from torch import nn
 
 import lmdeploy.pytorch.distributed as dist
-from lmdeploy.pytorch.distributed import get_dist_manager, get_tp_world_rank
+from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank, get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 
 from ..backends import OpType, get_backend
@@ -417,7 +417,8 @@ class LinearWeightsBlockedF8(LinearWeights):
         self.register_parameter('scale', scale)
 
         if self.ep:
-            self.scale.weight_loader = self.weight_loader_ep
+            self.expert_map = dict((eid, idx) for idx, eid in enumerate(expert_list))
+            self.scale.weight_loader = self.weight_loader_scale_ep
         else:
             self.scale.weight_loader = self.weight_loader_scale_tp
 
@@ -428,6 +429,14 @@ class LinearWeightsBlockedF8(LinearWeights):
         scale = torch.nn.Parameter(scale, requires_grad=False)
         scale.weight_loader = weight_loader
         self.register_parameter('scale', scale)
+
+    def weight_loader_scale_ep(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, expert_id: int,
+                               shard_id: str):
+        expert_list = self.expert_list
+        if expert_id not in expert_list:
+            return
+        expert_id = self.expert_map[expert_id]
+        self.weight_loader_scale_tp(param, loaded_weight, expert_id, shard_id)
 
     def weight_loader_scale_tp(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, expert_id: int,
                                shard_id: str):
@@ -469,13 +478,20 @@ class FusedMoEBlockedF8(nn.Module):
             device = torch.device('cpu')
         dtype = torch.float16 if dtype is None else dtype
         self.block_size = 128
+        dist_ctx = get_dist_manager().current_context()
+        self.ep_size, rank = get_ep_world_rank()
         impl_builder = get_backend().get_layer_impl_builder(OpType.FusedMoEBlockedF8)
-        self.impl = impl_builder.build(top_k, num_experts, renormalize, block_size=self.block_size, out_dtype=dtype)
+        self.impl = impl_builder.build(top_k,
+                                       num_experts,
+                                       hidden_dim,
+                                       renormalize,
+                                       block_size=self.block_size,
+                                       ep_size=self.ep_size,
+                                       ep_group=dist_ctx.ep_gpu_group,
+                                       out_dtype=dtype)
 
-        enable_ep = enable_ep and self.impl.support_ep()
-        if enable_ep:
-            world_size, rank = get_tp_world_rank()
-            expert_list = self.impl.ep_expert_list(world_size, rank)
+        if self.ep_size > 1:
+            expert_list = self.impl.ep_expert_list(self.ep_size, rank)
             num_experts = len(expert_list)
         else:
             hidden_dim, ffn_dim = _update_args(hidden_dim, ffn_dim)
@@ -490,7 +506,7 @@ class FusedMoEBlockedF8(nn.Module):
                                               dtype=fp8_dtype,
                                               device=device,
                                               expert_list=expert_list,
-                                              ep=enable_ep)
+                                              ep=self.ep_size > 1)
         self.down = LinearWeightsBlockedF8(
             num_experts,
             ffn_dim,
@@ -500,7 +516,7 @@ class FusedMoEBlockedF8(nn.Module):
             dtype=fp8_dtype,
             device=device,
             expert_list=expert_list,
-            ep=enable_ep,
+            ep=self.ep_size > 1,
         )
 
         self.hidden_dim = hidden_dim
@@ -508,7 +524,6 @@ class FusedMoEBlockedF8(nn.Module):
         self.num_experts = num_experts
         self.dtype = dtype
         self.device = device
-        self.enable_ep = enable_ep
         world_size, _ = get_tp_world_rank()
         if world_size == 1:
             all_reduce = False
@@ -523,13 +538,12 @@ class FusedMoEBlockedF8(nn.Module):
         self.down.update_weight(down_weights, down_scale)
 
     def forward(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.LongTensor):
-        hidden_states, topk_weights, topk_ids = _moe_gather_inputs(hidden_states, topk_weights, topk_ids,
-                                                                   self.enable_ep)
+        hidden_states, topk_weights, topk_ids = _moe_gather_inputs(hidden_states, topk_weights, topk_ids, False)
 
         ret = self.impl.forward(hidden_states, topk_weights, topk_ids, self.gate_up.weight, self.gate_up.scale,
                                 self.down.weight, self.down.scale, self.expert_list)
         if self.all_reduce:
-            ret = _moe_reduce(ret, self.enable_ep)
+            ret = _moe_reduce(ret, False)
         return ret
 
 
