@@ -230,13 +230,17 @@ class RayExecutor(ExecutorBase):
             logger.info('Warming up distribute environment, this might take long time, please waiting...')
             ray.get([worker.warmup_dist.remote() for worker in self.workers])
 
-    def collective_rpc(self, method: str, args: Tuple[Any] = None, kwargs: Dict[str, Any] = None):
+    def collective_rpc(self,
+                       method: str,
+                       args: Tuple[Any] = None,
+                       kwargs: Dict[str, Any] = None,
+                       timeout: float = None):
         """collective rpc."""
         if args is None:
             args = list()
         if kwargs is None:
             kwargs = dict()
-        return ray.get([getattr(worker, method).remote(*args, **kwargs) for worker in self.workers])
+        return ray.get([getattr(worker, method).remote(*args, **kwargs) for worker in self.workers], timeout=timeout)
 
     def build_model(self):
         """build model."""
@@ -293,9 +297,21 @@ class RayExecutor(ExecutorBase):
 
     def release(self):
         """release."""
-        self.collective_rpc('release')
-        for worker in self.workers:
-            ray.kill(worker)
+        if self.dp == 1:
+            try:
+                self.collective_rpc('release', timeout=5.0)
+                logger.debug('RayExecutor workers released.')
+            except ray.exceptions.GetTimeoutError:
+                logger.info('Ray release timeout.')
+
+            try:
+                self.collective_rpc('exit')
+                logger.debug('RayExecutor workers exited.')
+            except ray.exceptions.RayActorError as e:
+                logger.debug(f'ray actor exit: {e}')
+        else:
+            [ray.kill(worker) for worker in self.workers]
+
         ray.util.remove_placement_group(self.placement_group)
 
     def _compile_dag(self):
