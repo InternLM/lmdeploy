@@ -313,7 +313,7 @@ core::Tensor LlamaV2::postDecodeEmbedding(const core::Tensor& features, Buffer l
         sync_check_cuda_error();
         core::Tensor out{{bsz, (int)vocab_size_padded_}, features.dtype(), features.device()};
         invokeTransposeAxis01(
-            (uint16_t*)out.raw_data(), (uint16_t*)local.raw_data(), tp_size_, bsz, local_vocab_size, stream_);
+            (uint16_t*)out.raw_data(), (uint16_t*)logits.raw_data(), tp_size_, bsz, local_vocab_size, stream_);
         sync_check_cuda_error();
         return out;
     }
