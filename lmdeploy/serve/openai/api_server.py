@@ -719,8 +719,10 @@ async def completions_v1(raw_request: Request = None):
     # Non-streaming response
     usage = UsageInfo()
     choices = [None] * len(generators)
-
+    cache_block_ids = []
+    remote_token_ids = []
     async def _inner_call(i, generator):
+        nonlocal cache_block_ids, remote_token_ids
         final_logprobs = []
         final_token_ids = []
         final_res = None
@@ -732,6 +734,8 @@ async def completions_v1(raw_request: Request = None):
                 return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
             final_res = res
             text += res.response
+            cache_block_ids.append(res.cache_block_ids)
+            remote_token_ids.append(res.token_ids)
             if res.token_ids:
                 final_token_ids.extend(res.token_ids)
             if res.logprobs:
@@ -754,7 +758,11 @@ async def completions_v1(raw_request: Request = None):
             logprobs=logprobs,
         )
         choices[i] = choice_data
-
+        
+        if with_cache:
+            cache_block_ids = cache_block_ids[0]
+            print(remote_token_ids)
+            remote_token_ids = [remote_token_ids[0][-1]]
         total_tokens = sum([final_res.history_token_len, final_res.input_token_len, final_res.generate_token_len])
         usage.prompt_tokens += final_res.input_token_len
         usage.completion_tokens += final_res.generate_token_len
@@ -768,7 +776,13 @@ async def completions_v1(raw_request: Request = None):
         model=model_name,
         choices=choices,
         usage=usage,
-    )
+    ).model_dump()
+
+    print(response)
+
+    if with_cache:
+        response["cache_block_ids"] = cache_block_ids
+        response["remote_token_ids"] = remote_token_ids
 
     return response
 
@@ -807,7 +821,7 @@ async def encode(request: EncodeRequest, raw_request: Request = None):
             length.append(len(ids))
         return EncodeResponse(input_ids=encoded, length=length)
 
-
+""" PD Disaggregation API Begin """
 @router.get("/distserve/engine_info")
 async def engine_info():
     engine = VariableInterface.async_engine.engine
@@ -824,7 +838,6 @@ async def engine_info():
 
     return response.model_dump_json()
 
-""" PD Disaggregation API Begin """
 @router.post("/distserve/p2p_initialize")
 async def p2p_initialize(init_request: MigrationInitRequest):
     return VariableInterface.async_engine.p2p_initialize(init_request)
@@ -840,6 +853,7 @@ async def free_cache(raw_request: Request) -> JSONResponse:
     config = await raw_request.json()
     session_id = int(config["session_id"])
     VariableInterface.async_engine.free_cache(session_id)
+    return {"status": "SUCCESS"}
 """ PD Disaggregation API End """
 
 
@@ -1002,8 +1016,9 @@ async def startup_event():
         return
     try:
         import requests
+        engine_config = VariableInterface.async_engine.engine.engine_config
         url = f'{VariableInterface.proxy_url}/nodes/add'
-        data = {'url': VariableInterface.api_server_url, 'status': {'models': get_model_list()}}
+        data = {'url': VariableInterface.api_server_url, 'status': {'models': get_model_list(), 'role': engine_config.role.value}}
         headers = {'accept': 'application/json', 'Content-Type': 'application/json'}
         response = requests.post(url, headers=headers, json=data)
 

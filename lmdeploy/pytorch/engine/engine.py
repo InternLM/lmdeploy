@@ -9,6 +9,8 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 import torch
 
+import requests
+
 from lmdeploy.disagg.messages import EngineRole, MigrationExecutionBatch
 from lmdeploy.messages import PytorchEngineConfig, ResponseType
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model, logging_timer
@@ -493,6 +495,9 @@ class Engine:
                     # reserve prefill KVCache until decode migration done.
                     seqs = list(self.scheduler.sessions[session_id].sequences.values())
                     seqs[0].status == MessageStatus.TO_BE_MIGRATED
+                    session = self.scheduler.sessions.pop(session_id)
+                    print(f"session_id: {session_id}")
+                    self.scheduler.locked_sessions[session_id] = session
                 else:
                     self.scheduler.end_session(session_id)
                 resp_type = ResponseType.SUCCESS
@@ -961,7 +966,11 @@ class Engine:
                     requests=migration_execution_requests
                 )
                 await self.executor.migrate(migration_inputs)
-
+                for msg in migration_running:
+                    try:
+                        requests.post(f"{msg.migration_request.remote_engine_id}/distserve/free_cache", json={"session_id": msg.migration_request.remote_session_id})
+                    except:
+                        logger.warn("free kvcache failure, this may cause memory leak.")
                 # generate output
                 outputs: Dict[int, InferOutput] = dict()
                 self.scheduler.lock_running(migration_running)

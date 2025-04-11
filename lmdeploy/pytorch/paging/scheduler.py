@@ -41,6 +41,9 @@ class Scheduler:
 
         self.sessions: Dict[int, SchedulerSession] = OrderedDict()
 
+        # For Disaggregation
+        self.locked_sessions: Dict[int, SchedulerSession] = OrderedDict()
+
         self.block_manager = build_block_manager(cache_config)
         self.block_trie = BlockTrie(self.cache_config, self.block_manager)
 

@@ -5,6 +5,11 @@ from typing import List, Optional, Tuple
 from pydantic import BaseModel
 
 
+class ServingStrategy(enum.Enum):
+    NonDisaggregated = enum.auto()
+    Disaggregated = enum.auto()
+
+
 class EngineRole(enum.Enum):
     Hybrid = enum.auto()
     Prefill = enum.auto()
@@ -54,7 +59,7 @@ class NVLinkInitRequest(BaseModel):
 
 
 class MigrationInitRequest(BaseModel):
-    remote_engine_id: int
+    remote_engine_id: str
     remote_engine_config: DisaggEngineConfig
     protocol: MigrationTransportProtocol
 
@@ -67,7 +72,7 @@ class MigrationInitRequest(BaseModel):
 
 class MigrationRegisterMemoryRequest(BaseModel):
     protocol: MigrationTransportProtocol
-    remote_engine_id: int
+    remote_engine_id: str
     mr_key: str
     addr: int
     length: int
@@ -75,12 +80,12 @@ class MigrationRegisterMemoryRequest(BaseModel):
 
 class MigrationConnectionRequest(BaseModel):
     protocol: MigrationTransportProtocol
-    remote_engine_id: int
+    remote_engine_id: str
     remote_endpoint_info: str
 
 
 class MigrationRequest(BaseModel):
-    remote_engine_id: int
+    remote_engine_id: str
     remote_session_id: int
     remote_token_id: int
     remote_block_ids: List[int]
@@ -89,12 +94,12 @@ class MigrationRequest(BaseModel):
 class MigrationExecutionBatch(BaseModel):
     """Input of the Migration."""
 
-    requests: List[Tuple[int, List[Tuple[int, int]]]] = []
+    requests: List[Tuple[str, List[Tuple[int, int]]]] = []
 
 
 class MigrationAssignment(BaseModel):
     protocol: MigrationTransportProtocol
-    remote_engine_id: int
+    remote_engine_id: str
     mr_key: str
     target_offset: List[int]
     source_offset: List[int]

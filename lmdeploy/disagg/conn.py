@@ -1,3 +1,5 @@
+import enum
+
 from typing import List, Optional, Tuple
 
 import requests
@@ -10,11 +12,23 @@ from lmdeploy.disagg.messages import (
     NVLinkInitRequest,
     MigrationTransportProtocol,
     MigrationConnectionRequest
-) 
+)
+
+
+class PDConnectionStatus(enum.Enum):
+    Disconnect = enum.auto()
+    Connected = enum.auto()
+
+
+class PDConnectionPool:
+    def __init__(self):
+        self.pool = {}
+
+    def init_connection(self, p0: str, p1: str):
+        self.pool[(p0, p1)] = PDConnectionStatus.Disconnect
 
 
 def pd_consolidation(
-    engine_id: Tuple[int, int],
     endpoint: Tuple[str, str],
     protocol: MigrationTransportProtocol=MigrationTransportProtocol.RDMA,
     *,
@@ -56,12 +70,12 @@ def pd_consolidation(
     # Step 2. Construct Initialize Configuration
     prefill_init_req = MigrationInitRequest(
         protocol=protocol,
-        remote_engine_id=engine_id[1],
+        remote_engine_id=endpoint[1],
         remote_engine_config=decode_engine_config,
     )
     decode_init_req = MigrationInitRequest(
         protocol=protocol,
-        remote_engine_id=engine_id[0],
+        remote_engine_id=endpoint[0],
         remote_engine_config=prefill_engine_config,
     )
 
@@ -87,7 +101,7 @@ def pd_consolidation(
         prefill_endpoint_conn_reqs = [
             MigrationConnectionRequest(
                 protocol=protocol,
-                remote_engine_id=engine_id[1],
+                remote_engine_id=endpoint[1],
                 remote_endpoint_info=info
             )
             for info in decode_endpoint_info
@@ -95,7 +109,7 @@ def pd_consolidation(
         decode_endpoint_conn_reqs = [
             MigrationConnectionRequest(
                 protocol=protocol,
-                remote_engine_id=engine_id[0],
+                remote_engine_id=endpoint[0],
                 remote_endpoint_info=info
             )
             for info in prefill_endpoint_info

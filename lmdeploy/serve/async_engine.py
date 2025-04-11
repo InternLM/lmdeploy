@@ -594,14 +594,14 @@ class AsyncEngine(LogitsMixin):
     @asynccontextmanager
     async def safe_run(self, inst, session_id, **kwargs):
         generator = inst.async_stream_infer(session_id, **kwargs)
-        try:
-            yield generator
-        except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
-            logger.error(f'[safe_run] exception caught: {type(e).__name__} {e}')
-            # TODO: remove session_id from async cancel
-            await inst.async_cancel(session_id)
-        finally:
-            await generator.aclose()
+        # try:
+        yield generator
+        # except (Exception, asyncio.CancelledError, GeneratorExit) as e:  # noqa
+        #     logger.error(f'[safe_run] exception caught: {type(e).__name__} {e}')
+        #     # TODO: remove session_id from async cancel
+        #     await inst.async_cancel(session_id)
+        # finally:
+        #     await generator.aclose()
 
     async def generate(
             self,
@@ -889,7 +889,16 @@ class AsyncEngine(LogitsMixin):
     
     """ DistServe Async Engine API Begin """
     def free_cache(self, session_id: int):
-        self.engine.scheduler.end_session(session_id)
+        """End session.
+
+        Args:
+            session_id (int): The session id.
+        """
+        session = self.engine.scheduler.locked_sessions[session_id]
+        seqs = list(session.sequences.values())
+        for seq in seqs:
+            self.engine.scheduler._remove_sequence(seq)
+        self.engine.scheduler.locked_sessions.pop(session_id)
 
     def p2p_initialize(self, init_request: MigrationInitRequest):
         return self.engine.executor.p2p_initialize(init_request)

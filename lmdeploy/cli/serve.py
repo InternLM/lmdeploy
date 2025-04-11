@@ -232,7 +232,12 @@ class SubCliServe:
         parser.set_defaults(run=SubCliServe.proxy)
         parser.add_argument('--server-name', type=str, default='0.0.0.0', help='Host ip for proxy serving')
         parser.add_argument('--server-port', type=int, default=8000, help='Server port of the proxy')
-        parser.add_argument('--strategy',
+        parser.add_argument('--serving-strategy',
+                            type=str,
+                            choices=['Disaggregated', 'NonDisaggregated'],
+                            default='NonDisaggregated',
+                            help='the strategy to dispatch requests to nodes')
+        parser.add_argument('--routing-strategy',
                             type=str,
                             choices=['random', 'min_expected_latency', 'min_observed_latency'],
                             default='min_expected_latency',

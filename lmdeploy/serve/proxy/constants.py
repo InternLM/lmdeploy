@@ -6,7 +6,7 @@ LATENCY_DEQUE_LEN = 15
 API_READ_TIMEOUT = 100
 
 
-class Strategy(enum.Enum):
+class RoutingStrategy(enum.Enum):
     """Strategy to dispatch requests to nodes."""
     RANDOM = enum.auto()
     MIN_EXPECTED_LATENCY = enum.auto()
