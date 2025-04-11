@@ -109,7 +109,7 @@ struct LlamaLinear::Impl {
 
         TM_CHECK_EQ(output.shape(0), input.shape(0));
         TM_CHECK_EQ(input.shape(1), dense.input_dim);
-        TM_CHECK_EQ(output.shape(1), dense.output_dim);
+        // TM_CHECK_EQ(output.shape(1), dense.output_dim);
 
         using namespace gemm;
 

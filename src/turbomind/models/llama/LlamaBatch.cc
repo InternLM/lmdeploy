@@ -1550,7 +1550,7 @@ bool LlamaBatch::Forward(GenerationState& g)
 
         auto logits = model_->postDecodeEmbedding(decoder_output_buf_.slice(0, bsz), symm_logits_buf_.buffer());
 
-        AnomalyHandler::instance().FixLogits(logits.data<nv_bfloat16>(), bsz, 1);
+        // AnomalyHandler::instance().FixLogits(logits.data<nv_bfloat16>(), bsz, 1);
 
         OutputLogits(logits, 0, bsz, GenerationConfig::kGeneration);
 

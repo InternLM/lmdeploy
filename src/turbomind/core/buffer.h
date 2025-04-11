@@ -40,8 +40,11 @@ inline ssize_t get_byte_size(DataType dtype, ssize_t count = 1)
         case TYPE_INT64:
         case TYPE_FP64:
             return 8 * count;
+        case TYPE_UINT4:
+        case TYPE_INT4:
+            return count * 4 / 8;
         default:
-            TM_CHECK(0) << "Not supported dtype: " << dtype;
+            TM_CHECK(0) << "Not supported: " << dtype;
             return -1;
     }
 }
@@ -74,8 +77,12 @@ inline ssize_t get_elem_num(ssize_t byte_size, DataType dtype)
         case TYPE_FP64:
             TM_CHECK(byte_size % 8 == 0);
             return byte_size / 8;
+        case TYPE_UINT4:
+        case TYPE_INT4:
+            TM_CHECK(byte_size * 8 % 4 == 0);
+            return byte_size * 8 / 4;
         default:
-            TM_CHECK(0) << "Not supported";
+            TM_CHECK(0) << "Not supported: " << dtype;
             return -1;
     }
 }

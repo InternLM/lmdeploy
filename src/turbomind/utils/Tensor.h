@@ -35,8 +35,7 @@
 
 namespace turbomind {
 
-typedef enum datatype_enum
-{
+typedef enum datatype_enum {
     TYPE_INVALID,
     TYPE_BOOL,
     TYPE_UINT4,
@@ -58,6 +57,58 @@ typedef enum datatype_enum
     TYPE_STR,
     TYPE_VOID,
 } DataType;
+
+constexpr const char* to_string(DataType dtype)
+{
+    switch (dtype) {
+        case TYPE_INVALID:
+            return "invalid";
+        case TYPE_BOOL:
+            return "bool";
+        case TYPE_UINT4:
+            return "u4";
+        case TYPE_UINT8:
+            return "u8";
+        case TYPE_UINT16:
+            return "u16";
+        case TYPE_UINT32:
+            return "u32";
+        case TYPE_UINT64:
+            return "u64";
+        case TYPE_INT4:
+            return "s4";
+        case TYPE_INT8:
+            return "s8";
+        case TYPE_INT16:
+            return "s16";
+        case TYPE_INT32:
+            return "s32";
+        case TYPE_INT64:
+            return "s64";
+        case TYPE_FP16:
+            return "f16";
+        case TYPE_FP32:
+            return "f32";
+        case TYPE_FP64:
+            return "f64";
+        case TYPE_BYTES:
+            return "byte";
+        case TYPE_BF16:
+            return "bf16";
+        case TYPE_FP8_E4M3:
+            return "f8_e4m3";
+        case TYPE_STR:
+            return "str";
+        case TYPE_VOID:
+            return "void";
+    }
+    return "unknown";
+}
+
+inline std::ostream& operator<<(std::ostream& os, DataType data_type)
+{
+    return os << to_string(data_type);
+}
 
 template<typename T_>
 constexpr DataType getTensorType()
@@ -88,6 +139,15 @@ constexpr DataType getTensorType()
     }
     else if (std::is_same_v<T, uint> || std::is_same_v<T, uint32_t>) {
         return TYPE_UINT32;
+    }
+    else if (std::is_same_v<T, unsigned char> || std::is_same_v<T, uint8_t>) {
+        return TYPE_UINT8;
+    }
+    else if (std::is_same_v<T, short> || std::is_same_v<T, int16_t>) {
+        return TYPE_INT16;
+    }
+    else if (std::is_same_v<T, unsigned short> || std::is_same_v<T, uint16_t>) {
+        return TYPE_UINT16;
     }
     else if (std::is_same_v<T, long long> || std::is_same_v<T, int64_t>) {
         return TYPE_INT64;
@@ -130,8 +190,7 @@ static inline size_t get_elem_size(DataType type)
     }
 }
 
-typedef enum memorytype_enum
-{
+typedef enum memorytype_enum {
     MEMORY_CPU,
     MEMORY_CPU_PINNED,
     MEMORY_GPU

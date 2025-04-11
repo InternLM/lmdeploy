@@ -123,33 +123,9 @@ LlamaDecoderLayerWeight::LlamaDecoderLayerWeight(DataType           data_type,
     register_parameter("ffn_norm.weight", ffn_norm);
 }
 
-size_t LlamaDecoderLayerWeight::workspace_size() const noexcept
-{
-    // Space to hold the largest weight in full precision
-
-    auto get_size = [](const auto& w) { return (size_t)w.input_dim * w.output_dim; };
-
-    size_t size = 0;
-
-    size = std::max(size, get_size(self_attn_weights->qkv));
-    size = std::max(size, get_size(self_attn_weights->output));
-    size = std::max(size, get_size(ffn_weights->gating));
-    size = std::max(size, get_size(ffn_weights->fused_gating_intermediate));
-
-    if (moe_weights) {
-        for (const auto& e : moe_weights->experts) {
-            size = std::max(size, get_size(e->gating));
-            size = std::max(size, get_size(e->fused_gating_intermediate));
-        }
-    }
-
-    return size * sizeof(uint16_t);
-}
-
 LlamaDecoderLayerWeight::~LlamaDecoderLayerWeight() = default;
 
-static void
-convert_u4(LlamaDenseWeight& dense, bool is_fused_moe, void* workspace, size_t size, bool use_simt, cudaStream_t st)
+static void convert_u4(LlamaDenseWeight& dense, bool is_fused_moe, bool use_simt, cudaStream_t st)
 {
     FT_CHECK(dense.weight_type == TYPE_UINT4);
 
@@ -159,14 +135,15 @@ convert_u4(LlamaDenseWeight& dense, bool is_fused_moe, void* workspace, size_t s
         get_weight_and_scales_layout(gemm::DataType::U4, is_fused_moe, getSMVersion(), use_simt);
 
     if (order_b == kColMajor) {
+        core::Buffer trans{dense.input_dim * dense.output_dim, TYPE_UINT4, MEMORY_GPU};
         transpose_u4(
-            (uint4_t*)workspace, (const uint4_t*)dense.weight.raw_data(), dense.input_dim, dense.output_dim, st);
+            (uint4_t*)trans.raw_data(), (const uint4_t*)dense.weight.raw_data(), dense.input_dim, dense.output_dim, st);
         cudaMemcpyAsync(
-            dense.weight.raw_data(), workspace, dense.input_dim * dense.output_dim / 2, cudaMemcpyDefault, st);
+            dense.weight.raw_data(), trans.raw_data(), dense.input_dim * dense.output_dim / 2, cudaMemcpyDefault, st);
     }
 
-    extend_to_u16(
-        (uint16_t*)workspace, (const uint4_t*)dense.weight.raw_data(), dense.input_dim * dense.output_dim, st);
+    core::Buffer_<uint16_t> tmp_w{dense.input_dim * dense.output_dim, MEMORY_GPU};
+    extend_to_u16(tmp_w.data(), (const uint4_t*)dense.weight.raw_data(), dense.input_dim * dense.output_dim, st);
     sync_check_cuda_error();
 
     MatrixLayout w_desc{
@@ -183,19 +160,19 @@ convert_u4(LlamaDenseWeight& dense, bool is_fused_moe, void* workspace, size_t s
 
     cudaMemsetAsync(dense.weight.raw_data(), 0, dense.input_dim * dense.output_dim / 2, st);
 
-    FT_CHECK(Convert(workspace, w_desc, dense.weight.raw_data(), k_desc, st) == 0);
+    FT_CHECK(Convert(tmp_w.data(), w_desc, dense.weight.raw_data(), k_desc, st) == 0);
     sync_check_cuda_error();
 
     const int scale_count = (dense.input_dim / dense.group_size) * dense.output_dim;
 
-    // std::cout << "fuse_scales_and_zeros\n";
-    fuse_scales_and_zeros((half*)workspace, dense.scales.data<half>(), dense.zeros.data<half>(), scale_count, st);
+    core::Buffer_<half> tmp_q{scale_count * 2, MEMORY_GPU};
+    fuse_scales_and_zeros(tmp_q.data(), dense.scales.data<half>(), dense.zeros.data<half>(), scale_count, st);
     sync_check_cuda_error();
 
     dense.scales = {};
     dense.zeros  = {};
 
-    deviceMalloc((half**)&dense.scales_zeros, scale_count * 2, st);
+    dense.scales_zeros = core::Tensor_<half>{{scale_count, 2}, MEMORY_GPU};
 
     MatrixLayout s_desc{
         gemm::DataType::U32,
@@ -208,15 +185,14 @@ convert_u4(LlamaDenseWeight& dense, bool is_fused_moe, void* workspace, size_t s
     MatrixLayout q_desc = s_desc;
     q_desc.pack         = pack_v;
 
-    FT_CHECK(Convert(workspace, s_desc, dense.scales_zeros.raw_data(), q_desc, st) == 0);
+    FT_CHECK(Convert(tmp_q.data(), s_desc, dense.scales_zeros.raw_data(), q_desc, st) == 0);
     sync_check_cuda_error();
 
     dense.k_desc = k_desc;
     dense.q_desc = q_desc;
 }
 
-static void
-convert_fp(LlamaDenseWeight& dense, bool is_fused_moe, void* workspace, size_t size, bool use_simt, cudaStream_t st)
+static void convert_fp(LlamaDenseWeight& dense, bool is_fused_moe, bool use_simt, cudaStream_t st)
 {
     using namespace gemm;
 
@@ -235,13 +211,15 @@ convert_fp(LlamaDenseWeight& dense, bool is_fused_moe, void* workspace, size_t s
 
     TM_CHECK(dense.weight.is_contiguous());
 
+    core::Buffer_<uint16_t> tmp{input_dim * output_dim, MEMORY_GPU};
+
     if (order_b == kColMajor) {
-        invokeTransposeAxis01((uint16_t*)workspace, (uint16_t*)dense.weight.raw_data(), input_dim, output_dim, 1, st);
+        invokeTransposeAxis01(tmp.data(), (uint16_t*)dense.weight.raw_data(), input_dim, output_dim, 1, st);
         sync_check_cuda_error();
     }
     else {
         check_cuda_error(
-            cudaMemcpyAsync(workspace, dense.weight.raw_data(), dense.weight.byte_size(), cudaMemcpyDefault, st));
+            cudaMemcpyAsync(tmp.data(), dense.weight.raw_data(), dense.weight.byte_size(), cudaMemcpyDefault, st));
     }
 
     MatrixLayout src{
@@ -256,41 +234,29 @@ convert_fp(LlamaDenseWeight& dense, bool is_fused_moe, void* workspace, size_t s
     dst.pack         = pack_b;
 
     if (pack_b) {
-        FT_CHECK(Convert(workspace, src, dense.weight.raw_data(), dst, st) == 0);
+        FT_CHECK(Convert(tmp.data(), src, dense.weight.raw_data(), dst, st) == 0);
         sync_check_cuda_error();
     }
     else {
         check_cuda_error(
-            cudaMemcpyAsync(dense.weight.raw_data(), workspace, dense.weight.byte_size(), cudaMemcpyDefault, st));
+            cudaMemcpyAsync(dense.weight.raw_data(), tmp.data(), dense.weight.byte_size(), cudaMemcpyDefault, st));
     }
 
     dense.k_desc = dst;
 }
 
-static void convert(LlamaDenseWeight& dense,
-                    bool              is_fused_moe,
-                    DataType          data_type,
-                    void*             workspace,
-                    size_t            size,
-                    bool              use_simt,
-                    cudaStream_t      st)
+static void convert(LlamaDenseWeight& dense, bool is_fused_moe, DataType data_type, bool use_simt, cudaStream_t st)
 {
     if (dense.weight_type == TYPE_UINT4) {
         TM_CHECK_EQ(data_type, TYPE_FP16);
-        convert_u4(dense, is_fused_moe, workspace, size, use_simt, st);
+        convert_u4(dense, is_fused_moe, use_simt, st);
     }
     else {
-        convert_fp(dense, is_fused_moe, workspace, size, use_simt, st);
+        convert_fp(dense, is_fused_moe, use_simt, st);
     }
 }
 
-void interleave(LlamaDenseWeight& c,
-                LlamaDenseWeight& a,
-                LlamaDenseWeight& b,
-                DataType          data_type,
-                void*             workspace,
-                size_t            size,
-                cudaStream_t      st)
+void interleave(LlamaDenseWeight& c, LlamaDenseWeight& a, LlamaDenseWeight& b, DataType data_type, cudaStream_t st)
 {
     FT_CHECK(c.input_dim == a.input_dim);
     FT_CHECK(c.input_dim == b.input_dim);
@@ -302,19 +268,16 @@ void interleave(LlamaDenseWeight& c,
     auto invoke = [&](auto t) {
         using T = decltype(t);
         if (a.weight_type == TYPE_UINT4) {
-            uint8_t* tmp_a = (uint8_t*)workspace;
-            uint8_t* tmp_b = tmp_a + a.output_dim * a.input_dim;
-            uint8_t* tmp_c = tmp_b + b.output_dim * b.input_dim;
+            core::Buffer_<uint8_t> tmp_a{a.weight.size(), MEMORY_GPU};
+            core::Buffer_<uint8_t> tmp_b{b.weight.size(), MEMORY_GPU};
+            core::Buffer_<uint8_t> tmp_c{c.weight.size(), MEMORY_GPU};
 
-            const auto sentinel = tmp_c + c.output_dim * c.input_dim;
-            FT_CHECK(sentinel <= (uint8_t*)workspace + size);
+            extend_to_u8(tmp_a.data(), (const uint4_t*)a.weight.raw_data(), a.output_dim * a.input_dim, st);
+            extend_to_u8(tmp_b.data(), (const uint4_t*)b.weight.raw_data(), b.output_dim * b.input_dim, st);
 
-            extend_to_u8(tmp_a, (const uint4_t*)a.weight.raw_data(), a.output_dim * a.input_dim, st);
-            extend_to_u8(tmp_b, (const uint4_t*)b.weight.raw_data(), b.output_dim * b.input_dim, st);
+            interleave_output_dims(tmp_c.data(), tmp_a.data(), tmp_b.data(), a.output_dim, a.input_dim, st);
 
-            interleave_output_dims(tmp_c, tmp_a, tmp_b, a.output_dim, a.input_dim, st);
-
-            compact_to_u4((uint4_t*)c.weight.raw_data(), tmp_c, c.output_dim * c.input_dim, st);
+            compact_to_u4((uint4_t*)c.weight.raw_data(), tmp_c.data(), c.output_dim * c.input_dim, st);
 
             interleave_output_dims(c.scales.data<T>(),
                                    a.scales.data<T>(),
@@ -347,8 +310,7 @@ void interleave(LlamaDenseWeight& c,
     }
 }
 
-void chunk(
-    LlamaDenseWeight& c, LlamaDenseWeight& a, LlamaDenseWeight& b, DataType data_type, void*, size_t, cudaStream_t st)
+void chunk(LlamaDenseWeight& c, LlamaDenseWeight& a, LlamaDenseWeight& b, DataType data_type, cudaStream_t st)
 {
     FT_CHECK(c.input_dim == a.input_dim);
     FT_CHECK(c.input_dim == b.input_dim);
@@ -396,12 +358,12 @@ void chunk(
     }
 }
 
-void LlamaDecoderLayerWeight::prepare(void* workspace, size_t size, const cudaDeviceProp& prop, cudaStream_t st)
+void LlamaDecoderLayerWeight::prepare(const cudaDeviceProp& prop, cudaStream_t st)
 {
     const bool is_16xx = is_16xx_series(prop.name);
 
-    convert(self_attn_weights->qkv, false, data_type_, workspace, size, is_16xx, st);
-    convert(self_attn_weights->output, false, data_type_, workspace, size, is_16xx, st);
+    convert(self_attn_weights->qkv, false, data_type_, is_16xx, st);
+    convert(self_attn_weights->output, false, data_type_, is_16xx, st);
 
     auto process_ffn = [&](LlamaFfnWeight& ffn, bool is_fused_moe) {
         if (fused_up_and_gate_) {
@@ -415,23 +377,23 @@ void LlamaDecoderLayerWeight::prepare(void* workspace, size_t size, const cudaDe
                                       ffn.gating.group_size);
 
             if (ffn.is_fused_silu) {
-                interleave(fused_up_and_gate, ffn.gating, ffn.intermediate, data_type_, workspace, size, st);
+                interleave(fused_up_and_gate, ffn.gating, ffn.intermediate, data_type_, st);
             }
             else {
-                chunk(fused_up_and_gate, ffn.gating, ffn.intermediate, data_type_, workspace, size, st);
+                chunk(fused_up_and_gate, ffn.gating, ffn.intermediate, data_type_, st);
             }
 
-            convert(ffn.fused_gating_intermediate, is_fused_moe, data_type_, workspace, size, is_16xx, st);
+            convert(ffn.fused_gating_intermediate, is_fused_moe, data_type_, is_16xx, st);
 
             ffn.gating       = {};
             ffn.intermediate = {};
         }
         else {
-            convert(ffn.gating, is_fused_moe, data_type_, workspace, size, is_16xx, st);
-            convert(ffn.intermediate, is_fused_moe, data_type_, workspace, size, is_16xx, st);
+            convert(ffn.gating, is_fused_moe, data_type_, is_16xx, st);
+            convert(ffn.intermediate, is_fused_moe, data_type_, is_16xx, st);
         }
 
-        convert(ffn.output, is_fused_moe, data_type_, workspace, size, is_16xx, st);
+        convert(ffn.output, is_fused_moe, data_type_, is_16xx, st);
     };
 
     if (inter_size_) {

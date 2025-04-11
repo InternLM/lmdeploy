@@ -180,6 +180,12 @@ public:
         return layout_.rank();
     }
 
+    friend std::ostream& operator<<(std::ostream& os, const Tensor& t)
+    {
+        os << t.dtype() << "_" << t.layout();  // << "@" << t.buffer_.unsafe_data();
+        return os;
+    }
+
 private:
     Layout layout_;
     Buffer buffer_;

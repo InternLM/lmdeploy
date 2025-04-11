@@ -108,28 +108,13 @@ void LlamaWeight::prepare(const cudaDeviceProp& prop)
 {
     core::ContextGuard guard = context();
 
-    const auto workspace_size = [&] {
-        size_t size{};
-        for (const auto& layer : decoder_layer_weights) {
-            size = std::max(size, layer->workspace_size());
-        }
-        return size;
-    }();
-
-    TM_LOG_INFO("[LlamaWeight<T>::prepare] workspace size: %d", workspace_size);
-
     // Wait for the weights to be filled externally
     check_cuda_error(cudaDeviceSynchronize());
 
     auto stream = core::Context::stream().handle();
 
-    core::Buffer_<char> workspace;
-
-    if (workspace_size) {
-        workspace = core::Buffer_<char>(workspace_size, MEMORY_GPU);
-    }
     for (auto& layer : decoder_layer_weights) {
-        layer->prepare(workspace.data(), workspace_size, prop, stream);
+        layer->prepare(prop, stream);
     }
 }
 

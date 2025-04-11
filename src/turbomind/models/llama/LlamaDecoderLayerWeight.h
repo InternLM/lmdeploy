@@ -41,9 +41,7 @@ public:
     LlamaDecoderLayerWeight(const LlamaDecoderLayerWeight&)            = delete;
     LlamaDecoderLayerWeight& operator=(const LlamaDecoderLayerWeight&) = delete;
 
-    void prepare(void* workspace, size_t size, const cudaDeviceProp& prop, cudaStream_t st);
-
-    size_t workspace_size() const noexcept;
+    void prepare(const cudaDeviceProp& prop, cudaStream_t st);
 
     core::Tensor self_attn_norm;
     core::Tensor ffn_norm;

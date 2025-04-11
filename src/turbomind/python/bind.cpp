@@ -379,17 +379,19 @@ PYBIND11_MODULE(_turbomind, m)
                 auto src = DLManagedTensorToTritonTensor(dlmt);
                 // take ownership of capsule's payload
                 cap.set_name("used_dltensor");
+
+                TM_CHECK_EQ(self.byte_size(), src->byte_size());
+
                 switch (self.dtype()) {
                     case ft::TYPE_FP16:
+                    case ft::TYPE_BF16:
                     case ft::TYPE_FP32:
                     case ft::TYPE_INT32:
-                    case ft::TYPE_BF16: {
-                        TM_CHECK_EQ(self.byte_size(), src->byte_size());
+                    case ft::TYPE_UINT4:
                         safe_memcpy(self.raw_data(), src->raw_data(), self.byte_size());
                         break;
-                    }
                     default:
-                        ft::FT_CHECK(0);
+                        TM_CHECK(0) << "Not suppported: " << self.dtype();
                 }
             },
             "tensor"_a)
@@ -533,9 +535,7 @@ PYBIND11_MODULE(_turbomind, m)
              "rank"_a)
         .def(
             "get_params",
-            [](LlamaTritonModel* model, int deviceId, int rank) {
-                return model->getParams(deviceId, rank);
-            },
+            [](LlamaTritonModel* model, int deviceId, int rank) { return model->getParams(deviceId, rank); },
             py::call_guard<py::gil_scoped_release>(),
             "device_id"_a,
             "rank"_a)
