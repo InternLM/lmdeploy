@@ -221,6 +221,7 @@ class ModelInputs:
 
         return ret
 
+    @torch.inference_mode()
     def to_device(self, device: str, non_blocking: bool = False):
         """to device."""
         out_dict = dict()
