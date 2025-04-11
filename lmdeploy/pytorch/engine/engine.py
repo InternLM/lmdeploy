@@ -567,6 +567,7 @@ class Engine:
             return torch.int32
         return torch.int64
 
+    @torch.inference_mode()
     @logging_timer('CreateModelInputs', logger)
     def create_model_inputs(self, messages: SeqList, is_prefill: bool):
         """create model inputs from messages.

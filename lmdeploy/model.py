@@ -228,7 +228,7 @@ class BaseChatTemplate(BaseModel):
             role = message['role']
             content = get_text(message['content'])
             ret += f'{box_map[role]}{content}{eox_map[role]}'
-        if len(messages) and messages[-1]['role'] == 'assistant':
+        if len(messages) and messages[-1]['role'] == 'assistant' and len(eox_map['assistant']) > 0:
             return ret[:-len(eox_map['assistant'])]  # prefix of response
         ret += f'{self.assistant}'
         return ret
@@ -1973,6 +1973,41 @@ class Molmo(BaseChatTemplate):
         path = model_path.lower()
         if 'molmo' in path:
             return 'molmo'
+
+
+@MODELS.register_module(name='llama4')
+class Llama4(BaseChatTemplate):
+
+    def __init__(self,
+                 system='<|header_start|>system<|header_end|>\n\n',
+                 user='<|header_start|>user<|header_end|>\n\n',
+                 assistant='<|header_start|>assistant<|header_end|>\n\n',
+                 eosys='<|eot|>',
+                 eoh='<|eot|>',
+                 eoa='<|eot|>',
+                 separator='',
+                 stop_words=['<|end_of_text|>', '<|eom|>', '<|eot|>'],
+                 **kwargs):
+        super().__init__(system=system,
+                         eosys=eosys,
+                         user=user,
+                         eoh=eoh,
+                         assistant=assistant,
+                         eoa=eoa,
+                         separator=separator,
+                         stop_words=stop_words,
+                         **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        path = model_path.lower()
+        if 'llama-4' in path:
+            return 'llama4'
 
 
 def best_match_model(query: str) -> Optional[str]:
