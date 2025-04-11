@@ -42,14 +42,6 @@ RUN wget https://developer.nvidia.com/downloads/assets/secure/nvshmem/nvshmem_sr
 # install DeepEP
 RUN cd DeepEP && NVSHMEM_DIR=${NVSHMEM_PREFIX} pip install -v .
 
-# FlashMLA
-RUN git clone https://github.com/deepseek-ai/FlashMLA.git --recursive && \
-    cd FlashMLA && python setup.py install
-
-# DeepGEMM
-RUN git clone https://github.com/deepseek-ai/DeepGEMM.git --recursive && \
-    cd DeepGEMM && python setup.py install
-
 # export stage
 FROM ${BASE_IMAGE} AS export_stage
 
@@ -58,7 +50,16 @@ ARG NVSHMEM_PREFIX
 
 COPY --from=builder_stage ${GDRCOPY_HOME} ${GDRCOPY_HOME}
 COPY --from=builder_stage ${NVSHMEM_PREFIX} ${NVSHMEM_PREFIX}
-COPY --from=builder_stage /opt/py3/lib/python3.10/site-packages/deep_ep*/ /opt/py3/lib/python3.10/site-packages/deep_ep/
+COPY --from=builder_stage /opt/py3/lib/python3.10/site-packages/deep_ep/ /opt/py3/lib/python3.10/site-packages/deep_ep/
 COPY --from=builder_stage /opt/py3/lib/python3.10/site-packages/deep_ep_cpp* /opt/py3/lib/python3.10/site-packages/
-COPY --from=builder_stage /opt/py3/lib/python3.10/site-packages/flash_mla*/ /opt/py3/lib/python3.10/site-packages/flash_mla/
-COPY --from=builder_stage /opt/py3/lib/python3.10/site-packages/deep_gemm*/ /opt/py3/lib/python3.10/site-packages/deep_gemm/
+
+WORKDIR /opt/
+# install FlashMLA
+RUN git clone https://github.com/deepseek-ai/FlashMLA.git --recursive && \
+    cd FlashMLA && python setup.py install && \
+    cd .. && rm -rf FlashMLA
+
+# install DeepGEMM
+RUN git clone https://github.com/deepseek-ai/DeepGEMM.git --recursive && \
+    cd DeepGEMM && python setup.py install && \
+    cd .. && rm -rf DeepGEMM
