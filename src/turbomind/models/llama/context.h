@@ -31,26 +31,16 @@ struct Context {
     core::Allocator              allocator;
     cudaStream_t                 stream;
     std::unique_ptr<LlamaLinear> linear;
-    Communicators                comm;
-    cudaDeviceProp               cuda_device_prop;
+    cudaDeviceProp               device_prop;
+    Communicators                comm;  // initialize later
 
-    Context(DataType data_type, int device_id)
+    Context(int device_id):
+        core_stream{core::Stream::create()},
+        allocator{core::Allocator(core_stream, false)},
+        stream{core_stream.handle()},
+        linear{std::make_unique<LlamaLinear>(stream)}
     {
-        core_stream = core::Stream::create();
-        allocator   = core::Allocator(core_stream, false);
-
-        stream = core_stream.handle();
-
-        linear = std::make_unique<LlamaLinear>(stream);
-
-        check_cuda_error(cudaGetDeviceProperties(&cuda_device_prop, device_id));
-    }
-
-    ~Context()
-    {
-        linear.reset();
-
-        // `comm` destroyed by infer threads collectively
+        check_cuda_error(cudaGetDeviceProperties(&device_prop, device_id));
     }
 };
 

@@ -1,16 +1,16 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
-#include "src/turbomind/models/llama/moe_ffn_layer.h"
+#include <cuda_runtime.h>
+
 #include "src/turbomind/kernels/activation_kernels.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/llama/llama_utils.h"
+#include "src/turbomind/models/llama/moe_ffn_layer.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/nvtx_utils.h"
 #include "src/turbomind/utils/string_utils.h"
-#include <cublasLt.h>
-#include <cuda_runtime.h>
 
 namespace turbomind {
 
@@ -19,15 +19,15 @@ MoeFfnLayer::MoeFfnLayer(const ModelParam& model, const MoeParam& param, const E
     hidden_dim_(model.hidden_units),
     param_(param),
     stream_(ctx.stream),
-    linear_(ctx.linear.get())
+    linear_(*ctx.linear)
 {
-    FT_CHECK(!param.expert_num.empty());
+    TM_CHECK(!param.expert_num.empty());
 
     const int max_expert_num = *std::max_element(param.expert_num.begin(), param.expert_num.end());
 
     if (param_.method == MoeParam::kFused) {
-        context_ = std::make_unique<gemm::MoeGemmContext>(
-            max_expert_num, param.experts_per_token, ctx.cuda_device_prop, stream_);
+        context_ =
+            std::make_unique<gemm::MoeGemmContext>(max_expert_num, param.experts_per_token, ctx.device_prop, stream_);
     }
     else {
         expert_ffn_ = std::make_unique<LlamaFfnLayer>(model, ctx);
@@ -53,7 +53,7 @@ core::Tensor_<float> MoeFfnLayer::Gate(const core::Tensor& input, const LlamaDen
     auto& weight = gate.weight;
     TM_CHECK_EQ(input.shape(1), weight.shape(0));
     core::Tensor_<float> logits{{input.shape(0), weight.shape(1)}, MEMORY_GPU};
-    linear_->forward(input, gate, LlamaLinear::kGemm, logits);
+    linear_.forward(input, gate, LlamaLinear::kGemm, logits);
     sync_check_cuda_error();
     return logits;
 }
@@ -152,13 +152,13 @@ void MoeFfnLayer::Forward(ForwardParam& p)
         const int    inter_dim = block.is_fused_silu ? inter_dim : inter_dim * 2;
         core::Tensor inter{{tokens * param_.experts_per_token, inter_dim}, p.input.dtype(), p.input.device()};
 
-        linear_->forward_moe(inter,
-                             p.input,
-                             f2n_.data(),
-                             offsets_.data(),
-                             block.fused_gating_intermediate,
-                             block.is_fused_silu ? LlamaLinear::kFusedSiluFfn : LlamaLinear::kGemm,
-                             context_.get());
+        linear_.forward_moe(inter,
+                            p.input,
+                            f2n_.data(),
+                            offsets_.data(),
+                            block.fused_gating_intermediate,
+                            block.is_fused_silu ? LlamaLinear::kFusedSiluFfn : LlamaLinear::kGemm,
+                            context_.get());
         sync_check_cuda_error();
 
         if (!block.is_fused_silu) {
@@ -168,13 +168,13 @@ void MoeFfnLayer::Forward(ForwardParam& p)
             sync_check_cuda_error();
         }
 
-        linear_->forward_moe(p.temp,
-                             inter.slice({0, 0}, {-1, inter_size_}),
-                             nullptr,
-                             offsets_.data(),
-                             block.output,
-                             LlamaLinear::kGemm,
-                             context_.get());
+        linear_.forward_moe(p.temp,
+                            inter.slice({0, 0}, {-1, inter_size_}),
+                            nullptr,
+                            offsets_.data(),
+                            block.output,
+                            LlamaLinear::kGemm,
+                            context_.get());
         sync_check_cuda_error();
     }
 }

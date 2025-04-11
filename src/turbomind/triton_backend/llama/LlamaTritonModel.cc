@@ -478,7 +478,7 @@ void LlamaTritonModel::createEngine(int device_id, int rank)
 {
     check_cuda_error(cudaSetDevice(device_id));
 
-    auto ctx = std::make_unique<Context>(dtype_, device_id);
+    auto ctx = std::make_unique<Context>(device_id);
 
     core::ContextGuard guard{ctx->core_stream, ctx->allocator, core::Allocator{MEMORY_CPU_PINNED}};
 

@@ -119,7 +119,7 @@ private:
 
     // Refs into `Context`, make the pointer constant (not the pointed objects)
     cudaStream_t const stream_;
-    LlamaLinear* const linear_;
+    LlamaLinear&       linear_;
 
     bool use_allgather_2d_{false};
 

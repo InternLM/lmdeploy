@@ -37,7 +37,7 @@ private:
     const MoeParam param_;
 
     cudaStream_t const stream_;
-    LlamaLinear* const linear_;
+    LlamaLinear&       linear_;
 
     std::unique_ptr<LlamaFfnLayer>        expert_ffn_;
     std::unique_ptr<gemm::MoeGemmContext> context_;
