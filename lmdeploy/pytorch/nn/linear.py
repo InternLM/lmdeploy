@@ -419,7 +419,9 @@ class MergedBlockedF8Linear(BlockedF8Linear):
         """weight loader."""
         world_size, rank = _get_tp_world_rank(self.is_tp)
         shard_idx = self.out_names_map[shard_id]
-        if loaded_weight.dim() == 2 and loaded_weight.dtype == torch.float32:
+        bits = torch.finfo(loaded_weight.dtype).bits
+        if loaded_weight.dim() == 2 and bits != 8:
+            loaded_weight = loaded_weight.to(torch.float32)
             all_out_features = [feats // self.block_size for feats in self.all_out_features]
             param_w = param.data.split(all_out_features, 0)[shard_idx]
         else:
@@ -430,7 +432,8 @@ class MergedBlockedF8Linear(BlockedF8Linear):
 
     def weight_spliter(self, loaded_weight: torch.Tensor):
         """weight spliter."""
-        if loaded_weight.dim() == 2 and loaded_weight.dtype == torch.float32:
+        bits = torch.finfo(loaded_weight.dtype).bits
+        if loaded_weight.dim() == 2 and bits != 8:
             return loaded_weight.split(self.scale_split_section, dim=0)
         return loaded_weight.split(self.split_section, dim=0)
 
