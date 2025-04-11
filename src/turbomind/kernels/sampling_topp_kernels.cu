@@ -91,9 +91,7 @@ static __global__ void softmax(T* logits, const int vocab_size_padded, const int
     }
     logits += bid * vocab_size_padded;
 
-    float            max_val   = -1 * FLT_MAX;
-    const bool       IS_FP16   = std::is_same<T, half>::value;
-    const T          MAX_T_VAL = (IS_FP16) ? HALF_FLT_MAX : FLT_MAX;
+    float            max_val = -1 * FLT_MAX;
     __shared__ float s_max_val;
     __shared__ float s_sum_val;
 
@@ -139,12 +137,21 @@ void invokeSoftmax(T*           logits,
     softmax<<<grid, block, 0, stream>>>(logits, vocab_size_padded, vocab_size, kept);
 }
 
-template void invokeSoftmax(float*       logits,
-                            const int    vocab_size_padded,
-                            const int    vocab_size,
-                            const int    batch_size,
-                            const int*   kept,
-                            cudaStream_t stream);
+#define INSTANTIATE_INVOKE_SOFTMAX(T)                                                                                  \
+    template void invokeSoftmax<T>(T * logits,                                                                         \
+                                   const int    vocab_size_padded,                                                     \
+                                   const int    vocab_size,                                                            \
+                                   const int    batch_size,                                                            \
+                                   const int*   kept,                                                                  \
+                                   cudaStream_t stream);
+
+#ifdef ENABLE_FP32
+INSTANTIATE_INVOKE_SOFTMAX(float);
+#endif
+INSTANTIATE_INVOKE_SOFTMAX(half);
+#ifdef ENABLE_BF16
+INSTANTIATE_INVOKE_SOFTMAX(nv_bfloat16);
+#endif
 
 template<typename T, int MAX_K, int THREADBLOCK_SIZE>
 __launch_bounds__(THREADBLOCK_SIZE) __global__ void topp_beam_topk_kernel(const T*     logits,
@@ -173,8 +180,7 @@ __launch_bounds__(THREADBLOCK_SIZE) __global__ void topp_beam_topk_kernel(const 
     __shared__ typename BlockReduce::TempStorage               temp_storage;
     TopK<T, MAX_K>                                             partial;
 
-    const bool IS_FP16   = std::is_same<T, half>::value;
-    const T    MAX_T_VAL = (IS_FP16) ? HALF_FLT_MAX : FLT_MAX;
+    const T MAX_T_VAL = getMaxValue<T>();
 
 #pragma unroll
     for (int i = 0; i < MAX_K; ++i) {
@@ -190,20 +196,20 @@ __launch_bounds__(THREADBLOCK_SIZE) __global__ void topp_beam_topk_kernel(const 
     TopK<T, MAX_K> total = BlockReduce(temp_storage).Reduce(partial, reduce_topk_op<T, MAX_K>);
 
     if (thread_id == 0) {
-        T sum_prob = (T)(0.0f);
+        float sum_prob = 0.f;
 
 #pragma unroll
         for (int i = 0; i < MAX_K; i++) {
-            sum_prob += total.u[i];
+            sum_prob += (float)total.u[i];
         }
 
-        if ((float)sum_prob >= p_threshold) {
+        if (sum_prob >= p_threshold) {
             end_offset_buf[batch_id] = begin_offset_buf[batch_id];
             kept[batch_id]           = MAX_K;
 
 #pragma unroll
             for (int i = 0; i < MAX_K; ++i) {
-                sorted_logits[i]  = total.u[i] / sum_prob;
+                sorted_logits[i]  = (float)total.u[i] / sum_prob;
                 sorted_indices[i] = total.p[i];
             }
         }
@@ -284,7 +290,13 @@ void invokeTopPSort(TopPSortParams& params, cudaStream_t stream)
                                                                         stream));       // cudaStream_t
 }
 
+#ifdef ENABLE_FP32
 template void invokeTopPSort<float>(TopPSortParams& params, cudaStream_t stream);
+#endif
+template void invokeTopPSort<half>(TopPSortParams& params, cudaStream_t stream);
+#ifdef ENABLE_BF16
+template void invokeTopPSort<nv_bfloat16>(TopPSortParams& params, cudaStream_t stream);
+#endif
 
 template<typename T, int BLOCK_SIZE>
 __global__ void topPMinPFilter(T*           sorted_logits,
@@ -376,7 +388,7 @@ __global__ void topPMinPFilter(T*           sorted_logits,
         }
         // norm
         for (int i = tid; i < n; i += BLOCK_SIZE) {
-            sorted_logits[i] /= sum_logits;
+            sorted_logits[i] = (float)sorted_logits[i] / sum_logits;
         }
     }
 }
@@ -392,6 +404,12 @@ void invokeTopPMinPFilter(TopPMinPFilterParams& params, cudaStream_t stream)
                                                                   params.min_ps);
 }
 
+#ifdef ENABLE_FP32
 template void invokeTopPMinPFilter<float>(TopPMinPFilterParams& params, cudaStream_t stream);
+#endif
+template void invokeTopPMinPFilter<half>(TopPMinPFilterParams& params, cudaStream_t stream);
+#ifdef ENABLE_BF16
+template void invokeTopPMinPFilter<nv_bfloat16>(TopPMinPFilterParams& params, cudaStream_t stream);
+#endif
 
 }  // namespace turbomind

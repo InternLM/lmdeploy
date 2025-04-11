@@ -31,6 +31,8 @@ _SUPPORTED_ARCHS = dict(
     # llama, llama2, alpaca, vicuna, codellama, ultracm, yi,
     # deepseek-coder, deepseek-llm
     LlamaForCausalLM=True,
+    # llama4
+    Llama4ForConditionalGeneration=True,
     # Mistral-7B
     MistralForCausalLM=True,
     # Mixtral-8x7B

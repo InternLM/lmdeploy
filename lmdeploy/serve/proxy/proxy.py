@@ -27,7 +27,7 @@ from lmdeploy.disagg.messages import EngineRole, ServingStrategy, MigrationReque
 from lmdeploy.serve.openai.api_server import check_api_key, create_error_response
 from lmdeploy.serve.openai.protocol import ModelCard  # noqa: E501
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, CompletionRequest, ModelList, ModelPermission
-from lmdeploy.serve.proxy.constants import API_READ_TIMEOUT, LATENCY_DEQUE_LEN, ErrorCodes, RoutingStrategy, err_msg
+from lmdeploy.serve.proxy.constants import AIOHTTP_TIMEOUT, LATENCY_DEQUE_LEN, ErrorCodes, RoutingStrategy, err_msg
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -95,7 +95,7 @@ class NodeManager:
                     self.nodes = {node_url: Status.model_validate_json(node_status) for node_url, node_status in config.items()}
         self.heart_beat_thread = threading.Thread(target=heart_beat_controller, args=(self, ), daemon=True)
         self.heart_beat_thread.start()
-        self.aiotimeout = aiohttp.ClientTimeout(total=API_READ_TIMEOUT)
+        self.aiotimeout = aiohttp.ClientTimeout(total=AIOHTTP_TIMEOUT)
     
     def get_nodes(self, role: EngineRole) -> Dict:
         return {node_url: node_status for (node_url, node_status) in self.nodes.items() if node_status.role == role}

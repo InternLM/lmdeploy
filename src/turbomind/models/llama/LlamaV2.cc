@@ -90,13 +90,13 @@ LlamaV2<T>::LlamaV2(const ModelParam&               model,
 
     unified_decoder_ = std::make_unique<UnifiedDecoder<T>>(model, engine, attn, moe, lora, ctx);
 
-    dynamic_decode_layer_ = std::make_unique<DynamicDecodeLayer<float>>(vocab_size_,
-                                                                        vocab_size_padded_,
-                                                                        stream_,
-                                                                        cublas_wrapper_,
-                                                                        allocator_,
-                                                                        is_free_buffer_after_forward_,
-                                                                        (cudaDeviceProp*)&ctx.cuda_device_prop);
+    dynamic_decode_layer_ = std::make_unique<DynamicDecodeLayer<T>>(vocab_size_,
+                                                                    vocab_size_padded_,
+                                                                    stream_,
+                                                                    cublas_wrapper_,
+                                                                    allocator_,
+                                                                    is_free_buffer_after_forward_,
+                                                                    (cudaDeviceProp*)&ctx.cuda_device_prop);
 
     unified_decoder_->allocateBuffer(max_batch_size);
 }
@@ -278,7 +278,7 @@ void LlamaV2<T>::forwardUnified(T*               out,
 }
 
 template<typename T>
-void LlamaV2<T>::postDecodeEmbedding(float* logits, float* local_logits, const T* decoder_output, int batch_size)
+void LlamaV2<T>::postDecodeEmbedding(T* logits, T* local_logits, const T* decoder_output, int batch_size)
 {
     NvtxScope scope("postDecodeEmbedding");
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
@@ -304,7 +304,7 @@ void LlamaV2<T>::postDecodeEmbedding(float* logits, float* local_logits, const T
                               hidden_units_,  // k
                               &beta,
                               C + first * batch_stride_C + tp_rank_ * rank_stride_C,
-                              CUDA_R_32F,
+                              data_type,
                               batch_stride_C,  // ldc
                               CUDA_R_32F,
                               cublasGemmAlgo_t(-1));
@@ -320,7 +320,7 @@ void LlamaV2<T>::postDecodeEmbedding(float* logits, float* local_logits, const T
         invoke_gemm(0, batch_size, local_logits, local_vocab_size, slice);
         sync_check_cuda_error();
         comm_->d_comm->AllGather(
-            local_logits + tp_rank_ * slice, local_logits, slice, getTensorType<float>(), comm_->d_tp_group, stream_);
+            local_logits + tp_rank_ * slice, local_logits, slice, getTensorType<T>(), comm_->d_tp_group, stream_);
         sync_check_cuda_error();
         invokeTransposeAxis01(logits, local_logits, tp_size_, batch_size, local_vocab_size, stream_);
         sync_check_cuda_error();
@@ -350,7 +350,7 @@ void LlamaV2<T>::postDecodeEmbedding(float* logits, float* local_logits, const T
                                        local_vocab_size,
                                        local_vocab_size,
                                        n,
-                                       getTensorType<float>(),
+                                       getTensorType<T>(),
                                        {first == 0, first + n == batch_size},
                                        comm_->d_tp_group,
                                        comm_stream);
@@ -373,7 +373,7 @@ void LlamaV2<T>::dynamicDecode(int*            token_ids,
                                curandState_t*  curand_state,
                                TensorMap*      inputs,
                                TensorMap*      outputs,
-                               const float*    logits,
+                               const T*        logits,
                                const uint32_t* seq_limit_len,
                                const int*      context_length,
                                int             step,
@@ -387,7 +387,7 @@ void LlamaV2<T>::dynamicDecode(int*            token_ids,
     int local_batch_size = (int)batch_size;
 
     std::unordered_map<std::string, Tensor> dynamic_decode_input_tensors{
-        {"logits", {MEMORY_GPU, TYPE_FP32, {batch_size, (size_t)1, vocab_size_padded_}, logits}},
+        {"logits", {MEMORY_GPU, getTensorType<T>(), {batch_size, (size_t)1, vocab_size_padded_}, logits}},
         {"step", {MEMORY_CPU, TYPE_INT32, {1}, &step}},
         {"max_input_length", {MEMORY_CPU, TYPE_INT32, {1}, &max_context_len}},
         {"sequence_limit_length", {MEMORY_GPU, TYPE_UINT32, {batch_size}, seq_limit_len}},

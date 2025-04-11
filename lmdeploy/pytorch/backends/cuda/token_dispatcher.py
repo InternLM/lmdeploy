@@ -1,17 +1,53 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 try:
     from deep_ep import Buffer
-
     use_deepep = True
 except ImportError:
     use_deepep = False
 
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import torch
 import torch.distributed as dist
 
+from ..default.token_dispatcher import AlltoAllTokenDispatcher
+from ..token_dispatcher import TokenDispatcherImpl
+
 _buffer_normal = None
+_buffer_low_latency = None
+_buffer_common = None
+
+
+def get_buffer_common(
+    group: dist.ProcessGroup,
+    num_max_dispatch_tokens_per_rank: int,
+    hidden: int,
+    num_experts: int,
+    hidden_bytes: int,
+):
+    global _buffer_common
+    num_nvl_bytes, num_rdma_bytes = 0, 0
+    for config in (
+            Buffer.get_dispatch_config(group.size()),
+            Buffer.get_combine_config(group.size()),
+    ):
+        num_nvl_bytes = max(config.get_nvl_buffer_size_hint(hidden_bytes, group.size()), num_nvl_bytes)
+        num_rdma_bytes = max(config.get_rdma_buffer_size_hint(hidden_bytes, group.size()), num_rdma_bytes)
+
+    num_rdma_bytes = max(
+        Buffer.get_low_latency_rdma_size_hint(num_max_dispatch_tokens_per_rank, hidden, group.size(), num_experts),
+        num_rdma_bytes)
+
+    if (_buffer_common is None or _buffer_common.group != group or _buffer_common.num_nvl_bytes < num_nvl_bytes
+            or _buffer_common.num_rdma_bytes < num_rdma_bytes):
+        _buffer_common = Buffer(
+            group,
+            num_nvl_bytes=num_nvl_bytes,
+            num_rdma_bytes=num_rdma_bytes,
+            low_latency_mode=True,
+            num_qps_per_rank=num_experts // group.size(),
+        )
+    return _buffer_common
 
 
 def get_buffer_normal(group: dist.ProcessGroup, hidden_bytes: int):
@@ -27,51 +63,41 @@ def get_buffer_normal(group: dist.ProcessGroup, hidden_bytes: int):
     ):
         num_nvl_bytes = max(config.get_nvl_buffer_size_hint(hidden_bytes, group.size()), num_nvl_bytes)
         num_rdma_bytes = max(config.get_rdma_buffer_size_hint(hidden_bytes, group.size()), num_rdma_bytes)
+
     if (_buffer_normal is None or _buffer_normal.group != group or _buffer_normal.num_nvl_bytes < num_nvl_bytes
             or _buffer_normal.num_rdma_bytes < num_rdma_bytes):
         _buffer_normal = Buffer(group, num_nvl_bytes, num_rdma_bytes)
     return _buffer_normal
 
 
-def permute(
-    tokens,
-    routing_map,
+def get_buffer_low_latency(
+    group: dist.ProcessGroup,
+    num_max_dispatch_tokens_per_rank: int,
+    hidden: int,
+    num_experts: int,
 ):
-    """Copy from Megatron-Core moe for token permutation
-    https://github.com/NVIDIA/Megatron-
-    LM/blob/main/megatron/core/transformer/moe/moe_utils.py."""
+    """Copy from DeepEP example usage in model inference decoding.
 
-    num_tokens, _ = tokens.shape
-    num_experts = routing_map.shape[1]
-    routing_map = routing_map.bool().T.contiguous()
-    token_indices = (torch.arange(num_tokens, device=routing_map.device).unsqueeze(0).expand(num_experts, -1))
-    sorted_indices = token_indices.masked_select(routing_map)
-    permuted_input = tokens.index_select(0, sorted_indices)
-    return permuted_input, sorted_indices
+    https://github.com/deepseek-ai/DeepEP?tab=readme-ov-file#example-use-in-inference-decoding
+    """
 
+    global _buffer_low_latency
+    num_rdma_bytes = Buffer.get_low_latency_rdma_size_hint(num_max_dispatch_tokens_per_rank, hidden, group.size(),
+                                                           num_experts)
 
-def unpermute(
-    permuted_tokens: torch.Tensor,
-    sorted_indices: torch.Tensor,
-    restore_shape: torch.Size,
-    probs: torch.Tensor = None,
-    routing_map: torch.Tensor = None,
-):
-    """Copy from Megatron-Core moe for token unpermutation
-    https://github.com/NVIDIA/Megatron-
-    LM/blob/main/megatron/core/transformer/moe/moe_utils.py."""
-
-    _, hidden = restore_shape
-    if probs is not None:
-        assert routing_map is not None, 'Mask must be provided to permute the probs.'
-        permuted_probs = probs.T.contiguous().masked_select(routing_map.T.contiguous())
-        permuted_tokens = permuted_tokens * permuted_probs.unsqueeze(-1)
-    output_tokens = torch.zeros(restore_shape, device=permuted_tokens.device, dtype=permuted_tokens.dtype)
-    output_tokens.scatter_add_(0, sorted_indices.unsqueeze(1).expand(-1, hidden), permuted_tokens)
-    return output_tokens
+    if (_buffer_low_latency is None or _buffer_low_latency.group != group or not _buffer_low_latency.low_latency_mode
+            or _buffer_low_latency.num_rdma_bytes < num_rdma_bytes):
+        assert num_experts % group.size() == 0, f'num_experts:{num_experts} must be divisible by ep_size:{group.size()}'
+        _buffer_low_latency = Buffer(
+            group,
+            num_rdma_bytes=num_rdma_bytes,
+            low_latency_mode=True,
+            num_qps_per_rank=num_experts // group.size(),
+        )
+    return _buffer_low_latency
 
 
-class DeepEPDispatcher:
+class DeepEPTokenDispatcher(TokenDispatcherImpl):
     """Copy from Megatron-Core token_dispatcher MoEFlexTokenDispatcher
     https://github.com/NVIDIA/Megatron-
     LM/blob/main/megatron/core/transformer/moe/token_dispatcher.py."""
@@ -83,6 +109,7 @@ class DeepEPDispatcher:
         num_local_experts: int = None,
         hidden_size: int = None,
         params_dtype: torch.dtype = None,
+        num_max_dispatch_tokens_per_rank=128,
     ):
         self.group = group
         self.num_experts = num_experts
@@ -94,16 +121,20 @@ class DeepEPDispatcher:
         if not use_deepep:
             raise ImportError('DeepEP is not installed. Please install DeepEP package from '
                               'https://github.com/deepseek-ai/deepep.')
-        self.buffer_normal = get_buffer_normal(self.group, self.hidden_size * self.params_bytes)
+        self.buffer_normal = get_buffer_common(self.group,
+                                               num_max_dispatch_tokens_per_rank,
+                                               self.hidden_size,
+                                               self.num_experts,
+                                               hidden_bytes=self.hidden_size * self.params_bytes)
 
     def dispatch(
         self,
         hidden_states: torch.Tensor,
         topk_idx: torch.Tensor,
         topk_weights: torch.Tensor,
-        num_experts: int,
+        expert_list: List[int] = None,
         previous_event=None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         self.hidden_shape = hidden_states.shape
         topk_idx = topk_idx.to(torch.int64)
         (
@@ -113,7 +144,7 @@ class DeepEPDispatcher:
             num_recv_tokens_per_expert_list,
             handle,
             event,
-        ) = self.dispatch_normal(hidden_states, topk_idx, topk_weights, num_experts, previous_event)
+        ) = self.dispatch_normal(hidden_states, topk_idx, topk_weights, self.num_experts, previous_event)
         self.tokens_per_expert = torch.tensor(
             num_recv_tokens_per_expert_list,
             device=hidden_states.device,
@@ -159,7 +190,7 @@ class DeepEPDispatcher:
         ) = self.buffer_normal.dispatch(
             x,
             topk_idx=topk_idx,
-            topk_weights=topk_weights,
+            topk_weights=topk_weights.to(torch.float32),
             num_tokens_per_rank=num_tokens_per_rank,
             num_tokens_per_rdma_rank=num_tokens_per_rdma_rank,
             is_token_in_rank=is_token_in_rank,
@@ -178,7 +209,7 @@ class DeepEPDispatcher:
             event,
         )
 
-    def combine(self, hidden_states: torch.Tensor) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    def combine(self, hidden_states: torch.Tensor) -> torch.Tensor:
         if hidden_states.shape[0] > 0:
             hidden_states = self.get_restored_hidden_states_by_experts(hidden_states)
         hidden_states, event = self.combine_normal(hidden_states, self.handle)
@@ -195,38 +226,15 @@ class DeepEPDispatcher:
         )
         return combined_x, event
 
-    def _indices_to_multihot(self, indices, probs):
-        batch_size = indices.shape[0]
-        multihot_routing_map = torch.zeros(
-            (batch_size, self.num_local_experts),
-            dtype=torch.long,
-            device=indices.device,
-        )
-
-        multihot_probs = torch.zeros(
-            (batch_size, self.num_local_experts),
-            dtype=torch.float,
-            device=indices.device,
-        )
-
-        mask = indices != -1
-        valid_indices = indices[mask]
-        row_indices = torch.arange(batch_size, device=indices.device).repeat_interleave(mask.sum(dim=1))
-        multihot_routing_map[row_indices, valid_indices] = 1
-        multihot_probs[row_indices, valid_indices] = probs[mask]
-        return multihot_routing_map.bool(), multihot_probs
-
-    def get_dispached_metadata(self) -> torch.Tensor:
-        return self.topk_idx, self.topk_weights
-
     def get_number_of_tokens_per_expert(self) -> torch.Tensor:
         """Get the number of tokens per expert."""
         return self.tokens_per_expert
 
     def get_permuted_hidden_states_by_experts(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        self.dispatched_routing_map, self.topk_weights = self._indices_to_multihot(self.topk_idx, self.topk_weights)
+        self.dispatched_routing_map, self.topk_weights = super().indices_to_multihot(
+            self.topk_idx, self.topk_weights, self.num_experts)
         self.hidden_shape_before_permute = hidden_states.shape
-        hidden_states, self.reversed_mapping_for_combine = permute(
+        hidden_states, self.reversed_mapping_for_combine = super().permute(
             hidden_states,
             self.dispatched_routing_map,
         )
@@ -235,7 +243,7 @@ class DeepEPDispatcher:
     def get_restored_hidden_states_by_experts(self, hidden_states: torch.Tensor) -> torch.Tensor:
         input_dtype = hidden_states.dtype
         assert (self.topk_weights.dtype == torch.float32), 'DeepEP only supports float32 probs'
-        hidden_states = unpermute(
+        hidden_states = super().unpermute(
             hidden_states,
             self.reversed_mapping_for_combine,
             restore_shape=self.hidden_shape_before_permute,
@@ -243,3 +251,106 @@ class DeepEPDispatcher:
             probs=self.topk_weights,
         )
         return hidden_states.to(input_dtype)
+
+
+class DeepEPTokenDispatcherLowLatency(TokenDispatcherImpl):
+
+    def __init__(
+        self,
+        group: torch.distributed.ProcessGroup,
+        num_experts: int = None,
+        num_local_experts: int = None,
+        hidden_size: int = None,
+        params_dtype: torch.dtype = None,
+        return_recv_hook: bool = False,
+    ):
+        if not use_deepep:
+            raise ImportError('DeepEP is not installed. Please install DeepEP package from '
+                              'https://github.com/deepseek-ai/deepep.')
+        self.group = group
+        self.num_experts = num_experts
+        self.num_local_experts = num_local_experts
+        self.hidden_size = hidden_size
+        self.params_bytes = params_dtype.itemsize
+        self.handle = None
+        self.num_max_dispatch_tokens_per_rank = 128
+        self.buffer_low_latency = get_buffer_common(self.group,
+                                                    self.num_max_dispatch_tokens_per_rank,
+                                                    self.hidden_size,
+                                                    self.num_experts,
+                                                    hidden_bytes=self.hidden_size * self.params_bytes)
+        self.return_recv_hook = return_recv_hook
+
+    def dispatch(
+        self,
+        hidden_states: torch.Tensor,
+        topk_idx: torch.Tensor,
+        topk_weights: torch.Tensor,
+        num_experts: int,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        topk_idx = topk_idx.to(torch.int64)
+        expected_m = (hidden_states.shape[0] * self.buffer_low_latency.group_size * topk_idx.shape[1] +
+                      num_experts) // num_experts
+
+        packed_recv_hidden, masked_m, self.handle, event, hook = (self.buffer_low_latency.low_latency_dispatch(
+            hidden_states,
+            topk_idx,
+            self.num_max_dispatch_tokens_per_rank,
+            num_experts,
+            use_fp8=True,
+            async_finish=not self.return_recv_hook,
+            return_recv_hook=self.return_recv_hook,
+        ))
+        hook() if self.return_recv_hook else event.current_stream_wait()
+        return (
+            packed_recv_hidden,
+            topk_idx,
+            topk_weights,
+            masked_m,
+            expected_m,
+        )
+
+    def combine(
+        self,
+        hidden_states: torch.Tensor,
+        topk_idx: torch.Tensor,
+        topk_weights: torch.Tensor,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        combined_hidden_states, event, hook = (self.buffer_low_latency.low_latency_combine(
+            hidden_states,
+            topk_idx,
+            topk_weights.to(torch.float32),
+            self.handle,
+            async_finish=not self.return_recv_hook,
+            return_recv_hook=self.return_recv_hook,
+        ))
+        hook() if self.return_recv_hook else event.current_stream_wait()
+        return combined_hidden_states
+
+
+class TokenDispatcherBuilder:
+    """token dispatcher builder."""
+
+    @staticmethod
+    def build(
+        group,
+        num_experts,
+        num_local_experts,
+        hidden_size,
+        params_dtype,
+    ) -> TokenDispatcherImpl:
+        """build."""
+        if use_deepep is True:
+            return DeepEPTokenDispatcher(
+                group,
+                num_experts,
+                num_local_experts,
+                hidden_size,
+                params_dtype,
+            )
+        else:
+            return AlltoAllTokenDispatcher(
+                group,
+                num_experts,
+                num_local_experts,
+            )

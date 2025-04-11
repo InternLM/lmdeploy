@@ -8,6 +8,7 @@ from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import blocked_gemm_fp8, dee
 from lmdeploy.utils import get_logger
 
 from ..blockedf8_modules import LinearBlockedF8Builder, LinearBlockedF8Impl
+from .warmup_manager import WarmupMeta, get_warmup_manager
 
 logger = get_logger('lmdeploy')
 
@@ -80,6 +81,30 @@ class DeepGemmLinearBlockedF8Impl(LinearBlockedF8Impl):
         self.out_dtype = out_dtype
         self.block_size = block_size
 
+        warmup_mgr = get_warmup_manager()
+        key = ('deepgemm_blockedfp8_gemm_'
+               f'{in_features}_{out_features}_{block_size}_{out_dtype}')
+        if key not in warmup_mgr:
+            warmup_mgr[key] = self.warmup
+
+    def warmup(self, warmup_meta: WarmupMeta):
+        """warmup."""
+        from deep_gemm.jit_kernels.utils import get_m_alignment_for_contiguous_layout
+        device = 'cuda'
+        max_num_tokens = warmup_meta.max_num_tokens
+        alignment = get_m_alignment_for_contiguous_layout()
+        range_end = max_num_tokens + alignment - 1
+        k, n = self.in_features, self.out_features
+        block_size = self.block_size
+        weight = torch.empty(n, k, dtype=torch.float8_e4m3fn, device=device)
+        scale = torch.empty(((n + block_size - 1) // block_size, (k + block_size - 1) // block_size),
+                            dtype=torch.float32,
+                            device=device)
+        for m in range(alignment, range_end, alignment):
+            inputs = torch.empty(m, k, dtype=self.out_dtype, device=device)
+            input_quant, input_scale = quant_fp8_tma(inputs, self.block_size, dtype=weight.dtype)
+            deep_gemm_fp8(input_quant, input_scale, weight, scale, out_dtype=inputs.dtype)
+
     def forward(self,
                 x,
                 weight: torch.Tensor,
@@ -92,6 +117,7 @@ class DeepGemmLinearBlockedF8Impl(LinearBlockedF8Impl):
         input_quant, input_scale = quant_fp8_tma(x, self.block_size, dtype=weight.dtype)
 
         out = deep_gemm_fp8(input_quant, input_scale, weight, scale, out_dtype=x.dtype)
+        out = out[:x.size(0)]
         if bias is not None:
             out += bias
 
