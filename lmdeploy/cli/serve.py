@@ -60,7 +60,7 @@ class SubCliServe:
         max_batch_size_act = ArgumentHelper.max_batch_size(pt_group)
         cache_max_entry_act = ArgumentHelper.cache_max_entry_count(pt_group)
         cache_block_seq_len_act = ArgumentHelper.cache_block_seq_len(pt_group)
-        prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
+        prefix_caching_act = ArgumentHelper.disable_prefix_caching(pt_group)
         max_prefill_token_num_act = ArgumentHelper.max_prefill_token_num(pt_group)
         # turbomind args
         tb_group = parser.add_argument_group('TurboMind engine arguments')
@@ -160,7 +160,7 @@ class SubCliServe:
         max_batch_size_act = ArgumentHelper.max_batch_size(pt_group)
         cache_max_entry_act = ArgumentHelper.cache_max_entry_count(pt_group)
         cache_block_seq_len_act = ArgumentHelper.cache_block_seq_len(pt_group)
-        prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
+        prefix_caching_act = ArgumentHelper.disable_prefix_caching(pt_group)
         max_prefill_token_num_act = ArgumentHelper.max_prefill_token_num(pt_group)
         quant_policy = ArgumentHelper.quant_policy(pt_group)
         ArgumentHelper.dp(pt_group)
@@ -250,7 +250,7 @@ class SubCliServe:
                                                  cache_max_entry_count=args.cache_max_entry_count,
                                                  block_size=args.cache_block_seq_len,
                                                  session_len=args.session_len,
-                                                 enable_prefix_caching=args.enable_prefix_caching,
+                                                 enable_prefix_caching=not args.disable_prefix_caching,
                                                  device_type=args.device,
                                                  quant_policy=args.quant_policy,
                                                  eager_mode=args.eager_mode,
@@ -265,7 +265,7 @@ class SubCliServe:
                                                    rope_scaling_factor=args.rope_scaling_factor,
                                                    cache_max_entry_count=args.cache_max_entry_count,
                                                    cache_block_seq_len=args.cache_block_seq_len,
-                                                   enable_prefix_caching=args.enable_prefix_caching,
+                                                   enable_prefix_caching=not args.disable_prefix_caching,
                                                    max_prefill_token_num=args.max_prefill_token_num,
                                                    communicator=args.communicator)
         chat_template_config = get_chat_template(args.chat_template)
@@ -303,7 +303,7 @@ class SubCliServe:
                                                  block_size=args.cache_block_seq_len,
                                                  session_len=args.session_len,
                                                  adapters=adapters,
-                                                 enable_prefix_caching=args.enable_prefix_caching,
+                                                 enable_prefix_caching=not args.disable_prefix_caching,
                                                  device_type=args.device,
                                                  quant_policy=args.quant_policy,
                                                  eager_mode=args.eager_mode,
@@ -319,7 +319,7 @@ class SubCliServe:
                                                    rope_scaling_factor=args.rope_scaling_factor,
                                                    cache_max_entry_count=args.cache_max_entry_count,
                                                    cache_block_seq_len=args.cache_block_seq_len,
-                                                   enable_prefix_caching=args.enable_prefix_caching,
+                                                   enable_prefix_caching=not args.disable_prefix_caching,
                                                    max_prefill_token_num=args.max_prefill_token_num,
                                                    communicator=args.communicator)
         chat_template_config = get_chat_template(args.chat_template)

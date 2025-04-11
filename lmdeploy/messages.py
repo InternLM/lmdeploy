@@ -192,7 +192,7 @@ class TurbomindEngineConfig:
         cache_block_seq_len (int): the length of the token sequence in
             a k/v block, default to 64
         enable_prefix_caching (bool): enable cache prompts for block reuse,
-            default to False
+            default to True
         quant_policy (int): default to 0. When k/v is quantized into 4 or 8
             bit, set it to 4 or 8, respectively
         rope_scaling_factor (float): scaling factor used for dynamic ntk,
@@ -228,7 +228,7 @@ class TurbomindEngineConfig:
     cache_max_entry_count: float = 0.8
     cache_chunk_size: int = -1
     cache_block_seq_len: int = 64
-    enable_prefix_caching: bool = False
+    enable_prefix_caching: bool = True
     quant_policy: int = 0
     rope_scaling_factor: float = 0.0
     use_logn_attn: bool = False
@@ -313,7 +313,7 @@ class PytorchEngineConfig:
     adapters: Dict[str, str] = None
     max_prefill_token_num: int = 4096
     thread_safe: bool = False
-    enable_prefix_caching: bool = False
+    enable_prefix_caching: bool = True
     device_type: str = 'cuda'
     eager_mode: bool = False
     custom_module_map: Dict[str, str] = None
