@@ -53,7 +53,7 @@ COPY --from=builder_stage ${NVSHMEM_PREFIX} ${NVSHMEM_PREFIX}
 COPY --from=builder_stage /opt/py3/lib/python3.10/site-packages/deep_ep/ /opt/py3/lib/python3.10/site-packages/deep_ep/
 COPY --from=builder_stage /opt/py3/lib/python3.10/site-packages/deep_ep_cpp* /opt/py3/lib/python3.10/site-packages/
 
-WORKDIR /opt/
+WORKDIR /opt
 # install FlashMLA
 RUN git clone https://github.com/deepseek-ai/FlashMLA.git --recursive && \
     cd FlashMLA && python setup.py install && \
@@ -63,3 +63,6 @@ RUN git clone https://github.com/deepseek-ai/FlashMLA.git --recursive && \
 RUN git clone https://github.com/deepseek-ai/DeepGEMM.git --recursive && \
     cd DeepGEMM && python setup.py install && \
     cd .. && rm -rf DeepGEMM
+
+# set workspace
+WORKDIR /opt/lmdeploy
