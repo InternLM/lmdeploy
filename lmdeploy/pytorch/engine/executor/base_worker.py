@@ -1,6 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
-from typing import Any, Dict
+from typing import Any, Dict, List
+
+from lmdeploy.disagg.messages import (
+    MigrationInitRequest,
+    MigrationConnectionRequest,
+    MigrationExecutionBatch,
+)
 
 from lmdeploy.pytorch.backends.selector import get_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, ModelConfig
@@ -159,3 +165,14 @@ class WorkerWrapperBase:
     def release(self):
         """stop engine loop."""
         self.model_agent.release()
+
+    """ PD Disaggregation API Begin """
+    def p2p_initialize(self, init_request: MigrationInitRequest):
+        return self.model_agent.cache_engine.p2p_initialize(init_request)
+
+    def p2p_connect(self, conn_request: List[MigrationConnectionRequest]):
+        return self.model_agent.cache_engine.p2p_connect(conn_request)
+
+    async def migrate(self, inputs: MigrationExecutionBatch):
+        return await self.model_agent.cache_engine.migrate(inputs)
+    """ PD Disaggregation API End """

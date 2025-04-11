@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-
+from lmdeploy.disagg.messages import EngineRole, MigrationBackend, MigrationTransportProtocol
 from lmdeploy.utils import get_max_batch_size
 
 from .cli import CLI
@@ -125,6 +125,23 @@ class SubCliServe:
                             'engine’s tasks once the maximum number of concurrent requests is '
                             'reached, regardless of any additional requests sent by clients '
                             'concurrently during that time. Default to None.')
+        parser.add_argument('--role',
+                            type=str,
+                            default='Hybrid',
+                            choices=['Hybrid', 'Prefill', 'Decode'],
+                            help='Hybrid for Non-Disaggregated Engine;'
+                                 'Prefill for Disaggregated Prefill Engine;'
+                                 'Decode fro Disaggregated Decode Engine;')
+        parser.add_argument('--migration-backend',
+                            type=str,
+                            default='DLSlime',
+                            choices=['DLSlime', 'Mooncake', 'InfiniStore'],
+                            help='kvcache migration management backend when PD disaggregation')
+        parser.add_argument('--migration-protocol',
+                            type=str,
+                            default='RDMA',
+                            choices=['TCP', 'RDMA', 'NVLINK'],
+                            help='kvcache migration protocol')
         # common args
         ArgumentHelper.backend(parser)
         ArgumentHelper.log_level(parser)
@@ -215,7 +232,12 @@ class SubCliServe:
         parser.set_defaults(run=SubCliServe.proxy)
         parser.add_argument('--server-name', type=str, default='0.0.0.0', help='Host ip for proxy serving')
         parser.add_argument('--server-port', type=int, default=8000, help='Server port of the proxy')
-        parser.add_argument('--strategy',
+        parser.add_argument('--serving-strategy',
+                            type=str,
+                            choices=['Disaggregated', 'NonDisaggregated'],
+                            default='NonDisaggregated',
+                            help='the strategy to dispatch requests to nodes')
+        parser.add_argument('--routing-strategy',
                             type=str,
                             choices=['random', 'min_expected_latency', 'min_observed_latency'],
                             default='min_expected_latency',
@@ -307,7 +329,10 @@ class SubCliServe:
                                                  device_type=args.device,
                                                  quant_policy=args.quant_policy,
                                                  eager_mode=args.eager_mode,
-                                                 max_prefill_token_num=args.max_prefill_token_num)
+                                                 max_prefill_token_num=args.max_prefill_token_num,
+                                                 role=EngineRole.__members__[args.role],
+                                                 migration_backend=MigrationBackend.__members__[args.migration_backend],
+                                                 migration_protocol=MigrationTransportProtocol.__members__[args.migration_protocol])
         else:
             from lmdeploy.messages import TurbomindEngineConfig
             backend_config = TurbomindEngineConfig(dtype=args.dtype,
