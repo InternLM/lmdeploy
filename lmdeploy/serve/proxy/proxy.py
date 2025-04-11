@@ -202,11 +202,7 @@ class NodeManager:
 
         def get_matched_urls():
             urls_with_speeds, speeds, urls_without_speeds = [], [], []
-            print("???????????????")
-            print(self.get_nodes(role))
-            print(print(self.nodes))
             for node_url, node_status in self.get_nodes(role).items():
-                print(node_url, node_status)
                 if model_name in node_status.models:
                     if node_status.speed is not None:
                         urls_with_speeds.append(node_url)
@@ -577,11 +573,9 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
 
             start = node_manager.pre_call(prefill_node_url)
             prefill_info = json.loads(await node_manager.generate(prefill_request_dict, prefill_node_url, '/v1/completions'))
-            print(f"prefill info: {prefill_info}")
             node_manager.post_call(prefill_node_url, start)
 
             # # Decode
-            # # TODO: Add Migration request
             decode_node_url = node_manager.get_node_url(EngineRole.Decode, request.model)
             if not decode_node_url:
                 return node_manager.handle_unavailable_model(request.model)
@@ -606,8 +600,6 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
             else:
                 response = await node_manager.generate(request_dict, decode_node_url, '/v1/completions')
                 node_manager.post_call(decode_node_url, start)
-                print(request_dict)
-                print(json.loads(response))
                 return JSONResponse(json.loads(response))
 
 

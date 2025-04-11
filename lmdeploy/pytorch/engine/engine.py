@@ -492,7 +492,6 @@ class Engine:
                     seqs = list(self.scheduler.sessions[session_id].sequences.values())
                     seqs[0].status == MessageStatus.TO_BE_MIGRATED
                     session = self.scheduler.sessions.pop(session_id)
-                    print(f"session_id: {session_id}")
                     self.scheduler.locked_sessions[session_id] = session
                 else:
                     self.scheduler.end_session(session_id)
