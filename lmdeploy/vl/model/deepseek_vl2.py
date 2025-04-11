@@ -8,6 +8,7 @@ from transformers import AutoConfig
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
+from lmdeploy.vl.utils import hash_multimodal_data
 
 logger = get_logger('lmdeploy')
 
@@ -74,11 +75,15 @@ class DeepSeek2VisionModel(VisonModel):
         # convert to upstream api formats
         images = [img_parameter[0] for img_parameter in images]
         formatted_messages = []
+        hash_value = ''
         for message in messages:
             text_content = DeepSeek2VisionModel.proc_single_message(message)
             image_content = [x['image'] for x in message['content'] if x['type'] == 'image']
+            if self.enable_prefix_caching:
+                hash_value += hash_multimodal_data(model_id=self.model_path, image=image_content)
             formatted_messages.append(dict(role=message['role'], content=text_content, images=image_content))
-
+        if hash_value == '':
+            hash_value = None
         # NOTE: DeepseekVLV2Processor inputs
         # conversations (List[Dict]): conversations with a list of messages;
         # images (List[ImageType]): the list of images;
@@ -92,13 +97,12 @@ class DeepSeek2VisionModel(VisonModel):
         messages.append(
             dict(role='preprocess',
                  content=[
-                     dict(
-                         pixel_values=prepare.images,
-                         image_tokens=prepare.num_image_tokens[0],
-                         image_token_id=self.image_processor.image_token_id,
-                         image_size=self.image_processor.image_size,
-                         images_spatial_crop=prepare.images_spatial_crop,
-                     )
+                     dict(pixel_values=prepare.images,
+                          image_tokens=prepare.num_image_tokens[0],
+                          image_token_id=self.image_processor.image_token_id,
+                          image_size=self.image_processor.image_size,
+                          images_spatial_crop=prepare.images_spatial_crop,
+                          hash_value=hash_value)
                  ]))
         return messages
 

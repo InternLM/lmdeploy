@@ -39,7 +39,7 @@ class LogitsMixin:
         logits = [x.squeeze() for x in logits]
         scores = [x[-1].cpu().item() for x in logits]
         for session_id in session_ids:
-            self.end_session(session_id)
+            self._run(coro=self.end_session(session_id))
         return scores
 
     async def _async_get_logits(self,
@@ -119,7 +119,7 @@ class LogitsMixin:
                 )
                 result.extend(res)
             for session_id in session_ids:
-                self.end_session(session_id)
+                self._run(coro=self.end_session(session_id))
         output = list(range(len(result)))
         for index, sorted_index in enumerate(indices):
             output[sorted_index] = result[index]

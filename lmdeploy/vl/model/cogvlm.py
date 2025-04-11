@@ -12,6 +12,7 @@ class CogVLMVisionModel(VisonModel):
     """CogVLM vision model."""
 
     _arch = 'CogVLMForCausalLM'
+    support_prefix_caching: bool = False
 
     def build_preprocessor(self):
         from torchvision import transforms
@@ -43,7 +44,7 @@ class CogVLMVisionModel(VisonModel):
         """refer to the spec of `super().preprocess`"""
         images = self.collect_images(messages)
         outputs = []
-        for image, _ in images:
+        for image, params in images:
             image = image.convert('RGB')
             pixel_values = self.image_transform(image)
             outputs.append(

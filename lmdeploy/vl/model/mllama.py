@@ -18,6 +18,7 @@ class MllamaVLModel(VisonModel):
     """llama3.2 model."""
 
     _arch = 'MllamaForConditionalGeneration'
+    support_prefix_caching: bool = False
 
     def build_preprocessor(self):
         from transformers import AutoProcessor
