@@ -2,47 +2,36 @@
 
 #pragma once
 
-#include "src/turbomind/models/llama/LlamaDenseWeight.h"
-#include "src/turbomind/utils/cublasMMWrapper.h"
 #include <istream>
 #include <ostream>
 
+#include "src/turbomind/core/tensor.h"
+#include "src/turbomind/models/llama/LlamaDenseWeight.h"
+
 namespace turbomind {
 
-template<typename T>
 class LlamaLinear {
 public:
-    enum Type
-    {
+    enum Type {
         kGemm,
         kFusedSiluFfn,
         kFusedAdd
     };
 
-    struct Pitched {
-        const T* ptr;
-        int      pitch;
-        Pitched(const T* ptr, int pitch = 0): ptr{ptr}, pitch{pitch} {}
-    };
+    explicit LlamaLinear(cudaStream_t stream);
 
-    LlamaLinear(cublasMMWrapper* cublas_wrapper, cudaStream_t stream);
+    core::Tensor forward(const core::Tensor&         input,
+                         const LlamaDenseWeight&     weight,
+                         Type                        type   = kGemm,
+                         std::optional<core::Tensor> output = {});
 
-    void forward(T*                         output_data,
-                 Pitched                    input_data,
-                 int                        batch_size,
-                 const LlamaDenseWeight<T>& weight,
-                 Type                       type      = kGemm,
-                 T*                         lora_buff = nullptr,
-                 int*                       lora_mask = nullptr);
-
-    void forward_moe(T*                         output_data,
-                     Pitched                    input_data,
-                     const int*                 indexes,
-                     const int*                 offsets,
-                     int                        batch_size,
-                     const LlamaDenseWeight<T>& weight,
-                     Type                       type,
-                     gemm::Context*             context);
+    void forward_moe(core::Tensor&           output,
+                     const core::Tensor&     input,
+                     const int*              indexes,
+                     const int*              offsets,
+                     const LlamaDenseWeight& weight,
+                     Type                    type,
+                     gemm::Context*          context);
 
     void set_measure(bool measure);
 

@@ -477,18 +477,11 @@ __global__ void getFeatureOfLastToken(T* output, const T* input, const int* cu_s
     }
 }
 
-template<typename T>
 void invokeGetFeatureOfLastToken(
-    T* output, const T* input, const int* cu_seqlens, int dims, int batch_size, cudaStream_t stream)
+    uint16_t* output, const uint16_t* input, const int* cu_seqlens, int dims, int batch_size, cudaStream_t stream)
 {
     getFeatureOfLastToken<<<batch_size, 256, 0, stream>>>(output, input, cu_seqlens, dims);
 }
-
-template void invokeGetFeatureOfLastToken(half*, const half*, const int*, int, int, cudaStream_t);
-template void invokeGetFeatureOfLastToken(float*, const float*, const int*, int, int, cudaStream_t);
-#ifdef ENABLE_BF16
-template void invokeGetFeatureOfLastToken(__nv_bfloat16*, const __nv_bfloat16*, const int*, int, int, cudaStream_t);
-#endif  // ENABLE_BF16
 
 template<class T, int C>
 struct BatchedCopyParam {

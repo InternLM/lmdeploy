@@ -2,16 +2,19 @@
 
 #pragma once
 
+#include <functional>
+
+#include "src/turbomind/core/allocator.h"
+
 #include "src/turbomind/models/llama/BlockManager.h"
 #include "src/turbomind/models/llama/BlockTrie.h"
-#include <functional>
+
 
 namespace turbomind {
 
 struct Sequence {
 
-    enum Status
-    {
+    enum Status {
         kCached = 0,
         kLocked,
         kActive
@@ -78,7 +81,7 @@ public:
                              int                chunk_size,
                              bool               enable_prefix_caching,
                              int                rank,
-                             IAllocator*        allocator,
+                             core::Allocator    allocator,
                              GetFreeMemSize     get_free_size);
 
     SequenceManager(const SequenceManager&)     = delete;

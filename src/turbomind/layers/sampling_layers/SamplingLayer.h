@@ -15,55 +15,47 @@
  */
 #pragma once
 
-#include "src/turbomind/layers/DynamicDecodeBaseLayer.h"
-#include "src/turbomind/macro.h"
 #include <vector>
+
+#include "src/turbomind/core/tensor.h"
+#include "src/turbomind/layers/BaseDynamicDecodeLayer.h"
+#include "src/turbomind/macro.h"
+
+#include "src/turbomind/engine/request.h"
 
 namespace turbomind {
 
 template<typename T>
-class SamplingLayer: public DynamicDecodeBaseLayer {
+class SamplingLayer: public BaseDynamicDecodeLayer {
 public:
-    using DynamicDecodeBaseLayer::DynamicDecodeBaseLayer;
-    using DynamicDecodeBaseLayer::args_;
+    explicit SamplingLayer(const BaseParam& param);
 
-    void setup(const size_t batch_size, const size_t beam_width, TensorMap* params) override;
+    void Setup(const std::vector<const Request*>& rs) override;
 
-    void forward(TensorMap* output_tensors, TensorMap* input_tensors) override;
-
-    ~SamplingLayer();
+    void Forward(core::TensorMap& args) override;
 
 private:
-    void allocateBuffer() override;
-
-    void freeBuffer() override;
-
-    void allocateBuffer(const size_t batch_size);
-
     // host buffer
-    std::vector<int>   kept_n_;
-    std::vector<int>   runtime_top_k_;
-    std::vector<float> runtime_top_p_;
-    std::vector<float> runtime_min_p_;
-    int                max_topk_;
-    int                min_topk_;
-    float              min_topp_;
-    float              max_minp_;
+    core::Buffer_<int>   kept_;
+    core::Buffer_<int>   top_k_;
+    core::Buffer_<float> top_p_;
+    core::Buffer_<float> min_p_;
+
+    int   max_topk_;
+    int   min_topk_;
+    float min_topp_;
+    float max_minp_;
 
     // device buffer
-    int*   runtime_top_k_buf_{};
-    float* runtime_top_p_buf_{};
-    float* runtime_min_p_buf_{};
+    core::Buffer_<int>   top_k_buf_;
+    core::Buffer_<float> top_p_buf_;
+    core::Buffer_<float> min_p_buf_;
 
-    void*  topk_ws_{};
-    size_t topk_ws_size_;
+    core::Buffer_<char> topk_ws_;
+    core::Buffer_<char> topp_ws_;
 
-    void*  topp_ws_{};
-    size_t topp_ws_size_;
-
-    T*   logits_{};   // sorted logits
-    int* indices_{};  // sorted indices
-    int* kept_{};     // kept sample
+    core::Buffer_<int> indices_;   // sorted indices
+    core::Buffer_<int> kept_buf_;  // kept sample
 };
 
 }  // namespace turbomind
