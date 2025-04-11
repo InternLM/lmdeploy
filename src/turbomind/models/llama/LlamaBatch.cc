@@ -710,7 +710,7 @@ void LlamaBatch::AllocateBuffer(ssize_t batch_size, ssize_t session_len, int cac
 
     sequence_lengths_ = {batchxbeam, MEMORY_GPU};
 
-    cu_block_counts_ = {batch_size, MEMORY_GPU};
+    cu_block_counts_ = {batch_size + 1, MEMORY_GPU};
     block_ptrs_      = {max_batch_block_count, MEMORY_GPU};
 
     sampled_logprobs_ = {batchxbeam * kMaxLogProb, MEMORY_GPU};

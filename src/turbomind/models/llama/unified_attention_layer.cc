@@ -456,13 +456,14 @@ core::Tensor UnifiedAttentionLayer::forward_mla(const core::Tensor& hidden_state
         sync_check_cuda_error();
     }
 
-    core::Tensor kv_a = linear_.forward(hidden_state, w.kv_a_proj);
+    core::Tensor kv_a_k_pe = linear_.forward(hidden_state, w.kv_a_proj);
     sync_check_cuda_error();
 
+    auto kv_a = kv_a_k_pe.slice({0, 0}, {-1, kv_lora_rank});
     invokeRMSNorm(kv_a, kv_a, w.kv_a_layernorm, model_param_.norm_eps, stream_);
     sync_check_cuda_error();
 
-    core::Tensor kv_b = linear_.forward(kv_a.slice({0, 0}, {token_num, kv_lora_rank}), w.kv_b_proj);
+    core::Tensor kv_b = linear_.forward(kv_a, w.kv_b_proj);
     sync_check_cuda_error();
 
     const int local_q_kv_head_num = local_head_num_ + 2 * local_kv_head_num_;
