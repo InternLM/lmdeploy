@@ -761,7 +761,6 @@ async def completions_v1(raw_request: Request = None):
         
         if with_cache:
             cache_block_ids = cache_block_ids[0]
-            print(remote_token_ids)
             remote_token_ids = [remote_token_ids[0][-1]]
         total_tokens = sum([final_res.history_token_len, final_res.input_token_len, final_res.generate_token_len])
         usage.prompt_tokens += final_res.input_token_len
@@ -777,8 +776,6 @@ async def completions_v1(raw_request: Request = None):
         choices=choices,
         usage=usage,
     ).model_dump()
-
-    print(response)
 
     if with_cache:
         response["cache_block_ids"] = cache_block_ids
@@ -1024,7 +1021,6 @@ async def startup_event():
 
         if response.status_code != 200:
             raise HTTPException(status_code=400, detail='Service registration failed')
-        print(response.text)
     except Exception as e:
         print(f'Service registration failed: {e}')
 

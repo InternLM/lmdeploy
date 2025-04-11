@@ -90,7 +90,7 @@ class NodeManager:
         if osp.exists(self.config_path) and self.cache_status:
             with open(self.config_path, 'r') as config_file:
                 if os.path.getsize(self.config_path) > 0:
-                    logger.info(f"loading node configuration: {config_path}")
+                    logger.info(f"loading node configuration: {self.config_path}")
                     config = json.load(config_file)
                     self.nodes = {node_url: Status.model_validate_json(node_status) for node_url, node_status in config.items()}
         self.heart_beat_thread = threading.Thread(target=heart_beat_controller, args=(self, ), daemon=True)
@@ -202,7 +202,11 @@ class NodeManager:
 
         def get_matched_urls():
             urls_with_speeds, speeds, urls_without_speeds = [], [], []
+            print("???????????????")
+            print(self.get_nodes(role))
+            print(print(self.nodes))
             for node_url, node_status in self.get_nodes(role).items():
+                print(node_url, node_status)
                 if model_name in node_status.models:
                     if node_status.speed is not None:
                         urls_with_speeds.append(node_url)
