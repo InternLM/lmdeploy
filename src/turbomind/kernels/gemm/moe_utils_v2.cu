@@ -831,15 +831,19 @@ void invokeMoeCombine(core::Ref<core::Tensor> out_,
                       float                   dst_scale,
                       cudaStream_t            st)
 {
-    auto& out    = out_.get();
-    auto  invoke = [&](auto t) {
+    auto& out = out_.get();
+
+    const int tokens = out.shape(0);
+    TM_CHECK_EQ(src.shape(0), tokens * experts_per_token);
+
+    auto invoke = [&](auto t) {
         using T = decltype(t);
         return invokeMoeReduce(out.data<T>(),
                                src.data<T>(),
                                scales,
                                en2f,
                                dst_scales,
-                               src.shape(0),
+                               tokens,
                                experts_per_token,
                                src.shape(1),
                                dst_scale,

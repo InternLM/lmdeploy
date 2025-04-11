@@ -54,6 +54,8 @@ struct LlamaDenseWeight: public core::Module {
 
     void emplace(int input_dim, int output_dim, DataType data_type, bool bias, DataType weight_type, int group_size);
 
+    void prepare(bool fused_moe, bool use_simt);
+
     LlamaDenseWeight& operator=(std::nullptr_t)
     {
         this->~LlamaDenseWeight();
@@ -104,6 +106,8 @@ struct LlamaAttentionWeight: public core::Module {
                          DataType weight_type,
                          int      group_size);
 
+    void prepare(bool use_simt);
+
     LlamaDenseWeight qkv;
     LlamaDenseWeight output;
 
@@ -130,6 +134,10 @@ struct LlamaFfnWeight: core::Module {
                    int      group_size,
                    bool     fuse_silu_act);
 
+    static constexpr bool fuse_up_and_gate = true;
+
+    void prepare(bool fused_moe, bool use_simt);
+
     LlamaDenseWeight gating;
     LlamaDenseWeight intermediate;
     LlamaDenseWeight output;
@@ -152,6 +160,8 @@ struct MoeFfnWeight: core::Module {
                  int             tp_size,
                  int             tp_rank,
                  bool            fuse_silu_act);
+
+    void prepare(bool use_simt);
 
     LlamaDenseWeight gate;
     LlamaDenseWeight shared_gate;

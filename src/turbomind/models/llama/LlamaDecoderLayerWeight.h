@@ -67,8 +67,6 @@ private:
     int  attn_tp_rank_;
     int  mlp_tp_size_;
     int  mlp_tp_rank_;
-    bool is_maintain_buffer_ = false;
-    bool fused_up_and_gate_;
 };
 
 }  // namespace turbomind

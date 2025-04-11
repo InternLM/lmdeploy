@@ -120,7 +120,7 @@ void MoeFfnLayer::Forward(ForwardParam& p)
             offsets_.data(), h_offsets_.data(), sizeof(int) * (expert_num + 1), cudaMemcpyDefault, stream_));
     }
 
-    p.temp = core::Tensor{{tokens * param_.experts_per_token, hidden_dim_}, p.input.dtype(), p.input.device()};
+    p.temp = core::Tensor{{param_.experts_per_token * tokens, hidden_dim_}, p.input.dtype(), p.input.device()};
 
     if (param_.method == MoeParam::kNaive) {
 
@@ -132,12 +132,9 @@ void MoeFfnLayer::Forward(ForwardParam& p)
 
         check_cuda_error(cudaStreamSynchronize(stream_));
 
-        if (h_offsets_[expert_num] != tokens * param_.experts_per_token) {
-            FT_CHECK_WITH_INFO(0, fmtstr("%d vs %d", h_offsets_[expert_num], tokens * param_.experts_per_token));
-        }
+        TM_CHECK_EQ(h_offsets_[expert_num], tokens * param_.experts_per_token);
 
         for (int i = 0; i < expert_num; ++i) {
-            FT_CHECK(moe.experts[i]->is_fused_silu == false);
             if (int count = h_offsets_[i + 1] - h_offsets_[i]) {
                 auto io = p.temp.slice({h_offsets_[i], 0}, {count, -1});
                 expert_ffn_->forward({io, io, moe.experts.at(i).get(), p.layer_id});
@@ -149,7 +146,7 @@ void MoeFfnLayer::Forward(ForwardParam& p)
 
         auto& block = moe.block;
 
-        const int    inter_dim = block.is_fused_silu ? inter_dim : inter_dim * 2;
+        const int    inter_dim = block.is_fused_silu ? inter_size_ : inter_size_ * 2;
         core::Tensor inter{{tokens * param_.experts_per_token, inter_dim}, p.input.dtype(), p.input.device()};
 
         linear_.forward_moe(inter,
@@ -193,7 +190,7 @@ void MoeFfnLayer::Combine(ForwardParam& p)
                      p.temp,
                      scales_.data(),
                      en2f_.data(),
-                     shared_scales ? shared_scales.data() : nullptr,
+                     shared_scales.buffer().unsafe_data<float>(),
                      param_.experts_per_token,
                      p.scale,
                      stream_);

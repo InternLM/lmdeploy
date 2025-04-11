@@ -196,9 +196,6 @@ void UnifiedDecoder::Forward(core::TensorMap& args, const std::vector<WeightType
                                                       ffn_layer_ ? 1.f : 0.f,
                                                       (int)layer,
                                                       weights.at(layer)->moe_weights.get()};
-        }
-
-        if (moe_fwd_param) {
             moe_ffn_layer_->Forward(*moe_fwd_param);
         }
 
@@ -219,7 +216,7 @@ void UnifiedDecoder::Forward(core::TensorMap& args, const std::vector<WeightType
 
         AllreduceResidualRMSnorm(global_hidden_states,
                                  local_residual,
-                                 weights.at(layer)->ffn_weights->output.bias,
+                                 {},
                                  scale_weight,
                                  local_token_num,
                                  0,

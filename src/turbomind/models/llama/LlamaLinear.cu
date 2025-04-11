@@ -220,7 +220,7 @@ struct LlamaLinear::Impl {
                             {},
                             dense.weight.raw_data(),
                             dense.k_desc,
-                            dense.scales_zeros.raw_data(),
+                            dense.scales_zeros.buffer().unsafe_data(),
                             dense.q_desc,
                             type == kFusedAdd ? 1.0f : 0.0f,
                             output.raw_data(),
