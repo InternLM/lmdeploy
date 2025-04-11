@@ -154,6 +154,16 @@ lmdeploy lite auto_awq $HF_MODEL --work-dir $WORK_DIR --device npu
 
 支持的模型列表请参考[支持的模型](../../supported_models/supported_models.md)。
 
+### w8a8 SMOOTH_QUANT
+
+运行下面的代码可以在Atlas 800T A2上对权重进行W8A8量化。
+
+```bash
+lmdeploy lite smooth_quant $HF_MODEL --work-dir $WORK_DIR --device npu
+```
+
+支持的模型列表请参考[支持的模型](../../supported_models/supported_models.md)。
+
 ### int8 KV-cache 量化
 
 昇腾后端现在支持了在eager模式下的离线int8 KV-cache量化。
