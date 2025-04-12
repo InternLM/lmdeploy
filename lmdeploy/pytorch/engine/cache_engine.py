@@ -325,6 +325,8 @@ class CacheEngine:
         migration_init_request.rank = self.rank
         self.migration_backend_impl.p2p_initialize(migration_init_request)
         for i, t in enumerate(self.full_gpu_cache):
+            if t.numel() == 0:
+                continue
             register_mr_request = MigrationRegisterMemoryRequest(
                 protocol=self.cache_config.migration_protocol,
                 remote_engine_id=migration_init_request.remote_engine_id,
@@ -370,6 +372,8 @@ class CacheEngine:
             target_offset, source_offset = get_offset(blocks_to_migration, assignment_len, layer_stride, remote_layer_stride)
 
             for i, _ in enumerate(self.full_gpu_cache):
+                if t.numel() == 0:
+                    continue
                 await self.migration_backend_impl.p2p_migrate(
                     MigrationAssignment(
                         protocol=self.cache_config.migration_protocol,
