@@ -909,7 +909,7 @@ class Engine:
                 session_ids = [out.session_id for out in outputs]
                 logger.debug(f'Response sessions: {session_ids}')
             elif logger.level <= logging.INFO:
-                logger.info(f'Response: num_outputs={len(outputs)}.')
+                logger.debug(f'Response: num_outputs={len(outputs)}.')
 
         def __send_resp(out: InferOutput):
             """send response."""

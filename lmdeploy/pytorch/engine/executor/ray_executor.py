@@ -85,7 +85,7 @@ def init_ray_cluster(world_size: int, ray_address: str = None):
     """init ray cluster."""
     # modifier from vLLM
     if not ray.is_initialized():
-        ray.init(address=ray_address, ignore_reinit_error=True)
+        ray.init(address=ray_address, ignore_reinit_error=True, num_cpus=16)
 
     device_str = get_device_str()
 
