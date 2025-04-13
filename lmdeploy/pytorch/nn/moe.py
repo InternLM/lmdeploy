@@ -590,8 +590,12 @@ class FusedMoEBlockedF8(nn.Module):
             }
         elif moe_type == MoeType.DSAsyncDecode:
             fusedmoe = self.fusedmoe_build(low_latency_mode=True)
+            use_event = False
             (recv_hidden_states, recv_expert_count, handle, event,
-             hook) = fusedmoe.dispatch_async(state['hidden_states'], state['topk_idx'], use_fp8=True, async_finish=True)
+             hook) = fusedmoe.dispatch_async(state['hidden_states'],
+                                             state['topk_idx'],
+                                             use_fp8=True,
+                                             async_finish=use_event)
             recv_state = {
                 'fusedmoe': fusedmoe,
                 'recv_hidden_states': recv_hidden_states,
@@ -600,9 +604,12 @@ class FusedMoEBlockedF8(nn.Module):
                 'topk_weights': state['topk_weights'],
                 'raw_hidden_shape': state['raw_hidden_shape'],
                 'handle': handle,
-                'event': event,
                 'moe_type': state['moe_type']
             }
+            if use_event:
+                recv_state['event'] = event
+            else:
+                recv_state['hook'] = hook
         else:  # MoeType.Default
             hidden_states, topk_weights, topk_idx = _moe_gather_inputs(state['hidden_states'], state['topk_weights'],
                                                                        state['topk_idx'], False)
@@ -663,14 +670,21 @@ class FusedMoEBlockedF8(nn.Module):
             }
         elif moe_type == MoeType.DSAsyncDecode:
             fusedmoe = state['fusedmoe']
-            out_hidden_states, event, hook = fusedmoe.combine_async(state['hidden_states'], state['topk_idx'],
-                                                                    state['topk_weights'], state['handle'], True)
+            use_event = False
+            out_hidden_states, event, hook = fusedmoe.combine_async(state['hidden_states'],
+                                                                    state['topk_idx'],
+                                                                    state['topk_weights'],
+                                                                    state['handle'],
+                                                                    async_finish=use_event)
             out_state = {
                 'fusedmoe': state['fusedmoe'],
                 'hidden_states': out_hidden_states,
-                'event': event,
                 'moe_type': state['moe_type']
             }
+            if use_event:
+                out_state['event'] = event
+            else:
+                out_state['hook'] = hook
         else:  # MoeType.Default
             if self.all_reduce:
                 state['hidden_states'] = _moe_reduce(state['hidden_states'], False)
@@ -680,6 +694,9 @@ class FusedMoEBlockedF8(nn.Module):
     def wait(self, state):
         if state.get('event', None) is not None:
             state['fusedmoe'].wait(state['event'])
+            return True
+        elif state.get('hook', None) is not None:
+            state['hook']()
             return True
         else:
             return False

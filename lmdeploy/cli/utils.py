@@ -525,6 +525,5 @@ class ArgumentHelper:
         """Add argument enable_microbatch to parser."""
 
         return parser.add_argument('--enable-microbatch',
-                                   type=bool,
-                                   default=False,
+                                   action='store_true',
                                    help='enable microbatch for specified model')

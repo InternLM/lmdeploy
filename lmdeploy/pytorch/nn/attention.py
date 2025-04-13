@@ -39,7 +39,6 @@ class Attention(nn.Module):
         **kwargs,
     ):
         super().__init__()
-        self.use_flash_mla = use_flash_mla
         if num_kv_heads is None:
             num_kv_heads = num_heads
         if v_head_size is None:
