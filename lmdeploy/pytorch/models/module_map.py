@@ -15,6 +15,12 @@ MODULE_MAP.update({
     'LlamaForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaForCausalLM',
 })
 
+# llama4
+MODULE_MAP.update({
+    'Llama4ForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama4.Llama4ForConditionalGeneration',
+})
+
 # Falcon Models in transformer / on hub
 MODULE_MAP.update({
     'FalconForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.falcon.FalconForCausalLM',

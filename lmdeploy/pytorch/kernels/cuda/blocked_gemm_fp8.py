@@ -29,6 +29,7 @@ def _quant_fp8_kernel(
     stride_sm,
     stride_sg,
     GROUP_SIZE: tl.constexpr,
+    NUM_STAGES: tl.constexpr,
 ):
     """quant fp8 kernel."""
     group_id = tl.program_id(0)
@@ -44,7 +45,7 @@ def _quant_fp8_kernel(
     o_ptrs = out_ptr + m_id * stride_om + g_offs * stride_ok
     s_ptr = scale_ptr + m_id * stride_sm + group_id * stride_sg
 
-    for m_id in tl.range(m_id_start, M_out, m_id_stride):
+    for m_id in tl.range(m_id_start, M_out, m_id_stride, num_stages=NUM_STAGES):
 
         a = tl.load(a_ptrs, mask=m_id < M, other=0).to(tl.float32)
         scale = tl.max(tl.abs(a)) * rfp8_max
@@ -73,7 +74,6 @@ def _quant_fp8_launcher(A: Tensor, group_size: int, out: Tensor, scales: Tensor)
     fmax = finfo.max
 
     num_warps = 1
-    num_stages = 1
 
     props = get_device_props(A.device.index)
     num_sm = props['multi_processor_count']
@@ -81,6 +81,7 @@ def _quant_fp8_launcher(A: Tensor, group_size: int, out: Tensor, scales: Tensor)
     max_ctas = num_sm * warps_per_sm // num_warps
     grid_size1 = min(M_out, max_ctas // num_groups)
     assert grid_size1 < 65536
+    num_stages = min(5, max(1, triton.cdiv(M_out, grid_size1)))
     grid = (num_groups, grid_size1)
     _quant_fp8_kernel[grid](
         A,
@@ -97,6 +98,7 @@ def _quant_fp8_launcher(A: Tensor, group_size: int, out: Tensor, scales: Tensor)
         stride_sm=scales.stride(0),
         stride_sg=scales.stride(1),
         GROUP_SIZE=group_size,
+        NUM_STAGES=num_stages,
         num_warps=num_warps,
         num_stages=num_stages,
     )

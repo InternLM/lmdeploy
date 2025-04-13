@@ -317,6 +317,7 @@ class LinearWeightsW8A8(LinearWeights):
             weight = loaded_weight
         else:
             raise RuntimeError(f'Unknown shard_id: {shard_id}')
+        weight = weight.to(param.dtype)
         param_data.copy_(weight)
 
 
