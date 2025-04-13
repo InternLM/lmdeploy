@@ -39,6 +39,7 @@ class Attention(nn.Module):
         **kwargs,
     ):
         super().__init__()
+        self.use_flash_mla = use_flash_mla
         if num_kv_heads is None:
             num_kv_heads = num_heads
         if v_head_size is None:
@@ -86,6 +87,10 @@ class Attention(nn.Module):
             v_scales_zeros=v_scales_zeros,
             inplace=inplace,
         )
+
+    @staticmethod
+    def update_meta_flashmla(attn_metadata: AttentionMetadata, num_attention_heads):
+        get_backend().update_meta_flashmla(attn_metadata, num_attention_heads)
 
 
 class FlashAttention(nn.Module):

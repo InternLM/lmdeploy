@@ -182,6 +182,10 @@ def get_new_meta(attn_metadata, start_idx: int, end_idx: int):
         if attn_metadata.kv_seqlens is not None else None
     new_attn_metadata.kv_flatten_size = sum(new_attn_metadata.kv_seqlens.tolist()) \
         if attn_metadata.kv_flatten_size is not None else None
+    # create buffers for flash mla
+    if attn_metadata.num_splits is not None:
+        Attention.update_meta_flashmla(new_attn_metadata,
+                                       get_step_ctx_manager().current_context().model_config.num_attention_heads)
     return new_attn_metadata
 
 
@@ -850,7 +854,6 @@ class DeepseekV2DecoderLayer(nn.Module):
     ):
         """forward_yield."""
         is_decoding = attn_metadata.is_decoding
-
         if residual is None:
             residual = hidden_states
             hidden_states = self.input_layernorm(hidden_states)
@@ -1157,14 +1160,17 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
 
         # twobatch or onebatch
         if self.enable_microbatch:
-            if attn_metadata.q_start_loc.size(dim=0) < 2:
+            batch_size = attn_metadata.q_start_loc.size(dim=0)
+            if batch_size < 2:
                 disable_num = torch.tensor(1, dtype=torch.int32, device=input_ids.device)
             else:
                 disable_num = torch.tensor(0, dtype=torch.int32, device=input_ids.device)
             ep_group = get_dist_manager().current_context().ep_gpu_group
             dist.all_reduce(disable_num, op=dist.ReduceOp.SUM, group=ep_group)
             step_ctx = get_step_ctx_manager().current_context()
-            step_ctx.enable_microbatch = disable_num.item() == 0
+            enable_microbatch = disable_num.item() == 0
+            step_ctx.enable_microbatch = enable_microbatch
+
         return dict(
             input_ids=input_ids,
             position_ids=position_ids,
