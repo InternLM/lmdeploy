@@ -81,7 +81,7 @@ jobs:
           docker build . -f docker/Dockerfile -t ${TAG} --build-arg CUDA_VERSION=${CUDA_VERSION}
           docker push $TAG
       - name: Build and push cu12 Docker image for Hopper GPU
-        if: endsWith(env.TAG, 'cu12') == true
+        if: endsWith(env.TAG, 'latest-cu12') == true
         run: |
           docker build . -f docker/Dockerfile_Hopper -t ${TAG}-hopper
           docker push ${TAG}-hopper
