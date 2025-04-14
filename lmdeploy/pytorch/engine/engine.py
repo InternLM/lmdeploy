@@ -89,6 +89,7 @@ def _build_dist_config(engine_config: PytorchEngineConfig):
         tp=engine_config.tp,
         ep=engine_config.ep,
         dp_rank=engine_config.dp_rank,
+        prefill_without_permute=engine_config.prefill_without_permute,
     )
     return dist_config
 

@@ -6,6 +6,7 @@ import torch
 import torch.distributed as dist
 
 from lmdeploy.pytorch.backends.cuda.token_dispatcher import DeepEPTokenDispatcherLowLatency, TokenDispatcherBuilder
+from lmdeploy.pytorch.distributed import prefill_without_permute
 from lmdeploy.pytorch.kernels.cuda import fused_moe, fused_moe_w8a8
 from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import fused_moe_blocked_fp8
 from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
@@ -20,6 +21,7 @@ from lmdeploy.utils import get_logger
 from ..moe import (FusedMoEBlockedF8Builder, FusedMoEBlockedF8Impl, FusedMoEBuilder, FusedMoEImpl, FusedMoEW8A8Builder,
                    FusedMoEW8A8Impl)
 
+is_prefill_without_permute = prefill_without_permute()
 logger = get_logger('lmdeploy')
 
 

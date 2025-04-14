@@ -513,6 +513,17 @@ class ArgumentHelper:
                                    'If True, cuda graph would be disabled')
 
     @staticmethod
+    def prefill_without_permute(parser):
+        """Add argument prefill_without_permute to parser."""
+
+        return parser.add_argument('--prefill-without-permute',
+                                   action='store_true',
+                                   default=False,
+                                   help='Whether to enable prefill_without_permute. '
+                                   'If True, the moe layer would not permute the input, '
+                                   'and would not unpermute the output')
+
+    @staticmethod
     def communicator(parser):
         return parser.add_argument('--communicator',
                                    type=str,
