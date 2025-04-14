@@ -42,10 +42,12 @@ class CacheEngine:
         cache_config: CacheConfig,
         model_config: ModelConfig,
         rank: int = 0,
+        tp_rank: int = 0,
         world_size: int = 1,
     ) -> None:
         self.world_size = world_size
         self.rank = rank
+        self.tp_rank = tp_rank
         self.cache_config = cache_config
         self.model_config = model_config
 
@@ -323,6 +325,7 @@ class CacheEngine:
     """ Metheds for PD Disaggregation Begin. """
     def p2p_initialize(self, migration_init_request: MigrationInitRequest):
         migration_init_request.rank = self.rank
+        migration_init_request.tp_rank = self.tp_rank
         self.migration_backend_impl.p2p_initialize(migration_init_request)
         for i, t in enumerate(self.full_gpu_cache):
             if t.numel() == 0:
@@ -340,7 +343,7 @@ class CacheEngine:
             migration_init_request.protocol)
 
     def p2p_connect(self, migration_conn_request: MigrationConnectionRequest):
-        self.migration_backend_impl.p2p_connect(migration_conn_request[self.rank])
+        self.migration_backend_impl.p2p_connect(migration_conn_request[self.tp_rank])
 
     async def migrate(self, migration_execution_inputs: MigrationExecutionBatch):
         def get_assignment_len():
@@ -371,7 +374,7 @@ class CacheEngine:
             remote_layer_stride = self.migration_backend_impl.links[remote_engine_id].remote_engine_config.num_gpu_blocks * assignment_len
             target_offset, source_offset = get_offset(blocks_to_migration, assignment_len, layer_stride, remote_layer_stride)
 
-            for i, _ in enumerate(self.full_gpu_cache):
+            for i, t in enumerate(self.full_gpu_cache):
                 if t.numel() == 0:
                     continue
                 await self.migration_backend_impl.p2p_migrate(

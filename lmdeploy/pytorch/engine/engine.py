@@ -560,6 +560,7 @@ class Engine:
                 __update_max_new_tokens(msg)
                 scheduler.add_sequence(msg)
                 if migration_request:
+                    print("??????????????", migration_request)
                     self.scheduler._set_message_status(msg, MessageStatus.WAITING_MIGRATION)
                     self.migration_event.set()
             else:
@@ -1074,17 +1075,20 @@ class Engine:
             loop_send_resp = event_loop.create_task(self._async_loop_send_responses(resp_que, forward_event),
                                                     name='MainLoopResponse')
 
-            logger.info('Starting async task MigrationLoop.')
-            loop_migration = event_loop.create_task(
-                self._async_loop_migration(
-                    resp_que, has_runable_event=has_runable_event
-                ),
-                name="MainLoopMigration",
-            )
+            if self.engine_config.role == EngineRole.Decode:
+                logger.info('Starting async task MigrationLoop.')
+                loop_migration = event_loop.create_task(
+                    self._async_loop_migration(
+                        resp_que, has_runable_event=has_runable_event
+                    ),
+                    name="MainLoopMigration",
+                )
 
             # binding done callback
             loop_main = asyncio.current_task()
-            loop_tasks: List[asyncio.Task] = [loop_main, loop_migration, loop_msg_proc, loop_send_resp]
+            loop_tasks: List[asyncio.Task] = [loop_main, loop_msg_proc, loop_send_resp]
+            if self.engine_config.role == EngineRole.Decode:
+                loop_tasks.append(loop_migration)
             self._add_loop_tasks_done_callback(loop_tasks)
             self._loop_main = loop_main
 

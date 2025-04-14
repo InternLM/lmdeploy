@@ -370,7 +370,8 @@ class AutoModelAgent:
 
         logger.info(f'<ForwardTask> rank[{rank}]: '
                     f'batch_size={inputs.seq_length.size(0)} '
-                    f'num_tokens={inputs.input_ids.size(-1)}')
+                    f'num_tokens={inputs.input_ids.size(-1)} '
+                    f'is_decoding={inputs.is_decoding}')
 
         is_decoding = inputs.is_decoding
         eager_mode = self.backend_config.eager_mode
@@ -637,7 +638,7 @@ class BaseModelAgent(AutoModelAgent):
             attn_dist_cfg = dist_ctx.dist_config.attn_config
             tp = attn_dist_cfg.tp
 
-            self.cache_engine = CacheEngine(self.cache_config, self.model_config, rank=self.rank, world_size=tp)
+            self.cache_engine = CacheEngine(self.cache_config, self.model_config, rank=self.rank, tp_rank=self.tp_rank, world_size=tp)
 
     def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
         cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)

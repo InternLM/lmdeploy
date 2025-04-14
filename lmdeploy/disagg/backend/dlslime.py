@@ -19,6 +19,7 @@ from dlslime import RDMAEndpoint, available_nic
 class DLSlimeMigrationManagement:
     def __init__(self, init_request: MigrationInitRequest):
         self.rank = init_request.rank
+        self.tp_rank = init_request.tp_rank
         self.remote_engine_config: DisaggEngineConfig = init_request.remote_engine_config
         self.endpoint: Dict[str, RDMAEndpoint] = {
             MigrationTransportProtocol.TCP: None,
@@ -46,7 +47,7 @@ class DLSlimeMigrationManagement:
         self.endpoint[connect_request.protocol].connect_to(connect_request.remote_endpoint_info)
 
     async def p2p_migrate(self, assignment: MigrationAssignment):
-        max_batch = 8192
+        max_batch = 4096 + 2048
         for i in range(0, len(assignment.target_offset), max_batch):
             await self.endpoint[assignment.protocol].read_batch_async(
                 assignment.mr_key,

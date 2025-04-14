@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from lmdeploy.disagg.conn import PDConnectionStatus, PDConnectionPool, pd_consolidation
+from lmdeploy.disagg.conn import PDConnectionStatus, PDConnectionPool, pd_consolidation, pd_consolidation_multi_thread
 from lmdeploy.disagg.messages import EngineRole, ServingStrategy, MigrationRequest
 from lmdeploy.serve.openai.api_server import check_api_key, create_error_response
 from lmdeploy.serve.openai.protocol import ModelCard  # noqa: E501
@@ -96,7 +96,18 @@ class NodeManager:
         self.heart_beat_thread = threading.Thread(target=heart_beat_controller, args=(self, ), daemon=True)
         self.heart_beat_thread.start()
         self.aiotimeout = aiohttp.ClientTimeout(total=AIOHTTP_TIMEOUT)
-    
+
+        # p_endpoints =  list(self.prefill_nodes.keys())
+        # d_endpoints =  list(self.decode_nodes.keys())
+        # pd_consolidation_multi_thread(p_endpoints, d_endpoints)
+        # for pidx, pid in enumerate(p_endpoints):
+        #     for didx, did in enumerate(d_endpoints):
+        #         # pd_consolidation((pid, did))
+        #         self.pd_connection_pool.pool[(pid, did)] = PDConnectionStatus.Connected
+        #         print(f"{((pidx, pid), (didx, did))} connected")
+
+        self.initialized = False
+
     def get_nodes(self, role: EngineRole) -> Dict:
         return {node_url: node_status for (node_url, node_status) in self.nodes.items() if node_status.role == role}
 
@@ -307,7 +318,7 @@ class NodeManager:
             # exception happened, reduce unfinished num
             yield self.handle_api_timeout(node_url)
 
-    async def generate(self, request: Dict, node_url: str, endpoint: str):
+    async def generate(self, request: Dict, node_url: str, endpoint: str, is_prefill: bool = False):
         """Return a the response of the input request.
 
         Args:
@@ -315,13 +326,36 @@ class NodeManager:
             node_url (str): the node url.
             endpoint (str): the endpoint. Such as `/v1/chat/completions`.
         """
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(node_url + endpoint, json=request, timeout=self.aiotimeout) as response:
-                    return await response.text()
-        except (Exception, GeneratorExit, aiohttp.ClientError, asyncio.CancelledError) as e:  # noqa  # yapf: disable
-            logger.error(f'catched an exception: {e}')
-            return self.handle_api_timeout(node_url)
+        if not self.initialized:
+            # 初始化信号量
+            self.prefill_sem = asyncio.Semaphore(1024)  # Prefill并发限制
+            self.decode_sem = asyncio.Semaphore(1024)   # Decode并发限制
+            
+            self._connector = aiohttp.TCPConnector(
+                limit=500,  # 总连接数限制
+                limit_per_host=100,  # 单节点连接数限制
+                ssl=False
+            )
+
+            # 创建持久化会话
+            self.prefill_session = aiohttp.ClientSession(
+                connector=aiohttp.TCPConnector(limit_per_host=2048),
+                timeout=aiohttp.ClientTimeout(total=AIOHTTP_TIMEOUT)
+            )
+            self.decode_session = aiohttp.ClientSession(
+                connector=aiohttp.TCPConnector(limit_per_host=2048),
+                timeout=aiohttp.ClientTimeout(total=AIOHTTP_TIMEOUT)
+            )
+            self.initialized = True
+        session = self.prefill_session if is_prefill else self.decode_session
+        sem = self.prefill_sem if is_prefill else self.decode_sem
+        # try:
+        async with sem:
+            async with session.post(node_url + endpoint, json=request, timeout=self.aiotimeout) as response:
+                return await response.text()
+        # except (Exception, GeneratorExit, aiohttp.ClientError, asyncio.CancelledError) as e:  # noqa  # yapf: disable
+        #     logger.error(f'catched an exception: {e}')
+        #     return self.handle_api_timeout(node_url)
 
     def pre_call(self, node_url):
         """Preprocess before the request get processed.
@@ -572,7 +606,8 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
             logger.info(f'A Prefill request is dispatched to {prefill_node_url}')
 
             start = node_manager.pre_call(prefill_node_url)
-            prefill_info = json.loads(await node_manager.generate(prefill_request_dict, prefill_node_url, '/v1/completions'))
+            prefill_info = json.loads(await node_manager.generate(prefill_request_dict, prefill_node_url, '/v1/completions', is_prefill=True))
+            # print(prefill_info)
             node_manager.post_call(prefill_node_url, start)
 
             # # Decode
@@ -583,6 +618,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
             
             if (prefill_node_url, decode_node_url) not in node_manager.pd_connection_pool.pool:
                 pd_consolidation((prefill_node_url, decode_node_url))
+                print(f"construct connection_pool: {(prefill_node_url, decode_node_url)}, total connections: {len(node_manager.pd_connection_pool.pool)}")
                 node_manager.pd_connection_pool.pool[(prefill_node_url, decode_node_url)] = PDConnectionStatus.Connected
             migration_request = MigrationRequest(
                 remote_engine_id=prefill_node_url,

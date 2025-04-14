@@ -2,7 +2,11 @@ import enum
 
 from typing import List, Optional, Tuple
 
+from concurrent.futures import ThreadPoolExecutor
+
 import requests
+
+from lmdeploy.logger import get_logger
 
 from lmdeploy.disagg.messages import (
     DisaggEngineConfig,
@@ -13,6 +17,8 @@ from lmdeploy.disagg.messages import (
     MigrationTransportProtocol,
     MigrationConnectionRequest
 )
+
+logger = get_loger("lmdeploy")
 
 
 class PDConnectionStatus(enum.Enum):
@@ -116,3 +122,23 @@ def pd_consolidation(
         ]
         p2p_connect(endpoint[0], prefill_endpoint_conn_reqs)
         p2p_connect(endpoint[1], decode_endpoint_conn_reqs)
+        logger.info(f"{endpoint} connected")
+    
+def pd_consolidation_multi_thread(
+    p_endpoints: List[str],
+    d_endpoints: List[str],
+    protocol: MigrationTransportProtocol = MigrationTransportProtocol.RDMA,
+    *,
+    rdma_link_type: str = None,
+    available_nic: Optional[Tuple[List[str], List[str]]] = None
+):
+    with ThreadPoolExecutor() as executor:
+        for pid in p_endpoints:
+            for did in d_endpoints:
+                executor.submit(
+                    pd_consolidation,
+                    (pid, did),
+                    protocol,
+                    rdma_link_type=rdma_link_type,
+                    available_nic=available_nic
+                )
