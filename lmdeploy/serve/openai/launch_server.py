@@ -130,8 +130,6 @@ def launch_server(num_nodes: int,
     dp = backend_config.dp
     tp = backend_config.tp
     dp_per_node = dp // num_nodes
-    tp_per_dp = tp // dp
-    backend_config.tp = tp_per_dp
 
     processes = []
     http_or_https = 'https' if kwargs.get('ssl', False) else 'http'
@@ -146,7 +144,7 @@ def launch_server(num_nodes: int,
         dp_rank = node_rank * dp_per_node + idx
         backend_config_dp.dp_rank = dp_rank
         server_port = find_available_port()
-        gpu_ids_per_dp = [base_gpu_id + gid for gid in range(idx * tp_per_dp, (idx + 1) * tp_per_dp)]
+        gpu_ids_per_dp = [base_gpu_id + gid for gid in range(idx * tp, (idx + 1) * tp)]
         cur_server_kwargs = dict()
         cur_server_kwargs.update(kwargs)
         cur_server_kwargs['server_name'] = server_name
@@ -163,9 +161,9 @@ def launch_server(num_nodes: int,
     signal.signal(signal.SIGINT, lambda sig, frame: cleanup_processes(processes))
     signal.signal(signal.SIGTERM, lambda sig, frame: cleanup_processes(processes))
     signal.signal(signal.SIGQUIT, lambda sig, frame: cleanup_processes(processes))
+
     # warm up
-    if dp > 1 and tp > 1:
-        warmup_servers(server_urls, model_name)
+    warmup_servers(server_urls, model_name)
 
     print(f'HINT:    Please open \033[93m\033[1m{proxy_url}'
           '\033[0m in a browser for detailed api'
