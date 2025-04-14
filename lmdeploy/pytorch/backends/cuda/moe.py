@@ -427,7 +427,8 @@ class FusedMoENormal:
                 up_scale: torch.Tensor,
                 down_weights: torch.Tensor,
                 down_scale: torch.Tensor,
-                expert_list: List[int] = None):
+                expert_list: List[int] = None,
+                dlblas_moe_impl: FusedMoEBlockedF8Impl = None):
         """forward."""
         recv_hidden_states, recv_topk_ids, recv_topk_weights, tokens_per_expert = self.token_dispatcher.dispatch(
             hidden_states,
@@ -435,8 +436,13 @@ class FusedMoENormal:
             topk_weights,
             expert_list,
         )
-        out_states = self.experts.forward(recv_hidden_states, tokens_per_expert, up_weights, up_scale, down_weights,
-                                          down_scale)
+        if is_prefill_without_permute and dlblas_moe_impl != None:
+            logger.error(f"dlblas_moe_impl is try to run.")
+            out_states = dlblas_moe_impl.forward(recv_hidden_states, recv_topk_weights, recv_topk_ids, up_weights, up_scale,
+                                                 down_weights, down_scale)
+        else:
+            out_states = self.experts.forward(recv_hidden_states, tokens_per_expert, up_weights, up_scale, down_weights,
+                                              down_scale)
         out_states = self.token_dispatcher.combine(out_states)
         return out_states
 
@@ -509,15 +515,22 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
             logger.warning('For higher performance, please install DeepGEMM https://github.com/deepseek-ai/DeepGEMM')
 
         try:
-            from dlblas.layers.moe.ep_moe import FusedMoEBlockedF8Impl
-            self.dlblas_moe = FusedMoEBlockedF8Impl(ep_size=ep_size,
-                                                    ep_group=ep_group,
-                                                    top_k=top_k,
-                                                    num_experts=num_experts,
-                                                    hidden_dim=hidden_dim,
-                                                    renormalize=renormalize,
-                                                    block_size=block_size,
-                                                    out_dtype=out_dtype)
+            # from dlblas.layers.moe.ep_moe import FusedMoEBlockedF8Impl
+            # self.dlblas_moe = FusedMoEBlockedF8Impl(ep_size=ep_size,
+            #                                         ep_group=ep_group,
+            #                                         top_k=top_k,
+            #                                         num_experts=num_experts,
+            #                                         hidden_dim=hidden_dim,
+            #                                         renormalize=renormalize,
+            #                                         block_size=block_size,
+            #                                         out_dtype=out_dtype)
+            from dlblas.layers.moe.ep_moe import DlblasTritonFusedMoEBlockedF8Impl
+            self.dlblas_moe = DlblasTritonFusedMoEBlockedF8Impl(top_k=top_k,
+                                                                num_experts=num_experts,
+                                                                renormalize=renormalize,
+                                                                block_size=block_size,
+                                                                out_dtype=out_dtype,
+                                                                ep_size=ep_size)
         except ImportError:
             self.dlblas_moe = None
             logger.warning('For higher performance, please install dlblas https://github.com/DeepLink-org/dlBlas')
@@ -533,19 +546,21 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
                 expert_list: List[int] = None):
         """forward."""
         step_ctx = get_step_ctx_manager().current_context()
-        if self.dlblas_moe is not None:
-            return self.dlblas_moe.forward(hidden_states, topk_weights, topk_ids, gate_up_weights, gate_up_scale,
-                                           down_weights, down_scale, step_ctx.is_decoding, expert_list)
-        topk_weights = _renormalize(topk_weights, self.renormalize)
+        if is_prefill_without_permute:
+            pass
+        else:
+            topk_weights = _renormalize(topk_weights, self.renormalize)
         moe = None
         if step_ctx.is_decoding is False or self.use_deep_gemm is False:
             moe = FusedMoENormal(self.ep_size, self.ep_group, self.num_experts, self.hidden_dim, self.block_size,
                                  self.out_dtype)
+            out_states = moe.forward(hidden_states, topk_weights, topk_ids, gate_up_weights, gate_up_scale, down_weights,
+                                     down_scale, expert_list, self.dlblas_moe)
         else:
             moe = FusedMoELowLatency(self.ep_size, self.ep_group, self.num_experts, self.hidden_dim, self.block_size,
                                      self.out_dtype)
-        out_states = moe.forward(hidden_states, topk_weights, topk_ids, gate_up_weights, gate_up_scale, down_weights,
-                                 down_scale, expert_list)
+            out_states = moe.forward(hidden_states, topk_weights, topk_ids, gate_up_weights, gate_up_scale, down_weights,
+                                     down_scale, expert_list)
         return out_states
 
 
