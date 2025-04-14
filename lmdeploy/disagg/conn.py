@@ -115,16 +115,13 @@ class PDConnectionPool:
         )
 
         if protocol == MigrationTransportProtocol.RDMA:
-            prefill_init_req.rdma_init_request = RDMAInitRequest(
+            rdma_init_req = RDMAInitRequest(
                 device_name=None,
                 ib_port=ib_port,
                 link_type=rdma_link_type
             )
-            decode_init_req.rdma_init_request = RDMAInitRequest(
-                device_name=None,
-                ib_port=ib_port,
-                link_type=rdma_link_type
-            )
+            prefill_init_req.rdma_init_request = rdma_init_req
+            decode_init_req.rdma_init_request = rdma_init_req
         else:
             raise NotImplementedError
 
