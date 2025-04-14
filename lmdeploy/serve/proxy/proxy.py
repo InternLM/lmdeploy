@@ -97,17 +97,6 @@ class NodeManager:
         self.heart_beat_thread.start()
         self.aiotimeout = aiohttp.ClientTimeout(total=AIOHTTP_TIMEOUT)
 
-        # p_endpoints =  list(self.prefill_nodes.keys())
-        # d_endpoints =  list(self.decode_nodes.keys())
-        # pd_consolidation_multi_thread(p_endpoints, d_endpoints)
-        # for pidx, pid in enumerate(p_endpoints):
-        #     for didx, did in enumerate(d_endpoints):
-        #         # pd_consolidation((pid, did))
-        #         self.pd_connection_pool.pool[(pid, did)] = PDConnectionStatus.Connected
-        #         print(f"{((pidx, pid), (didx, did))} connected")
-
-        self.initialized = False
-
     def get_nodes(self, role: EngineRole) -> Dict:
         return {node_url: node_status for (node_url, node_status) in self.nodes.items() if node_status.role == role}
 
@@ -326,23 +315,8 @@ class NodeManager:
             node_url (str): the node url.
             endpoint (str): the endpoint. Such as `/v1/chat/completions`.
         """
-        if not self.initialized:
-            self.prefill_sem = asyncio.Semaphore(1024)
-            self.decode_sem = asyncio.Semaphore(1024)
-            # 创建持久化会话
-            self.prefill_session = aiohttp.ClientSession(
-                connector=aiohttp.TCPConnector(limit_per_host=2048),
-                timeout=aiohttp.ClientTimeout(total=AIOHTTP_TIMEOUT)
-            )
-            self.decode_session = aiohttp.ClientSession(
-                connector=aiohttp.TCPConnector(limit_per_host=2048),
-                timeout=aiohttp.ClientTimeout(total=AIOHTTP_TIMEOUT)
-            )
-            self.initialized = True
-        session = self.prefill_session if is_prefill else self.decode_session
-        sem = self.prefill_sem if is_prefill else self.decode_sem
         try:
-            async with sem:
+            async with aiohttp.ClientSession() as session:
                 async with session.post(node_url + endpoint, json=request, timeout=self.aiotimeout) as response:
                     return await response.text()
         except (Exception, GeneratorExit, aiohttp.ClientError, asyncio.CancelledError) as e:  # noqa  # yapf: disable

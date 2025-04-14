@@ -92,13 +92,6 @@ class PDConnectionPool:
         prefill_engine_config = await get_engine_config(p_url)
         decode_engine_config = await get_engine_config(d_url)
 
-        # Note: Only tp is supported by now
-        assert prefill_engine_config.dp_size is None
-        assert prefill_engine_config.pp_size is None
-
-        assert decode_engine_config.dp_size is None
-        assert decode_engine_config.pp_size is None
-
         # Note: Only Same Parallel Configurations are supported by now
         assert prefill_engine_config.tp_size == decode_engine_config.tp_size
 

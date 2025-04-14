@@ -25,9 +25,10 @@ class MigrationBackend(enum.Enum):
 class DisaggEngineConfig(BaseModel):
     # parallel config
     tp_size: int
-    ep_size: Optional[int]
-    dp_size: Optional[int]
+    ep_size: int
+    dp_size: int
     pp_size: Optional[int]
+    dp_rank: int
 
     # cache config
     block_size: int

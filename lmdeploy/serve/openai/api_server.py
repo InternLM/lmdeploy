@@ -830,9 +830,10 @@ async def engine_info():
 
     response = DisaggEngineConfig(
         tp_size=engine.engine_config.tp,
-        dp_size=None,
+        dp_size=engine.engine_config.dp,
         pp_size=None,
-        ep_size=None,
+        ep_size=engine.engine_config.ep,
+        dp_rank=engine.engine_config.dp_rank,
         block_size=engine.engine_config.block_size,
         num_cpu_blocks=engine.scheduler.block_manager.num_cpu_blocks,
         num_gpu_blocks=engine.scheduler.block_manager.num_gpu_blocks,
