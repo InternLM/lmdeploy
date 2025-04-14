@@ -21,7 +21,7 @@ RUN dpkg -r libgdrapi gdrcopy && \
     make prefix=${GDRCOPY_HOME} install -j$(nproc)
 
 # DeepEP
-RUN git clone https://github.com/deepseek-ai/DeepEP.git
+RUN git clone --depth=1 https://github.com/deepseek-ai/DeepEP.git
 
 # NVSHMEM
 RUN wget https://developer.nvidia.com/downloads/assets/secure/nvshmem/nvshmem_src_3.2.5-1.txz && \
@@ -55,12 +55,12 @@ COPY --from=builder_stage /opt/py3/lib/python3.10/site-packages/deep_ep_cpp* /op
 
 WORKDIR /opt
 # install FlashMLA
-RUN git clone https://github.com/deepseek-ai/FlashMLA.git --recursive && \
+RUN git clone --recursive --depth=1 https://github.com/deepseek-ai/FlashMLA.git && \
     cd FlashMLA && python setup.py install && \
     cd .. && rm -rf FlashMLA
 
 # install DeepGEMM
-RUN git clone https://github.com/deepseek-ai/DeepGEMM.git --recursive && \
+RUN git clone --recursive --depth=1 https://github.com/deepseek-ai/DeepGEMM.git && \
     cd DeepGEMM && python setup.py install && \
     cd .. && rm -rf DeepGEMM
 
