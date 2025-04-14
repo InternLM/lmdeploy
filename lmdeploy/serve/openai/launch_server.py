@@ -128,7 +128,6 @@ def launch_server(num_nodes: int,
 
     mp.set_start_method('spawn')
     dp = backend_config.dp
-    tp = backend_config.tp
     dp_per_node = dp // num_nodes
 
     processes = []
@@ -138,13 +137,15 @@ def launch_server(num_nodes: int,
         model_name = model_path
     server_name = get_host_ip()
     server_urls = []
+    tp_per_dp = 1  # each dp uses one rank
+    server_port_li = [find_available_port() for _ in range(dp_per_node)]
 
     for idx in range(dp_per_node):
         backend_config_dp = copy.deepcopy(backend_config)
         dp_rank = node_rank * dp_per_node + idx
         backend_config_dp.dp_rank = dp_rank
-        server_port = find_available_port()
-        gpu_ids_per_dp = [base_gpu_id + gid for gid in range(idx * tp, (idx + 1) * tp)]
+        server_port = server_port_li[idx]
+        gpu_ids_per_dp = [base_gpu_id + gid for gid in range(idx * tp_per_dp, (idx + 1) * tp_per_dp)]
         cur_server_kwargs = dict()
         cur_server_kwargs.update(kwargs)
         cur_server_kwargs['server_name'] = server_name
