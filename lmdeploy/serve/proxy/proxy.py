@@ -506,28 +506,29 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
-    match node_manager.serving_strategy:
-        case ServingStrategy.NonDisaggregated:
-            check_response = await node_manager.check_request_model(request.model)
-            if check_response is not None:
-                return check_response
-            node_url = node_manager.get_node_url(request.model)
-            if not node_url:
-                return node_manager.handle_unavailable_model(request.model)
+    if node_manager.serving_strategy == ServingStrategy.NonDisaggregated:
+        check_response = await node_manager.check_request_model(request.model)
+        if check_response is not None:
+            return check_response
+        node_url = node_manager.get_node_url(request.model)
+        if not node_url:
+            return node_manager.handle_unavailable_model(request.model)
 
-            logger.info(f'A request is dispatched to {node_url}')
-            request_dict = request.model_dump()
-            start = node_manager.pre_call(node_url)
-            if request.stream is True:
-                response = node_manager.stream_generate(request_dict, node_url, '/v1/chat/completions')
-                background_task = node_manager.create_background_tasks(node_url, start)
-                return StreamingResponse(response, background=background_task)
-            else:
-                response = await node_manager.generate(request_dict, node_url, '/v1/chat/completions')
-                node_manager.post_call(node_url, start)
-                return JSONResponse(json.loads(response))
-        case ServingStrategy.Disaggregated:
-            raise NotImplementedError
+        logger.info(f'A request is dispatched to {node_url}')
+        request_dict = request.model_dump()
+        start = node_manager.pre_call(node_url)
+        if request.stream is True:
+            response = node_manager.stream_generate(request_dict, node_url, '/v1/chat/completions')
+            background_task = node_manager.create_background_tasks(node_url, start)
+            return StreamingResponse(response, background=background_task)
+        else:
+            response = await node_manager.generate(request_dict, node_url, '/v1/chat/completions')
+            node_manager.post_call(node_url, start)
+            return JSONResponse(json.loads(response))
+    elif node_manager.serving_strategy == ServingStrategy.Disaggregated:
+        raise NotImplementedError
+    else:
+        raise ValueError(f"No serving strategy named {node_manager.serving_strategy}")
 
 
 @app.post('/v1/completions', dependencies=[Depends(check_api_key)])
@@ -567,76 +568,77 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
-    match node_manager.serving_strategy:
-        case ServingStrategy.NonDisaggregated:
-            check_response = await node_manager.check_request_model(request.model)
-            if check_response is not None:
-                return check_response
-            node_url = node_manager.get_node_url(request.model)
-            if not node_url:
-                return node_manager.handle_unavailable_model(request.model)
+    if node_manager.serving_strategy == ServingStrategy.NonDisaggregated:
+        check_response = await node_manager.check_request_model(request.model)
+        if check_response is not None:
+            return check_response
+        node_url = node_manager.get_node_url(request.model)
+        if not node_url:
+            return node_manager.handle_unavailable_model(request.model)
 
-            logger.info(f'A request is dispatched to {node_url}')
-            request_dict = request.model_dump()
-            start = node_manager.pre_call(node_url)
-            if request.stream is True:
-                response = node_manager.stream_generate(request_dict, node_url, '/v1/completions')
-                background_task = node_manager.create_background_tasks(node_url, start)
-                return StreamingResponse(response, background=background_task)
-            else:
-                response = await node_manager.generate(request_dict, node_url, '/v1/completions')
-                node_manager.post_call(node_url, start)
-                return JSONResponse(json.loads(response))
-        case ServingStrategy.Disaggregated:
-            check_response = await node_manager.check_request_model(request.model)
-            if check_response is not None:
-                return check_response
+        logger.info(f'A request is dispatched to {node_url}')
+        request_dict = request.model_dump()
+        start = node_manager.pre_call(node_url)
+        if request.stream is True:
+            response = node_manager.stream_generate(request_dict, node_url, '/v1/completions')
+            background_task = node_manager.create_background_tasks(node_url, start)
+            return StreamingResponse(response, background=background_task)
+        else:
+            response = await node_manager.generate(request_dict, node_url, '/v1/completions')
+            node_manager.post_call(node_url, start)
+            return JSONResponse(json.loads(response))
+    elif node_manager.serving_strategy == ServingStrategy.Disaggregated:
+        check_response = await node_manager.check_request_model(request.model)
+        if check_response is not None:
+            return check_response
 
-            request_dict = request.model_dump()
+        request_dict = request.model_dump()
 
-            # Prefill
-            prefill_request_dict = copy.deepcopy(request_dict)
-            prefill_request_dict["max_tokens"] = 1
-            prefill_request_dict["stream"] = False
-            prefill_request_dict["with_cache"] = True
+        # Prefill
+        prefill_request_dict = copy.deepcopy(request_dict)
+        prefill_request_dict["max_tokens"] = 1
+        prefill_request_dict["stream"] = False
+        prefill_request_dict["with_cache"] = True
 
-            prefill_node_url = node_manager.get_node_url(EngineRole.Prefill, request.model)
-            if not prefill_node_url:
-                return node_manager.handle_unavailable_model(request.model)
-            logger.info(f'A Prefill request is dispatched to {prefill_node_url}')
+        prefill_node_url = node_manager.get_node_url(EngineRole.Prefill, request.model)
+        if not prefill_node_url:
+            return node_manager.handle_unavailable_model(request.model)
+        logger.info(f'A Prefill request is dispatched to {prefill_node_url}')
 
-            start = node_manager.pre_call(prefill_node_url)
-            prefill_info = json.loads(await node_manager.generate(prefill_request_dict, prefill_node_url, '/v1/completions', is_prefill=True))
-            # print(prefill_info)
-            node_manager.post_call(prefill_node_url, start)
+        start = node_manager.pre_call(prefill_node_url)
+        prefill_info = json.loads(await node_manager.generate(prefill_request_dict, prefill_node_url, '/v1/completions', is_prefill=True))
+        # print(prefill_info)
+        node_manager.post_call(prefill_node_url, start)
 
-            # # Decode
-            decode_node_url = node_manager.get_node_url(EngineRole.Decode, request.model)
-            if not decode_node_url:
-                return node_manager.handle_unavailable_model(request.model)
-            logger.info(f'A Decode request is dispatched to {decode_node_url}')
-            
-            if (prefill_node_url, decode_node_url) not in node_manager.pd_connection_pool.pool:
-                pd_consolidation((prefill_node_url, decode_node_url))
-                print(f"construct connection_pool: {(prefill_node_url, decode_node_url)}, total connections: {len(node_manager.pd_connection_pool.pool)}")
-                node_manager.pd_connection_pool.pool[(prefill_node_url, decode_node_url)] = PDConnectionStatus.Connected
-            migration_request = MigrationRequest(
-                remote_engine_id=prefill_node_url,
-                remote_session_id=int(prefill_info["id"]),
-                remote_block_ids=prefill_info["cache_block_ids"],
-                remote_token_id=prefill_info["remote_token_ids"][-1],
-            )
-            request_dict["migration_request"] = migration_request.model_dump()
+        # # Decode
+        decode_node_url = node_manager.get_node_url(EngineRole.Decode, request.model)
+        if not decode_node_url:
+            return node_manager.handle_unavailable_model(request.model)
+        logger.info(f'A Decode request is dispatched to {decode_node_url}')
+        
+        if (prefill_node_url, decode_node_url) not in node_manager.pd_connection_pool.pool:
+            pd_consolidation((prefill_node_url, decode_node_url))
+            print(f"construct connection_pool: {(prefill_node_url, decode_node_url)}, total connections: {len(node_manager.pd_connection_pool.pool)}")
+            node_manager.pd_connection_pool.pool[(prefill_node_url, decode_node_url)] = PDConnectionStatus.Connected
+        migration_request = MigrationRequest(
+            remote_engine_id=prefill_node_url,
+            remote_session_id=int(prefill_info["id"]),
+            remote_block_ids=prefill_info["cache_block_ids"],
+            remote_token_id=prefill_info["remote_token_ids"][-1],
+        )
+        request_dict["migration_request"] = migration_request.model_dump()
 
-            start = node_manager.pre_call(decode_node_url)
-            if request.stream is True:
-                response = node_manager.stream_generate(request_dict, decode_node_url, '/v1/completions')
-                background_task = node_manager.create_background_tasks(prefill_node_url, start)
-                return StreamingResponse(response, background=background_task)
-            else:
-                response = await node_manager.generate(request_dict, decode_node_url, '/v1/completions')
-                node_manager.post_call(decode_node_url, start)
-                return JSONResponse(json.loads(response))
+        start = node_manager.pre_call(decode_node_url)
+        if request.stream is True:
+            response = node_manager.stream_generate(request_dict, decode_node_url, '/v1/completions')
+            background_task = node_manager.create_background_tasks(prefill_node_url, start)
+            return StreamingResponse(response, background=background_task)
+        else:
+            response = await node_manager.generate(request_dict, decode_node_url, '/v1/completions')
+            node_manager.post_call(decode_node_url, start)
+            return JSONResponse(json.loads(response))
+    else:
+        raise ValueError(f"No serving strategy named {node_manager.serving_strategy}")
 
 
 def proxy(server_name: str = '0.0.0.0',
