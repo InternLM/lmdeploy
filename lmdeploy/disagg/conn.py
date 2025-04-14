@@ -18,7 +18,7 @@ from lmdeploy.disagg.messages import (
     MigrationConnectionRequest
 )
 
-logger = get_loger("lmdeploy")
+logger = get_logger("lmdeploy")
 
 
 class PDConnectionStatus(enum.Enum):
