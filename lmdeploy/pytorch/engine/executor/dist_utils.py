@@ -6,14 +6,17 @@ from datetime import timedelta
 import torch.distributed as dist
 
 
-def find_available_port() -> bool:
+def find_available_port(start_port: int = 0) -> int:
     """find available port."""
-    port = 29500
-    while True:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            if s.connect_ex(('localhost', port)) != 0:
-                return port
-            port += 1
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind(('127.0.0.1', start_port))
+            port = s.getsockname()[1]
+            return port
+        except socket.error as e:
+            if start_port == 0:
+                raise RuntimeError('Failed to find available port.') from e
+            return find_available_port(0)
 
 
 def setup_master_addr(addr: str, port: str):
