@@ -560,7 +560,6 @@ class Engine:
                 __update_max_new_tokens(msg)
                 scheduler.add_sequence(msg)
                 if migration_request:
-                    print("??????????????", migration_request)
                     self.scheduler._set_message_status(msg, MessageStatus.WAITING_MIGRATION)
                     self.migration_event.set()
             else:

@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from lmdeploy.disagg.conn import PDConnectionStatus, PDConnectionPool, pd_consolidation, pd_consolidation_multi_thread
+from lmdeploy.disagg.conn import PDConnectionPool
 from lmdeploy.disagg.messages import EngineRole, ServingStrategy, MigrationRequest
 from lmdeploy.serve.openai.api_server import check_api_key, create_error_response
 from lmdeploy.serve.openai.protocol import ModelCard  # noqa: E501
@@ -169,7 +169,7 @@ class NodeManager:
                 if node_url in conn:
                     dropped_conn.append(conn)
             for conn in dropped_conn:
-                self.pd_connection_pool.pool.pop(conn)
+                self.pd_connection_pool.drop(*conn)
 
     def remove_stale_nodes_by_expiration(self):
         """remove stale nodes."""
@@ -192,8 +192,8 @@ class NodeManager:
     def model_list(self):
         """Supported model list."""
         model_names = []
-        for node_url, node_status in self.nodes.items():
-            model_names.extend(node_status.models)
+        for _, status in self.nodes.items():
+            model_names.extend(status.models)
         return model_names
 
     @property
@@ -201,7 +201,7 @@ class NodeManager:
         """Return the status."""
         return self.nodes
 
-    def get_node_url(self, role: EngineRole, model_name: str):
+    def get_node_url(self, model_name: str, role: EngineRole = EngineRole.Hybrid):
         """Add a node to the manager.
 
         Args:
@@ -213,11 +213,11 @@ class NodeManager:
 
         def get_matched_urls():
             urls_with_speeds, speeds, urls_without_speeds = [], [], []
-            for node_url, node_status in self.get_nodes(role).items():
-                if model_name in node_status.models:
-                    if node_status.speed is not None:
+            for node_url, status in self.get_nodes(role).items():
+                if model_name in status.models:
+                    if status.speed is not None:
                         urls_with_speeds.append(node_url)
-                        speeds.append(node_status.speed)
+                        speeds.append(status.speed)
                     else:
                         urls_without_speeds.append(node_url)
             all_matched_urls = urls_with_speeds + urls_without_speeds
@@ -327,16 +327,8 @@ class NodeManager:
             endpoint (str): the endpoint. Such as `/v1/chat/completions`.
         """
         if not self.initialized:
-            # 初始化信号量
-            self.prefill_sem = asyncio.Semaphore(1024)  # Prefill并发限制
-            self.decode_sem = asyncio.Semaphore(1024)   # Decode并发限制
-            
-            self._connector = aiohttp.TCPConnector(
-                limit=500,  # 总连接数限制
-                limit_per_host=100,  # 单节点连接数限制
-                ssl=False
-            )
-
+            self.prefill_sem = asyncio.Semaphore(1024)
+            self.decode_sem = asyncio.Semaphore(1024)
             # 创建持久化会话
             self.prefill_session = aiohttp.ClientSession(
                 connector=aiohttp.TCPConnector(limit_per_host=2048),
@@ -349,13 +341,13 @@ class NodeManager:
             self.initialized = True
         session = self.prefill_session if is_prefill else self.decode_session
         sem = self.prefill_sem if is_prefill else self.decode_sem
-        # try:
-        async with sem:
-            async with session.post(node_url + endpoint, json=request, timeout=self.aiotimeout) as response:
-                return await response.text()
-        # except (Exception, GeneratorExit, aiohttp.ClientError, asyncio.CancelledError) as e:  # noqa  # yapf: disable
-        #     logger.error(f'catched an exception: {e}')
-        #     return self.handle_api_timeout(node_url)
+        try:
+            async with sem:
+                async with session.post(node_url + endpoint, json=request, timeout=self.aiotimeout) as response:
+                    return await response.text()
+        except (Exception, GeneratorExit, aiohttp.ClientError, asyncio.CancelledError) as e:  # noqa  # yapf: disable
+            logger.error(f'catched an exception: {e}')
+            return self.handle_api_timeout(node_url)
 
     def pre_call(self, node_url):
         """Preprocess before the request get processed.
@@ -600,42 +592,39 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         prefill_request_dict["stream"] = False
         prefill_request_dict["with_cache"] = True
 
-        prefill_node_url = node_manager.get_node_url(EngineRole.Prefill, request.model)
-        if not prefill_node_url:
+        p_url = node_manager.get_node_url(request.model, EngineRole.Prefill)
+        if not p_url:
             return node_manager.handle_unavailable_model(request.model)
-        logger.info(f'A Prefill request is dispatched to {prefill_node_url}')
+        logger.info(f'A Prefill request is dispatched to {p_url}')
 
-        start = node_manager.pre_call(prefill_node_url)
-        prefill_info = json.loads(await node_manager.generate(prefill_request_dict, prefill_node_url, '/v1/completions', is_prefill=True))
+        start = node_manager.pre_call(p_url)
+        prefill_info = json.loads(await node_manager.generate(prefill_request_dict, p_url, '/v1/completions', is_prefill=True))
         # print(prefill_info)
-        node_manager.post_call(prefill_node_url, start)
+        node_manager.post_call(p_url, start)
 
         # # Decode
-        decode_node_url = node_manager.get_node_url(EngineRole.Decode, request.model)
-        if not decode_node_url:
+        d_url = node_manager.get_node_url(request.model, EngineRole.Decode)
+        if not d_url:
             return node_manager.handle_unavailable_model(request.model)
-        logger.info(f'A Decode request is dispatched to {decode_node_url}')
-        
-        if (prefill_node_url, decode_node_url) not in node_manager.pd_connection_pool.pool:
-            pd_consolidation((prefill_node_url, decode_node_url))
-            print(f"construct connection_pool: {(prefill_node_url, decode_node_url)}, total connections: {len(node_manager.pd_connection_pool.pool)}")
-            node_manager.pd_connection_pool.pool[(prefill_node_url, decode_node_url)] = PDConnectionStatus.Connected
-        migration_request = MigrationRequest(
-            remote_engine_id=prefill_node_url,
+        logger.info(f'A Decode request is dispatched to {d_url}')
+
+        if not node_manager.pd_connection_pool.get(p_url, d_url):
+            await node_manager.pd_connection_pool.connect(p_url, d_url)
+        request_dict["migration_request"] = MigrationRequest(
+            remote_engine_id=p_url,
             remote_session_id=int(prefill_info["id"]),
             remote_block_ids=prefill_info["cache_block_ids"],
             remote_token_id=prefill_info["remote_token_ids"][-1],
-        )
-        request_dict["migration_request"] = migration_request.model_dump()
+        ).model_dump()
 
-        start = node_manager.pre_call(decode_node_url)
+        start = node_manager.pre_call(d_url)
         if request.stream is True:
-            response = node_manager.stream_generate(request_dict, decode_node_url, '/v1/completions')
-            background_task = node_manager.create_background_tasks(prefill_node_url, start)
+            response = node_manager.stream_generate(request_dict, d_url, '/v1/completions')
+            background_task = node_manager.create_background_tasks(p_url, start)
             return StreamingResponse(response, background=background_task)
         else:
-            response = await node_manager.generate(request_dict, decode_node_url, '/v1/completions')
-            node_manager.post_call(decode_node_url, start)
+            response = await node_manager.generate(request_dict, d_url, '/v1/completions')
+            node_manager.post_call(d_url, start)
             return JSONResponse(json.loads(response))
     else:
         raise ValueError(f"No serving strategy named {node_manager.serving_strategy}")
