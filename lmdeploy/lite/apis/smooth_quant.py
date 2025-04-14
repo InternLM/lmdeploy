@@ -11,6 +11,7 @@ from lmdeploy.lite.apis.calibrate import LAYER_TYPE_MAP, NORM_TYPE_MAP, calibrat
 from lmdeploy.lite.quantization.awq import FC_FCS_MAP, NORM_FCS_MAP, awq_layers, skipped_module, smooth_layers
 from lmdeploy.lite.utils import collect_target_modules
 from lmdeploy.pytorch.models import QLinear, QRMSNorm
+from lmdeploy.utils import try_import_deeplink
 
 
 def smooth_quant(model: str,
@@ -26,6 +27,7 @@ def smooth_quant(model: str,
                  quant_dtype: Literal['int8', 'fp8', 'float8_e4m3fn', 'float8_e5m2'] = 'int8',
                  revision: str = None,
                  download_dir: str = None):
+    try_import_deeplink(device)
     if quant_dtype == 'fp8':
         quant_dtype = 'float8_e4m3fn'
 

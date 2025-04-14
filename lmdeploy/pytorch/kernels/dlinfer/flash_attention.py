@@ -12,22 +12,25 @@ def flash_attention_fwd(
     q_seqlens: Tensor,
     kv_start_loc: Tensor,
     kv_seqlens: Tensor,
+    num_heads: int,
+    num_kv_heads: int,
     max_q_seqlen: int = None,
     window_size: int = None,
     sm_scale: float = None,
     logit_softcapping: float = None,
     causal: bool = True,
 ):
-    num_q_heads = query_states.shape[1]
-    num_kv_heads = value_states.shape[1]
     return ext_ops.prefill_attention(
         query_states,
         key_states,
         value_states,
+        None,
+        None,
         q_start_loc,
         q_seqlens,
+        kv_seqlens,
         max_q_seqlen,
-        num_q_heads,
+        num_heads,
         num_kv_heads,
         attn_mask=[],
         softmax_scale=sm_scale,

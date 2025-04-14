@@ -75,8 +75,9 @@ def _flatten_kv_cache(
 
     kc = tl.load(kc_ptrs)
     tl.store(ko_ptrs, kc, mask=mask_bs[:, None] and mask_dk[None, :])
-    vc = tl.load(vc_ptrs)
-    tl.store(vo_ptrs, vc, mask=mask_bs[:, None] and mask_dv[None, :])
+    if HEAD_DIM_V > 0:
+        vc = tl.load(vc_ptrs)
+        tl.store(vo_ptrs, vc, mask=mask_bs[:, None] and mask_dv[None, :])
 
 
 @triton.jit
@@ -231,10 +232,15 @@ def flatten_kv_cache(k_caches: Tensor,
     BLOCK_BS = k_caches.size(s_dim)
 
     k_states = k_caches.new_empty(num_heads, out_size, k_head_dim, dtype=out_dtype)
-    v_states = v_caches.new_empty(num_heads, out_size, v_head_dim, dtype=out_dtype)
 
     grid = (num_blocks, batch_size, num_heads)
     if quant_policy == 0:
+        shared_kv = k_caches.data_ptr() == v_caches.data_ptr() and v_head_dim < k_head_dim
+        if shared_kv:
+            v_states = k_states[..., :v_head_dim]
+            v_head_dim = 0
+        else:
+            v_states = v_caches.new_empty(num_heads, out_size, v_head_dim, dtype=out_dtype)
         _flatten_kv_cache[grid](
             k_caches,
             v_caches,
@@ -266,6 +272,7 @@ def flatten_kv_cache(k_caches: Tensor,
             BLOCK_DV=BLOCK_DV,
         )
     else:
+        v_states = v_caches.new_empty(num_heads, out_size, v_head_dim, dtype=out_dtype)
         _flatten_kv_cache_quant[grid](
             k_caches,
             v_caches,

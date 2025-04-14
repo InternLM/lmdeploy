@@ -21,7 +21,7 @@ from lmdeploy import Tokenizer
 from lmdeploy.archs import get_model_arch
 from lmdeploy.logger import RequestLogger
 from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, Response, ResponseType, TurbomindEngineConfig
-from lmdeploy.model import MODELS, ChatTemplateConfig, best_match_model
+from lmdeploy.model import MODELS, BaseChatTemplate, ChatTemplateConfig, best_match_model
 from lmdeploy.serve.metrics import IterTimer, Metrics
 from lmdeploy.serve.utils import LogitsMixin
 from lmdeploy.tokenizer import DetokenizeState
@@ -570,7 +570,9 @@ class AsyncEngine(LogitsMixin):
             chat_template = self.chat_template
             if adapter_name in MODELS.module_dict:
                 chat_template = MODELS.module_dict[adapter_name]()
-            prompt = chat_template.messages2prompt(prompt, sequence_start, tools=tools)
+        else:
+            chat_template = BaseChatTemplate()
+        prompt = chat_template.messages2prompt(prompt, sequence_start, tools=tools)
         if prompt is None:
             raise ValueError(
                 f'You are using base template to handle chat task. Please specify a `--chat-template` name chosen from `lmdeploy list` if you want to use OpenAI messages input.'  # noqa
