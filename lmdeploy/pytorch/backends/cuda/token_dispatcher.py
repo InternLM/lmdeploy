@@ -13,12 +13,9 @@ import torch.distributed as dist
 from ..default.token_dispatcher import AlltoAllTokenDispatcher
 from ..token_dispatcher import TokenDispatcherImpl
 
-from lmdeploy.pytorch.distributed import prefill_without_permute
-
 _buffer_normal = None
 _buffer_low_latency = None
 _buffer_common = None
-is_prefill_without_permute = prefill_without_permute()
 
 def get_buffer_common(
     group: dist.ProcessGroup,
@@ -156,11 +153,8 @@ class DeepEPTokenDispatcher(TokenDispatcherImpl):
         self.handle = handle
         self.topk_idx = topk_idx
         self.topk_weights = topk_weights
-        if is_prefill_without_permute:
-            pass
-        else:
-            if hidden_states.shape[0] > 0:
-                hidden_states = self.get_permuted_hidden_states_by_experts(hidden_states)
+        if hidden_states.shape[0] > 0:
+            hidden_states = self.get_permuted_hidden_states_by_experts(hidden_states)
         return hidden_states, topk_idx, topk_weights, tokens_per_expert
 
     def dispatch_normal(
@@ -215,11 +209,8 @@ class DeepEPTokenDispatcher(TokenDispatcherImpl):
         )
 
     def combine(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        if is_prefill_without_permute:
-            pass
-        else:
-            if hidden_states.shape[0] > 0:
-                hidden_states = self.get_restored_hidden_states_by_experts(hidden_states)
+        if hidden_states.shape[0] > 0:
+            hidden_states = self.get_restored_hidden_states_by_experts(hidden_states)
         hidden_states, event = self.combine_normal(hidden_states, self.handle)
         self.handle = None
         return hidden_states.view(self.hidden_shape)
