@@ -155,7 +155,7 @@ public:
         if constexpr (is_quant_a) {
             static_assert(pack_a && pack_u);
             Quantize<Ta>(a_, m, k, order_a, g, a_f_, a_q_, u_, stream);
-            u_pack_desc_ = u_desc_ = {DataType::kU32, kColMajor, m, ceil_div(k, g), m};
+            u_pack_desc_ = u_desc_ = {kUint32, kColMajor, m, ceil_div(k, g), m};
             u_pack_desc_.pack      = pack_u;
             u_pack_.resize(u_.size());
             CHECK(!Convert(u_.data().get(), u_desc_, u_pack_.data().get(), u_pack_desc_, stream_));
@@ -176,7 +176,7 @@ public:
             Quantize<Tb>(b_, n * E, k, _order_b, g, b_f_, b_q_, v_, stream);
             quant_b_ = {QuantType::kDefault, g};
 
-            v_pack_desc_ = v_desc_ = {DataType::kU32, kRowMajor, ceil_div(k, g), n, int(n * E)};
+            v_pack_desc_ = v_desc_ = {kUint32, kRowMajor, ceil_div(k, g), n, int(n * E)};
             v_pack_desc_.pack      = pack_v;
             v_pack_.resize(v_.size());
             auto v_src_data = (uint32_t*)v_.data().get();

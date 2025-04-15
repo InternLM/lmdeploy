@@ -157,12 +157,12 @@ int Convert(const void*         S,  //
     auto dispatch_3 = [&](auto mma, auto operand, auto order) -> bool {
         if constexpr (is_AB(operand)) {
             switch (Ddesc.type) {
-                case kF16:
-                case kBF16:
+                case kFloat16:
+                case kBfloat16:
                     return dispatch_4(mma, operand, order, type_c<uint16_t>, type_c<uint16_t>);
-                case kU8:
+                case kUint8:
                     return dispatch_4(mma, operand, order, type_c<uint16_t>, type_c<uint8_t>);
-                case kU4:
+                case kUint4:
                     return dispatch_4(mma, operand, order, type_c<uint16_t>, type_c<uint4_t>);
                 default:
                     return false;
@@ -170,7 +170,7 @@ int Convert(const void*         S,  //
         }
         else {  // UV: U16, U32
             switch (Ddesc.type) {
-                case kU32:
+                case kUint32:
                     return dispatch_4(mma, operand, order, type_c<uint32_t>, type_c<uint32_t>);
                 default:
                     return false;
@@ -228,11 +228,11 @@ std::tuple<Order, Pack, Order, Pack>
 get_weight_and_scales_layout(DataType dtype, bool is_fused_moe, int sm, bool force_simt)
 {
     if (is_fused_moe) {
-        if (dtype == kBF16 && sm >= 80) {
+        if (dtype == kBfloat16 && sm >= 80) {
             return {kColMajor, HMMA_16816 | OPERAND_B | 1, {}, {}};
         }
 
-        if (dtype == kF16) {
+        if (dtype == kFloat16) {
             if (sm >= 80) {
                 return {kColMajor, HMMA_16816 | OPERAND_B | 1, {}, {}};
             }
@@ -243,7 +243,7 @@ get_weight_and_scales_layout(DataType dtype, bool is_fused_moe, int sm, bool for
                 return {kColMajor, HMMA_884 | OPERAND_B | 1, {}, {}};
             }
         }
-        else if (dtype == kU4) {
+        else if (dtype == kUint4) {
             if (sm >= 80) {
                 return {kColMajor, HMMA_16816 | OPERAND_B | 2, kRowMajor, HMMA_16816 | OPERAND_V | 1};
             }
@@ -256,7 +256,7 @@ get_weight_and_scales_layout(DataType dtype, bool is_fused_moe, int sm, bool for
         }
     }
     else {
-        if (dtype == kU4) {
+        if (dtype == kUint4) {
             if (force_simt) {
                 return {kColMajor, HMMA_SIMT | OPERAND_B | 1, kRowMajor, HMMA_SIMT | OPERAND_V | 1};
             }

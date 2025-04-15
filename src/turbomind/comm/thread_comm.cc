@@ -226,13 +226,13 @@ struct ThreadCommImpl: public HostCommImpl {
         };
         auto dispatch = [&]() -> reduce_fn {
             switch (dtype) {
-                case kI32:
+                case kInt32:
                     return dispatch_op(int32_t{});
-                case kI64:
+                case kInt64:
                     return dispatch_op(int64_t{});
-                case kU32:
+                case kUint32:
                     return dispatch_op(uint32_t{});
-                case kU64:
+                case kUint64:
                     return dispatch_op(uint64_t{});
                 default:
                     return {};

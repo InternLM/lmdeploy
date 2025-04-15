@@ -43,11 +43,11 @@ struct LlamaLinear::Impl {
     void forward(Tensor& output, const Tensor& input, const LlamaDenseWeight& dense, Type type)
     {
         switch (dense.weight_type) {
-            case kF16:
-            case kF32:
-            case kBF16:
+            case kFloat16:
+            case kFloat32:
+            case kBfloat16:
                 return forwardFp(output, input, dense.weight);
-            case kU4:
+            case kUint4:
                 return forwardInt4(output, input, dense, type);
             default:
                 TM_CHECK(0) << "not implemented for weight type: " << dense.weight_type;
@@ -171,7 +171,7 @@ struct LlamaLinear::Impl {
         using namespace gemm;
 
         QuantDesc quant_b{};
-        if (dense.k_desc.type == kU4) {
+        if (dense.k_desc.type == kUint4) {
             quant_b.type       = QuantType::kDefault;
             quant_b.group_size = dense.group_size;
         }

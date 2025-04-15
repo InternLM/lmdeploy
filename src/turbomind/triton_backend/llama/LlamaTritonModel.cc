@@ -364,19 +364,19 @@ LlamaTritonModel::LlamaTritonModel(DataType                               dtype,
 
     const std::string weight_type_str = model_reader["weight_type"].as<std::string>();
     if (weight_type_str == "fp16" || weight_type_str == "float16") {
-        model_param_.weight_type = kF16;
+        model_param_.weight_type = kFloat16;
     }
     else if (weight_type_str == "bf16" || weight_type_str == "bfloat16") {
-        model_param_.weight_type = kBF16;
+        model_param_.weight_type = kBfloat16;
     }
     else if (weight_type_str == "fp32") {
-        model_param_.weight_type = kF32;
+        model_param_.weight_type = kFloat32;
     }
     else if (weight_type_str == "int8") {
-        model_param_.weight_type = kU8;
+        model_param_.weight_type = kUint8;
     }
     else if (weight_type_str == "int4") {
-        model_param_.weight_type = kU4;
+        model_param_.weight_type = kUint4;
     }
     else {
         std::cout << "[ERROR] Unsupported weight type: '" << weight_type_str << "'\n";

@@ -270,7 +270,7 @@ TEST_CASE("test tensor", "[tensor]")
     a = {};
     x = {};
 
-    Tensor y = core::Buffer{100, kI32, MEMORY_CPU};
+    Tensor y = core::Buffer{100, kInt32, MEMORY_CPU};
     REQUIRE(y.ndim() == 1);
     REQUIRE(y.shape(0) == 100);
 }

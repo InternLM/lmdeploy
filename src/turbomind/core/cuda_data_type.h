@@ -14,20 +14,20 @@ namespace turbomind {
 constexpr cudaDataType to_cuda_dtype(DataType type)
 {
     switch (type) {
-        case kU8:  return CUDA_R_8U;
-        case kU16: return CUDA_R_16U;
-        case kU32: return CUDA_R_32U;
-        case kU64: return CUDA_R_64U;
-        case kI8:  return CUDA_R_8I;
-        case kI16: return CUDA_R_16I;
-        case kI32: return CUDA_R_32I;
-        case kI64: return CUDA_R_64I;
-        case kF16: return CUDA_R_16F;
-        case kF32: return CUDA_R_32F;
-        case kF64: return CUDA_R_64F;
-        case kBF16: return CUDA_R_16BF;
-        case kF8_e4m3: return CUDA_R_8F_E4M3;
-        case kF8_e5m2: return CUDA_R_8F_E5M2;
+        case kUint8:  return CUDA_R_8U;
+        case kUint16: return CUDA_R_16U;
+        case kUint32: return CUDA_R_32U;
+        case kUint64: return CUDA_R_64U;
+        case kInt8:  return CUDA_R_8I;
+        case kInt16: return CUDA_R_16I;
+        case kInt32: return CUDA_R_32I;
+        case kInt64: return CUDA_R_64I;
+        case kFloat16: return CUDA_R_16F;
+        case kFloat32: return CUDA_R_32F;
+        case kFloat64: return CUDA_R_64F;
+        case kBfloat16: return CUDA_R_16BF;
+        case kFloat8_e4m3: return CUDA_R_8F_E4M3;
+        case kFloat8_e5m2: return CUDA_R_8F_E5M2;
         default: 
             throw std::runtime_error("Not supported " + std::string{to_string(type)});
     }
@@ -35,20 +35,20 @@ constexpr cudaDataType to_cuda_dtype(DataType type)
 
 constexpr DataType from_cuda_dtype(cudaDataType type) {
     switch (type) {
-        case CUDA_R_8U:  return kU8;
-        case CUDA_R_16U: return kU16;
-        case CUDA_R_32U: return kU32;
-        case CUDA_R_64U: return kU64;
-        case CUDA_R_8I:  return kI8;
-        case CUDA_R_16I: return kI16;
-        case CUDA_R_32I: return kI32;
-        case CUDA_R_64I: return kI64;
-        case CUDA_R_16F: return kF16;
-        case CUDA_R_32F: return kF32;
-        case CUDA_R_64F: return kF64;
-        case CUDA_R_16BF: return kBF16;
-        case CUDA_R_8F_E4M3: return kF8_e4m3;
-        case CUDA_R_8F_E5M2: return kF8_e5m2;
+        case CUDA_R_8U:  return kUint8;
+        case CUDA_R_16U: return kUint16;
+        case CUDA_R_32U: return kUint32;
+        case CUDA_R_64U: return kUint64;
+        case CUDA_R_8I:  return kInt8;
+        case CUDA_R_16I: return kInt16;
+        case CUDA_R_32I: return kInt32;
+        case CUDA_R_64I: return kInt64;
+        case CUDA_R_16F: return kFloat16;
+        case CUDA_R_32F: return kFloat32;
+        case CUDA_R_64F: return kFloat64;
+        case CUDA_R_16BF: return kBfloat16;
+        case CUDA_R_8F_E4M3: return kFloat8_e4m3;
+        case CUDA_R_8F_E5M2: return kFloat8_e5m2;
         default: 
             throw std::runtime_error("Not supported " + std::string{std::to_string(type)});
     }

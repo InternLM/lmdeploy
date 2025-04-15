@@ -41,49 +41,61 @@ using bfloat16_t = __nv_bfloat16;
 using fp8_e4m3_t = __nv_fp8_e4m3;
 using fp8_e5m2_t = __nv_fp8_e5m2;
 
-#define ENCODE_DTYPE(sign, exponent, mantissa) ((sign << 16) | (exponent << 8) | mantissa)
+constexpr int encode_data_type(bool sign, int exponent, int mantissa) {
+    return ((sign << 16) | (exponent << 8) | mantissa);
+}
 
 enum class DataType: int {
-    kNiL = 0,
-    kBool,
-    kU8      = ENCODE_DTYPE(0, 0, 8),
-    kU16     = ENCODE_DTYPE(0, 0, 16),
-    kU32     = ENCODE_DTYPE(0, 0, 32),
-    kU64     = ENCODE_DTYPE(0, 0, 64),
-    kI8      = ENCODE_DTYPE(1, 0, 8),
-    kI16     = ENCODE_DTYPE(1, 0, 16),
-    kI32     = ENCODE_DTYPE(1, 0, 32),
-    kI64     = ENCODE_DTYPE(1, 0, 64),
-    kF16     = ENCODE_DTYPE(1, 5, 10),
-    kF32     = ENCODE_DTYPE(1, 8, 23),
-    kF64     = ENCODE_DTYPE(1, 11, 52),
-    kBF16    = ENCODE_DTYPE(1, 8, 7),
-    kF8_e4m3 = ENCODE_DTYPE(1, 4, 3),
-    kF8_e5m2 = ENCODE_DTYPE(1, 5, 2),
-    kU2      = ENCODE_DTYPE(0, 0, 2), 
-    kU4      = ENCODE_DTYPE(0, 0, 4),
-    kU6      = ENCODE_DTYPE(0, 0, 6)
+    kNull        = 0,
+    kBool        = 1,
+    kUint8       = encode_data_type(0,  0,  8),
+    kUint16      = encode_data_type(0,  0, 16),
+    kUint32      = encode_data_type(0,  0, 32),
+    kUint64      = encode_data_type(0,  0, 64),
+    kInt8        = encode_data_type(1,  0,  8),
+    kInt16       = encode_data_type(1,  0, 16),
+    kInt32       = encode_data_type(1,  0, 32),
+    kInt64       = encode_data_type(1,  0, 64),
+    kFloat16     = encode_data_type(1,  5, 10),
+    kFloat32     = encode_data_type(1,  8, 23),
+    kFloat64     = encode_data_type(1, 11, 52),
+    kBfloat16    = encode_data_type(1,  8,  7),
+    kFloat8_e4m3 = encode_data_type(1,  4,  3),
+    kFloat8_e5m2 = encode_data_type(1,  5,  2),
+    kUint2       = encode_data_type(0,  0,  2),
+    kUint4       = encode_data_type(0,  0,  4),
+    kUint6       = encode_data_type(0,  0,  6),
+    kUint        = kUint32,
+    kInt         = kInt32,
+    kFloat       = kFloat32,
+    kHalf        = kFloat16,
+    kDouble      = kFloat64,
 };
 
-inline constexpr DataType kNiL = DataType::kNiL;
+inline constexpr DataType kNull = DataType::kNull;
 inline constexpr DataType kBool = DataType::kBool;
-inline constexpr DataType kU8  = DataType::kU8;
-inline constexpr DataType kU16 = DataType::kU16;
-inline constexpr DataType kU32 = DataType::kU32;
-inline constexpr DataType kU64 = DataType::kU64;
-inline constexpr DataType kI8  = DataType::kI8;
-inline constexpr DataType kI16 = DataType::kI16;
-inline constexpr DataType kI32 = DataType::kI32;
-inline constexpr DataType kI64 = DataType::kI64;
-inline constexpr DataType kF16 = DataType::kF16;
-inline constexpr DataType kF32 = DataType::kF32;
-inline constexpr DataType kF64 = DataType::kF64;
-inline constexpr DataType kBF16 = DataType::kBF16;
-inline constexpr DataType kF8_e4m3 = DataType::kF8_e4m3;
-inline constexpr DataType kF8_e5m2 = DataType::kF8_e5m2;
-inline constexpr DataType kU2  = DataType::kU2;
-inline constexpr DataType kU4  = DataType::kU4;
-inline constexpr DataType kU6  = DataType::kU6;
+inline constexpr DataType kUint8  = DataType::kUint8;
+inline constexpr DataType kUint16 = DataType::kUint16;
+inline constexpr DataType kUint32 = DataType::kUint32;
+inline constexpr DataType kUint64 = DataType::kUint64;
+inline constexpr DataType kInt8  = DataType::kInt8;
+inline constexpr DataType kInt16 = DataType::kInt16;
+inline constexpr DataType kInt32 = DataType::kInt32;
+inline constexpr DataType kInt64 = DataType::kInt64;
+inline constexpr DataType kFloat16 = DataType::kFloat16;
+inline constexpr DataType kFloat32 = DataType::kFloat32;
+inline constexpr DataType kFloat64 = DataType::kFloat64;
+inline constexpr DataType kBfloat16 = DataType::kBfloat16;
+inline constexpr DataType kFloat8_e4m3 = DataType::kFloat8_e4m3;
+inline constexpr DataType kFloat8_e5m2 = DataType::kFloat8_e5m2;
+inline constexpr DataType kUint2  = DataType::kUint2;
+inline constexpr DataType kUint4  = DataType::kUint4;
+inline constexpr DataType kUint6  = DataType::kUint6;
+inline constexpr DataType kUint = DataType::kUint;
+inline constexpr DataType kInt = DataType::kInt;
+inline constexpr DataType kHalf = DataType::kHalf;
+inline constexpr DataType kFloat = DataType::kFloat;
+inline constexpr DataType kDouble = DataType::kDouble;
 
 template <class T>
 struct to_data_type;
@@ -95,30 +107,30 @@ struct from_data_type;
     template <> struct to_data_type<T> { static constexpr auto value = DataType::D; }; \
     template <> struct from_data_type<DataType::D> { using type = T; }
 
-CVT_DATA_TYPE(kNiL, void);
+CVT_DATA_TYPE(kNull, void);
 
 CVT_DATA_TYPE(kBool, bool);
-CVT_DATA_TYPE( kU8, uint8_t);
-CVT_DATA_TYPE(kU16, uint16_t);
-CVT_DATA_TYPE(kU32, uint32_t);
-CVT_DATA_TYPE(kU64, uint64_t);
+CVT_DATA_TYPE( kUint8, uint8_t);
+CVT_DATA_TYPE(kUint16, uint16_t);
+CVT_DATA_TYPE(kUint32, uint32_t);
+CVT_DATA_TYPE(kUint64, uint64_t);
 
-CVT_DATA_TYPE( kI8, int8_t);  // NOTE: `int8_t` is `signed char` and is different from `char`
-CVT_DATA_TYPE(kI16, int16_t);
-CVT_DATA_TYPE(kI32, int32_t); 
-CVT_DATA_TYPE(kI64, int64_t);
+CVT_DATA_TYPE( kInt8, int8_t);  // NOTE: `int8_t` is `signed char` and is different from `char`
+CVT_DATA_TYPE(kInt16, int16_t);
+CVT_DATA_TYPE(kInt32, int32_t); 
+CVT_DATA_TYPE(kInt64, int64_t);
 
-CVT_DATA_TYPE(kF16, half_t);
-CVT_DATA_TYPE(kF32, float);
-CVT_DATA_TYPE(kF64, double);
+CVT_DATA_TYPE(kFloat16, half_t);
+CVT_DATA_TYPE(kFloat32, float);
+CVT_DATA_TYPE(kFloat64, double);
 
-CVT_DATA_TYPE(kBF16, bfloat16_t);
-CVT_DATA_TYPE(kF8_e4m3, fp8_e4m3_t);
-CVT_DATA_TYPE(kF8_e5m2, fp8_e5m2_t);
+CVT_DATA_TYPE(kBfloat16, bfloat16_t);
+CVT_DATA_TYPE(kFloat8_e4m3, fp8_e4m3_t);
+CVT_DATA_TYPE(kFloat8_e5m2, fp8_e5m2_t);
 
-CVT_DATA_TYPE(kU2, uint2_t);
-CVT_DATA_TYPE(kU4, uint4_t);
-CVT_DATA_TYPE(kU6, uint6_t);
+CVT_DATA_TYPE(kUint2, uint2_t);
+CVT_DATA_TYPE(kUint4, uint4_t);
+CVT_DATA_TYPE(kUint6, uint6_t);
 
 
 #undef CVT_DATA_TYPE
@@ -132,29 +144,29 @@ using data_type_t = typename from_data_type<D>::type;
 
 constexpr std::ptrdiff_t bytesize(DataType type, std::ptrdiff_t size) {
     switch (type) {
-        case kNiL: return 0;
+        case kNull: return 0;
         case DataType::kBool:
-        case kU8:
-        case kI8:
-        case kF8_e4m3:
-        case kF8_e5m2:
+        case kUint8:
+        case kInt8:
+        case kFloat8_e4m3:
+        case kFloat8_e5m2:
             return size;
-        case kU16: 
-        case kI16:
-        case kF16:
-        case kBF16:
+        case kUint16: 
+        case kInt16:
+        case kFloat16:
+        case kBfloat16:
             return size * 2;
-        case kU32: 
-        case kI32: 
-        case kF32:
+        case kUint32: 
+        case kInt32: 
+        case kFloat32:
             return size * 4;
-        case kU64:
-        case kI64:
-        case kF64: 
+        case kUint64:
+        case kInt64:
+        case kFloat64: 
             return size * 8;
-        case kU2: return size * 2 / 8;
-        case kU4: return size * 4 / 8;
-        case kU6: return size * 6 / 8;
+        case kUint2: return size * 2 / 8;
+        case kUint4: return size * 4 / 8;
+        case kUint6: return size * 6 / 8;
     }
     return 0;
 }
@@ -164,29 +176,29 @@ constexpr std::ptrdiff_t bytesize(std::ptrdiff_t size) { return bytesize(data_ty
 
 constexpr std::ptrdiff_t numel(DataType type, std::ptrdiff_t size) {
     switch (type) {
-        case kNiL: return 0;
+        case kNull: return 0;
         case DataType::kBool:
-        case kU8: 
-        case kI8:
-        case kF8_e4m3:
-        case kF8_e5m2:
+        case kUint8: 
+        case kInt8:
+        case kFloat8_e4m3:
+        case kFloat8_e5m2:
             return size;
-        case kU16: 
-        case kI16:
-        case kF16:
-        case kBF16:
+        case kUint16: 
+        case kInt16:
+        case kFloat16:
+        case kBfloat16:
             return size / 2;
-        case kU32: 
-        case kI32: 
-        case kF32:
+        case kUint32: 
+        case kInt32: 
+        case kFloat32:
             return size / 4;
-        case kU64:
-        case kI64:
-        case kF64: 
+        case kUint64:
+        case kInt64:
+        case kFloat64: 
             return size / 8;
-        case kU2: return size * 8 / 2;
-        case kU4: return size * 8 / 4;
-        case kU6: return size * 8 / 6;
+        case kUint2: return size * 8 / 2;
+        case kUint4: return size * 8 / 4;
+        case kUint6: return size * 8 / 6;
     }
     return 0;
 }
@@ -196,25 +208,25 @@ constexpr std::ptrdiff_t numel(std::ptrdiff_t size) { return numel(data_type_v<T
 
 constexpr const char* to_string(DataType type) {
     switch (type) {
-        case kNiL: return "nil";
+        case kNull: return "nil";
         case DataType::kBool: return "bool";
-        case kU8: return "u8";
-        case kU16: return "u16";
-        case kU32: return "u32";
-        case kU64: return "u64";
-        case kI8: return "i8";
-        case kI16: return "i16";
-        case kI32: return "i32";
-        case kI64: return "i64";
-        case kF16: return "f16";
-        case kF32: return "f32";
-        case kF64: return "f64";
-        case kBF16: return "bf16";
-        case kF8_e4m3: return "f8_e4m3";
-        case kF8_e5m2: return "f8_e5m2";
-        case kU2: return "u2";
-        case kU4: return "u4";
-        case kU6: return "u8";
+        case kUint8: return "u8";
+        case kUint16: return "u16";
+        case kUint32: return "u32";
+        case kUint64: return "u64";
+        case kInt8: return "i8";
+        case kInt16: return "i16";
+        case kInt32: return "i32";
+        case kInt64: return "i64";
+        case kFloat16: return "f16";
+        case kFloat32: return "f32";
+        case kFloat64: return "f64";
+        case kBfloat16: return "bf16";
+        case kFloat8_e4m3: return "f8_e4m3";
+        case kFloat8_e5m2: return "f8_e5m2";
+        case kUint2: return "u2";
+        case kUint4: return "u4";
+        case kUint6: return "u8";
         default:
             return "unknown";
     }

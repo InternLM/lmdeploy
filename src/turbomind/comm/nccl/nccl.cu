@@ -35,13 +35,13 @@ namespace turbomind::comm {
 static inline ncclDataType_t to_nccl_dtype(DataType type)
 {
     switch (type) {
-        case kF32:
+        case kFloat32:
             return ncclFloat;
-        case kF16:
+        case kFloat16:
             return ncclHalf;
-        case kBF16:
+        case kBfloat16:
             return ncclBfloat16;
-        case kU8:
+        case kUint8:
             return ncclUint8;
         default:
             throw std::runtime_error("not supported");
@@ -181,8 +181,8 @@ public:
         const void* sendbuff, void* recvbuff, size_t recvcount, DataType type, int group, cudaStream_t stream) override
     {
         NCCLCHECK(ncclGroupStart());
-        NCCLCHECK(ncclReduceScatter(
-            sendbuff, recvbuff, recvcount, to_nccl_dtype(type), ncclSum, groups_.at(group), stream));
+        NCCLCHECK(
+            ncclReduceScatter(sendbuff, recvbuff, recvcount, to_nccl_dtype(type), ncclSum, groups_.at(group), stream));
         NCCLCHECK(ncclGroupEnd());
     }
 

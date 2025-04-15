@@ -344,20 +344,20 @@ PYBIND11_MODULE(_turbomind, m)
     {
         using namespace turbomind;
         py::enum_<ft::DataType>(m, "DataType")
-            .value("TYPE_INVALID", kNiL)
+            .value("TYPE_INVALID", kNull)
             .value("TYPE_BOOL", kBool)
-            .value("TYPE_UINT8", kU8)
-            .value("TYPE_UINT16", kU16)
-            .value("TYPE_UINT32", kU32)
-            .value("TYPE_UINT64", kU64)
-            .value("TYPE_INT8", kI8)
-            .value("TYPE_INT16", kI16)
-            .value("TYPE_INT32", kI32)
-            .value("TYPE_INT64", kI64)
-            .value("TYPE_FP16", kF16)
-            .value("TYPE_FP32", kF32)
-            .value("TYPE_FP64", kF64)
-            .value("TYPE_BF16", kBF16);
+            .value("TYPE_UINT8", kUint8)
+            .value("TYPE_UINT16", kUint16)
+            .value("TYPE_UINT32", kUint32)
+            .value("TYPE_UINT64", kUint64)
+            .value("TYPE_INT8", kInt8)
+            .value("TYPE_INT16", kInt16)
+            .value("TYPE_INT32", kInt32)
+            .value("TYPE_INT64", kInt64)
+            .value("TYPE_FP16", kFloat16)
+            .value("TYPE_FP32", kFloat32)
+            .value("TYPE_FP64", kFloat64)
+            .value("TYPE_BF16", kBfloat16);
 
         // memory type
         py::enum_<ft::MemoryType>(m, "MemoryType")
@@ -490,11 +490,11 @@ PYBIND11_MODULE(_turbomind, m)
 
                 if (weight_type == "half" || weight_type == "fp16" || weight_type == "float16"
                     || weight_type == "int4") {
-                    data_type = turbomind::kF16;
+                    data_type = turbomind::kFloat16;
                 }
                 else if (weight_type == "bf16" || weight_type == "bfloat16") {
 #ifdef ENABLE_BF16
-                    data_type = turbomind::kBF16;
+                    data_type = turbomind::kBfloat16;
 #else
                     throw std::runtime_error("Error: turbomind has not been built with bf16 support.");
 #endif

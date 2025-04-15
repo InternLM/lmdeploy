@@ -84,7 +84,7 @@ void Broadcast(HostCommImpl* comm, T* data, int n, int root)
     else {
         if (comm->is_same_process()) {
             /// TODO: Constness should be considered
-            comm->Broadcast(data, n, kNiL, root, detail::copy_fn<T>);
+            comm->Broadcast(data, n, kNull, root, detail::copy_fn<T>);
         }
         else {
             throw std::runtime_error("not implemented");
@@ -101,7 +101,7 @@ void AllGather(HostCommImpl* comm, T* data, int n)
     else {
         if (comm->is_same_process()) {
             /// TODO: Constness should be considered
-            comm->AllGather(data, n, kNiL, detail::copy_fn<T>);
+            comm->AllGather(data, n, kNull, detail::copy_fn<T>);
         }
         else {
             /// serialize data
