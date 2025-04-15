@@ -26,7 +26,7 @@ struct BatchState {
     Buffer_<int>  h_context_length;
     Buffer_<bool> h_finished;
 
-    core::Tensor_<char> curand_state;  // [n, sizeof(curandState_t)]
+    core::Tensor_<uint8_t> curand_state;  // [n, sizeof(curandState_t)]
 
     core::Tensor_<int> output_ids;  // output ids in [B, S]
 
@@ -259,11 +259,11 @@ private:
     Buffer_<int>       h_cu_block_counts_;
     Buffer_<uintptr_t> h_block_ptrs_;
 
-    Buffer_<unsigned long long> h_random_seed_;
-    Buffer_<unsigned long long> d_random_seed_;
+    Buffer_<uint64_t> h_random_seed_;
+    Buffer_<uint64_t> d_random_seed_;
 
-    core::Tensor_<char> h_curand_state_;  // [n, sizeof(curandState_t)]
-    core::Tensor_<char> d_curand_state_;
+    core::Tensor_<uint8_t> h_curand_state_;  // [n, sizeof(curandState_t)]
+    core::Tensor_<uint8_t> d_curand_state_;
 
     std::array<BatchState, 3> states_{};
 

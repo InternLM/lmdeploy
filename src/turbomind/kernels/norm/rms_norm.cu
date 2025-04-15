@@ -4,13 +4,13 @@
 
 #include "cub/block/block_reduce.cuh"
 
+#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/core/meta.h"
 
 #include "src/turbomind/kernels/norm/rms_norm.h"
-#include "src/turbomind/utils/Tensor.h"
 
 namespace turbomind {
 
@@ -116,14 +116,7 @@ void invokeRMSNorm(core::Tensor& out, const core::Tensor& x, const core::Tensor&
                                                                                  1.f / dim);
     };
 
-    switch (x.dtype()) {
-        case TYPE_FP16:
-            return invoke(half{});
-        case TYPE_BF16:
-            return invoke(nv_bfloat16{});
-        default:
-            TM_CHECK(0) << "Not implemented: " << x.dtype();
-    }
+    TM_DISPATCH_PRIMARY_DTYPES(x.dtype(), invoke);
 }
 
 namespace kernel {
@@ -198,11 +191,14 @@ void invokeQkRMSNorm(void*        data,
                      float        eps,
                      cudaStream_t stream)
 {
-    auto invoke = [&](auto t, auto max_dim_t) {
+
+    constexpr constant<128> max_dim{};
+    TM_CHECK_LE(head_dim, max_dim);
+
+    auto invoke = [&](auto t) {
         using T = decltype(t);
 
         constexpr int vec_size   = sizeof(uint4) / sizeof(T);
-        constexpr int max_dim    = max_dim_t.value;
         constexpr int thr_per_qk = max_dim / vec_size;
 
         FT_CHECK(head_dim % vec_size == 0);
@@ -215,17 +211,7 @@ void invokeQkRMSNorm(void*        data,
             (T*)data, ld, (const T*)weight, head_dim, n, token_num, eps, 1.f / head_dim);
     };
 
-    constexpr constant<128> max_dim{};
-    FT_CHECK(head_dim <= max_dim);
-
-    switch (dtype) {
-        case TYPE_FP16:
-            return invoke(half{}, max_dim);
-        case TYPE_BF16:
-            return invoke(nv_bfloat16{}, max_dim);
-        default:
-            throw std::runtime_error("not implemented");
-    }
+    TM_DISPATCH_PRIMARY_DTYPES(dtype, invoke);
 }
 
 void invokeRMSNormQK(core::Tensor& x, const core::Tensor& w, float eps, cudaStream_t st)
@@ -240,11 +226,13 @@ void invokeRMSNormQK(core::Tensor& x, const core::Tensor& w, float eps, cudaStre
     auto data   = x.raw_data();
     auto stride = x.stride(0);
 
-    auto invoke = [&](auto t, auto max_dim_t) {
+    constexpr constant<128> max_dim{};
+    TM_CHECK_LE(head_dim, max_dim);
+
+    auto invoke = [&](auto t) {
         using T = decltype(t);
 
         constexpr int vec_size   = sizeof(uint4) / sizeof(T);
-        constexpr int max_dim    = max_dim_t.value;
         constexpr int thr_per_qk = max_dim / vec_size;
 
         TM_CHECK(head_dim % vec_size == 0);
@@ -257,17 +245,7 @@ void invokeRMSNormQK(core::Tensor& x, const core::Tensor& w, float eps, cudaStre
             (T*)data, stride, (const T*)w.raw_data(), head_dim, head_num, token_num, eps, 1.f / head_dim);
     };
 
-    constexpr constant<128> max_dim{};
-    FT_CHECK(head_dim <= max_dim);
-
-    switch (x.dtype()) {
-        case TYPE_FP16:
-            return invoke(half{}, max_dim);
-        case TYPE_BF16:
-            return invoke(nv_bfloat16{}, max_dim);
-        default:
-            TM_CHECK(0) << "Not implemented.";
-    }
+    TM_DISPATCH_PRIMARY_DTYPES(x.dtype(), invoke);
 }
 
 // r' <- r + (h + b)
@@ -415,14 +393,8 @@ void invokeResidualBiasRMSNorm(void*        hidden_states,
                                                                                            eps,
                                                                                            1.f / dims);
     };
-    switch (dtype) {
-        case DataType::TYPE_FP16:
-            return invoke(half{});
-        case DataType::TYPE_BF16:
-            return invoke(nv_bfloat16{});
-        default:
-            FT_CHECK(0);
-    }
+
+    TM_DISPATCH_PRIMARY_DTYPES(dtype, invoke);
 }
 
 }  // namespace turbomind

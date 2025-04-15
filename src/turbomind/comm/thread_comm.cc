@@ -7,10 +7,10 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <numeric>
 
 #include "src/turbomind/comm/host_comm.h"
-
-#include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind::comm {
@@ -226,13 +226,13 @@ struct ThreadCommImpl: public HostCommImpl {
         };
         auto dispatch = [&]() -> reduce_fn {
             switch (dtype) {
-                case DataType::TYPE_INT32:
+                case kI32:
                     return dispatch_op(int32_t{});
-                case DataType::TYPE_INT64:
+                case kI64:
                     return dispatch_op(int64_t{});
-                case DataType::TYPE_UINT32:
+                case kU32:
                     return dispatch_op(uint32_t{});
-                case DataType::TYPE_UINT64:
+                case kU64:
                     return dispatch_op(uint64_t{});
                 default:
                     return {};
@@ -250,11 +250,11 @@ struct ThreadCommImpl: public HostCommImpl {
     void AllReduce(void* data, int count, DataType dtype, RedOp red_op) override
     {
         const auto reduce    = get_reduce(dtype, red_op);
-        const auto elem_size = get_elem_size(dtype);
+        const auto elem_size = bytesize(dtype, 1);
         if (n_ranks() == 1) {
             return;
         }
-        std::unique_ptr<char[]> tmp((char*)::operator new[](elem_size* count));
+        std::unique_ptr<char[]> tmp((char*)::operator new[](elem_size * count));
         std::copy_n((char*)data, elem_size * count, tmp.get());
         for (const auto& r : l2g_) {
             if (r != rank_) {

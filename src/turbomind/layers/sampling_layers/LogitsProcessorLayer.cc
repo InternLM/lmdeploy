@@ -24,7 +24,6 @@
 #include "src/turbomind/kernels/sampling_penalty_kernels.h"
 #include "src/turbomind/layers/sampling_layers/LogitsProcessorLayer.h"
 #include "src/turbomind/layers/sampling_layers/utils.h"
-#include "src/turbomind/utils/Tensor.h"
 
 namespace turbomind {
 
@@ -89,7 +88,7 @@ void LogitsProcessorLayer<T>::Forward(core::TensorMap& args)
 
     // repetition penalty
     if (step > 1 && repetition_penalty_type_ != RepetitionPenaltyType::None) {
-        core::Buffer_<char> workspace(bsz * step * (sizeof(int) + sizeof(float)), MEMORY_GPU);
+        core::Buffer_<uint8_t> workspace(bsz * step * (sizeof(int) + sizeof(float)), MEMORY_GPU);
         invokeBatchApplyRepetitionPenalty(logits.data(),
                                           repetition_penalty_buf_.data(),
                                           (int*)workspace.data(),

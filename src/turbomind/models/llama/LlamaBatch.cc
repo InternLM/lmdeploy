@@ -44,7 +44,6 @@
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 
-#include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/constant.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -289,7 +288,7 @@ void LlamaBatch::ProcessInferRequests(const Requests& reqs, std::vector<Signal>&
             std::copy_n(input_ids, input_length, seq.prompt.data());
         }
 
-        const int elem_size = core::get_byte_size(data_type_);
+        const int elem_size = bytesize(data_type_, 1);
 
         // copy input embeddings
         if (r->inputs.contains("input_embedding_ranges")) {
@@ -826,7 +825,7 @@ LlamaBatch::LlamaBatch(DataType                 data_type,
 {
     const auto cache_block_seq_len = model_->attn_param_.cache_block_seq_len;
 
-    const int dbits = core::get_byte_size(data_type, 8);
+    const int dbits = bytesize(data_type, 8);
 
     const auto quant_policy = model_->param_.quant_policy;
     const int  elem_bits    = quant_policy ? quant_policy : dbits;
@@ -984,7 +983,7 @@ void LlamaBatch::ComputeAndOutputLogits(const core::Tensor& hidden_states, int f
 void LlamaBatch::OutputLogits(const core::Tensor& logits, int first, int last, GenerationConfig::OutType out_type)
 {
     const auto& src_buf   = logits.buffer();
-    const auto  elem_size = core::get_byte_size(logits.dtype());
+    const auto  elem_size = bytesize(logits.dtype(), 1);
     // when `is_all` is true, logits only contains last token of the sequences
     const bool is_all = out_type == GenerationConfig::kAll;
 
@@ -1079,7 +1078,7 @@ void LlamaBatch::OutputLastHiddenState(const core::Tensor& hidden_states, int fi
                 int dst_base = std::max(0, cache_len - (history_len + offset));
 
                 core::Copy(src_buf.raw_data(src_base * model_->hidden_units_),
-                           core::get_byte_size(data_type, valid_len * model_->hidden_units_),
+                           bytesize(data_type, valid_len * model_->hidden_units_),
                            dst_buf.raw_data(dst_base * model_->hidden_units_));
             }
         }

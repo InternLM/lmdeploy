@@ -1,5 +1,6 @@
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 
+#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/kernels/gemm/cast.h"
 #include "src/turbomind/kernels/gemm/gemm.h"
 #include "src/turbomind/kernels/gemm/types.h"
@@ -18,7 +19,7 @@ void LlamaDenseWeight::emplace(
     this->output_dim  = output_dim;
     this->group_size  = group_size;
 
-    const auto wbits = core::get_byte_size(weight_type, 8);
+    const auto wbits = bytesize(weight_type, 8);
 
     weight = core::Tensor({input_dim, output_dim}, weight_type, MEMORY_GPU);
     register_parameter(wbits < 16 ? "qweight" : "weight", weight);
@@ -39,15 +40,15 @@ void LlamaDenseWeight::emplace(
 
 static void convert_u4(LlamaDenseWeight& dense, bool is_fused_moe, bool use_simt, cudaStream_t st)
 {
-    FT_CHECK(dense.weight_type == TYPE_UINT4);
+    TM_CHECK_EQ(dense.weight_type, data_type_v<uint4_t>);
 
     using namespace gemm;
 
     auto [order_b, pack_b, order_v, pack_v] =
-        get_weight_and_scales_layout(gemm::DataType::U4, is_fused_moe, getSMVersion(), use_simt);
+        get_weight_and_scales_layout(data_type_v<uint4_t>, is_fused_moe, getSMVersion(), use_simt);
 
     if (order_b == kColMajor) {
-        core::Buffer trans{dense.input_dim * dense.output_dim, TYPE_UINT4, MEMORY_GPU};
+        core::Buffer trans{dense.input_dim * dense.output_dim, data_type_v<uint4_t>, MEMORY_GPU};
         transpose_u4(
             (uint4_t*)trans.raw_data(), (const uint4_t*)dense.weight.raw_data(), dense.input_dim, dense.output_dim, st);
         cudaMemcpyAsync(
@@ -59,7 +60,7 @@ static void convert_u4(LlamaDenseWeight& dense, bool is_fused_moe, bool use_simt
     sync_check_cuda_error();
 
     MatrixLayout w_desc{
-        gemm::DataType::F16,
+        data_type_v<half_t>,
         order_b,
         (int)dense.input_dim,   // k
         (int)dense.output_dim,  // n
@@ -67,7 +68,7 @@ static void convert_u4(LlamaDenseWeight& dense, bool is_fused_moe, bool use_simt
     };
 
     MatrixLayout k_desc = w_desc;
-    k_desc.type         = gemm::DataType::U4;
+    k_desc.type         = data_type_v<uint4_t>;
     k_desc.pack         = pack_b;
 
     cudaMemsetAsync(dense.weight.raw_data(), 0, dense.input_dim * dense.output_dim / 2, st);
@@ -87,7 +88,7 @@ static void convert_u4(LlamaDenseWeight& dense, bool is_fused_moe, bool use_simt
     dense.scales_zeros = core::Tensor_<half>{{scale_count, 2}, MEMORY_GPU};
 
     MatrixLayout s_desc{
-        gemm::DataType::U32,
+        data_type_v<uint32_t>,
         order_v,
         (int)dense.input_dim / dense.group_size,  // k
         (int)dense.output_dim,                    // n
@@ -113,7 +114,7 @@ static void convert_fp(LlamaDenseWeight& dense, bool is_fused_moe, bool use_simt
     }
 
     /// TODO: unify data types
-    auto data_type = dense.weight_type == TYPE_BF16 ? get_data_type_v<nv_bfloat16> : get_data_type_v<half>;
+    auto data_type = dense.data_type;
 
     const auto [order_b, pack_b, order_v, pack_v] =
         get_weight_and_scales_layout(data_type, is_fused_moe, getSMVersion(), use_simt);
@@ -167,8 +168,8 @@ void LlamaDenseWeight::prepare(bool fused_moe, bool use_simt)
 
     auto stream = core::Context::stream().handle();
 
-    if (weight_type == TYPE_UINT4) {
-        TM_CHECK_EQ(data_type, TYPE_FP16);
+    if (weight_type == data_type_v<uint4_t>) {
+        TM_CHECK_EQ(data_type, data_type_v<half_t>);
         convert_u4(*this, fused_moe, use_simt, stream);
     }
     else {
@@ -287,7 +288,7 @@ void interleave(LlamaDenseWeight& c, LlamaDenseWeight& a, LlamaDenseWeight& b, D
 
     auto invoke = [&](auto t) {
         using T = decltype(t);
-        if (a.weight_type == TYPE_UINT4) {
+        if (a.weight_type == data_type_v<uint4_t>) {
             core::Buffer_<uint8_t> tmp_a{a.weight.size(), MEMORY_GPU};
             core::Buffer_<uint8_t> tmp_b{b.weight.size(), MEMORY_GPU};
             core::Buffer_<uint8_t> tmp_c{c.weight.size(), MEMORY_GPU};
@@ -320,14 +321,7 @@ void interleave(LlamaDenseWeight& c, LlamaDenseWeight& a, LlamaDenseWeight& b, D
         sync_check_cuda_error();
     };
 
-    switch (data_type) {
-        case TYPE_BF16:
-            return invoke(nv_bfloat16{});
-        case TYPE_FP16:
-            return invoke(half{});
-        default:
-            TM_CHECK(0) << "not implemented";
-    }
+    TM_DISPATCH_DTYPES(data_type, invoke, half_t, bfloat16_t);
 }
 
 void chunk(LlamaDenseWeight& c, LlamaDenseWeight& a, LlamaDenseWeight& b, DataType data_type, cudaStream_t st)
@@ -348,7 +342,7 @@ void chunk(LlamaDenseWeight& c, LlamaDenseWeight& a, LlamaDenseWeight& b, DataTy
 
     auto invoke = [&](auto t) {
         using T = decltype(t);
-        if (c.weight_type == TYPE_UINT4) {
+        if (c.weight_type == data_type_v<uint4_t>) {
             _chunks(c.weight.raw_data(), a.weight.raw_data(), b.weight.raw_data(), a.input_dim, 4 * a.output_dim / 8);
             _chunks(c.scales.data<T>(),
                     a.scales.data<T>(),
@@ -368,14 +362,7 @@ void chunk(LlamaDenseWeight& c, LlamaDenseWeight& a, LlamaDenseWeight& b, DataTy
         sync_check_cuda_error();
     };
 
-    switch (data_type) {
-        case TYPE_BF16:
-            return invoke(nv_bfloat16{});
-        case TYPE_FP16:
-            return invoke(half{});
-        default:
-            TM_CHECK(0) << "not implemented";
-    }
+    TM_DISPATCH_DTYPES(data_type, invoke, half_t, bfloat16_t);
 }
 
 void LlamaFfnWeight::prepare(bool fused_moe, bool use_simt)

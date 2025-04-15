@@ -25,7 +25,6 @@
 
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/models/llama/llama_params.h"
-#include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/memory_utils.h"
 #include <cuda_bf16.h>

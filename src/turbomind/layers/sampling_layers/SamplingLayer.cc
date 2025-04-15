@@ -20,9 +20,7 @@
 #include "src/turbomind/kernels/sampling_kernels.h"
 #include "src/turbomind/kernels/sampling_topk_kernels.h"
 #include "src/turbomind/kernels/sampling_topp_kernels.h"
-#include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/logger.h"
-#include "src/turbomind/utils/memory_utils.h"
 
 namespace turbomind {
 

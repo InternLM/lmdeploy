@@ -7,7 +7,7 @@
 #include <stdexcept>
 #include <type_traits>
 
-#include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/core/data_type.h"
 
 namespace turbomind::comm {
 
@@ -79,12 +79,12 @@ template<class T>
 void Broadcast(HostCommImpl* comm, T* data, int n, int root)
 {
     if constexpr (std::is_trivially_copyable_v<T>) {
-        comm->Broadcast((char*)data, sizeof(T) * n, TYPE_INT8, root, detail::copy_fn<char>);
+        comm->Broadcast(data, sizeof(T) * n, data_type_v<uint8_t>, root, detail::copy_fn<uint8_t>);
     }
     else {
         if (comm->is_same_process()) {
             /// TODO: Constness should be considered
-            comm->Broadcast(data, n, TYPE_INVALID, root, detail::copy_fn<T>);
+            comm->Broadcast(data, n, kNiL, root, detail::copy_fn<T>);
         }
         else {
             throw std::runtime_error("not implemented");
@@ -96,12 +96,12 @@ template<class T>
 void AllGather(HostCommImpl* comm, T* data, int n)
 {
     if constexpr (std::is_trivially_copyable_v<T>) {
-        comm->AllGather(data, sizeof(T) * n, TYPE_INT8, detail::copy_fn<char>);
+        comm->AllGather(data, sizeof(T) * n, data_type_v<uint8_t>, detail::copy_fn<uint8_t>);
     }
     else {
         if (comm->is_same_process()) {
             /// TODO: Constness should be considered
-            comm->AllGather(data, n, TYPE_INVALID, detail::copy_fn<T>);
+            comm->AllGather(data, n, kNiL, detail::copy_fn<T>);
         }
         else {
             /// serialize data
@@ -113,7 +113,7 @@ void AllGather(HostCommImpl* comm, T* data, int n)
 template<class T>
 void AllReduce(HostCommImpl* comm, T* data, int n, RedOp red_op)
 {
-    comm->AllReduce(data, n, getTensorType<T>(), red_op);
+    comm->AllReduce(data, n, data_type_v<T>, red_op);
 }
 
 //////////////////////////////////////////////////////////////////////////////////

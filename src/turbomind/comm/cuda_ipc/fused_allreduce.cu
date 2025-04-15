@@ -8,13 +8,13 @@
 #include "src/turbomind/comm/cuda_ipc/device_semaphore.h"
 #include "src/turbomind/comm/cuda_ipc/group_sum.h"
 
+#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/meta.h"
 
 #include "src/turbomind/kernels/norm/rms_norm.h"
 
-#include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind::comm {
@@ -424,7 +424,7 @@ void CudaIpcCommImpl::AllreduceResidualBiasRMSnorm(void*        hidden,
                                                    cudaStream_t stream)
 {
 
-    const size_t elemsize = get_elem_size(dtype);
+    const size_t elemsize = bytesize(dtype, 1);
     const size_t bytesize = elemsize * token_num * dim;
 
     const int n_ranks = this->n_ranks(group);
@@ -504,19 +504,10 @@ void CudaIpcCommImpl::AllreduceResidualBiasRMSnorm(void*        hidden,
         return false;  // > 1024 vdim
     };
 
-    auto dispatch = [&] {
-        switch (dtype) {
-            case DataType::TYPE_FP16:
-                return dispatch_D(half{});
-            case DataType::TYPE_BF16:
-                return dispatch_D(nv_bfloat16{});
-            default:
-                return false;
-        }
-    };
+    auto dispatch = [&]() -> bool { TM_DISPATCH_PRIMARY_DTYPES_RET(dtype, dispatch_D); };
 
     if (bytesize > (1 << 19)) {
-        if (auto success = dispatch()) {
+        if (dispatch()) {
             return;
         }
     }

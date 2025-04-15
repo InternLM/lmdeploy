@@ -51,8 +51,8 @@ private:
     core::Buffer_<float> top_p_buf_;
     core::Buffer_<float> min_p_buf_;
 
-    core::Buffer_<char> topk_ws_;
-    core::Buffer_<char> topp_ws_;
+    core::Buffer_<uint8_t> topk_ws_;
+    core::Buffer_<uint8_t> topp_ws_;
 
     core::Buffer_<int> indices_;   // sorted indices
     core::Buffer_<int> kept_buf_;  // kept sample

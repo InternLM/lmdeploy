@@ -1,7 +1,10 @@
 // Copyright (c) OpenMMLab. All rights reserved.
+
+#include <cuda_bf16.h>
+
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/kernels/core/array_ops.h"
-#include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 
@@ -107,13 +110,10 @@ void MLACopyQKV(DataType     dtype,
                          v_head_dim,
                          stream);
     };
-    switch (dtype) {
-        case TYPE_FP16:
-        case TYPE_BF16:
-            return invoke(uint16_t{});
-        default:
-            TM_CHECK(0) << "not implemented";
-    }
+
+    TM_CHECK_EQ(bytesize(dtype, 1), 2) << "unsupported data type: " << dtype;
+
+    return invoke(uint16_t{});
 }
 
 }  // namespace turbomind

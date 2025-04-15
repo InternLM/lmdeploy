@@ -1,13 +1,13 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include "src/turbomind/core/tensor.h"
-#include "src/turbomind/core/typecvt.h"
 #include "src/turbomind/kernels/gemm/gemm.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/llama_decoder_kernels.h"
-#include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
+
+#include "src/turbomind/core/cuda_data_type.h"
 
 namespace turbomind {
 
@@ -44,11 +44,11 @@ struct LlamaLinear::Impl {
     void forward(core::Tensor& output, const core::Tensor& input, const LlamaDenseWeight& dense, Type type)
     {
         switch (dense.weight_type) {
-            case TYPE_FP16:
-            case TYPE_FP32:
-            case TYPE_BF16:
+            case kF16:
+            case kF32:
+            case kBF16:
                 return forwardFp(output, input, dense.weight);
-            case TYPE_UINT4:
+            case kU4:
                 return forwardInt4(output, input, dense, type);
             default:
                 TM_CHECK(0) << "not implemented for weight type: " << dense.weight_type;
@@ -122,7 +122,7 @@ struct LlamaLinear::Impl {
                                   nullptr};
 
         const MatrixLayout a_desc{
-            to_gemm_dtype(input.dtype()),
+            input.dtype(),
             kRowMajor,
             (int)input.shape(0),
             dense.input_dim,
@@ -130,7 +130,7 @@ struct LlamaLinear::Impl {
         };
 
         const MatrixLayout c_desc{
-            to_gemm_dtype(output.dtype()),  //
+            output.dtype(),  //
             kRowMajor,
             (int)output.shape(0),
             dense.output_dim,
@@ -172,7 +172,7 @@ struct LlamaLinear::Impl {
         using namespace gemm;
 
         QuantDesc quant_b{};
-        if (dense.k_desc.type == gemm::DataType::U4) {
+        if (dense.k_desc.type == kU4) {
             quant_b.type       = QuantType::kDefault;
             quant_b.group_size = dense.group_size;
         }
@@ -186,7 +186,7 @@ struct LlamaLinear::Impl {
                                   nullptr};
 
         MatrixLayout a_desc{
-            to_gemm_dtype(input.dtype()),
+            input.dtype(),
             kRowMajor,
             (int)output.shape(0),  // batch size
             dense.input_dim,       // k
@@ -200,7 +200,7 @@ struct LlamaLinear::Impl {
         //           << input_data.pitch << "\n";
 
         MatrixLayout c_desc{
-            to_gemm_dtype(output.dtype()),  //
+            output.dtype(),  //
             kRowMajor,
             (int)output.shape(0),  // batch size
             dense.output_dim,

@@ -42,40 +42,9 @@ namespace turbomind {
 // workspace for cublas gemm : 32MB
 #define CUBLAS_WORKSPACE_SIZE 33554432
 
-typedef struct __align__(4)
-{
+typedef struct __align__(4) {
     half x, y, z, w;
-}
-half4;
-
-/* **************************** type definition ***************************** */
-
-enum CublasDataType
-{
-    FLOAT_DATATYPE    = 0,
-    HALF_DATATYPE     = 1,
-    BFLOAT16_DATATYPE = 2,
-    INT8_DATATYPE     = 3,
-    FP8_DATATYPE      = 4
-};
-
-enum FtCudaDataType
-{
-    FP32 = 0,
-    FP16 = 1,
-    BF16 = 2,
-    INT8 = 3,
-    FP8  = 4
-};
-
-enum class OperationType
-{
-    FP32,
-    FP16,
-    BF16,
-    INT8,
-    FP8
-};
+} half4;
 
 /* **************************** debug tools ********************************* */
 static const char* _cudaGetErrorEnum(cudaError_t error)
@@ -316,63 +285,6 @@ inline int getDeviceCount()
     check_cuda_error(cudaGetDeviceCount(&count));
     return count;
 }
-
-template<typename T>
-CublasDataType getCublasDataType()
-{
-    if (std::is_same<T, half>::value) {
-        return HALF_DATATYPE;
-    }
-#ifdef ENABLE_BF16
-    else if (std::is_same<T, __nv_bfloat16>::value) {
-        return BFLOAT16_DATATYPE;
-    }
-#endif
-    else if (std::is_same<T, float>::value) {
-        return FLOAT_DATATYPE;
-    }
-    else {
-        FT_CHECK(false);
-        return FLOAT_DATATYPE;
-    }
-}
-
-template<typename T>
-cudaDataType_t getCudaDataType()
-{
-    if (std::is_same<T, half>::value) {
-        return CUDA_R_16F;
-    }
-#ifdef ENABLE_BF16
-    else if (std::is_same<T, __nv_bfloat16>::value) {
-        return CUDA_R_16BF;
-    }
-#endif
-    else if (std::is_same<T, float>::value) {
-        return CUDA_R_32F;
-    }
-    else {
-        FT_CHECK(false);
-        return CUDA_R_32F;
-    }
-}
-
-template<CublasDataType T>
-struct getTypeFromCudaDataType {
-    using Type = float;
-};
-
-template<>
-struct getTypeFromCudaDataType<HALF_DATATYPE> {
-    using Type = half;
-};
-
-#ifdef ENABLE_BF16
-template<>
-struct getTypeFromCudaDataType<BFLOAT16_DATATYPE> {
-    using Type = __nv_bfloat16;
-};
-#endif
 
 // clang-format off
 template<typename T> struct packed_type;

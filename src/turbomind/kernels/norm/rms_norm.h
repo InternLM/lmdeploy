@@ -2,8 +2,6 @@
 
 #include <cuda_runtime.h>
 
-#include "src/turbomind/utils/Tensor.h"
-
 #include "src/turbomind/core/tensor.h"
 
 namespace turbomind {

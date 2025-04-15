@@ -1,10 +1,10 @@
 
+#include <numeric>
 
 #include "src/turbomind/core/buffer.h"
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/context.h"
 #include "src/turbomind/core/tensor.h"
-#include "src/turbomind/utils/Tensor.h"
 
 #include "catch2/catch_test_macros.hpp"
 
@@ -133,20 +133,20 @@ TEST_CASE("test basic buffer", "[buffer]")
     {
         auto x = std::shared_ptr<int[]>(new int[v.size()]);
         std::copy(v.begin(), v.end(), x.get());
-        b = Buffer(x, v.size(), getTensorType<int>(), MEMORY_CPU);
+        b = Buffer(x, v.size(), data_type_v<int>, MEMORY_CPU);
         REQUIRE(b.data<int>() == x.get());
         REQUIRE(b.raw_data() == x.get());
     }
     SECTION("allocation")
     {
         Allocator alloc{MEMORY_CPU};
-        b = Buffer(v.size(), getTensorType<int>(), alloc);
+        b = Buffer(v.size(), data_type_v<int>, alloc);
         std::copy(v.begin(), v.end(), b.data<int>());
     }
 
     REQUIRE(b);
     REQUIRE(b.size() == v.size());
-    REQUIRE(b.dtype() == getTensorType<int>());
+    REQUIRE(b.dtype() == data_type_v<int>);
     REQUIRE(b.byte_size() == sizeof(int) * v.size());
     auto c = b;
     REQUIRE(c == b);
@@ -160,7 +160,7 @@ TEST_CASE("test basic buffer", "[buffer]")
     REQUIRE(s.raw_data() == b.data<int>() + 3);
 
     Buffer_<int> x;
-    Buffer_<int> y;
+    Buffer_<int> y = Buffer{data_type_v<int>};
 
     Buffer z = Buffer_<int>(1024, MEMORY_CPU);
 
@@ -270,7 +270,7 @@ TEST_CASE("test tensor", "[tensor]")
     a = {};
     x = {};
 
-    Tensor y = core::Buffer{100, TYPE_INT32, MEMORY_CPU};
+    Tensor y = core::Buffer{100, kI32, MEMORY_CPU};
     REQUIRE(y.ndim() == 1);
     REQUIRE(y.shape(0) == 100);
 }

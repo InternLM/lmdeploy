@@ -16,6 +16,7 @@
 
 #include <cub/cub.cuh>
 
+#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
 #include "src/turbomind/utils/memory_utils.h"
@@ -68,13 +69,10 @@ void invokeEmbeddingLookup(core::Ref<core::Tensor>   out_,
                                                                        dim);
     };
 
-    switch (out.dtype()) {
-        case TYPE_FP16:
-        case TYPE_BF16:
-            return invoke(uint16_t{});
-        default:
-            TM_CHECK(0) << "not implemented";
+    if (bytesize(out.dtype(), 1) == 2) {
+        return invoke(uint16_t{});
     }
+    TM_CHECK(0) << "not implemented";
 }
 
 // TODO Add half2 implementation

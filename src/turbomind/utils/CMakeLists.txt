@@ -26,7 +26,6 @@ set_property(TARGET logger PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET logger PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(logger PUBLIC CUDA::cudart)
 
-
 add_library(nvtx_utils STATIC nvtx_utils.cc)
 set_property(TARGET nvtx_utils PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET nvtx_utils PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
@@ -39,12 +38,7 @@ endif()
 add_library(memory_utils STATIC memory_utils.cu)
 set_property(TARGET memory_utils PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET memory_utils PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(memory_utils PUBLIC cuda_utils logger tensor)
-
-add_library(tensor STATIC Tensor.cc)
-set_property(TARGET tensor PROPERTY POSITION_INDEPENDENT_CODE  ON)
-set_property(TARGET tensor PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(tensor PUBLIC cuda_utils logger)
+target_link_libraries(memory_utils PUBLIC cuda_utils logger)
 
 add_library(anomaly_handler STATIC anomaly_handler.cu)
 set_property(TARGET anomaly_handler PROPERTY POSITION_INDEPENDENT_CODE  ON)

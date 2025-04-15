@@ -1,12 +1,9 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 #pragma once
 
-#include <cstdint>
-#include <cuda_bf16.h>
 #include <cuda_runtime.h>
 
-#include "src/turbomind/utils/Tensor.h"
-#include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/core/data_type.h"
 
 namespace turbomind {
 

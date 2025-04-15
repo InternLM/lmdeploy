@@ -36,7 +36,6 @@ target_link_libraries(Llama PUBLIC CUDA::cudart
         decoding_kernels
         unfused_attention_kernels
         gpt_kernels
-        tensor
         memory_utils
         cuda_utils
         logger

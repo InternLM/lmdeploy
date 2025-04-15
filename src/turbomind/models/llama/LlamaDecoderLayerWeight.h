@@ -22,7 +22,6 @@
 
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/llama_params.h"
-#include "src/turbomind/utils/Tensor.h"
 
 namespace turbomind {
 

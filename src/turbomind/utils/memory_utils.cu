@@ -15,7 +15,6 @@
  */
 
 #include "src/turbomind/macro.h"
-#include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_type_utils.cuh"
 #include "src/turbomind/utils/logger.h"
 #include "src/turbomind/utils/memory_utils.h"
@@ -390,60 +389,6 @@ template int
 loadWeightFromBinFunc<__nv_fp8_e4m3, float>(__nv_fp8_e4m3* ptr, std::vector<size_t> shape, std::string filename);
 #endif  // ENABLE_FP8
 
-template<typename T>
-int loadWeightFromBin(T* ptr, std::vector<size_t> shape, std::string filename, FtCudaDataType model_file_type)
-{
-    switch (model_file_type) {
-        case FtCudaDataType::FP32:
-            loadWeightFromBinFunc<T, float>(ptr, shape, filename);
-            break;
-        case FtCudaDataType::FP16:
-            loadWeightFromBinFunc<T, half>(ptr, shape, filename);
-            break;
-        case FtCudaDataType::INT8:
-            loadWeightFromBinFunc<T, int8_t>(ptr, shape, filename);
-            break;
-#ifdef ENABLE_BF16
-        case FtCudaDataType::BF16:
-            loadWeightFromBinFunc<T, __nv_bfloat16>(ptr, shape, filename);
-            break;
-#endif
-#ifdef ENABLE_FP8
-        case FtCudaDataType::FP8:
-            loadWeightFromBinFunc<T, float>(ptr, shape, filename);
-            break;
-#endif
-        default:
-            TM_LOG_ERROR("Does not support FtCudaDataType=%d", model_file_type);
-            FT_CHECK(false);
-    }
-    return 0;
-}
-
-template<>
-int loadWeightFromBin(int* ptr, std::vector<size_t> shape, std::string filename, FtCudaDataType model_file_type)
-{
-    loadWeightFromBinFunc<int, int>(ptr, shape, filename);
-    return 0;
-}
-
-template int
-loadWeightFromBin(float* ptr, std::vector<size_t> shape, std::string filename, FtCudaDataType model_file_type);
-template int
-loadWeightFromBin(half* ptr, std::vector<size_t> shape, std::string filename, FtCudaDataType model_file_type);
-template int
-loadWeightFromBin(int8_t* ptr, std::vector<size_t> shape, std::string filename, FtCudaDataType model_file_type);
-#ifdef ENABLE_BF16
-template int
-loadWeightFromBin(__nv_bfloat16* ptr, std::vector<size_t> shape, std::string filename, FtCudaDataType model_file_type);
-#endif
-#ifdef ENABLE_FP8
-template int
-loadWeightFromBin(__nv_fp8_e4m3* ptr, std::vector<size_t> shape, std::string filename, FtCudaDataType model_file_type);
-#endif
-template int
-loadWeightFromBin(int* ptr, std::vector<size_t> shape, std::string filename, FtCudaDataType model_file_type);
-
 template<typename T_IN, typename T_OUT>
 __global__ void cudaD2DcpyConvert(T_OUT* dst, const T_IN* src, const size_t size)
 {
@@ -735,7 +680,6 @@ template void invokeInPlaceTranspose102(uint16_t*    data,
                                         bool         copy,
                                         cudaStream_t stream);
 
-
 template<typename T>
 void __global__ multiplyScale(T* tensor, float scale, const size_t size)
 {
@@ -799,19 +743,6 @@ template void invokeFakeCast<half, __nv_fp8_e4m3>(half* input_ptr, const size_t 
 template void
 invokeFakeCast<__nv_bfloat16, __nv_fp8_e4m3>(__nv_bfloat16* input_ptr, const size_t size, cudaStream_t stream);
 #endif
-
-size_t cuda_datatype_size(FtCudaDataType dt)
-{
-    static const std::unordered_map<FtCudaDataType, size_t> sizes{{FtCudaDataType::FP32, sizeof(float)},
-                                                                  {FtCudaDataType::FP16, sizeof(half)}
-#ifdef ENABLE_BF16
-                                                                  ,
-                                                                  {FtCudaDataType::BF16, sizeof(__nv_bfloat16)}
-#endif
-    };
-
-    return sizes.at(dt);
-}
 
 template<typename T>
 __global__ void check_range(T* buffer, size_t size, T min, T max, bool* d_within_range)

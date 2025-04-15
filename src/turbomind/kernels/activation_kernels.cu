@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/core/tensor.h"
 #include "src/turbomind/kernels/activation_kernels.h"
 #include "src/turbomind/kernels/core/array.h"
@@ -241,14 +242,7 @@ void invokeGenericActivation_v3(core::Ref<core::Tensor> inter_, const core::Tens
             <<<grid, block, 0, stream>>>(inter.data<T>(), gate.data<T>(), inter.stride(0), num, dim);
     };
 
-    switch (inter.dtype()) {
-        case TYPE_FP16:
-            return invoke(half{});
-        case TYPE_BF16:
-            return invoke(nv_bfloat16{});
-        default:
-            TM_CHECK(0) << "not implemented";
-    }
+    TM_DISPATCH_PRIMARY_DTYPES(inter.dtype(), invoke);
 }
 
 template void invokeGenericActivation_v3<SiluActivation>(core::Ref<core::Tensor> inter_,

@@ -3,7 +3,6 @@
 
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/context.h"
-#include "src/turbomind/utils/Tensor.h"
 
 namespace turbomind::core {
 

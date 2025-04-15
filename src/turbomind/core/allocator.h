@@ -6,7 +6,19 @@
 
 #include "src/turbomind/kernels/core/math.h"
 
-#include "src/turbomind/utils/Tensor.h"
+namespace turbomind {
+
+enum class MemoryType : int {
+    MEMORY_CPU,
+    MEMORY_CPU_PINNED,
+    MEMORY_GPU
+};
+
+inline constexpr MemoryType MEMORY_CPU        = MemoryType::MEMORY_CPU;
+inline constexpr MemoryType MEMORY_CPU_PINNED = MemoryType::MEMORY_CPU_PINNED;
+inline constexpr MemoryType MEMORY_GPU        = MemoryType::MEMORY_GPU;
+
+}  // namespace turbomind
 
 namespace turbomind::core {
 

@@ -30,7 +30,6 @@ target_link_libraries(LlamaTritonBackend PUBLIC
         device_comm
         host_comm
         core
-        tensor
         memory_utils
         CUDA::cublasLt
         yaml-cpp::yaml-cpp)

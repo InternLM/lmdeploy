@@ -6,7 +6,6 @@
 #include <vector>
 
 #include "src/turbomind/core/tensor.h"
-#include "src/turbomind/utils/Tensor.h"
 
 namespace turbomind {
 

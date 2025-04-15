@@ -8,7 +8,7 @@
 #include <string>
 
 #include "src/turbomind/models/llama/llama_rope.h"
-#include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/core/data_type.h"
 
 namespace turbomind {
 

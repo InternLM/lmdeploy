@@ -25,7 +25,6 @@
 
 #include "src/turbomind/comm/device_comm.h"
 #include "src/turbomind/core/buffer.h"
-#include "src/turbomind/core/typecvt.h"
 #include "src/turbomind/macro.h"
 
 #include "src/turbomind/models/llama/LlamaLinear.h"
@@ -38,7 +37,6 @@
 
 #include "src/turbomind/kernels/gpt_kernels.h"
 
-#include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/logger.h"
@@ -115,7 +113,7 @@ void LlamaV2::updateEmbedding(char*            decoder_input,
         mask_ptr = mask.data();
     }
 
-    const size_t elem_size = core::get_byte_size(dtype_);
+    const size_t elem_size = bytesize(dtype_, 1);
 
     for (int i = 0; i < bsz; i++) {
         const auto& seq        = *sequences[i];
@@ -269,8 +267,6 @@ core::Tensor LlamaV2::postDecodeEmbedding(const core::Tensor& features, Buffer l
 {
     NvtxScope scope("postDecodeEmbedding");
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
-
-    cudaDataType_t data_type = to_cuda_dtype(dtype_);
 
     TM_CHECK(vocab_size_padded_ % tp_size_ == 0) << vocab_size_padded_ << " " << tp_size_;
 

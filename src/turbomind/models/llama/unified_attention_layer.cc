@@ -24,6 +24,7 @@
 #include <numeric>
 
 #include "src/turbomind/core/check.h"
+#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/core/tensor.h"
 
 #include "src/turbomind/kernels/attention/attention.h"
@@ -38,7 +39,6 @@
 #include "src/turbomind/models/llama/mla_utils.h"
 #include "src/turbomind/models/llama/unified_attention_layer.h"
 
-#include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/logger.h"
@@ -263,18 +263,7 @@ void UnifiedAttentionLayer::forward(ForwardParam& p)
         return core_attention<T>(qkv, p, weights);
     };
 
-    core::Tensor attn;
-
-    switch (qkv.dtype()) {
-        case TYPE_FP16:
-            attn = invoke(half{});
-            break;
-        case TYPE_BF16:
-            attn = invoke(nv_bfloat16{});
-            break;
-        default:
-            TM_CHECK(0) << "not implemented";
-    }
+    core::Tensor attn = [&]() -> core::Tensor { TM_DISPATCH_PRIMARY_DTYPES_RET(qkv.dtype(), invoke); }();
 
     TM_DEBUG_TENSOR(attn, Concat("attn", layer_id), 3);
 

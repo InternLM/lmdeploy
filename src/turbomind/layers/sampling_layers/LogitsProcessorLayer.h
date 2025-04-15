@@ -21,7 +21,6 @@
 #include "src/turbomind/kernels/penalty_types.h"
 #include "src/turbomind/layers/BaseDynamicDecodeLayer.h"
 #include "src/turbomind/macro.h"
-#include "src/turbomind/utils/Tensor.h"
 
 #include "src/turbomind/engine/request.h"
 

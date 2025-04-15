@@ -8,8 +8,6 @@
 #include "src/turbomind/core/context.h"
 #include "src/turbomind/core/layout.h"
 
-#include "src/turbomind/utils/Tensor.h"
-
 namespace turbomind::core {
 
 class Tensor {
@@ -77,7 +75,7 @@ public:
 
     ssize_t byte_size() const noexcept
     {
-        return get_byte_size(dtype(), size());
+        return bytesize(dtype(), size());
     }
 
     explicit operator bool() const noexcept
@@ -212,16 +210,16 @@ template<class T>
 struct Tensor_: public Tensor {
     Tensor_() = default;
 
-    Tensor_(Layout layout, MemLoc device): Tensor{std::move(layout), getTensorType<T>(), device} {}
+    Tensor_(Layout layout, MemLoc device): Tensor{std::move(layout), data_type_v<T>, device} {}
 
-    Tensor_(Layout layout, Allocator& alloc): Tensor{std::move(layout), getTensorType<T>(), alloc} {}
+    Tensor_(Layout layout, Allocator& alloc): Tensor{std::move(layout), data_type_v<T>, alloc} {}
 
     Tensor_(Buffer buffer, Layout layout): Tensor{ensure_dtype(std::move(buffer)), std::move(layout)} {}
 
     Tensor_(T* data, Layout layout, MemLoc device): Tensor{data, std::move(layout), device} {}
 
     Tensor_(shared_ptr<void> data, Layout layout, MemLoc device):
-        Tensor{Buffer{std::move(data), layout.cosize(), getTensorType<T>(), device}, layout}
+        Tensor{Buffer{std::move(data), layout.cosize(), data_type_v<T>, device}, layout}
     {
     }
 
@@ -257,16 +255,15 @@ struct Tensor_: public Tensor {
 
     constexpr DataType dtype() const noexcept
     {
-        return dtype_;
+        return data_type_v<T>;
     }
 
 private:
-    static constexpr DataType dtype_ = getTensorType<T>();
 
     template<class U>
     static decltype(auto) ensure_dtype(U&& u)
     {
-        TM_CHECK_EQ(u.dtype(), dtype_);
+        TM_CHECK_EQ(u.dtype(), data_type_v<T>);
         return (U&&)u;
     }
 };

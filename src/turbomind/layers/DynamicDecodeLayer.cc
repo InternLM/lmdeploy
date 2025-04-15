@@ -15,6 +15,7 @@
  */
 
 #include "src/turbomind/layers/DynamicDecodeLayer.h"
+#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/layers/BaseDynamicDecodeLayer.h"
 #include "src/turbomind/layers/sampling_layers/LogitsProcessorLayer.h"
 #include "src/turbomind/layers/sampling_layers/SamplingLayer.h"
@@ -39,21 +40,7 @@ DynamicDecodeLayer::DynamicDecodeLayer(DataType              data_type,
         layers_.emplace_back(new SamplingLayer<T>{param});
         layers_.emplace_back(new StopCriteriaLayer<T>{param});
     };
-    switch (data_type) {
-        case TYPE_FP16:
-            dispatch(half{});
-            break;
-        case TYPE_BF16:
-            dispatch(nv_bfloat16{});
-            break;
-#if ENABLE_FP32
-        case TYPE_FP32:
-            dispatch(float{});
-            break;
-#endif
-        default:
-            TM_CHECK(0) << "not implemented";
-    }
+    TM_DISPATCH_PRIMARY_DTYPES(data_type, dispatch);
 }
 
 DynamicDecodeLayer::~DynamicDecodeLayer() {}

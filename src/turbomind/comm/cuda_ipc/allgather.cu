@@ -4,7 +4,6 @@
 #include "src/turbomind/comm/cuda_ipc/device_semaphore.h"
 
 #include "src/turbomind/kernels/core/meta.h"
-#include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind::comm {
@@ -51,7 +50,7 @@ __global__ void __launch_bounds__(1024, 1) Allgather_Simple_Pull(T*             
 void CudaIpcCommImpl::AllGather(
     const void* sendbuff, void* recvbuff, size_t sendcount, DataType type, int group, cudaStream_t stream)
 {
-    const size_t bytesize = get_elem_size(type) * sendcount;
+    const size_t bytesize = turbomind::bytesize(type, 1) * sendcount;
 
     const int peers = this->n_ranks(group) - 1;
     const int rank  = this->rank(group);
@@ -165,9 +164,9 @@ void CudaIpcCommImpl::AllGather2D(const void*  sendbuff,
                                   int          group,
                                   cudaStream_t stream)
 {
-    const size_t byte_width  = get_elem_size(type) * width;
-    const size_t byte_pitch  = get_elem_size(type) * pitch;
-    const size_t byte_stride = get_elem_size(type) * stride;
+    const size_t byte_width  = bytesize(type, width);
+    const size_t byte_pitch  = bytesize(type, pitch);
+    const size_t byte_stride = bytesize(type, stride);
 
     void*  base{};
     size_t offset{};

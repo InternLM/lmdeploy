@@ -64,11 +64,11 @@ target_link_libraries(  # Libs for test_sampling_layer
   unittest PUBLIC
     CUDA::cublas CUDA::cublasLt CUDA::cudart
     cublasMMWrapper memory_utils
-    DynamicDecodeLayer tensor cuda_utils logger
+    DynamicDecodeLayer cuda_utils logger
 )
 target_link_libraries(  # Libs for test_tensor
-  unittest PUBLIC tensor cuda_utils logger)
+  unittest PUBLIC cuda_utils logger)
 
 remove_definitions(-DTORCH_CUDA=1)
 add_executable(test_gemm test_gemm.cu)
-target_link_libraries(test_gemm PUBLIC CUDA::cublas CUDA::cudart CUDA::curand gemm cublasMMWrapper tensor cuda_utils logger)
+target_link_libraries(test_gemm PUBLIC CUDA::cublas CUDA::cudart CUDA::curand gemm cublasMMWrapper cuda_utils logger)

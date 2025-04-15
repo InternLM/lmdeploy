@@ -10,82 +10,9 @@
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/common.h"
 #include "src/turbomind/core/context.h"
-
-#include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/core/data_type.h"
 
 namespace turbomind::core {
-
-inline ssize_t get_byte_size(DataType dtype, ssize_t count = 1)
-{
-    if (!count) {
-        return 0;
-    }
-    switch (dtype) {
-        case TYPE_BOOL:
-        case TYPE_UINT8:
-        case TYPE_INT8:
-        case TYPE_BYTES:
-        case TYPE_FP8_E4M3:
-            return count;
-        case TYPE_UINT16:
-        case TYPE_INT16:
-        case TYPE_FP16:
-        case TYPE_BF16:
-            return 2 * count;
-        case TYPE_UINT32:
-        case TYPE_INT32:
-        case TYPE_FP32:
-            return 4 * count;
-        case TYPE_UINT64:
-        case TYPE_INT64:
-        case TYPE_FP64:
-            return 8 * count;
-        case TYPE_UINT4:
-        case TYPE_INT4:
-            return count * 4 / 8;
-        default:
-            TM_CHECK(0) << "Not supported: " << dtype;
-            return -1;
-    }
-}
-
-inline ssize_t get_elem_num(ssize_t byte_size, DataType dtype)
-{
-    if (!byte_size) {
-        return 0;
-    }
-    switch (dtype) {
-        case TYPE_BOOL:
-        case TYPE_UINT8:
-        case TYPE_INT8:
-        case TYPE_BYTES:
-        case TYPE_FP8_E4M3:
-            return byte_size;
-        case TYPE_UINT16:
-        case TYPE_INT16:
-        case TYPE_FP16:
-        case TYPE_BF16:
-            TM_CHECK(byte_size % 2 == 0);
-            return byte_size / 2;
-        case TYPE_UINT32:
-        case TYPE_INT32:
-        case TYPE_FP32:
-            TM_CHECK(byte_size % 4 == 0);
-            return byte_size / 4;
-        case TYPE_UINT64:
-        case TYPE_INT64:
-        case TYPE_FP64:
-            TM_CHECK(byte_size % 8 == 0);
-            return byte_size / 8;
-        case TYPE_UINT4:
-        case TYPE_INT4:
-            TM_CHECK(byte_size * 8 % 4 == 0);
-            return byte_size * 8 / 4;
-        default:
-            TM_CHECK(0) << "Not supported: " << dtype;
-            return -1;
-    }
-}
 
 class Buffer {
 public:
@@ -100,7 +27,7 @@ public:
     // Reference into `data` buffer
     template<class T>
     Buffer(T* data, ssize_t size, MemoryLocation device):
-        data_{data, [](auto) {}}, base_{}, size_{size}, device_{device}, dtype_{getTensorType<T>()}
+        data_{data, [](auto) {}}, base_{}, size_{size}, device_{device}, dtype_{data_type_v<T>}
     {
     }
 
@@ -119,7 +46,7 @@ public:
     Buffer(ssize_t size, DataType dtype, Allocator& alloc):
         base_{}, size_{size}, device_{alloc->device()}, dtype_{dtype}
     {
-        auto bytes = get_byte_size(dtype, size);
+        auto bytes = bytesize(dtype, size);
         data_      = {alloc->allocate(bytes), [=](auto p) { alloc->deallocate(p, bytes); }};
     }
 
@@ -128,7 +55,7 @@ public:
     template<class T>
     T* data()
     {
-        TM_CHECK_EQ(getTensorType<T>(), dtype_);
+        TM_CHECK_EQ(data_type_v<T>, dtype_);
         return static_cast<T*>(raw_data());
     }
 
@@ -140,7 +67,7 @@ public:
 
     void* raw_data(ssize_t offset = 0)
     {
-        return TM_CHECK_NOTNULL((char*)data_.get()) + get_byte_size(dtype_, base_ + offset);
+        return TM_CHECK_NOTNULL((char*)data_.get()) + bytesize(dtype_, base_ + offset);
     }
 
     const void* raw_data(ssize_t offset = 0) const
@@ -151,7 +78,7 @@ public:
     template<class T = void>
     T* unsafe_data() const
     {
-        return (T*)((char*)data_.get() + get_byte_size(dtype_, base_));
+        return (T*)((char*)data_.get() + bytesize(dtype_, base_));
     }
 
     DataType dtype() const
@@ -171,7 +98,7 @@ public:
 
     ssize_t byte_size() const
     {
-        return get_byte_size(dtype_, size_);
+        return bytesize(dtype_, size_);
     }
 
     explicit operator bool() const noexcept
@@ -184,7 +111,7 @@ public:
     template<class T>
     Buffer view() const
     {
-        return view(getTensorType<T>());
+        return view(data_type_v<T>);
     }
 
     Buffer slice(ssize_t base, ssize_t size) const;
@@ -235,15 +162,17 @@ void Fill(Buffer&& b, const void* v, const Stream& stream);
 template<class T>
 struct Buffer_: public Buffer {
 
-    Buffer_(): Buffer{getTensorType<T>()} {}
+    Buffer_(): Buffer{data_type_v<T>} {}
 
     Buffer_(T* data, ssize_t size, MemLoc device): Buffer{data, size, device} {}
 
-    Buffer_(shared_ptr<void> data, ssize_t size, MemLoc device): Buffer{std::move(data), size, dtype_, device} {}
+    Buffer_(shared_ptr<void> data, ssize_t size, MemLoc device): Buffer{std::move(data), size, data_type_v<T>, device}
+    {
+    }
 
-    Buffer_(ssize_t size, Allocator& alloc): Buffer{size, dtype_, alloc} {}
+    Buffer_(ssize_t size, Allocator& alloc): Buffer{size, data_type_v<T>, alloc} {}
 
-    Buffer_(ssize_t size, MemLoc device): Buffer{size, dtype_, device} {}
+    Buffer_(ssize_t size, MemLoc device): Buffer{size, data_type_v<T>, device} {}
 
     Buffer_(const Buffer_&)            = default;
     Buffer_& operator=(const Buffer_&) = default;
@@ -314,16 +243,14 @@ struct Buffer_: public Buffer {
 
     constexpr DataType dtype() const noexcept
     {
-        return dtype_;
+        return data_type_v<T>;
     }
 
 private:
-    static constexpr DataType dtype_ = getTensorType<T>();
-
     template<class U>
     static decltype(auto) ensure_dtype(U&& u) noexcept
     {
-        TM_CHECK_EQ(u.dtype(), dtype_);
+        TM_CHECK_EQ(u.dtype(), data_type_v<T>);
         return (U&&)u;
     }
 };

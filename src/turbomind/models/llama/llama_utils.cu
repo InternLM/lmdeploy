@@ -133,18 +133,7 @@ template void Compare(__nv_bfloat16* ptr, size_t size, std::string key, CmpMode 
 template void CheckNan(const float* ptr, size_t size, std::string key, cudaStream_t stream);
 template void CheckNan(const half* ptr, size_t size, std::string key, cudaStream_t stream);
 
-std::string format(const std::pair<std::string, Tensor>& p)
-{
-    std::stringstream ss;
-    ss << p.first << " [";
-    bool first = true;
-    for (const auto& x : p.second.shape) {
-        ss << (first ? "" : ", ") << x;
-        first = false;
-    }
-    ss << "]";
-    return ss.str();
-}
+
 
 size_t curandStateGetSize()
 {

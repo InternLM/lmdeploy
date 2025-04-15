@@ -11,21 +11,10 @@
 
 #include "src/turbomind/engine/model_request.h"
 #include "src/turbomind/engine/request.h"
-#include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/constant.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
-
-template<class T>
-static T get(const std::unordered_map<std::string, ManagedTensor>& m, const std::string& key, T fallback = {})
-{
-    auto it = m.find(key);
-    if (it != m.end()) {
-        return it->second->getVal<T>();
-    }
-    return fallback;
-}
 
 ModelRequest::ModelRequest(Gateway* gateway, DataType data_type, int session_len, int vocab_size, int hidden_dim):
     gateway_{gateway},
@@ -90,8 +79,8 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
         inputs_->emplace(k, v);
     }
 
-    add(outputs_, "output_ids", TYPE_INT32, MEMORY_CPU, max_seq_len);
-    add(outputs_, "sequence_length", TYPE_INT32, MEMORY_CPU, 1);
+    add(outputs_, "output_ids", data_type_v<int>, MEMORY_CPU, max_seq_len);
+    add(outputs_, "sequence_length", data_type_v<int>, MEMORY_CPU, 1);
 
     if (param.gen_cfg.output_logits) {
         const int len = param.gen_cfg.output_logits == GenerationConfig::kAll ? max_in_out_len : max_out_len;
@@ -105,8 +94,8 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
 
     if (param.gen_cfg.output_logprobs) {
         add(outputs_, "logprob_vals", data_type_, MEMORY_CPU, max_out_len, kMaxLogProb);
-        add(outputs_, "logprob_indexes", TYPE_INT32, MEMORY_CPU, max_out_len, kMaxLogProb);
-        add(outputs_, "logprob_nums", TYPE_INT32, MEMORY_CPU, max_out_len);
+        add(outputs_, "logprob_indexes", data_type_v<int>, MEMORY_CPU, max_out_len, kMaxLogProb);
+        add(outputs_, "logprob_nums", data_type_v<int>, MEMORY_CPU, max_out_len);
     }
 
     auto r = std::make_shared<Request>();

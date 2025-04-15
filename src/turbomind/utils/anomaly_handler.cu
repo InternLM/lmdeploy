@@ -7,6 +7,7 @@
 #include <thrust/device_vector.h>
 #include <thrust/host_vector.h>
 
+#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -399,16 +400,7 @@ void DebugTensor(core::Tensor& tensor, const std::string& key, int level)
         AnomalyHandler::instance().CountAndFix((T*)tensor.raw_data(), tensor.size(), key, level);
         // Compare((T*)tensor.raw_data(), tensor.size(), key, compare_mode, core::Context::stream().handle());
     };
-    switch (tensor.dtype()) {
-        case TYPE_FP32:
-            return invoke(float{});
-        case TYPE_FP16:
-            return invoke(half{});
-        case TYPE_BF16:
-            return invoke(nv_bfloat16{});
-        default:
-            TM_CHECK(0) << "Not implemented.";
-    }
+    TM_DISPATCH_DTYPES(tensor.dtype(), invoke, float, half_t, bfloat16_t);
 }
 
 }  // namespace turbomind

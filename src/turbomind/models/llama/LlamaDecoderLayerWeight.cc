@@ -93,7 +93,7 @@ LlamaDecoderLayerWeight::LlamaDecoderLayerWeight(DataType           data_type,
             data_type_,
             weight_type_,
             model.group_size,
-            weight_type_ == TYPE_UINT4 && is_fuse_silu_act(),
+            weight_type_ == data_type_v<uint4_t> && is_fuse_silu_act(),
         });
         register_module("feed_forward", *ffn_weights);
     }

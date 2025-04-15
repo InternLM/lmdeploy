@@ -11,11 +11,11 @@
 #include <cub/block/block_scan.cuh>
 #include <cub/warp/warp_scan.cuh>
 
+#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/gemm/moe_utils_v2.h"
-#include "src/turbomind/utils/Tensor.h"
 
 namespace turbomind {
 
@@ -695,7 +695,7 @@ void invokeMoeDispatch(
     core::Ref<core::Tensor> out_, const core::Tensor& src, const int* f2n, int expert_per_token, cudaStream_t st)
 {
     using T = uint16_t;
-    TM_CHECK_EQ(get_elem_size(src.dtype()), sizeof(T));
+    TM_CHECK_EQ(bytesize(src.dtype(), 1), sizeof(T));
     auto& out              = out_.get();
     auto [num, dim]        = src.shapes(0, 1);
     constexpr int threads  = 256;
@@ -849,14 +849,8 @@ void invokeMoeCombine(core::Ref<core::Tensor> out_,
                                dst_scale,
                                st);
     };
-    switch (src.dtype()) {
-        case TYPE_FP16:
-            return invoke(half{});
-        case TYPE_BF16:
-            return invoke(nv_bfloat16{});
-        default:
-            TM_CHECK(0) << "not implemented";
-    }
+
+    TM_DISPATCH_PRIMARY_DTYPES(src.dtype(), invoke);
 }
 
 std::vector<int> SampleUniform(int token_num, int expert_num, int exp_per_tok, std::mt19937& g)

@@ -59,60 +59,59 @@ DLDevice getDLDevice(const Tensor& tensor)
 
 DLManagedTensor* TritonTensorToDLManagedTensor(Tensor& tensor)
 {
-    DLDevice device = getDLDevice(tensor);
-
+    DLDevice   device = getDLDevice(tensor);
     DLDataType data_type{0, 0, 1};
+    using ft::data_type_v;
     switch (tensor.dtype()) {
-        case ft::TYPE_BOOL:
+        case data_type_v<bool>:
             data_type.code = DLDataTypeCode::kDLBool;
             data_type.bits = 8;
             break;
-        case ft::TYPE_UINT8:
+        case data_type_v<uint8_t>:
             data_type.code = DLDataTypeCode::kDLUInt;
             data_type.bits = 8;
             break;
-        case ft::TYPE_UINT16:
+        case data_type_v<uint16_t>:
             data_type.code = DLDataTypeCode::kDLUInt;
             data_type.bits = 16;
             break;
-        case ft::TYPE_UINT32:
+        case data_type_v<uint32_t>:
             data_type.code = DLDataTypeCode::kDLUInt;
             data_type.bits = 32;
             break;
-        case ft::TYPE_UINT64:
+        case data_type_v<uint64_t>:
             data_type.code = DLDataTypeCode::kDLUInt;
             data_type.bits = 64;
             break;
-        case ft::TYPE_INT8:
-        case ft::TYPE_BYTES:
+        case data_type_v<int8_t>:
             data_type.code = DLDataTypeCode::kDLInt;
             data_type.bits = 8;
             break;
-        case ft::TYPE_INT16:
+        case data_type_v<int16_t>:
             data_type.code = DLDataTypeCode::kDLInt;
             data_type.bits = 16;
             break;
-        case ft::TYPE_INT32:
+        case data_type_v<int32_t>:
             data_type.code = DLDataTypeCode::kDLInt;
             data_type.bits = 32;
             break;
-        case ft::TYPE_INT64:
+        case data_type_v<int64_t>:
             data_type.code = DLDataTypeCode::kDLInt;
             data_type.bits = 64;
             break;
-        case ft::TYPE_FP16:
+        case data_type_v<turbomind::half_t>:
             data_type.code = DLDataTypeCode::kDLFloat;
             data_type.bits = 16;
             break;
-        case ft::TYPE_FP32:
+        case data_type_v<float>:
             data_type.code = DLDataTypeCode::kDLFloat;
             data_type.bits = 32;
             break;
-        case ft::TYPE_FP64:
+        case data_type_v<double>:
             data_type.code = DLDataTypeCode::kDLFloat;
             data_type.bits = 64;
             break;
-        case ft::TYPE_BF16:
+        case data_type_v<turbomind::bfloat16_t>:
             data_type.code = DLDataTypeCode::kDLBfloat;
             data_type.bits = 16;
             break;
@@ -151,59 +150,60 @@ ft::MemoryType getMemoryType(DLDevice device)
 
 ft::DataType getDataType(DLDataType data_type)
 {
+    using ft::data_type_v;
     switch (data_type.code) {
         case DLDataTypeCode::kDLUInt:
             switch (data_type.bits) {
                 case 8:
-                    return ft::TYPE_UINT8;
+                    return data_type_v<uint8_t>;
                 case 16:
-                    return ft::TYPE_UINT16;
+                    return data_type_v<uint16_t>;
                 case 32:
-                    return ft::TYPE_UINT32;
+                    return data_type_v<uint32_t>;
                 case 64:
-                    return ft::TYPE_UINT64;
+                    return data_type_v<uint64_t>;
                 default:
-                    return ft::TYPE_INVALID;
+                    return data_type_v<void>;
             }
             break;
         case DLDataTypeCode::kDLInt:
             switch (data_type.bits) {
                 case 8:
-                    return ft::TYPE_INT8;
+                    return data_type_v<int8_t>;
                 case 16:
-                    return ft::TYPE_INT16;
+                    return data_type_v<int16_t>;
                 case 32:
-                    return ft::TYPE_INT32;
+                    return data_type_v<int32_t>;
                 case 64:
-                    return ft::TYPE_INT64;
+                    return data_type_v<int64_t>;
                 default:
-                    return ft::TYPE_INVALID;
+                    return data_type_v<void>;
             }
             break;
         case DLDataTypeCode::kDLFloat:
             switch (data_type.bits) {
                 case 16:
-                    return ft::TYPE_FP16;
+                    return data_type_v<turbomind::half_t>;
                 case 32:
-                    return ft::TYPE_FP32;
+                    return data_type_v<float>;
                 case 64:
-                    return ft::TYPE_FP64;
+                    return data_type_v<double>;
                 default:
-                    return ft::TYPE_INVALID;
+                    return data_type_v<void>;
             }
             break;
         case DLDataTypeCode::kDLBfloat:
             switch (data_type.bits) {
                 case 16:
-                    return ft::TYPE_BF16;
+                    return data_type_v<turbomind::bfloat16_t>;
                 default:
-                    return ft::TYPE_INVALID;
+                    return data_type_v<void>;
             }
             break;
         case DLDataTypeCode::kDLBool:
-            return ft::TYPE_BOOL;
+            return data_type_v<bool>;
         default:
-            return ft::TYPE_INVALID;
+            return data_type_v<void>;
     }
 }
 
@@ -341,28 +341,30 @@ PYBIND11_MODULE(_turbomind, m)
         .def("consume", [](ft::AtomicRequestState& s) { return s.exchange(nullptr); });
 
     // data type
-    py::enum_<ft::DataType>(m, "DataType")
-        .value("TYPE_INVALID", ft::DataType::TYPE_INVALID)
-        .value("TYPE_BOOL", ft::DataType::TYPE_BOOL)
-        .value("TYPE_UINT8", ft::DataType::TYPE_UINT8)
-        .value("TYPE_UINT16", ft::DataType::TYPE_UINT16)
-        .value("TYPE_UINT32", ft::DataType::TYPE_UINT32)
-        .value("TYPE_UINT64", ft::DataType::TYPE_UINT64)
-        .value("TYPE_INT8", ft::DataType::TYPE_INT8)
-        .value("TYPE_INT16", ft::DataType::TYPE_INT16)
-        .value("TYPE_INT32", ft::DataType::TYPE_INT32)
-        .value("TYPE_INT64", ft::DataType::TYPE_INT64)
-        .value("TYPE_FP16", ft::DataType::TYPE_FP16)
-        .value("TYPE_FP32", ft::DataType::TYPE_FP32)
-        .value("TYPE_FP64", ft::DataType::TYPE_FP64)
-        .value("TYPE_BYTES", ft::DataType::TYPE_BYTES)
-        .value("TYPE_BF16", ft::DataType::TYPE_BF16);
+    {
+        using namespace turbomind;
+        py::enum_<ft::DataType>(m, "DataType")
+            .value("TYPE_INVALID", kNiL)
+            .value("TYPE_BOOL", kBool)
+            .value("TYPE_UINT8", kU8)
+            .value("TYPE_UINT16", kU16)
+            .value("TYPE_UINT32", kU32)
+            .value("TYPE_UINT64", kU64)
+            .value("TYPE_INT8", kI8)
+            .value("TYPE_INT16", kI16)
+            .value("TYPE_INT32", kI32)
+            .value("TYPE_INT64", kI64)
+            .value("TYPE_FP16", kF16)
+            .value("TYPE_FP32", kF32)
+            .value("TYPE_FP64", kF64)
+            .value("TYPE_BF16", kBF16);
 
-    // memory type
-    py::enum_<ft::MemoryType>(m, "MemoryType")
-        .value("MEMORY_CPU", ft::MemoryType::MEMORY_CPU)
-        .value("MEMORY_CPU_PINNED", ft::MemoryType::MEMORY_CPU_PINNED)
-        .value("MEMORY_GPU", ft::MemoryType::MEMORY_GPU);
+        // memory type
+        py::enum_<ft::MemoryType>(m, "MemoryType")
+            .value("MEMORY_CPU", ft::MemoryType::MEMORY_CPU)
+            .value("MEMORY_CPU_PINNED", ft::MemoryType::MEMORY_CPU_PINNED)
+            .value("MEMORY_GPU", ft::MemoryType::MEMORY_GPU);
+    }
 
     // tensor
     py::class_<Tensor, std::shared_ptr<Tensor>>(m, "Tensor")
@@ -381,18 +383,7 @@ PYBIND11_MODULE(_turbomind, m)
                 cap.set_name("used_dltensor");
 
                 TM_CHECK_EQ(self.byte_size(), src->byte_size());
-
-                switch (self.dtype()) {
-                    case ft::TYPE_FP16:
-                    case ft::TYPE_BF16:
-                    case ft::TYPE_FP32:
-                    case ft::TYPE_INT32:
-                    case ft::TYPE_UINT4:
-                        safe_memcpy(self.raw_data(), src->raw_data(), self.byte_size());
-                        break;
-                    default:
-                        TM_CHECK(0) << "Not suppported: " << self.dtype();
-                }
+                safe_memcpy(self.raw_data(), src->raw_data(), self.byte_size());
             },
             "tensor"_a)
         .def(
@@ -499,18 +490,18 @@ PYBIND11_MODULE(_turbomind, m)
 
                 if (weight_type == "half" || weight_type == "fp16" || weight_type == "float16"
                     || weight_type == "int4") {
-                    data_type = turbomind::TYPE_FP16;
+                    data_type = turbomind::kF16;
                 }
                 else if (weight_type == "bf16" || weight_type == "bfloat16") {
 #ifdef ENABLE_BF16
-                    data_type = turbomind::TYPE_BF16;
+                    data_type = turbomind::kBF16;
 #else
                     throw std::runtime_error("Error: turbomind has not been built with bf16 support.");
 #endif
                 }
                 else {
 #ifdef ENABLE_FP32
-                    data_type = turbomind::TYPE_FP32;
+                    data_type = turbomind::kF32;
 #else
                     throw std::runtime_error("Error: turbomind has not been built with fp32 support.");
 #endif

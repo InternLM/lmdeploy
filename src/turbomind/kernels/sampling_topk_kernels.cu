@@ -55,14 +55,15 @@ __global__ void curandBatchInitialize(curandState_t* states, const int size, con
     }
 }
 
-void invokeCurandBatchInitialize(curandState_t*            states,
-                                 const size_t              batch_size,
-                                 const unsigned long long* random_seeds,
-                                 cudaStream_t              stream)
+void invokeCurandBatchInitialize(curandState_t*  states,
+                                 const size_t    batch_size,
+                                 const uint64_t* random_seeds,
+                                 cudaStream_t    stream)
 {
     dim3 block(256);
     dim3 grid((int)(ceil(batch_size * 1.0 / 256)));
-    curandBatchInitialize<<<grid, block, 0, stream>>>(states, batch_size, random_seeds);
+    static_assert(sizeof(uint64_t) == sizeof(unsigned long long));
+    curandBatchInitialize<<<grid, block, 0, stream>>>(states, batch_size, (unsigned long long*)random_seeds);
 }
 
 template<typename T, int BLOCK_SIZE, int BLOCKS_PER_BEAM>

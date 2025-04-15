@@ -2,9 +2,8 @@
 #include "src/turbomind/core/buffer.h"
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/context.h"
+#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/core/stream.h"
-#include "src/turbomind/utils/Tensor.h"
-
 namespace turbomind::core {
 
 Buffer Buffer::view(DataType dtype) const
@@ -14,9 +13,9 @@ Buffer Buffer::view(DataType dtype) const
         return b;
     }
     b.dtype_ = dtype;
-    b.size_  = get_elem_num(byte_size(), dtype);
+    b.size_  = numel(dtype, byte_size());
     if (base_) {
-        b.base_ = get_elem_num(get_byte_size(dtype_, base_), dtype);
+        b.base_ = numel(dtype, bytesize(dtype_, base_));
     }
     return b;
 }
@@ -42,7 +41,7 @@ void Copy(const Buffer& a, ssize_t n, Ref<Buffer> b_, const Stream& stream)
     TM_CHECK_LE(n, a.size());
     TM_CHECK_LE(n, b.size());
     check_cuda_error(
-        cudaMemcpyAsync(b.raw_data(), a.raw_data(), get_byte_size(a.dtype(), n), cudaMemcpyDefault, stream.handle()));
+        cudaMemcpyAsync(b.raw_data(), a.raw_data(), bytesize(a.dtype(), n), cudaMemcpyDefault, stream.handle()));
 }
 
 void Copy(const Buffer& a, ssize_t n, Ref<Buffer> b_)
