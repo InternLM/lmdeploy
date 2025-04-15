@@ -74,7 +74,7 @@ class PDConnectionPool:
                 async with self.conn_sess.post(
                     get_server_api(server_endpoint, "distserve/p2p_initialize"),
                     json=init_request.model_dump(mode="json"),
-                    timeout=self.aiotimeout
+                    timeout=self.aiotimeout,
                 ) as resp:
                     return await resp.json()
 
@@ -82,8 +82,8 @@ class PDConnectionPool:
             async with self.conn_sem:
                 async with self.conn_sess.post(
                     get_server_api(server_endpoint, "distserve/p2p_connect"),
-                    timeout=5,
-                    json=[req.model_dump(mode="json") for req in conn_request]
+                    json=[req.model_dump(mode="json") for req in conn_request],
+                    timeout=self.aiotimeout,
                 ) as resp:
                     return await resp.json()
 
@@ -141,7 +141,7 @@ class PDConnectionPool:
             ]
             await p2p_connect(p_url, prefill_endpoint_conn_reqs)
             await p2p_connect(d_url, decode_endpoint_conn_reqs)
-            logger.info(f"{(p_url, d_url)} connected")
+            logger.info(f"{(p_url, d_url)} connected, total: {len(self.pool.items())}")
         self.pool[(p_url, d_url)] = PDConnectionStatus.Connected
 
     def get(self, left: str, right: str):

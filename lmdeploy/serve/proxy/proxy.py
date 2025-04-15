@@ -594,7 +594,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         start = node_manager.pre_call(d_url)
         if request.stream is True:
             response = node_manager.stream_generate(request_dict, d_url, '/v1/completions')
-            background_task = node_manager.create_background_tasks(p_url, start)
+            background_task = node_manager.create_background_tasks(d_url, start)
             return StreamingResponse(response, background=background_task)
         else:
             response = await node_manager.generate(request_dict, d_url, '/v1/completions')

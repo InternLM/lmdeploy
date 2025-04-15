@@ -83,7 +83,7 @@ class CacheConfig:
     device_type: str = 'cuda'
 
     # For PD Disaggregation
-    role: str = EngineRole.Hybrid
+    role: EngineRole = EngineRole.Hybrid
 
 
     def __post_init__(self):
