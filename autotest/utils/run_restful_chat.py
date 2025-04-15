@@ -553,8 +553,17 @@ def test_qwen_multiple_round_prompt(client, model):
                                               tools=tools)
     print(response)
     response_list = [response]
+    func1_name = response.choices[0].message.tool_calls[0].function.name
+    func1_args = response.choices[0].message.tool_calls[0].function.arguments
+    func2_name = response.choices[0].message.tool_calls[1].function.name
+    func2_args = response.choices[0].message.tool_calls[1].function.arguments
     with assume:
-        assert False, 'test'
+        assert response.choices[0].finish_reason == 'tool_calls'
+        assert func1_name == 'get_current_weather'
+        assert func1_args == '{"location": "San Francisco, CA, USA"}'
+        assert func2_name == 'get_temperature_date'
+        assert func2_args == '{"location": "San Francisco, CA, USA", "date": "2024-11-15"}'
+        assert response.choices[0].message.tool_calls[0].type == 'function'
 
     messages.append(response.choices[0].message)
 
@@ -577,7 +586,8 @@ def test_qwen_multiple_round_prompt(client, model):
     print(response)
     response_list.append(response)
     with assume:
-        assert False, 'test'
+        assert response.choices[0].finish_reason == 'stop'
+        assert '26.1' in response.choices[0].message.content
 
     return response_list
 

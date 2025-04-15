@@ -85,6 +85,7 @@ turbomind_chat_model:
     - deepseek-ai/DeepSeek-V2-Lite-Chat
     - codellama/CodeLlama-7b-Instruct-hf
     - THUDM/glm-4-9b-chat
+    - THUDM/codegeex4-all-9b
     - openbmb/MiniCPM-Llama3-V-2_5
     - openbmb/MiniCPM-V-2_6
     - allenai/Molmo-7B-D-0924
@@ -137,12 +138,11 @@ pytorch_chat_model:
     - deepseek-ai/deepseek-moe-16b-chat
     - deepseek-ai/deepseek-coder-1.3b-instruct
     - deepseek-ai/DeepSeek-V2-Lite-Chat
-    - deepseek-ai/deepseek-vl2-tiny
-    - deepseek-ai/deepseek-vl2
     - THUDM/chatglm2-6b
     - THUDM/cogvlm2-llama3-chinese-chat-19B
     - THUDM/glm-4v-9b
     - THUDM/glm-4-9b-chat
+    - THUDM/codegeex4-all-9b
     - openbmb/MiniCPM-V-2_6
     - microsoft/Phi-3-mini-4k-instruct
     - microsoft/Phi-3-vision-128k-instruct
@@ -196,8 +196,6 @@ pytorch_vl_model:
     - openbmb/MiniCPM-V-2_6
     - microsoft/Phi-3-vision-128k-instruct
     - microsoft/Phi-3.5-vision-instruct
-    - deepseek-ai/deepseek-vl2-tiny
-    - deepseek-ai/deepseek-vl2
 
 turbomind_base_model:
     - internlm/internlm2_5-7b

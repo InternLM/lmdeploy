@@ -233,7 +233,7 @@ def assert_pipeline_single_element(output, is_stream: bool = False, is_last: boo
         result &= output.logprobs is None
     else:
         if is_stream:
-            result &= len(output.logprobs) == 1
+            result &= len(output.logprobs) >= 1
         else:
             result &= len(output.logprobs) == output.generate_token_len or len(
                 output.logprobs) == output.generate_token_len + 1

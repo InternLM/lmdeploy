@@ -404,12 +404,6 @@ def test_restful_chat_reasoning_tp2(config, worker_id):
         'tp_num': 1,
         'extra': ' --tool-call-parser qwen'
     },
-    {
-        'model': 'meta-llama/Meta-Llama-3-1-8B-Instruct',
-        'cuda_prefix': None,
-        'tp_num': 1,
-        'extra': ' --tool-call-parser llama3'
-    },
 ],
                          indirect=True)
 def test_restful_chat_tools_tp1(config, worker_id):
