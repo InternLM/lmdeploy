@@ -153,9 +153,9 @@ struct MatrixLayout {
     int*     idxs;
 };
 
-inline int64_t bytesize(const MatrixLayout& m)
+inline int64_t byte_size(const MatrixLayout& m)
 {
-    return bytesize(m.type, (int64_t)m.rows * m.cols);
+    return byte_size(m.type, (int64_t)m.rows * m.cols);
 }
 
 inline Striding get_mode(const MatrixLayout& m)

@@ -111,7 +111,7 @@ void MLACopyQKV(DataType     dtype,
                          stream);
     };
 
-    TM_CHECK_EQ(bytesize(dtype, 1), 2) << "unsupported data type: " << dtype;
+    TM_CHECK_EQ(byte_size(dtype, 1), 2) << "unsupported data type: " << dtype;
 
     return invoke(uint16_t{});
 }

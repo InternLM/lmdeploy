@@ -27,15 +27,15 @@ namespace turbomind {
 template<typename T>
 SamplingLayer<T>::SamplingLayer(const BaseParam& param): BaseDynamicDecodeLayer{param}
 {
-    top_k_ = {max_batch_size_, MEMORY_CPU_PINNED};
-    top_p_ = {max_batch_size_, MEMORY_CPU_PINNED};
-    min_p_ = {max_batch_size_, MEMORY_CPU_PINNED};
-    kept_  = {max_batch_size_, MEMORY_CPU_PINNED};
+    top_k_ = {max_batch_size_, kCPUpinned};
+    top_p_ = {max_batch_size_, kCPUpinned};
+    min_p_ = {max_batch_size_, kCPUpinned};
+    kept_  = {max_batch_size_, kCPUpinned};
 
-    top_k_buf_ = {max_batch_size_, MEMORY_GPU};
-    top_p_buf_ = {max_batch_size_, MEMORY_GPU};
-    min_p_buf_ = {max_batch_size_, MEMORY_GPU};
-    kept_buf_  = {max_batch_size_, MEMORY_GPU};
+    top_k_buf_ = {max_batch_size_, kDEVICE};
+    top_p_buf_ = {max_batch_size_, kDEVICE};
+    min_p_buf_ = {max_batch_size_, kDEVICE};
+    kept_buf_  = {max_batch_size_, kDEVICE};
 }
 
 template<typename T>
@@ -151,7 +151,7 @@ void SamplingLayer<T>::Setup(const std::vector<const Request*>& rs)
     min_topp_ = *std::min_element(top_p_.begin(), top_p_.end());
     max_minp_ = *std::max_element(min_p_.begin(), min_p_.end());
 
-    indices_ = Buffer_<int>(bsz * vocab_size_padded_, MEMORY_GPU);
+    indices_ = Buffer_<int>(bsz * vocab_size_padded_, kDEVICE);
 
     {
         // topk buffer
@@ -159,7 +159,7 @@ void SamplingLayer<T>::Setup(const std::vector<const Request*>& rs)
         params.batch_size = bsz;
         params.max_top_k  = max_topk_;
         invokeTopKSortFilter<T>(params, stream_);
-        topk_ws_ = {(ssize_t)params.workspace_size, MEMORY_GPU};
+        topk_ws_ = {(ssize_t)params.workspace_size, kDEVICE};
     }
 
     {
@@ -169,7 +169,7 @@ void SamplingLayer<T>::Setup(const std::vector<const Request*>& rs)
         params.vocab_size        = vocab_size_;
         params.vocab_size_padded = vocab_size_padded_;
         invokeTopPSort<T>(params, stream_);
-        topp_ws_ = {(ssize_t)params.workspace_size, MEMORY_GPU};
+        topp_ws_ = {(ssize_t)params.workspace_size, kDEVICE};
     }
 
     std::fill_n(kept_.data(), bsz, vocab_size_);

@@ -111,8 +111,8 @@ LlamaDecoderLayerWeight::LlamaDecoderLayerWeight(DataType           data_type,
         register_module("moe_ffn", *moe_weights);
     }
 
-    self_attn_norm = Tensor{{hidden_units_}, data_type_, MEMORY_GPU};
-    ffn_norm       = Tensor{{hidden_units_}, data_type_, MEMORY_GPU};
+    self_attn_norm = Tensor{{hidden_units_}, data_type_, kDEVICE};
+    ffn_norm       = Tensor{{hidden_units_}, data_type_, kDEVICE};
     register_parameter("attention_norm.weight", self_attn_norm);
     register_parameter("ffn_norm.weight", ffn_norm);
 }

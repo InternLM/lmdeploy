@@ -64,7 +64,7 @@ void UnifiedDecoder::AllreduceResidualRMSnorm(Tensor&       hidden_states,
     else if (group0 || group1) {
         d_comm_->AllreduceResidualBiasRMSnormEx(hidden_states.raw_data(),
                                                 residual.raw_data(),
-                                                bias.buffer().unsafe_data(),
+                                                bias.data_or((void*)nullptr),
                                                 weight.raw_data(),
                                                 rmsnorm_eps_,
                                                 hidden_units_,
@@ -78,7 +78,7 @@ void UnifiedDecoder::AllreduceResidualRMSnorm(Tensor&       hidden_states,
     else if (d_comm_) {
         d_comm_->AllreduceResidualBiasRMSnorm(hidden_states.raw_data(),
                                               residual.raw_data(),
-                                              bias.buffer().unsafe_data(),
+                                              bias.data_or((void*)nullptr),
                                               weight.raw_data(),
                                               rmsnorm_eps_,
                                               hidden_units_,
@@ -92,7 +92,7 @@ void UnifiedDecoder::AllreduceResidualRMSnorm(Tensor&       hidden_states,
         invokeResidualBiasRMSNorm(hidden_states.raw_data(),
                                   residual.raw_data(),
                                   weight.raw_data(),
-                                  bias.buffer().unsafe_data(),
+                                  bias.data_or((void*)nullptr),
                                   dtype,
                                   hidden_units_,
                                   token_num,
@@ -126,7 +126,7 @@ void UnifiedDecoder::Forward(TensorMap& args, const std::vector<WeightType*>& we
     const int prefil_num = *args.at("prefil_num").data<int>();
     const int batch_size = prefil_num + decode_num;
 
-    constexpr auto device = MEMORY_GPU;
+    constexpr auto device = kDEVICE;
 
     Tensor_<int> local_token_nums = args.at("local_token_nums");
 
@@ -253,7 +253,7 @@ void UnifiedDecoder::Forward(TensorMap& args, const std::vector<WeightType*>& we
     }
 
     Buffer out(
-        (void*)last_token_hidden_units, (decode_num + prefil_num) * hidden_units_, local_residual.dtype(), MEMORY_GPU);
+        (void*)last_token_hidden_units, (decode_num + prefil_num) * hidden_units_, local_residual.dtype(), kDEVICE);
 
     TM_DEBUG_TENSOR(out, "out", 1);
 

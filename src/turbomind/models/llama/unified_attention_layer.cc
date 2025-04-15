@@ -51,8 +51,8 @@ struct ForwardParam {
 
     explicit ForwardParam(int max_batch_size)
     {
-        d_cu_x_len = {2 * (max_batch_size + 1), MEMORY_GPU};
-        h_cu_x_len = {2 * (max_batch_size + 1), MEMORY_CPU_PINNED};
+        d_cu_x_len = {2 * (max_batch_size + 1), kDEVICE};
+        h_cu_x_len = {2 * (max_batch_size + 1), kCPUpinned};
         event      = Event::create();
     }
 
@@ -191,11 +191,11 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(
 
     init_rope_kernel_param(param_.rope, rope_param_);
 
-    partial_M_ = Tensor_<float>({kMaxWorkspaceTokens, local_head_num_}, MEMORY_GPU);
-    partial_L_ = Tensor_<float>({kMaxWorkspaceTokens, local_head_num_}, MEMORY_GPU);
-    partial_O_ = Tensor_<float>({kMaxWorkspaceTokens, local_head_num_, size_per_head_}, MEMORY_GPU);
-    split_cnt_ = Tensor_<int>({kMaxWorkspaceTokens}, MEMORY_GPU);
-    barriers_  = Tensor_<int>({kMaxWorkspaceTokens, local_head_num_}, MEMORY_GPU);
+    partial_M_ = Tensor_<float>({kMaxWorkspaceTokens, local_head_num_}, kDEVICE);
+    partial_L_ = Tensor_<float>({kMaxWorkspaceTokens, local_head_num_}, kDEVICE);
+    partial_O_ = Tensor_<float>({kMaxWorkspaceTokens, local_head_num_, size_per_head_}, kDEVICE);
+    split_cnt_ = Tensor_<int>({kMaxWorkspaceTokens}, kDEVICE);
+    barriers_  = Tensor_<int>({kMaxWorkspaceTokens, local_head_num_}, kDEVICE);
 
     Clear(split_cnt_.buffer());
     Clear(barriers_.buffer());
@@ -303,7 +303,7 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         params.stride = (local_head_num_ + 2 * local_kv_head_num_) * size_per_head_;
 
         if (weights.qkv.bias) {
-            params.q_bias = weights.qkv.bias.buffer().unsafe_data<T>();
+            params.q_bias = (T*)weights.qkv.bias.data_or<T>(nullptr);
             params.k_bias = params.q_bias + local_head_num_ * size_per_head_;
             params.v_bias = params.k_bias + local_kv_head_num_ * size_per_head_;
         }

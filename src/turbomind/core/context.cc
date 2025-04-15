@@ -24,7 +24,7 @@ struct ContextStorage {
 
     ContextStorage()
     {
-        push(Allocator{MEMORY_CPU});
+        push(Allocator{kCPU});
     }
 
     void push(const Stream& stream)
@@ -42,15 +42,15 @@ struct ContextStorage {
         int mask{};
         if (alloc) {
             const auto type = alloc->device().type;
-            if (type == MEMORY_CPU) {
+            if (type == kCPU) {
                 mask = host_alloc_bit;
                 host_alloc_.push(alloc);
             }
-            else if (type == MEMORY_GPU) {
+            else if (type == kDEVICE) {
                 mask = device_alloc_bit;
                 device_alloc_.push(alloc);
             }
-            else if (type == MEMORY_CPU_PINNED) {
+            else if (type == kCPUpinned) {
                 mask = pinned_alloc_bit;
                 pinned_alloc_.push(alloc);
             }
@@ -127,14 +127,14 @@ Allocator& Context::pinned_alloc()
     return pinned_alloc_.top();
 }
 
-Allocator& Context::alloc(MemoryLocation device)
+Allocator& Context::alloc(Device device)
 {
     switch (device.type) {
-        case MEMORY_GPU:
+        case kDEVICE:
             return device_alloc();
-        case MEMORY_CPU:
+        case kCPU:
             return host_alloc();
-        case MEMORY_CPU_PINNED:
+        case kCPUpinned:
             return pinned_alloc();
     }
     TM_UNREACHABLE;

@@ -17,7 +17,7 @@ Stream AllocatorImpl::stream() const noexcept
 class CudaMemPoolAllocator: public AllocatorImpl {
 public:
     CudaMemPoolAllocator(Stream stream, bool use_default_pool):
-        pool_{}, stream_{stream}, device_{MEMORY_GPU}, use_default_pool_{use_default_pool}
+        pool_{}, stream_{stream}, device_{kDEVICE}, use_default_pool_{use_default_pool}
     {
         check_cuda_error(cudaGetDevice(&device_.id));
         if (use_default_pool_) {
@@ -55,7 +55,7 @@ public:
         check_cuda_error(cudaFreeAsync(p, stream_.handle()));
     }
 
-    MemoryLocation device() const noexcept override
+    Device device() const noexcept override
     {
         return device_;
     }
@@ -71,10 +71,10 @@ public:
     }
 
 private:
-    cudaMemPool_t  pool_;
-    Stream         stream_;
-    MemoryLocation device_;
-    bool           use_default_pool_;
+    cudaMemPool_t pool_;
+    Stream        stream_;
+    Device        device_;
+    bool          use_default_pool_;
 };
 
 class CudaAllocator: public AllocatorImpl {
@@ -91,9 +91,9 @@ public:
         check_cuda_error(cudaFree(p));
     }
 
-    MemoryLocation device() const noexcept override
+    Device device() const noexcept override
     {
-        return MEMORY_GPU;
+        return kDEVICE;
     }
 };
 
@@ -111,9 +111,9 @@ public:
         check_cuda_error(cudaFreeHost(p));
     }
 
-    MemoryLocation device() const noexcept override
+    Device device() const noexcept override
     {
-        return MEMORY_CPU_PINNED;
+        return kCPUpinned;
     }
 };
 
@@ -129,21 +129,21 @@ public:
         ::operator delete(p);
     }
 
-    MemoryLocation device() const noexcept override
+    Device device() const noexcept override
     {
-        return MEMORY_CPU;
+        return kCPU;
     }
 };
 
-Allocator::Allocator(MemoryType type)
+Allocator::Allocator(DeviceType type)
 {
     impl_ = [&]() -> shared_ptr<AllocatorImpl> {
         switch (type) {
-            case MEMORY_CPU:
+            case kCPU:
                 return std::make_shared<HostAllocator>();
-            case MEMORY_GPU:
+            case kDEVICE:
                 return std::make_shared<CudaAllocator>();
-            case MEMORY_CPU_PINNED:
+            case kCPUpinned:
                 return std::make_shared<CudaHostAllocator>();
         }
         return {};

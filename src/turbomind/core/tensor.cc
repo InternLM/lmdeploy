@@ -5,6 +5,12 @@
 
 namespace turbomind::core {
 
+std::ostream& operator<<(std::ostream& os, const Tensor& t)
+{
+    os << t.dtype() << "[" << t.layout() << "]@" << t.buffer_.data_or((void*)nullptr);
+    return os;
+}
+
 Tensor& TensorMap::at(const std::string& key)
 {
     auto it = find(key);

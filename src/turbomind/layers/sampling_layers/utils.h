@@ -64,7 +64,7 @@ void init_stop_bad_words(G getter, const char* key, const Rs& rs, T* h_buf, T* d
     }
     core::Copy(h_buf, bsz * 2 * max_length, d_buf);
     // Construct a tensor from the device buffer
-    out = {d_buf, {bsz, 2, max_length}, MEMORY_GPU};
+    out = {d_buf, {bsz, 2, max_length}, kDEVICE};
 };
 
 }  // namespace

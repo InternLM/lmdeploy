@@ -54,17 +54,17 @@ template<typename T>
 LogitsProcessorLayer<T>::LogitsProcessorLayer(const BaseParam& param): BaseDynamicDecodeLayer{param}
 {
 
-    repetition_penalty_ = {max_batch_size_, MEMORY_CPU_PINNED};
-    min_lengths_        = {max_batch_size_, MEMORY_CPU_PINNED};
-    temperature_        = {max_batch_size_, MEMORY_CPU_PINNED};
-    bad_words_          = {max_batch_size_ * 2 * kMaxStopBadWordsLen, MEMORY_CPU_PINNED};
-    end_ids_            = {max_batch_size_ * kMaxEndIdsSize, MEMORY_CPU_PINNED};
+    repetition_penalty_ = {max_batch_size_, kCPUpinned};
+    min_lengths_        = {max_batch_size_, kCPUpinned};
+    temperature_        = {max_batch_size_, kCPUpinned};
+    bad_words_          = {max_batch_size_ * 2 * kMaxStopBadWordsLen, kCPUpinned};
+    end_ids_            = {max_batch_size_ * kMaxEndIdsSize, kCPUpinned};
 
-    repetition_penalty_buf_ = {max_batch_size_, MEMORY_GPU};
-    min_lengths_buf_        = {max_batch_size_, MEMORY_GPU};
-    temperature_buf_        = {max_batch_size_, MEMORY_GPU};
-    bad_words_buf_          = {max_batch_size_ * 2 * kMaxStopBadWordsLen, MEMORY_GPU};
-    end_ids_buf_            = {max_batch_size_ * kMaxEndIdsSize, MEMORY_GPU};
+    repetition_penalty_buf_ = {max_batch_size_, kDEVICE};
+    min_lengths_buf_        = {max_batch_size_, kDEVICE};
+    temperature_buf_        = {max_batch_size_, kDEVICE};
+    bad_words_buf_          = {max_batch_size_ * 2 * kMaxStopBadWordsLen, kDEVICE};
+    end_ids_buf_            = {max_batch_size_ * kMaxEndIdsSize, kDEVICE};
 
     context_length_.resize(max_batch_size_);
     prompt_length_.resize(max_batch_size_);
@@ -88,7 +88,7 @@ void LogitsProcessorLayer<T>::Forward(TensorMap& args)
 
     // repetition penalty
     if (step > 1 && repetition_penalty_type_ != RepetitionPenaltyType::None) {
-        Buffer_<uint8_t> workspace(bsz * step * (sizeof(int) + sizeof(float)), MEMORY_GPU);
+        Buffer_<uint8_t> workspace(bsz * step * (sizeof(int) + sizeof(float)), kDEVICE);
         invokeBatchApplyRepetitionPenalty(logits.data(),
                                           repetition_penalty_buf_.data(),
                                           (int*)workspace.data(),
@@ -230,7 +230,7 @@ void LogitsProcessorLayer<T>::Setup(const std::vector<const Request*>& rs)
                 h_end_ids += max_length;
             }
             Copy(end_ids_, bsz * max_length, end_ids_buf_);
-            end_ids_ten_ = {end_ids_buf_.data(), {bsz, max_length}, MEMORY_GPU};
+            end_ids_ten_ = {end_ids_buf_.data(), {bsz, max_length}, kDEVICE};
         }
     }
 

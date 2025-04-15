@@ -14,7 +14,7 @@ class Tensor {
 public:
     Tensor() = default;
 
-    Tensor(Layout layout, DataType dtype, MemLoc device): Tensor{layout, dtype, Context::alloc(device)} {}
+    Tensor(Layout layout, DataType dtype, Device device): Tensor{layout, dtype, Context::alloc(device)} {}
 
     Tensor(Layout layout, DataType dtype, Allocator& alloc): layout_{std::move(layout)}
     {
@@ -28,22 +28,22 @@ public:
 
     Tensor(Buffer buffer): layout_{buffer.size()}, buffer_{buffer} {}
 
-    Tensor(void* data, Layout layout, DataType dtype, MemLoc device):
+    Tensor(void* data, Layout layout, DataType dtype, Device device):
         Tensor{Buffer{data, layout.cosize(), dtype, device}, layout}
     {
     }
 
-    Tensor(std::shared_ptr<void> data, Layout layout, DataType dtype, MemLoc device):
+    Tensor(std::shared_ptr<void> data, Layout layout, DataType dtype, Device device):
         Tensor{Buffer{data, layout.cosize(), dtype, device}, layout}
     {
     }
 
     template<class T>
-    Tensor(T* data, Layout layout, MemLoc device): Tensor{Buffer{data, layout.cosize(), device}, layout}
+    Tensor(T* data, Layout layout, Device device): Tensor{Buffer{data, layout.cosize(), device}, layout}
     {
     }
 
-    static Tensor empty_like(const Tensor& tensor, std::optional<MemLoc> device = {})
+    static Tensor empty_like(const Tensor& tensor, std::optional<Device> device = {})
     {
         return Tensor{tensor.layout_, tensor.dtype(), device ? *device : tensor.device()};
     }
@@ -63,7 +63,7 @@ public:
         return buffer_.dtype();
     }
 
-    MemLoc device() const
+    Device device() const
     {
         return buffer_.device();
     }
@@ -75,7 +75,7 @@ public:
 
     ssize_t byte_size() const noexcept
     {
-        return bytesize(dtype(), size());
+        return turbomind::byte_size(dtype(), size());
     }
 
     explicit operator bool() const noexcept
@@ -103,6 +103,18 @@ public:
     const void* raw_data() const
     {
         return const_cast<Tensor*>(this)->raw_data();
+    }
+
+    template<class T>
+    T* data_or(T* other)
+    {
+        return buffer_.data_or(other);
+    }
+
+    template<class T>
+    const T* data_or(T* other) const
+    {
+        return buffer_.data_or(other);
     }
 
     Tensor view(std::vector<ssize_t> shape) const
@@ -178,11 +190,7 @@ public:
         return layout_.rank();
     }
 
-    friend std::ostream& operator<<(std::ostream& os, const Tensor& t)
-    {
-        os << "<" << t.dtype() << ">" << t.layout() << "@" << t.buffer_.unsafe_data();
-        return os;
-    }
+    friend std::ostream& operator<<(std::ostream& os, const Tensor& t);
 
 private:
     Layout layout_;
@@ -210,15 +218,15 @@ template<class T>
 struct Tensor_: public Tensor {
     Tensor_() = default;
 
-    Tensor_(Layout layout, MemLoc device): Tensor{std::move(layout), data_type_v<T>, device} {}
+    Tensor_(Layout layout, Device device): Tensor{std::move(layout), data_type_v<T>, device} {}
 
     Tensor_(Layout layout, Allocator& alloc): Tensor{std::move(layout), data_type_v<T>, alloc} {}
 
     Tensor_(Buffer buffer, Layout layout): Tensor{ensure_dtype(std::move(buffer)), std::move(layout)} {}
 
-    Tensor_(T* data, Layout layout, MemLoc device): Tensor{data, std::move(layout), device} {}
+    Tensor_(T* data, Layout layout, Device device): Tensor{data, std::move(layout), device} {}
 
-    Tensor_(shared_ptr<void> data, Layout layout, MemLoc device):
+    Tensor_(shared_ptr<void> data, Layout layout, Device device):
         Tensor{Buffer{std::move(data), layout.cosize(), data_type_v<T>, device}, layout}
     {
     }
@@ -245,12 +253,22 @@ struct Tensor_: public Tensor {
 
     T* data() noexcept
     {
-        return static_cast<T*>(raw_data());
+        return Tensor::data<T>();
     }
 
     const T* data() const noexcept
     {
-        return static_cast<const T*>(raw_data());
+        return Tensor::data<T>();
+    }
+
+    T* data_or(T* other)
+    {
+        return Tensor::data_or<T>(other);
+    }
+
+    const T* data_or(T* other) const
+    {
+        return Tensor::data_or<T>(other);
     }
 
     constexpr DataType dtype() const noexcept
@@ -259,7 +277,6 @@ struct Tensor_: public Tensor {
     }
 
 private:
-
     template<class U>
     static decltype(auto) ensure_dtype(U&& u)
     {

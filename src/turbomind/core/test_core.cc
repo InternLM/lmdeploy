@@ -53,10 +53,10 @@ TEST_CASE("test allocator", "[allocator]")
     Allocator a;
     REQUIRE(!a);
 
-    Allocator b{MEMORY_CPU};
+    Allocator b{kCPU};
     REQUIRE(b);
     REQUIRE(a != b);
-    REQUIRE(b->device() == MEMORY_CPU);
+    REQUIRE(b->device() == kCPU);
     Stream s{};
     REQUIRE(!b->stream());
 
@@ -78,7 +78,7 @@ TEST_CASE("test context", "[context]")
 
     Stream s0 = Stream::create();
 
-    ContextGuard g0{s0, Allocator{MEMORY_CPU}};
+    ContextGuard g0{s0, Allocator{kCPU}};
 
     REQUIRE(Context::stream());
     REQUIRE(Context::stream() == s0);
@@ -87,7 +87,7 @@ TEST_CASE("test context", "[context]")
 
     {
         Allocator a1(Context::stream(), false);  // device allocator
-        REQUIRE(a1->device().type == MEMORY_GPU);
+        REQUIRE(a1->device().type == kDEVICE);
 
         ContextGuard g1{a1};
 
@@ -96,7 +96,7 @@ TEST_CASE("test context", "[context]")
         REQUIRE(Context::host_alloc() == a0);
 
         {
-            ContextGuard g2{Stream::create(), Allocator(MEMORY_GPU)};
+            ContextGuard g2{Stream::create(), Allocator(kDEVICE)};
             REQUIRE(Context::device_alloc() != a1);
             REQUIRE(Context::stream() != s0);
         }
@@ -125,7 +125,7 @@ TEST_CASE("test basic buffer", "[buffer]")
 
     SECTION("reference into v")
     {
-        b = Buffer(v.data(), v.size(), MEMORY_CPU);
+        b = Buffer(v.data(), v.size(), kCPU);
         REQUIRE(b.data<int>() == v.data());
         REQUIRE(b.raw_data() == v.data());
     }
@@ -133,13 +133,13 @@ TEST_CASE("test basic buffer", "[buffer]")
     {
         auto x = std::shared_ptr<int[]>(new int[v.size()]);
         std::copy(v.begin(), v.end(), x.get());
-        b = Buffer(x, v.size(), data_type_v<int>, MEMORY_CPU);
+        b = Buffer(x, v.size(), data_type_v<int>, kCPU);
         REQUIRE(b.data<int>() == x.get());
         REQUIRE(b.raw_data() == x.get());
     }
     SECTION("allocation")
     {
-        Allocator alloc{MEMORY_CPU};
+        Allocator alloc{kCPU};
         b = Buffer(v.size(), data_type_v<int>, alloc);
         std::copy(v.begin(), v.end(), b.data<int>());
     }
@@ -162,7 +162,7 @@ TEST_CASE("test basic buffer", "[buffer]")
     Buffer_<int> x;
     Buffer_<int> y = Buffer{data_type_v<int>};
 
-    Buffer z = Buffer_<int>(1024, MEMORY_CPU);
+    Buffer z = Buffer_<int>(1024, kCPU);
 
     x = z;
 
@@ -173,6 +173,10 @@ TEST_CASE("test basic buffer", "[buffer]")
     std::vector<int> ref(1024);
     std::iota(ref.begin(), ref.end(), 0);
     REQUIRE(std::vector(x.begin(), x.end()) == ref);
+
+    Buffer e;
+    REQUIRE(!e.data_or((void*)0));
+    REQUIRE(!e.data_or<int>(nullptr));
 }
 
 TEST_CASE("test buffer view", "[buffer]")
@@ -181,11 +185,13 @@ TEST_CASE("test buffer view", "[buffer]")
 
     std::vector<int64_t> v{0, 1, 2, 3, 4, 5, 6, 7};
 
-    Buffer b(v.data(), v.size(), MEMORY_CPU);
+    Buffer b(v.data(), v.size(), kCPU);
 
     auto c = b.slice(2, 4);
     REQUIRE(c.size() == 4);
     REQUIRE(c.raw_data() == b.data<int64_t>() + 2);
+
+    std::cout << c << std::endl;
 
     auto d = c.view<int>();
 
@@ -249,8 +255,10 @@ TEST_CASE("test tensor", "[tensor]")
     Tensor a;
     REQUIRE(!a);
 
-    Tensor_<float> b{{10, 20}, MEMORY_CPU};
+    Tensor_<float> b{{10, 20}, kCPU};
     Tensor_<float> c = b.slice(0, 5);
+
+    std::cout << b << std::endl;
 
     REQUIRE(c.shape() == std::vector<ssize_t>{5, 20});
     REQUIRE(c.data() == b.data());
@@ -270,7 +278,7 @@ TEST_CASE("test tensor", "[tensor]")
     a = {};
     x = {};
 
-    Tensor y = core::Buffer{100, kInt32, MEMORY_CPU};
+    Tensor y = core::Buffer{100, kInt32, kCPU};
     REQUIRE(y.ndim() == 1);
     REQUIRE(y.shape(0) == 100);
 }

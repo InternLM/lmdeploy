@@ -15,7 +15,7 @@ Buffer Buffer::view(DataType dtype) const
     b.dtype_ = dtype;
     b.size_  = numel(dtype, byte_size());
     if (base_) {
-        b.base_ = numel(dtype, bytesize(dtype_, base_));
+        b.base_ = numel(dtype, turbomind::byte_size(dtype_, base_));
     }
     return b;
 }
@@ -34,6 +34,15 @@ Buffer Buffer::slice(ssize_t base, ssize_t size) const
     return b;
 }
 
+std::ostream& operator<<(std::ostream& os, const Buffer& b)
+{
+    os << b.dtype() << "[" << b.size() << "]@" << b.data_;
+    if (b.base_) {
+        os << "+" << b.base_;
+    }
+    return os;
+}
+
 void Copy(const Buffer& a, ssize_t n, Ref<Buffer> b_, const Stream& stream)
 {
     auto& b = b_.get();
@@ -41,7 +50,7 @@ void Copy(const Buffer& a, ssize_t n, Ref<Buffer> b_, const Stream& stream)
     TM_CHECK_LE(n, a.size());
     TM_CHECK_LE(n, b.size());
     check_cuda_error(
-        cudaMemcpyAsync(b.raw_data(), a.raw_data(), bytesize(a.dtype(), n), cudaMemcpyDefault, stream.handle()));
+        cudaMemcpyAsync(b.raw_data(), a.raw_data(), byte_size(a.dtype(), n), cudaMemcpyDefault, stream.handle()));
 }
 
 void Copy(const Buffer& a, ssize_t n, Ref<Buffer> b_)

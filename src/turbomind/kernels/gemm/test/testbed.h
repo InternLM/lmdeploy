@@ -371,8 +371,8 @@ public:
         c_e_ref_.resize(c_e_.size());
 
         for (int i = 0; i < 10; ++i) {
-            invokeMoeDispatch(Tensor{a_e_.data().get(), {top_e * batch_size_, input_dims_}, MEMORY_GPU},
-                              Tensor{a_f_.data().get(), {batch_size_, input_dims_}, MEMORY_GPU},
+            invokeMoeDispatch(Tensor{a_e_.data().get(), {top_e * batch_size_, input_dims_}, kDEVICE},
+                              Tensor{a_f_.data().get(), {batch_size_, input_dims_}, kDEVICE},
                               moe_f2n_.data().get(),
                               top_e,
                               stream_);
@@ -517,8 +517,8 @@ public:
             Compare(c_.data().get(), c_ref_.data().get(), dims, dims, bsz, 0);
         }
         else {
-            invokeMoeCombine(Tensor{c_.data().get(), {batch_size_, output_dims_}, MEMORY_GPU},
-                             Tensor{c_e_.data().get(), {(int)expert_ids_.size(), output_dims_}, MEMORY_GPU},
+            invokeMoeCombine(Tensor{c_.data().get(), {batch_size_, output_dims_}, kDEVICE},
+                             Tensor{c_e_.data().get(), {(int)expert_ids_.size(), output_dims_}, kDEVICE},
                              moe_scales_.data().get(),
                              moe_en2f_.data().get(),
                              nullptr,
@@ -526,8 +526,8 @@ public:
                              0.f,
                              stream_);
 
-            invokeMoeCombine(Tensor{c_ref_.data().get(), {batch_size_, output_dims_}, MEMORY_GPU},
-                             Tensor{c_e_ref_.data().get(), {(int)expert_ids_.size(), output_dims_}, MEMORY_GPU},
+            invokeMoeCombine(Tensor{c_ref_.data().get(), {batch_size_, output_dims_}, kDEVICE},
+                             Tensor{c_e_ref_.data().get(), {(int)expert_ids_.size(), output_dims_}, kDEVICE},
                              moe_scales_.data().get(),
                              moe_en2f_.data().get(),
                              nullptr,
@@ -589,13 +589,14 @@ public:
     int64_t get_global_memory_reads()
     {
         if (experts_ == 0) {
-            return bytesize(a_pack_desc_) + bytesize(b_pack_desc_) + bytesize(u_pack_desc_) + bytesize(v_pack_desc_);
+            return byte_size(a_pack_desc_) + byte_size(b_pack_desc_) + byte_size(u_pack_desc_)
+                   + byte_size(v_pack_desc_);
         }
         else {
-            size_t    size = bytesize(a_pack_desc_) + bytesize(u_pack_desc_);
+            size_t    size = byte_size(a_pack_desc_) + byte_size(u_pack_desc_);
             const int nnz =
                 std::accumulate(moe_cnt_.begin(), moe_cnt_.end(), 0, [](auto a, auto x) { return a + (x > 0); });
-            size += nnz * (bytesize(b_pack_desc_) + bytesize(v_pack_desc_));
+            size += nnz * (byte_size(b_pack_desc_) + byte_size(v_pack_desc_));
             return size;
         }
     }
@@ -603,13 +604,13 @@ public:
     int64_t get_ref_global_memory_reads()
     {
         if (experts_ == 0) {
-            return bytesize(a_desc_) + bytesize(b_desc_);
+            return byte_size(a_desc_) + byte_size(b_desc_);
         }
         else {
-            size_t    size = bytesize(a_desc_);
+            size_t    size = byte_size(a_desc_);
             const int nnz =
                 std::accumulate(moe_cnt_.begin(), moe_cnt_.end(), 0, [](auto a, auto x) { return a + (x > 0); });
-            size += nnz * bytesize(b_desc_);
+            size += nnz * byte_size(b_desc_);
             return size;
         }
     }

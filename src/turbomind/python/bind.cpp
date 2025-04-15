@@ -32,7 +32,7 @@ static const char kDlTensorCapsuleName[] = "dltensor";
 DLDevice getDLDevice(const Tensor& tensor)
 {
     int device_id = 0;
-    if (tensor.device().type == ft::MEMORY_GPU) {
+    if (tensor.device().type == ft::kDEVICE) {
         cudaPointerAttributes ptr_attr{};
         cudaPointerGetAttributes(&ptr_attr, tensor.raw_data());
         device_id = ptr_attr.device;
@@ -41,13 +41,13 @@ DLDevice getDLDevice(const Tensor& tensor)
     DLDevice device{kDLCPU, device_id};
 
     switch (tensor.device().type) {
-        case ft::MEMORY_CPU:
+        case ft::kCPU:
             device.device_type = DLDeviceType::kDLCPU;
             break;
-        case ft::MEMORY_CPU_PINNED:
+        case ft::kCPUpinned:
             device.device_type = DLDeviceType::kDLCUDAHost;
             break;
-        case ft::MEMORY_GPU:
+        case ft::kDEVICE:
             device.device_type = DLDeviceType::kDLCUDA;
             break;
         default:
@@ -135,16 +135,16 @@ DLManagedTensor* TritonTensorToDLManagedTensor(Tensor& tensor)
                                }};
 }
 
-ft::MemoryType getMemoryType(DLDevice device)
+ft::DeviceType getMemoryType(DLDevice device)
 {
     switch (device.device_type) {
         case DLDeviceType::kDLCUDAHost:
-            return ft::MemoryType::MEMORY_CPU_PINNED;
+            return ft::DeviceType::kCPUpinned;
         case DLDeviceType::kDLCUDA:
-            return ft::MemoryType::MEMORY_GPU;
+            return ft::DeviceType::kDEVICE;
         case DLDeviceType::kDLCPU:
         default:
-            return ft::MemoryType::MEMORY_CPU;
+            return ft::DeviceType::kCPU;
     }
 }
 
@@ -360,10 +360,10 @@ PYBIND11_MODULE(_turbomind, m)
             .value("TYPE_BF16", kBfloat16);
 
         // memory type
-        py::enum_<ft::MemoryType>(m, "MemoryType")
-            .value("MEMORY_CPU", ft::MemoryType::MEMORY_CPU)
-            .value("MEMORY_CPU_PINNED", ft::MemoryType::MEMORY_CPU_PINNED)
-            .value("MEMORY_GPU", ft::MemoryType::MEMORY_GPU);
+        py::enum_<ft::DeviceType>(m, "MemoryType")
+            .value("MEMORY_CPU", ft::DeviceType::kCPU)
+            .value("MEMORY_CPU_PINNED", ft::DeviceType::kCPUpinned)
+            .value("MEMORY_GPU", ft::DeviceType::kDEVICE);
     }
 
     // tensor

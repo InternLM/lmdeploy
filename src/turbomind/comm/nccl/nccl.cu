@@ -197,7 +197,7 @@ public:
                                       int          group,
                                       cudaStream_t stream) override
     {
-        const auto elem_size = bytesize(dtype, 1);
+        const auto elem_size = byte_size(dtype);
 
         auto rms_norm = [&](int64_t first, int64_t count) {
             invokeResidualBiasRMSNorm((char*)hidden + elem_size * first * dim,
@@ -240,7 +240,7 @@ public:
                                         const int*   local_token_nums,
                                         cudaStream_t stream) override
     {
-        const size_t         elem_size = bytesize(type, 1);
+        const size_t         elem_size = byte_size(type);
         const ncclDataType_t nccl_type = to_nccl_dtype(type);
 
         FT_CHECK(group0 == 0 || group1 == 0);

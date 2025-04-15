@@ -424,7 +424,7 @@ void CudaIpcCommImpl::AllreduceResidualBiasRMSnorm(void*        hidden,
                                                    cudaStream_t stream)
 {
 
-    const size_t elemsize = bytesize(dtype, 1);
+    const size_t elemsize = byte_size(dtype);
     const size_t bytesize = elemsize * token_num * dim;
 
     const int n_ranks = this->n_ranks(group);

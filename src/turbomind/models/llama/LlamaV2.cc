@@ -113,7 +113,7 @@ void LlamaV2::updateEmbedding(char*            decoder_input,
         mask_ptr = mask.data();
     }
 
-    const size_t elem_size = bytesize(dtype_, 1);
+    const size_t elem_size = byte_size(dtype_, 1);
 
     for (int i = 0; i < bsz; i++) {
         const auto& seq        = *sequences[i];
@@ -178,7 +178,7 @@ void LlamaV2::Forward(Buffer_<int>     input_ids,
         const auto& embedding_table = weights_->pre_decoder_embedding.weight;
         TM_CHECK_EQ(embedding_table.shape(1) * tp_size_, hidden_units_);
 
-        input_embeds = Tensor{{token_num, (int)hidden_units_}, dtype_, MEMORY_GPU};
+        input_embeds = Tensor{{token_num, (int)hidden_units_}, dtype_, kDEVICE};
 
         if (tp_size_ == 1) {
             invokeEmbeddingLookup(input_embeds, input_ids, embedding_table, stream_);
@@ -253,8 +253,8 @@ void LlamaV2::Forward(Buffer_<int>     input_ids,
                    {"h_q_len", h_input_length},
                    {"h_k_len", h_context_length},
                    {"finished", finished},
-                   {"decode_num", Buffer{&decode_num, 1, MEMORY_CPU}},
-                   {"prefil_num", Buffer{&prefil_num, 1, MEMORY_CPU}},
+                   {"decode_num", Buffer{&decode_num, 1, kCPU}},
+                   {"prefil_num", Buffer{&prefil_num, 1, kCPU}},
                    {"rope_base", rope_base},
                    {"cu_block_nums", cu_block_nums},
                    {"kv_block_ptrs", kv_block_ptrs},
@@ -334,8 +334,8 @@ void LlamaV2::dynamicDecode(Buffer token_ids,
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     TensorMap args{
         {"logits", logits},
-        {"step", Buffer{&step, 1, MEMORY_CPU}},
-        {"max_input_length", Buffer{&max_context_len, 1, MEMORY_CPU}},
+        {"step", Buffer{&step, 1, kCPU}},
+        {"max_input_length", Buffer{&max_context_len, 1, kCPU}},
         {"sequence_limit_length", seq_limit_len},
         {"init_context_length", init_context_length},
         {"context_length", context_length},

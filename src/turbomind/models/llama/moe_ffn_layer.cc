@@ -33,26 +33,26 @@ MoeFfnLayer::MoeFfnLayer(const ModelParam& model, const MoeParam& param, const E
         expert_ffn_ = std::make_unique<LlamaFfnLayer>(model, ctx);
     }
 
-    h_offsets_ = {max_expert_num + 1, MEMORY_CPU_PINNED};
+    h_offsets_ = {max_expert_num + 1, kCPUpinned};
 
     const int max_token_num = engine.max_forward_token_num;
     const int pad_token_num = (max_token_num + kMoeGateVecSize - 1) / kMoeGateVecSize * kMoeGateVecSize;
 
-    masks_   = {max_expert_num * pad_token_num, MEMORY_GPU};
-    f2n_     = {param_.experts_per_token * max_token_num, MEMORY_GPU};
-    en2f_    = {param_.experts_per_token * max_token_num, MEMORY_GPU};
-    scales_  = {param_.experts_per_token * max_token_num, MEMORY_GPU};
-    offsets_ = {max_expert_num + 1, MEMORY_GPU};
-    accum_   = {max_expert_num * kMoeGateMaxTiles, MEMORY_GPU};
+    masks_   = {max_expert_num * pad_token_num, kDEVICE};
+    f2n_     = {param_.experts_per_token * max_token_num, kDEVICE};
+    en2f_    = {param_.experts_per_token * max_token_num, kDEVICE};
+    scales_  = {param_.experts_per_token * max_token_num, kDEVICE};
+    offsets_ = {max_expert_num + 1, kDEVICE};
+    accum_   = {max_expert_num * kMoeGateMaxTiles, kDEVICE};
 
-    shared_scales_ = {max_token_num, MEMORY_GPU};
+    shared_scales_ = {max_token_num, kDEVICE};
 }
 
 Tensor_<float> MoeFfnLayer::Gate(const Tensor& input, const LlamaDenseWeight& gate)
 {
     auto& weight = gate.weight;
     TM_CHECK_EQ(input.shape(1), weight.shape(0));
-    Tensor_<float> logits{{input.shape(0), weight.shape(1)}, MEMORY_GPU};
+    Tensor_<float> logits{{input.shape(0), weight.shape(1)}, kDEVICE};
     linear_.forward(input, gate, LlamaLinear::kGemm, logits);
     sync_check_cuda_error();
     return logits;
@@ -146,8 +146,8 @@ void MoeFfnLayer::Forward(ForwardParam& p)
 
         auto& block = moe.block;
 
-        const int    inter_dim = block.is_fused_silu ? inter_size_ : inter_size_ * 2;
-        Tensor inter{{tokens * param_.experts_per_token, inter_dim}, p.input.dtype(), p.input.device()};
+        const int inter_dim = block.is_fused_silu ? inter_size_ : inter_size_ * 2;
+        Tensor    inter{{tokens * param_.experts_per_token, inter_dim}, p.input.dtype(), p.input.device()};
 
         linear_.forward_moe(inter,
                             p.input,
@@ -190,7 +190,7 @@ void MoeFfnLayer::Combine(ForwardParam& p)
                      p.temp,
                      scales_.data(),
                      en2f_.data(),
-                     shared_scales.buffer().unsafe_data<float>(),
+                     shared_scales.data_or((float*)nullptr),
                      param_.experts_per_token,
                      p.scale,
                      stream_);

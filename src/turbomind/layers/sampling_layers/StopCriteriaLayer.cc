@@ -24,8 +24,8 @@ namespace turbomind {
 template<typename T>
 StopCriteriaLayer<T>::StopCriteriaLayer(const BaseParam& param): BaseDynamicDecodeLayer{param}
 {
-    stop_words_     = {max_batch_size_ * 2 * kMaxStopBadWordsLen, MEMORY_CPU_PINNED};
-    stop_words_buf_ = {max_batch_size_ * 2 * kMaxStopBadWordsLen, MEMORY_GPU};
+    stop_words_     = {max_batch_size_ * 2 * kMaxStopBadWordsLen, kCPUpinned};
+    stop_words_buf_ = {max_batch_size_ * 2 * kMaxStopBadWordsLen, kDEVICE};
 }
 
 template<typename T>

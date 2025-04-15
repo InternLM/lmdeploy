@@ -12,7 +12,7 @@ public:
     static Allocator& host_alloc();
     static Allocator& device_alloc();
     static Allocator& pinned_alloc();
-    static Allocator& alloc(MemoryLocation device);
+    static Allocator& alloc(Device device);
 
 private:
     friend class ContextGuard;

@@ -3,7 +3,6 @@
 #pragma once
 
 #include "src/turbomind/core/check.h"
-#include "src/turbomind/core/common.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -123,7 +122,6 @@ CVT_DATA_TYPE(kInt64, int64_t);
 CVT_DATA_TYPE(kFloat16, half_t);
 CVT_DATA_TYPE(kFloat32, float);
 CVT_DATA_TYPE(kFloat64, double);
-
 CVT_DATA_TYPE(kBfloat16, bfloat16_t);
 CVT_DATA_TYPE(kFloat8_e4m3, fp8_e4m3_t);
 CVT_DATA_TYPE(kFloat8_e5m2, fp8_e5m2_t);
@@ -131,7 +129,6 @@ CVT_DATA_TYPE(kFloat8_e5m2, fp8_e5m2_t);
 CVT_DATA_TYPE(kUint2, uint2_t);
 CVT_DATA_TYPE(kUint4, uint4_t);
 CVT_DATA_TYPE(kUint6, uint6_t);
-
 
 #undef CVT_DATA_TYPE
 
@@ -141,11 +138,10 @@ inline constexpr auto data_type_v = to_data_type<std::remove_cv_t<T>>::value;
 template <DataType D>
 using data_type_t = typename from_data_type<D>::type;
 
-
-constexpr std::ptrdiff_t bytesize(DataType type, std::ptrdiff_t size) {
+constexpr std::ptrdiff_t byte_size(DataType type, std::ptrdiff_t size = 1) {
     switch (type) {
         case kNull: return 0;
-        case DataType::kBool:
+        case kBool:
         case kUint8:
         case kInt8:
         case kFloat8_e4m3:
@@ -172,12 +168,12 @@ constexpr std::ptrdiff_t bytesize(DataType type, std::ptrdiff_t size) {
 }
 
 template <class T>
-constexpr std::ptrdiff_t bytesize(std::ptrdiff_t size) { return bytesize(data_type_v<T>, size); }
+constexpr std::ptrdiff_t byte_size(std::ptrdiff_t size = 1) { return byte_size(data_type_v<T>, size); }
 
-constexpr std::ptrdiff_t numel(DataType type, std::ptrdiff_t size) {
+constexpr std::ptrdiff_t numel(DataType type, std::ptrdiff_t size = 1) {
     switch (type) {
         case kNull: return 0;
-        case DataType::kBool:
+        case kBool:
         case kUint8: 
         case kInt8:
         case kFloat8_e4m3:
@@ -209,7 +205,7 @@ constexpr std::ptrdiff_t numel(std::ptrdiff_t size) { return numel(data_type_v<T
 constexpr const char* to_string(DataType type) {
     switch (type) {
         case kNull: return "nil";
-        case DataType::kBool: return "bool";
+        case kBool: return "bool";
         case kUint8: return "u8";
         case kUint16: return "u16";
         case kUint32: return "u32";

@@ -288,7 +288,7 @@ void LlamaBatch::ProcessInferRequests(const Requests& reqs, std::vector<Signal>&
             std::copy_n(input_ids, input_length, seq.prompt.data());
         }
 
-        const int elem_size = bytesize(data_type_, 1);
+        const int elem_size = byte_size(data_type_);
 
         // copy input embeddings
         if (r->inputs.contains("input_embedding_ranges")) {
@@ -699,69 +699,69 @@ void LlamaBatch::AllocateBuffer(ssize_t batch_size, ssize_t session_len, int cac
     const ssize_t max_batch_block_count =
         batch_size * ((session_len + cache_block_seq_len - 1) / cache_block_seq_len) + 1;
 
-    input_ids_buf_ = {max_forward_token_num_, MEMORY_GPU};
+    input_ids_buf_ = {max_forward_token_num_, kDEVICE};
 
-    decoder_output_buf_ = {{batchxbeam, hidden_units}, data_type_, MEMORY_GPU};
+    decoder_output_buf_ = {{batchxbeam, hidden_units}, data_type_, kDEVICE};
 
-    input_length_buf_    = {batchxbeam, MEMORY_GPU};
-    context_length_buf_  = {batchxbeam, MEMORY_GPU};
-    init_context_length_ = {batchxbeam, MEMORY_GPU};
+    input_length_buf_    = {batchxbeam, kDEVICE};
+    context_length_buf_  = {batchxbeam, kDEVICE};
+    init_context_length_ = {batchxbeam, kDEVICE};
 
-    sequence_lengths_ = {batchxbeam, MEMORY_GPU};
+    sequence_lengths_ = {batchxbeam, kDEVICE};
 
-    cu_block_counts_ = {batch_size + 1, MEMORY_GPU};
-    block_ptrs_      = {max_batch_block_count, MEMORY_GPU};
+    cu_block_counts_ = {batch_size + 1, kDEVICE};
+    block_ptrs_      = {max_batch_block_count, kDEVICE};
 
-    sampled_logprobs_ = {batchxbeam * kMaxLogProb, MEMORY_GPU};
-    sampled_indexes_  = {batchxbeam * kMaxLogProb, MEMORY_GPU};
-    sampled_nums_     = {batchxbeam, MEMORY_GPU};
+    sampled_logprobs_ = {batchxbeam * kMaxLogProb, kDEVICE};
+    sampled_indexes_  = {batchxbeam * kMaxLogProb, kDEVICE};
+    sampled_nums_     = {batchxbeam, kDEVICE};
 
-    token_ids_buf_ = {ssize_t(session_len * 2 * batchxbeam), MEMORY_GPU};
+    token_ids_buf_ = {ssize_t(session_len * 2 * batchxbeam), kDEVICE};
 
-    finished_buf_  = {(int)batchxbeam, MEMORY_GPU};
-    seq_limit_len_ = {batch_size, MEMORY_GPU};
+    finished_buf_  = {(int)batchxbeam, kDEVICE};
+    seq_limit_len_ = {batch_size, kDEVICE};
 
-    rope_theta_ = {batch_size, MEMORY_GPU};
+    rope_theta_ = {batch_size, kDEVICE};
 
-    h_random_seed_ = {batch_size, MEMORY_CPU_PINNED};
+    h_random_seed_ = {batch_size, kCPUpinned};
     Clear(h_random_seed_);
 
-    d_random_seed_ = {batch_size, MEMORY_GPU};
+    d_random_seed_ = {batch_size, kDEVICE};
     Clear(d_random_seed_);
 
-    h_curand_state_ = {{batch_size, sizeof(curandState_t)}, MEMORY_CPU_PINNED};
+    h_curand_state_ = {{batch_size, sizeof(curandState_t)}, kCPUpinned};
     Clear(h_curand_state_.buffer());
 
-    d_curand_state_ = {{batch_size, sizeof(curandState_t)}, MEMORY_GPU};
+    d_curand_state_ = {{batch_size, sizeof(curandState_t)}, kDEVICE};
     Clear(d_curand_state_.buffer());
 
     for (auto& s : states_) {
-        s.output_ids = {{batch_size, session_len_}, MEMORY_GPU};
+        s.output_ids = {{batch_size, session_len_}, kDEVICE};
         Clear(s.output_ids.buffer());
 
-        s.curand_state = {{batch_size, sizeof(curandState_t)}, MEMORY_GPU};
+        s.curand_state = {{batch_size, sizeof(curandState_t)}, kDEVICE};
         Clear(s.curand_state.buffer());
     }
 
-    h_input_length_buf_ = {batch_size, MEMORY_CPU_PINNED};
-    h_cu_block_counts_  = {batch_size + 1, MEMORY_CPU_PINNED};
-    h_block_ptrs_       = {(ssize_t)max_batch_block_count, MEMORY_CPU_PINNED};
+    h_input_length_buf_ = {batch_size, kCPUpinned};
+    h_cu_block_counts_  = {batch_size + 1, kCPUpinned};
+    h_block_ptrs_       = {(ssize_t)max_batch_block_count, kCPUpinned};
 
     for (auto& s : states_) {
-        s.h_prompt_length  = {batch_size, MEMORY_CPU_PINNED};
-        s.h_context_length = {batch_size, MEMORY_CPU_PINNED};
-        s.h_finished       = {batch_size * 2, MEMORY_CPU_PINNED};
-        s.h_rope_theta     = {batch_size, MEMORY_CPU_PINNED};
+        s.h_prompt_length  = {batch_size, kCPUpinned};
+        s.h_context_length = {batch_size, kCPUpinned};
+        s.h_finished       = {batch_size * 2, kCPUpinned};
+        s.h_rope_theta     = {batch_size, kCPUpinned};
     }
 
-    h_seq_limit_len_ = {batch_size, MEMORY_CPU_PINNED};
+    h_seq_limit_len_ = {batch_size, kCPUpinned};
     std::fill_n(h_seq_limit_len_.data(), batch_size, 0);
 
-    h_output_ids_ = {batch_size * session_len_, MEMORY_CPU_PINNED};
+    h_output_ids_ = {batch_size * session_len_, kCPUpinned};
 
-    h_sampled_logprobs_ = {batch_size * kMaxLogProb, MEMORY_CPU_PINNED};
-    h_sampled_indexes_  = {batch_size * kMaxLogProb, MEMORY_CPU_PINNED};
-    h_sampled_nums_     = {batch_size, MEMORY_CPU_PINNED};
+    h_sampled_logprobs_ = {batch_size * kMaxLogProb, kCPUpinned};
+    h_sampled_indexes_  = {batch_size * kMaxLogProb, kCPUpinned};
+    h_sampled_nums_     = {batch_size, kCPUpinned};
 }
 
 void LlamaBatch::AllocSymmBuffers()
@@ -825,7 +825,7 @@ LlamaBatch::LlamaBatch(DataType                 data_type,
 {
     const auto cache_block_seq_len = model_->attn_param_.cache_block_seq_len;
 
-    const int dbits = bytesize(data_type, 8);
+    const int dbits = byte_size(data_type, 8);
 
     const auto quant_policy = model_->param_.quant_policy;
     const int  elem_bits    = quant_policy ? quant_policy : dbits;
@@ -850,7 +850,7 @@ LlamaBatch::LlamaBatch(DataType                 data_type,
                                                 param.cache_chunk_size,
                                                 param.enable_prefix_caching,
                                                 tp_rank_,
-                                                core::Context::alloc(MEMORY_GPU),
+                                                core::Context::alloc(kDEVICE),
                                                 get_free_size});
 
     const size_t max_session_len = sequence_manager_->max_block_count() * cache_block_seq_len;
@@ -879,7 +879,7 @@ LlamaBatch::LlamaBatch(DataType                 data_type,
 
     symm_alloc_ = core::SimpleAllocator::Create([this](ssize_t size) { return SymmAlloc(size, true); },
                                           [this](void* p, ssize_t size) { return SymmFree(p, size, true); },
-                                          MEMORY_GPU);
+                                          kDEVICE);
 
     AllocSymmBuffers();
 
@@ -983,7 +983,7 @@ void LlamaBatch::ComputeAndOutputLogits(const Tensor& hidden_states, int first, 
 void LlamaBatch::OutputLogits(const Tensor& logits, int first, int last, GenerationConfig::OutType out_type)
 {
     const auto& src_buf   = logits.buffer();
-    const auto  elem_size = bytesize(logits.dtype(), 1);
+    const auto  elem_size = byte_size(logits.dtype(), 1);
     // when `is_all` is true, logits only contains last token of the sequences
     const bool is_all = out_type == GenerationConfig::kAll;
 
@@ -1078,7 +1078,7 @@ void LlamaBatch::OutputLastHiddenState(const Tensor& hidden_states, int first, i
                 int dst_base = std::max(0, cache_len - (history_len + offset));
 
                 core::Copy(src_buf.raw_data(src_base * model_->hidden_units_),
-                           bytesize(data_type, valid_len * model_->hidden_units_),
+                           byte_size(data_type, valid_len * model_->hidden_units_),
                            dst_buf.raw_data(dst_base * model_->hidden_units_));
             }
         }
@@ -1535,7 +1535,7 @@ bool LlamaBatch::Forward(GenerationState& g)
                         state_->h_context_length.slice(first, mini_batch_size),
                         rope_theta_.slice(first, mini_batch_size),
                         finished_buf_.slice(first, mini_batch_size),
-                        Buffer(local_token_nums.data(), local_token_nums.size(), MEMORY_CPU),
+                        Buffer(local_token_nums.data(), local_token_nums.size(), kCPU),
                         lora_mask_buf_,
                         dc_batch_size,
                         pf_batch_size,
@@ -1714,11 +1714,11 @@ void LlamaBatch::Warmup()
                             decoder_output_buf_.slice(0, bsz),
                             block_ptrs_,
                             cu_block_counts_.slice(0, bsz + 1),
-                            Buffer{&input_length, 1, MEMORY_CPU},
-                            Buffer{&input_length, 1, MEMORY_CPU},
+                            Buffer{&input_length, 1, kCPU},
+                            Buffer{&input_length, 1, kCPU},
                             rope_theta_.slice(0, bsz),
                             finished_buf_.slice(0, bsz),
-                            Buffer{local_token_nums.data(), (int)local_token_nums.size(), MEMORY_CPU},
+                            Buffer{local_token_nums.data(), (int)local_token_nums.size(), kCPU},
                             Buffer{},
                             0,
                             bsz,

@@ -68,7 +68,7 @@ void invokeEmbeddingLookup(Ref<Tensor>         out_,
                                                                        dim);
     };
 
-    if (bytesize(out.dtype(), 1) == 2) {
+    if (byte_size(out.dtype()) == byte_size<uint16_t>()) {
         return invoke(uint16_t{});
     }
     TM_CHECK(0) << "not implemented";

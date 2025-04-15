@@ -250,7 +250,7 @@ struct ThreadCommImpl: public HostCommImpl {
     void AllReduce(void* data, int count, DataType dtype, RedOp red_op) override
     {
         const auto reduce    = get_reduce(dtype, red_op);
-        const auto elem_size = bytesize(dtype, 1);
+        const auto elem_size = byte_size(dtype);
         if (n_ranks() == 1) {
             return;
         }

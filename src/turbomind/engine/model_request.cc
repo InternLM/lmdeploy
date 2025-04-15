@@ -79,23 +79,23 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
         inputs_->emplace(k, v);
     }
 
-    add(outputs_, "output_ids", data_type_v<int>, MEMORY_CPU, max_seq_len);
-    add(outputs_, "sequence_length", data_type_v<int>, MEMORY_CPU, 1);
+    add(outputs_, "output_ids", data_type_v<int>, kCPU, max_seq_len);
+    add(outputs_, "sequence_length", data_type_v<int>, kCPU, 1);
 
     if (param.gen_cfg.output_logits) {
         const int len = param.gen_cfg.output_logits == GenerationConfig::kAll ? max_in_out_len : max_out_len;
-        add(outputs_, "logits", data_type_, MEMORY_CPU, len, vocab_size_);
+        add(outputs_, "logits", data_type_, kCPU, len, vocab_size_);
     }
 
     if (param.gen_cfg.output_last_hidden_state) {
         const int len = param.gen_cfg.output_last_hidden_state == GenerationConfig::kAll ? max_in_out_len : max_out_len;
-        add(outputs_, "last_hidden_state", data_type_, MEMORY_CPU, len, hidden_dim_);
+        add(outputs_, "last_hidden_state", data_type_, kCPU, len, hidden_dim_);
     }
 
     if (param.gen_cfg.output_logprobs) {
-        add(outputs_, "logprob_vals", data_type_, MEMORY_CPU, max_out_len, kMaxLogProb);
-        add(outputs_, "logprob_indexes", data_type_v<int>, MEMORY_CPU, max_out_len, kMaxLogProb);
-        add(outputs_, "logprob_nums", data_type_v<int>, MEMORY_CPU, max_out_len);
+        add(outputs_, "logprob_vals", data_type_, kCPU, max_out_len, kMaxLogProb);
+        add(outputs_, "logprob_indexes", data_type_v<int>, kCPU, max_out_len, kMaxLogProb);
+        add(outputs_, "logprob_nums", data_type_v<int>, kCPU, max_out_len);
     }
 
     auto r = std::make_shared<Request>();

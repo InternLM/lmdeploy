@@ -8,40 +8,53 @@
 
 namespace turbomind {
 
-enum class MemoryType : int {
-    MEMORY_CPU,
-    MEMORY_CPU_PINNED,
-    MEMORY_GPU
+enum class DeviceType : int {
+    kCPU,
+    kCPUpinned,
+    kDEVICE
 };
 
-inline constexpr MemoryType MEMORY_CPU        = MemoryType::MEMORY_CPU;
-inline constexpr MemoryType MEMORY_CPU_PINNED = MemoryType::MEMORY_CPU_PINNED;
-inline constexpr MemoryType MEMORY_GPU        = MemoryType::MEMORY_GPU;
+inline constexpr DeviceType kCPU       = DeviceType::kCPU;
+inline constexpr DeviceType kCPUpinned = DeviceType::kCPUpinned;
+inline constexpr DeviceType kDEVICE    = DeviceType::kDEVICE;
+
+constexpr const char* to_string(DeviceType device)
+{
+    switch (device) {
+        case kCPU:
+            return "cpu";
+        case kCPUpinned:
+            return "cpu_pinned";
+        case kDEVICE:
+            return "device";
+    }
+    return "";
+}
+
+inline std::ostream& operator<<(std::ostream& os, DeviceType device)
+{
+    return os << to_string(device);
+}
 
 }  // namespace turbomind
 
 namespace turbomind::core {
 
-struct MemoryLocation {
-    MemoryType type;
+struct Device {
+    DeviceType type;
     int        id;
-
-    MemoryLocation(): MemoryLocation{MEMORY_CPU} {}
-    MemoryLocation(MemoryType type_): type{type_}, id{-1} {}
-    MemoryLocation(MemoryType type_, int device_): type{type_}, id{device_} {}
-
-    friend bool operator==(const MemoryLocation& a, const MemoryLocation& b)
+    Device(): Device{kCPU} {}
+    Device(DeviceType type_): type{type_}, id{-1} {}
+    Device(DeviceType type_, int device_): type{type_}, id{device_} {}
+    friend bool operator==(const Device& a, const Device& b)
     {
         return a.type == b.type && a.id == b.id;
     }
-
-    friend bool operator!=(const MemoryLocation& a, const MemoryLocation& b)
+    friend bool operator!=(const Device& a, const Device& b)
     {
         return !(a == b);
     }
 };
-
-using MemLoc = MemoryLocation;
 
 class AllocatorImpl {
 public:
@@ -54,14 +67,14 @@ public:
     // Returns invalid stream by default
     virtual Stream stream() const noexcept;
 
-    virtual MemoryLocation device() const noexcept = 0;
+    virtual Device device() const noexcept = 0;
 };
 
 class Allocator {
 public:
     Allocator() = default;
 
-    explicit Allocator(MemoryType type);
+    explicit Allocator(DeviceType type);
 
     Allocator(Stream stream, bool use_default_pool);
 
@@ -158,7 +171,7 @@ public:
         return underlying_impl_->stream();
     }
 
-    MemoryLocation device() const noexcept override
+    Device device() const noexcept override
     {
         return underlying_impl_->device();
     }
@@ -193,13 +206,13 @@ private:
 class SimpleAllocator: public AllocatorImpl {
 public:
     template<class Alloc, class Dealloc>
-    static Allocator Create(Alloc&& alloc, Dealloc&& dealloc, MemLoc device)
+    static Allocator Create(Alloc&& alloc, Dealloc&& dealloc, Device device)
     {
         return Allocator{std::make_shared<SimpleAllocator>((Alloc&&)alloc, (Dealloc&&)dealloc, device)};
     }
 
     template<class Alloc, class Dealloc>
-    SimpleAllocator(Alloc&& alloc, Dealloc&& dealloc, MemLoc device):
+    SimpleAllocator(Alloc&& alloc, Dealloc&& dealloc, Device device):
         alloc_{std::move(alloc)}, dealloc_{std ::move(dealloc)}, device_{device}
     {
     }
@@ -214,7 +227,7 @@ public:
         return dealloc_(p, size);
     }
 
-    MemoryLocation device() const noexcept override
+    Device device() const noexcept override
     {
         return device_;
     }
@@ -222,7 +235,7 @@ public:
 private:
     std::function<void*(ssize_t)>       alloc_;
     std::function<void(void*, ssize_t)> dealloc_;
-    MemLoc                              device_;
+    Device                              device_;
 };
 
 }  // namespace turbomind::core

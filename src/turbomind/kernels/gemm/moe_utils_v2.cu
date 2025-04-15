@@ -694,7 +694,7 @@ __global__ void MoeGatherKernel(T*         dst,  // [e*n, d]
 void invokeMoeDispatch(Ref<Tensor> out_, const Tensor& src, const int* f2n, int expert_per_token, cudaStream_t st)
 {
     using T = uint16_t;
-    TM_CHECK_EQ(bytesize(src.dtype(), 1), sizeof(T));
+    TM_CHECK_EQ(byte_size(src.dtype()), byte_size<T>());
     auto& out              = out_.get();
     auto [num, dim]        = src.shapes(0, 1);
     constexpr int threads  = 256;
