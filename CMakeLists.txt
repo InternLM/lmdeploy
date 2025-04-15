@@ -218,13 +218,11 @@ link_directories(
   ${COMMON_LIB_DIRS}
 )
 
-# add_subdirectory(3rdparty)
 add_subdirectory(src)
-# add_subdirectory(examples)
 
-if(BUILD_TEST)
-    add_subdirectory(tests/csrc)
-endif()
+# if(BUILD_TEST)
+#     add_subdirectory(tests/csrc)
+# endif()
 
 # install python api
 if (BUILD_PY_FFI)

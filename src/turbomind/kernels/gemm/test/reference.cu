@@ -25,9 +25,9 @@ MatrixLayout transpose(MatrixLayout x)
 cudaDataType to_cuda_dtype(DataType dtype)
 {
     switch (dtype) {
-        case DataType::F16:
+        case DataType::kF16:
             return CUDA_R_16F;
-        case DataType::BF16:
+        case DataType::kBF16:
             return CUDA_R_16BF;
         default:
             CHECK("unsupported data type" && 0);
