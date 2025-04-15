@@ -6,6 +6,7 @@ import torch
 import torch.distributed as dist
 
 from lmdeploy.pytorch.backends.cuda.token_dispatcher import DeepEPTokenDispatcherLowLatency, TokenDispatcherBuilder
+from lmdeploy.pytorch.distributed import prefill_without_permute
 from lmdeploy.pytorch.kernels.cuda import fused_moe, fused_moe_w8a8
 from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import fused_moe_blocked_fp8
 from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
@@ -20,6 +21,7 @@ from lmdeploy.utils import get_logger
 from ..moe import (FusedMoEBlockedF8Builder, FusedMoEBlockedF8Impl, FusedMoEBuilder, FusedMoEImpl, FusedMoEW8A8Builder,
                    FusedMoEW8A8Impl)
 
+is_prefill_without_permute = prefill_without_permute()
 logger = get_logger('lmdeploy')
 
 
@@ -425,7 +427,8 @@ class FusedMoENormal:
                 up_scale: torch.Tensor,
                 down_weights: torch.Tensor,
                 down_scale: torch.Tensor,
-                expert_list: List[int] = None):
+                expert_list: List[int] = None,
+                dlblas_moe_impl: FusedMoEBlockedF8Impl = None):
         """forward."""
         recv_hidden_states, recv_topk_ids, recv_topk_weights, tokens_per_expert = self.token_dispatcher.dispatch(
             hidden_states,
@@ -506,6 +509,21 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
             self.use_deep_gemm = False
             logger.warning('For higher performance, please install DeepGEMM https://github.com/deepseek-ai/DeepGEMM')
 
+        try:
+            # use dlblas moe block
+            from dlblas.layers.moe.ep_moe import FusedMoEBlockedF8Impl
+            self.dlblas_moe = FusedMoEBlockedF8Impl(ep_size=ep_size,
+                                                    ep_group=ep_group,
+                                                    top_k=top_k,
+                                                    num_experts=num_experts,
+                                                    hidden_dim=hidden_dim,
+                                                    renormalize=renormalize,
+                                                    block_size=block_size,
+                                                    out_dtype=out_dtype)
+        except ImportError:
+            self.dlblas_moe = None
+            logger.warning('For higher performance, please install dlblas https://github.com/DeepLink-org/dlBlas')
+
     def forward(self,
                 hidden_states: torch.Tensor,
                 topk_weights: torch.Tensor,
@@ -516,8 +534,13 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
                 down_scale: torch.Tensor,
                 expert_list: List[int] = None):
         """forward."""
-        topk_weights = _renormalize(topk_weights, self.renormalize)
         step_ctx = get_step_ctx_manager().current_context()
+        # use dlblas moe block
+        if self.dlblas_moe is not None and is_prefill_without_permute:
+            return self.dlblas_moe.forward(hidden_states, topk_weights, topk_ids, gate_up_weights, gate_up_scale,
+                                           down_weights, down_scale, step_ctx.is_decoding, expert_list)
+
+        topk_weights = _renormalize(topk_weights, self.renormalize)
         moe = None
         if step_ctx.is_decoding is False or self.use_deep_gemm is False:
             moe = FusedMoENormal(self.ep_size, self.ep_group, self.num_experts, self.hidden_dim, self.block_size,

@@ -97,6 +97,7 @@ class DistConfig:
     dp_rank: int = 0
     world_size: int = None
     attn_config: 'DistConfig' = None
+    prefill_without_permute: bool = False
 
     def __post_init__(self):
         """post init."""

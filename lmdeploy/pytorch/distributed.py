@@ -29,6 +29,7 @@ class DistContext:
     ep_gpu_group: dist.ProcessGroup = None
     ep_gpu_groups: List[dist.ProcessGroup] = None
     dist_config: DistConfig = None
+    prefill_without_permute: bool = False
 
     @classmethod
     def build(cls, rank: int = 0, dist_config: DistConfig = None, ccl_backend: str = 'nccl'):
@@ -44,6 +45,7 @@ class DistContext:
         ep = dist_config.ep
         world_size = dist_config.world_size
         dp_rank = dist_config.dp_rank
+        prefill_without_permute = dist_config.prefill_without_permute
 
         if world_size == 1:
             return DistContext(dist_config=dist_config)
@@ -104,6 +106,7 @@ class DistContext:
             ep_gpu_group=ep_gpu_group,
             ep_gpu_groups=ep_gpu_groups,
             dist_config=dist_config,
+            prefill_without_permute=prefill_without_permute,
         )
         return context
 
@@ -179,6 +182,11 @@ def get_dp_world_rank():
 def get_ep_world_rank():
     ctx = get_dist_manager().current_context()
     return ctx.ep, ctx.ep_rank
+
+
+def prefill_without_permute():
+    ctx = get_dist_manager().current_context()
+    return ctx.prefill_without_permute
 
 
 def _check_group_device(device: str):

@@ -17,7 +17,6 @@ _buffer_normal = None
 _buffer_low_latency = None
 _buffer_common = None
 
-
 def get_buffer_common(
     group: dist.ProcessGroup,
     num_max_dispatch_tokens_per_rank: int,
