@@ -691,8 +691,7 @@ __global__ void MoeGatherKernel(T*         dst,  // [e*n, d]
     }
 }
 
-void invokeMoeDispatch(
-    core::Ref<core::Tensor> out_, const core::Tensor& src, const int* f2n, int expert_per_token, cudaStream_t st)
+void invokeMoeDispatch(Ref<Tensor> out_, const Tensor& src, const int* f2n, int expert_per_token, cudaStream_t st)
 {
     using T = uint16_t;
     TM_CHECK_EQ(bytesize(src.dtype(), 1), sizeof(T));
@@ -822,14 +821,14 @@ void invokeMoeReduce(T*           dst,
     }
 }
 
-void invokeMoeCombine(core::Ref<core::Tensor> out_,
-                      const core::Tensor&     src,
-                      const float*            scales,
-                      const int*              en2f,
-                      const float*            dst_scales,
-                      int                     experts_per_token,
-                      float                   dst_scale,
-                      cudaStream_t            st)
+void invokeMoeCombine(Ref<Tensor>   out_,
+                      const Tensor& src,
+                      const float*  scales,
+                      const int*    en2f,
+                      const float*  dst_scales,
+                      int           experts_per_token,
+                      float         dst_scale,
+                      cudaStream_t  st)
 {
     auto& out = out_.get();
 

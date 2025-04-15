@@ -2,7 +2,20 @@
 
 #pragma once
 
-#include "src/turbomind/core/tensor.h"
+#include <algorithm>
+#include <climits>
+#include <cstdlib>
+#include <fstream>
+#include <iomanip>
+#include <iterator>
+#include <numeric>
+#include <random>
+#include <type_traits>
+
+#include <thrust/universal_vector.h>
+
+#include "src/turbomind/core/core.h"
+
 #include "src/turbomind/kernels/core/array.h"
 #include "src/turbomind/kernels/core/data_type.h"
 #include "src/turbomind/kernels/core/math.h"
@@ -17,16 +30,6 @@
 #include "src/turbomind/kernels/gemm/test/test_utils.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gemm/utils.h"
-#include <algorithm>
-#include <climits>
-#include <cstdlib>
-#include <fstream>
-#include <iomanip>
-#include <iterator>
-#include <numeric>
-#include <random>
-#include <thrust/universal_vector.h>
-#include <type_traits>
 
 namespace turbomind::gemm {
 
@@ -368,8 +371,8 @@ public:
         c_e_ref_.resize(c_e_.size());
 
         for (int i = 0; i < 10; ++i) {
-            invokeMoeDispatch(core::Tensor{a_e_.data().get(), {top_e * batch_size_, input_dims_}, MEMORY_GPU},
-                              core::Tensor{a_f_.data().get(), {batch_size_, input_dims_}, MEMORY_GPU},
+            invokeMoeDispatch(Tensor{a_e_.data().get(), {top_e * batch_size_, input_dims_}, MEMORY_GPU},
+                              Tensor{a_f_.data().get(), {batch_size_, input_dims_}, MEMORY_GPU},
                               moe_f2n_.data().get(),
                               top_e,
                               stream_);
@@ -514,8 +517,8 @@ public:
             Compare(c_.data().get(), c_ref_.data().get(), dims, dims, bsz, 0);
         }
         else {
-            invokeMoeCombine(core::Tensor{c_.data().get(), {batch_size_, output_dims_}, MEMORY_GPU},
-                             core::Tensor{c_e_.data().get(), {(int)expert_ids_.size(), output_dims_}, MEMORY_GPU},
+            invokeMoeCombine(Tensor{c_.data().get(), {batch_size_, output_dims_}, MEMORY_GPU},
+                             Tensor{c_e_.data().get(), {(int)expert_ids_.size(), output_dims_}, MEMORY_GPU},
                              moe_scales_.data().get(),
                              moe_en2f_.data().get(),
                              nullptr,
@@ -523,8 +526,8 @@ public:
                              0.f,
                              stream_);
 
-            invokeMoeCombine(core::Tensor{c_ref_.data().get(), {batch_size_, output_dims_}, MEMORY_GPU},
-                             core::Tensor{c_e_ref_.data().get(), {(int)expert_ids_.size(), output_dims_}, MEMORY_GPU},
+            invokeMoeCombine(Tensor{c_ref_.data().get(), {batch_size_, output_dims_}, MEMORY_GPU},
+                             Tensor{c_e_ref_.data().get(), {(int)expert_ids_.size(), output_dims_}, MEMORY_GPU},
                              moe_scales_.data().get(),
                              moe_en2f_.data().get(),
                              nullptr,

@@ -15,9 +15,9 @@ public:
     MoeFfnLayer(const ModelParam& model, const MoeParam& param, const EngineParam& engine, const Context& ctx);
 
     struct ForwardParam {
-        core::Tensor        output;
-        core::Tensor        input;
-        core::Tensor        temp;
+        Tensor              output;
+        Tensor              input;
+        Tensor              temp;
         float               scale;
         int                 layer_id;
         const MoeFfnWeight* weight;
@@ -28,7 +28,7 @@ public:
     void Combine(ForwardParam& p);
 
 private:
-    core::Tensor_<float> Gate(const core::Tensor& input, const LlamaDenseWeight& gate);
+    Tensor_<float> Gate(const Tensor& input, const LlamaDenseWeight& gate);
 
     void dump_logits(int token_num, int layer_id, int expert_num);
 
@@ -42,15 +42,15 @@ private:
     std::unique_ptr<LlamaFfnLayer>        expert_ffn_;
     std::unique_ptr<gemm::MoeGemmContext> context_;
 
-    core::Buffer_<int> h_offsets_;
+    Buffer_<int> h_offsets_;
 
-    core::Buffer_<int>   masks_;
-    core::Buffer_<int>   f2n_;
-    core::Buffer_<int>   en2f_;
-    core::Buffer_<float> scales_;
-    core::Buffer_<float> shared_scales_;
-    core::Buffer_<int>   accum_;
-    core::Buffer_<int>   offsets_;
+    Buffer_<int>   masks_;
+    Buffer_<int>   f2n_;
+    Buffer_<int>   en2f_;
+    Buffer_<float> scales_;
+    Buffer_<float> shared_scales_;
+    Buffer_<int>   accum_;
+    Buffer_<int>   offsets_;
 };
 
 }  // namespace turbomind

@@ -39,7 +39,7 @@ public:
 
     void Setup(const std::vector<const Request*>& rs);
 
-    void Forward(core::TensorMap& args);
+    void Forward(TensorMap& args);
 
 private:
     std::vector<std::unique_ptr<BaseDynamicDecodeLayer>> layers_;

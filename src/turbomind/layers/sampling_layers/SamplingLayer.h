@@ -32,14 +32,14 @@ public:
 
     void Setup(const std::vector<const Request*>& rs) override;
 
-    void Forward(core::TensorMap& args) override;
+    void Forward(TensorMap& args) override;
 
 private:
     // host buffer
-    core::Buffer_<int>   kept_;
-    core::Buffer_<int>   top_k_;
-    core::Buffer_<float> top_p_;
-    core::Buffer_<float> min_p_;
+    Buffer_<int>   kept_;
+    Buffer_<int>   top_k_;
+    Buffer_<float> top_p_;
+    Buffer_<float> min_p_;
 
     int   max_topk_;
     int   min_topk_;
@@ -47,15 +47,15 @@ private:
     float max_minp_;
 
     // device buffer
-    core::Buffer_<int>   top_k_buf_;
-    core::Buffer_<float> top_p_buf_;
-    core::Buffer_<float> min_p_buf_;
+    Buffer_<int>   top_k_buf_;
+    Buffer_<float> top_p_buf_;
+    Buffer_<float> min_p_buf_;
 
-    core::Buffer_<uint8_t> topk_ws_;
-    core::Buffer_<uint8_t> topp_ws_;
+    Buffer_<uint8_t> topk_ws_;
+    Buffer_<uint8_t> topp_ws_;
 
-    core::Buffer_<int> indices_;   // sorted indices
-    core::Buffer_<int> kept_buf_;  // kept sample
+    Buffer_<int> indices_;   // sorted indices
+    Buffer_<int> kept_buf_;  // kept sample
 };
 
 }  // namespace turbomind

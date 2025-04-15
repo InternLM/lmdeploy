@@ -47,18 +47,18 @@ void ModelRequest::End(std::function<void(int)> cb, uint64_t session_id)
 
 auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> OutputParam
 {
-    inputs_  = std::make_shared<core::TensorMap>();
-    outputs_ = std::make_shared<core::TensorMap>();
+    inputs_  = std::make_shared<TensorMap>();
+    outputs_ = std::make_shared<TensorMap>();
 
     auto add = [](auto& dest, auto key, auto dtype, auto where, auto shape, auto&&... dims) {
-        core::Layout shape_;
+        Layout shape_;
         if constexpr (std::is_integral_v<decltype(shape)>) {
             shape_ = {shape, dims...};
         }
         else {
             shape_ = {shape.cbegin(), shape.cend()};
         }
-        dest->emplace(key, core::Tensor{shape_, dtype, where});
+        dest->emplace(key, Tensor{shape_, dtype, where});
     };
 
     auto& inputs = *param.tensors;

@@ -32,10 +32,10 @@ namespace turbomind {
 namespace {
 
 template<typename T>
-void init_host_buffer(const core::TensorMap& map, const std::string& key, size_t size, T* dst, T default_value)
+void init_host_buffer(const TensorMap& map, const std::string& key, size_t size, T* dst, T default_value)
 {
-    core::Tensor        empty{};
-    const core::Tensor& src = map.contains(key) ? map.at(key) : empty;
+    Tensor        empty{};
+    const Tensor& src = map.contains(key) ? map.at(key) : empty;
 
     if (src) {
         if (size_t sz = src.size(); sz > size) {
@@ -71,15 +71,15 @@ LogitsProcessorLayer<T>::LogitsProcessorLayer(const BaseParam& param): BaseDynam
 }
 
 template<typename T>
-void LogitsProcessorLayer<T>::Forward(core::TensorMap& args)
+void LogitsProcessorLayer<T>::Forward(TensorMap& args)
 {
     // apply repetition penalty -> ban bad words -> min length penalty -> temperature penalty
     // the order is same with transformers
 
     TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
 
-    core::Tensor_<int> output_ids = args.at("output_ids");
-    core::Tensor_<T>   logits     = args.at("logits");
+    Tensor_<int> output_ids = args.at("output_ids");
+    Tensor_<T>   logits     = args.at("logits");
 
     const auto bsz = logits.shape(0);
 
@@ -88,7 +88,7 @@ void LogitsProcessorLayer<T>::Forward(core::TensorMap& args)
 
     // repetition penalty
     if (step > 1 && repetition_penalty_type_ != RepetitionPenaltyType::None) {
-        core::Buffer_<uint8_t> workspace(bsz * step * (sizeof(int) + sizeof(float)), MEMORY_GPU);
+        Buffer_<uint8_t> workspace(bsz * step * (sizeof(int) + sizeof(float)), MEMORY_GPU);
         invokeBatchApplyRepetitionPenalty(logits.data(),
                                           repetition_penalty_buf_.data(),
                                           (int*)workspace.data(),

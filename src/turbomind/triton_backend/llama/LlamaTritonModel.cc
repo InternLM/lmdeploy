@@ -432,7 +432,7 @@ void LlamaTritonModel::createSharedWeights(int device_id, int rank)
     // }
 }
 
-core::TensorMap LlamaTritonModel::getParams(int device_id, int rank)
+TensorMap LlamaTritonModel::getParams(int device_id, int rank)
 {
     return TM_CHECK_NOTNULL(weights_[rank])->get_parameters();
 }
@@ -479,7 +479,7 @@ void LlamaTritonModel::createEngine(int device_id, int rank)
 
     auto ctx = std::make_unique<Context>(device_id);
 
-    core::ContextGuard guard{ctx->core_stream, ctx->allocator, core::Allocator{MEMORY_CPU_PINNED}};
+    core::ContextGuard guard{ctx->core_stream, ctx->allocator, Allocator{MEMORY_CPU_PINNED}};
 
     ctx->comm = createCommSplits(rank);
 

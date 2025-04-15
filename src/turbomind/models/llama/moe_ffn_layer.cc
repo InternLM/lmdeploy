@@ -48,11 +48,11 @@ MoeFfnLayer::MoeFfnLayer(const ModelParam& model, const MoeParam& param, const E
     shared_scales_ = {max_token_num, MEMORY_GPU};
 }
 
-core::Tensor_<float> MoeFfnLayer::Gate(const core::Tensor& input, const LlamaDenseWeight& gate)
+Tensor_<float> MoeFfnLayer::Gate(const Tensor& input, const LlamaDenseWeight& gate)
 {
     auto& weight = gate.weight;
     TM_CHECK_EQ(input.shape(1), weight.shape(0));
-    core::Tensor_<float> logits{{input.shape(0), weight.shape(1)}, MEMORY_GPU};
+    Tensor_<float> logits{{input.shape(0), weight.shape(1)}, MEMORY_GPU};
     linear_.forward(input, gate, LlamaLinear::kGemm, logits);
     sync_check_cuda_error();
     return logits;
@@ -120,7 +120,7 @@ void MoeFfnLayer::Forward(ForwardParam& p)
             offsets_.data(), h_offsets_.data(), sizeof(int) * (expert_num + 1), cudaMemcpyDefault, stream_));
     }
 
-    p.temp = core::Tensor{{param_.experts_per_token * tokens, hidden_dim_}, p.input.dtype(), p.input.device()};
+    p.temp = Tensor{{param_.experts_per_token * tokens, hidden_dim_}, p.input.dtype(), p.input.device()};
 
     if (param_.method == MoeParam::kNaive) {
 
@@ -147,7 +147,7 @@ void MoeFfnLayer::Forward(ForwardParam& p)
         auto& block = moe.block;
 
         const int    inter_dim = block.is_fused_silu ? inter_size_ : inter_size_ * 2;
-        core::Tensor inter{{tokens * param_.experts_per_token, inter_dim}, p.input.dtype(), p.input.device()};
+        Tensor inter{{tokens * param_.experts_per_token, inter_dim}, p.input.dtype(), p.input.device()};
 
         linear_.forward_moe(inter,
                             p.input,
@@ -180,7 +180,7 @@ void MoeFfnLayer::Combine(ForwardParam& p)
 {
     auto& moe = *p.weight;
 
-    core::Tensor_<float> shared_scales;
+    Tensor_<float> shared_scales;
 
     if (moe.shared_gate.weight) {
         shared_scales = Gate(p.input, moe.shared_gate);

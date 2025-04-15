@@ -21,18 +21,18 @@ void LlamaDenseWeight::emplace(
 
     const auto wbits = bytesize(weight_type, 8);
 
-    weight = core::Tensor({input_dim, output_dim}, weight_type, MEMORY_GPU);
+    weight = Tensor({input_dim, output_dim}, weight_type, MEMORY_GPU);
     register_parameter(wbits < 16 ? "qweight" : "weight", weight);
 
     if (bias) {
-        this->bias = core::Tensor{{output_dim}, data_type, MEMORY_GPU};
+        this->bias = Tensor{{output_dim}, data_type, MEMORY_GPU};
         register_parameter("bias", this->bias);
     }
 
     if (wbits < 16) {
         TM_CHECK(input_dim % group_size == 0) << input_dim << " " << group_size;
-        scales = core::Tensor{{input_dim / group_size, output_dim}, data_type, MEMORY_GPU};
-        zeros  = core::Tensor{{input_dim / group_size, output_dim}, data_type, MEMORY_GPU};
+        scales = Tensor{{input_dim / group_size, output_dim}, data_type, MEMORY_GPU};
+        zeros  = Tensor{{input_dim / group_size, output_dim}, data_type, MEMORY_GPU};
         register_parameter("scales", scales);
         register_parameter("zeros", zeros);
     }
@@ -48,14 +48,14 @@ static void convert_u4(LlamaDenseWeight& dense, bool is_fused_moe, bool use_simt
         get_weight_and_scales_layout(data_type_v<uint4_t>, is_fused_moe, getSMVersion(), use_simt);
 
     if (order_b == kColMajor) {
-        core::Buffer trans{dense.input_dim * dense.output_dim, data_type_v<uint4_t>, MEMORY_GPU};
+        Buffer trans{dense.input_dim * dense.output_dim, data_type_v<uint4_t>, MEMORY_GPU};
         transpose_u4(
             (uint4_t*)trans.raw_data(), (const uint4_t*)dense.weight.raw_data(), dense.input_dim, dense.output_dim, st);
         cudaMemcpyAsync(
             dense.weight.raw_data(), trans.raw_data(), dense.input_dim * dense.output_dim / 2, cudaMemcpyDefault, st);
     }
 
-    core::Buffer_<uint16_t> tmp_w{dense.input_dim * dense.output_dim, MEMORY_GPU};
+    Buffer_<uint16_t> tmp_w{dense.input_dim * dense.output_dim, MEMORY_GPU};
     extend_to_u16(tmp_w.data(), (const uint4_t*)dense.weight.raw_data(), dense.input_dim * dense.output_dim, st);
     sync_check_cuda_error();
 
@@ -78,14 +78,14 @@ static void convert_u4(LlamaDenseWeight& dense, bool is_fused_moe, bool use_simt
 
     const int scale_count = (dense.input_dim / dense.group_size) * dense.output_dim;
 
-    core::Buffer_<half> tmp_q{scale_count * 2, MEMORY_GPU};
+    Buffer_<half> tmp_q{scale_count * 2, MEMORY_GPU};
     fuse_scales_and_zeros(tmp_q.data(), dense.scales.data<half>(), dense.zeros.data<half>(), scale_count, st);
     sync_check_cuda_error();
 
     dense.scales = {};
     dense.zeros  = {};
 
-    dense.scales_zeros = core::Tensor_<half>{{scale_count, 2}, MEMORY_GPU};
+    dense.scales_zeros = Tensor_<half>{{scale_count, 2}, MEMORY_GPU};
 
     MatrixLayout s_desc{
         data_type_v<uint32_t>,
@@ -124,7 +124,7 @@ static void convert_fp(LlamaDenseWeight& dense, bool is_fused_moe, bool use_simt
 
     TM_CHECK(dense.weight.is_contiguous());
 
-    core::Buffer_<uint16_t> tmp{input_dim * output_dim, MEMORY_GPU};
+    Buffer_<uint16_t> tmp{input_dim * output_dim, MEMORY_GPU};
 
     if (order_b == kColMajor) {
         invokeTransposeAxis01(tmp.data(), (uint16_t*)dense.weight.raw_data(), input_dim, output_dim, 1, st);
@@ -195,8 +195,8 @@ LlamaAttentionWeight::LlamaAttentionWeight(int      hidden_dim,
             hidden_dim, (head_num + 2 * kv_head_num) * head_dim / tp_size, data_type, bias, weight_type, group_size);
         register_module("w_qkv", qkv, tp_rank);
         if (qk_norm) {
-            q_a_layernorm  = core::Tensor{{head_dim}, data_type, MEMORY_GPU};
-            kv_a_layernorm = core::Tensor{{head_dim}, data_type, MEMORY_GPU};
+            q_a_layernorm  = Tensor{{head_dim}, data_type, MEMORY_GPU};
+            kv_a_layernorm = Tensor{{head_dim}, data_type, MEMORY_GPU};
             register_parameter("q_norm", q_a_layernorm);
             register_parameter("k_norm", kv_a_layernorm);
         }
@@ -206,7 +206,7 @@ LlamaAttentionWeight::LlamaAttentionWeight(int      hidden_dim,
         if (mla.q_lora_rank) {
             q_a_proj.emplace(hidden_dim, mla.q_lora_rank, data_type, false, weight_type, group_size);
             q_b_proj.emplace(mla.q_lora_rank, head_num * head_dim / tp_size, data_type, false, weight_type, group_size);
-            q_a_layernorm = core::Tensor{{q_b_proj.input_dim}, data_type, MEMORY_GPU};
+            q_a_layernorm = Tensor{{q_b_proj.input_dim}, data_type, MEMORY_GPU};
             register_module("q_a_proj", q_a_proj);
             register_module("q_b_proj", q_b_proj, tp_rank);
             register_parameter("q_a_layernorm", q_a_layernorm);
@@ -223,7 +223,7 @@ LlamaAttentionWeight::LlamaAttentionWeight(int      hidden_dim,
                           weight_type,
                           group_size);
 
-        kv_a_layernorm = core::Tensor{{kv_b_proj.input_dim}, data_type, MEMORY_GPU};
+        kv_a_layernorm = Tensor{{kv_b_proj.input_dim}, data_type, MEMORY_GPU};
         register_module("kv_a_proj", kv_a_proj);
         register_module("kv_b_proj", kv_b_proj, tp_rank);
         register_parameter("kv_a_layernorm", kv_a_layernorm);
@@ -289,9 +289,9 @@ void interleave(LlamaDenseWeight& c, LlamaDenseWeight& a, LlamaDenseWeight& b, D
     auto invoke = [&](auto t) {
         using T = decltype(t);
         if (a.weight_type == data_type_v<uint4_t>) {
-            core::Buffer_<uint8_t> tmp_a{a.weight.size(), MEMORY_GPU};
-            core::Buffer_<uint8_t> tmp_b{b.weight.size(), MEMORY_GPU};
-            core::Buffer_<uint8_t> tmp_c{c.weight.size(), MEMORY_GPU};
+            Buffer_<uint8_t> tmp_a{a.weight.size(), MEMORY_GPU};
+            Buffer_<uint8_t> tmp_b{b.weight.size(), MEMORY_GPU};
+            Buffer_<uint8_t> tmp_c{c.weight.size(), MEMORY_GPU};
 
             extend_to_u8(tmp_a.data(), (const uint4_t*)a.weight.raw_data(), a.output_dim * a.input_dim, st);
             extend_to_u8(tmp_b.data(), (const uint4_t*)b.weight.raw_data(), b.output_dim * b.input_dim, st);
@@ -480,10 +480,10 @@ void MoeFfnWeight::prepare(bool use_simt)
         }
 
         // Dummy tensors to hold the blocked ptrs
-        m.weight = core::Tensor{make_block_ptr(weight_ptrs), {n_expert}, m.weight_type, MEMORY_GPU};
+        m.weight = Tensor{make_block_ptr(weight_ptrs), {n_expert}, m.weight_type, MEMORY_GPU};
         if (!quant_ptrs.empty()) {
             TM_CHECK_EQ(quant_ptrs.size(), n_expert);
-            m.scales_zeros = core::Tensor{make_block_ptr(quant_ptrs), {n_expert}, m.data_type, MEMORY_GPU};
+            m.scales_zeros = Tensor{make_block_ptr(quant_ptrs), {n_expert}, m.data_type, MEMORY_GPU};
         }
 
         m.k_desc.num = m.q_desc.num = experts.size();

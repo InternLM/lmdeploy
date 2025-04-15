@@ -24,7 +24,7 @@
 
 namespace turbomind {
 
-void LlamaFfnLayer::activation(core::Tensor& gating, core::Tensor& inter, cudaStream_t stream)
+void LlamaFfnLayer::activation(Tensor& gating, Tensor& inter, cudaStream_t stream)
 {
     // Code for dispatching activation types
     invokeGenericActivation_v3<SiluActivation>(gating, inter, stream);
@@ -42,8 +42,8 @@ void LlamaFfnLayer::forward(ForwardParam param)
 
     const auto stream = core::Context::stream().handle();
 
-    core::Tensor gating;
-    core::Tensor inter;
+    Tensor gating;
+    Tensor inter;
 
     if (mlp.fused_gating_intermediate.weight) {
         const auto type = mlp.is_fused_silu ? LlamaLinear::kFusedSiluFfn : LlamaLinear::kGemm;

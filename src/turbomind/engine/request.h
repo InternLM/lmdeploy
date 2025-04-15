@@ -10,7 +10,7 @@
 #include <memory>
 #include <ostream>
 
-#include "src/turbomind/core/tensor.h"
+#include "src/turbomind/core/core.h"
 
 namespace turbomind {
 
@@ -119,11 +119,11 @@ struct Request {
     bool stream_output;
 
     // reference to IO tensors
-    core::TensorMap inputs;
-    core::TensorMap outputs;
+    TensorMap inputs;
+    TensorMap outputs;
     // fast path for accessing common output buffers
-    core::Tensor_<int> output_ids;
-    core::Tensor_<int> sequence_length;
+    Tensor_<int> output_ids;
+    Tensor_<int> sequence_length;
 
     std::function<void(int)> end_cb;
 

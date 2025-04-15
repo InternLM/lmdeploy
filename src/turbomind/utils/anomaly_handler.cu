@@ -393,7 +393,7 @@ template void AnomalyHandler::FixLogits(half*, int, int);
 template void AnomalyHandler::FixLogits(__nv_bfloat16*, int, int);
 #endif
 
-void DebugTensor(core::Tensor& tensor, const std::string& key, int level)
+void DebugTensor(Tensor& tensor, const std::string& key, int level)
 {
     auto invoke = [&](auto t) {
         using T = decltype(t);

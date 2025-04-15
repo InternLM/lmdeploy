@@ -19,7 +19,7 @@
 
 #pragma once
 
-#include "src/turbomind/core/tensor.h"
+#include "src/turbomind/core/core.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/context.h"
@@ -34,8 +34,8 @@ public:
     }
 
     struct ForwardParam {
-        core::Tensor          input;
-        core::Tensor          output;
+        Tensor                input;
+        Tensor                output;
         const LlamaFfnWeight* weights;
         int                   layer_id;
     };
@@ -43,7 +43,7 @@ public:
     void forward(ForwardParam param);
 
 private:
-    void activation(core::Tensor& gating, core::Tensor& inter, cudaStream_t stream);
+    void activation(Tensor& gating, Tensor& inter, cudaStream_t stream);
 
 private:
     const size_t hidden_units_;

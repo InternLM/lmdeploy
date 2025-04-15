@@ -4,7 +4,7 @@
 
 #include <memory>
 
-#include "src/turbomind/core/tensor.h"
+#include "src/turbomind/core/core.h"
 #include "src/turbomind/engine/gateway.h"
 
 namespace turbomind {
@@ -22,7 +22,7 @@ public:
     void End(std::function<void(int)> cb, uint64_t session_id);
 
     struct InputParam {
-        std::shared_ptr<core::TensorMap> tensors;
+        std::shared_ptr<TensorMap> tensors;
 
         SessionParam     session;
         GenerationConfig gen_cfg;
@@ -31,7 +31,7 @@ public:
     };
 
     struct OutputParam {
-        std::shared_ptr<core::TensorMap>    tensors;
+        std::shared_ptr<TensorMap>    tensors;
         std::shared_ptr<AtomicRequestState> state;
     };
 
@@ -50,8 +50,8 @@ protected:
 
     std::weak_ptr<Request> request_;
 
-    std::shared_ptr<core::TensorMap> inputs_;
-    std::shared_ptr<core::TensorMap> outputs_;
+    std::shared_ptr<TensorMap> inputs_;
+    std::shared_ptr<TensorMap> outputs_;
 };
 
 }  // namespace turbomind

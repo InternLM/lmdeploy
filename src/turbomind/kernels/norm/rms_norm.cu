@@ -84,7 +84,7 @@ __global__ void RMSNorm(T*       dst,
 
 }  // namespace kernel
 
-void invokeRMSNorm(core::Tensor& out, const core::Tensor& x, const core::Tensor& w, float eps, cudaStream_t st)
+void invokeRMSNorm(Tensor& out, const Tensor& x, const Tensor& w, float eps, cudaStream_t st)
 {
     TM_CHECK(x.ndim() == 2);
     TM_CHECK(out.shape() == x.shape());
@@ -214,7 +214,7 @@ void invokeQkRMSNorm(void*        data,
     TM_DISPATCH_PRIMARY_DTYPES(dtype, invoke);
 }
 
-void invokeRMSNormQK(core::Tensor& x, const core::Tensor& w, float eps, cudaStream_t st)
+void invokeRMSNormQK(Tensor& x, const Tensor& w, float eps, cudaStream_t st)
 {
     TM_CHECK(x.ndim() == 3);
 

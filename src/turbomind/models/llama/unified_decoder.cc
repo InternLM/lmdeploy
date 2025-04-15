@@ -50,14 +50,14 @@ UnifiedDecoder::UnifiedDecoder(const ModelParam&     model,
     }
 }
 
-void UnifiedDecoder::AllreduceResidualRMSnorm(core::Tensor&       hidden_states,
-                                              core::Tensor&       residual,
-                                              const core::Tensor& bias,
-                                              const core::Tensor& weight,
-                                              int                 token_num,
-                                              int                 group0,
-                                              int                 group1,
-                                              const int*          local_token_nums)
+void UnifiedDecoder::AllreduceResidualRMSnorm(Tensor&       hidden_states,
+                                              Tensor&       residual,
+                                              const Tensor& bias,
+                                              const Tensor& weight,
+                                              int           token_num,
+                                              int           group0,
+                                              int           group1,
+                                              const int*    local_token_nums)
 {
     const auto dtype = hidden_states.dtype();
     if (0) {}
@@ -102,7 +102,7 @@ void UnifiedDecoder::AllreduceResidualRMSnorm(core::Tensor&       hidden_states,
     }
 }
 
-void UnifiedDecoder::Forward(core::TensorMap& args, const std::vector<WeightType*>& weights)
+void UnifiedDecoder::Forward(TensorMap& args, const std::vector<WeightType*>& weights)
 {
     /**
      * input tensors:
@@ -128,12 +128,12 @@ void UnifiedDecoder::Forward(core::TensorMap& args, const std::vector<WeightType
 
     constexpr auto device = MEMORY_GPU;
 
-    core::Tensor_<int> local_token_nums = args.at("local_token_nums");
+    Tensor_<int> local_token_nums = args.at("local_token_nums");
 
-    core::Tensor local_residual       = args.at("decoder_input");
-    core::Tensor global_hidden_states = args.at("decoder_output");
+    Tensor local_residual       = args.at("decoder_input");
+    Tensor global_hidden_states = args.at("decoder_output");
 
-    core::Tensor local_hidden_states = global_hidden_states;
+    Tensor local_hidden_states = global_hidden_states;
 
     const auto global_token_num = global_hidden_states.shape(0);
     const auto local_token_num  = local_residual.shape(0);
@@ -252,7 +252,7 @@ void UnifiedDecoder::Forward(core::TensorMap& args, const std::vector<WeightType
         // TM_DEBUG_RAW(last_token_hidden_units + decode_num * hidden_units_, prefil_num * hidden_units_, "pf_out", 2);
     }
 
-    core::Buffer out(
+    Buffer out(
         (void*)last_token_hidden_units, (decode_num + prefil_num) * hidden_units_, local_residual.dtype(), MEMORY_GPU);
 
     TM_DEBUG_TENSOR(out, "out", 1);

@@ -4,6 +4,8 @@
 
 #include <curand_kernel.h>
 
+#include "src/turbomind/core/core.h"
+
 #include "src/turbomind/engine/gateway.h"
 #include "src/turbomind/engine/request.h"
 
@@ -16,19 +18,15 @@
 
 namespace turbomind {
 
-using core::Buffer;
-using core::Buffer_;
-using core::ssize_t;
-
 struct BatchState {
 
     Buffer_<int>  h_prompt_length;  // history + input, ignore generated
     Buffer_<int>  h_context_length;
     Buffer_<bool> h_finished;
 
-    core::Tensor_<uint8_t> curand_state;  // [n, sizeof(curandState_t)]
+    Tensor_<uint8_t> curand_state;  // [n, sizeof(curandState_t)]
 
-    core::Tensor_<int> output_ids;  // output ids in [B, S]
+    Tensor_<int> output_ids;  // output ids in [B, S]
 
     Buffer_<float> h_rope_theta;
 
@@ -96,11 +94,11 @@ public:
 
     [[nodiscard]] Signal Interrupt(int index, bool force_stop = false, bool force_end = false);
 
-    void ComputeAndOutputLogits(const core::Tensor& hidden_states, int first, int last);
+    void ComputeAndOutputLogits(const Tensor& hidden_states, int first, int last);
 
-    void OutputLogits(const core::Tensor& logits, int first, int last, GenerationConfig::OutType out_type);
+    void OutputLogits(const Tensor& logits, int first, int last, GenerationConfig::OutType out_type);
 
-    void OutputLastHiddenState(const core::Tensor& hidden_states, int first, int last);
+    void OutputLastHiddenState(const Tensor& hidden_states, int first, int last);
 
     explicit LlamaBatch(DataType                 data_type,
                         const EngineParam&       param,
@@ -212,7 +210,7 @@ private:
 
     Communicators& comm_;
 
-    core::Allocator symm_alloc_;
+    Allocator symm_alloc_;
 
     ///////////////////////////////////////////////////////////////////
     // k/v cache block buffers
@@ -221,10 +219,10 @@ private:
 
     ////////////////////////////////////////////////////////////////////
     // context decoding temp buffers
-    core::Tensor symm_hidden_states_buf_;
-    core::Tensor symm_logits_buf_;
+    Tensor symm_hidden_states_buf_;
+    Tensor symm_logits_buf_;
 
-    core::Tensor decoder_output_buf_;
+    Tensor decoder_output_buf_;
 
     Buffer_<int> input_ids_buf_;
 
@@ -262,8 +260,8 @@ private:
     Buffer_<uint64_t> h_random_seed_;
     Buffer_<uint64_t> d_random_seed_;
 
-    core::Tensor_<uint8_t> h_curand_state_;  // [n, sizeof(curandState_t)]
-    core::Tensor_<uint8_t> d_curand_state_;
+    Tensor_<uint8_t> h_curand_state_;  // [n, sizeof(curandState_t)]
+    Tensor_<uint8_t> d_curand_state_;
 
     std::array<BatchState, 3> states_{};
 

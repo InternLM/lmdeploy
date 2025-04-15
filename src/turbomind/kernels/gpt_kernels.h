@@ -20,8 +20,7 @@
 #include <cuda_runtime.h>
 #include <unordered_map>
 
-#include "src/turbomind/core/buffer.h"
-#include "src/turbomind/core/tensor.h"
+#include "src/turbomind/core/core.h"
 #include "src/turbomind/utils/memory_utils.h"
 
 namespace turbomind {
@@ -240,9 +239,9 @@ void invokeTranspose2D(T* dst, const T* src, int rows, int cols, cudaStream_t st
     }
 }
 
-void invokeEmbeddingLookup(core::Ref<core::Tensor>   out_,
-                           const core::Buffer_<int>& token_ids,
-                           const core::Tensor&       embedding_table,
-                           cudaStream_t              st);
+void invokeEmbeddingLookup(Ref<Tensor>         out_,
+                           const Buffer_<int>& token_ids,
+                           const Tensor&       embedding_table,
+                           cudaStream_t        st);
 
 }  // namespace turbomind

@@ -61,8 +61,8 @@ private:
                          bool*            have_embeddings);
 
     void Forward(Buffer_<int>     input_ids,
-                 core::Tensor     hidden_states_out,
-                 core::Tensor     decoder_out,
+                 Tensor           hidden_states_out,
+                 Tensor           decoder_out,
                  Buffer           kv_block_ptrs,
                  Buffer           cu_block_nums,
                  Buffer_<int>     h_input_length,
@@ -75,22 +75,22 @@ private:
                  int              prefil_num,
                  const Sequence** sequences);
 
-    core::Tensor postDecodeEmbedding(const core::Tensor& features, Buffer local_logits);
+    Tensor postDecodeEmbedding(const Tensor& features, Buffer local_logits);
 
-    void dynamicDecode(Buffer       token_ids,
-                       Buffer       finished,
-                       Buffer       sequence_length,
-                       core::Tensor curand_state,
-                       core::Tensor logits,
-                       Buffer       seq_limit_len,
-                       Buffer       init_context_length,
-                       Buffer       context_length,
-                       Buffer       prompt_length,
-                       Buffer       sampled_logprobs,  // <- indicator
-                       Buffer       sampled_indexes,
-                       Buffer       sampled_nums,
-                       int          step,
-                       int          max_context_len);
+    void dynamicDecode(Buffer token_ids,
+                       Buffer finished,
+                       Buffer sequence_length,
+                       Tensor curand_state,
+                       Tensor logits,
+                       Buffer seq_limit_len,
+                       Buffer init_context_length,
+                       Buffer context_length,
+                       Buffer prompt_length,
+                       Buffer sampled_logprobs,  // <- indicator
+                       Buffer sampled_indexes,
+                       Buffer sampled_nums,
+                       int    step,
+                       int    max_context_len);
 
 private:
     friend class LlamaBatch;

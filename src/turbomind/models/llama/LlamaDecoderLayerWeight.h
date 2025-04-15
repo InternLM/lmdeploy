@@ -20,6 +20,8 @@
 
 #pragma once
 
+#include "src/turbomind/core/core.h"
+
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/llama_params.h"
 
@@ -42,8 +44,8 @@ public:
 
     void prepare(const cudaDeviceProp& prop, cudaStream_t st);
 
-    core::Tensor self_attn_norm;
-    core::Tensor ffn_norm;
+    Tensor self_attn_norm;
+    Tensor ffn_norm;
 
     std::unique_ptr<LlamaAttentionWeight> self_attn_weights;
 

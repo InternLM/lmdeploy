@@ -878,8 +878,8 @@ LlamaBatch::LlamaBatch(DataType                 data_type,
     incoming_ = &states_[2];
 
     symm_alloc_ = core::SimpleAllocator::Create([this](ssize_t size) { return SymmAlloc(size, true); },
-                                                [this](void* p, ssize_t size) { return SymmFree(p, size, true); },
-                                                MEMORY_GPU);
+                                          [this](void* p, ssize_t size) { return SymmFree(p, size, true); },
+                                          MEMORY_GPU);
 
     AllocSymmBuffers();
 
@@ -939,7 +939,7 @@ void LlamaBatch::InitializeSampling(const GenerationState& g)
     sync_check_cuda_error();
 }
 
-void LlamaBatch::ComputeAndOutputLogits(const core::Tensor& hidden_states, int first, int last)
+void LlamaBatch::ComputeAndOutputLogits(const Tensor& hidden_states, int first, int last)
 {
     auto enable = [&] {
         for (int i = first; i < last; ++i) {
@@ -980,7 +980,7 @@ void LlamaBatch::ComputeAndOutputLogits(const core::Tensor& hidden_states, int f
     }
 }
 
-void LlamaBatch::OutputLogits(const core::Tensor& logits, int first, int last, GenerationConfig::OutType out_type)
+void LlamaBatch::OutputLogits(const Tensor& logits, int first, int last, GenerationConfig::OutType out_type)
 {
     const auto& src_buf   = logits.buffer();
     const auto  elem_size = bytesize(logits.dtype(), 1);
@@ -1046,7 +1046,7 @@ void LlamaBatch::OutputLogits(const core::Tensor& logits, int first, int last, G
     }
 }
 
-void LlamaBatch::OutputLastHiddenState(const core::Tensor& hidden_states, int first, int last)
+void LlamaBatch::OutputLastHiddenState(const Tensor& hidden_states, int first, int last)
 {
     const auto& src_buf   = hidden_states.buffer();
     const auto  data_type = src_buf.dtype();

@@ -5,7 +5,7 @@
 #include <istream>
 #include <ostream>
 
-#include "src/turbomind/core/tensor.h"
+#include "src/turbomind/core/core.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 
 namespace turbomind {
@@ -20,13 +20,13 @@ public:
 
     explicit LlamaLinear(cudaStream_t stream);
 
-    core::Tensor forward(const core::Tensor&         input,
-                         const LlamaDenseWeight&     weight,
-                         Type                        type   = kGemm,
-                         std::optional<core::Tensor> output = {});
+    Tensor forward(const Tensor&           input,  //
+                   const LlamaDenseWeight& weight,
+                   Type                    type   = kGemm,
+                   std::optional<Tensor>   output = {});
 
-    void forward_moe(core::Tensor&           output,
-                     const core::Tensor&     input,
+    void forward_moe(Tensor&                 output,
+                     const Tensor&           input,
                      const int*              indexes,
                      const int*              offsets,
                      const LlamaDenseWeight& weight,

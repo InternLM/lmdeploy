@@ -33,31 +33,31 @@ public:
 
     void Setup(const std::vector<const Request*>& rs) override;
 
-    void Forward(core::TensorMap& args) override;
+    void Forward(TensorMap& args) override;
 
 private:
     // repetition penalty type
     RepetitionPenaltyType repetition_penalty_type_ = RepetitionPenaltyType::None;
 
     // host buffer
-    core::Buffer_<float> repetition_penalty_;
-    core::Buffer_<int>   min_lengths_;
-    core::Buffer_<float> temperature_;
-    core::Buffer_<int>   bad_words_;
-    core::Buffer_<int>   end_ids_;
+    Buffer_<float> repetition_penalty_;
+    Buffer_<int>   min_lengths_;
+    Buffer_<float> temperature_;
+    Buffer_<int>   bad_words_;
+    Buffer_<int>   end_ids_;
 
     std::vector<int> context_length_;
     std::vector<int> prompt_length_;
 
     // device buffer
-    core::Buffer_<float> repetition_penalty_buf_;
-    core::Buffer_<int>   min_lengths_buf_;
-    core::Buffer_<float> temperature_buf_;
-    core::Buffer_<int>   bad_words_buf_;
-    core::Buffer_<int>   end_ids_buf_;
+    Buffer_<float> repetition_penalty_buf_;
+    Buffer_<int>   min_lengths_buf_;
+    Buffer_<float> temperature_buf_;
+    Buffer_<int>   bad_words_buf_;
+    Buffer_<int>   end_ids_buf_;
 
-    core::Tensor_<int> bad_words_ten_;
-    core::Tensor_<int> end_ids_ten_;
+    Tensor_<int> bad_words_ten_;
+    Tensor_<int> end_ids_ten_;
 };
 
 }  // namespace turbomind

@@ -49,7 +49,7 @@ public:
 
     void createSharedWeights(int deviceId, int rank);
 
-    core::TensorMap getParams(int deviceId, int rank);
+    TensorMap getParams(int deviceId, int rank);
 
     void processWeights(int deviceId, int rank);
 

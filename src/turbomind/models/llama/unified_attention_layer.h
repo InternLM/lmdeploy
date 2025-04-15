@@ -23,7 +23,7 @@
 
 #include <cuda_runtime.h>
 
-#include "src/turbomind/core/tensor.h"
+#include "src/turbomind/core/core.h"
 #include "src/turbomind/kernels/gemm/test/test_utils.h"
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
@@ -37,7 +37,7 @@ namespace attention {
 
 struct ForwardParam;
 
-void Initialize(ForwardParam& p, core::TensorMap& args, const core::Tensor& input, core::Tensor& output);
+void Initialize(ForwardParam& p, TensorMap& args, const Tensor& input, Tensor& output);
 
 void SetLayer(ForwardParam& p, const LlamaAttentionWeight* weights, int layer_id);
 
@@ -69,13 +69,13 @@ public:
     void forward(ForwardParam& param);
 
 private:
-    core::Tensor forward_mla(const core::Tensor& hidden_state, const WeightType& weights);
+    Tensor forward_mla(const Tensor& hidden_state, const WeightType& weights);
 
     /// TODO: dropping the `T` here requires deep refactor of attention dispatch
     template<class T>
-    core::Tensor core_attention(core::Tensor& qkv, const ForwardParam& p, const WeightType& weights);
+    Tensor core_attention(Tensor& qkv, const ForwardParam& p, const WeightType& weights);
 
-    void qk_norm(core::Tensor& qkv, const WeightType& weights);
+    void qk_norm(Tensor& qkv, const WeightType& weights);
 
 private:
     const int head_num_;
@@ -104,11 +104,11 @@ private:
 
     RopeKernelParam rope_param_{};
 
-    core::Tensor_<float> partial_M_;
-    core::Tensor_<float> partial_L_;
-    core::Tensor_<float> partial_O_;
-    core::Tensor_<int>   split_cnt_;
-    core::Tensor_<int>   barriers_;  // always zero
+    Tensor_<float> partial_M_;
+    Tensor_<float> partial_L_;
+    Tensor_<float> partial_O_;
+    Tensor_<int>   split_cnt_;
+    Tensor_<int>   barriers_;  // always zero
 };
 
 }  // namespace turbomind

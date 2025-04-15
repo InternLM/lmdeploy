@@ -19,15 +19,11 @@
 
 #pragma once
 
-#include "src/turbomind/core/buffer.h"
+#include "src/turbomind/core/core.h"
 #include "src/turbomind/core/module.h"
-#include "src/turbomind/core/tensor.h"
 
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/models/llama/llama_params.h"
-#include "src/turbomind/utils/cuda_utils.h"
-#include "src/turbomind/utils/memory_utils.h"
-#include <cuda_bf16.h>
 
 namespace turbomind {
 
@@ -74,13 +70,13 @@ struct LlamaDenseWeight: public core::Module {
     DataType data_type;
     DataType weight_type;
 
-    core::Tensor weight;
-    core::Tensor bias;
+    Tensor weight;
+    Tensor bias;
 
-    core::Tensor scales;
-    core::Tensor zeros;
+    Tensor scales;
+    Tensor zeros;
 
-    core::Tensor scales_zeros;
+    Tensor scales_zeros;
 
     LoraWeight lora;
 
@@ -116,8 +112,8 @@ struct LlamaAttentionWeight: public core::Module {
     LlamaDenseWeight kv_a_proj;
     LlamaDenseWeight kv_b_proj;
 
-    core::Tensor q_a_layernorm;
-    core::Tensor kv_a_layernorm;
+    Tensor q_a_layernorm;
+    Tensor kv_a_layernorm;
 };
 
 struct LlamaFfnWeight: core::Module {

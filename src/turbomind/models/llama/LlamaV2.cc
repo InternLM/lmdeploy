@@ -24,7 +24,7 @@
 #include <memory>
 
 #include "src/turbomind/comm/device_comm.h"
-#include "src/turbomind/core/buffer.h"
+#include "src/turbomind/core/core.h"
 #include "src/turbomind/macro.h"
 
 #include "src/turbomind/models/llama/LlamaLinear.h"
@@ -154,8 +154,8 @@ void LlamaV2::updateEmbedding(char*            decoder_input,
 }
 
 void LlamaV2::Forward(Buffer_<int>     input_ids,
-                      core::Tensor     hidden_states_out,
-                      core::Tensor     decoder_out,
+                      Tensor           hidden_states_out,
+                      Tensor           decoder_out,
                       Buffer           kv_block_ptrs,
                       Buffer           cu_block_nums,
                       Buffer_<int>     h_input_length,
@@ -170,7 +170,7 @@ void LlamaV2::Forward(Buffer_<int>     input_ids,
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
-    core::Tensor input_embeds;
+    Tensor input_embeds;
 
     const int token_num = input_ids.size();
 
@@ -178,15 +178,15 @@ void LlamaV2::Forward(Buffer_<int>     input_ids,
         const auto& embedding_table = weights_->pre_decoder_embedding.weight;
         TM_CHECK_EQ(embedding_table.shape(1) * tp_size_, hidden_units_);
 
-        input_embeds = core::Tensor{{token_num, (int)hidden_units_}, dtype_, MEMORY_GPU};
+        input_embeds = Tensor{{token_num, (int)hidden_units_}, dtype_, MEMORY_GPU};
 
         if (tp_size_ == 1) {
             invokeEmbeddingLookup(input_embeds, input_ids, embedding_table, stream_);
             sync_check_cuda_error();
         }
         else if (use_allgather_2d_) {
-            const auto   local_hidden_units = embedding_table.shape(1);
-            core::Tensor temp{hidden_states_out.buffer(), {token_num, tp_size_, local_hidden_units}};
+            const auto local_hidden_units = embedding_table.shape(1);
+            Tensor     temp{hidden_states_out.buffer(), {token_num, tp_size_, local_hidden_units}};
 
             auto local = temp.slice({0, tp_rank_, 0}, {-1, 1, -1}).squeeze(1);
 
@@ -208,8 +208,8 @@ void LlamaV2::Forward(Buffer_<int>     input_ids,
             Copy(temp.buffer(), input_embeds.buffer());
         }
         else {
-            const auto   local_hidden_units = embedding_table.shape(1);
-            core::Tensor temp{hidden_states_out.buffer(), {tp_size_, token_num, local_hidden_units}};
+            const auto local_hidden_units = embedding_table.shape(1);
+            Tensor     temp{hidden_states_out.buffer(), {tp_size_, token_num, local_hidden_units}};
 
             auto local = temp.slice(tp_rank_).squeeze(0);
 
@@ -246,24 +246,24 @@ void LlamaV2::Forward(Buffer_<int>     input_ids,
         sync_check_cuda_error();
     }
 
-    core::TensorMap args{{"decoder_input", input_embeds},
-                         {"decoder_output", hidden_states_out.view({-1, (int)hidden_units_}).borrow()},
-                         {"last_token_hidden_units", decoder_out},
-                         {"output_norm_weight", weights_->output_norm_weight},
-                         {"h_q_len", h_input_length},
-                         {"h_k_len", h_context_length},
-                         {"finished", finished},
-                         {"decode_num", Buffer{&decode_num, 1, MEMORY_CPU}},
-                         {"prefil_num", Buffer{&prefil_num, 1, MEMORY_CPU}},
-                         {"rope_base", rope_base},
-                         {"cu_block_nums", cu_block_nums},
-                         {"kv_block_ptrs", kv_block_ptrs},
-                         {"local_token_nums", local_token_nums}};
+    TensorMap args{{"decoder_input", input_embeds},
+                   {"decoder_output", hidden_states_out.view({-1, (int)hidden_units_}).borrow()},
+                   {"last_token_hidden_units", decoder_out},
+                   {"output_norm_weight", weights_->output_norm_weight},
+                   {"h_q_len", h_input_length},
+                   {"h_k_len", h_context_length},
+                   {"finished", finished},
+                   {"decode_num", Buffer{&decode_num, 1, MEMORY_CPU}},
+                   {"prefil_num", Buffer{&prefil_num, 1, MEMORY_CPU}},
+                   {"rope_base", rope_base},
+                   {"cu_block_nums", cu_block_nums},
+                   {"kv_block_ptrs", kv_block_ptrs},
+                   {"local_token_nums", local_token_nums}};
 
     unified_decoder_->Forward(args, weights_->decoder_layer_weights);
 }
 
-core::Tensor LlamaV2::postDecodeEmbedding(const core::Tensor& features, Buffer local_logits)
+Tensor LlamaV2::postDecodeEmbedding(const Tensor& features, Buffer local_logits)
 {
     NvtxScope scope("postDecodeEmbedding");
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
@@ -274,7 +274,7 @@ core::Tensor LlamaV2::postDecodeEmbedding(const core::Tensor& features, Buffer l
     const int local_vocab_size = vocab_size_padded_ / tp_size_;
 
     if (tp_size_ == 1) {
-        core::Tensor logits{local_logits, {bsz, (int)vocab_size_padded_}};
+        Tensor logits{local_logits, {bsz, (int)vocab_size_padded_}};
         linear_.forward(features, weights_->post_decoder_embedding, LlamaLinear::kGemm, logits);
         sync_check_cuda_error();
 
@@ -282,8 +282,8 @@ core::Tensor LlamaV2::postDecodeEmbedding(const core::Tensor& features, Buffer l
         return logits;
     }
     else if (use_allgather_2d_) {
-        core::Tensor logits{local_logits, {bsz, tp_size_, local_vocab_size}};
-        core::Tensor local = logits.slice({0, tp_rank_, 0}, {-1, 1, -1});
+        Tensor logits{local_logits, {bsz, tp_size_, local_vocab_size}};
+        Tensor local = logits.slice({0, tp_rank_, 0}, {-1, 1, -1});
         linear_.forward(features, weights_->post_decoder_embedding, LlamaLinear::kGemm, local.squeeze(1));
         sync_check_cuda_error();
         comm_->d_comm->AllGather2D(local.raw_data(),
@@ -300,14 +300,14 @@ core::Tensor LlamaV2::postDecodeEmbedding(const core::Tensor& features, Buffer l
         return logits.view({bsz, -1});
     }
     else {
-        core::Tensor logits{local_logits, {tp_size_, bsz, local_vocab_size}};
-        core::Tensor local = logits.slice({tp_rank_, 0, 0}, {1, -1, -1});
+        Tensor logits{local_logits, {tp_size_, bsz, local_vocab_size}};
+        Tensor local = logits.slice({tp_rank_, 0, 0}, {1, -1, -1});
         linear_.forward(features, weights_->post_decoder_embedding, LlamaLinear::kGemm, local.squeeze(0));
         sync_check_cuda_error();
         comm_->d_comm->AllGather(
             local.raw_data(), logits.raw_data(), local.size(), local.dtype(), comm_->d_tp_group, stream_);
         sync_check_cuda_error();
-        core::Tensor out{{bsz, (int)vocab_size_padded_}, features.dtype(), features.device()};
+        Tensor out{{bsz, (int)vocab_size_padded_}, features.dtype(), features.device()};
         invokeTransposeAxis01(
             (uint16_t*)out.raw_data(), (uint16_t*)logits.raw_data(), tp_size_, bsz, local_vocab_size, stream_);
         sync_check_cuda_error();
@@ -315,24 +315,24 @@ core::Tensor LlamaV2::postDecodeEmbedding(const core::Tensor& features, Buffer l
     }
 }
 
-void LlamaV2::dynamicDecode(Buffer       token_ids,
-                            Buffer       finished,
-                            Buffer       sequence_length,
-                            core::Tensor curand_state,
-                            core::Tensor logits,
-                            Buffer       seq_limit_len,
-                            Buffer       init_context_length,
-                            Buffer       context_length,
-                            Buffer       prompt_length,
-                            Buffer       sampled_logprobs,
-                            Buffer       sampled_indexes,
-                            Buffer       sampled_nums,
-                            int          step,
-                            int          max_context_len)
+void LlamaV2::dynamicDecode(Buffer token_ids,
+                            Buffer finished,
+                            Buffer sequence_length,
+                            Tensor curand_state,
+                            Tensor logits,
+                            Buffer seq_limit_len,
+                            Buffer init_context_length,
+                            Buffer context_length,
+                            Buffer prompt_length,
+                            Buffer sampled_logprobs,
+                            Buffer sampled_indexes,
+                            Buffer sampled_nums,
+                            int    step,
+                            int    max_context_len)
 {
     NvtxScope scope("dynamicDecode");
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
-    core::TensorMap args{
+    TensorMap args{
         {"logits", logits},
         {"step", Buffer{&step, 1, MEMORY_CPU}},
         {"max_input_length", Buffer{&max_context_len, 1, MEMORY_CPU}},

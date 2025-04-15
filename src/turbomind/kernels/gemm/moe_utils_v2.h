@@ -5,7 +5,7 @@
 #include <random>
 #include <vector>
 
-#include "src/turbomind/core/tensor.h"
+#include "src/turbomind/core/core.h"
 
 namespace turbomind {
 
@@ -28,20 +28,20 @@ void invokeMoeGate_V2(int*         f2n,
                       float        routed_scale,
                       cudaStream_t st);
 
-void invokeMoeDispatch(core::Ref<core::Tensor> out_,  //
-                       const core::Tensor&     src,
-                       const int*              f2n,
-                       int                     expert_per_token,
-                       cudaStream_t            st);
+void invokeMoeDispatch(Ref<Tensor>   out_,  //
+                       const Tensor& src,
+                       const int*    f2n,
+                       int           expert_per_token,
+                       cudaStream_t  st);
 
-void invokeMoeCombine(core::Ref<core::Tensor> out_,
-                      const core::Tensor&     src,
-                      const float*            scales,
-                      const int*              en2f,
-                      const float*            dst_scales,
-                      int                     experts_per_token,
-                      float                   dst_scale,
-                      cudaStream_t            st);
+void invokeMoeCombine(Ref<Tensor>   out_,
+                      const Tensor& src,
+                      const float*  scales,
+                      const int*    en2f,
+                      const float*  dst_scales,
+                      int           experts_per_token,
+                      float         dst_scale,
+                      cudaStream_t  st);
 
 void invokeMoeSoftmaxMaskTopKGroups(
     float* logits, int token_num, int expert_num, int group_size, int top_k, cudaStream_t st);

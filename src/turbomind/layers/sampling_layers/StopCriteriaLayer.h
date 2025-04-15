@@ -29,12 +29,12 @@ public:
 
     void Setup(const std::vector<const Request*>& rs) override;
 
-    void Forward(core::TensorMap& args) override;
+    void Forward(TensorMap& args) override;
 
 private:
-    core::Buffer_<int> stop_words_;
-    core::Buffer_<int> stop_words_buf_;
-    core::Tensor_<int> stop_words_ten_;
+    Buffer_<int> stop_words_;
+    Buffer_<int> stop_words_buf_;
+    Tensor_<int> stop_words_ten_;
 };
 
 }  // namespace turbomind

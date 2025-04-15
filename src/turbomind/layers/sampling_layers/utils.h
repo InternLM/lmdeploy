@@ -2,7 +2,7 @@
 #include <functional>
 #include <vector>
 
-#include "src/turbomind/core/tensor.h"
+#include "src/turbomind/core/core.h"
 
 namespace turbomind {
 
@@ -12,7 +12,7 @@ constexpr int kMaxEndIdsSize      = 32;
 namespace {
 
 template<class G, class Rs, class T>
-void init_stop_bad_words(G getter, const char* key, const Rs& rs, T* h_buf, T* d_buf, core::Tensor_<T>& out)
+void init_stop_bad_words(G getter, const char* key, const Rs& rs, T* h_buf, T* d_buf, Tensor_<T>& out)
 {
     const int bsz        = rs.size();
     int       max_length = 0;

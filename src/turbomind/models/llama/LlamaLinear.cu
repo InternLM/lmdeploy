@@ -1,6 +1,5 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
-#include "src/turbomind/core/tensor.h"
 #include "src/turbomind/kernels/gemm/gemm.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
@@ -41,7 +40,7 @@ struct LlamaLinear::Impl {
         workspace_ = {};
     }
 
-    void forward(core::Tensor& output, const core::Tensor& input, const LlamaDenseWeight& dense, Type type)
+    void forward(Tensor& output, const Tensor& input, const LlamaDenseWeight& dense, Type type)
     {
         switch (dense.weight_type) {
             case kF16:
@@ -55,7 +54,7 @@ struct LlamaLinear::Impl {
         }
     }
 
-    void forwardFp(core::Ref<core::Tensor> output_, const core::Tensor& input, const core::Tensor& weight)
+    void forwardFp(Ref<Tensor> output_, const Tensor& input, const Tensor& weight)
     {
         auto& output = output_.get();
         TM_CHECK_EQ(weight.ndim(), 2);
@@ -99,7 +98,7 @@ struct LlamaLinear::Impl {
                                       CUBLAS_GEMM_DEFAULT_TENSOR_OP));
     }
 
-    void forwardInt4(core::Tensor& output, const core::Tensor& input, const LlamaDenseWeight& dense, Type type)
+    void forwardInt4(Tensor& output, const Tensor& input, const LlamaDenseWeight& dense, Type type)
     {
         TM_CHECK_EQ(output.ndim(), 2);  // A [m, k]
         TM_CHECK_EQ(input.ndim(), 2);   // C [m, n]
@@ -161,8 +160,8 @@ struct LlamaLinear::Impl {
         }
     }
 
-    void forward_moe(core::Tensor&           output,
-                     const core::Tensor&     input,
+    void forward_moe(Tensor&                 output,
+                     const Tensor&           input,
                      const int*              indexes,
                      const int*              offsets,
                      const LlamaDenseWeight& dense,
@@ -246,21 +245,21 @@ struct LlamaLinear::Impl {
 
 LlamaLinear::LlamaLinear(cudaStream_t stream): impl_{std::make_shared<Impl>(stream)} {}
 
-core::Tensor LlamaLinear::forward(const core::Tensor&         input,  //
-                                  const LlamaDenseWeight&     dense,
-                                  Type                        type,
-                                  std::optional<core::Tensor> output)
+Tensor LlamaLinear::forward(const Tensor&           input,  //
+                            const LlamaDenseWeight& dense,
+                            Type                    type,
+                            std::optional<Tensor>   output)
 {
-    core::ssize_t output_dim = type == kFusedSiluFfn ? dense.output_dim / 2 : dense.output_dim;
+    ssize_t output_dim = type == kFusedSiluFfn ? dense.output_dim / 2 : dense.output_dim;
 
-    core::Tensor in = input.view({-1, input.shape(-1)});
-    core::Tensor out;
+    Tensor in = input.view({-1, input.shape(-1)});
+    Tensor out;
 
     if (output) {
         out = output->view({in.shape(0), output_dim});
     }
     else {
-        out = core::Tensor({in.shape(0), output_dim}, input.dtype(), input.device());
+        out = Tensor({in.shape(0), output_dim}, input.dtype(), input.device());
     }
 
     impl_->forward(out, in, dense, type);
@@ -271,8 +270,8 @@ core::Tensor LlamaLinear::forward(const core::Tensor&         input,  //
     return out.view(shape);
 }
 
-void LlamaLinear::forward_moe(core::Tensor&           output,
-                              const core::Tensor&     input,
+void LlamaLinear::forward_moe(Tensor&                 output,
+                              const Tensor&           input,
                               const int*              indexes,
                               const int*              offsets,
                               const LlamaDenseWeight& dense,

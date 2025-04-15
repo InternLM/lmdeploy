@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
+#include "src/turbomind/core/core.h"
 #include "src/turbomind/core/data_type.h"
-#include "src/turbomind/core/tensor.h"
 #include "src/turbomind/kernels/activation_kernels.h"
 #include "src/turbomind/kernels/core/array.h"
 #include "src/turbomind/kernels/core/array_ops.h"
@@ -219,7 +219,7 @@ void invokeGenericActivation_v2(
 }
 
 template<template<typename T> class Activation>
-void invokeGenericActivation_v3(core::Ref<core::Tensor> inter_, const core::Tensor& gate, cudaStream_t stream)
+void invokeGenericActivation_v3(Ref<Tensor> inter_, const Tensor& gate, cudaStream_t stream)
 {
     auto& inter = inter_.get();
     TM_CHECK_EQ(inter.ndim(), 2);
@@ -245,8 +245,6 @@ void invokeGenericActivation_v3(core::Ref<core::Tensor> inter_, const core::Tens
     TM_DISPATCH_PRIMARY_DTYPES(inter.dtype(), invoke);
 }
 
-template void invokeGenericActivation_v3<SiluActivation>(core::Ref<core::Tensor> inter_,
-                                                         const core::Tensor&     gate,
-                                                         cudaStream_t            stream);
+template void invokeGenericActivation_v3<SiluActivation>(Ref<Tensor> inter_, const Tensor& gate, cudaStream_t stream);
 
 }  // namespace turbomind

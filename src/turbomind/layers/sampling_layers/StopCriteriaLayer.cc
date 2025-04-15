@@ -40,7 +40,7 @@ void StopCriteriaLayer<T>::Setup(const std::vector<const Request*>& rs)
 }
 
 template<typename T>
-void StopCriteriaLayer<T>::Forward(core::TensorMap& args)
+void StopCriteriaLayer<T>::Forward(TensorMap& args)
 {
     TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
 

@@ -16,12 +16,9 @@
 
 #pragma once
 
-#include <string>
-#include <unordered_map>
-
 #include <cuda_runtime.h>
 
-#include "src/turbomind/core/tensor.h"
+#include "src/turbomind/core/core.h"
 #include "src/turbomind/engine/request.h"
 
 namespace turbomind {
@@ -49,7 +46,7 @@ public:
 
     virtual void Setup(const std::vector<const Request*>& rs) = 0;
 
-    virtual void Forward(core::TensorMap& args) = 0;
+    virtual void Forward(TensorMap& args) = 0;
 
 protected:
     int                   max_batch_size_;

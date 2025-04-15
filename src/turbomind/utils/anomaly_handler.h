@@ -10,7 +10,7 @@
 #include <memory>
 #include <string>
 
-#include "src/turbomind/core/tensor.h"
+#include "src/turbomind/core/core.h"
 
 namespace turbomind {
 
@@ -52,9 +52,9 @@ void count_and_fix(T* data, size_t size, std::string key, int level)
     AnomalyHandler::instance().CountAndFix(data, size, key, level);
 }
 
-void DebugTensor(core::Tensor& tensor, const std::string& key, int level);
+void DebugTensor(Tensor& tensor, const std::string& key, int level);
 
-inline void DebugTensor(core::Tensor&& tensor, const std::string& key, int level)
+inline void DebugTensor(Tensor&& tensor, const std::string& key, int level)
 {
     DebugTensor(tensor, key, level);
 }

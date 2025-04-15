@@ -53,7 +53,7 @@ void DynamicDecodeLayer::Setup(const std::vector<const Request*>& rs)
     }
 }
 
-void DynamicDecodeLayer::Forward(core::TensorMap& args)
+void DynamicDecodeLayer::Forward(TensorMap& args)
 {
     /**
      * @brief

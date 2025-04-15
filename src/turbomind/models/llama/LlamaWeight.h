@@ -50,7 +50,7 @@ struct LlamaWeight: core::Module {
     LlamaDenseWeight pre_decoder_embedding;
     LlamaDenseWeight post_decoder_embedding;
 
-    core::Tensor output_norm_weight;
+    Tensor output_norm_weight;
 
 private:
     int hidden_units_;

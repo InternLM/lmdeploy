@@ -16,7 +16,6 @@
 
 #include <cub/cub.cuh>
 
-#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
 #include "src/turbomind/utils/memory_utils.h"
@@ -41,10 +40,10 @@ embeddingLookupKernel(T* dst, int dst_stride, const T* src, int src_stride, cons
     }
 }
 
-void invokeEmbeddingLookup(core::Ref<core::Tensor>   out_,
-                           const core::Buffer_<int>& token_ids,
-                           const core::Tensor&       embedding_table,
-                           cudaStream_t              st)
+void invokeEmbeddingLookup(Ref<Tensor>         out_,
+                           const Buffer_<int>& token_ids,
+                           const Tensor&       embedding_table,
+                           cudaStream_t        st)
 {
     auto& out = out_.get();
 

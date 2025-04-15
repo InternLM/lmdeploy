@@ -22,7 +22,7 @@ public:
                    const LoraParam&      lora,
                    const Context&        ctx);
 
-    void Forward(core::TensorMap& args, const std::vector<WeightType*>& weights);
+    void Forward(TensorMap& args, const std::vector<WeightType*>& weights);
 
 private:
     const size_t layer_num_;
@@ -48,10 +48,10 @@ private:
 
     std::shared_ptr<UnifiedAttentionLayer::ForwardParam> attn_fwd_param_;
 
-    void AllreduceResidualRMSnorm(core::Tensor&       hidden_states,
-                                  core::Tensor&       residual,
-                                  const core::Tensor& bias,
-                                  const core::Tensor& weight,
+    void AllreduceResidualRMSnorm(Tensor&       hidden_states,
+                                  Tensor&       residual,
+                                  const Tensor& bias,
+                                  const Tensor& weight,
                                   int                 token_num,
                                   int                 t0,
                                   int                 t1,

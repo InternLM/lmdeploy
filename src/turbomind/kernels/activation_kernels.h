@@ -18,7 +18,7 @@
 
 #include <cuda_runtime.h>
 
-#include "src/turbomind/core/tensor.h"
+#include "src/turbomind/core/core.h"
 
 namespace turbomind {
 
@@ -30,6 +30,6 @@ template<typename T> struct IdentityActivation;
 // clang-format on
 
 template<template<typename T> class Activation>
-void invokeGenericActivation_v3(core::Ref<core::Tensor> inter_, const core::Tensor& gate, cudaStream_t stream);
+void invokeGenericActivation_v3(Ref<Tensor> inter_, const Tensor& gate, cudaStream_t stream);
 
 }  // namespace turbomind

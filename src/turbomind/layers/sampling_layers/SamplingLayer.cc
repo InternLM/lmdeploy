@@ -39,7 +39,7 @@ SamplingLayer<T>::SamplingLayer(const BaseParam& param): BaseDynamicDecodeLayer{
 }
 
 template<typename T>
-void SamplingLayer<T>::Forward(core::TensorMap& args)
+void SamplingLayer<T>::Forward(TensorMap& args)
 {
     // step1:
     //  - use topk / topp_minp kernel to sort and filter the scores
@@ -49,7 +49,7 @@ void SamplingLayer<T>::Forward(core::TensorMap& args)
 
     TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
 
-    core::Tensor_<T> logits = args.at("logits");
+    Tensor_<T> logits = args.at("logits");
 
     const auto bsz = logits.shape(0);
 
@@ -151,7 +151,7 @@ void SamplingLayer<T>::Setup(const std::vector<const Request*>& rs)
     min_topp_ = *std::min_element(top_p_.begin(), top_p_.end());
     max_minp_ = *std::max_element(min_p_.begin(), min_p_.end());
 
-    indices_ = core::Buffer_<int>(bsz * vocab_size_padded_, MEMORY_GPU);
+    indices_ = Buffer_<int>(bsz * vocab_size_padded_, MEMORY_GPU);
 
     {
         // topk buffer
@@ -159,7 +159,7 @@ void SamplingLayer<T>::Setup(const std::vector<const Request*>& rs)
         params.batch_size = bsz;
         params.max_top_k  = max_topk_;
         invokeTopKSortFilter<T>(params, stream_);
-        topk_ws_ = {(core::ssize_t)params.workspace_size, MEMORY_GPU};
+        topk_ws_ = {(ssize_t)params.workspace_size, MEMORY_GPU};
     }
 
     {
@@ -169,7 +169,7 @@ void SamplingLayer<T>::Setup(const std::vector<const Request*>& rs)
         params.vocab_size        = vocab_size_;
         params.vocab_size_padded = vocab_size_padded_;
         invokeTopPSort<T>(params, stream_);
-        topp_ws_ = {(core::ssize_t)params.workspace_size, MEMORY_GPU};
+        topp_ws_ = {(ssize_t)params.workspace_size, MEMORY_GPU};
     }
 
     std::fill_n(kept_.data(), bsz, vocab_size_);

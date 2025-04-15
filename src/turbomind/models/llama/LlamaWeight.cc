@@ -75,7 +75,7 @@ LlamaWeight::LlamaWeight(DataType           data_type,
         register_module("layers", *decoder_layer_weights.back(), i);
     }
 
-    output_norm_weight = core::Tensor{{hidden_units_}, data_type_, MEMORY_GPU};
+    output_norm_weight = Tensor{{hidden_units_}, data_type_, MEMORY_GPU};
     register_parameter("norm.weight", output_norm_weight);
 }
 
