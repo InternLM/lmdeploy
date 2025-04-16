@@ -23,6 +23,9 @@
 #include "src/turbomind/macro.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
+#define EVAL(x) #x
+#define PRINT(x) EVAL(x)
+
 namespace turbomind {
 
 DynamicDecodeLayer::DynamicDecodeLayer(DataType              dtype,
@@ -40,18 +43,7 @@ DynamicDecodeLayer::DynamicDecodeLayer(DataType              dtype,
         layers_.emplace_back(new SamplingLayer<T>{param});
         layers_.emplace_back(new StopCriteriaLayer<T>{param});
     };
-    // TM_DISPATCH_PRIMARY_DTYPES(dtype, dispatch);
-    // MSVC complains about the dispatch marcro here :(
-    switch (dtype) {
-        case kHalf:
-            dispatch(half_t{});
-            break;
-        case kBfloat16:
-            dispatch(bfloat16_t{});
-            break;
-        default:
-            TM_CHECK(0) << "unsupported type: " << dtype;
-    }
+    TM_DISPATCH_PRIMARY_DTYPES(dtype, dispatch);
 }
 
 DynamicDecodeLayer::~DynamicDecodeLayer() {}
