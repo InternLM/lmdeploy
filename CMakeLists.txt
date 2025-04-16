@@ -137,9 +137,10 @@ message(STATUS "Building with CUDA archs: ${CMAKE_CUDA_ARCHITECTURES}")
 
 if (MSVC) 
     # use standard conformant preprocessor
-    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>")
-    # https://stackoverflow.com/questions/59425220/cmake-pass-list-of-compiler-flags-through-nvcc
-    add_compile_options("$<$<COMPILE_LANGUAGE:CUDA>:--Xcompiler=/Zc:preprocessor>")
+    add_compile_options(/Zc:preprocessor)
+    # https://stackoverflow.com/questions/78515942/cuda-compatibility-with-visual-studio-2022-version-17-10
+    add_compile_options("$<$<COMPILE_LANGUAGE:CUDA>:--allow-unsupported-compiler>")
+    add_definitions(-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH)
 endif ()
 
 set(CMAKE_CUDA_RUNTIME_LIBRARY Shared)
