@@ -137,7 +137,9 @@ message(STATUS "Building with CUDA archs: ${CMAKE_CUDA_ARCHITECTURES}")
 
 if (MSVC) 
     # use standard conformant preprocessor
-    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>)
+    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>")
+    # https://stackoverflow.com/questions/59425220/cmake-pass-list-of-compiler-flags-through-nvcc
+    add_compile_options("$<$<COMPILE_LANGUAGE:CUDA>:--Xcompiler=/Zc:preprocessor>")
 endif ()
 
 set(CMAKE_CUDA_RUNTIME_LIBRARY Shared)
