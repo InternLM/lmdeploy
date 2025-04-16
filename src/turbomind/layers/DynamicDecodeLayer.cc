@@ -40,7 +40,18 @@ DynamicDecodeLayer::DynamicDecodeLayer(DataType              dtype,
         layers_.emplace_back(new SamplingLayer<T>{param});
         layers_.emplace_back(new StopCriteriaLayer<T>{param});
     };
-    TM_DISPATCH_PRIMARY_DTYPES(dtype, dispatch);
+    // TM_DISPATCH_PRIMARY_DTYPES(dtype, dispatch);
+    // MSVC complains about the dispatch marcro here :(
+    switch (dtype) {
+        case ::turbomind ::data_type_v<::turbomind ::half_t>:
+            dispatch(::turbomind ::half_t{});
+            break;
+        case ::turbomind ::data_type_v<::turbomind ::bfloat16_t>:
+            dispatch(::turbomind ::bfloat16_t{});
+            break;
+        default:
+            TM_CHECK(0) << "unsupported type: " << dtype;
+    }
 }
 
 DynamicDecodeLayer::~DynamicDecodeLayer() {}
