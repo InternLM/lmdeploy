@@ -268,6 +268,7 @@ pytorch_quatization:
         - Qwen/Qwen2-VL-2B-Instruct
         - Qwen/Qwen2-VL-7B-Instruct
         - microsoft/Phi-3-mini-4k-instruct
+        - THUDM/glm-4v-9b
     w8a8:
         - meta-llama/Meta-Llama-3-8B-Instruct
         - meta-llama/Llama-3.2-1B-Instruct
