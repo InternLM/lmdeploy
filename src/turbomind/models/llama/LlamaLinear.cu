@@ -3,7 +3,6 @@
 #include "src/turbomind/kernels/gemm/gemm.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
-#include "src/turbomind/models/llama/llama_decoder_kernels.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 #include "src/turbomind/core/cuda_data_type.h"

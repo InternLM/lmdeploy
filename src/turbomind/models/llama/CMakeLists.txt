@@ -20,7 +20,6 @@ add_library(Llama STATIC
         unified_decoder.cc
         unified_attention_layer.cc
         llama_kernels.cu
-        llama_decoder_kernels.cu
         llama_utils.cu
         mla_utils.cu)
 set_property(TARGET Llama PROPERTY POSITION_INDEPENDENT_CODE  ON)
