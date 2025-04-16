@@ -297,10 +297,10 @@ inline std::ostream& operator<<(std::ostream& os, DataType type) {
     }
 // clang-format on
 
-#define TM_PRIMARY_DTYPES_0 ::turbomind::half_t
+#define TM_PRIMARY_DTYPES_0 half_t
 
 #if ENABLE_BF16
-#define TM_PRIMARY_DTYPES_1 TM_PRIMARY_DTYPES_0, ::turbomind::bfloat16_t
+#define TM_PRIMARY_DTYPES_1 TM_PRIMARY_DTYPES_0, bfloat16_t
 #else
 #define TM_PRIMARY_DTYPES_1 TM_PRIMARY_DTYPES_0
 #endif
