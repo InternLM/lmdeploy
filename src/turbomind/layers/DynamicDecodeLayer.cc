@@ -43,11 +43,11 @@ DynamicDecodeLayer::DynamicDecodeLayer(DataType              dtype,
     // TM_DISPATCH_PRIMARY_DTYPES(dtype, dispatch);
     // MSVC complains about the dispatch marcro here :(
     switch (dtype) {
-        case ::turbomind ::data_type_v<::turbomind ::half_t>:
-            dispatch(::turbomind ::half_t{});
+        case kHalf:
+            dispatch(half_t{});
             break;
-        case ::turbomind ::data_type_v<::turbomind ::bfloat16_t>:
-            dispatch(::turbomind ::bfloat16_t{});
+        case kBfloat16:
+            dispatch(bfloat16_t{});
             break;
         default:
             TM_CHECK(0) << "unsupported type: " << dtype;
