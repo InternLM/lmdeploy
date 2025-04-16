@@ -84,6 +84,8 @@ $msBuildExtensions = (Get-ChildItem  "$src\visual_studio_integration\CUDAVisualS
     }
 }
 
+$CUDA_FLAGS="-allow-unsupported-compiler -D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH=1"
+
 # Add to Github env
 Write-Output "Setting environment variables for GitHub Actions..."
 
@@ -97,7 +99,7 @@ Write-Output "CUDA_PATH_V$($CUDA_MAJOR)_$($CUDA_MINOR)=$dst" >> $env:GITHUB_ENV
 Write-Output "CUDA_PATH_VX_Y=CUDA_PATH_V$($CUDA_MAJOR)_$($CUDA_MINOR)" >> $env:GITHUB_ENV
 Write-Output "CudaToolkitDir=$dst" >> $env:GITHUB_ENV
 Write-Output "CMAKE_CUDA_COMPILER=$dst\bin\nvcc.exe" >> $env:GITHUB_ENV
-Write-Output "NVCC_APPEND_FLAGS=-allow-unsupported-compiler" >> $env:GITHUB_ENV
+Write-Output "NVCC_APPEND_FLAGS=$CUDA_FLAGS" >> $env:GITHUB_ENV
 
 Write-Output "CUDA_VERSION=$CUDA_VERSION_FULL" >> $env:GITHUB_ENV
 Write-Output "Setup completed."

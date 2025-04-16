@@ -3,6 +3,6 @@ cmake .. -A x64 -T "v143,cuda=$env:CUDA_PATH" `
     -DCMAKE_INSTALL_PREFIX=install `
     -DBUILD_PY_FFI=ON `
     -DBUILD_MULTI_GPU=OFF `
-    -DCMAKE_CUDA_FLAGS="-lineinfo -D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH=1" `
+    -DCMAKE_CUDA_FLAGS="-lineinfo" `
     -DUSE_NVTX=ON `
     -DBUILD_TEST="$env:BUILD_TEST"
