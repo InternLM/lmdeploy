@@ -1,5 +1,7 @@
 #pragma once
 
+#include <functional>
+
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/common.h"
 #include "src/turbomind/core/stream.h"

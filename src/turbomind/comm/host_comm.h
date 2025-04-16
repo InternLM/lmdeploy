@@ -6,6 +6,7 @@
 #include <memory>
 #include <stdexcept>
 #include <type_traits>
+#include <vector>
 
 #include "src/turbomind/core/data_type.h"
 
