@@ -559,7 +559,7 @@ def test_qwen_multiple_round_prompt(client, model):
     func2_args = response.choices[0].message.tool_calls[1].function.arguments
     with assume:
         assert response.choices[0].finish_reason == 'tool_calls'
-        assert func1_name == 'get_current_weather'
+        assert func1_name == 'get_current_temperature'
         assert func1_args == '{"location": "San Francisco, CA, USA"}'
         assert func2_name == 'get_temperature_date'
         assert func2_args == '{"location": "San Francisco, CA, USA", "date": "2024-11-15"}'
