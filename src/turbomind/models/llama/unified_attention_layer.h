@@ -33,20 +33,6 @@
 
 namespace turbomind {
 
-namespace attention {
-
-struct ForwardParam;
-
-void Initialize(ForwardParam& p, TensorMap& args, const Tensor& input, Tensor& output);
-
-void SetLayer(ForwardParam& p, const LlamaAttentionWeight* weights, int layer_id);
-
-void Finalize(ForwardParam& p);
-
-const int* d_cu_q_len(ForwardParam& p);
-
-}  // namespace attention
-
 class UnifiedAttentionLayer {
 public:
     using WeightType = LlamaAttentionWeight;
@@ -54,19 +40,32 @@ public:
     static constexpr int kMaxKVSplits        = 128;
     static constexpr int kMaxWorkspaceTokens = 4096;
 
-    using ForwardParam = attention::ForwardParam;
-
-    std::shared_ptr<ForwardParam> CreateForwardParam(int max_batch_size);
+    struct ForwardParam {
+        Tensor            input;
+        Tensor            output;
+        const WeightType* weights;
+        int               layer_id;
+    };
 
     ~UnifiedAttentionLayer();
 
     UnifiedAttentionLayer(const ModelParam&     model,
                           const AttentionParam& attn,
+                          const EngineParam&    engine,
                           const LoraParam&      lora,
                           int                   tp_size,
                           const Context&        context);
 
-    void forward(ForwardParam& param);
+    void Forward(ForwardParam p);
+
+    void Initialize(TensorMap& args);
+
+    void Finalize();
+
+    const int* d_cu_q_len()
+    {
+        return d_cu_q_len_;
+    }
 
 private:
     Tensor forward_mla(const Tensor& hidden_state, const WeightType& weights);
@@ -104,11 +103,37 @@ private:
 
     RopeKernelParam rope_param_{};
 
+    ///////////////////////////////////////////////////////
+    /// runtime states
+    int decode_num_;
+    int prefil_num_;
+
     Tensor_<float> partial_M_;
     Tensor_<float> partial_L_;
     Tensor_<float> partial_O_;
     Tensor_<int>   split_cnt_;
     Tensor_<int>   barriers_;  // always zero
+
+    Event event_;
+
+    Buffer_<int> h_q_len_;
+    Buffer_<int> h_k_len_;
+
+    Buffer_<int> d_cu_x_len_;
+    Buffer_<int> h_cu_x_len_;
+
+    // references into d/h_cu_x_len_
+    int* d_cu_q_len_;
+    int* d_cu_k_len_;
+    int* h_cu_q_len_;
+    int* h_cu_k_len_;
+
+    Buffer_<bool>  finished_;
+    Buffer_<float> rope_base_;
+
+    Buffer_<int>       cu_block_nums_;
+    Buffer_<uintptr_t> kv_block_ptrs_;
+    ///////////////////////////////////////////////////////
 };
 
 }  // namespace turbomind

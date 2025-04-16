@@ -15,12 +15,11 @@ public:
     MoeFfnLayer(const ModelParam& model, const MoeParam& param, const EngineParam& engine, const Context& ctx);
 
     struct ForwardParam {
-        Tensor              output;
         Tensor              input;
-        Tensor              temp;
+        Tensor              output;
+        const MoeFfnWeight* weights;
         float               scale;
         int                 layer_id;
-        const MoeFfnWeight* weight;
     };
 
     void Forward(ForwardParam& p);
@@ -42,6 +41,8 @@ private:
     std::unique_ptr<LlamaFfnLayer>        expert_ffn_;
     std::unique_ptr<gemm::MoeGemmContext> context_;
 
+    ///////////////////////////////////////////////////////
+    /// runtime states
     Buffer_<int> h_offsets_;
 
     Buffer_<int>   masks_;
@@ -51,6 +52,9 @@ private:
     Buffer_<float> shared_scales_;
     Buffer_<int>   accum_;
     Buffer_<int>   offsets_;
+
+    Tensor temp_;
+    ///////////////////////////////////////////////////////
 };
 
 }  // namespace turbomind

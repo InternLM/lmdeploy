@@ -1,6 +1,5 @@
 
 
-#include <iterator>
 #include <numeric>
 #include <optional>
 
@@ -37,9 +36,7 @@ UnifiedDecoder::UnifiedDecoder(const ModelParam&     model,
     d_comm_(ctx.comm.d_comm),
     tune_layer_num_(model.tune_layer_num)
 {
-    attn_layer_ = std::make_unique<UnifiedAttentionLayer>(model, attn, lora, attn_tp_size_, ctx);
-
-    attn_fwd_param_ = attn_layer_->CreateForwardParam(engine.max_batch_size);
+    attn_layer_ = std::make_unique<UnifiedAttentionLayer>(model, attn, engine, lora, attn_tp_size_, ctx);
 
     if (std::accumulate(moe.expert_num.begin(), moe.expert_num.end(), 0LL)) {
         moe_ffn_layer_ = std::make_unique<MoeFfnLayer>(model, moe, engine, ctx);
@@ -147,7 +144,7 @@ void UnifiedDecoder::Forward(TensorMap& args, const std::vector<WeightType*>& we
         local_hidden_states = global_hidden_states.slice({offset, 0}, {local_token_num, -1});
     }
 
-    Initialize(*attn_fwd_param_, args, local_hidden_states, local_hidden_states);
+    attn_layer_->Initialize(args);
 
     TM_DEBUG_TENSOR(local_residual, "res", 1);
     TM_DEBUG_TENSOR(weights.at(0)->self_attn_norm, "norm_weight", 2);
@@ -157,7 +154,7 @@ void UnifiedDecoder::Forward(TensorMap& args, const std::vector<WeightType*>& we
 
     TM_DEBUG_TENSOR(local_hidden_states, Concat("norm0", 0), 2);
 
-    for (size_t layer = 0; layer < layer_num_; ++layer) {
+    for (int layer = 0; layer < layer_num_; ++layer) {
 
         /// TODO: do not skip the layers when they are heterogeneous
         if (isTuning() && layer >= tune_layer_num_) {
@@ -166,8 +163,10 @@ void UnifiedDecoder::Forward(TensorMap& args, const std::vector<WeightType*>& we
 
         /////////////////////////////////////////////
         /// self-attention
-        SetLayer(*attn_fwd_param_, weights.at(layer)->self_attn_weights.get(), layer);
-        attn_layer_->forward(*attn_fwd_param_);
+        attn_layer_->Forward({local_hidden_states,  //
+                              local_hidden_states,
+                              weights.at(layer)->self_attn_weights.get(),
+                              layer});
 
         TM_DEBUG_TENSOR(local_hidden_states, Concat("attn_block", layer), 2);
 
@@ -191,10 +190,9 @@ void UnifiedDecoder::Forward(TensorMap& args, const std::vector<WeightType*>& we
         if (weights.at(layer)->moe_weights) {
             moe_fwd_param = MoeFfnLayer::ForwardParam{global_hidden_states,
                                                       global_hidden_states,
-                                                      {},
+                                                      weights.at(layer)->moe_weights.get(),
                                                       ffn_layer_ ? 1.f : 0.f,
-                                                      (int)layer,
-                                                      weights.at(layer)->moe_weights.get()};
+                                                      layer};
             moe_ffn_layer_->Forward(*moe_fwd_param);
         }
 
@@ -244,7 +242,7 @@ void UnifiedDecoder::Forward(TensorMap& args, const std::vector<WeightType*>& we
     if (prefil_num) {
         invokeGetFeatureOfLastToken(last_token_hidden_units + decode_num * hidden_units_,  //
                                     (T*)local_hidden_states.raw_data(),
-                                    d_cu_q_len(*attn_fwd_param_) + decode_num,
+                                    attn_layer_->d_cu_q_len() + decode_num,
                                     hidden_units_,
                                     prefil_num,
                                     stream_);
@@ -257,10 +255,7 @@ void UnifiedDecoder::Forward(TensorMap& args, const std::vector<WeightType*>& we
 
     TM_DEBUG_TENSOR(out, "out", 1);
 
-    Finalize(*attn_fwd_param_);
-
-    // cudaStreamSynchronize(stream_);
-    // std::abort();
+    attn_layer_->Finalize();
 }
 
 }  // namespace turbomind

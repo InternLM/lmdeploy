@@ -46,16 +46,14 @@ private:
     std::unique_ptr<LlamaFfnLayer>         ffn_layer_;
     std::unique_ptr<MoeFfnLayer>           moe_ffn_layer_;
 
-    std::shared_ptr<UnifiedAttentionLayer::ForwardParam> attn_fwd_param_;
-
     void AllreduceResidualRMSnorm(Tensor&       hidden_states,
                                   Tensor&       residual,
                                   const Tensor& bias,
                                   const Tensor& weight,
-                                  int                 token_num,
-                                  int                 t0,
-                                  int                 t1,
-                                  const int*          local_token_nums);
+                                  int           token_num,
+                                  int           t0,
+                                  int           t1,
+                                  const int*    local_token_nums);
 };
 
 }  // namespace turbomind

@@ -9,8 +9,6 @@
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/llama/moe_ffn_layer.h"
 #include "src/turbomind/utils/cuda_utils.h"
-#include "src/turbomind/utils/nvtx_utils.h"
-#include "src/turbomind/utils/string_utils.h"
 
 namespace turbomind {
 
@@ -61,7 +59,7 @@ Tensor_<float> MoeFfnLayer::Gate(const Tensor& input, const LlamaDenseWeight& ga
 void MoeFfnLayer::Forward(ForwardParam& p)
 {
     const int   tokens = p.input.shape(0);
-    const auto& moe    = *p.weight;
+    const auto& moe    = *p.weights;
 
     const size_t padded     = (tokens + kMoeGateVecSize - 1) / kMoeGateVecSize * kMoeGateVecSize;
     const int    expert_num = moe.experts.size();
@@ -69,10 +67,6 @@ void MoeFfnLayer::Forward(ForwardParam& p)
     FT_CHECK(expert_num);
 
     auto logits = Gate(p.input, moe.gate);
-
-    // if (tensor_para_.rank_ == 0) {
-    //     Compare(logits_, tokens * expert_num, Concat("logit", layer_id), compare_mode, stream_);
-    // }
 
     check_cuda_error(cudaMemsetAsync(accum_.data(), 0, sizeof(int) * expert_num * kMoeGateMaxTiles, stream_));
     check_cuda_error(cudaMemsetAsync(masks_.data(), -1, sizeof(int8_t) * expert_num * padded, stream_));
@@ -120,11 +114,11 @@ void MoeFfnLayer::Forward(ForwardParam& p)
             offsets_.data(), h_offsets_.data(), sizeof(int) * (expert_num + 1), cudaMemcpyDefault, stream_));
     }
 
-    p.temp = Tensor{{param_.experts_per_token * tokens, hidden_dim_}, p.input.dtype(), p.input.device()};
+    temp_ = Tensor{{param_.experts_per_token * tokens, hidden_dim_}, p.input.dtype(), p.input.device()};
 
     if (param_.method == MoeParam::kNaive) {
 
-        invokeMoeDispatch(p.temp, p.input, f2n_.data(), param_.experts_per_token, stream_);
+        invokeMoeDispatch(temp_, p.input, f2n_.data(), param_.experts_per_token, stream_);
         sync_check_cuda_error();
 
         check_cuda_error(cudaMemcpyAsync(
@@ -136,7 +130,7 @@ void MoeFfnLayer::Forward(ForwardParam& p)
 
         for (int i = 0; i < expert_num; ++i) {
             if (int count = h_offsets_[i + 1] - h_offsets_[i]) {
-                auto io = p.temp.slice({h_offsets_[i], 0}, {count, -1});
+                auto io = temp_.slice({h_offsets_[i], 0}, {count, -1});
                 expert_ffn_->forward({io, io, moe.experts.at(i).get(), p.layer_id});
             }
         }
@@ -165,7 +159,7 @@ void MoeFfnLayer::Forward(ForwardParam& p)
             sync_check_cuda_error();
         }
 
-        linear_.forward_moe(p.temp,
+        linear_.forward_moe(temp_,
                             inter.slice({0, 0}, {-1, inter_size_}),
                             nullptr,
                             offsets_.data(),
@@ -178,7 +172,7 @@ void MoeFfnLayer::Forward(ForwardParam& p)
 
 void MoeFfnLayer::Combine(ForwardParam& p)
 {
-    auto& moe = *p.weight;
+    auto& moe = *p.weights;
 
     Tensor_<float> shared_scales;
 
@@ -187,7 +181,7 @@ void MoeFfnLayer::Combine(ForwardParam& p)
     }
 
     invokeMoeCombine(p.output,
-                     p.temp,
+                     temp_,
                      scales_.data(),
                      en2f_.data(),
                      shared_scales.data_or((float*)nullptr),
@@ -195,6 +189,8 @@ void MoeFfnLayer::Combine(ForwardParam& p)
                      p.scale,
                      stream_);
     sync_check_cuda_error();
+
+    temp_ = {};
 }
 
 }  // namespace turbomind

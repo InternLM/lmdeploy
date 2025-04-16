@@ -30,7 +30,6 @@
 #include "src/turbomind/kernels/attention/attention.h"
 #include "src/turbomind/kernels/attention/decoding.h"
 #include "src/turbomind/kernels/attention/kv_cache_utils_v2.h"
-
 #include "src/turbomind/kernels/norm/rms_norm.h"
 
 #include "src/turbomind/macro.h"
@@ -44,110 +43,6 @@
 #include "src/turbomind/utils/logger.h"
 
 namespace turbomind {
-
-namespace attention {
-
-struct ForwardParam {
-
-    explicit ForwardParam(int max_batch_size)
-    {
-        d_cu_x_len = {2 * (max_batch_size + 1), kDEVICE};
-        h_cu_x_len = {2 * (max_batch_size + 1), kCPUpinned};
-        event      = Event::create();
-    }
-
-    void Init(TensorMap& args, const Tensor& input_, Tensor& output_)
-    {
-        h_q_len = args.at("h_q_len").buffer();
-        h_k_len = args.at("h_k_len").buffer();
-
-        const int bsz = h_q_len.size();
-
-        d_cu_q_len = d_cu_x_len.data();
-        h_cu_q_len = h_cu_x_len.data();
-        d_cu_k_len = d_cu_q_len + bsz + 1;
-        h_cu_k_len = h_cu_q_len + bsz + 1;
-
-        h_cu_q_len[0] = h_cu_k_len[0] = 0;
-
-        std::inclusive_scan(h_q_len.data(), h_q_len.data() + bsz, h_cu_q_len + 1);
-        std::inclusive_scan(h_k_len.data(), h_k_len.data() + bsz, h_cu_k_len + 1);
-
-        Copy(h_cu_x_len.slice(0, 2 * bsz + 2), d_cu_x_len.slice(0, 2 * bsz + 2));
-
-        event.Record(core::Context::stream());
-
-        decode_num = *args.at("decode_num").data<int>();
-        prefil_num = *args.at("prefil_num").data<int>();
-
-        finished  = args.at("finished").buffer();
-        rope_base = args.at("rope_base").buffer();
-
-        cu_block_nums = args.at("cu_block_nums").buffer();
-        kv_block_ptrs = args.at("kv_block_ptrs").buffer();
-
-        input  = input_;
-        output = output_;
-    }
-
-    Tensor input;
-    Tensor output;
-
-    Buffer_<int> h_q_len;
-    Buffer_<int> h_k_len;
-
-    Buffer_<int> d_cu_x_len;
-    Buffer_<int> h_cu_x_len;
-
-    int* d_cu_q_len;
-    int* d_cu_k_len;
-    int* h_cu_q_len;
-    int* h_cu_k_len;
-
-    Buffer_<bool>  finished;
-    Buffer_<float> rope_base;
-
-    Buffer_<int>       cu_block_nums;
-    Buffer_<uintptr_t> kv_block_ptrs;
-
-    const LlamaAttentionWeight* weights;
-
-    Event event;
-
-    int decode_num;
-    int prefil_num;
-    int layer_id;
-};
-
-void Initialize(ForwardParam& p, TensorMap& args, const Tensor& input, Tensor& output)
-{
-    p.Init(args, input, output);
-}
-
-void SetLayer(ForwardParam& p, const LlamaAttentionWeight* weights, int layer_id)
-{
-    p.weights  = weights;
-    p.layer_id = layer_id;
-}
-
-void Finalize(ForwardParam& p)
-{
-    // This is used to prevent data-race on `h_cu_q_len`, otherwise it may be modified by later
-    // `Init` calls before the HtoD copy is done
-    p.event.Sync();
-}
-
-const int* d_cu_q_len(ForwardParam& p)
-{
-    return p.d_cu_q_len;
-}
-
-}  // namespace attention
-
-auto UnifiedAttentionLayer::CreateForwardParam(int max_batch_size) -> std::shared_ptr<ForwardParam>
-{
-    return std::make_shared<ForwardParam>(max_batch_size);
-}
 
 UnifiedAttentionLayer::~UnifiedAttentionLayer()
 {
@@ -163,8 +58,12 @@ UnifiedAttentionLayer::~UnifiedAttentionLayer()
     aux_stream_             = {};
 }
 
-UnifiedAttentionLayer::UnifiedAttentionLayer(
-    const ModelParam& model, const AttentionParam& attn, const LoraParam& lora, int tp_size, const Context& ctx):
+UnifiedAttentionLayer::UnifiedAttentionLayer(const ModelParam&     model,
+                                             const AttentionParam& attn,
+                                             const EngineParam&    engine,
+                                             const LoraParam&      lora,
+                                             int                   tp_size,
+                                             const Context&        ctx):
     head_num_(model.head_num),
     kv_head_num_(model.kv_head_num),
     size_per_head_(model.head_dim),
@@ -199,9 +98,51 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(
 
     Clear(split_cnt_.buffer());
     Clear(barriers_.buffer());
+
+    const auto max_batch_size = engine.max_batch_size;
+
+    d_cu_x_len_ = {2 * (max_batch_size + 1), kDEVICE};
+    h_cu_x_len_ = {2 * (max_batch_size + 1), kCPUpinned};
+    event_      = Event::create();
 }
 
-void UnifiedAttentionLayer::forward(ForwardParam& p)
+void UnifiedAttentionLayer::Initialize(TensorMap& args)
+{
+    h_q_len_ = args.at("h_q_len").buffer();
+    h_k_len_ = args.at("h_k_len").buffer();
+
+    const int bsz = h_q_len_.size();
+
+    d_cu_q_len_ = d_cu_x_len_.data();
+    h_cu_q_len_ = h_cu_x_len_.data();
+    d_cu_k_len_ = d_cu_q_len_ + bsz + 1;
+    h_cu_k_len_ = h_cu_q_len_ + bsz + 1;
+
+    h_cu_q_len_[0] = h_cu_k_len_[0] = 0;
+
+    std::inclusive_scan(h_q_len_.data(), h_q_len_.data() + bsz, h_cu_q_len_ + 1);
+    std::inclusive_scan(h_k_len_.data(), h_k_len_.data() + bsz, h_cu_k_len_ + 1);
+
+    Copy(h_cu_x_len_.slice(0, 2 * bsz + 2), d_cu_x_len_.slice(0, 2 * bsz + 2));
+
+    event_.Record(core::Context::stream());
+
+    decode_num_ = *args.at("decode_num").data<int>();
+    prefil_num_ = *args.at("prefil_num").data<int>();
+
+    finished_  = args.at("finished").buffer();
+    rope_base_ = args.at("rope_base").buffer();
+
+    cu_block_nums_ = args.at("cu_block_nums").buffer();
+    kv_block_ptrs_ = args.at("kv_block_ptrs").buffer();
+}
+
+void UnifiedAttentionLayer::Finalize()
+{
+    event_.Sync();
+}
+
+void UnifiedAttentionLayer::Forward(ForwardParam p)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
@@ -279,9 +220,9 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
     const auto device = qkv.device();
     const auto dtype  = qkv.dtype();
 
-    const int batch_size = p.decode_num + p.prefil_num;
+    const int batch_size = decode_num_ + prefil_num_;
     const int q_count    = qkv.shape(0);
-    const int k_count    = p.h_cu_k_len[batch_size] - p.h_cu_k_len[p.decode_num];
+    const int k_count    = h_cu_k_len_[batch_size] - h_cu_k_len_[decode_num_];
     const int layer_id   = p.layer_id;
 
     const int local_q_kv_head_num = local_head_num_ + 2 * local_kv_head_num_;
@@ -308,27 +249,27 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
             params.v_bias = params.k_bias + local_kv_head_num_ * size_per_head_;
         }
 
-        params.token_num  = p.h_cu_q_len[offset + batch_size] - p.h_cu_q_len[offset];
+        params.token_num  = h_cu_q_len_[offset + batch_size] - h_cu_q_len_[offset];
         params.batch_size = batch_size;
         /// TODO: maximum on buffer slice
-        params.max_q_len = *std::max_element(p.h_q_len.data() + offset, p.h_q_len.data() + offset + batch_size);
-        params.max_k_len = *std::max_element(p.h_k_len.data() + offset, p.h_k_len.data() + offset + batch_size);
+        params.max_q_len = *std::max_element(h_q_len_.data() + offset, h_q_len_.data() + offset + batch_size);
+        params.max_k_len = *std::max_element(h_k_len_.data() + offset, h_k_len_.data() + offset + batch_size);
 
         // Decoding use only
-        params.block_iter_params = BlockIteratorParams{(char**)p.kv_block_ptrs.data(),  //
-                                                       p.cu_block_nums.data() + offset,
+        params.block_iter_params = BlockIteratorParams{(char**)kv_block_ptrs_.data(),  //
+                                                       cu_block_nums_.data() + offset,
                                                        layer_id,
                                                        (int)param_.cache_block_seq_len};
 
         // Prefilling use only
-        const int sum_k_len       = p.h_cu_k_len[offset + p.prefil_num] - p.h_cu_k_len[offset];
+        const int sum_k_len       = h_cu_k_len_[offset + prefil_num_] - h_cu_k_len_[offset];
         params.linear_iter_params = LinearIteratorParams{tmp_kv.raw_data(),  //
                                                          int(2 * sum_k_len * size_per_head_),
                                                          int(sum_k_len * size_per_head_)};
 
-        params.finished = p.finished.data() + offset;
-        params.cu_q_len = p.d_cu_q_len + offset;
-        params.cu_k_len = p.d_cu_k_len + offset;
+        params.finished = finished_.data() + offset;
+        params.cu_q_len = d_cu_q_len_ + offset;
+        params.cu_k_len = d_cu_k_len_ + offset;
 
         params.num_heads     = local_head_num_;
         params.num_kv_heads  = local_kv_head_num_;
@@ -345,7 +286,7 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
 
         // rotary embedding
         if (rope_param_.type == RopeType::kDynamic) {
-            rope_param_.base = const_cast<float*>(p.rope_base.data()) + offset;
+            rope_param_.base = const_cast<float*>(rope_base_.data()) + offset;
         }
         params.rope_param = rope_param_;
 
@@ -371,18 +312,18 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
     cudaStream_t pf_stream = stream_;
     cudaStream_t dc_stream = stream_;
 
-    if (p.decode_num && p.prefil_num) {
+    if (decode_num_ && prefil_num_) {
         pf_stream = aux_stream_;
         check_cuda_error(cudaEventRecord(qkv_event_, stream_));
         check_cuda_error(cudaStreamWaitEvent(aux_stream_, qkv_event_));
     }
 
-    if (p.prefil_num && !isTuning()) {
-        const int offset    = p.decode_num;
-        const int sum_k_len = p.h_cu_k_len[offset + p.prefil_num] - p.h_cu_k_len[offset];
+    if (prefil_num_ && !isTuning()) {
+        const int offset    = decode_num_;
+        const int sum_k_len = h_cu_k_len_[offset + prefil_num_] - h_cu_k_len_[offset];
         // We are executing prefill & decoding kernels concurrently, but only have 1 workspace
         // disable split kv for prefill for now
-        auto params = CreateParams(offset, p.prefil_num, 1, pf_stream);
+        auto params = CreateParams(offset, prefil_num_, 1, pf_stream);
         if constexpr (sizeof(T) == 2) {
             invokeProcessKV_v2_(params);
             sync_check_cuda_error();
@@ -396,15 +337,15 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         }
     }
 
-    if (p.decode_num && !isTuning()) {
-        auto params = CreateParams(0, p.decode_num, kMaxKVSplits, dc_stream);
+    if (decode_num_ && !isTuning()) {
+        auto params = CreateParams(0, decode_num_, kMaxKVSplits, dc_stream);
         if constexpr (sizeof(T) == 2) {
             dispatchDecoding<T>(params);
             sync_check_cuda_error();
         }
     }
 
-    if (p.decode_num && p.prefil_num) {
+    if (decode_num_ && prefil_num_) {
         check_cuda_error(cudaEventRecord(aux_event_, aux_stream_));
         check_cuda_error(cudaStreamWaitEvent(stream_, aux_event_));
     }
