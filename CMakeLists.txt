@@ -137,7 +137,7 @@ message(STATUS "Building with CUDA archs: ${CMAKE_CUDA_ARCHITECTURES}")
 
 if (MSVC) 
     # use standard conformant preprocessor
-    add_compile_options(/Zc:preprocessor)
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>)
 endif ()
 
 set(CMAKE_CUDA_RUNTIME_LIBRARY Shared)
