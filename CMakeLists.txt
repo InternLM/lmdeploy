@@ -140,7 +140,7 @@ if (MSVC)
     add_compile_options(/Zc:preprocessor)
     # https://stackoverflow.com/questions/78515942/cuda-compatibility-with-visual-studio-2022-version-17-10
     add_compile_options("$<$<COMPILE_LANGUAGE:CUDA>:--allow-unsupported-compiler>")
-    add_definitions(-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH)
+    add_compile_definitions(-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH=1)
 endif ()
 
 set(CMAKE_CUDA_RUNTIME_LIBRARY Shared)
