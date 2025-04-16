@@ -223,6 +223,7 @@ turbomind_quatization:
         - deepseek-ai/DeepSeek-V2-Lite-Chat
         - codellama/CodeLlama-7b-Instruct-hf
         - allenai/Molmo-7B-D-0924
+        - THUDM/codegeex4-all-9b
     gptq:
         - internlm/internlm2_5-7b-chat
     no_kvint4:
