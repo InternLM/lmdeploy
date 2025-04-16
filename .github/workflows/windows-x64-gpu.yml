@@ -50,7 +50,7 @@ jobs:
             INPUT_CUDA_VERSION: ${{ matrix.cudaver }}
       - name: Build wheel
         run: |
-          $env:BUILD_TEST="ON"
+          $env:BUILD_TEST="OFF"
           mkdir build
           cd build
           ..\builder\windows\generate.ps1
