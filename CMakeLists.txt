@@ -15,13 +15,10 @@
 cmake_minimum_required(VERSION 3.11 FATAL_ERROR) # for PyTorch extensions, version should be greater than 3.13
 project(TurboMind LANGUAGES CXX CUDA)
 
-find_package(CUDA 10.2 REQUIRED)
-
 find_package(CUDAToolkit REQUIRED)
 
-if(${CUDA_VERSION_MAJOR} VERSION_GREATER_EQUAL "11")
+if(${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL "11")
   add_definitions("-DENABLE_BF16")
-  message("CUDA_VERSION ${CUDA_VERSION_MAJOR}.${CUDA_VERSION_MINOR} is greater or equal than 11.0, enable -DENABLE_BF16 flag")
 endif()
 
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake/Modules)
@@ -119,13 +116,13 @@ set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler -Wall -ldl") # -Xptxas -v
 # TODO: build for sm_72 & sm_87 on aarch64 platform (Jetson devices)
 if (NOT CMAKE_CUDA_ARCHITECTURES)
   set(CMAKE_CUDA_ARCHITECTURES 70-real 75-real)
-  if (${CUDA_VERSION} VERSION_GREATER_EQUAL "11")
+  if (${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL "11")
     list(APPEND CMAKE_CUDA_ARCHITECTURES 80-real)
   endif ()
-  if (${CUDA_VERSION} VERSION_GREATER_EQUAL "11.1")
+  if (${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL "11.1")
     list(APPEND CMAKE_CUDA_ARCHITECTURES 86-real)
   endif ()
-  if (${CUDA_VERSION} VERSION_GREATER_EQUAL "11.8")
+  if (${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL "11.8")
     list(APPEND CMAKE_CUDA_ARCHITECTURES 89-real 90-real)
   endif ()
   if (MSVC)
