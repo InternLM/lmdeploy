@@ -54,7 +54,7 @@ jobs:
           mkdir build
           cd build
           ..\builder\windows\generate.ps1
-          cmake --build . --config Release -- /m /v:d
+          cmake --build . --config Release -- /m /v:n
           if (-Not $?) {
             echo "build failed"
             exit 1
