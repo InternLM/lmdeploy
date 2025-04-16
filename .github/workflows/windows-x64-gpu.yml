@@ -28,7 +28,7 @@ jobs:
   build:
     strategy:
       matrix:
-        cudaver: [11.8.0, 12.1.0]
+        cudaver: [12.5.0]
     name: cuda-${{ matrix.cudaver }}
     runs-on: windows-latest
     steps:
