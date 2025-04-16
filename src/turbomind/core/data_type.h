@@ -281,15 +281,15 @@ inline std::ostream& operator<<(std::ostream& os, DataType type) {
         break
 
 // clang-format off
-#define TM_DISPATCH_DTYPES_RET(var, f, ...)                                                                             \
+#define TM_DISPATCH_DTYPES_RET(var, f, ...)                                                                            \
     switch (var) {                                                                                                     \
         TM_PP_DISPATCH_N(TM_PP_INVOKE_, __VA_ARGS__)(TM_DISPATCH_DTYPE_RET_CASE, f, __VA_ARGS__);                      \
         default:                                                                                                       \
-            TM_CHECK(0) << "unsupported type: "  << to_string(var);                                                   \
+            TM_CHECK(0) << "unsupported type: "  << to_string(var);                                                    \
             return {};                                                                                                 \
     }
 
-#define TM_DISPATCH_DTYPES(var, f, ...)                                                                                 \
+#define TM_DISPATCH_DTYPES(var, f, ...)                                                                                \
     switch (var) {                                                                                                     \
         TM_PP_DISPATCH_N(TM_PP_INVOKE_, __VA_ARGS__)(TM_DISPATCH_DTYPE_CASE, f, __VA_ARGS__);                          \
         default:                                                                                                       \
