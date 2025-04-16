@@ -3,6 +3,7 @@
 import math
 from copy import deepcopy
 from enum import Enum, auto
+from os import getenv
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import torch
@@ -1111,6 +1112,12 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                                             device=device)
         self._load_buffers = dict()
         self.enable_microbatch = get_dist_manager().current_context().dist_config.enable_microbatch
+        self.enable_microbatch_prefill_batchsize_threshold = \
+            int(getenv('ENABLE_MICROBATCH_PREFILL_BATCHSIZE_THRESHOLD', 2))
+        self.enable_microbatch_prefill_token_threshold = \
+            int(getenv('ENABLE_MICROBATCH_PREFILL_TOKEN_THRESHOLD', 2))
+        self.enable_microbatch_decode_batchsize_threshold = \
+            int(getenv('ENABLE_MICROBATCH_DECODE_BATCHSIZE_THRESHOLD', 2))
 
     def forward(
         self,
@@ -1161,10 +1168,16 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
         # twobatch or onebatch
         if self.enable_microbatch:
             batch_size = attn_metadata.q_start_loc.size(dim=0)
-            if batch_size < 2:
-                disable_num = torch.tensor(1, dtype=torch.int32, device=input_ids.device)
+            tokens = input_ids.numel()
+            if attn_metadata.is_decoding:
+                enable_microbatch = batch_size >= self.enable_microbatch_decode_batchsize_threshold
             else:
+                enable_microbatch = batch_size >= self.enable_microbatch_prefill_batchsize_threshold and \
+                                    tokens >= self.enable_microbatch_prefill_token_threshold
+            if enable_microbatch:
                 disable_num = torch.tensor(0, dtype=torch.int32, device=input_ids.device)
+            else:
+                disable_num = torch.tensor(1, dtype=torch.int32, device=input_ids.device)
             ep_group = get_dist_manager().current_context().ep_gpu_group
             dist.all_reduce(disable_num, op=dist.ReduceOp.SUM, group=ep_group)
             step_ctx = get_step_ctx_manager().current_context()
