@@ -127,9 +127,9 @@ public:
 
         MatrixLayout Adesc = _Adesc;
 
-        const int m = Ddesc.rows;
-        const int n = Ddesc.cols;
-        const int k = Adesc.cols;
+        [[maybe_unused]] const int m = Ddesc.rows;
+        [[maybe_unused]] const int n = Ddesc.cols;
+        [[maybe_unused]] const int k = Adesc.cols;
 
         auto transpose = [](MatrixLayout x) {
             std::swap(x.rows, x.cols);

@@ -21,10 +21,6 @@
 #include "src/turbomind/layers/sampling_layers/SamplingLayer.h"
 #include "src/turbomind/layers/sampling_layers/StopCriteriaLayer.h"
 #include "src/turbomind/macro.h"
-#include "src/turbomind/utils/cuda_utils.h"
-
-#define EVAL(x) #x
-#define PRINT(x) EVAL(x)
 
 namespace turbomind {
 

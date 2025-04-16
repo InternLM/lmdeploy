@@ -136,7 +136,8 @@ endif ()
 message(STATUS "Building with CUDA archs: ${CMAKE_CUDA_ARCHITECTURES}")
 
 if (MSVC) 
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /Zc:preprocessor")
+    # use standard conformant preprocessor
+    add_compile_options(/Zc:preprocessor)
 endif ()
 
 set(CMAKE_CUDA_RUNTIME_LIBRARY Shared)
