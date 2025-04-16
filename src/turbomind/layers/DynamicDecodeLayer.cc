@@ -25,7 +25,7 @@
 
 namespace turbomind {
 
-DynamicDecodeLayer::DynamicDecodeLayer(DataType              data_type,
+DynamicDecodeLayer::DynamicDecodeLayer(DataType              dtype,
                                        int                   max_batch_size,
                                        int                   vocab_size,
                                        int                   vocab_size_padded,
@@ -40,7 +40,7 @@ DynamicDecodeLayer::DynamicDecodeLayer(DataType              data_type,
         layers_.emplace_back(new SamplingLayer<T>{param});
         layers_.emplace_back(new StopCriteriaLayer<T>{param});
     };
-    TM_DISPATCH_PRIMARY_DTYPES(data_type, dispatch);
+    TM_DISPATCH_PRIMARY_DTYPES(dtype, dispatch);
 }
 
 DynamicDecodeLayer::~DynamicDecodeLayer() {}
