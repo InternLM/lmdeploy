@@ -158,6 +158,16 @@ lmdeploy lite auto_awq $HF_MODEL --work-dir $WORK_DIR --device npu
 
 Please check [supported_models](../../supported_models/supported_models.md) before use this feature.
 
+### w8a8 SMOOTH_QUANT
+
+Run the following commands to quantize weights on Atlas 800T A2.
+
+```bash
+lmdeploy lite smooth_quant $HF_MODEL --work-dir $WORK_DIR --device npu
+```
+
+Please check [supported_models](../../supported_models/supported_models.md) before use this feature.
+
 ### int8 KV-cache Quantization
 
 Ascend backend has supported offline int8 KV-cache Quantization on eager mode.
