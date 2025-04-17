@@ -15,6 +15,7 @@ from lmdeploy.pytorch.models.qwen2_vl import Qwen2VLForConditionalGeneration
 from lmdeploy.utils import get_logger
 
 from ...graph_runner import GraphRunner
+from .op_backend import SocVersion
 
 ACL_FORMAT_ND = 2
 
@@ -107,7 +108,7 @@ class AscendGraphRunner(GraphRunner):
         context: StepContext = None,
     ):
         """prepare inputs."""
-        if self.enable_graph:
+        if self.enable_graph and SocVersion.is_Ascend910B():
             self._convert_kv_format(past_key_values)
         return self.model.prepare_inputs_for_generation(
             past_key_values=past_key_values,
