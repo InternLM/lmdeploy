@@ -7,7 +7,6 @@ import torch
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.utils import get_logger
 
-from ..backends.dlinfer.ascend import SocVersion
 from ..config import CacheConfig, ModelConfig
 
 KVCache = Tuple[torch.Tensor, torch.Tensor]
@@ -162,31 +161,16 @@ class CacheEngine:
         num_layers = self.num_layers
         kv_cache_dtype = self.kv_cache_dtype
 
-        if device == 'cuda' and self.cache_config.device_type in ['ascend', 'npu'] and SocVersion.is_Ascend310P():
-            import torch_npu
-            key_cache = torch_npu.empty_with_format(
-                size=(num_layers, num_blocks, *key_block_shape),
-                dtype=kv_cache_dtype,
-                device='npu',
-                acl_format=29,
-            )
-            value_cache = torch_npu.empty_with_format(
-                size=(num_layers, num_blocks, *value_block_shape),
-                dtype=kv_cache_dtype,
-                device='npu',
-                acl_format=29,
-            )
-        else:
-            key_cache = torch.empty(
-                size=(num_layers, num_blocks, *key_block_shape),
-                dtype=kv_cache_dtype,
-                device=device,
-            )
-            value_cache = torch.empty(
-                size=(num_layers, num_blocks, *value_block_shape),
-                dtype=kv_cache_dtype,
-                device=device,
-            )
+        key_cache = torch.empty(
+            size=(num_layers, num_blocks, *key_block_shape),
+            dtype=kv_cache_dtype,
+            device=device,
+        )
+        value_cache = torch.empty(
+            size=(num_layers, num_blocks, *value_block_shape),
+            dtype=kv_cache_dtype,
+            device=device,
+        )
 
         output = (key_cache, value_cache)
 

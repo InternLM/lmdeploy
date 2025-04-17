@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Dict, Tuple
 
 import torch
-import torch_npu
 
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.utils import get_logger
@@ -24,7 +23,14 @@ class SocVersion:
     @classmethod
     @lru_cache(maxsize=1)
     def device_name(cls) -> str:
-        return torch_npu.npu.get_device_name()[:10]
+        try:
+            import torch_npu
+            return torch_npu.npu.get_device_name()[:10]
+        except ImportError:
+            logger.warning('Failed to import torch_npu. Please make sure torch_npu is installed correctly. ')
+        except Exception as e:
+            logger.warning(f'Error during Ascend get device name: {str(e)}. '
+                           'Please check your Ascend environment configuration.')
 
     @classmethod
     def is_Ascend310P(cls) -> bool:
