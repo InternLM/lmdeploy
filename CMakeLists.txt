@@ -133,7 +133,6 @@ if (NOT CMAKE_CUDA_ARCHITECTURES)
   endif ()
   if (MSVC)
     list(REMOVE_ITEM CMAKE_CUDA_ARCHITECTURES 80-real 90-real)
-    set(CMAKE_CUDA_ARCHITECTURES 89-real)
   endif ()
 endif ()
 
