@@ -878,8 +878,8 @@ LlamaBatch::LlamaBatch(DataType                 data_type,
     incoming_ = &states_[2];
 
     symm_alloc_ = core::SimpleAllocator::Create([this](ssize_t size) { return SymmAlloc(size, true); },
-                                          [this](void* p, ssize_t size) { return SymmFree(p, size, true); },
-                                          kDEVICE);
+                                                [this](void* p, ssize_t size) { return SymmFree(p, size, true); },
+                                                kDEVICE);
 
     AllocSymmBuffers();
 

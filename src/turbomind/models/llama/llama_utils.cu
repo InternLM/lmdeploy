@@ -133,8 +133,6 @@ template void Compare(__nv_bfloat16* ptr, size_t size, std::string key, CmpMode 
 template void CheckNan(const float* ptr, size_t size, std::string key, cudaStream_t stream);
 template void CheckNan(const half* ptr, size_t size, std::string key, cudaStream_t stream);
 
-
-
 size_t curandStateGetSize()
 {
     return sizeof(curandState_t);

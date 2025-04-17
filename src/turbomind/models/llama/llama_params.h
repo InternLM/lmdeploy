@@ -7,8 +7,8 @@
 #include <regex>
 #include <string>
 
-#include "src/turbomind/models/llama/llama_rope.h"
 #include "src/turbomind/core/data_type.h"
+#include "src/turbomind/models/llama/llama_rope.h"
 
 namespace turbomind {
 

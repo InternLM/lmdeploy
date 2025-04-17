@@ -198,7 +198,7 @@ void invokeQkRMSNorm(void*        data,
     auto invoke = [&](auto t) {
         using T = decltype(t);
 
-        constexpr int vec_size   = sizeof(uint4) / sizeof(T);
+        constexpr int vec_size = sizeof(uint4) / sizeof(T);
         // Captured constexpr may not be constant to MSVC
         constexpr int thr_per_qk = max_dim.value / vec_size;
 

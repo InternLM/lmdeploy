@@ -31,7 +31,7 @@ public:
     };
 
     struct OutputParam {
-        std::shared_ptr<TensorMap>    tensors;
+        std::shared_ptr<TensorMap>          tensors;
         std::shared_ptr<AtomicRequestState> state;
     };
 

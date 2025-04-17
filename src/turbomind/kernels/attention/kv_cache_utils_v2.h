@@ -2,8 +2,8 @@
 
 #pragma once
 
-#include "src/turbomind/kernels/attention/attention_params.h"
 #include "src/turbomind/core/data_type.h"
+#include "src/turbomind/kernels/attention/attention_params.h"
 
 namespace turbomind {
 

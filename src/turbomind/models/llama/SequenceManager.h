@@ -9,12 +9,12 @@
 #include "src/turbomind/models/llama/BlockManager.h"
 #include "src/turbomind/models/llama/BlockTrie.h"
 
-
 namespace turbomind {
 
 struct Sequence {
 
-    enum Status {
+    enum Status
+    {
         kCached = 0,
         kLocked,
         kActive

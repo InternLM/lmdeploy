@@ -38,7 +38,7 @@ struct LlamaWeight: core::Module {
 
     ~LlamaWeight();
 
-    LlamaWeight(const LlamaWeight&)            = delete;
+    LlamaWeight(const LlamaWeight&) = delete;
     LlamaWeight& operator=(const LlamaWeight&) = delete;
 
     void prepare(const cudaDeviceProp& prop);
