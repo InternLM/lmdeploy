@@ -3,25 +3,31 @@ import pytest
 from lmdeploy.model import MODELS, best_match_model
 
 
-@pytest.mark.parametrize('model_path_and_name', [('internlm/internlm-chat-7b', ['internlm']),
-                                                 ('internlm/internlm2-1_8b', ['base']),
-                                                 ('models--internlm--internlm-chat-7b/snapshots/1234567', ['internlm']),
-                                                 ('Qwen/Qwen-7B-Chat', ['qwen']),
-                                                 ('Qwen/Qwen2.5-7B-Instruct', ['qwen2d5']),
-                                                 ('codellama/CodeLlama-7b-hf', ['codellama']),
-                                                 ('upstage/SOLAR-0-70b', ['solar', 'solar-70b']),
-                                                 ('meta-llama/Llama-2-7b-chat-hf', ['llama2']),
-                                                 ('THUDM/chatglm2-6b', ['chatglm']),
-                                                 ('01-ai/Yi-6B-200k', ['yi', 'yi-200k']), ('01-ai/Yi-34B-Chat', ['yi']),
-                                                 ('01-ai/Yi-6B-Chat', ['yi', 'yi-chat']),
-                                                 ('WizardLM/WizardLM-70B-V1.0', ['wizardlm']),
-                                                 ('codellama/CodeLlama-34b-Instruct-hf', ['codellama']),
-                                                 ('deepseek-ai/deepseek-coder-6.7b-instruct', ['deepseek-coder']),
-                                                 ('deepseek-ai/deepseek-vl-7b-chat', ['deepseek-vl']),
-                                                 ('deepseek-ai/deepseek-moe-16b-chat', ['deepseek']),
-                                                 ('internlm/internlm-xcomposer2-4khd-7b', ['internlm-xcomposer2']),
-                                                 ('internlm/internlm-xcomposer2d5-7b', ['internlm-xcomposer2d5']),
-                                                 ('tiiuae/falcon-7b', ['falcon']), ('workspace', ['base'])])
+@pytest.mark.parametrize('model_path_and_name', [
+    ('internlm/internlm-chat-7b', ['internlm']),
+    ('internlm/internlm2-1_8b', ['base']),
+    ('models--internlm--internlm-chat-7b/snapshots/1234567', ['internlm']),
+    ('Qwen/Qwen-7B-Chat', ['qwen']),
+    ('Qwen/Qwen2.5-7B-Instruct', ['qwen2d5']),
+    ('codellama/CodeLlama-7b-hf', ['codellama']),
+    ('upstage/SOLAR-0-70b', ['solar', 'solar-70b']),
+    ('meta-llama/Llama-2-7b-chat-hf', ['llama2']),
+    ('THUDM/chatglm2-6b', ['chatglm']),
+    ('01-ai/Yi-6B-200k', ['yi', 'yi-200k']),
+    ('01-ai/Yi-34B-Chat', ['yi']),
+    ('01-ai/Yi-6B-Chat', ['yi', 'yi-chat']),
+    ('WizardLM/WizardLM-70B-V1.0', ['wizardlm']),
+    ('codellama/CodeLlama-34b-Instruct-hf', ['codellama']),
+    ('deepseek-ai/deepseek-coder-6.7b-instruct', ['deepseek-coder']),
+    ('deepseek-ai/deepseek-vl-7b-chat', ['deepseek-vl']),
+    ('deepseek-ai/deepseek-moe-16b-chat', ['deepseek']),
+    ('internlm/internlm-xcomposer2-4khd-7b', ['internlm-xcomposer2']),
+    ('internlm/internlm-xcomposer2d5-7b', ['internlm-xcomposer2d5']),
+    ('tiiuae/falcon-7b', ['falcon']),
+    ('workspace', ['base']),
+    ('OpenGVLab/InternVL2_5-1B', ['internvl2_5']),
+    ('OpenGVLab/InternVL3-1B', ['internvl2_5']),
+])
 @pytest.mark.parametrize('suffix', ['', '-w4', '-4bit', '-16bit'])
 def test_best_match_model(model_path_and_name, suffix):
     if model_path_and_name[0] == 'internlm/internlm2-1_8b' and suffix:
