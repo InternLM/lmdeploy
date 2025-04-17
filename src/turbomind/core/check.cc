@@ -35,7 +35,7 @@ std::string StripSrcPrefix(const char* file)
         }
     }
 
-    return ret;
+    return ret.string();
 }
 
 }  // namespace

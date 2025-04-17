@@ -199,7 +199,8 @@ void invokeQkRMSNorm(void*        data,
         using T = decltype(t);
 
         constexpr int vec_size   = sizeof(uint4) / sizeof(T);
-        constexpr int thr_per_qk = max_dim / vec_size;
+        // Captured constexpr may not be constant to MSVC
+        constexpr int thr_per_qk = max_dim.value / vec_size;
 
         FT_CHECK(head_dim % vec_size == 0);
 
@@ -233,7 +234,7 @@ void invokeRMSNormQK(Tensor& x, const Tensor& w, float eps, cudaStream_t st)
         using T = decltype(t);
 
         constexpr int vec_size   = sizeof(uint4) / sizeof(T);
-        constexpr int thr_per_qk = max_dim / vec_size;
+        constexpr int thr_per_qk = max_dim.value / vec_size;
 
         TM_CHECK(head_dim % vec_size == 0);
 
