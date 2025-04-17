@@ -21,6 +21,8 @@
 
 #pragma once
 
+#include <array>
+
 #include <cuda_runtime.h>
 
 #include "src/turbomind/core/core.h"
