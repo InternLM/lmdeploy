@@ -12,6 +12,7 @@ import torch
 from ray.util.placement_group import PlacementGroup
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.backends.selector import init_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, ModelConfig
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
@@ -125,7 +126,7 @@ def _get_master_port():
 
 
 def get_ascend_device_rank_mapping(master_addr):
-    rank_table_file = os.environ.get('ASCEND_RANK_TABLE_FILE_PATH')
+    rank_table_file = _envs.ascend_rank_table_file
     if not rank_table_file:
         raise ValueError('ASCEND_RANK_TABLE_FILE_PATH is not set')
     with open(rank_table_file, 'r') as f:
@@ -255,8 +256,8 @@ class RayExecutor(ExecutorBase):
                 self.master_addr = _get_master_addr()
                 self.master_port = _get_master_port()
             else:
-                self.master_addr = os.environ.get('LMDEPLOY_DP_MASTER_ADDR', None)
-                self.master_port = os.environ.get('LMDEPLOY_DP_MASTER_PORT', None)
+                self.master_addr = _envs.dp_master_addr
+                self.master_port = _envs.dp_master_port
                 if self.master_addr is None or self.master_port is None:
                     raise RuntimeError('DP > 1 requires "LMDEPLOY_DP_MASTER_ADDR" and "LMDEPLOY_DP_MASTER_PORT".')
 
@@ -391,7 +392,7 @@ class RayExecutor(ExecutorBase):
                 self.collective_rpc('exit')
                 logger.debug('RayExecutor workers exited.')
             except ray.exceptions.RayActorError as e:
-                logger.debug(f'ray actor exit: {e}')
+                logger.warning(f'ray actor exit: {e}')
         else:
             [ray.kill(worker) for worker in self.workers]
 
@@ -493,10 +494,14 @@ class RayExecutor(ExecutorBase):
             )
 
             if device_str == 'GPU':
+                runtime_env = dict()
+                if _envs.enable_ray_nsys_profile:
+                    runtime_env['nsight'] = 'default'
                 worker = ray.remote(
                     num_cpus=0,
                     num_gpus=1.0,
                     scheduling_strategy=scheduling_strategy,
+                    runtime_env=runtime_env,
                 )(RayWorkerWrapper).remote(**worker_kwargs)
             else:
                 worker = ray.remote(
