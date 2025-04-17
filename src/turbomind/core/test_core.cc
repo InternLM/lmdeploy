@@ -1,10 +1,7 @@
 
 #include <numeric>
 
-#include "src/turbomind/core/buffer.h"
-#include "src/turbomind/core/check.h"
-#include "src/turbomind/core/context.h"
-#include "src/turbomind/core/tensor.h"
+#include "src/turbomind/core/core.h"
 
 #include "catch2/catch_test_macros.hpp"
 

@@ -3,16 +3,12 @@
 #include <algorithm>
 #include <functional>
 #include <memory>
-#include <numeric>
 #include <type_traits>
-#include <unordered_map>
 #include <utility>
-#include <vector>
 
 #include "src/turbomind/engine/model_request.h"
 #include "src/turbomind/engine/request.h"
 #include "src/turbomind/utils/constant.h"
-#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 

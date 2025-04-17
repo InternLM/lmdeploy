@@ -10,9 +10,8 @@
 #include <numeric>
 
 #include "src/turbomind/comm/host_comm.h"
+#include "src/turbomind/core/check.h"
 #include "src/turbomind/core/data_type.h"
-#include "src/turbomind/utils/cuda_utils.h"
-
 namespace turbomind::comm {
 
 struct ThreadCommImpl: public HostCommImpl {
@@ -71,8 +70,8 @@ struct ThreadCommImpl: public HostCommImpl {
 
     std::shared_ptr<HostCommImpl> Split(int color, int key) override
     {
-        FT_CHECK(color >= 0);
-        FT_CHECK(g2l_[rank_] >= 0);
+        TM_CHECK(color >= 0);
+        TM_CHECK(g2l_[rank_] >= 0);
 
         // `g2l_[rank_]` imposes proper ordering when keys are equal
         auto vec = comm::AllGather(this, std::make_tuple(color, key, g2l_[rank_]));
@@ -124,7 +123,7 @@ struct ThreadCommImpl: public HostCommImpl {
 
     void Broadcast(void* data, int count, DataType dtype, int root, copy_fn copy) override
     {
-        FT_CHECK(copy);
+        TM_CHECK(copy);
         if (n_ranks() == 1) {
             return;
         }
@@ -158,7 +157,7 @@ struct ThreadCommImpl: public HostCommImpl {
 
     void AllGather(void* data, int count, DataType dtype, copy_fn copy) override
     {
-        FT_CHECK(copy);
+        TM_CHECK(copy);
         if (n_ranks() == 1) {
             return;
         }
@@ -292,7 +291,7 @@ public:
 
     void Export(std::ostream& os) override
     {
-        FT_CHECK((bool)internal_);  // `Initialize` must come befor `Export`
+        TM_CHECK((bool)internal_);  // `Initialize` must come befor `Export`
 
         const void* ptr = this;
         os.write((const char*)&ptr, sizeof(ptr));
@@ -304,7 +303,7 @@ public:
         is.read((char*)&ptr, sizeof(ptr));
         internal_ = reinterpret_cast<ThreadGroupId*>(ptr)->internal_;
 
-        FT_CHECK((bool)internal_);
+        TM_CHECK((bool)internal_);
     }
 
     HostComm CreateCommunicator(int n_ranks, int rank) override
@@ -313,12 +312,12 @@ public:
             internal_->state = std::make_shared<ThreadCommImpl::State>(n_ranks);
         };
 
-        FT_CHECK((bool)internal_);
+        TM_CHECK((bool)internal_);
 
         // One of the rank initialize the shared state
         std::call_once(internal_->flag, init_shared_state);
 
-        FT_CHECK((bool)internal_->state);
+        TM_CHECK((bool)internal_->state);
 
         auto impl = std::make_shared<ThreadCommImpl>(n_ranks, internal_->state, rank);
 
