@@ -51,6 +51,14 @@ if (BUILD_TEST)
 
   set(CUTLASS_HEADER_DIR ${PROJECT_SOURCE_DIR}/3rdparty/cutlass/include)
   set(CUTLASS_EXTENSIONS_DIR ${PROJECT_SOURCE_DIR}/src/turbomind/cutlass_extensions/include)
+
+
+  FetchContent_Declare(
+    Catch2
+    GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+    GIT_TAG        v3.8.0
+  )
+  FetchContent_MakeAvailable(Catch2)
 endif()
 
 FetchContent_Declare(
@@ -60,14 +68,6 @@ FetchContent_Declare(
 )
 set(YAML_BUILD_SHARED_LIBS OFF CACHE BOOL "Build static library of yaml-cpp")
 FetchContent_MakeAvailable(yaml-cpp)
-
-
-FetchContent_Declare(
-  Catch2
-  GIT_REPOSITORY https://github.com/catchorg/Catch2.git
-  GIT_TAG        v3.8.0
-)
-FetchContent_MakeAvailable(Catch2)
 
 
 # the environment variable
