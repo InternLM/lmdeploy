@@ -125,6 +125,7 @@ class SubCliServe:
                             'engine’s tasks once the maximum number of concurrent requests is '
                             'reached, regardless of any additional requests sent by clients '
                             'concurrently during that time. Default to None.')
+        parser.add_argument('--metrics', action='store_true', default=False, help='Whether log stats to prometheus')
         # common args
         ArgumentHelper.backend(parser)
         ArgumentHelper.log_level(parser)
@@ -337,6 +338,7 @@ class SubCliServe:
                        proxy_url=args.proxy_url,
                        max_log_len=args.max_log_len,
                        disable_fastapi_docs=args.disable_fastapi_docs,
+                       metrics=args.metrics,
                        max_concurrent_requests=args.max_concurrent_requests,
                        reasoning_parser=args.reasoning_parser,
                        tool_call_parser=args.tool_call_parser)
