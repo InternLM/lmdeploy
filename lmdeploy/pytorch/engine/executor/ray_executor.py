@@ -406,7 +406,7 @@ class RayExecutor(ExecutorBase):
                 self.collective_rpc('exit')
                 logger.debug('RayExecutor workers exited.')
             except ray.exceptions.RayActorError as e:
-                logger.warning(f'ray actor exit: {e}')
+                logger.debug(f'ray actor exit: {e}')
         else:
             [ray.kill(worker) for worker in self.workers]
 
