@@ -15,6 +15,12 @@
 cmake_minimum_required(VERSION 3.11 FATAL_ERROR) # for PyTorch extensions, version should be greater than 3.13
 project(TurboMind LANGUAGES CXX CUDA)
 
+if (MSVC)
+    # use standard conformant preprocessor
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>)
+    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler=/Zc:preprocessor")
+endif ()
+
 find_package(CUDAToolkit REQUIRED)
 
 if(${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL "11")
@@ -132,11 +138,6 @@ if (NOT CMAKE_CUDA_ARCHITECTURES)
 endif ()
 
 message(STATUS "Building with CUDA archs: ${CMAKE_CUDA_ARCHITECTURES}")
-
-if (MSVC) 
-    # use standard conformant preprocessor
-    add_compile_options(/Zc:preprocessor)
-endif ()
 
 set(CMAKE_CUDA_RUNTIME_LIBRARY Shared)
 set(CMAKE_C_FLAGS_DEBUG    "${CMAKE_C_FLAGS_DEBUG}    -Wall -O0")
