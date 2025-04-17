@@ -134,5 +134,6 @@
 | InternVL(v1.5) |  2B-26B  | MLLM |       Yes        |        -         |     Yes     |     Yes      |
 |   InternVL2    |  1B-40B  | MLLM |       Yes        |       Yes        |     Yes     |     Yes      |
 |  InternVL2.5   |  1B-78B  | MLLM |       Yes        |       Yes        |     Yes     |     Yes      |
+|   InternVL3    |  1B-78B  | MLLM |       Yes        |       Yes        |     Yes     |     Yes      |
 |  CogVLM2-chat  |   19B    | MLLM |       Yes        |        No        |      -      |      -       |
 |     GLM4V      |    9B    | MLLM |       Yes        |        No        |      -      |      -       |
