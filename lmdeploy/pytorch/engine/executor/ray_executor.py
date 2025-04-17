@@ -152,6 +152,20 @@ def get_ascend_device_rank_mapping(master_addr):
     return rank_mapping, worker_ips, envs
 
 
+def _update_runtime_env_nsys(runtime_env: Dict):
+    """update runtime env for nsys."""
+    nsight_env = {
+        't': 'cuda,cudnn,cublas,nvtx',
+        'o': "'worker_process_%p'",
+        'stop-on-exit': 'true',
+    }
+    prefix_path = _envs.ray_nsys_output_prefix
+    if prefix_path is not None:
+        nsight_env['o'] = f'{prefix_path}%p'
+    runtime_env['nsight'] = nsight_env
+    return runtime_env
+
+
 class RayWorkerWrapper(WorkerWrapperBase):
     """worker wrapper."""
 
@@ -495,8 +509,8 @@ class RayExecutor(ExecutorBase):
 
             if device_str == 'GPU':
                 runtime_env = dict()
-                if _envs.enable_ray_nsys_profile:
-                    runtime_env['nsight'] = 'default'
+                if _envs.ray_nsys_enable:
+                    runtime_env = _update_runtime_env_nsys(runtime_env)
                 worker = ray.remote(
                     num_cpus=0,
                     num_gpus=1.0,

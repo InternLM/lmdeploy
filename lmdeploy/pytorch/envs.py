@@ -25,7 +25,8 @@ def env_to_bool(
 
 
 # profile
-enable_ray_nsys_profile = env_to_bool('LMDEPLOY_RAY_NSYS_PROFILE', False)
+ray_nsys_enable = env_to_bool('LMDEPLOY_RAY_NSYS_ENABLE', False)
+ray_nsys_output_prefix = os.getenv('LMDEPLOY_RAY_NSYS_OUT_PREFIX', None)
 
 # ascend
 ascend_rank_table_file = os.getenv('ASCEND_RANK_TABLE_FILE_PATH')
