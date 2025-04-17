@@ -36,6 +36,7 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |             InternVL             |   v1.1 - v1.5    | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |    InternVL2<sup>\[2\]</sup>     | 1 - 2B, 8B - 76B | MLLM |    Yes    |  Yes\*  |  Yes\*  |  Yes  |
 | InternVL2.5(MPO)<sup>\[2\]</sup> |     1 - 78B      | MLLM |    Yes    |  Yes\*  |  Yes\*  |  Yes  |
+|    InternVL3<sup>\[2\]</sup>     |     1 - 78B      | MLLM |    Yes    |  Yes\*  |  Yes\*  |  Yes  |
 |             ChemVLM              |     8B - 26B     | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |       MiniCPM-Llama3-V-2_5       |        -         | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |          MiniCPM-V-2_6           |        -         | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
@@ -95,6 +96,7 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |         InternVL(v1.5)         |     2B-26B      | MLLM |    Yes    |   Yes   |   Yes   |  No  |  Yes  |
 |           InternVL2            |     1B-76B      | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
 |        InternVL2.5(MPO)        |     1B-78B      | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
+|           InternVL3            |     1B-78B      | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
 | Mono-InternVL<sup>\[1\]</sup>  |       2B        | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
 |            ChemVLM             |     8B-26B      | MLLM |    Yes    |   Yes   |   No    |  -   |   -   |
 |             Gemma2             |     9B-27B      | LLM  |    Yes    |   Yes   |   Yes   |  -   |   -   |
@@ -129,5 +131,7 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |  DeepSeek-V2   |   16B    | LLM  |        No        |       Yes        |      No      |
 | InternVL(v1.5) |  2B-26B  | MLLM |       Yes        |        -         |     Yes      |
 |   InternVL2    |  1B-40B  | MLLM |       Yes        |       Yes        |     Yes      |
+|  InternVL2.5   |  1B-78B  | MLLM |       Yes        |       Yes        |     Yes      |
+|   InternVL3    |  1B-78B  | MLLM |       Yes        |       Yes        |     Yes      |
 |  CogVLM2-chat  |   19B    | MLLM |       Yes        |        No        |      -       |
 |     GLM4V      |    9B    | MLLM |       Yes        |        No        |      -       |
