@@ -87,6 +87,10 @@ class Attention(nn.Module):
             inplace=inplace,
         )
 
+    @staticmethod
+    def update_meta_flashmla(attn_metadata: AttentionMetadata, num_attention_heads):
+        get_backend().update_meta_flashmla(attn_metadata, num_attention_heads)
+
 
 class FlashAttention(nn.Module):
     """flash attention w/o paging."""

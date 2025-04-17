@@ -2,9 +2,9 @@
 
 LMDeploy 支持 Qwen-VL 系列模型，具体如下：
 
-|   Model    |    Size     | Supported Inference Engine |
-| :--------: | :---------: | :------------------------: |
-| Qwen2.5-VL | 3B, 7B, 72B |          PyTorch           |
+|   Model    |       Size       | Supported Inference Engine |
+| :--------: | :--------------: | :------------------------: |
+| Qwen2.5-VL | 3B, 7B, 32B, 72B |          PyTorch           |
 
 本文将以[Qwen2.5-VL-7B-Instruct](https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct)为例，演示使用 LMDeploy 部署 Qwen2.5-VL 系列模型的方法
 
