@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from lmdeploy.disagg.conn import PDConnectionPool
+from lmdeploy.disagg.conn import PDConnectionPool, PDConnectionRequest
 from lmdeploy.disagg.messages import EngineRole, ServingStrategy, MigrationRequest
 from lmdeploy.serve.openai.api_server import check_api_key, create_error_response
 from lmdeploy.serve.openai.protocol import ModelCard  # noqa: E501
@@ -96,6 +96,8 @@ class NodeManager:
         self.heart_beat_thread = threading.Thread(target=heart_beat_controller, args=(self, ), daemon=True)
         self.heart_beat_thread.start()
         self.aiotimeout = aiohttp.ClientTimeout(total=AIOHTTP_TIMEOUT)
+
+        self.initialized = False
 
     def get_nodes(self, role: EngineRole) -> Dict:
         return {node_url: node_status for (node_url, node_status) in self.nodes.items() if node_status.role == role}
@@ -554,52 +556,69 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
             node_manager.post_call(node_url, start)
             return JSONResponse(json.loads(response))
     elif node_manager.serving_strategy == ServingStrategy.Disaggregated:
-        check_response = await node_manager.check_request_model(request.model)
-        if check_response is not None:
-            return check_response
+        # if not node_manager.initialized:
+        #     node_manager.initialized = True
+        #     conns = []
+        #     for pid in node_manager.prefill_nodes:
+        #         for did in node_manager.decode_nodes:
+        #             conns.append(node_manager.pd_connection_pool.connect(PDConnectionRequest(p_url=pid, d_url=did)))
+        #     await asyncio.gather(*conns)
+        prefill_info = {}
+        try:
+            check_response = await node_manager.check_request_model(request.model)
+            if check_response is not None:
+                return check_response
 
-        request_dict = request.model_dump()
+            request_dict = request.model_dump()
 
-        # Prefill
-        prefill_request_dict = copy.deepcopy(request_dict)
-        prefill_request_dict["max_tokens"] = 1
-        prefill_request_dict["stream"] = False
-        prefill_request_dict["with_cache"] = True
+            # Prefill
+            prefill_request_dict = copy.deepcopy(request_dict)
+            prefill_request_dict["max_tokens"] = 1
+            prefill_request_dict["stream"] = False
+            prefill_request_dict["with_cache"] = True
 
-        p_url = node_manager.get_node_url(request.model, EngineRole.Prefill)
-        if not p_url:
-            return node_manager.handle_unavailable_model(request.model)
-        logger.info(f'A Prefill request is dispatched to {p_url}')
+            p_url = node_manager.get_node_url(request.model, EngineRole.Prefill)
+            if not p_url:
+                return node_manager.handle_unavailable_model(request.model)
+            logger.info(f'A Prefill request is dispatched to {p_url}')
 
-        start = node_manager.pre_call(p_url)
-        prefill_info = json.loads(await node_manager.generate(prefill_request_dict, p_url, '/v1/completions', is_prefill=True))
-        # print(prefill_info)
-        node_manager.post_call(p_url, start)
+            start = node_manager.pre_call(p_url)
+            prefill_info = json.loads(await node_manager.generate(prefill_request_dict, p_url, '/v1/completions', is_prefill=True))
+            node_manager.post_call(p_url, start)
 
-        # # Decode
-        d_url = node_manager.get_node_url(request.model, EngineRole.Decode)
-        if not d_url:
-            return node_manager.handle_unavailable_model(request.model)
-        logger.info(f'A Decode request is dispatched to {d_url}')
+            # # Decode
+            d_url = node_manager.get_node_url(request.model, EngineRole.Decode)
+            if not d_url:
+                return node_manager.handle_unavailable_model(request.model)
+            logger.info(f'A Decode request is dispatched to {d_url}')
 
-        if not node_manager.pd_connection_pool.get(p_url, d_url):
-            await node_manager.pd_connection_pool.connect(p_url, d_url)
-        request_dict["migration_request"] = MigrationRequest(
-            remote_engine_id=p_url,
-            remote_session_id=int(prefill_info["id"]),
-            remote_block_ids=prefill_info["cache_block_ids"],
-            remote_token_id=prefill_info["remote_token_ids"][-1],
-        ).model_dump()
+            if not node_manager.pd_connection_pool.is_connected(p_url, d_url):
+                await node_manager.pd_connection_pool.connect(PDConnectionRequest(p_url=p_url, d_url=d_url))
+            request_dict["migration_request"] = MigrationRequest(
+                remote_engine_id=p_url,
+                remote_session_id=int(prefill_info["id"]),
+                remote_block_ids=prefill_info["cache_block_ids"],
+                remote_token_id=prefill_info["remote_token_ids"][-1],
+            ).model_dump()
 
-        start = node_manager.pre_call(d_url)
-        if request.stream is True:
-            response = node_manager.stream_generate(request_dict, d_url, '/v1/completions')
-            background_task = node_manager.create_background_tasks(d_url, start)
-            return StreamingResponse(response, background=background_task)
-        else:
-            response = await node_manager.generate(request_dict, d_url, '/v1/completions')
-            node_manager.post_call(d_url, start)
-            return JSONResponse(json.loads(response))
+            start = node_manager.pre_call(d_url)
+            if request.stream is True:
+                response = node_manager.stream_generate(request_dict, d_url, '/v1/completions')
+                background_task = node_manager.create_background_tasks(d_url, start)
+                return StreamingResponse(response, background=background_task)
+            else:
+                response = await node_manager.generate(request_dict, d_url, '/v1/completions')
+                node_manager.post_call(d_url, start)
+                return JSONResponse(json.loads(response))
+        except:
+            if prefill_info.get("session_id", None):
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        node_url + "/distserve/free_cache",
+                        json={"session_id": prefill_info["id"]},
+                        timeout=self.aiotimeout
+                    ) as response:
+                        return await response.text()
     else:
         raise ValueError(f"No serving strategy named {node_manager.serving_strategy}")
 

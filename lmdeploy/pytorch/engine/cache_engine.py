@@ -66,8 +66,7 @@ class CacheEngine:
         self.local_gpu_cache = self.allocate_gpu_cache()
         self.local_cpu_cache = self.allocate_cpu_cache()
 
-        if self.cache_config.role in [EngineRole.Prefill, EngineRole.Decode]:
-            self.migration_backend_impl: MigrationBackendImpl = MIGRATION_BACKENDS[self.cache_config.migration_backend]()
+        self.migration_backend_impl: MigrationBackendImpl = MIGRATION_BACKENDS[self.cache_config.migration_backend]()
 
         # Initialize the stream for caching operations.
         self.cache_stream = torch.cuda.Stream()

@@ -68,7 +68,7 @@ class MigrationInitRequest(BaseModel):
     tp_rank: Optional[int] = None
 
     tcp_init_request: Optional[TCPInitRequest] = None
-    rdma_init_request: Optional[RDMAInitRequest] = None
+    rdma_init_request: Optional[RDMAInitRequest] = RDMAInitRequest()
     nvlink_init_request: Optional[NVLinkInitRequest] = None
 
 

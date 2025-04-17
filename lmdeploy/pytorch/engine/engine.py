@@ -9,7 +9,9 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 import torch
 
+import time
 import requests
+import aiohttp
 
 from lmdeploy.disagg.messages import EngineRole, MigrationExecutionBatch
 from lmdeploy.messages import PytorchEngineConfig, ResponseType
@@ -251,8 +253,11 @@ class InputsMakerSync(InputsMakerAsync):
         self._is_prefill = True
 
     def do_prefill(self):
-        ret = self._is_prefill
-        self._is_prefill = not self._is_prefill
+        if self.engine.engine_config.role in [EngineRole.Hybrid, EngineRole.Decode]:
+            ret = self._is_prefill
+            self._is_prefill = not self._is_prefill
+        elif self.engine.engine_config.role == EngineRole.Prefill:
+            ret = True
         return ret
 
     async def send_next_inputs(self):
@@ -295,6 +300,8 @@ class Engine:
             engine_config = copy.deepcopy(engine_config)
         if engine_config.max_batch_size is None:
             engine_config.max_batch_size = get_max_batch_size(engine_config.device_type)
+        if engine_config.role == EngineRole.Prefill:
+            engine_config.prefill_interval = 1
 
         tp = engine_config.tp
         dp = engine_config.dp
@@ -965,7 +972,13 @@ class Engine:
                 await self.executor.migrate(migration_inputs)
                 for msg in migration_running:
                     try:
-                        requests.post(f"{msg.migration_request.remote_engine_id}/distserve/free_cache", json={"session_id": msg.migration_request.remote_session_id})
+                        async with aiohttp.ClientSession() as session:
+                            async with session.post(
+                                node_url + endpoint, 
+                                json=f"{msg.migration_request.remote_engine_id}/distserve/free_cache",
+                                timeout=self.aiotimeout
+                            ) as response:
+                                await response.json()
                     except:
                         logger.warn("free kvcache failure, this may cause memory leak.")
                 # generate output

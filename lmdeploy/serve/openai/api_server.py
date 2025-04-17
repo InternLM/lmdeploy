@@ -18,6 +18,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from lmdeploy.archs import get_task
 from lmdeploy.disagg.messages import (
+    EngineRole,
     MigrationRequest,
     DisaggEngineConfig,
     MigrationInitRequest,
@@ -850,6 +851,20 @@ async def p2p_initialize(init_request: MigrationInitRequest):
 async def p2p_connect(conn_request: List[MigrationConnectionRequest]):
     return VariableInterface.async_engine.p2p_connect(conn_request)
 
+@router.post("/distserve/set_engine_to_prefill")
+async def set_engine_to_prefill() -> JSONResponse:
+    VariableInterface.async_engine.engine.engine_config.role = EngineRole.Prefill
+    return {"status": "SUCCESS"}
+
+@router.post("/distserve/set_engine_to_decode")
+async def set_engine_to_hybrid() -> JSONResponse:
+    VariableInterface.async_engine.engine.engine_config.role = EngineRole.Decode
+    return {"status": "SUCCESS"}
+
+@router.post("/distserve/set_engine_to_hybrid")
+async def set_engine_to_hybrid() -> JSONResponse:
+    VariableInterface.async_engine.engine.engine_config.role = EngineRole.Hybrid
+    return {"status": "SUCCESS"}
 
 @router.post("/distserve/free_cache")
 async def free_cache(raw_request: Request) -> JSONResponse:
