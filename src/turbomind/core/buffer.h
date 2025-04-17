@@ -186,10 +186,10 @@ struct Buffer_: public Buffer {
 
     Buffer_(ssize_t size, Device device): Buffer{size, data_type_v<T>, device} {}
 
-    Buffer_(const Buffer_&)            = default;
+    Buffer_(const Buffer_&) = default;
     Buffer_& operator=(const Buffer_&) = default;
 
-    Buffer_(Buffer_&&) noexcept            = default;
+    Buffer_(Buffer_&&) noexcept = default;
     Buffer_& operator=(Buffer_&&) noexcept = default;
 
     Buffer_(const Buffer& b)
@@ -283,7 +283,7 @@ private:
     static decltype(auto) ensure_dtype(U&& u) noexcept
     {
         TM_CHECK_EQ(u.dtype(), data_type_v<T>);
-        return (U&&)u;
+        return (U &&) u;
     }
 };
 

@@ -9,7 +9,8 @@ namespace turbomind::core {
 namespace {
 
 struct ContextStorage {
-    enum {
+    enum
+    {
         stream_bit       = 1,
         host_alloc_bit   = 2,
         device_alloc_bit = 4,

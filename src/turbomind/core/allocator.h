@@ -10,7 +10,8 @@
 
 namespace turbomind {
 
-enum class DeviceType : int {
+enum class DeviceType : int
+{
     kCPU,
     kCPUpinned,
     kDEVICE
@@ -106,7 +107,7 @@ public:
     template<class T, class... Args>
     shared_ptr<T> adapt(Args&&... args) const
     {
-        return {std::make_shared<T>(impl_, ((Args&&)args)...)};
+        return {std::make_shared<T>(impl_, ((Args &&) args)...)};
     }
 
 private:
@@ -210,7 +211,7 @@ public:
     template<class Alloc, class Dealloc>
     static Allocator Create(Alloc&& alloc, Dealloc&& dealloc, Device device)
     {
-        return Allocator{std::make_shared<SimpleAllocator>((Alloc&&)alloc, (Dealloc&&)dealloc, device)};
+        return Allocator{std::make_shared<SimpleAllocator>((Alloc &&) alloc, (Dealloc &&) dealloc, device)};
     }
 
     template<class Alloc, class Dealloc>

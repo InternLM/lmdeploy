@@ -20,7 +20,7 @@
 #include <vector>
 
 #include "src/turbomind/engine/request.h"
-#include "src/turbomind/layers/BaseDynamicDecodeLayer.h" 
+#include "src/turbomind/layers/BaseDynamicDecodeLayer.h"
 
 #include "src/turbomind/core/tensor.h"
 

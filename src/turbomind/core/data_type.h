@@ -99,7 +99,7 @@ inline constexpr DataType kDouble = DataType::kDouble;
 template <class T>
 struct to_data_type;
 
-template <DataType D> 
+template <DataType D>
 struct from_data_type;
 
 #define CVT_DATA_TYPE(D, T) \
@@ -116,7 +116,7 @@ CVT_DATA_TYPE(kUint64, uint64_t);
 
 CVT_DATA_TYPE( kInt8, int8_t);  // NOTE: `int8_t` is `signed char` and is different from `char`
 CVT_DATA_TYPE(kInt16, int16_t);
-CVT_DATA_TYPE(kInt32, int32_t); 
+CVT_DATA_TYPE(kInt32, int32_t);
 CVT_DATA_TYPE(kInt64, int64_t);
 
 CVT_DATA_TYPE(kFloat16, half_t);
@@ -147,18 +147,18 @@ constexpr std::ptrdiff_t byte_size(DataType type, std::ptrdiff_t size = 1) {
         case kFloat8_e4m3:
         case kFloat8_e5m2:
             return size;
-        case kUint16: 
+        case kUint16:
         case kInt16:
         case kFloat16:
         case kBfloat16:
             return size * 2;
-        case kUint32: 
-        case kInt32: 
+        case kUint32:
+        case kInt32:
         case kFloat32:
             return size * 4;
         case kUint64:
         case kInt64:
-        case kFloat64: 
+        case kFloat64:
             return size * 8;
         case kUint2: return size * 2 / 8;
         case kUint4: return size * 4 / 8;
@@ -174,23 +174,23 @@ constexpr std::ptrdiff_t numel(DataType type, std::ptrdiff_t size = 1) {
     switch (type) {
         case kNull: return 0;
         case kBool:
-        case kUint8: 
+        case kUint8:
         case kInt8:
         case kFloat8_e4m3:
         case kFloat8_e5m2:
             return size;
-        case kUint16: 
+        case kUint16:
         case kInt16:
         case kFloat16:
         case kBfloat16:
             return size / 2;
-        case kUint32: 
-        case kInt32: 
+        case kUint32:
+        case kInt32:
         case kFloat32:
             return size / 4;
         case kUint64:
         case kInt64:
-        case kFloat64: 
+        case kFloat64:
             return size / 8;
         case kUint2: return size * 8 / 2;
         case kUint4: return size * 8 / 4;

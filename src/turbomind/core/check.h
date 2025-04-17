@@ -135,7 +135,7 @@ decltype(auto) EnsureNotNull(const char* file, int line, const char* expr, T&& p
     if (TM_UNLIKELY(p == nullptr)) {
         ReportNullError(file, line, expr);
     }
-    return (T&&)p;
+    return (T &&) p;
 }
 
 #define TM_CHECK_NOTNULL(p) ::turbomind::core::EnsureNotNull(__FILE__, __LINE__, #p, (p))

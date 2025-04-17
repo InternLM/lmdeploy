@@ -1,8 +1,8 @@
 
 #include <cstdlib>
 #include <filesystem>
-#include <sstream>
 #include <iostream>
+#include <sstream>
 
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/utils/logger.h"
@@ -83,7 +83,7 @@ void CheckErrorStream::Report()
 void ReportNullError(const char* file, int line, const char* expr)
 {
     // ! Be aware of `%` in expr
-    std::cerr << "[TM][FATAL] " << StripSrcPrefix(file) << "(" << line << "): '" << expr << "' Must be non NULL\n"; 
+    std::cerr << "[TM][FATAL] " << StripSrcPrefix(file) << "(" << line << "): '" << expr << "' Must be non NULL\n";
     std::abort();
 }
 

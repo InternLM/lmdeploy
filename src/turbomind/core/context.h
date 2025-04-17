@@ -26,7 +26,7 @@ public:
     template<class... Args>
     explicit ContextGuard(Args&&... args): n_{}
     {
-        (Context::push((Args&&)args), ...);
+        (Context::push((Args &&) args), ...);
         n_ = sizeof...(Args);
     }
     ~ContextGuard()

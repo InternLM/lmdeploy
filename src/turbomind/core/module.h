@@ -9,10 +9,10 @@ public:
 
     Module();
 
-    Module(const Module&)            = delete;
+    Module(const Module&) = delete;
     Module& operator=(const Module&) = delete;
 
-    Module(Module&&) noexcept            = delete;
+    Module(Module&&) noexcept = delete;
     Module& operator=(Module&&) noexcept = delete;
 
     void register_module(std::string name, Module& module, std::optional<int> index = {});

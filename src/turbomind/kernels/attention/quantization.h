@@ -744,7 +744,7 @@ struct ConvertKvCache<fp8_e4m3, T> {
         }
     }
 };
-#endif 
+#endif
 
 template<class Q, class T>
 inline __device__ void StoreQuantParam(T* dst, Array<T, 2> src)

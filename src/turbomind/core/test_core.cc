@@ -22,7 +22,8 @@ TEST_CASE("test check", "[check]")
 
     if (0) {
         TM_CHECK(zero);
-        TM_CHECK_EQ(42, 43) << "Not " << "Ok";
+        TM_CHECK_EQ(42, 43) << "Not "
+                            << "Ok";
     }
 
     int  x = 42;

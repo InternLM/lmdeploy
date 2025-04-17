@@ -28,7 +28,7 @@ constexpr cudaDataType to_cuda_dtype(DataType type)
         case kBfloat16: return CUDA_R_16BF;
         case kFloat8_e4m3: return CUDA_R_8F_E4M3;
         case kFloat8_e5m2: return CUDA_R_8F_E5M2;
-        default: 
+        default:
             throw std::runtime_error("Not supported " + std::string{to_string(type)});
     }
 }
@@ -49,7 +49,7 @@ constexpr DataType from_cuda_dtype(cudaDataType type) {
         case CUDA_R_16BF: return kBfloat16;
         case CUDA_R_8F_E4M3: return kFloat8_e4m3;
         case CUDA_R_8F_E5M2: return kFloat8_e5m2;
-        default: 
+        default:
             throw std::runtime_error("Not supported " + std::string{std::to_string(type)});
     }
 }
