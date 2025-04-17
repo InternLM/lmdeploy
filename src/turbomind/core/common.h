@@ -5,6 +5,7 @@
 #include <memory>
 #include <vector>
 
+/// TODO: remove this dependency
 #include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind::core {
