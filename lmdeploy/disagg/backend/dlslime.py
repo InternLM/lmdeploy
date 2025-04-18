@@ -1,13 +1,9 @@
 from typing import Dict
 
+from lmdeploy.disagg.request import DistServeConnectionRequest
 from lmdeploy.disagg.messages import (
-    MigrationBackend,
-    MigrationInitRequest,
-    MigrationTransportProtocol,
-    DisaggEngineConfig,
-    MigrationConnectionRequest,
-    MigrationAssignment,
-    MigrationRegisterMemoryRequest
+    DistServeRegisterMRMessages,
+    MigrationAssignment
 )
 
 from lmdeploy.disagg.backend.base import MigrationBackendImpl
@@ -15,35 +11,45 @@ from lmdeploy.disagg.backend.backend import register_migration_backend
 
 from dlslime import RDMAEndpoint, available_nic
 
+from lmdeploy.disagg.config import (
+    DistServeEngineConfig,
+    MigrationBackend,
+    MigrationProtocol
+)
+from lmdeploy.disagg.request import DistServeInitRequest
+
 
 class DLSlimeMigrationManagement:
-    def __init__(self, init_request: MigrationInitRequest):
+    def __init__(self, init_request: DistServeInitRequest):
         self.rank = init_request.rank
-        self.tp_rank = init_request.tp_rank
-        self.remote_engine_config: DisaggEngineConfig = init_request.remote_engine_config
+        self.local_engine_config: DistServeEngineConfig = init_request.local_engine_config
+        self.remote_engine_config: DistServeEngineConfig = init_request.remote_engine_config
         self.endpoint: Dict[str, RDMAEndpoint] = {
-            MigrationTransportProtocol.TCP: None,
-            MigrationTransportProtocol.RDMA: None,
-            MigrationTransportProtocol.NVLINK: None,
+            MigrationProtocol.TCP: None,
+            MigrationProtocol.RDMA: None,
+            MigrationProtocol.NVLINK: None,
         }
         if init_request.rdma_init_request:
-            if not init_request.rdma_init_request.device_name:
-                nics = available_nic()
-                init_request.rdma_init_request.device_name = nics[self.rank % len(nics)]
-            self.endpoint[MigrationTransportProtocol.RDMA] = RDMAEndpoint(
-                device_name=init_request.rdma_init_request.device_name,
-                ib_port=init_request.rdma_init_request.ib_port,
-                link_type=init_request.rdma_init_request.link_type
+            nics = self.local_engine_config.available_nics or available_nic()
+            device_name = nics[self.rank % len(nics)]
+            self.endpoint[MigrationProtocol.RDMA] = RDMAEndpoint(
+                device_name=device_name,
+                ib_port=1,
+                link_type=init_request.rdma_init_request.link_type.name
             )
+        if init_request.nvlink_init_request:
+            raise NotImplementedError
+        if init_request.tcp_init_request:
+            raise NotImplementedError
 
-    def register_memory_region(self, register_mr_request: MigrationRegisterMemoryRequest):
+    def register_memory_region(self, register_mr_request: DistServeRegisterMRMessages):
         self.endpoint[register_mr_request.protocol].register_memory_region(
             register_mr_request.mr_key,
             register_mr_request.addr,
             register_mr_request.length
         )
 
-    def connect_to(self, connect_request: MigrationConnectionRequest):
+    def connect_to(self, connect_request: DistServeConnectionRequest):
         self.endpoint[connect_request.protocol].connect_to(connect_request.remote_endpoint_info)
 
     async def p2p_migrate(self, assignment: MigrationAssignment):
@@ -62,17 +68,17 @@ class DLSlimeBackend(MigrationBackendImpl):
     def __init__(self):
         self.links: Dict[int, DLSlimeMigrationManagement] = {}
 
-    def p2p_initialize(self, init_request: MigrationInitRequest):
+    def p2p_initialize(self, init_request: DistServeInitRequest):
         self.links[init_request.remote_engine_id] = DLSlimeMigrationManagement(init_request)
 
-    def register_memory_region(self, register_mr_request:MigrationRegisterMemoryRequest):
+    def register_memory_region(self, register_mr_request:DistServeRegisterMRMessages):
         self.links[register_mr_request.remote_engine_id].register_memory_region(register_mr_request)
 
-    def endpoint_info(self, remote_engine_id: int, protocol: MigrationTransportProtocol):
+    def endpoint_info(self, remote_engine_id: int, protocol: MigrationProtocol):
         return self.links[remote_engine_id].endpoint[protocol].local_endpoint_info
 
-    def p2p_connect(self, connect_request: MigrationConnectionRequest):
-        self.links[connect_request.remote_engine_id].connect_to(connect_request)
+    def p2p_connect(self, conn_req: DistServeConnectionRequest):
+        self.links[conn_req.remote_engine_id].connect_to(conn_req)
 
     async def p2p_migrate(self, assignment: MigrationAssignment):
         await self.links[assignment.remote_engine_id].p2p_migrate(assignment)

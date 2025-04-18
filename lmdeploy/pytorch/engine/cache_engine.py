@@ -4,11 +4,9 @@ from typing import Dict, List, Literal, Tuple
 
 import torch
 
+from lmdeploy.disagg.config import EngineRole
 from lmdeploy.disagg.messages import (
-    EngineRole,
-    MigrationInitRequest,
-    MigrationRegisterMemoryRequest,
-    MigrationConnectionRequest,
+    DistServeRegisterMRMessages,
     MigrationExecutionBatch,
     MigrationAssignment,
 )
@@ -16,6 +14,10 @@ from lmdeploy.disagg.messages import (
 from lmdeploy.disagg.backend.base import MigrationBackendImpl
 from lmdeploy.disagg.backend.backend import MIGRATION_BACKENDS
 
+from lmdeploy.disagg.request import (
+    DistServeInitRequest,
+    DistServeConnectionRequest
+)
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.utils import get_logger
 
@@ -322,15 +324,14 @@ class CacheEngine:
         return total
 
     """ Metheds for PD Disaggregation Begin. """
-    def p2p_initialize(self, migration_init_request: MigrationInitRequest):
+    def p2p_initialize(self, migration_init_request: DistServeInitRequest):
         migration_init_request.rank = self.rank
-        migration_init_request.tp_rank = self.tp_rank
         self.migration_backend_impl.p2p_initialize(migration_init_request)
         for i, t in enumerate(self.full_gpu_cache):
             if t.numel() == 0:
                 continue
-            register_mr_request = MigrationRegisterMemoryRequest(
-                protocol=self.cache_config.migration_protocol,
+            register_mr_request = DistServeRegisterMRMessages(
+                protocol=migration_init_request.protocol,
                 remote_engine_id=migration_init_request.remote_engine_id,
                 mr_key=str(i),
                 addr=t.data_ptr() + t.storage_offset(),
@@ -341,7 +342,7 @@ class CacheEngine:
             migration_init_request.remote_engine_id,
             migration_init_request.protocol)
 
-    def p2p_connect(self, migration_conn_request: MigrationConnectionRequest):
+    def p2p_connect(self, migration_conn_request: DistServeConnectionRequest):
         self.migration_backend_impl.p2p_connect(migration_conn_request[self.tp_rank])
 
     async def migrate(self, migration_execution_inputs: MigrationExecutionBatch):
@@ -378,7 +379,7 @@ class CacheEngine:
                     continue
                 await self.migration_backend_impl.p2p_migrate(
                     MigrationAssignment(
-                        protocol=self.cache_config.migration_protocol,
+                        protocol=migration_execution_inputs.protocol,
                         remote_engine_id=remote_engine_id,
                         mr_key=str(i),
                         target_offset=target_offset,

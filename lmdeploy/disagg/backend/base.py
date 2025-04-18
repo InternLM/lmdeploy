@@ -1,29 +1,29 @@
 from abc import abstractmethod
 
+from lmdeploy.disagg.request import DistServeConnectionRequest
 from lmdeploy.disagg.messages import (
-    MigrationInitRequest,
-    MigrationConnectionRequest,
-    MigrationAssignment,
-    MigrationRegisterMemoryRequest,
-    MigrationTransportProtocol
+    DistServeRegisterMRMessages,
+    MigrationAssignment
 )
+from lmdeploy.disagg.config import MigrationProtocol
+from lmdeploy.disagg.request import DistServeInitRequest
 
 
 class MigrationBackendImpl:
     @abstractmethod
-    def p2p_initialize(self, init_request: MigrationInitRequest):
+    def p2p_initialize(self, init_request: DistServeInitRequest):
         raise NotImplementedError
 
     @abstractmethod
-    def register_memory_region(self, register_mr_request:MigrationRegisterMemoryRequest):
+    def register_memory_region(self, register_mr_request:DistServeRegisterMRMessages):
         raise NotImplementedError
 
     @abstractmethod
-    def endpoint_info(self, remote_engine_id: int, protocol: MigrationTransportProtocol):
+    def endpoint_info(self, remote_engine_id: int, protocol: MigrationProtocol):
         return NotImplementedError
 
     @abstractmethod
-    def p2p_connect(self, connect_request: MigrationConnectionRequest):
+    def p2p_connect(self, conn_req: DistServeConnectionRequest):
         raise NotImplementedError
 
     @abstractmethod

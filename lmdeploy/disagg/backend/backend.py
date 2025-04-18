@@ -1,4 +1,4 @@
-from lmdeploy.disagg.messages import MigrationBackend
+from lmdeploy.disagg.config import MigrationBackend
 
 
 MIGRATION_BACKENDS = {}

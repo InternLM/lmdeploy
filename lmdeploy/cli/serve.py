@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from lmdeploy.disagg.messages import EngineRole, MigrationBackend, MigrationTransportProtocol
+from lmdeploy.disagg.config import MigrationBackend
+from lmdeploy.disagg.config import EngineRole, MigrationProtocol
 from lmdeploy.utils import get_max_batch_size
 
 from .cli import CLI
@@ -137,11 +138,11 @@ class SubCliServe:
                             default='DLSlime',
                             choices=['DLSlime', 'Mooncake', 'InfiniStore'],
                             help='kvcache migration management backend when PD disaggregation')
-        parser.add_argument('--migration-protocol',
+        parser.add_argument('--available-nics',
                             type=str,
-                            default='RDMA',
-                            choices=['TCP', 'RDMA', 'NVLINK'],
-                            help='kvcache migration protocol')
+                            nargs="+",
+                            default=None,
+                            help='available-nics')
         # common args
         ArgumentHelper.backend(parser)
         ArgumentHelper.log_level(parser)
@@ -234,8 +235,8 @@ class SubCliServe:
         parser.add_argument('--server-port', type=int, default=8000, help='Server port of the proxy')
         parser.add_argument('--serving-strategy',
                             type=str,
-                            choices=['Disaggregated', 'NonDisaggregated'],
-                            default='NonDisaggregated',
+                            choices=['Hybrid', 'DistServe'],
+                            default='Hybrid',
                             help='the strategy to dispatch requests to nodes')
         parser.add_argument('--routing-strategy',
                             type=str,
@@ -247,6 +248,13 @@ class SubCliServe:
                             help='Whether to disable cache status of the '
                             'proxy. If set, the proxy will forget the status '
                             'of the previous time')
+        # For Disaggregation
+        parser.add_argument('--migration-protocol',
+                            type=str,
+                            choices=['TCP', 'RDMA', 'NVLINK'],
+                            default='RDMA',
+                            help='transport protocol of KV migration')
+
         ArgumentHelper.api_keys(parser)
         ArgumentHelper.ssl(parser)
         ArgumentHelper.log_level(parser)
@@ -332,7 +340,7 @@ class SubCliServe:
                                                  max_prefill_token_num=args.max_prefill_token_num,
                                                  role=EngineRole.__members__[args.role],
                                                  migration_backend=MigrationBackend.__members__[args.migration_backend],
-                                                 migration_protocol=MigrationTransportProtocol.__members__[args.migration_protocol])
+                                                 available_nics=args.available_nics)
         else:
             from lmdeploy.messages import TurbomindEngineConfig
             backend_config = TurbomindEngineConfig(dtype=args.dtype,

@@ -13,7 +13,8 @@ import time
 import requests
 import aiohttp
 
-from lmdeploy.disagg.messages import EngineRole, MigrationExecutionBatch
+from lmdeploy.disagg.config import EngineRole
+from lmdeploy.disagg.messages import MigrationExecutionBatch
 from lmdeploy.messages import PytorchEngineConfig, ResponseType
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model, logging_timer
 
@@ -78,6 +79,9 @@ def _build_cache_config(engine_config: PytorchEngineConfig):
         enable_prefix_caching=engine_config.enable_prefix_caching,
         quant_policy=engine_config.quant_policy,
         device_type=engine_config.device_type,
+        role=engine_config.role,
+        migration_backend=engine_config.migration_backend,
+        available_nics=engine_config.available_nics,
     )
     return cache_config
 
@@ -330,9 +334,6 @@ class Engine:
         # build configs
         scheduler_config = _build_scheduler_config(engine_config)
         cache_config = _build_cache_config(engine_config)
-        setattr(cache_config, "role", engine_config.role)
-        setattr(cache_config, "migration_backend", engine_config.migration_backend)
-        setattr(cache_config, "migration_protocol", engine_config.migration_protocol)
         backend_config = _build_backend_config(engine_config)
         dist_config = _build_dist_config(engine_config)
         self.should_execute_dummy_batch = dist_config.need_dummy_batch()
@@ -496,8 +497,6 @@ class Engine:
             if session_id in self.scheduler.sessions:
                 if self.engine_config.role == EngineRole.Prefill:
                     # reserve prefill KVCache until decode migration done.
-                    seqs = list(self.scheduler.sessions[session_id].sequences.values())
-                    seqs[0].status == MessageStatus.TO_BE_MIGRATED
                     session = self.scheduler.sessions.pop(session_id)
                     self.scheduler.locked_sessions[session_id] = session
                 else:
@@ -948,10 +947,10 @@ class Engine:
             if not self.scheduler.running_migration and self.scheduler.waiting_migration:
                 self.migration_event.wait()
             else:
-                migration_execution_requests: List[
-                    Tuple[int, List[Tuple[int, int]]]
-                ] = []
                 for msg in migration_running:
+                    migration_execution_requests: List[
+                        Tuple[int, List[Tuple[int, int]]]
+                    ] = []
                     migration_request = msg.migration_request
                     prefill_block_ids = migration_request.remote_block_ids
                     decode_block_ids = list(
@@ -959,23 +958,25 @@ class Engine:
                     )
 
                     assert len(prefill_block_ids) == len(decode_block_ids)
-                    migration_execution_requests.append(
+                    migration_execution_requests = [
                         (
                             migration_request.remote_engine_id,
                             list(zip(prefill_block_ids, decode_block_ids)),
                         )
-                    )
+                    ]
 
-                migration_inputs = MigrationExecutionBatch(
-                    requests=migration_execution_requests
-                )
-                await self.executor.migrate(migration_inputs)
-                for msg in migration_running:
+                    migration_inputs = MigrationExecutionBatch(
+                        protocol=migration_request.protocol,
+                        requests=migration_execution_requests,
+                    )
+                    print("start")
+                    await self.executor.migrate(migration_inputs)
+                    print("end")
                     try:
                         async with aiohttp.ClientSession() as session:
                             async with session.post(
-                                node_url + endpoint, 
-                                json=f"{msg.migration_request.remote_engine_id}/distserve/free_cache",
+                                f"http://{migration_request.remote_engine_id}/distserve/free_cache", 
+                                json={"session_id": migration_request.remote_session_id},
                                 timeout=self.aiotimeout
                             ) as response:
                                 await response.json()

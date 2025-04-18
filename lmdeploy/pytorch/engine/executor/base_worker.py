@@ -2,12 +2,12 @@
 import asyncio
 from typing import Any, Dict, List
 
+from lmdeploy.disagg.request import DistServeConnectionRequest
 from lmdeploy.disagg.messages import (
-    MigrationInitRequest,
-    MigrationConnectionRequest,
     MigrationExecutionBatch,
 )
 
+from lmdeploy.disagg.request import DistServeInitRequest
 from lmdeploy.pytorch.backends.selector import get_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, ModelConfig
 from lmdeploy.pytorch.devices import DeviceContext
@@ -167,10 +167,10 @@ class WorkerWrapperBase:
         self.model_agent.release()
 
     """ PD Disaggregation API Begin """
-    def p2p_initialize(self, init_request: MigrationInitRequest):
+    def p2p_initialize(self, init_request: DistServeInitRequest):
         return self.model_agent.cache_engine.p2p_initialize(init_request)
 
-    def p2p_connect(self, conn_request: List[MigrationConnectionRequest]):
+    def p2p_connect(self, conn_request: List[DistServeConnectionRequest]):
         return self.model_agent.cache_engine.p2p_connect(conn_request)
 
     async def migrate(self, inputs: MigrationExecutionBatch):

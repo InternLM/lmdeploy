@@ -6,14 +6,14 @@ from typing import Callable, Dict, List, Literal, Optional
 import torch
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 
+from lmdeploy.disagg.config import EngineRole, DistServeEngineConfig, MigrationProtocol
+from lmdeploy.disagg.request import MigrationRequest
+
 from .tokenizer import Tokenizer
 from .utils import get_logger
 
-from lmdeploy.disagg.messages import (
-    EngineRole,
+from lmdeploy.disagg.config import (
     MigrationBackend,
-    MigrationTransportProtocol,
-    MigrationRequest,
 )
 
 logger = get_logger('lmdeploy')
@@ -335,7 +335,7 @@ class PytorchEngineConfig:
 
     role: EngineRole = EngineRole.Hybrid
     migration_backend: MigrationBackend = MigrationBackend.DLSlime
-    migration_protocol: MigrationTransportProtocol = MigrationTransportProtocol.RDMA
+    available_nics: Optional[List[str]] = None
 
     def __post_init__(self):
         """Check input validation."""

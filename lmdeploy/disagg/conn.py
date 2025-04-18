@@ -1,23 +1,21 @@
 import os
 import enum
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import asyncio
 import aiohttp
-import requests
 
-from pydantic import BaseModel
 
+from lmdeploy.disagg.config import (
+    MigrationProtocol
+)
+
+from lmdeploy.disagg.messages import PDConnectionMessage
+from lmdeploy.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.logger import get_logger
 
-from lmdeploy.disagg.messages import (
-    DisaggEngineConfig,
-    MigrationInitRequest,
-    TCPInitRequest,
-    RDMAInitRequest,
-    NVLinkInitRequest,
-    MigrationTransportProtocol,
-    MigrationConnectionRequest
+from lmdeploy.disagg.config import (
+    DistServeEngineConfig
 )
 
 logger = get_logger("lmdeploy")
@@ -26,32 +24,58 @@ logger = get_logger("lmdeploy")
 AIOHTTP_TIMEOUT = os.getenv('AIOHTTP_TIMEOUT', None)
 
 
-class PDConnectionRequest(BaseModel):
-    p_url: str
-    d_url: str
-    protocol: MigrationTransportProtocol = MigrationTransportProtocol.RDMA
-    tcp_init_request: Optional[TCPInitRequest] = None
-    rdma_init_request: Optional[RDMAInitRequest] = RDMAInitRequest()
-    nvlink_init_request: Optional[NVLinkInitRequest] = None
-
-
 class PDConnectionStatus(enum.Enum):
     Disconnected = enum.auto()
     Connected = enum.auto()
     Connecting = enum.auto()
 
 
+class PDConnectionState:
+    def __init__(self, status: PDConnectionStatus, event: asyncio.Event):
+        self.status = status
+        self.event = event
+
+    async def wait(self):
+        await self.event.wait()
+
+    def set_status(self, status: PDConnectionStatus):
+        self.status = status
+
+
 class PDConnectionPool:
     def __init__(self):
-        self.pool = {}
-        self.initialized = False
-        self.waiting_conn: asyncio.Queue[Tuple[PDConnectionRequest, asyncio.Event]] = asyncio.Queue()
-        self.conn_req_event = asyncio.Event()
+        """
+        PD Connection Pool. Constructing the link of Prefill and Decode engine for
+            the migration of KVCache.
+
+        Note: we use Peer to Peer transportation in KVCache migration.
+        Note: Lazy link construction is supported, which perform connection at the first
+            LLM request. As a result, we don't need to construct PD Communication group when
+            start a engine server. 
+        Warning: By now, only engines with same parallel configuration can be correctly connected.
+        """
+
+        # Links of PD Connection.
+        self.pool: Dict[Tuple[str, str], PDConnectionState] = {}
+
+        # conn_perform handler queue
+        self.waiting_conn: asyncio.Queue[
+            Tuple[PDConnectionMessage, asyncio.Event]
+        ] = asyncio.Queue()
+
+        # conn Registry Lock
         self.conn_lock = asyncio.Lock()
+
+        # Connection Retry when failure
         self.max_retry_cnt = 8
 
+        # trigger signal when conn request arrive.
+        self.conn_req_event = asyncio.Event()
+
+        # conn initialized signal
+        self.initialized = False
+
     async def perform_conn(self):
-        logger.info("perform_conn start")
         def get_server_api(url:str, api: str):
                 return f"{url}/{api}"
         
@@ -61,9 +85,9 @@ class PDConnectionPool:
                     get_server_api(server_endpoint, "distserve/engine_info"),
                     timeout=self.aiotimeout
                 ) as resp:
-                    return DisaggEngineConfig.model_validate_json(await resp.json())
+                    return DistServeEngineConfig.model_validate_json(await resp.json())
 
-        async def p2p_initialize(server_endpoint, init_request: MigrationInitRequest):
+        async def p2p_initialize(server_endpoint, init_request: DistServeInitRequest):
             async with self.conn_sem:
                 async with self.conn_sess.post(
                     get_server_api(server_endpoint, "distserve/p2p_initialize"),
@@ -72,7 +96,7 @@ class PDConnectionPool:
                 ) as resp:
                     return await resp.json()
 
-        async def p2p_connect(server_endpoint, conn_request: List[MigrationConnectionRequest]):
+        async def p2p_connect(server_endpoint, conn_request: List[DistServeConnectionRequest]):
             async with self.conn_sem:
                 async with self.conn_sess.post(
                     get_server_api(server_endpoint, "distserve/p2p_connect"),
@@ -81,9 +105,9 @@ class PDConnectionPool:
                 ) as resp:
                     return await resp.json()
 
-        async def conn_worker(conn_req: PDConnectionRequest, conn_event: asyncio.Event):
-            try:
-                logger.info(f"{(conn_req.p_url, conn_req.d_url)} connecting...")
+        async def conn_worker(conn_req: PDConnectionMessage, conn_event: asyncio.Event):
+                link = (conn_req.p_url, conn_req.d_url)
+                logger.info(f"{link} connecting...")
                 # Step 1. Get Remote Engine Configuration
                 prefill_engine_config = await get_engine_config(conn_req.p_url)
                 decode_engine_config = await get_engine_config(conn_req.d_url)
@@ -92,18 +116,22 @@ class PDConnectionPool:
                 assert prefill_engine_config.tp_size == decode_engine_config.tp_size
 
                 # Step 2. Construct Initialize Configuration
-                prefill_init_req = MigrationInitRequest(
+                prefill_init_req = DistServeInitRequest(
                     protocol=conn_req.protocol,
+                    local_engine_id=conn_req.p_url,
+                    local_engine_config=prefill_engine_config,
                     remote_engine_id=conn_req.d_url,
                     remote_engine_config=decode_engine_config,
                 )
-                decode_init_req = MigrationInitRequest(
+                decode_init_req = DistServeInitRequest(
                     protocol=conn_req.protocol,
+                    local_engine_id=conn_req.d_url,
+                    local_engine_config=decode_engine_config,
                     remote_engine_id=conn_req.p_url,
                     remote_engine_config=prefill_engine_config,
                 )
 
-                if conn_req.protocol == MigrationTransportProtocol.RDMA:
+                if conn_req.protocol == MigrationProtocol.RDMA:
                     prefill_init_req.rdma_init_request = conn_req.rdma_init_request
                     decode_init_req.rdma_init_request = conn_req.rdma_init_request
                 else:
@@ -113,9 +141,9 @@ class PDConnectionPool:
                 decode_endpoint_info = await p2p_initialize(conn_req.d_url, decode_init_req)
 
                 # Step 3. Connection
-                if conn_req.protocol == MigrationTransportProtocol.RDMA:
+                if conn_req.protocol == MigrationProtocol.RDMA:
                     prefill_endpoint_conn_reqs = [
-                        MigrationConnectionRequest(
+                        DistServeConnectionRequest(
                             protocol=conn_req.protocol,
                             remote_engine_id=conn_req.d_url,
                             remote_endpoint_info=info
@@ -123,7 +151,7 @@ class PDConnectionPool:
                         for info in decode_endpoint_info
                     ]
                     decode_endpoint_conn_reqs = [
-                        MigrationConnectionRequest(
+                        DistServeConnectionRequest(
                             protocol=conn_req.protocol,
                             remote_engine_id=conn_req.p_url,
                             remote_endpoint_info=info
@@ -133,18 +161,15 @@ class PDConnectionPool:
                     await p2p_connect(conn_req.p_url, prefill_endpoint_conn_reqs)
                     await p2p_connect(conn_req.d_url, decode_endpoint_conn_reqs)
                 logger.info(f"{(conn_req.p_url, conn_req.d_url)} connected")
-                self.pool[(conn_req.p_url, conn_req.d_url)] = PDConnectionStatus.Connected
-            except:
-                self.pool[(conn_req.p_url, conn_req.d_url)] = PDConnectionStatus.Disconnected
+                async with self.conn_lock:
+                    self.pool[link].set_status(PDConnectionStatus.Connected)
+            # conn_event.set()
+
+        async def wait_for_conn(conn_req: PDConnectionMessage, conn_event: asyncio.Event):
+            await self.pool[(conn_req.p_url, conn_req.d_url)].event.wait()
             conn_event.set()
 
-        async def wait_for_conn(conn_req, conn_event):
-            while True:
-                if self.pool[(conn_req.p_url, conn_req.d_url)] == PDConnectionStatus.Connected:
-                    conn_event.set()
-                    return
-                await asyncio.sleep(0.5)
-
+        logger.info("perform_conn start")
         while True:
             if self.waiting_conn.empty():
                 await self.conn_req_event.wait()
@@ -154,16 +179,19 @@ class PDConnectionPool:
             while not self.waiting_conn.empty():
                 conn_req, conn_event = self.waiting_conn.get_nowait()
                 link = (conn_req.p_url, conn_req.d_url)
-                if link not in self.pool or self.pool.get(link, None) == PDConnectionStatus.Disconnected:
+                if link not in self.pool:
                     async with self.conn_lock:
-                        self.pool[link] = PDConnectionStatus.Connecting
-                    asyncio.create_task(conn_worker(conn_req, conn_event))
-                elif self.pool.get(link, None) == PDConnectionStatus.Connected:
-                    conn_event.set()
-                elif self.pool.get(link, None) == PDConnectionStatus.Connecting:
+                        self.pool[link] = PDConnectionState(
+                            PDConnectionStatus.Disconnected,
+                            conn_event,
+                        )
+                if self.pool[link].status == PDConnectionStatus.Connecting:
                     asyncio.create_task(wait_for_conn(conn_req, conn_event))
+                elif self.pool[link].status == PDConnectionStatus.Disconnected:
+                    self.pool[link].set_status(PDConnectionStatus.Connecting)
+                    asyncio.create_task(conn_worker(conn_req, conn_event))
 
-    async def connect(self, conn_req: PDConnectionRequest):
+    async def connect(self, conn_req: PDConnectionMessage):
         """pd consolidation."""
         if not self.initialized:
             loop = asyncio.get_event_loop()
@@ -177,19 +205,22 @@ class PDConnectionPool:
             self.initialized = True
         cnt = 0
         while cnt < self.max_retry_cnt:
+            if self.is_connected(conn_req.p_url, conn_req.d_url):
+                return
+            if cnt > 0:
+                logger.warning(f"Connection failure, retry cnt: {cnt}")
             conn_event = asyncio.Event()
             self.waiting_conn.put_nowait((conn_req, conn_event))
             self.conn_req_event.set()
             await conn_event.wait()
-            if self.is_connected(conn_req.p_url, conn_req.d_url):
-                return
-            logger.warn("Retry Conn")
             cnt += 1
-        else:
-            raise TimeoutError("PDConnection Failure")
+        raise TimeoutError("PDConnection Failure")
 
     def is_connected(self, p_url: str, d_url: str):
-        return self.pool.get((p_url, d_url), None) == PDConnectionStatus.Connected
+        link = self.pool.get((p_url, d_url), None)
+        if not link:
+            return False
+        return link.status == PDConnectionStatus.Connected
 
     def drop(self, left: str, right: str):
         self.pool.pop((left, right), None)

@@ -17,13 +17,12 @@ from fastapi.security.http import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from lmdeploy.archs import get_task
-from lmdeploy.disagg.messages import (
+from lmdeploy.disagg.request import DistServeConnectionRequest
+from lmdeploy.disagg.config import DistServeEngineConfig
+from lmdeploy.disagg.config import (
     EngineRole,
-    MigrationRequest,
-    DisaggEngineConfig,
-    MigrationInitRequest,
-    MigrationConnectionRequest,
 )
+from lmdeploy.disagg.request import DistServeInitRequest, MigrationRequest
 from lmdeploy.messages import GenerationConfig, LogitsProcessor, PytorchEngineConfig, TurbomindEngineConfig
 from lmdeploy.model import ChatTemplateConfig
 from lmdeploy.serve.async_engine import AsyncEngine
@@ -829,7 +828,7 @@ async def encode(request: EncodeRequest, raw_request: Request = None):
 async def engine_info():
     engine = VariableInterface.async_engine.engine
 
-    response = DisaggEngineConfig(
+    response = DistServeEngineConfig(
         tp_size=engine.engine_config.tp,
         dp_size=engine.engine_config.dp,
         pp_size=None,
@@ -838,17 +837,18 @@ async def engine_info():
         block_size=engine.engine_config.block_size,
         num_cpu_blocks=engine.scheduler.block_manager.num_cpu_blocks,
         num_gpu_blocks=engine.scheduler.block_manager.num_gpu_blocks,
+        available_nics=engine.engine_config.available_nics
     )
 
     return response.model_dump_json()
 
 @router.post("/distserve/p2p_initialize")
-async def p2p_initialize(init_request: MigrationInitRequest):
+async def p2p_initialize(init_request: DistServeInitRequest):
     return VariableInterface.async_engine.p2p_initialize(init_request)
 
 
 @router.post("/distserve/p2p_connect")
-async def p2p_connect(conn_request: List[MigrationConnectionRequest]):
+async def p2p_connect(conn_request: List[DistServeConnectionRequest]):
     return VariableInterface.async_engine.p2p_connect(conn_request)
 
 @router.post("/distserve/set_engine_to_prefill")

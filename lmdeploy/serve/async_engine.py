@@ -19,11 +19,7 @@ import tqdm
 
 from lmdeploy import Tokenizer
 from lmdeploy.archs import get_model_arch
-from lmdeploy.disagg.messages import (
-    MigrationInitRequest,
-    MigrationConnectionRequest,
-    MigrationExecutionBatch
-)
+from lmdeploy.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.logger import RequestLogger
 from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, Response, ResponseType, TurbomindEngineConfig
 from lmdeploy.model import MODELS, BaseChatTemplate, ChatTemplateConfig, best_match_model
@@ -902,9 +898,9 @@ class AsyncEngine(LogitsMixin):
             self.engine.scheduler._remove_sequence(seq)
         self.engine.scheduler.locked_sessions.pop(session_id)
 
-    def p2p_initialize(self, init_request: MigrationInitRequest):
+    def p2p_initialize(self, init_request: DistServeInitRequest):
         return self.engine.executor.p2p_initialize(init_request)
 
-    def p2p_connect(self, conn_request: List[MigrationConnectionRequest]):
+    def p2p_connect(self, conn_request: List[DistServeConnectionRequest]):
         return self.engine.executor.p2p_connect(conn_request)
     """ DistServe Async Engine API End """
