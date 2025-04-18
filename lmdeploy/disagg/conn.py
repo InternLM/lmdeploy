@@ -106,6 +106,7 @@ class PDConnectionPool:
                     return await resp.json()
 
         async def conn_worker(conn_req: PDConnectionMessage, conn_event: asyncio.Event):
+            try:
                 link = (conn_req.p_url, conn_req.d_url)
                 logger.info(f"{link} connecting...")
                 # Step 1. Get Remote Engine Configuration
@@ -160,10 +161,13 @@ class PDConnectionPool:
                     ]
                     await p2p_connect(conn_req.p_url, prefill_endpoint_conn_reqs)
                     await p2p_connect(conn_req.d_url, decode_endpoint_conn_reqs)
-                logger.info(f"{(conn_req.p_url, conn_req.d_url)} connected")
                 async with self.conn_lock:
                     self.pool[link].set_status(PDConnectionStatus.Connected)
-            # conn_event.set()
+                logger.info(f"{(conn_req.p_url, conn_req.d_url)} connected")
+            except:
+                async with self.conn_lock:
+                    self.pool[link].set_status(PDConnectionStatus.Disconnected)
+            conn_event.set()
 
         async def wait_for_conn(conn_req: PDConnectionMessage, conn_event: asyncio.Event):
             await self.pool[(conn_req.p_url, conn_req.d_url)].event.wait()
