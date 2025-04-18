@@ -10,7 +10,6 @@
 
 #include "src/turbomind/kernels/core/array.h"
 
-#include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind::comm {

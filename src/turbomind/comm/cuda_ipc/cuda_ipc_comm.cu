@@ -1,8 +1,7 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include <memory>
-#include <mutex>
-#include <type_traits>
+#include <numeric>
 #include <vector>
 
 #include <cuda.h>

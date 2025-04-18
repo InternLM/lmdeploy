@@ -24,6 +24,8 @@ if ($CUDA_VERSION_FULL -eq "12.1.0") {
     $downloadUrl = "https://developer.download.nvidia.com/compute/cuda/12.1.0/local_installers/cuda_12.1.0_531.14_windows.exe"
 } elseif ($CUDA_VERSION_FULL -eq "11.8.0") {
     $downloadUrl = "https://developer.download.nvidia.com/compute/cuda/11.8.0/local_installers/cuda_11.8.0_522.06_windows.exe"
+} elseif ($CUDA_VERSION_FULL -eq "12.5.0") {
+    $downloadUrl = "https://developer.download.nvidia.com/compute/cuda/12.5.0/local_installers/cuda_12.5.0_555.85_windows.exe"
 } else {
     Write-Output "Unsupported CUDA version specified"
     exit 1
@@ -84,6 +86,8 @@ $msBuildExtensions = (Get-ChildItem  "$src\visual_studio_integration\CUDAVisualS
     }
 }
 
+$CUDA_FLAGS="-allow-unsupported-compiler -D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH=1"
+
 # Add to Github env
 Write-Output "Setting environment variables for GitHub Actions..."
 
@@ -97,7 +101,7 @@ Write-Output "CUDA_PATH_V$($CUDA_MAJOR)_$($CUDA_MINOR)=$dst" >> $env:GITHUB_ENV
 Write-Output "CUDA_PATH_VX_Y=CUDA_PATH_V$($CUDA_MAJOR)_$($CUDA_MINOR)" >> $env:GITHUB_ENV
 Write-Output "CudaToolkitDir=$dst" >> $env:GITHUB_ENV
 Write-Output "CMAKE_CUDA_COMPILER=$dst\bin\nvcc.exe" >> $env:GITHUB_ENV
-Write-Output "NVCC_APPEND_FLAGS=-allow-unsupported-compiler" >> $env:GITHUB_ENV
+Write-Output "NVCC_APPEND_FLAGS=$CUDA_FLAGS" >> $env:GITHUB_ENV
 
 Write-Output "CUDA_VERSION=$CUDA_VERSION_FULL" >> $env:GITHUB_ENV
 Write-Output "Setup completed."

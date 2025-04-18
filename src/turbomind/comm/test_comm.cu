@@ -17,11 +17,10 @@
 
 #include "src/turbomind/comm/device_comm.h"
 #include "src/turbomind/comm/host_comm.h"
-#include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 using namespace turbomind::comm;
-using turbomind::getTensorType;
+using turbomind::data_type_v;
 using turbomind::check;
 using turbomind::myAssert;
 using std::vector;
@@ -164,7 +163,7 @@ struct TestComm {
             tp = device_num;
         }
 
-        std::tie(h_comm_, d_comm_, h_split_, d_split_) = Init(device_num, 4, "cudaipc");
+        std::tie(h_comm_, d_comm_, h_split_, d_split_) = Init(device_num, 4, "cuda-ipc");
 
         warmup_ = warmup;
         iters_  = iters;
@@ -186,7 +185,7 @@ struct TestComm {
     template<class T>
     void TestAllReduce(size_t dim, int group = 0)
     {
-        const auto dtype = getTensorType<T>();
+        const auto dtype = data_type_v<T>;
 
         const int tp_size = d_comm_[0]->n_ranks(group);
         const int dp_size = d_comm_.size() / tp_size;
@@ -325,7 +324,7 @@ struct TestComm {
             }
         }
 
-        const auto dtype = getTensorType<T>();
+        const auto dtype = data_type_v<T>;
 
         const int tp_size = d_comm_[0]->n_ranks(group);
         const int dp_size = d_comm_.size() / tp_size;
@@ -497,7 +496,7 @@ struct TestComm {
     template<class T>
     void TestAllGather(size_t dim, int group)
     {
-        const auto dtype = getTensorType<T>();
+        const auto dtype = data_type_v<T>;
 
         const int tp_size = d_comm_[0]->n_ranks(group);
         const int dp_size = d_comm_.size() / tp_size;
@@ -621,7 +620,7 @@ struct TestComm {
 
         const int inner_tp = std::gcd(tp_size_0, tp_size_1);
 
-        const auto dtype = getTensorType<T>();
+        const auto dtype = data_type_v<T>;
 
         std::mt19937                  gen{};
         std::uniform_int_distribution dist{0, 31};  // 5 mantissa bits

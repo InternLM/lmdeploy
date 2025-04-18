@@ -4,6 +4,7 @@
 #include "attention_config.h"
 #include "src/turbomind/kernels/attention/arch.h"
 #include "src/turbomind/models/llama/llama_utils.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 

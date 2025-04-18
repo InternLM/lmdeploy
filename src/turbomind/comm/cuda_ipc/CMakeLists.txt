@@ -12,6 +12,8 @@ add_library(cuda_ipc_comm STATIC
 target_link_libraries(cuda_ipc_comm PRIVATE
         rms_norm
         host_comm
+        core
+        cuda_utils
         CUDA::cuda_driver
         logger)
 

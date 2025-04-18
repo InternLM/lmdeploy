@@ -16,29 +16,25 @@
 
 #pragma once
 
-#include "src/turbomind/layers/DynamicDecodeBaseLayer.h"
-#include "src/turbomind/macro.h"
+#include "src/turbomind/layers/BaseDynamicDecodeLayer.h"
+
+#include "src/turbomind/engine/request.h"
 
 namespace turbomind {
 
 template<typename T>
-class StopCriteriaLayer: public DynamicDecodeBaseLayer {
+class StopCriteriaLayer: public BaseDynamicDecodeLayer {
 public:
-    using DynamicDecodeBaseLayer::DynamicDecodeBaseLayer;
+    explicit StopCriteriaLayer(const BaseParam& param);
 
-    void setup(const size_t batch_size, const size_t beam_width, TensorMap* params) override;
+    void Setup(const std::vector<const Request*>& rs, const TensorMap&) override;
 
-    void forward(TensorMap* output_tensors, TensorMap* input_tensors) override;
-
-    ~StopCriteriaLayer();
+    void Forward(TensorMap& args) override;
 
 private:
-    void allocateBuffer() override;
-
-    void freeBuffer() override;
-
-    // host buffer
-    int* h_pinned_finished_sum_{};
+    Buffer_<int> stop_words_;
+    Buffer_<int> stop_words_buf_;
+    Tensor_<int> stop_words_ten_;
 };
 
 }  // namespace turbomind

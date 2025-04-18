@@ -1,7 +1,6 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #pragma once
-#include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/nvtx_utils.h"
 #include <cuda_runtime.h>
 #include <sstream>
@@ -61,8 +60,6 @@ std::string Concat(std::string key, Args&&... args)
     }
     return key;
 }
-
-std::string format(const std::pair<std::string, Tensor>& p);
 
 size_t curandStateGetSize();
 

@@ -16,43 +16,33 @@
 
 #pragma once
 
-#include <string>
-#include <unordered_map>
+#include <memory>
+#include <vector>
 
-#include "src/turbomind/layers/BaseLayer.h"
-#include "src/turbomind/layers/DynamicDecodeBaseLayer.h"
+#include "src/turbomind/engine/request.h"
+#include "src/turbomind/layers/BaseDynamicDecodeLayer.h"
+
+#include "src/turbomind/core/tensor.h"
 
 namespace turbomind {
 
-template<typename T>
-class DynamicDecodeLayer: public BaseLayer {
-protected:
-    void allocateBuffer() override;
-    void freeBuffer() override;
-    void initialize();
-
-    size_t          vocab_size_;
-    size_t          vocab_size_padded_;
-    cudaDeviceProp* cuda_device_prop_;
-
-    std::vector<std::unique_ptr<DynamicDecodeBaseLayer>> layers_;
-
+class DynamicDecodeLayer {
 public:
-    DynamicDecodeLayer(size_t           vocab_size,
-                       size_t           vocab_size_padded,
-                       cudaStream_t     stream,
-                       cublasMMWrapper* cublas_wrapper,
-                       IAllocator*      allocator,
-                       bool             is_free_buffer_after_forward,
-                       cudaDeviceProp*  cuda_device_prop);
+    DynamicDecodeLayer(DataType              data_type,
+                       int                   max_batch_size,
+                       int                   vocab_size,
+                       int                   vocab_size_padded,
+                       cudaStream_t          stream,
+                       const cudaDeviceProp* device_prop);
 
     ~DynamicDecodeLayer();
-    DynamicDecodeLayer(DynamicDecodeLayer const& dynamic_decode_layer);
 
-    void setup(const size_t batch_size, const size_t beam_width, TensorMap* runtime_args);
-    void forward(TensorMap* output_tensors, TensorMap* input_tensors);
-    void forward(std::unordered_map<std::string, Tensor>*       output_tensors,
-                 const std::unordered_map<std::string, Tensor>* input_tensors);
+    void Setup(const std::vector<const Request*>& rs, const TensorMap& args);
+
+    void Forward(TensorMap& args);
+
+private:
+    std::vector<std::unique_ptr<BaseDynamicDecodeLayer>> layers_;
 };
 
 }  // namespace turbomind

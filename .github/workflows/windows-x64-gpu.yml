@@ -50,11 +50,11 @@ jobs:
             INPUT_CUDA_VERSION: ${{ matrix.cudaver }}
       - name: Build wheel
         run: |
-          $env:BUILD_TEST="ON"
+          $env:BUILD_TEST="OFF"
           mkdir build
           cd build
           ..\builder\windows\generate.ps1
-          cmake --build . --config Release -- /m /v:q
+          cmake --build . --config Release -- /m /v:n
           if (-Not $?) {
             echo "build failed"
             exit 1

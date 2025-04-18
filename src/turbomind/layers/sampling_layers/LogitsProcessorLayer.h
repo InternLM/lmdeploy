@@ -16,47 +16,45 @@
 
 #pragma once
 
-#include "src/turbomind/kernels/penalty_types.h"
-#include "src/turbomind/layers/DynamicDecodeBaseLayer.h"
-#include "src/turbomind/macro.h"
 #include <vector>
+
+#include "src/turbomind/kernels/penalty_types.h"
+#include "src/turbomind/layers/BaseDynamicDecodeLayer.h"
+#include "src/turbomind/macro.h"
+
+#include "src/turbomind/engine/request.h"
 
 namespace turbomind {
 
 template<typename T>
-class LogitsProcessorLayer: public DynamicDecodeBaseLayer {
+class LogitsProcessorLayer: public BaseDynamicDecodeLayer {
 public:
-    using DynamicDecodeBaseLayer::DynamicDecodeBaseLayer;
-    using DynamicDecodeBaseLayer::args_;
+    explicit LogitsProcessorLayer(const BaseParam& param);
 
-    void setup(const size_t batch_size, const size_t beam_width, TensorMap* runtime_args) override;
+    void Setup(const std::vector<const Request*>& rs, const TensorMap& args) override;
 
-    void forward(TensorMap* output_tensors, TensorMap* input_tensors) override;
-
-    ~LogitsProcessorLayer();
+    void Forward(TensorMap& args) override;
 
 private:
-    void allocateBuffer() override;
-
-    void allocateBuffer(const size_t batch_size);
-
-    void freeBuffer() override;
-
     // repetition penalty type
     RepetitionPenaltyType repetition_penalty_type_ = RepetitionPenaltyType::None;
 
     // host buffer
-    std::vector<float> repetition_penalty_;
-    std::vector<int>   min_lengths_;
-    std::vector<float> temperature_;
-    std::vector<int>   context_length_;
-    std::vector<int>   prompt_length_;
+    Buffer_<float> repetition_penalty_;
+    Buffer_<int>   min_lengths_;
+    Buffer_<float> temperature_;
+    Buffer_<int>   bad_words_;
+    Buffer_<int>   end_ids_;
 
     // device buffer
-    int*   repetition_penalty_workspace_ = nullptr;
-    float* repetition_penalty_buf_       = nullptr;
-    int*   min_lengths_buf_              = nullptr;
-    float* temperature_buf_              = nullptr;
+    Buffer_<float> repetition_penalty_buf_;
+    Buffer_<int>   min_lengths_buf_;
+    Buffer_<float> temperature_buf_;
+    Buffer_<int>   bad_words_buf_;
+    Buffer_<int>   end_ids_buf_;
+
+    Tensor_<int> bad_words_ten_;
+    Tensor_<int> end_ids_ten_;
 };
 
 }  // namespace turbomind

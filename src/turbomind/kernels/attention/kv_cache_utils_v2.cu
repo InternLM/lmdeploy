@@ -1,5 +1,7 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
+#include <type_traits>
+
 #include "src/turbomind/kernels/attention/block.h"
 #include "src/turbomind/kernels/attention/kv_cache_utils_v2.h"
 #include "src/turbomind/kernels/attention/quantization.h"
@@ -7,7 +9,7 @@
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/thread_map.h"
 #include "src/turbomind/models/llama/llama_utils.h"
-#include <type_traits>
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 

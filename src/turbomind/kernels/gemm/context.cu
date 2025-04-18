@@ -188,10 +188,10 @@ std::vector<LaunchSpec> StaticGemmContext::Populate(const Kernel& kernel, const 
         const int64_t mma_cost = wave_mma_cost * waves;
 
         // IO has less severe quantization effect
-        const int64_t mio_cost_a = get_size(desc.type_a, tiled_shape_n * m * split_ceil_k) * splits;
-        const int64_t mio_cost_b = get_size(desc.type_b, tiled_shape_m * n * split_ceil_k) * splits;
+        const int64_t mio_cost_a = byte_size(desc.type_a, tiled_shape_n * m * split_ceil_k) * splits;
+        const int64_t mio_cost_b = byte_size(desc.type_b, tiled_shape_m * n * split_ceil_k) * splits;
         /// TODO: read type from `desc_.accum` when added
-        const int64_t mio_cost_c = get_size(DataType::F32, (int64_t)m * n) * (splits - 1) * 2;
+        const int64_t mio_cost_c = byte_size(desc.type_c, (int64_t)m * n) * (splits - 1) * 2;
         const int64_t mio_cost   = mio_cost_a + mio_cost_b + mio_cost_c;
 
         // std::cout << name() << " " << splits << " " << waves << " " << (float)mio_cost << " " << (float)mma_cost
@@ -435,10 +435,10 @@ std::vector<LaunchSpec> MoeGemmContext::Populate(const Kernel& kernel, const Pop
         const int64_t mma_cost = wave_mma_cost * waves;
 
         // IO has less severe quantization effect
-        const int64_t mio_cost_a = get_size(desc.type_a, tiled_shape_n * batch_size * split_ceil_k) * num * splits;
-        const int64_t mio_cost_b = get_size(desc.type_b, tiled_shape_m * n * split_ceil_k) * num * splits;
+        const int64_t mio_cost_a = byte_size(desc.type_a, tiled_shape_n * batch_size * split_ceil_k) * num * splits;
+        const int64_t mio_cost_b = byte_size(desc.type_b, tiled_shape_m * n * split_ceil_k) * num * splits;
         /// TODO: read type from `desc_.accum` when added
-        const int64_t mio_cost_c = get_size(DataType::F32, (int64_t)batch_size * n) * num * (splits - 1) * 2;
+        const int64_t mio_cost_c = byte_size(desc.type_c, (int64_t)batch_size * n) * num * (splits - 1) * 2;
         const int64_t mio_cost   = mio_cost_a + mio_cost_b + mio_cost_c;
 
         LaunchSpec spec{};

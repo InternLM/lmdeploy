@@ -5,6 +5,7 @@
 #include "src/turbomind/comm/cuda_ipc/group_sum.h"
 
 #include "src/turbomind/comm/cuda_ipc/mscclpp.h"
+#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/meta.h"
@@ -279,18 +280,11 @@ void CudaIpcCommImpl::AllreduceResidualBiasRMSnormEx(void*        hidden,
         return false;  // > 1024 vdim
     };
 
-    auto dispatch = [&] {
-        switch (dtype) {
-            case DataType::TYPE_FP16:
-                return dispatch_D(half{});
-            case DataType::TYPE_BF16:
-                return dispatch_D(nv_bfloat16{});
-            default:
-                return false;
-        }
+    auto dispatch = [&]() -> bool {  //
+        TM_DISPATCH_PRIMARY_DTYPES_RET(dtype, dispatch_D);
     };
 
-    FT_CHECK(dispatch());
+    TM_CHECK(dispatch());
 }
 
 }  // namespace turbomind::comm

@@ -6,9 +6,9 @@
 #include "src/turbomind/comm/cuda_ipc/cuda_ipc_comm.h"
 #include "src/turbomind/comm/cuda_ipc/device_semaphore.h"
 
+#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/meta.h"
-#include "src/turbomind/utils/Tensor.h"
 
 #include "src/turbomind/utils/cuda_utils.h"
 
@@ -423,14 +423,7 @@ void CudaIpcCommImpl::AllReduceSum(
         }
     };
 
-    switch (type) {
-        case DataType::TYPE_FP16:
-            return invoke(half{});
-        case DataType::TYPE_BF16:
-            return invoke(nv_bfloat16{});
-        default:
-            throw std::runtime_error("not implemented");
-    }
+    TM_DISPATCH_PRIMARY_DTYPES(type, invoke);
 }
 
 }  // namespace turbomind::comm

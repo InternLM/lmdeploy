@@ -25,7 +25,7 @@ DeviceComm CreateDeviceCommunicator(const std::string& backend, int n_ranks, int
     }
 #endif
 
-    FT_CHECK_WITH_INFO(0, fmtstr("Unknown communication backend: %s", backend.c_str()));
+    TM_CHECK(0) << "Unknown communication backend: " << backend;
     return {};
 }
 
