@@ -244,6 +244,16 @@ class CacheEngine:
         """
         self._swap(self.full_gpu_cache, self.full_cpu_cache, src_to_dst)
 
+    def copy_to(self, src_to_dst: Dict[int, int], cache_type: str = 'gpu') -> None:
+        """Copy cache.
+
+        Args:
+            src_to_dst (Dict[int, int]): Map between src and dst.
+            cache_type (str): cache type 'cpu', 'gpu'
+        """
+        target_cache = self.full_gpu_cache if cache_type == 'gpu' else self.full_cpu_cache
+        self._swap(target_cache, target_cache, src_to_dst)
+
     @classmethod
     def get_cache_block_size(cls,
                              block_size: int,

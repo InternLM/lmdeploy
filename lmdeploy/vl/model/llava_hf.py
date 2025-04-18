@@ -8,6 +8,7 @@ from transformers import AutoProcessor
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisonModel
 from lmdeploy.vl.model.utils import disable_logging
+from lmdeploy.vl.utils import hash_multimodal_data
 
 logger = get_logger('lmdeploy')
 
@@ -61,11 +62,15 @@ class LlavaHfVisionModel(VisonModel):
         outputs = []
         for image, params in images:
             image = image.convert('RGB')
+            hash_value = None
+            if self.enable_prefix_caching:
+                hash_value = hash_multimodal_data(model_id=self.model_path, image=image, params=params)
             pixel_values = self.processor(image, return_tensors='pt', input_data_format='channels_last').pixel_values
             outputs.append(
                 dict(pixel_values=pixel_values,
                      image_size=image.size,
                      image_tokens=self.n_token_per_image,
+                     hash_value=hash_value,
                      image_token_id=self.image_token_id))
         messages.append(dict(role='preprocess', content=outputs))
         return messages

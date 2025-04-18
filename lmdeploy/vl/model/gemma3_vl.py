@@ -39,6 +39,7 @@ class Gemma3VisionModel(VisonModel):
     """Gemma3 vision model."""
 
     _arch = 'Gemma3ForConditionalGeneration'
+    support_prefix_caching: bool = False
 
     def __init__(self,
                  model_path: str,
