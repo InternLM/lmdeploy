@@ -270,7 +270,7 @@ def logit_bias_logits_processor(logit_bias: Union[Dict[int, float], Dict[str, fl
 
 
 @router.post('/v1/chat/completions', dependencies=[Depends(check_api_key)])
-async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Request = None):
+async def chat_completions_v1(raw_request: Request = None):
     """Completion API similar to OpenAI's API.
 
     Refer to  `https://platform.openai.com/docs/api-reference/chat/create`
@@ -330,6 +330,14 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
+    json_request = await raw_request.json()
+    request = ChatCompletionRequest.model_validate(json_request)
+    migration_request = json_request.pop("migration_request", None)
+    with_cache = json_request.pop("with_cache", False)
+    preserve_cache = json_request.pop("preserve_cache", False)
+    if migration_request:
+        migration_request = MigrationRequest.model_validate(migration_request)
+
     if request.session_id == -1:
         VariableInterface.session_id += 1
         request.session_id = VariableInterface.session_id
@@ -383,7 +391,9 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                                   min_new_tokens=request.min_new_tokens,
                                   min_p=request.min_p,
                                   random_seed=random_seed,
-                                  spaces_between_special_tokens=request.spaces_between_special_tokens)
+                                  spaces_between_special_tokens=request.spaces_between_special_tokens,
+                                  with_cache=with_cache,
+                                  preserve_cache=preserve_cache)
 
     tools = None
     if request.tools and request.tool_choice != 'none':
@@ -492,6 +502,9 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                                                         finish_reason=res.finish_reason,
                                                         logprobs=logprobs,
                                                         usage=usage)
+            if res.cache_block_ids is not None:
+                response_json["cache_block_ids"] = res.cache_block_ids
+                response_json["remote_token_ids"] = res.token_ids
             yield f'data: {response_json}\n\n'
         yield 'data: [DONE]\n\n'
 
@@ -504,6 +517,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     final_token_ids = []
     final_res = None
     text = ''
+    cache_block_ids = []
+    remote_token_ids = []
     async for res in result_generator:
         if await raw_request.is_disconnected():
             # Abort the request if the client disconnects.
@@ -515,6 +530,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             final_token_ids.extend(res.token_ids)
         if res.logprobs:
             final_logprobs.extend(res.logprobs)
+        cache_block_ids.append(res.cache_block_ids)
+        remote_token_ids.append(res.token_ids)
 
     tool_calls = None
     reasoning_content = None
@@ -550,6 +567,10 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     )
     choices.append(choice_data)
 
+    if with_cache:
+        cache_block_ids = cache_block_ids[0]
+        remote_token_ids = [remote_token_ids[0][-1]]
+
     total_tokens = sum([final_res.history_token_len, final_res.input_token_len, final_res.generate_token_len])
     usage = UsageInfo(
         prompt_tokens=final_res.input_token_len,
@@ -563,6 +584,10 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         choices=choices,
         usage=usage,
     )
+
+    if with_cache:
+        response["cache_block_ids"] = cache_block_ids
+        response["remote_token_ids"] = remote_token_ids
 
     return response
 
