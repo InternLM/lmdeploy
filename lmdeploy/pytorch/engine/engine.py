@@ -372,6 +372,8 @@ class Engine:
 
         # for migration loop management
         self.migration_event = asyncio.Event()
+        self.free_event = asyncio.Event()
+        self.free_que = asyncio.Queue()
 
     @classmethod
     def from_pretrained(cls,
@@ -938,6 +940,21 @@ class Engine:
             __send_resps(resps)
 
     @torch.inference_mode()
+    async def _async_loop_cache_free(self):
+        while True:
+            if self.free_que.empty():
+                await self.free_event.wait()
+            self.free_event.clear()
+            while not self.free_que.empty():
+                migration_request = self.free_que.get_nowait()
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        f"{migration_request.remote_engine_id}/distserve/free_cache",
+                        json={"session_id": migration_request.remote_session_id}
+                    ) as response:
+                        await response.json()
+
+    @torch.inference_mode()
     async def _async_loop_migration(self, resp_que: asyncio.Queue, has_runable_event: asyncio.Event):
         """async loop migration."""
         while True:
@@ -969,12 +986,9 @@ class Engine:
                     )
                     await self.executor.migrate(migration_inputs)
                 for msg in migration_running:
-                    async with aiohttp.ClientSession() as session:
-                        async with session.post(
-                            f"{msg.migration_request.remote_engine_id}/distserve/free_cache",
-                            json={"session_id": migration_request.remote_session_id}
-                        ) as response:
-                            await response.json()
+                    self.free_que.put_nowait(migration_request)
+                    self.free_event.set()
+                    
                 # generate output
                 outputs: Dict[int, InferOutput] = dict()
                 self.scheduler.lock_running(migration_running)
@@ -1089,9 +1103,16 @@ class Engine:
                 name="MainLoopMigration",
             )
 
+            loop_cache_free = event_loop.create_task(
+                self._async_loop_cache_free(
+                    resp_que, has_runable_event=has_runable_event
+                ),
+                name="MainFreeMigration",
+            )
+
             # binding done callback
             loop_main = asyncio.current_task()
-            loop_tasks: List[asyncio.Task] = [loop_main, loop_msg_proc, loop_migration, loop_send_resp]
+            loop_tasks: List[asyncio.Task] = [loop_main, loop_msg_proc, loop_migration, loop_send_resp, loop_cache_free]
             self._add_loop_tasks_done_callback(loop_tasks)
             self._loop_main = loop_main
 
