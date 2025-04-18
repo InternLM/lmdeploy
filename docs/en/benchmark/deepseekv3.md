@@ -8,46 +8,50 @@ ______________________________________________________________________
 
 2 nodes, TP16
 
-| max bsz | prompt no | input-len | output-len | input token throughput (tok/s) | output token throughput (tok/s) |
-| ------- | :-------: | :-------: | :--------: | :----------------------------: | :-----------------------------: |
-| 1024    |   10000   |   2048    |    1024    |            3489.50             |             1743.56             |
-| 1024    |   10000   |   2048    |    2048    |            1665.07             |             1682.41             |
-| 1024    |   10000   |   2048    |    4096    |             725.01             |             1455.12             |
-| 1024    |   10000   |   2048    |    8192    |             253.17             |             1009.80             |
-| 128     |   2000    |   2048    |   16384    |             76.78              |             600.07              |
-| 128     |   2000    |   2048    |   32768    |             17.75              |             281.89              |
+| max bsz | prompt no | input-len | output-len | per node input token thr (tok/s) | per node output token thr (tok/s) |
+| ------- | :-------: | :-------: | :--------: | :------------------------------: | :-------------------------------: |
+| 1024    |   10000   |   2048    |    1024    |             1744.75              |              871.78               |
+| 1024    |   10000   |   2048    |    2048    |              832.54              |              841.21               |
+| 1024    |   10000   |   2048    |    4096    |              362.51              |              727.56               |
+| 1024    |   10000   |   2048    |    8192    |              126.59              |              504.90               |
+| Default |   2000    |   2048    |   16384    |              38.39               |              300.04               |
+| Default |   2000    |   2048    |   32768    |               8.88               |              140.95               |
 
 ### v0.7.2 + `1e77ed2`
 
 2 nodes, TP16
 
-| max bsz | prompt no | input-len | output-len | input token throughput (tok/s) | output token throughput (tok/s) |
-| ------- | :-------: | :-------: | :--------: | :----------------------------: | :-----------------------------: |
-| 1024    |   10000   |   2048    |    1024    |            3624.30             |             1810.91             |
-| 1024    |   10000   |   2048    |    2048    |            1753.75             |             1772.01             |
-| 1024    |   10000   |   2048    |    4096    |             764.61             |             1534.58             |
-| 1024    |   10000   |   2048    |    8192    |             281.32             |             1122.08             |
-| 1024    |   2000    |   2048    |   16384    |             98.92              |             773.06              |
-| 1024    |   2000    |   2048    |   32768    |             29.76              |             472.74              |
+| max bsz | prompt no | input-len | output-len | per node input token thr (tok/s) | per node output token thr (tok/s) |
+| ------- | :-------: | :-------: | :--------: | :------------------------------: | :-------------------------------: |
+| 1024    |   10000   |   2048    |    1024    |             1812.15              |              905.46               |
+| 1024    |   10000   |   2048    |    2048    |              876.88              |              886.01               |
+| 1024    |   10000   |   2048    |    4096    |              382.31              |              767.29               |
+| 1024    |   10000   |   2048    |    8192    |              140.66              |              561.04               |
+| 1024    |   2000    |   2048    |   16384    |              49.46               |              386.53               |
+| 1024    |   2000    |   2048    |   32768    |              14.88               |              236.37               |
 
-For output lengths of 16k and 32k, we decrease the total prompt numbers to shorten the execution time.
+For output lengths of 16k and 32k, we decrease the number of total prompts to shorten the execution time.
 
 ### v0.7.2 + `f24497f`
 
-4 nodes, DP32 + EP 32
+4 nodes, DP32 + EP32
 
-| max bsz | prompt no | input-len | output-len | input token throughput (tok/s) | output token throughput (tok/s) |
-| ------- | :-------: | :-------: | :--------: | :----------------------------: | :-----------------------------: |
-| 128     |   2000    |   2048    |    1024    |            8264.56             |             4064.52             |
-| 128     |   2000    |   2048    |    2048    |            6065.50             |             6017.63             |
-| 128     |   2000    |   2048    |    4096    |            3666.99             |             7199.48             |
-| 128     |   2000    |   2048    |    8192    |            1972.46             |             8010.31             |
-| 128     |   2000    |   2048    |   16384    |             993.55             |             7764.91             |
-| 128     |   2000    |   2048    |   32768    |             438.00             |             6956.78             |
+| max bsz | prompt no | input-len | output-len | per node input token thr (tok/s) | per node output token thr (tok/s) |
+| ------- | :-------: | :-------: | :--------: | :------------------------------: | :-------------------------------: |
+| Default |   2000    |   2048    |    1024    |             2066.14              |              1016.13              |
+| Default |   2000    |   2048    |    2048    |             1516.38              |              1504.41              |
+| Default |   2000    |   2048    |    4096    |              916.75              |              1799.87              |
+| Default |   2000    |   2048    |    8192    |              493.12              |              2002.58              |
+| Default |   2000    |   2048    |   16384    |              248.39              |              1941.23              |
+| Default |   2000    |   2048    |   32768    |              109.50              |              1739.20              |
 
-NOTE: This performance data is measured using 4 nodes (DP32 + EP32), while previous results were measured using 2 nodes (TP16).
+### v0.7.3 + `665f54f`
 
-We report the total throughput with multiple nodes rather than per node throughput.
+2 nodes, TP16
+
+| max bsz | prompt no | input-len | output-len | per node input token thr (tok/s) | per node output token thr (tok/s) |
+| ------- | :-------: | :-------: | :--------: | :------------------------------: | :-------------------------------: |
+| 1024    |   10000   |   2048    |    2048    |              964.64              |              974.68               |
 
 ## User guide (2 nodes)
 
@@ -77,20 +81,19 @@ docker run -it \
 > :warning: The following operations are all assumed to be performed within the Docker container.
 > We will build a Ray cluster consisting of docker containers, therefore commands executed on the host machine terminal won't be able to access this cluster.
 > LMdeploy utilizes Ray for multi-node cluster construction. In the following steps, we will build a Ray cluster with two nodes for illustration.
-
-Start the ray cluster on the head node. The default port in Ray is 6379 (change it to your own).
+> Start the ray cluster on the head node. The default port in Ray is 6379 (change it to your own).
 
 ```bash
 ray start --head --port=6379
 ```
 
-Start on the slave nodes to join in the ray cluster, change the ip and port to your own:
+Start on the slave nodes to join the ray cluster, change the IP and port to your own:
 
 ```bash
 ray start --address=${head_node_ip}:6379
 ```
 
-Use the following commands to check the ray cluster status on both head and slave nodes. You should be able to see the ray cluster status of multiple nodes information.
+Use the following commands to check the ray cluster status on both head and slave nodes. You should be able to see the ray cluster status of multiple nodes.
 
 ```bash
 ray status
@@ -267,10 +270,10 @@ if __name__ == "__main__":
 
 ### Wakeup and warmup engine
 
-After launching the API service, we need one more step before ready to use.
-Modify the node0 ~ node3 IP address in the following script and execute to warm up the engine.
+After launching the API service, we need one more step to warm up the engine.
+Modify the node0 ~ node3 IP addresses in the following script and execute it to warm up the engine.
 
-Once you see `Warm up finished, feel free to go!`, feel free to use the DeepSeekV3 API service with `http://${master_node_ip}:${proxy_server_port}` as usual.
+Once you see `Warm up finished, feel free to go!`, use the DeepSeekV3 API service with `http://${master_node_ip}:${proxy_server_port}` as usual.
 
 <details>
   <summary>
