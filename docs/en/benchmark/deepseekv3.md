@@ -80,7 +80,8 @@ docker run -it \
 
 > :warning: The following operations are all assumed to be performed within the Docker container.
 > We will build a Ray cluster consisting of docker containers, therefore commands executed on the host machine terminal won't be able to access this cluster.
-> LMdeploy utilizes Ray for multi-node cluster construction. In the following steps, we will build a Ray cluster with two nodes for illustration.
+
+LMdeploy utilizes Ray for multi-node cluster construction. In the following steps, we will build a Ray cluster with two nodes for illustration.
 
 Start the ray cluster on the head node. The default port in Ray is 6379 (change it to your own).
 
