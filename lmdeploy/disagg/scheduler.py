@@ -1,0 +1,2 @@
+class MigrationScheduler:
+    raise NotImplementedError

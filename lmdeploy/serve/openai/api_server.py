@@ -613,6 +613,7 @@ async def completions_v1(raw_request: Request = None):
     request = CompletionRequest.model_validate(json_request)
     migration_request = json_request.pop("migration_request", None)
     with_cache = json_request.pop("with_cache", False)
+    preserve_cache = json_request.pop("preserve_cache", False)
     if migration_request:
         migration_request = MigrationRequest.model_validate(migration_request)
 
@@ -650,7 +651,8 @@ async def completions_v1(raw_request: Request = None):
                                   random_seed=random_seed,
                                   spaces_between_special_tokens=request.spaces_between_special_tokens,
                                   migration_request=migration_request,
-                                  with_cache=with_cache)
+                                  with_cache=with_cache,
+                                  preserve_cache=preserve_cache)
     generators = []
     for i in range(len(request.prompt)):
         result_generator = VariableInterface.async_engine.generate(
@@ -767,6 +769,7 @@ async def completions_v1(raw_request: Request = None):
         if with_cache:
             cache_block_ids = cache_block_ids[0]
             remote_token_ids = [remote_token_ids[0][-1]]
+
         total_tokens = sum([final_res.history_token_len, final_res.input_token_len, final_res.generate_token_len])
         usage.prompt_tokens += final_res.input_token_len
         usage.completion_tokens += final_res.generate_token_len
@@ -845,7 +848,6 @@ async def engine_info():
 @router.post("/distserve/p2p_initialize")
 async def p2p_initialize(init_request: DistServeInitRequest):
     return VariableInterface.async_engine.p2p_initialize(init_request)
-
 
 @router.post("/distserve/p2p_connect")
 async def p2p_connect(conn_request: List[DistServeConnectionRequest]):

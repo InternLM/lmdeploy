@@ -27,7 +27,8 @@ class EngineRole(enum.Enum):
         taking implementation into the consideration, the role is still need to be identified
         when starting the engine server for the following reasons:
             1. Make sure the engine can be correctly discovered by the proxy.
-            2. The create of ModelInputs is different among hybrid, prefill and decode engines. 
+            2. The create of ModelInputs is different among hybrid, prefill and decode engines
+                in DP Engine (DSV3 DP + EP).
     """
     Hybrid = enum.auto()
     Prefill = enum.auto()
@@ -66,7 +67,7 @@ class DistServeRDMAConfig(BaseModel):
     """
     DistServe RDMA Config.
     
-    Warning: Only GDR is supported bynow.
+    Warning: Only GDR is supported by now.
     """
 
     # RDMA with GPU Direct RDMA Access

@@ -304,8 +304,6 @@ class Engine:
             engine_config = copy.deepcopy(engine_config)
         if engine_config.max_batch_size is None:
             engine_config.max_batch_size = get_max_batch_size(engine_config.device_type)
-        if engine_config.role == EngineRole.Prefill:
-            engine_config.prefill_interval = 1
 
         tp = engine_config.tp
         dp = engine_config.dp
@@ -495,8 +493,8 @@ class Engine:
             resp = req.data.get('response', True)
             resp_type = ResponseType.SESSION_NOT_EXIST
             if session_id in self.scheduler.sessions:
-                if self.engine_config.role == EngineRole.Prefill:
-                    # reserve prefill KVCache until decode migration done.
+                print(self.scheduler.sessions[session_id].sequences)
+                if list(self.scheduler.sessions[session_id].sequences.values())[0].preserve_cache:
                     session = self.scheduler.sessions.pop(session_id)
                     self.scheduler.locked_sessions[session_id] = session
                 else:
@@ -560,7 +558,8 @@ class Engine:
                     multimodals=req.data.get('input_multimodals'),
                     input_embeddings=req.data.get('input_embeddings',),
                     migration_request=migration_request,
-                    resp_cache=req.data.get('with_cache')
+                    resp_cache=req.data.get('with_cache'),
+                    preserve_cache=req.data.get('preserve_cache')
                 )
                 msg = next(iter(sess.sequences.values()))
                 __update_max_new_tokens(msg)
@@ -1083,20 +1082,17 @@ class Engine:
             loop_send_resp = event_loop.create_task(self._async_loop_send_responses(resp_que, forward_event),
                                                     name='MainLoopResponse')
 
-            if self.engine_config.role == EngineRole.Decode:
-                logger.info('Starting async task MigrationLoop.')
-                loop_migration = event_loop.create_task(
-                    self._async_loop_migration(
-                        resp_que, has_runable_event=has_runable_event
-                    ),
-                    name="MainLoopMigration",
-                )
+            logger.info('Starting async task MigrationLoop.')
+            loop_migration = event_loop.create_task(
+                self._async_loop_migration(
+                    resp_que, has_runable_event=has_runable_event
+                ),
+                name="MainLoopMigration",
+            )
 
             # binding done callback
             loop_main = asyncio.current_task()
-            loop_tasks: List[asyncio.Task] = [loop_main, loop_msg_proc, loop_send_resp]
-            if self.engine_config.role == EngineRole.Decode:
-                loop_tasks.append(loop_migration)
+            loop_tasks: List[asyncio.Task] = [loop_main, loop_msg_proc, loop_migration, loop_send_resp]
             self._add_loop_tasks_done_callback(loop_tasks)
             self._loop_main = loop_main
 

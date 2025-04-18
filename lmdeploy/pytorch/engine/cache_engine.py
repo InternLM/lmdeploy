@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
-from typing import Dict, List, Literal, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 
 import torch
 
@@ -68,7 +68,8 @@ class CacheEngine:
         self.local_gpu_cache = self.allocate_gpu_cache()
         self.local_cpu_cache = self.allocate_cpu_cache()
 
-        self.migration_backend_impl: MigrationBackendImpl = MIGRATION_BACKENDS[self.cache_config.migration_backend]()
+        self.migration_backend_impl: Optional[MigrationBackendImpl] = None
+        print(self.cache_config.migration_backend)
 
         # Initialize the stream for caching operations.
         self.cache_stream = torch.cuda.Stream()
@@ -325,6 +326,8 @@ class CacheEngine:
 
     """ Metheds for PD Disaggregation Begin. """
     def p2p_initialize(self, migration_init_request: DistServeInitRequest):
+        if not self.migration_backend_impl:
+            self.migration_backend_impl = MIGRATION_BACKENDS[self.cache_config.migration_backend]()
         migration_init_request.rank = self.rank
         self.migration_backend_impl.p2p_initialize(migration_init_request)
         for i, t in enumerate(self.full_gpu_cache):

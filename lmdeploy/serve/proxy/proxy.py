@@ -517,9 +517,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         prefill_request_dict["max_tokens"] = 1
         prefill_request_dict["stream"] = False
         prefill_request_dict["with_cache"] = True
-
-        # TODO: Add preserve_cache api for migration
-        # prefill_request_dict["preserve_cache"] = True
+        prefill_request_dict["preserve_cache"] = True
 
         p_url = node_manager.get_node_url(request.model, EngineRole.Prefill)
         if not p_url:
@@ -634,9 +632,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         prefill_request_dict["max_tokens"] = 1
         prefill_request_dict["stream"] = False
         prefill_request_dict["with_cache"] = True
-
-        # TODO: Add preserve_cache api for migration
-        # prefill_request_dict["preserve_cache"] = True
+        prefill_request_dict["preserve_cache"] = True
 
         p_url = node_manager.get_node_url(request.model, EngineRole.Prefill)
         if not p_url:

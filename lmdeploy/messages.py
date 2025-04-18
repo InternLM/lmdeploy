@@ -116,6 +116,7 @@ class GenerationConfig:
 
     # for disaggregation
     with_cache: bool = False
+    preserve_cache: bool = False
     migration_request: Optional[MigrationRequest] = None
 
     def convert_stop_bad_words_to_ids(self, tokenizer: Tokenizer):
