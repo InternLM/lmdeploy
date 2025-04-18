@@ -259,7 +259,6 @@ class SubCliServe:
                             choices=['Ethernet', 'IB'],
                             default='Ethernet',
                             help='RDMA Link Type')
-
         parser.add_argument('--disable-gdr',
                             action="store_true",
                             help='with GPU Direct Memory Access')

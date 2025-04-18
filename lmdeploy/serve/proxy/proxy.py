@@ -539,7 +539,9 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         if not node_manager.pd_connection_pool.is_connected(p_url, d_url):
             await node_manager.pd_connection_pool.connect(
                 PDConnectionMessage(
-                    p_url=p_url, d_url=d_url,
+                    p_url=p_url,
+                    d_url=d_url,
+                    protocol=node_manager.migration_protocol,
                     rdma_config=node_manager.rdma_config,
                 )
             )
@@ -656,8 +658,11 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
                 PDConnectionMessage(
                     p_url=p_url,
                     d_url=d_url,
-                    protocol=node_manager.migration_protocol)
+                    protocol=node_manager.migration_protocol,
+                    rdma_config=node_manager.rdma_config,
+                )
             )
+
         request_dict["migration_request"] = MigrationRequest(
             protocol=node_manager.migration_protocol,
             remote_engine_id=p_url,
@@ -710,6 +715,10 @@ def proxy(server_name: str = '0.0.0.0',
     node_manager.serving_strategy = ServingStrategy.__members__[serving_strategy]
     node_manager.routing_strategy = RoutingStrategy.from_str(routing_strategy)
     node_manager.migration_protocol = MigrationProtocol.__members__[migration_protocol]
+
+    if serving_strategy == ServingStrategy.DistServe:
+        assert not disable_gdr, "Bynow, only GDRDMA migration is supported in DistServe"
+
     node_manager.rdma_config = DistServeRDMAConfig(
         link_type=RDMALinkType.__members__[link_type],
         with_gdr=not disable_gdr,

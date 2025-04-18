@@ -123,6 +123,7 @@ class PDConnectionPool:
                     local_engine_config=prefill_engine_config,
                     remote_engine_id=conn_req.d_url,
                     remote_engine_config=decode_engine_config,
+                    rdma_config=conn_req.rdma_config,
                 )
                 decode_init_req = DistServeInitRequest(
                     protocol=conn_req.protocol,
@@ -130,13 +131,8 @@ class PDConnectionPool:
                     local_engine_config=decode_engine_config,
                     remote_engine_id=conn_req.p_url,
                     remote_engine_config=prefill_engine_config,
+                    rdma_config=conn_req.rdma_config,
                 )
-
-                if conn_req.protocol == MigrationProtocol.RDMA:
-                    prefill_init_req.rdma_init_request = conn_req.rdma_config
-                    decode_init_req.rdma_init_request = conn_req.rdma_config
-                else:
-                    raise NotImplementedError
 
                 prefill_endpoint_info = await p2p_initialize(conn_req.p_url, prefill_init_req)
                 decode_endpoint_info = await p2p_initialize(conn_req.d_url, decode_init_req)
@@ -208,17 +204,17 @@ class PDConnectionPool:
             self.aiotimeout = aiohttp.ClientTimeout(total=AIOHTTP_TIMEOUT)
             self.initialized = True
         cnt = 0
-        while cnt < self.max_retry_cnt:
-            if self.is_connected(conn_req.p_url, conn_req.d_url):
-                return
-            if cnt > 0:
-                logger.warning(f"Connection failure, retry cnt: {cnt}")
-            conn_event = asyncio.Event()
-            self.waiting_conn.put_nowait((conn_req, conn_event))
-            self.conn_req_event.set()
-            await conn_event.wait()
-            cnt += 1
-        raise TimeoutError("PDConnection Failure")
+        # while cnt < self.max_retry_cnt:
+        if self.is_connected(conn_req.p_url, conn_req.d_url):
+            return
+        if cnt > 0:
+            logger.warning(f"Connection failure, retry cnt: {cnt}")
+        conn_event = asyncio.Event()
+        self.waiting_conn.put_nowait((conn_req, conn_event))
+        self.conn_req_event.set()
+        await conn_event.wait()
+        cnt += 1
+        # raise TimeoutError("PDConnection Failure")
 
     def is_connected(self, p_url: str, d_url: str):
         link = self.pool.get((p_url, d_url), None)

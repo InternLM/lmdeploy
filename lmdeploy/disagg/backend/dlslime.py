@@ -29,13 +29,13 @@ class DLSlimeMigrationManagement:
             MigrationProtocol.RDMA: None,
             MigrationProtocol.NVLINK: None,
         }
-        if init_request.rdma_init_request:
+        if init_request.rdma_config:
             nics = self.local_engine_config.available_nics or available_nic()
             device_name = nics[self.rank % len(nics)]
             self.endpoint[MigrationProtocol.RDMA] = RDMAEndpoint(
                 device_name=device_name,
                 ib_port=1,
-                link_type=init_request.rdma_init_request.link_type.name
+                link_type=init_request.rdma_config.link_type.name
             )
         if init_request.nvlink_init_request:
             raise NotImplementedError

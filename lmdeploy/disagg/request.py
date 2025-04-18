@@ -30,7 +30,7 @@ class DistServeInitRequest(BaseModel):
     rank: Optional[int] = None
 
     tcp_init_request: Optional[DistServeTCPConfig] = None
-    rdma_init_request: Optional[DistServeRDMAConfig] = None
+    rdma_config: Optional[DistServeRDMAConfig] = None
     nvlink_init_request: Optional[DistServeNVLinkConfig] = None
 
 
