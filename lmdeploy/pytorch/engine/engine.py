@@ -493,7 +493,6 @@ class Engine:
             resp = req.data.get('response', True)
             resp_type = ResponseType.SESSION_NOT_EXIST
             if session_id in self.scheduler.sessions:
-                print(self.scheduler.sessions[session_id].sequences)
                 if list(self.scheduler.sessions[session_id].sequences.values())[0].preserve_cache:
                     session = self.scheduler.sessions.pop(session_id)
                     self.scheduler.locked_sessions[session_id] = session

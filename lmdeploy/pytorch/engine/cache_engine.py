@@ -69,7 +69,6 @@ class CacheEngine:
         self.local_cpu_cache = self.allocate_cpu_cache()
 
         self.migration_backend_impl: Optional[MigrationBackendImpl] = None
-        print(self.cache_config.migration_backend)
 
         # Initialize the stream for caching operations.
         self.cache_stream = torch.cuda.Stream()
