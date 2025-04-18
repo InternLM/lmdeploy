@@ -1104,9 +1104,7 @@ class Engine:
             )
 
             loop_cache_free = event_loop.create_task(
-                self._async_loop_cache_free(
-                    resp_que, has_runable_event=has_runable_event
-                ),
+                self._async_loop_cache_free(),
                 name="MainFreeMigration",
             )
 
