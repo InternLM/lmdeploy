@@ -262,8 +262,6 @@ class SubCliServe:
 
         parser.add_argument('--disable-gdr',
                             action="store_true",
-                            choices=['Ethernet', 'IB'],
-                            default='Ethernet',
                             help='with GPU Direct Memory Access')
 
         ArgumentHelper.api_keys(parser)
