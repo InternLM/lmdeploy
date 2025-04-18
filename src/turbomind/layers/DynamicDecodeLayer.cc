@@ -44,11 +44,11 @@ DynamicDecodeLayer::DynamicDecodeLayer(DataType              dtype,
 
 DynamicDecodeLayer::~DynamicDecodeLayer() {}
 
-void DynamicDecodeLayer::Setup(const std::vector<const Request*>& rs)
+void DynamicDecodeLayer::Setup(const std::vector<const Request*>& rs, const TensorMap& args)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     for (const auto& layer : layers_) {
-        layer->Setup(rs);
+        layer->Setup(rs, args);
     }
 }
 

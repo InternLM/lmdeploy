@@ -27,7 +27,7 @@ class StopCriteriaLayer: public BaseDynamicDecodeLayer {
 public:
     explicit StopCriteriaLayer(const BaseParam& param);
 
-    void Setup(const std::vector<const Request*>& rs) override;
+    void Setup(const std::vector<const Request*>& rs, const TensorMap&) override;
 
     void Forward(TensorMap& args) override;
 

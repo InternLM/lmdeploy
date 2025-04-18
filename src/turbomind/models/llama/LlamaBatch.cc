@@ -934,7 +934,8 @@ void LlamaBatch::InitializeSampling(const GenerationState& g)
     for (int i = 0; i < batch_size; ++i) {
         rs.push_back(state_->requests[i].get());
     }
-    model_->dynamic_decode_->Setup(rs);
+
+    model_->dynamic_decode_->Setup(rs, {{"prompt_length", {state_->h_prompt_length, {batch_size}}}});
 
     sync_check_cuda_error();
 }

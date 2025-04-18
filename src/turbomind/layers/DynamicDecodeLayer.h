@@ -37,7 +37,7 @@ public:
 
     ~DynamicDecodeLayer();
 
-    void Setup(const std::vector<const Request*>& rs);
+    void Setup(const std::vector<const Request*>& rs, const TensorMap& args);
 
     void Forward(TensorMap& args);
 

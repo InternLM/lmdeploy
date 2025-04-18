@@ -31,7 +31,7 @@ class LogitsProcessorLayer: public BaseDynamicDecodeLayer {
 public:
     explicit LogitsProcessorLayer(const BaseParam& param);
 
-    void Setup(const std::vector<const Request*>& rs) override;
+    void Setup(const std::vector<const Request*>& rs, const TensorMap& args) override;
 
     void Forward(TensorMap& args) override;
 
@@ -45,9 +45,6 @@ private:
     Buffer_<float> temperature_;
     Buffer_<int>   bad_words_;
     Buffer_<int>   end_ids_;
-
-    std::vector<int> context_length_;
-    std::vector<int> prompt_length_;
 
     // device buffer
     Buffer_<float> repetition_penalty_buf_;

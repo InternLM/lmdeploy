@@ -30,7 +30,7 @@ class SamplingLayer: public BaseDynamicDecodeLayer {
 public:
     explicit SamplingLayer(const BaseParam& param);
 
-    void Setup(const std::vector<const Request*>& rs) override;
+    void Setup(const std::vector<const Request*>& rs, const TensorMap&) override;
 
     void Forward(TensorMap& args) override;
 

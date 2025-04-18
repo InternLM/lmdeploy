@@ -44,7 +44,7 @@ public:
         device_prop_       = param.device_prop;
     };
 
-    virtual void Setup(const std::vector<const Request*>& rs) = 0;
+    virtual void Setup(const std::vector<const Request*>& rs, const TensorMap& args) = 0;
 
     virtual void Forward(TensorMap& args) = 0;
 

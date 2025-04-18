@@ -32,6 +32,9 @@ SamplingLayer<T>::SamplingLayer(const BaseParam& param): BaseDynamicDecodeLayer{
     min_p_ = {max_batch_size_, kCPUpinned};
     kept_  = {max_batch_size_, kCPUpinned};
 
+    // constant array
+    std::fill_n(kept_.data(), max_batch_size_, vocab_size_);
+
     top_k_buf_ = {max_batch_size_, kDEVICE};
     top_p_buf_ = {max_batch_size_, kDEVICE};
     min_p_buf_ = {max_batch_size_, kDEVICE};
@@ -54,6 +57,8 @@ void SamplingLayer<T>::Forward(TensorMap& args)
     const auto bsz = logits.shape(0);
 
     const int step = *args.at("step").data<int>();
+
+    core::Copy(kept_.data(), bsz, kept_buf_.data());
 
     // use topk sort if some request use topk filter
     if (max_topk_ > 0) {
@@ -132,13 +137,9 @@ void SamplingLayer<T>::Forward(TensorMap& args)
 }
 
 template<typename T>
-void SamplingLayer<T>::Setup(const std::vector<const Request*>& rs)
+void SamplingLayer<T>::Setup(const std::vector<const Request*>& rs, const TensorMap&)
 {
     const auto bsz = rs.size();
-
-    std::fill_n(top_k_.data(), bsz, 0);
-    std::fill_n(top_p_.data(), bsz, 0.f);
-    std::fill_n(min_p_.data(), bsz, 0.f);
 
     for (int i = 0; i < bsz; ++i) {
         top_k_[i] = rs[i]->gen_cfg.top_k;
@@ -171,9 +172,6 @@ void SamplingLayer<T>::Setup(const std::vector<const Request*>& rs)
         invokeTopPSort<T>(params, stream_);
         topp_ws_ = {(ssize_t)params.workspace_size, kDEVICE};
     }
-
-    std::fill_n(kept_.data(), bsz, vocab_size_);
-    core::Copy(kept_.data(), bsz, kept_buf_.data());
 
     core::Copy(top_k_.data(), bsz, top_k_buf_.data());
     core::Copy(top_p_.data(), bsz, top_p_buf_.data());

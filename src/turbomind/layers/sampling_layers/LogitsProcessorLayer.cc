@@ -65,9 +65,6 @@ LogitsProcessorLayer<T>::LogitsProcessorLayer(const BaseParam& param): BaseDynam
     temperature_buf_        = {max_batch_size_, kDEVICE};
     bad_words_buf_          = {max_batch_size_ * 2 * kMaxStopBadWordsLen, kDEVICE};
     end_ids_buf_            = {max_batch_size_ * kMaxEndIdsSize, kDEVICE};
-
-    context_length_.resize(max_batch_size_);
-    prompt_length_.resize(max_batch_size_);
 }
 
 template<typename T>
@@ -130,16 +127,15 @@ void LogitsProcessorLayer<T>::Forward(TensorMap& args)
         TM_CHECK_EQ(end_ids_ten_.ndim(), 2);
         auto enable = [&] {
             const int num_generated_tokens = step - max_input_length;
-            auto      prompt_len           = args.at("prompt_length").data<int>();
             auto      context_len          = args.at("context_length").data<int>();
             for (int i = 0; i < bsz; ++i) {
-                if (min_lengths_[i] > context_len[i] - prompt_len[i] + num_generated_tokens) {
+                if (min_lengths_[i] > context_len[i] + num_generated_tokens) {
                     return true;
                 }
             }
             return false;
-        };
-        if (enable()) {
+        }();
+        if (enable) {
             invokeMinLengthPenalty(logits.data(),
                                    min_lengths_buf_.data(),
                                    args.at("sequence_length").data<int>(),
@@ -168,27 +164,27 @@ void LogitsProcessorLayer<T>::Forward(TensorMap& args)
 }
 
 template<typename T>
-void LogitsProcessorLayer<T>::Setup(const std::vector<const Request*>& rs)
+void LogitsProcessorLayer<T>::Setup(const std::vector<const Request*>& rs, const TensorMap& args)
 {
     TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
 
     const int bsz = rs.size();
 
+    const auto prompt_length = args.at("prompt_length").data<int>();
+
+    repetition_penalty_type_ = RepetitionPenaltyType::None;
+
     for (int i = 0; i < bsz; ++i) {
         auto& c = rs[i]->gen_cfg;
         // repetition_penalty
         repetition_penalty_[i] = c.repetition_penalty;
+        if (repetition_penalty_[i] != 1.f) {
+            repetition_penalty_type_ = RepetitionPenaltyType::Multiplicative;
+        }
         // temperature
         temperature_[i] = c.temperature;
         // min_length
-        min_lengths_[i] = c.min_new_tokens;
-    }
-
-    if (std::accumulate(repetition_penalty_.begin(), repetition_penalty_.begin() + bsz, 1.f) != 1.f) {
-        repetition_penalty_type_ = RepetitionPenaltyType::Multiplicative;
-    }
-    else {
-        repetition_penalty_type_ = RepetitionPenaltyType::None;
+        min_lengths_[i] = c.min_new_tokens + prompt_length[i];
     }
 
     Copy_(temperature_, bsz, temperature_buf_);
