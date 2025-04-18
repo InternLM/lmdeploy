@@ -133,8 +133,8 @@ class PDConnectionPool:
                 )
 
                 if conn_req.protocol == MigrationProtocol.RDMA:
-                    prefill_init_req.rdma_init_request = conn_req.rdma_init_request
-                    decode_init_req.rdma_init_request = conn_req.rdma_init_request
+                    prefill_init_req.rdma_init_request = conn_req.rdma_config
+                    decode_init_req.rdma_init_request = conn_req.rdma_config
                 else:
                     raise NotImplementedError
 

@@ -254,6 +254,17 @@ class SubCliServe:
                             choices=['TCP', 'RDMA', 'NVLINK'],
                             default='RDMA',
                             help='transport protocol of KV migration')
+        parser.add_argument('--link-type',
+                            type=str,
+                            choices=['Ethernet', 'IB'],
+                            default='Ethernet',
+                            help='RDMA Link Type')
+
+        parser.add_argument('--disable-gdr',
+                            action="store_true",
+                            choices=['Ethernet', 'IB'],
+                            default='Ethernet',
+                            help='with GPU Direct Memory Access')
 
         ArgumentHelper.api_keys(parser)
         ArgumentHelper.ssl(parser)

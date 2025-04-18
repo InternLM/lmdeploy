@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from lmdeploy.disagg.config import EngineRole, MigrationProtocol
+from lmdeploy.disagg.config import EngineRole, MigrationProtocol, RDMALinkType, DistServeRDMAConfig
 from lmdeploy.disagg.conn import PDConnectionPool
 from lmdeploy.disagg.config import ServingStrategy
 from lmdeploy.disagg.messages import PDConnectionMessage
@@ -81,12 +81,13 @@ class NodeManager:
                  serving_strategy: str = 'Hybrid',
                  routing_strategy: str = 'min_expected_latency',
                  migration_protocol: str = 'RDMA',
+                 link_type: str = 'Ethernet',
+                 with_gdr: bool = True,
                  cache_status: Optional[bool] = True) -> None:
         self.nodes = dict()
         self.serving_strategy = ServingStrategy.__members__[serving_strategy]
         self.routing_strategy = RoutingStrategy.from_str(routing_strategy)
-        self.migration_protocol = MigrationProtocol.__members__[migration_protocol]
-        self.pd_connection_pool = PDConnectionPool()
+
         self.cache_status = cache_status
         self.latencies = dict()
         self.config_path = osp.join(osp.dirname(osp.realpath(__file__)), 'proxy_config.json')
@@ -102,7 +103,13 @@ class NodeManager:
         self.heart_beat_thread.start()
         self.aiotimeout = aiohttp.ClientTimeout(total=AIOHTTP_TIMEOUT)
 
-        self.initialized = False
+        # For PD Disaggregation
+        self.migration_protocol = MigrationProtocol.__members__[migration_protocol]
+        self.rdma_config = DistServeRDMAConfig(
+            with_gdr = with_gdr,
+            link_type = RDMALinkType.__members__[link_type]
+        )
+        self.pd_connection_pool = PDConnectionPool()
 
     def get_nodes(self, role: EngineRole) -> Dict:
         return {node_url: node_status for (node_url, node_status) in self.nodes.items() if node_status.role == role}
@@ -530,7 +537,12 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         logger.info(f'A Decode request is dispatched to {d_url}')
 
         if not node_manager.pd_connection_pool.is_connected(p_url, d_url):
-            await node_manager.pd_connection_pool.connect(PDConnectionMessage(p_url=p_url, d_url=d_url))
+            await node_manager.pd_connection_pool.connect(
+                PDConnectionMessage(
+                    p_url=p_url, d_url=d_url,
+                    rdma_config=node_manager.rdma_config,
+                )
+            )
         request_dict["migration_request"] = MigrationRequest(
             protocol=node_manager.migration_protocol,
             remote_engine_id=p_url,
@@ -640,7 +652,12 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         logger.info(f'A Decode request is dispatched to {d_url}')
 
         if not node_manager.pd_connection_pool.is_connected(p_url, d_url):
-            await node_manager.pd_connection_pool.connect(PDConnectionMessage(p_url=p_url, d_url=d_url))
+            await node_manager.pd_connection_pool.connect(
+                PDConnectionMessage(
+                    p_url=p_url,
+                    d_url=d_url,
+                    protocol=node_manager.migration_protocol)
+            )
         request_dict["migration_request"] = MigrationRequest(
             protocol=node_manager.migration_protocol,
             remote_engine_id=p_url,
@@ -671,6 +688,8 @@ def proxy(server_name: str = '0.0.0.0',
           log_level: str = 'INFO',
           disable_cache_status: bool = False,
           *,
+          disable_gdr: bool,
+          link_type: Literal['Ethernet', 'IB'],
           migration_protocol: MigrationProtocol,
           **kwargs):
     """To launch the proxy server.
@@ -691,6 +710,10 @@ def proxy(server_name: str = '0.0.0.0',
     node_manager.serving_strategy = ServingStrategy.__members__[serving_strategy]
     node_manager.routing_strategy = RoutingStrategy.from_str(routing_strategy)
     node_manager.migration_protocol = MigrationProtocol.__members__[migration_protocol]
+    node_manager.rdma_config = DistServeRDMAConfig(
+        link_type=RDMALinkType.__members__[link_type],
+        with_gdr=not disable_gdr,
+    )
     node_manager.cache_status = not disable_cache_status
     if api_keys is not None:
         if isinstance(api_keys, str):

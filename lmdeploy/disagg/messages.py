@@ -26,9 +26,9 @@ class PDConnectionMessage(BaseModel):
     p_url: str
     d_url: str
     protocol: MigrationProtocol = MigrationProtocol.RDMA
-    tcp_init_request: Optional[DistServeTCPConfig] = None
-    rdma_init_request: Optional[DistServeRDMAConfig] = DistServeRDMAConfig()
-    nvlink_init_request: Optional[DistServeNVLinkConfig] = None
+    tcp_config: Optional[DistServeTCPConfig] = None
+    rdma_config: Optional[DistServeRDMAConfig] = None
+    nvlink_config: Optional[DistServeNVLinkConfig] = None
 
 
 class DistServeRegisterMRMessages(BaseModel):
@@ -38,4 +38,3 @@ class DistServeRegisterMRMessages(BaseModel):
     mr_key: str
     addr: int
     length: int
-

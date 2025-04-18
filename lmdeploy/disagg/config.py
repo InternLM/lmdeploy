@@ -70,7 +70,7 @@ class DistServeRDMAConfig(BaseModel):
     """
 
     # RDMA with GPU Direct RDMA Access
-    gdr: bool = True
+    with_gdr: bool = True
     link_type: RDMALinkType = RDMALinkType.Ethernet
 
 
