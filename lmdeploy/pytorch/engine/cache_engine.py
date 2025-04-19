@@ -6,7 +6,7 @@ import torch
 
 from lmdeploy.disagg.config import EngineRole
 from lmdeploy.disagg.messages import (
-    DistServeRegisterMRMessages,
+    DistServeRegisterMRMessage,
     MigrationExecutionBatch,
     MigrationAssignment,
 )
@@ -332,7 +332,7 @@ class CacheEngine:
         for i, t in enumerate(self.full_gpu_cache):
             if t.numel() == 0:
                 continue
-            register_mr_request = DistServeRegisterMRMessages(
+            register_mr_request = DistServeRegisterMRMessage(
                 protocol=migration_init_request.protocol,
                 remote_engine_id=migration_init_request.remote_engine_id,
                 mr_key=str(i),

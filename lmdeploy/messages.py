@@ -310,6 +310,12 @@ class PytorchEngineConfig:
         distributed_executor_backend (str): backend of distributed backend,
             options: ['uni', 'mp', 'ray']
         enable_microbatch (bool): enable microbatch for specified model
+        role (EngineRole): role of engin, options: ['Hybrid', 'Prefill',
+            'Decode']. Default to `EngineRole.Hybrid`.
+        migration_backend: migration backend. options: ['DLSlime', 'Mooncake',
+            'InfiniStore']. Deafult to `MigrationBackend.DLSlime`.
+        available_nics: Available NICs when kvcache migration. If set to None,
+            the `MigrationBackend` will find available NICs by self.
     """
     dtype: str = 'auto'
     tp: int = 1
@@ -420,6 +426,8 @@ class EngineOutput:
             may not equal to the length of token_ids
         logprobs (List[Dict[int, float]]): the top logprobs for each output
             position.
+        cache_block_ids (List[int]): send cache blocks back for migration in
+            Disaggregated LLM Serving when Prefill Engine is Done.
     """
     status: ResponseType
     token_ids: List[int]
@@ -428,8 +436,6 @@ class EngineOutput:
     logits: torch.Tensor = None
     last_hidden_state: torch.Tensor = None
 
-    # send cache blocks back for migration in Disaggregated LLM Serving
-    # when Prefill Engine is Done.
     cache_block_ids: Optional[List[int]] = None
 
 

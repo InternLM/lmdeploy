@@ -2,7 +2,7 @@ from typing import Dict
 
 from lmdeploy.disagg.request import DistServeConnectionRequest
 from lmdeploy.disagg.messages import (
-    DistServeRegisterMRMessages,
+    DistServeRegisterMRMessage,
     MigrationAssignment
 )
 
@@ -42,7 +42,7 @@ class DLSlimeMigrationManagement:
         if init_request.tcp_init_request:
             raise NotImplementedError
 
-    def register_memory_region(self, register_mr_request: DistServeRegisterMRMessages):
+    def register_memory_region(self, register_mr_request: DistServeRegisterMRMessage):
         self.endpoint[register_mr_request.protocol].register_memory_region(
             register_mr_request.mr_key,
             register_mr_request.addr,
@@ -71,7 +71,7 @@ class DLSlimeBackend(MigrationBackendImpl):
     def p2p_initialize(self, init_request: DistServeInitRequest):
         self.links[init_request.remote_engine_id] = DLSlimeMigrationManagement(init_request)
 
-    def register_memory_region(self, register_mr_request:DistServeRegisterMRMessages):
+    def register_memory_region(self, register_mr_request:DistServeRegisterMRMessage):
         self.links[register_mr_request.remote_engine_id].register_memory_region(register_mr_request)
 
     def endpoint_info(self, remote_engine_id: int, protocol: MigrationProtocol):

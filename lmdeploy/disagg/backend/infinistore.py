@@ -1,5 +1,5 @@
 from lmdeploy.disagg.messages import (
-    DistServeRegisterMRMessages,
+    DistServeRegisterMRMessage,
     MigrationAssignment
 )
 
@@ -18,7 +18,7 @@ class InfiniStoreBackend(MigrationBackendImpl):
     def p2p_initialize(self, init_request: DistServeInitRequest):
         raise NotImplementedError
 
-    def register_memory_region(self, register_mr_request:DistServeRegisterMRMessages):
+    def register_memory_region(self, register_mr_request:DistServeRegisterMRMessage):
         raise NotImplementedError
 
     def endpoint_info(self, remote_engine_id: int, protocol: MigrationProtocol):

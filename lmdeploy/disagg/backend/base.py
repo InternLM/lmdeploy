@@ -2,7 +2,7 @@ from abc import abstractmethod
 
 from lmdeploy.disagg.request import DistServeConnectionRequest
 from lmdeploy.disagg.messages import (
-    DistServeRegisterMRMessages,
+    DistServeRegisterMRMessage,
     MigrationAssignment
 )
 from lmdeploy.disagg.config import MigrationProtocol
@@ -15,7 +15,7 @@ class MigrationBackendImpl:
         raise NotImplementedError
 
     @abstractmethod
-    def register_memory_region(self, register_mr_request:DistServeRegisterMRMessages):
+    def register_memory_region(self, register_mr_request:DistServeRegisterMRMessage):
         raise NotImplementedError
 
     @abstractmethod

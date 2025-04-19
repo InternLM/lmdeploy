@@ -3,7 +3,12 @@ from typing import List, Optional, Tuple
 
 from pydantic import BaseModel
 
-from lmdeploy.disagg.config import DistServeNVLinkConfig, DistServeRDMAConfig, DistServeTCPConfig, MigrationProtocol
+from lmdeploy.disagg.config import (
+    DistServeNVLinkConfig,
+    DistServeRDMAConfig,
+    DistServeTCPConfig,
+    MigrationProtocol,
+)
 
 
 class MigrationExecutionBatch(BaseModel):
@@ -14,7 +19,9 @@ class MigrationExecutionBatch(BaseModel):
 
 
 class MigrationAssignment(BaseModel):
+    """Migration Assignment."""
     protocol: MigrationProtocol
+
     remote_engine_id: str
     mr_key: str
     target_offset: List[int]
@@ -31,7 +38,7 @@ class PDConnectionMessage(BaseModel):
     nvlink_config: Optional[DistServeNVLinkConfig] = None
 
 
-class DistServeRegisterMRMessages(BaseModel):
+class DistServeRegisterMRMessage(BaseModel):
     protocol: MigrationProtocol
 
     remote_engine_id: str
