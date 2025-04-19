@@ -184,6 +184,7 @@ class SubCliServe:
         ArgumentHelper.dp(pt_group)
         ArgumentHelper.dp_rank(pt_group)
         ArgumentHelper.ep(pt_group)
+        ArgumentHelper.enable_microbatch(pt_group)
 
         # turbomind args
         tb_group = parser.add_argument_group('TurboMind engine arguments')
@@ -346,6 +347,7 @@ class SubCliServe:
                                                  quant_policy=args.quant_policy,
                                                  eager_mode=args.eager_mode,
                                                  max_prefill_token_num=args.max_prefill_token_num,
+                                                 enable_microbatch=args.enable_microbatch,
                                                  role=EngineRole.__members__[args.role],
                                                  migration_backend=MigrationBackend.__members__[args.migration_backend],
                                                  available_nics=args.available_nics)

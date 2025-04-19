@@ -1,6 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import math
+from copy import deepcopy
+from enum import Enum, auto
+from os import getenv
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import torch
@@ -9,15 +12,308 @@ from torch import nn
 
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.distributed import get_dist_manager, get_tp_world_rank
-from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
+from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager, get_step_ctx_manager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
 from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_down_linear, build_gateup_linear, build_o_proj,
                                         build_rowwise_linear)
-from lmdeploy.pytorch.nn.moe import SoftmaxTopK, build_fused_moe
+from lmdeploy.pytorch.nn.moe import MoeType, SoftmaxTopK, build_fused_moe
 from lmdeploy.pytorch.nn.rotary_embedding import YarnParameters
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
+
+
+# microbatch
+class ExecType(Enum):
+    """batch ecex type."""
+    One = auto()
+    Two0101 = auto()
+    Two0110 = auto()
+    TwoLikeOne = auto()
+    TwoPrefill = auto()
+    TwoDecode = auto()
+
+
+class BatchWorker:
+
+    def __init__(self, tag: str, generator):
+        self._tag = tag
+        self._generator = generator
+        self._count = 0
+        self.output = None
+
+    def next(self):
+        assert not self.done
+
+        try:
+            next(self._generator)
+        except StopIteration as e:
+            assert e.value is not None
+            self.output = e.value
+
+        self._count += 1
+
+    @property
+    def done(self):
+        return self.output is not None
+
+
+def execute_batch(inputs: list, fn, delta_stages: int = 0, exec_type: ExecType = ExecType.One, extern_tag: str = ''):
+    worker_list = [BatchWorker(str(idx), fn(**input, tag=str(idx) + extern_tag)) for idx, input in enumerate(inputs)]
+
+    if exec_type == ExecType.One:
+        assert len(inputs) == 1
+        i = 0
+        while not worker_list[0].done:
+            worker_list[0].next()
+            i += 1
+
+    if exec_type == ExecType.TwoLikeOne:
+        assert len(inputs) == 2
+        i = 0
+        while not worker_list[0].done:
+            worker_list[0].next()
+            i += 1
+        i = 0
+        while not worker_list[1].done:
+            worker_list[1].next()
+            i += 1
+
+    if exec_type == ExecType.Two0101:
+        assert len(inputs) == 2
+
+        for _ in range(delta_stages):
+            worker_list[0].next()
+        i = 0
+        while not worker_list[0].done:
+            worker_list[0].next()
+            worker_list[1].next()
+            i += 1
+
+        while not worker_list[1].done:
+            worker_list[1].next()
+
+    if exec_type == ExecType.Two0110:
+        assert len(inputs) == 2
+
+        for _ in range(delta_stages):
+            worker_list[0].next()
+        i = 0
+        while not worker_list[0].done:
+            if i % 2 == 0:
+                worker_list[0].next()
+                worker_list[1].next()
+            else:
+                worker_list[1].next()
+                worker_list[0].next()
+            i += 1
+
+        while not worker_list[1].done:
+            worker_list[1].next()
+
+    if exec_type == ExecType.TwoPrefill:
+        """
+        before:
+        A-attn0->A-attn1
+        roll:
+        A-dis->B-attn0->B-attn1->A-dis_wait->B-dis->A-moe->B-dis_wait->A-comb->
+        B-moe->(A-share->A-comb_wait)->B-comb->A-attn0->A-attn1->(B-share->B-comb_wait)
+        after:
+        B-dis_wait->B-moe->B-comb->B-comb_wait and end
+        """
+        assert len(inputs) == 2 and delta_stages in [0, 2]
+
+        for _ in range(2):
+            worker_list[0].next()
+
+        pipeline = [
+            '0-dis', '1-attn0', '1-attn1', '0-dis_wait', '1-dis', '0-moe', '1-dis_wait', '0-comb', '1-moe',
+            '0-share+0-comb_wait', '1-comb', '0-attn0', '0-attn1', '1-share+1-comb_wait'
+        ]
+        pipline_length = len(pipeline)
+        i = 0
+        while not worker_list[0].done:
+            worker_list[int(pipeline[i % pipline_length][0])].next()
+            i += 1
+
+        while not worker_list[1].done:
+            worker_list[1].next()
+
+    if exec_type == ExecType.TwoDecode:
+        """
+        before:
+        A-attn0->A-attn1->(A-dis->A-share)
+        roll:
+        B-attn0->A-dis_wait->A-moe->A-comb->B-attn1->A-comb_wait->(B-dis->B-share)->
+        A-attn0->B-dis_wait->B-moe->B-comb->A-attn1->B-comb_wait->(A-dis->A-share)
+        after:
+        B-dis_wait->B-moe->B-comb->B-comb_wait and end
+        """
+        assert len(inputs) == 2 and delta_stages in [0, 3]
+
+        for _ in range(3):
+            worker_list[0].next()
+
+        pipeline = [
+            '1-attn0', '0-dis_wait', '0-moe', '0-comb', '1-attn1', '0-comb_wait', '1-dis+1-share', '0-attn0',
+            '1-dis_wait', '1-moe', '1-comb', '0-attn1', '1-comb_wait', '0-dis+0-share'
+        ]
+        pipline_length = len(pipeline)
+        i = 0
+        while not worker_list[0].done:
+            worker_list[int(pipeline[i % pipline_length][0])].next()
+            i += 1
+
+        while not worker_list[1].done:
+            worker_list[1].next()
+
+    for worker in worker_list:
+        assert worker.done
+    return [worker.output for worker in worker_list]
+
+
+def get_new_meta(attn_metadata, start_idx: int, end_idx: int):
+    new_attn_metadata = deepcopy(attn_metadata)
+    new_attn_metadata.block_offsets = attn_metadata.block_offsets[start_idx:end_idx, ...]
+    new_attn_metadata.q_start_loc = attn_metadata.q_start_loc[start_idx:end_idx] - attn_metadata.q_start_loc[start_idx]
+    new_attn_metadata.kv_start_loc = attn_metadata.kv_start_loc[start_idx:end_idx] - \
+        attn_metadata.kv_start_loc[start_idx] if attn_metadata.kv_start_loc is not None else None
+    new_attn_metadata.q_seqlens = attn_metadata.q_seqlens[start_idx:end_idx]
+    new_attn_metadata.kv_seqlens = attn_metadata.kv_seqlens[start_idx:end_idx] \
+        if attn_metadata.kv_seqlens is not None else None
+    new_attn_metadata.kv_flatten_size = sum(new_attn_metadata.kv_seqlens.tolist()) \
+        if attn_metadata.kv_flatten_size is not None else None
+    # create buffers for flash mla
+    if attn_metadata.num_splits is not None:
+        Attention.update_meta_flashmla(new_attn_metadata,
+                                       get_step_ctx_manager().current_context().model_config.num_attention_heads)
+    return new_attn_metadata
+
+
+def get_new_rotary_pos_emb(rotary_pos_emb, start_loc, end_loc):
+    new_rotary_pos_emb = (rotary_pos_emb[0][start_loc:end_loc, ...].contiguous(), rotary_pos_emb[1][start_loc:end_loc,
+                                                                                                    ...].contiguous())
+    return new_rotary_pos_emb
+
+
+def get_new_input(hidden_states, rotary_pos_emb, past_key_values, residual, attn_metadata, start_idx, end_idx,
+                  start_loc, end_loc):
+    new_hidden_states = hidden_states[:, start_loc:end_loc, :].contiguous()
+    new_rotary_pos_emb = get_new_rotary_pos_emb(rotary_pos_emb, start_loc, end_loc)
+    new_past_key_values = past_key_values
+    new_residual = residual[:, start_loc:end_loc, :].contiguous() if residual is not None else None
+    new_attn_metadata = get_new_meta(attn_metadata, start_idx, end_idx)
+    return new_hidden_states, new_rotary_pos_emb, new_past_key_values, new_residual, new_attn_metadata
+
+
+def get_split_flags(attn_metadata, num=2):
+    """split flags for seqlens and startloc, support 2 only."""
+    assert num == 2
+    if attn_metadata.is_decoding:
+        batch_size = attn_metadata.q_start_loc.numel()
+        flag_a = {
+            'start_idx': 0,
+            'end_idx': batch_size // 2,
+            'start_loc': 0,
+            'end_loc': batch_size // 2,
+        }
+        flag_b = {
+            'start_idx': batch_size // 2,
+            'end_idx': batch_size,
+            'start_loc': batch_size // 2,
+            'end_loc': batch_size,
+        }
+    else:
+        q_start_loc = attn_metadata.q_start_loc.tolist()
+        q_seqlens = attn_metadata.q_seqlens.tolist()
+        total_len = sum(q_seqlens)
+        min_diff = total_len
+        split_flag = 1
+        for idx in range(1, len(q_seqlens)):
+            diff = abs(sum(q_seqlens[:idx]) - sum(q_seqlens[idx:]))
+            if diff < min_diff:
+                min_diff = diff
+                split_flag = idx
+        flag_a = {
+            'start_idx': 0,
+            'end_idx': split_flag,
+            'start_loc': q_start_loc[0],
+            'end_loc': q_start_loc[split_flag],
+        }
+        flag_b = {
+            'start_idx': split_flag,
+            'end_idx': len(q_seqlens),
+            'start_loc': q_start_loc[split_flag],
+            'end_loc': q_start_loc[-1] + q_seqlens[-1],
+        }
+    return [flag_a, flag_b]
+
+
+def split_input(hidden_states,
+                rotary_pos_emb,
+                past_key_values,
+                residual,
+                attn_metadata,
+                moe_start_idx,
+                moe_end_idx,
+                num=2):
+    """split input, support 1 or 2 only."""
+    # one batch
+    if num == 1:
+        input = {
+            'hidden_states': hidden_states,
+            'rotary_pos_emb': rotary_pos_emb,
+            'past_key_values': past_key_values,
+            'residual': residual,
+            'attn_metadata': attn_metadata,
+            'start_idx': moe_start_idx,
+            'end_idx': moe_end_idx
+        }
+        extern_tag = 'D' if attn_metadata.is_decoding else 'P'
+        return [input], ExecType.One, 0, extern_tag
+    else:
+        # two batch or more
+        flag_list = get_split_flags(attn_metadata, num=num)
+
+        inputs = []
+        for flag in flag_list:
+            (hidden_states_splited, rotary_pos_emb_splited, past_key_values_splited, residual_splited,
+             attn_metadata_splited) = get_new_input(hidden_states, rotary_pos_emb, past_key_values, residual,
+                                                    attn_metadata, flag['start_idx'], flag['end_idx'],
+                                                    flag['start_loc'], flag['end_loc'])
+            input = {
+                'hidden_states': hidden_states_splited,
+                'rotary_pos_emb': rotary_pos_emb_splited,
+                'past_key_values': past_key_values,
+                'residual': residual_splited,
+                'attn_metadata': attn_metadata_splited,
+                'start_idx': moe_start_idx,
+                'end_idx': moe_end_idx
+            }
+            inputs.append(input)
+
+        if attn_metadata.is_decoding:
+            exec_type = ExecType.TwoDecode
+            delta_stages = 0
+            extern_tag = 'D'
+        else:
+            exec_type = ExecType.TwoPrefill
+            delta_stages = 0
+            extern_tag = 'P'
+
+        return inputs, exec_type, delta_stages, extern_tag
+
+
+def merge_output(output_list):
+    # one batch
+    if len(output_list) == 1:
+        return output_list[0]
+    # two batch or more
+    hidden_states = torch.concat([output[0] for output in output_list], dim=1)
+    residual = None
+    if output_list[0][1] is not None:
+        residual = torch.concat([output[1] for output in output_list], dim=1)
+    return hidden_states, residual
 
 
 def yarn_get_mscale(scale=1, mscale=1):
@@ -548,6 +844,87 @@ class DeepseekV2DecoderLayer(nn.Module):
         outputs = (hidden_states, residual)
         return outputs
 
+    def forward_yield(
+        self,
+        hidden_states: torch.Tensor,
+        rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
+        past_key_value: Optional[List[torch.FloatTensor]],
+        residual: Optional[torch.Tensor] = None,
+        attn_metadata: Any = None,
+        tag: Any = None,
+    ):
+        """forward_yield."""
+        is_decoding = attn_metadata.is_decoding
+        if residual is None:
+            residual = hidden_states
+            hidden_states = self.input_layernorm(hidden_states)
+        else:
+            hidden_states, residual = self.input_layernorm(hidden_states, residual)
+
+        # yield for attn0 and attn1
+        yield
+        # Self Attention
+        hidden_states = self.self_attn(
+            hidden_states=hidden_states,
+            rotary_pos_emb=rotary_pos_emb,
+            past_key_value=past_key_value,
+            attn_metadata=attn_metadata,
+        )
+
+        hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
+
+        # MOE
+        batch_size, sequence_length, hidden_dim = hidden_states.shape
+        hidden_states = hidden_states.view(-1, hidden_dim)
+        topk_weights, topk_idx = self.mlp.gate(hidden_states)
+
+        topk_weights = self.mlp.experts.renormalize(topk_weights)
+        topk_weights = topk_weights.to(torch.float32)
+        topk_idx = topk_idx.to(torch.int64)
+        hidden_shape = hidden_states.shape
+        shared_states = None
+
+        state = {
+            'hidden_states': hidden_states,
+            'topk_idx': topk_idx,
+            'topk_weights': topk_weights,
+            'raw_hidden_shape': hidden_shape,
+            'moe_type': MoeType.DSAsyncDecode if is_decoding else MoeType.DSAsyncPrefill,
+        }
+
+        # yield for attn1, dis (+share)
+        yield
+        recv_state = self.mlp.experts.dispatch(state)
+        if self.mlp.shared_experts is not None and is_decoding:
+            shared_states = self.mlp.shared_experts(hidden_states)
+        # yield for dis, dis_wait
+        yield
+        self.mlp.experts.wait(recv_state)
+        # yield for dis_wait, moe
+        yield
+        gemm_state = self.mlp.experts.gemm(recv_state)
+        # yield for moe, comb
+        yield
+        out_state = self.mlp.experts.combine(gemm_state)
+        # yield for comb, (+share) comb_wait
+        yield
+        if self.mlp.shared_experts is not None and not is_decoding:
+            shared_states = self.mlp.shared_experts(hidden_states)
+        self.mlp.experts.wait(out_state)
+        # yield for (+share) comb_wait, (+share) attn0
+        yield
+        out_hidden_states = out_state['hidden_states'].view(hidden_shape)
+        if shared_states is not None:
+            out_hidden_states += shared_states
+        elif self.mlp.shared_experts is not None:
+            shared_states = self.mlp.shared_experts(hidden_states)
+            out_hidden_states += shared_states
+        else:
+            pass
+        out_hidden_states = out_hidden_states.reshape(batch_size, sequence_length, -1)
+        outputs = (out_hidden_states, residual)
+        return outputs
+
 
 class DeepseekV2Model(nn.Module):
     """mixtral model."""
@@ -634,6 +1011,80 @@ class DeepseekV2Model(nn.Module):
 
         return hidden_states
 
+    def forward_microbatch(
+        self,
+        input_ids: torch.LongTensor = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        attn_metadata: Any = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+    ):
+        """forward_microbatch."""
+        assert self.config.moe_layer_freq == 1
+        moe_start_idx = min(self.config.first_k_dense_replace, len(self.layers))
+
+        # embed and mlplayers
+        if inputs_embeds is None:
+            inputs_embeds = self.embed_tokens(input_ids)
+        hidden_states = inputs_embeds
+        residual = None
+        cos, sin = self.rotary_emb(hidden_states, position_ids)
+        cos, sin = cos[0], sin[0]
+        rotary_pos_emb = (cos, sin)
+
+        for idx, decoder_layer in enumerate(self.layers[:moe_start_idx]):
+            past_key_value = past_key_values[idx]
+            hidden_states, residual = decoder_layer(
+                hidden_states,
+                rotary_pos_emb=rotary_pos_emb,
+                past_key_value=past_key_value,
+                residual=residual,
+                attn_metadata=attn_metadata,
+            )
+
+        if moe_start_idx < len(self.layers):
+            # run two micro batch
+            num = 2
+            input_list, exec_type, delta_stages, extern_tag = split_input(hidden_states,
+                                                                          rotary_pos_emb,
+                                                                          past_key_values,
+                                                                          residual,
+                                                                          attn_metadata,
+                                                                          moe_start_idx,
+                                                                          len(self.layers),
+                                                                          num=num)
+
+            output_list = execute_batch(inputs=input_list,
+                                        fn=self.forward_yieldlayers,
+                                        delta_stages=delta_stages,
+                                        exec_type=exec_type,
+                                        extern_tag=extern_tag)
+            hidden_states, residual = merge_output(output_list)
+
+        hidden_states, _ = self.norm(hidden_states, residual)
+
+        return hidden_states
+
+    def forward_yieldlayers(self,
+                            hidden_states: torch.Tensor,
+                            rotary_pos_emb: Tuple[torch.FloatTensor, torch.FloatTensor],
+                            past_key_values: Optional[List[torch.FloatTensor]] = None,
+                            residual: Optional[torch.Tensor] = None,
+                            attn_metadata: Any = None,
+                            start_idx: int = -1,
+                            end_idx: int = -1,
+                            tag: Any = None):
+        """forward_yieldlayers."""
+        for idx in range(start_idx, end_idx):
+            past_key_value = past_key_values[idx]
+            hidden_states, residual = yield from self.layers[idx].forward_yield(hidden_states,
+                                                                                rotary_pos_emb=rotary_pos_emb,
+                                                                                past_key_value=past_key_value,
+                                                                                residual=residual,
+                                                                                attn_metadata=attn_metadata,
+                                                                                tag=tag)
+        return hidden_states, residual
+
     def get_input_embeddings(self):
         """get input embeddings."""
         return self.embed_tokens
@@ -660,6 +1111,13 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                                             dtype=dtype,
                                             device=device)
         self._load_buffers = dict()
+        self.enable_microbatch = get_dist_manager().current_context().dist_config.enable_microbatch
+        self.enable_microbatch_prefill_batchsize_threshold = \
+            int(getenv('ENABLE_MICROBATCH_PREFILL_BATCHSIZE_THRESHOLD', 2))
+        self.enable_microbatch_prefill_token_threshold = \
+            int(getenv('ENABLE_MICROBATCH_PREFILL_TOKEN_THRESHOLD', 2))
+        self.enable_microbatch_decode_batchsize_threshold = \
+            int(getenv('ENABLE_MICROBATCH_DECODE_BATCHSIZE_THRESHOLD', 2))
 
     def forward(
         self,
@@ -670,13 +1128,22 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
         inputs_embeds: torch.Tensor = None,
         **kwargs,
     ):
-        hidden_states = self.model(
-            input_ids=input_ids,
-            position_ids=position_ids,
-            past_key_values=past_key_values,
-            attn_metadata=attn_metadata,
-            inputs_embeds=inputs_embeds,
-        )
+        if get_step_ctx_manager().current_context().enable_microbatch:
+            hidden_states = self.model.forward_microbatch(
+                input_ids=input_ids,
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+                attn_metadata=attn_metadata,
+                inputs_embeds=inputs_embeds,
+            )
+        else:
+            hidden_states = self.model.forward(
+                input_ids=input_ids,
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+                attn_metadata=attn_metadata,
+                inputs_embeds=inputs_embeds,
+            )
         return hidden_states
 
     def get_logits(self, hidden_states: torch.Tensor):
@@ -697,6 +1164,25 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
         input_ids = context.input_ids
         position_ids = context.position_ids
         attn_metadata = context.attn_metadata
+
+        # twobatch or onebatch
+        if self.enable_microbatch:
+            batch_size = attn_metadata.q_start_loc.size(dim=0)
+            tokens = input_ids.numel()
+            if attn_metadata.is_decoding:
+                enable_microbatch = batch_size >= self.enable_microbatch_decode_batchsize_threshold
+            else:
+                enable_microbatch = batch_size >= self.enable_microbatch_prefill_batchsize_threshold and \
+                                    tokens >= self.enable_microbatch_prefill_token_threshold
+            if enable_microbatch:
+                disable_num = torch.tensor(0, dtype=torch.int32, device=input_ids.device)
+            else:
+                disable_num = torch.tensor(1, dtype=torch.int32, device=input_ids.device)
+            ep_group = get_dist_manager().current_context().ep_gpu_group
+            dist.all_reduce(disable_num, op=dist.ReduceOp.SUM, group=ep_group)
+            step_ctx = get_step_ctx_manager().current_context()
+            enable_microbatch = disable_num.item() == 0
+            step_ctx.enable_microbatch = enable_microbatch
 
         return dict(
             input_ids=input_ids,

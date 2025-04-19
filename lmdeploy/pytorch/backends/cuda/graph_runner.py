@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Tuple
 
 import torch
 
+from lmdeploy.pytorch.backends.selector import get_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.pytorch.model_inputs import StepContext
 from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMeta
@@ -117,6 +118,7 @@ class CUDAGraphRunner(GraphRunner):
 
         self.graph_pool_handle = torch.cuda.graph_pool_handle()
         self._runner_map: Dict[Any, CUDASingleGraphRunner] = dict()
+        self.has_try_compile_model: bool = False
 
     def check_enable_graph(self):
         """check enable graph."""
@@ -124,6 +126,16 @@ class CUDAGraphRunner(GraphRunner):
             return _false
 
         return getattr(self.model, 'support_cuda_graph', _false)
+
+    def _try_compile_model_once(self):
+        if self.has_try_compile_model:
+            return
+
+        if hasattr(self.model, 'compile_model'):
+            method = getattr(self.model, 'compile_model')
+            method()
+
+        self.has_try_compile_model = True
 
     def get_graph_key(self, input_ids: torch.Tensor, position_ids: torch.Tensor, past_key_values: List,
                       attn_metadata: Any, inputs_embeds: torch.Tensor, **kwargs):
@@ -140,6 +152,9 @@ class CUDAGraphRunner(GraphRunner):
 
     def __call__(self, **kwargs):
         """call."""
+        if not self.backend_config.eager_mode and get_backend().get_name() == 'cuda':
+            self._try_compile_model_once()
+
         enable_graph = self.enable_graph(**kwargs)
 
         if not enable_graph:

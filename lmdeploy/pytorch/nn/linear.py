@@ -712,7 +712,7 @@ class QKVAwqLinear(MergedAwqLinear, QKVMixin):
                  device: Optional[torch.device] = None,
                  is_tp: bool = True,
                  num_replicate_kv_heads: int = 1):
-
+        self.is_tp = is_tp
         self.qkv_split_section_s = self._get_qkv_out_features(num_q_heads, num_kv_heads, head_size, head_size_v,
                                                               num_replicate_kv_heads)
         elem_per_int = 32 // w_bit

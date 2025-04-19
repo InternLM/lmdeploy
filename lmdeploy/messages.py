@@ -309,6 +309,7 @@ class PytorchEngineConfig:
             bit, set it to 4 or 8, respectively
         distributed_executor_backend (str): backend of distributed backend,
             options: ['uni', 'mp', 'ray']
+        enable_microbatch (bool): enable microbatch for specified model
     """
     dtype: str = 'auto'
     tp: int = 1
@@ -333,6 +334,7 @@ class PytorchEngineConfig:
     revision: str = None
     quant_policy: Literal[0, 4, 8] = 0
     distributed_executor_backend: str = None
+    enable_microbatch: bool = False
 
     role: EngineRole = EngineRole.Hybrid
     migration_backend: MigrationBackend = MigrationBackend.DLSlime
