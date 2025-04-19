@@ -6,8 +6,15 @@ from typing import Callable, Dict, List, Literal, Optional
 import torch
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 
+from lmdeploy.disagg.config import EngineRole, DistServeEngineConfig, MigrationProtocol
+from lmdeploy.disagg.request import MigrationRequest
+
 from .tokenizer import Tokenizer
 from .utils import get_logger
+
+from lmdeploy.disagg.config import (
+    MigrationBackend,
+)
 
 logger = get_logger('lmdeploy')
 
@@ -106,6 +113,11 @@ class GenerationConfig:
     logits_processors: Optional[List[LogitsProcessor]] = None
     output_logits: Literal['all', 'generation'] = None
     output_last_hidden_state: Literal['all', 'generation'] = None
+
+    # for disaggregation
+    with_cache: bool = False
+    preserve_cache: bool = False
+    migration_request: Optional[MigrationRequest] = None
 
     def convert_stop_bad_words_to_ids(self, tokenizer: Tokenizer):
         """convert stop_words/bad_sords to ids and append the ids to
@@ -298,6 +310,12 @@ class PytorchEngineConfig:
         distributed_executor_backend (str): backend of distributed backend,
             options: ['uni', 'mp', 'ray']
         enable_microbatch (bool): enable microbatch for specified model
+        role (EngineRole): role of engin, options: ['Hybrid', 'Prefill',
+            'Decode']. Default to `EngineRole.Hybrid`.
+        migration_backend: migration backend. options: ['DLSlime', 'Mooncake',
+            'InfiniStore']. Deafult to `MigrationBackend.DLSlime`.
+        available_nics: Available NICs when kvcache migration. If set to None,
+            the `MigrationBackend` will find available NICs by self.
     """
     dtype: str = 'auto'
     tp: int = 1
@@ -323,6 +341,10 @@ class PytorchEngineConfig:
     quant_policy: Literal[0, 4, 8] = 0
     distributed_executor_backend: str = None
     enable_microbatch: bool = False
+
+    role: EngineRole = EngineRole.Hybrid
+    migration_backend: MigrationBackend = MigrationBackend.DLSlime
+    available_nics: Optional[List[str]] = None
 
     def __post_init__(self):
         """Check input validation."""
@@ -404,6 +426,8 @@ class EngineOutput:
             may not equal to the length of token_ids
         logprobs (List[Dict[int, float]]): the top logprobs for each output
             position.
+        cache_block_ids (List[int]): send cache blocks back for migration in
+            Disaggregated LLM Serving when Prefill Engine is Done.
     """
     status: ResponseType
     token_ids: List[int]
@@ -411,6 +435,8 @@ class EngineOutput:
     logprobs: List[Dict[int, float]] = None
     logits: torch.Tensor = None
     last_hidden_state: torch.Tensor = None
+
+    cache_block_ids: Optional[List[int]] = None
 
 
 @dataclass

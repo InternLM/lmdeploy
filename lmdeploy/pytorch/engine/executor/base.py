@@ -1,8 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # Inspired by vLLM: https://github.com/vllm-project/vllm
 import asyncio
-from typing import Any, Dict
+from typing import Any, Dict, List
 
+from lmdeploy.disagg.config import DistServeEngineConfig
+from lmdeploy.disagg.messages import MigrationExecutionBatch
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, ModelConfig
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine
 from lmdeploy.utils import get_logger
@@ -89,6 +91,20 @@ class ExecutorBase:
     async def get_output_async(self):
         """get output async."""
         raise NotImplementedError('Not Implemented')
+    
+    """ PD Disaggregation API Begin """
+    def p2p_initialize(self, remote_engine_id: int, remote_engine_config: DistServeEngineConfig):
+        """init rdma link."""
+        raise NotImplementedError('Not implemented')
+
+    def p2p_connect(self, remote_engine_id: int, remote_endpoint_info: List[str]):
+        """rdma_connect."""
+        raise NotImplementedError('Not Implemented')
+    
+    async def migrate(self, batch):
+        """KV Cache Migration."""
+        raise NotImplementedError('Not Implemented')
+    """ PD Disaggregation API End """
 
     def _get_runtime_size(self, num_free_gpu_mem: int, cache_block_size: int, vocal_size: int):
         """find best prefill num."""

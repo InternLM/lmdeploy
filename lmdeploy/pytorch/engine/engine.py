@@ -4,11 +4,17 @@ import copy
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import torch
 
+import time
+import requests
+import aiohttp
+
+from lmdeploy.disagg.config import EngineRole, MigrationProtocol
+from lmdeploy.disagg.messages import MigrationExecutionBatch
 from lmdeploy.messages import PytorchEngineConfig, ResponseType
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model, logging_timer
 
@@ -40,6 +46,10 @@ class InferOutput:
     finish: bool = False
     logits: torch.Tensor = None
 
+    # send cache blocks back for migration in Disaggregated LLM Serving
+    # when Prefill Engine is Done.
+    cache_block_ids: List[int] = None
+
 
 def _tensorlize_block_offsets(block_offsets, dtype=torch.int32):
     """tensorlize block_offsets."""
@@ -69,6 +79,9 @@ def _build_cache_config(engine_config: PytorchEngineConfig):
         enable_prefix_caching=engine_config.enable_prefix_caching,
         quant_policy=engine_config.quant_policy,
         device_type=engine_config.device_type,
+        migration_backend=engine_config.migration_backend,
+        role=engine_config.role,
+        available_nics=engine_config.available_nics
     )
     return cache_config
 
@@ -243,8 +256,11 @@ class InputsMakerSync(InputsMakerAsync):
         self._is_prefill = True
 
     def do_prefill(self):
-        ret = self._is_prefill
-        self._is_prefill = not self._is_prefill
+        if self.engine.engine_config.role in [EngineRole.Hybrid, EngineRole.Decode]:
+            ret = self._is_prefill
+            self._is_prefill = not self._is_prefill
+        elif self.engine.engine_config.role == EngineRole.Prefill:
+            ret = True
         return ret
 
     async def send_next_inputs(self):
@@ -352,6 +368,11 @@ class Engine:
         # create main thread
         self._start_loop()
         self._loop_main = None
+
+        # for migration loop management
+        self.migration_event = asyncio.Event()
+        self.free_event = asyncio.Event()
+        self.free_que = asyncio.Queue()
 
     @classmethod
     def from_pretrained(cls,
@@ -473,7 +494,11 @@ class Engine:
             resp = req.data.get('response', True)
             resp_type = ResponseType.SESSION_NOT_EXIST
             if session_id in self.scheduler.sessions:
-                self.scheduler.end_session(session_id)
+                if list(self.scheduler.sessions[session_id].sequences.values())[0].preserve_cache:
+                    session = self.scheduler.sessions.pop(session_id)
+                    self.scheduler.locked_sessions[session_id] = session
+                else:
+                    self.scheduler.end_session(session_id)
                 resp_type = ResponseType.SUCCESS
             if resp:
                 self._response(req.resp, resp_type)
@@ -523,6 +548,7 @@ class Engine:
             sampling_param = req.data['sampling_param']
             return_logits = sampling_param.out_logits
             if len(sess.sequences) == 0:
+                migration_request = req.data.get('migration_request')
                 assert len(req.data['token_ids']) > 0, ('Empty input is not allowed.')
                 sess.add_sequence(
                     req.data['token_ids'],
@@ -530,11 +556,17 @@ class Engine:
                     adapter_name=req.data['adapter_name'],
                     return_logits=return_logits,
                     multimodals=req.data.get('input_multimodals'),
-                    input_embeddings=req.data.get('input_embeddings'),
+                    input_embeddings=req.data.get('input_embeddings',),
+                    migration_request=migration_request,
+                    resp_cache=req.data.get('with_cache'),
+                    preserve_cache=req.data.get('preserve_cache')
                 )
                 msg = next(iter(sess.sequences.values()))
                 __update_max_new_tokens(msg)
                 scheduler.add_sequence(msg)
+                if migration_request:
+                    self.scheduler._set_message_status(msg, MessageStatus.WAITING_MIGRATION)
+                    self.migration_event.set()
             else:
                 msg = next(iter(sess.sequences.values()))
                 msg.update_token_ids(
@@ -722,11 +754,16 @@ class Engine:
             if not finish and len(token_ids) == 0:
                 continue
             session_id = msg.session_id
+            if msg.resp_cache:
+                cache_block_ids = self.scheduler.block_manager.get_block_table(msg).tolist()
+            else:
+                cache_block_ids = None
             out = InferOutput(
                 session_id=session_id,
                 resp=msg.resp,
                 finish=finish,
-                token_ids=token_ids,
+                token_ids=token_ids.tolist(),
+                cache_block_ids=cache_block_ids
             )
             outputs[session_id] = out
 
@@ -877,12 +914,12 @@ class Engine:
                 session_ids = [out.session_id for out in outputs]
                 logger.debug(f'Response sessions: {session_ids}')
             elif logger.level <= logging.INFO:
-                logger.info(f'Response: num_outputs={len(outputs)}.')
+                logger.debug(f'Response: num_outputs={len(outputs)}.')
 
         def __send_resp(out: InferOutput):
             """send response."""
             resp_type = (ResponseType.FINISH if out.finish else ResponseType.SUCCESS)
-            self._response(out.resp, resp_type, data=dict(token_ids=out.token_ids, logits=out.logits))
+            self._response(out.resp, resp_type, data=dict(token_ids=out.token_ids, logits=out.logits, cache_block_ids=out.cache_block_ids))
 
         def __send_resps(step_outputs: List[InferOutput]):
             """send response callback."""
@@ -900,6 +937,77 @@ class Engine:
                 resps = (await que.get()).values()
             await self._await_forward_event(forward_event)
             __send_resps(resps)
+
+    @torch.inference_mode()
+    async def _async_loop_cache_free(self):
+        while True:
+            if self.free_que.empty():
+                await self.free_event.wait()
+            self.free_event.clear()
+            while not self.free_que.empty():
+                migration_request = self.free_que.get_nowait()
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        f"{migration_request.remote_engine_id}/distserve/free_cache",
+                        json={"session_id": migration_request.remote_session_id}
+                    ) as response:
+                        await response.json()
+
+    @torch.inference_mode()
+    async def _async_loop_migration(self, resp_que: asyncio.Queue, has_runable_event: asyncio.Event):
+        """async loop migration."""
+        while True:
+            migration_running = self.scheduler._schedule_migration()
+            if not self.scheduler.running_migration and not self.scheduler.waiting_migration:
+                await self.migration_event.wait()
+            else:
+                self.migration_event.clear()
+                for msg in migration_running:
+                    migration_execution_requests: List[
+                        Tuple[int, List[Tuple[int, int]]]
+                    ] = []
+                    migration_request = msg.migration_request
+                    prefill_block_ids = migration_request.remote_block_ids
+                    decode_block_ids = list(
+                        self.scheduler.block_manager.get_block_table(msg=msg)
+                    )
+
+                    assert len(prefill_block_ids) == len(decode_block_ids)
+                    migration_execution_requests.append(
+                        (
+                            migration_request.remote_engine_id,
+                            list(zip(prefill_block_ids, decode_block_ids)),
+                        )
+                    )
+                    migration_inputs = MigrationExecutionBatch(
+                        protocol=migration_request.protocol,
+                        requests=migration_execution_requests
+                    )
+                    await self.executor.migrate(migration_inputs)
+                for msg in migration_running:
+                    self.free_que.put_nowait(migration_request)
+                    self.free_event.set()
+                    
+                # generate output
+                outputs: Dict[int, InferOutput] = dict()
+                self.scheduler.lock_running(migration_running)
+                for _, msg in enumerate(migration_running):
+                    session_id = msg.session_id
+                    msg.resp.type = ResponseType.SUCCESS
+                    token_ids = [msg.migration_request.remote_token_id]
+                    out = InferOutput(
+                        session_id=session_id,
+                        resp=msg.resp,
+                        finish=False,
+                        token_ids=token_ids,
+                    )
+                    outputs[session_id] = out
+                    self.update_running(
+                        [msg], torch.tensor([token_ids]), [False], [None]
+                    )
+                resp_que.put_nowait(outputs)
+                self.scheduler.unlock_running(migration_running)
+                has_runable_event.set()
 
     @torch.inference_mode()
     async def _async_loop_main(
@@ -986,9 +1094,22 @@ class Engine:
             loop_send_resp = event_loop.create_task(self._async_loop_send_responses(resp_que, forward_event),
                                                     name='MainLoopResponse')
 
+            logger.info('Starting async task MigrationLoop.')
+            loop_migration = event_loop.create_task(
+                self._async_loop_migration(
+                    resp_que, has_runable_event=has_runable_event
+                ),
+                name="MainLoopMigration",
+            )
+
+            loop_cache_free = event_loop.create_task(
+                self._async_loop_cache_free(),
+                name="MainFreeMigration",
+            )
+
             # binding done callback
             loop_main = asyncio.current_task()
-            loop_tasks: List[asyncio.Task] = [loop_main, loop_msg_proc, loop_send_resp]
+            loop_tasks: List[asyncio.Task] = [loop_main, loop_msg_proc, loop_migration, loop_send_resp, loop_cache_free]
             self._add_loop_tasks_done_callback(loop_tasks)
             self._loop_main = loop_main
 

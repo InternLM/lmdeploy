@@ -15,7 +15,7 @@ logger.info(f'AIOHTTP_TIMEOUT set to {AIOHTTP_TIMEOUT}. It can be modified befor
             'through env variable AIOHTTP_TIMEOUT')
 
 
-class Strategy(enum.Enum):
+class RoutingStrategy(enum.Enum):
     """Strategy to dispatch requests to nodes."""
     RANDOM = enum.auto()
     MIN_EXPECTED_LATENCY = enum.auto()

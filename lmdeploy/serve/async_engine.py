@@ -19,6 +19,7 @@ import tqdm
 
 from lmdeploy import Tokenizer
 from lmdeploy.archs import get_model_arch
+from lmdeploy.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.logger import RequestLogger
 from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, Response, ResponseType, TurbomindEngineConfig
 from lmdeploy.model import MODELS, BaseChatTemplate, ChatTemplateConfig, best_match_model
@@ -58,6 +59,9 @@ class GenOut:
     logprobs: List[Dict[int, float]] = None
     logits: Any = None
     last_hidden_state: Any = None
+
+    # for disaggregation
+    cache_block_ids: List[int] = None
 
 
 def _gen_out_to_response(out: GenOut, index) -> Response:
@@ -757,7 +761,7 @@ class AsyncEngine(LogitsMixin):
                         spaces_between_special_tokens=gen_config.spaces_between_special_tokens)
                     res = token_ids[ids_offset:]
 
-                    out = GenOut(response, history_len, input_len, gen_len, finish_reason, res)
+                    out = GenOut(response, history_len, input_len, gen_len, finish_reason, res, cache_block_ids=outputs.cache_block_ids)
 
                     if outputs.logprobs is not None:
                         log_offset = ids_offset - start_ids_offset
@@ -786,7 +790,7 @@ class AsyncEngine(LogitsMixin):
                     logger.info(f'session {session_id} finished, reason '
                                 f'"{finish_reason}", input_tokens '
                                 f'{len(input_ids)}, outupt_tokens {gen_len}')
-                    yield GenOut(response, self.id2step[session_id], len(input_ids), gen_len, finish_reason)
+                    yield GenOut(response, self.id2step[session_id], len(input_ids), gen_len, finish_reason, outputs.cache_block_ids)
                 else:
                     logger.error(f'session {session_id} finished, '
                                  'reason "error"')
@@ -880,3 +884,23 @@ class AsyncEngine(LogitsMixin):
             session.generator = None
 
         return session
+    
+    """ DistServe Async Engine API Begin """
+    def free_cache(self, session_id: int):
+        """End session.
+
+        Args:
+            session_id (int): The session id.
+        """
+        session = self.engine.scheduler.locked_sessions[session_id]
+        seqs = list(session.sequences.values())
+        for seq in seqs:
+            self.engine.scheduler._remove_sequence(seq)
+        self.engine.scheduler.locked_sessions.pop(session_id)
+
+    def p2p_initialize(self, init_request: DistServeInitRequest):
+        return self.engine.executor.p2p_initialize(init_request)
+
+    def p2p_connect(self, conn_request: List[DistServeConnectionRequest]):
+        return self.engine.executor.p2p_connect(conn_request)
+    """ DistServe Async Engine API End """

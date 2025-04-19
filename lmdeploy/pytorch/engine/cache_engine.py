@@ -1,9 +1,23 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
-from typing import Dict, List, Literal, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 
 import torch
 
+from lmdeploy.disagg.config import EngineRole
+from lmdeploy.disagg.messages import (
+    DistServeRegisterMRMessage,
+    MigrationExecutionBatch,
+    MigrationAssignment,
+)
+
+from lmdeploy.disagg.backend.base import MigrationBackendImpl
+from lmdeploy.disagg.backend.backend import MIGRATION_BACKENDS
+
+from lmdeploy.disagg.request import (
+    DistServeInitRequest,
+    DistServeConnectionRequest
+)
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.utils import get_logger
 
@@ -29,10 +43,13 @@ class CacheEngine:
         self,
         cache_config: CacheConfig,
         model_config: ModelConfig,
+        rank: int = 0,
+        tp_rank: int = 0,
         world_size: int = 1,
     ) -> None:
         self.world_size = world_size
-
+        self.rank = rank
+        self.tp_rank = tp_rank
         self.cache_config = cache_config
         self.model_config = model_config
 
@@ -51,6 +68,8 @@ class CacheEngine:
         self.local_gpu_cache = self.allocate_gpu_cache()
         self.local_cpu_cache = self.allocate_cpu_cache()
 
+        self.migration_backend_impl: Optional[MigrationBackendImpl] = None
+
         # Initialize the stream for caching operations.
         self.cache_stream = torch.cuda.Stream()
         assert self.cache_stream != torch.cuda.current_stream()
@@ -59,6 +78,7 @@ class CacheEngine:
 
         logger.debug(f'Initialize cache engine with {cache_config.num_gpu_blocks}'
                      f' gpu blocks and {cache_config.num_cpu_blocks} cpu blocks.')
+
 
     @property
     def cpu_cache(self):
@@ -302,3 +322,71 @@ class CacheEngine:
 
         total = num_layers * (mem_key_block + mem_value_block)
         return total
+
+    """ Metheds for PD Disaggregation Begin. """
+    def p2p_initialize(self, migration_init_request: DistServeInitRequest):
+        if not self.migration_backend_impl:
+            self.migration_backend_impl = MIGRATION_BACKENDS[self.cache_config.migration_backend]()
+        migration_init_request.rank = self.rank
+        self.migration_backend_impl.p2p_initialize(migration_init_request)
+        for i, t in enumerate(self.full_gpu_cache):
+            if t.numel() == 0:
+                continue
+            register_mr_request = DistServeRegisterMRMessage(
+                protocol=migration_init_request.protocol,
+                remote_engine_id=migration_init_request.remote_engine_id,
+                mr_key=str(i),
+                addr=t.data_ptr() + t.storage_offset(),
+                length=t.numel() * t.itemsize
+            )
+            self.migration_backend_impl.register_memory_region(register_mr_request)
+        return self.migration_backend_impl.endpoint_info(
+            migration_init_request.remote_engine_id,
+            migration_init_request.protocol)
+
+    def p2p_connect(self, migration_conn_request: DistServeConnectionRequest):
+        self.migration_backend_impl.p2p_connect(migration_conn_request[self.tp_rank])
+
+    async def migrate(self, migration_execution_inputs: MigrationExecutionBatch):
+        def get_assignment_len():
+            head_dim = self.model_config.get_head_size()
+            num_heads = self.model_config.num_key_value_heads // self.world_size
+            block_size = self.cache_config.block_size
+            return head_dim * num_heads * block_size * self.model_config.dtype.itemsize
+
+        assignment_len = get_assignment_len()
+        layer_stride = self.cache_config.num_gpu_blocks * assignment_len
+
+        def get_offset(block_ids, assignment_len, layer_stride, remote_layer_stride):
+            target_offset = [
+                block_id[0] * assignment_len + layer * remote_layer_stride
+                for layer in range(self.model_config.num_layers)
+                for block_id in block_ids
+            ]
+            source_offset = [
+                block_id[1] * assignment_len + layer * layer_stride
+                for layer in range(self.model_config.num_layers)
+                for block_id in block_ids
+            ]
+            return target_offset, source_offset
+
+        for migration_exe_req in migration_execution_inputs.requests:
+            remote_engine_id = migration_exe_req[0]
+            blocks_to_migration = migration_exe_req[1]
+            remote_layer_stride = self.migration_backend_impl.links[remote_engine_id].remote_engine_config.num_gpu_blocks * assignment_len
+            target_offset, source_offset = get_offset(blocks_to_migration, assignment_len, layer_stride, remote_layer_stride)
+
+            for i, t in enumerate(self.full_gpu_cache):
+                if t.numel() == 0:
+                    continue
+                await self.migration_backend_impl.p2p_migrate(
+                    MigrationAssignment(
+                        protocol=migration_execution_inputs.protocol,
+                        remote_engine_id=remote_engine_id,
+                        mr_key=str(i),
+                        target_offset=target_offset,
+                        source_offset=source_offset,
+                        length=assignment_len
+                    )
+                )
+    """ Metheds for PD Disaggregation End. """

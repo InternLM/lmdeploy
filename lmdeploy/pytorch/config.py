@@ -1,8 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from dataclasses import dataclass
-from typing import Any, Dict, List, Literal
+from typing import Any, Dict, List, Literal, Optional
 
 import torch
+
+from lmdeploy.disagg.config import EngineRole, MigrationBackend
 
 
 def _update_torch_dtype(config: 'ModelConfig', dtype: str):
@@ -79,6 +81,12 @@ class CacheConfig:
     enable_prefix_caching: bool = False
     quant_policy: Literal[0, 4, 8] = 0
     device_type: str = 'cuda'
+
+    # For PD Disaggregation
+    role: EngineRole = EngineRole.Hybrid
+    migration_backend: MigrationBackend = MigrationBackend.DLSlime
+    available_nics: Optional[List[str]] = None
+
 
     def __post_init__(self):
         """post init."""
