@@ -84,7 +84,6 @@ jobs:
       matrix:
         pyver: [py310]
     runs-on: ubuntu-latest
-    environment: 'prod'
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
       PLAT_NAME: manylinux2014_x86_64
@@ -118,7 +117,6 @@ jobs:
     if: ${{!cancelled()}}
     needs: ['build-pypi', 'build-pypi-lmdeploy']
     runs-on: lmdeploy-volc
-    environment: 'prod'
     timeout-minutes: 120 #2hours
     steps:
       - name: Clone repository
@@ -179,7 +177,6 @@ jobs:
         regression_func: ${{fromJSON(github.event.inputs.regression_func_volc || '["chat_models","base_models"]')}}
         backend: ${{ fromJSON(github.event.inputs.backend || '["turbomind", "pytorch"]')}}
     runs-on: lmdeploy-volc
-    environment: 'prod'
     timeout-minutes: 480 #6hours
     steps:
       - name: Checkout repository

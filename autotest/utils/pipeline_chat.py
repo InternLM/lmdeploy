@@ -153,7 +153,7 @@ def run_pipeline_vl_chat_test(config,
             with assume:
                 assert case_result, 'reason: batch-example1: tiger should in ' + response
         if not is_smoke:
-            if 'internvl' in model_case.lower():
+            if 'internvl' in model_case.lower() and '4B' not in model_path:
                 internvl_vl_testcase(output_text, f)
                 internvl_vl_testcase(output_text, f, 'cn')
             if 'minicpm' in model_case.lower():

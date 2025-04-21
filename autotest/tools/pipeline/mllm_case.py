@@ -90,7 +90,7 @@ def run_pipeline_mllm_test(model_path, resource_path, tp, backend_type, is_pr_te
           '[caseresult multi-turn2 end]\n')
 
     if not is_pr_test:
-        if 'internvl' in model_path.lower() and '4b' not in model_path.lower():
+        if 'internvl' in model_path.lower() and '4B' not in model_path:
             internvl_vl_testcase(pipe, resource_path)
             internvl_vl_testcase(pipe, resource_path, 'cn')
         if 'minicpm' in model_path.lower():
