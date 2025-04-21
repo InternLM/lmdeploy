@@ -862,7 +862,7 @@ class Engine:
         swap_in_map = scheduler_output.swap_in_map
         swap_out_map = scheduler_output.swap_out_map
 
-        if self.should_execute_dummy_batch and len(running) == 0:
+        if (self.should_execute_dummy_batch or self.engine_config.role == EngineRole.Prefill) and len(running) == 0:
             return __make_dummy_inputs()
 
         assert len(running) > 0

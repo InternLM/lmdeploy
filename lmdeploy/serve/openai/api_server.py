@@ -392,6 +392,7 @@ async def chat_completions_v1(raw_request: Request = None):
                                   min_p=request.min_p,
                                   random_seed=random_seed,
                                   spaces_between_special_tokens=request.spaces_between_special_tokens,
+                                  migration_request=migration_request,
                                   with_cache=with_cache,
                                   preserve_cache=preserve_cache)
 
