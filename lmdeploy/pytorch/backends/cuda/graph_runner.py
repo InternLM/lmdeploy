@@ -152,8 +152,8 @@ class CUDAGraphRunner(GraphRunner):
 
     def __call__(self, **kwargs):
         """call."""
-        #if not self.backend_config.eager_mode and get_backend().get_name() == 'cuda':
-        #    self._try_compile_model_once()
+        if not self.backend_config.eager_mode and get_backend().get_name() == 'cuda':
+            self._try_compile_model_once()
 
         enable_graph = self.enable_graph(**kwargs)
 
