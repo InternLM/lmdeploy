@@ -58,6 +58,8 @@ with read_base():
         models as lmdeploy_qwen2_5_3b_instruct_model  # noqa: F401, E501
     from opencompass.configs.models.qwen2_5.lmdeploy_qwen2_5_14b_instruct import \
         models as lmdeploy_qwen2_5_14b_instruct_model  # noqa: F401, E501
+    from opencompass.configs.models.qwen2_5.lmdeploy_qwen2_5_32b_instruct import \
+        models as lmdeploy_qwen2_5_32b_instruct_model  # noqa: F401, E501
     from opencompass.configs.models.qwen2_5.lmdeploy_qwen2_5_72b_instruct import \
         models as lmdeploy_qwen2_5_72b_instruct_model  # noqa: F401, E501
     from opencompass.configs.models.qwen.lmdeploy_qwen2_1_5b_instruct import \
@@ -86,6 +88,7 @@ pytorch_llama3_3_70b_instruct_model = deepcopy(lmdeploy_llama3_3_70b_instruct_mo
 pytorch_mistral_nemo_instruct_2407_model = deepcopy(lmdeploy_mistral_nemo_instruct_2407_model)
 pytorch_mistral_small_instruct_2409_model = deepcopy(lmdeploy_mistral_small_instruct_2409_model)
 pytorch_qwen2_5_72b_instruct_model = deepcopy(lmdeploy_qwen2_5_72b_instruct_model)
+pytorch_qwen2_5_32b_instruct_model = deepcopy(lmdeploy_qwen2_5_32b_instruct_model)
 pytorch_qwen2_7b_instruct_model = deepcopy(lmdeploy_qwen2_7b_instruct_model)
 pytorch_yi_1_5_34b_chat_model = deepcopy(lmdeploy_yi_1_5_34b_chat_model)
 
@@ -106,6 +109,7 @@ lmdeploy_mistral_small_instruct_2409_model_native = deepcopy(lmdeploy_mistral_sm
 lmdeploy_nemotron_70b_instruct_hf_model_native = deepcopy(lmdeploy_nemotron_70b_instruct_hf_model)
 lmdeploy_qwen2_5_0_5b_instruct_model_native = deepcopy(lmdeploy_qwen2_5_0_5b_instruct_model)
 lmdeploy_qwen2_5_14b_instruct_model_native = deepcopy(lmdeploy_qwen2_5_14b_instruct_model)
+lmdeploy_qwen2_5_32b_instruct_model_native = deepcopy(lmdeploy_qwen2_5_32b_instruct_model)
 lmdeploy_qwen2_5_72b_instruct_model_native = deepcopy(lmdeploy_qwen2_5_72b_instruct_model)
 lmdeploy_qwen2_7b_instruct_model_native = deepcopy(lmdeploy_qwen2_7b_instruct_model)
 lmdeploy_yi_1_5_6b_chat_model_native = deepcopy(lmdeploy_yi_1_5_6b_chat_model)
