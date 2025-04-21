@@ -161,12 +161,10 @@ class PDConnectionPool:
                     ]
                     await p2p_connect(conn_req.p_url, prefill_endpoint_conn_reqs)
                     await p2p_connect(conn_req.d_url, decode_endpoint_conn_reqs)
-                async with self.conn_lock:
-                    self.pool[link].set_status(PDConnectionStatus.Connected)
+                self.pool[link].set_status(PDConnectionStatus.Connected)
                 logger.info(f"{(conn_req.p_url, conn_req.d_url)} connected")
             except Exception as e:
-                async with self.conn_lock:
-                    self.pool[link].set_status(PDConnectionStatus.Disconnected)
+                self.pool[link].set_status(PDConnectionStatus.Disconnected)
                 logger.error(f"pd connection error: {e}")
             conn_event.set()
 
@@ -187,8 +185,7 @@ class PDConnectionPool:
                 conn_req, conn_event = self.waiting_conn.get_nowait()
                 link = (conn_req.p_url, conn_req.d_url)
                 if link not in self.pool:
-                    async with self.conn_lock:
-                        self.pool[link] = PDConnectionState(
+                    self.pool[link] = PDConnectionState(
                             PDConnectionStatus.Disconnected,
                             conn_event,
                         )

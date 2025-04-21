@@ -887,16 +887,10 @@ class AsyncEngine(LogitsMixin):
     
     """ DistServe Async Engine API Begin """
     def free_cache(self, session_id: int):
-        """End session.
-
-        Args:
-            session_id (int): The session id.
-        """
-        session = self.engine.scheduler.locked_sessions[session_id]
-        seqs = list(session.sequences.values())
-        for seq in seqs:
-            self.engine.scheduler._remove_sequence(seq)
-        self.engine.scheduler.locked_sessions.pop(session_id)
+        if session_id in self.engine.scheduler.sessions:
+            self.engine.scheduler.end_session(session_id)
+        else:
+            logger.warning("Invalid Free.")
 
     def p2p_initialize(self, init_request: DistServeInitRequest):
         return self.engine.executor.p2p_initialize(init_request)

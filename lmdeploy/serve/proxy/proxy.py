@@ -110,6 +110,7 @@ class NodeManager:
             link_type = RDMALinkType.__members__[link_type]
         )
         self.pd_connection_pool = PDConnectionPool()
+        self.initialized = False
 
     def get_nodes(self, role: EngineRole) -> Dict:
         return {node_url: node_status for (node_url, node_status) in self.nodes.items() if node_status.role == role}
@@ -621,6 +622,21 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
             node_manager.post_call(node_url, start)
             return JSONResponse(json.loads(response))
     elif node_manager.serving_strategy == ServingStrategy.DistServe:
+        if not node_manager.initialized:
+            conns = []
+            for p_url in node_manager.prefill_nodes:
+                for d_url in node_manager.decode_nodes:
+                    conns.append(node_manager.pd_connection_pool.connect(
+                        PDConnectionMessage(
+                            p_url=p_url,
+                            d_url=d_url,
+                            protocol=node_manager.migration_protocol,
+                            rdma_config=node_manager.rdma_config,
+                        )
+                    ))
+            await asyncio.gather(*conns)
+            node_manager.initialized = True
+
         check_response = await node_manager.check_request_model(request.model)
         if check_response is not None:
             return check_response

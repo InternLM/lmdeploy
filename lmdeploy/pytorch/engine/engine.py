@@ -495,8 +495,7 @@ class Engine:
             resp_type = ResponseType.SESSION_NOT_EXIST
             if session_id in self.scheduler.sessions:
                 if list(self.scheduler.sessions[session_id].sequences.values())[0].preserve_cache:
-                    session = self.scheduler.sessions.pop(session_id)
-                    self.scheduler.locked_sessions[session_id] = session
+                    self.scheduler._set_message_status(msg, MessageStatus.TO_BE_MIGRATED)
                 else:
                     self.scheduler.end_session(session_id)
                 resp_type = ResponseType.SUCCESS
