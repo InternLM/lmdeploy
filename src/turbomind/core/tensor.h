@@ -141,7 +141,7 @@ public:
     template<class... Is>
     auto shapes(Is&&... is) const
     {
-        return layout_.shapes(((Is &&) is)...);
+        return layout_.shapes(((Is&&)is)...);
     }
 
     auto& stride() const noexcept
@@ -184,6 +184,17 @@ public:
     Tensor squeeze(int dim) const
     {
         return Tensor{buffer_, layout_.squeeze(dim)};
+    }
+
+    Tensor transpose(int a, int b) const
+    {
+        return Tensor{buffer_, layout_.transpose(a, b)};
+    }
+
+    Tensor t() const
+    {
+        TM_CHECK_EQ(ndim(), 2);
+        return transpose(0, 1);
     }
 
     int ndim() const noexcept
@@ -232,10 +243,10 @@ struct Tensor_: public Tensor {
     {
     }
 
-    Tensor_(const Tensor_&) = default;
+    Tensor_(const Tensor_&)            = default;
     Tensor_& operator=(const Tensor_&) = default;
 
-    Tensor_(Tensor_&&) noexcept = default;
+    Tensor_(Tensor_&&) noexcept            = default;
     Tensor_& operator=(Tensor_&&) noexcept = default;
 
     Tensor_(const Tensor& other)

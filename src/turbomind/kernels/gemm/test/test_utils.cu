@@ -1,7 +1,9 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
+#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/kernels/gemm/test/test_utils.h"
 #include <cublas_v2.h>
+#include <cuda_bf16.h>
 #include <curand.h>
 #include <curand_kernel.h>
 #include <fstream>
@@ -113,8 +115,21 @@ FastCompare(const T* src, const T* ref, int dims, int bsz, cudaStream_t stream, 
             (float)thrust::get<6>(res) / bsz};  // outlier count
 }
 
-template std::vector<float>
-FastCompare(const half* src, const half* ref, int dims, int bsz, cudaStream_t stream, float rtol, float atol);
+template std::vector<float> FastCompare(const half*  src,  //
+                                        const half*  ref,
+                                        int          dims,
+                                        int          bsz,
+                                        cudaStream_t stream,
+                                        float        rtol,
+                                        float        atol);
+
+template std::vector<float> FastCompare(const nv_bfloat16* src,  //
+                                        const nv_bfloat16* ref,
+                                        int                dims,
+                                        int                bsz,
+                                        cudaStream_t       stream,
+                                        float              rtol,
+                                        float              atol);
 
 void LoadBinary(const std::string& path, size_t size, void* dst)
 {
@@ -238,14 +253,39 @@ void RNG::set_stream(cudaStream_t stream)
 
 template void RNG::GenerateUniform(half* out, size_t count, float scale, float shift);
 template void RNG::GenerateUniform(float* out, size_t count, float scale, float shift);
-#if ENABLE_BF16
 template void RNG::GenerateUniform(nv_bfloat16* out, size_t count, float scale, float shift);
-#endif
-
 template void RNG::GenerateNormal(half* out, size_t count, float scale, float shift);
 template void RNG::GenerateNormal(float* out, size_t count, float scale, float shift);
-#if ENABLE_BF16
 template void RNG::GenerateNormal(nv_bfloat16* out, size_t count, float scale, float shift);
-#endif
+
+void RNG::RandomBytes(Ref<Tensor> out_)
+{
+    auto& out = out_.get();
+    TM_CHECK(out.is_contiguous());
+    TM_CHECK(out.byte_size() % sizeof(uint) == 0);
+    GenerateUInt((uint*)out.raw_data(), out.byte_size() / sizeof(uint));
+}
+
+void RNG::UniformFloat(Ref<Tensor> out_, float scale, float shift)
+{
+    auto& out = out_.get();
+    TM_CHECK(out.is_contiguous());
+    auto invoke = [&](auto t) {
+        using T = decltype(t);
+        GenerateUniform(out.data<T>(), out.size(), scale, shift);
+    };
+    TM_DISPATCH_DTYPES(out.dtype(), invoke, float, half_t, bfloat16_t);
+}
+
+void RNG::NormalFloat(Ref<Tensor> out_, float scale, float shift)
+{
+    auto& out = out_.get();
+    TM_CHECK(out.is_contiguous());
+    auto invoke = [&](auto t) {
+        using T = decltype(t);
+        GenerateNormal(out.data<T>(), out.size(), scale, shift);
+    };
+    TM_DISPATCH_DTYPES(out.dtype(), invoke, float, half_t, bfloat16_t);
+}
 
 }  // namespace turbomind

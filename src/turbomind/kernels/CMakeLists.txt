@@ -26,6 +26,13 @@ add_library(activation_kernels STATIC activation_kernels.cu)
 set_property(TARGET activation_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET activation_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 
+add_library(quantization_kernels STATIC quantization.cu)
+set_property(TARGET quantization_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET quantization_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+
+add_executable(test_quantization test_quantization.cc gemm/test/test_utils.cu)
+target_link_libraries(test_quantization PRIVATE quantization_kernels core)
+
 add_library(logprob_kernels STATIC logprob_kernels.cu)
 set_property(TARGET logprob_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET logprob_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)

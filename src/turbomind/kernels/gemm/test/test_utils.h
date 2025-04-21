@@ -9,6 +9,8 @@
 #include <string>
 #include <vector>
 
+#include "src/turbomind/core/core.h"
+
 namespace turbomind {
 
 template<typename T>
@@ -38,6 +40,12 @@ public:
 
     template<typename T>
     void GenerateNormal(T* out, size_t count, float scale = 1.f, float shift = 0.f);
+
+    void RandomBytes(Ref<Tensor> out_);
+
+    void UniformFloat(Ref<Tensor> out_, float scale = 1.f, float shift = 0.f);
+
+    void NormalFloat(Ref<Tensor> out_, float scale = 1.f, float shift = 0.f);
 
     cudaStream_t stream() const;
 
