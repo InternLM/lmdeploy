@@ -200,7 +200,8 @@ class InputsMakerAsync(InputsMakerBase):
         num_waiting = scheduler.num_waiting()
         max_batches = self.scheduler_config.max_batches
         # prefill if too much waiting
-        if num_waiting >= 4:
+        permitted_waiting = 4 if (self.engine.engine_config.role != EngineRole.Prefill) else 0
+        if num_waiting >= permitted_waiting:
             return True
         # prefill if no enough running
         if num_running < max_batches * 0.5:
@@ -852,7 +853,7 @@ class Engine:
             return None
 
         # schedule decoding if no valid prefill reqs.
-        if prefill and len(scheduler_output.running) == 0 and not self.should_execute_dummy_batch:
+        if prefill and len(scheduler_output.running) == 0 and not self.should_execute_dummy_batch and self.engine_config.role != EngineRole.Prefill:
             prefill = False
             scheduler_output = scheduler.schedule(is_prefill=prefill, prealloc_size=prefill_interval)
 
