@@ -431,6 +431,16 @@ def remove_node(node_url: str):
         return 'Failed to delete, please check the input url.'
 
 
+@app.post('/distserve/connection_warmup')
+async def connection_warmup(request: ChatCompletionRequest, raw_request: Request = None):
+    await asyncio.gather(
+        *[
+            node_manager.pd_connection_pool.connect(purl, durl)
+            for purl in node_manager.prefill_nodes
+            for durl in node_manager.decode_nodes
+        ]
+    )
+
 @app.post('/v1/chat/completions', dependencies=[Depends(check_api_key)])
 async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Request = None):
     """Completion API similar to OpenAI's API.
