@@ -23,7 +23,6 @@ from lmdeploy.model import MODELS, best_match_model
     ('deepseek-ai/deepseek-moe-16b-chat', ['deepseek']),
     ('internlm/internlm-xcomposer2-4khd-7b', ['internlm-xcomposer2']),
     ('internlm/internlm-xcomposer2d5-7b', ['internlm-xcomposer2d5']),
-    ('tiiuae/falcon-7b', ['falcon']),
     ('workspace', ['base']),
     ('OpenGVLab/InternVL2_5-1B', ['internvl2_5']),
     ('OpenGVLab/InternVL3-1B', ['internvl2_5']),

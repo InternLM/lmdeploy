@@ -65,9 +65,7 @@ def get_command_with_extra(cmd,
 
 
 def get_model_name(model):
-    model_names = [
-        'llama', 'llama2', 'llama3', 'internlm', 'internlm2', 'baichuan2', 'chatglm2', 'falcon', 'yi', 'qwen'
-    ]
+    model_names = ['llama', 'llama2', 'llama3', 'internlm', 'internlm2', 'baichuan2', 'chatglm2', 'yi', 'qwen']
     model_names += list(MODELS.module_dict.keys())
     model_names.sort()
     model_name = _simple_model_name(model)
