@@ -39,7 +39,6 @@
 |             ChemVLM              |    8B - 26B    | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |       MiniCPM-Llama3-V-2_5       |       -        | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |          MiniCPM-V-2_6           |       -        | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
-|         MiniGeminiLlama          |       7B       | MLLM |    Yes    |    -    |    -    |  Yes  |
 |               GLM4               |       9B       | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |            CodeGeeX4             |       9B       | LLM  |    Yes    |   Yes   |   Yes   |   -   |
 |              Molmo               |    7B-D,72B    | MLLM |    Yes    |   Yes   |   Yes   |  No   |
@@ -69,7 +68,6 @@
 |           Baichuan2            |       7B        | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  No   |
 |           Baichuan2            |       13B       | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 |            ChatGLM2            |       6B        | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
-|             Falcon             |    7B - 180B    | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 |               YI               |    6B - 34B     | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |            Mistral             |       7B        | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |            Mixtral             |   8x7B, 8x22B   | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
@@ -87,7 +85,6 @@
 |            MiniCPM3            |       4B        | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 |         MiniCPM-V-2_6          |       8B        | LLM  |    Yes    |   No    |   No    |  No  |  Yes  |
 |             Gemma              |      2B-7B      | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
-|              Dbrx              |      132B       | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 |           StarCoder2           |     3B-15B      | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 |           Phi-3-mini           |      3.8B       | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |          Phi-3-vision          |      4.2B       | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
