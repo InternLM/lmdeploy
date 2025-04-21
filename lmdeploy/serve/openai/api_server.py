@@ -583,7 +583,7 @@ async def chat_completions_v1(raw_request: Request = None):
         model=model_name,
         choices=choices,
         usage=usage,
-    )
+    ).model_dump()
 
     if with_cache:
         response["cache_block_ids"] = cache_block_ids
