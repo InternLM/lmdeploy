@@ -432,14 +432,22 @@ def remove_node(node_url: str):
 
 
 @app.post('/distserve/connection_warmup')
-async def connection_warmup(request: ChatCompletionRequest, raw_request: Request = None):
+async def connection_warmup():
     await asyncio.gather(
         *[
-            node_manager.pd_connection_pool.connect(purl, durl)
-            for purl in node_manager.prefill_nodes
-            for durl in node_manager.decode_nodes
+            node_manager.pd_connection_pool.connect(
+                PDConnectionMessage(
+                    p_url=p_url,
+                    d_url=d_url,
+                    protocol=node_manager.migration_protocol,
+                    rdma_config=node_manager.rdma_config,
+                )
+            )
+            for p_url in node_manager.prefill_nodes
+            for d_url in node_manager.decode_nodes
         ]
     )
+    return JSONResponse({"SUCCESS": True})
 
 @app.post('/v1/chat/completions', dependencies=[Depends(check_api_key)])
 async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Request = None):

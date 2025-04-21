@@ -494,7 +494,8 @@ class Engine:
             resp = req.data.get('response', True)
             resp_type = ResponseType.SESSION_NOT_EXIST
             if session_id in self.scheduler.sessions:
-                if list(self.scheduler.sessions[session_id].sequences.values())[0].preserve_cache:
+                msg = list(self.scheduler.sessions[session_id].sequences.values())[0]
+                if msg.preserve_cache:
                     self.scheduler._set_message_status(msg, MessageStatus.TO_BE_MIGRATED)
                 else:
                     self.scheduler.end_session(session_id)
