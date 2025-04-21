@@ -10,7 +10,7 @@
 pip install lmdeploy[all] >= 0.7.0
 
 # Transfer Engine
-pip install dlslime==0.0.1.post1
+pip install dlslime==0.0.1.post2
 ```
 
 ## Quick Start
@@ -27,11 +27,12 @@ CUDA_VISIBLE_DEVICES=2,3 lmdeploy serve api_server internlm/internlm2_5-7b-chat 
 ### 2. Launch Router Service
 
 ``` shell
-python -m lmdeploy.disagg.router \
-    --host 0.0.0.0 \
-    --port 5000 \
-    --prefill-endpoint http://prefill-host:port1 http://prefill-host:port2 \
-    --decode-endpoint http://decode-host:port3 http://decode-host:port4
+lmdeploy serve proxy
+    --server-name 10.130.8.139
+    --server-port 5000
+    --routing-strategy "min_expected_latency"
+    --serving-strategy DistServe
+    --log-level INFO
 ```
 
 ## API Usage
@@ -56,3 +57,15 @@ ibv_devinfo   # Check device capabilities
 
 ### Check NVSHMEM configuration:
 Make sure to verify NVSHMEM installation.
+
+## Fault tolerance
+### CacheFree Issue​​
+When the ​​Decode Engine​​ completes migration, it sends a ​​FreeCache​​ request to the ​​Prefill Engine​​. However, if the connection fails or the Decode Engine encounters an exception, ​​Cache Free may fail​​, leading to ​​memory leaks​​. Future improvements may include:
+
+- ​​Exception monitoring in the Proxy​​ to automatically release unreferenced memory.
+- ​​Adding a timeout mechanism​​ to force cache release if a response is delayed.
+​​
+### ConnectionPool Issue​​
+Currently, if the ​​Proxy disconnects​​, the connection pool must be ​​warmed up again​​. A future enhancement could involve:
+
+A ​​dedicated connection pool management server​​ (e.g., using ​​Raft-based tools like ETCD​​, as mentioned in ​​Mooncake​​) to improve ​​connection discovery​​ and avoid repeated warmups.
