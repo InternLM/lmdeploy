@@ -361,10 +361,21 @@ class Scheduler:
     def lock_running(self, running: SeqList):
         """lock running sequence."""
         for seq in running:
-            if seq.status == MessageStatus.RUNNING or MessageStatus.RUNNING_MIGRATION:
+            if seq.status == MessageStatus.RUNNING:
                 self._set_message_status(seq, MessageStatus.LOCKED)
 
     def unlock_running(self, locked: SeqList):
         for seq in locked:
             if seq.status == MessageStatus.LOCKED:
+                self._set_message_status(seq, MessageStatus.RUNNING)
+
+    def lock_running_migration(self, running: SeqList):
+        """lock running sequence."""
+        for seq in running:
+            if seq.status == MessageStatus.RUNNING_MIGRATION:
+                self._set_message_status(seq, MessageStatus.MIGRATION_LOCKED)
+
+    def unlock_running_migration(self, locked: SeqList):
+        for seq in locked:
+            if seq.status == MessageStatus.MIGRATION_LOCKED:
                 self._set_message_status(seq, MessageStatus.RUNNING)

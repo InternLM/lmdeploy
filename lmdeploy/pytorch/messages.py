@@ -144,6 +144,7 @@ class MessageStatus(enum.Enum):
     TO_BE_MIGRATED = enum.auto()
     WAITING_MIGRATION = enum.auto()
     RUNNING_MIGRATION = enum.auto()
+    MIGRATION_LOCKED = enum.auto()
 
 
 _SEQ_COUNT = 0

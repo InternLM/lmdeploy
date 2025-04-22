@@ -736,6 +736,25 @@ class Engine:
                 msg.update_token_ids(update_token, model_meta=model_meta)
                 msg.status = MessageStatus.STOPPED
 
+    def update_running_migration(self, running: SeqList, next_token_ids: torch.Tensor, stopped: torch.Tensor,
+                       model_metas: List[Dict[str, Any]]):
+        """update scheduler."""
+        if model_metas is None:
+            model_metas = [None] * len(running)
+        next_token_ids = next_token_ids.numpy()
+        for token, msg, stop, model_meta in zip(next_token_ids, running, stopped, model_metas):
+            if msg.status != MessageStatus.MIGRATION_LOCKED:
+                continue
+            update_token = token
+
+            # fill token
+            msg.update_token_ids(update_token, model_meta=model_meta)
+            msg.num_new_tokens += 1
+            if stop:
+                update_token = _EMPTY_TOKEN
+                msg.update_token_ids(update_token, model_meta=model_meta)
+                msg.status = MessageStatus.STOPPED
+
     def _make_infer_outputs(self, next_token_ids: torch.LongTensor, running: SeqList, logits: torch.Tensor,
                             stopped: torch.Tensor, model_metas: List[Dict[str, Any]]):
         """make infer output."""
@@ -937,7 +956,6 @@ class Engine:
             else:
                 resps = (await que.get()).values()
             await self._await_forward_event(forward_event)
-            logger.info("sending")
             __send_resps(resps)
 
     @torch.inference_mode()
@@ -987,15 +1005,16 @@ class Engine:
                         protocol=migration_request.protocol,
                         requests=migration_execution_requests
                     )
-                    logger.info(f"migrating session: {msg.session_id}")
+                    logger.info(f"migrating session: {msg.session_id} begin")
                     await self.executor.migrate(migration_inputs)
+                    logger.info(f"migrating session: {msg.session_id} done")
                 for msg in migration_running:
                     self.free_que.put_nowait(msg.migration_request)
                     self.free_event.set()
                     
                 # generate output
                 outputs: Dict[int, InferOutput] = dict()
-                self.scheduler.lock_running(migration_running)
+                self.scheduler.lock_running_migration(migration_running)
                 for _, msg in enumerate(migration_running):
                     session_id = msg.session_id
                     msg.resp.type = ResponseType.SUCCESS
@@ -1007,11 +1026,11 @@ class Engine:
                         token_ids=token_ids,
                     )
                     outputs[session_id] = out
-                    self.update_running(
+                    self.update_running_migration(
                         [msg], torch.tensor([token_ids]), [False], [None]
                     )
                 resp_que.put_nowait(outputs)
-                self.scheduler.unlock_running(migration_running)
+                self.scheduler.unlock_running_migration(migration_running)
                 has_runable_event.set()
 
     @torch.inference_mode()
