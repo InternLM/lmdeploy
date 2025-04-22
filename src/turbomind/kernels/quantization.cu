@@ -1,3 +1,4 @@
+#include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
@@ -36,12 +37,31 @@ __global__ void quant_symm_row(Tout* out, Tscale* scales, const T* src, Tscale q
 
 void QuantizeSymm(Tensor& out, Tensor& scale, const Tensor& src, cudaStream_t st)
 {
+    TM_CHECK_EQ(src.ndim(), 2);
+    TM_CHECK(src.is_contiguous());
+
+    const auto [num, dim] = src.shapes(0, 1);
+
     using T      = bfloat16_t;
     using Tout   = fp8_e4m3_t;
     using Tscale = float;
 
     constexpr int group_size = 128;
     constexpr int vec_size   = 8;
+
+    if (!out) {
+        out = Tensor_<Tout>{src.layout(), kDEVICE};
+    }
+    else {
+        TM_CHECK(out.layout() == src.layout());
+    }
+
+    if (!scale) {
+        scale = Tensor_<Tscale>({num, dim / group_size}, kDEVICE);
+    }
+    else {
+        TM_CHECK(std::make_tuple(num, dim / group_size) == scale.shapes(0, 1));
+    }
 
     constexpr int block_dim = 512;
     int           grid_dim  = (int)cdiv<int64_t>(src.size(), block_dim * vec_size);
@@ -78,6 +98,13 @@ void DequantizeSymm(Tensor& out, const Tensor& src, const Tensor& scale, cudaStr
     using T      = fp8_e4m3_t;
     using Tout   = bfloat16_t;
     using Tscale = float;
+
+    if (!out) {
+        out = Tensor_<Tout>{src.layout(), kDEVICE};
+    }
+    else {
+        TM_CHECK(out.layout() == src.layout());
+    }
 
     constexpr int group_size = 128;
     constexpr int vec_size   = 8;
@@ -146,6 +173,9 @@ __global__ void quant_symm_block(Tout* out, Tscale* scales, const T* src, Tscale
 
 void QuantizeSymmBlock(Tensor& out, Tensor& scale, const Tensor& src, cudaStream_t st)
 {
+    TM_CHECK(src.is_contiguous());
+    TM_CHECK_EQ(src.ndim(), 2);
+
     using T      = bfloat16_t;
     using Tout   = fp8_e4m3_t;
     using Tscale = float;
@@ -157,6 +187,20 @@ void QuantizeSymmBlock(Tensor& out, Tensor& scale, const Tensor& src, cudaStream
 
     constexpr int cta_size = 1024;
     const dim3    grid(dim / block_size, num / block_size);
+
+    if (!out) {
+        out = Tensor_<Tout>{src.layout(), kDEVICE};
+    }
+    else {
+        TM_CHECK(out.layout() == src.layout());
+    }
+
+    if (!scale) {
+        scale = Tensor_<Tscale>({num / block_size, dim / block_size}, kDEVICE);
+    }
+    else {
+        TM_CHECK(std::make_tuple(num / block_size, dim / block_size) == scale.shapes(0, 1));
+    }
 
     quant_symm_block<vec_size, cta_size, block_size><<<grid, cta_size, 0, st>>>(  //
         out.data<Tout>(),
@@ -205,6 +249,13 @@ void DequantizeSymmBlock(Tensor& out, const Tensor& src, const Tensor& scale, cu
 
     constexpr int block_size = 128;
     constexpr int vec_size   = 8;
+
+    if (!out) {
+        out = Tensor_<Tout>{src.layout(), kDEVICE};
+    }
+    else {
+        TM_CHECK(out.layout() == src.layout());
+    }
 
     const auto [num, dim] = src.shapes(0, 1);
 

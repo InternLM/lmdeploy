@@ -1,5 +1,6 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
+#include "src/turbomind/core/core.h"
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/kernels/gemm/test/test_utils.h"
 #include <cublas_v2.h>
@@ -74,6 +75,16 @@ template void Compare(const nv_bfloat16* src,
                       float              atol);
 #endif
 
+void Compare(
+    const void* x, const void* r, DataType dtype, size_t stride, int dim, int bsz, bool show, float rtol, float atol)
+{
+    auto invoke = [&](auto t) {
+        using T = decltype(t);
+        Compare((const T*)x, (const T*)r, stride, dim, bsz, show, rtol, atol);
+    };
+    TM_DISPATCH_DTYPES(dtype, invoke, half_t, bfloat16_t);
+}
+
 template<class T>
 std::vector<float>
 FastCompare(const T* src, const T* ref, int dims, int bsz, cudaStream_t stream, float rtol, float atol)
@@ -130,6 +141,39 @@ template std::vector<float> FastCompare(const nv_bfloat16* src,  //
                                         cudaStream_t       stream,
                                         float              rtol,
                                         float              atol);
+
+std::vector<float> FastCompare(const Tensor& x, const Tensor& r, cudaStream_t stream, float rtol, float atol)
+{
+    TM_CHECK_EQ(x.ndim(), 2);
+    TM_CHECK(x.is_contiguous());
+    TM_CHECK(x.layout() == r.layout());
+    TM_CHECK(x.dtype() == r.dtype());
+
+    auto invoke = [&](auto t) {
+        using T         = decltype(t);
+        auto [dim, bsz] = x.shapes(1, 0);
+        return FastCompare(x.data<T>(), r.data<T>(), dim, bsz, stream, rtol, atol);
+    };
+
+    TM_DISPATCH_DTYPES_RET(x.dtype(), invoke, half_t, bfloat16_t);
+}
+
+void FC_Header()
+{
+    printf("%12s%12s%12s%12s%12s%12s%12s\n",
+           "amean",
+           "amean_ref",
+           "absdiff",
+           "absdiff_max",
+           "reldiff",
+           "reldiff_max",
+           "#outlier");
+}
+
+void FC_Print(const std::vector<float>& d)
+{
+    printf("%12f%12f%12f%12f%12f%12f%12f\n", d[0], d[1], d[2], d[3], d[4], d[5], d[6]);
+}
 
 void LoadBinary(const std::string& path, size_t size, void* dst)
 {
@@ -261,7 +305,7 @@ template void RNG::GenerateNormal(nv_bfloat16* out, size_t count, float scale, f
 void RNG::RandomBytes(Ref<Tensor> out_)
 {
     auto& out = out_.get();
-    TM_CHECK(out.is_contiguous());
+    TM_CHECK(out.size() == out.layout().cosize());
     TM_CHECK(out.byte_size() % sizeof(uint) == 0);
     GenerateUInt((uint*)out.raw_data(), out.byte_size() / sizeof(uint));
 }
@@ -269,7 +313,7 @@ void RNG::RandomBytes(Ref<Tensor> out_)
 void RNG::UniformFloat(Ref<Tensor> out_, float scale, float shift)
 {
     auto& out = out_.get();
-    TM_CHECK(out.is_contiguous());
+    TM_CHECK(out.size() == out.layout().cosize());
     auto invoke = [&](auto t) {
         using T = decltype(t);
         GenerateUniform(out.data<T>(), out.size(), scale, shift);
@@ -280,7 +324,7 @@ void RNG::UniformFloat(Ref<Tensor> out_, float scale, float shift)
 void RNG::NormalFloat(Ref<Tensor> out_, float scale, float shift)
 {
     auto& out = out_.get();
-    TM_CHECK(out.is_contiguous());
+    TM_CHECK(out.size() == out.layout().cosize());
     auto invoke = [&](auto t) {
         using T = decltype(t);
         GenerateNormal(out.data<T>(), out.size(), scale, shift);

@@ -10,22 +10,6 @@
 
 using namespace turbomind;
 
-static void Header()
-{
-    printf("%12s%12s%12s%12s%12s%12s%12s\n",
-           "amean",
-           "amean_ref",
-           "absdiff",
-           "absdiff_max",
-           "reldiff",
-           "reldiff_max",
-           "#outlier");
-}
-static void Print(const std::vector<float>& d)
-{
-    printf("%12f%12f%12f%12f%12f%12f%12f\n", d[0], d[1], d[2], d[3], d[4], d[5], d[6]);
-}
-
 int main()
 {
     core::ContextGuard ctx{core::Stream::create(), core::Allocator{kCPU}, core::Allocator{kDEVICE}};
@@ -49,35 +33,37 @@ int main()
     /////////////////////////////////////////////////////////////////////////////////////
     // round trip of dequant(quant(x))
     r.UniformFloat(x, 2.f, -1.f);  // [-1, +1]
-    Copy(x.buffer(), h_x.buffer());
+    Copy(x, h_x);
     QuantizeSymm(x_q, x_s, x, stream);
     DequantizeSymm(x_f, x_q, x_s, stream);
-    Copy(x_f.buffer(), h_x_f.buffer());
-    Header();
-    Print(FastCompare(x_f.data(), x.data(), n, m, stream));
+    Copy(x_f, h_x_f);
+    FC_Header();
+    FC_Print(FastCompare(x_f, x, stream));
 
     /////////////////////////////////////////////////////////////////////////////////////
     // round trip of dequant(quant(dequant(quant(x)))), aligned representable values
-    Copy(x_f.buffer(), x.buffer());
+    Copy(x_f, x);
+    Clear(x_f);
     QuantizeSymm(x_q, x_s, x, stream);
     DequantizeSymm(x_f, x_q, x_s, stream);
-    Print(FastCompare(x_f.data(), x.data(), n, m, stream));
+    FC_Print(FastCompare(x_f, x, stream));
 
     /////////////////////////////////////////////////////////////////////////////////////
     // round trip of dequant(quant(x))
     x_s = {{m / gs, n / gs}, kDEVICE};
     r.UniformFloat(x, 2.f, -1.f);  // [-1, +1]
-    Copy(x.buffer(), h_x.buffer());
+    Copy(x, h_x);
     QuantizeSymmBlock(x_q, x_s, x, stream);
     DequantizeSymmBlock(x_f, x_q, x_s, stream);
-    Print(FastCompare(x_f.data(), x.data(), n, m, stream));
+    FC_Print(FastCompare(x_f, x, stream));
 
     /////////////////////////////////////////////////////////////////////////////////////
     // round trip of dequant(quant(dequant(quant(x)))), aligned representable values
-    Copy(x_f.buffer(), x.buffer());
+    Copy(x_f, x);
+    Clear(x_f);
     QuantizeSymmBlock(x_q, x_s, x, stream);
     DequantizeSymmBlock(x_f, x_q, x_s, stream);
-    Print(FastCompare(x_f.data(), x.data(), n, m, stream));
+    FC_Print(FastCompare(x_f, x, stream));
 
     return 0;
 }

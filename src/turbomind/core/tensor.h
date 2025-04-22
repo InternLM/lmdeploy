@@ -44,11 +44,6 @@ public:
     {
     }
 
-    static Tensor empty_like(const Tensor& tensor, std::optional<Device> device = {})
-    {
-        return Tensor{tensor.layout_, tensor.dtype(), device ? *device : tensor.device()};
-    }
-
     Buffer& buffer() noexcept
     {
         return buffer_;
@@ -209,8 +204,20 @@ private:
     Buffer buffer_;
 };
 
+static Tensor empty_like(const Tensor& tensor, std::optional<Device> device = {})
+{
+    return Tensor{tensor.layout(), tensor.dtype(), device ? *device : tensor.device()};
+}
+
+void Copy(const Tensor& src, Ref<Tensor> dst_, const Stream& stream);
+
+void Copy(const Tensor& src, Ref<Tensor> dst_);
+
+void Clear(Ref<Tensor> a_, const Stream& stream);
+
+void Clear(Ref<Tensor> a_);
+
 #if 0
-void Copy(const Tensor& src, Tensor& dst, Stream& stream);
 
 void Copy(const Tensor& src, Tensor&& dst, Stream& stream);
 
@@ -293,7 +300,7 @@ private:
     static decltype(auto) ensure_dtype(U&& u)
     {
         TM_CHECK_EQ(u.dtype(), data_type_v<T>);
-        return (U &&) u;
+        return (U&&)u;
     }
 };
 
