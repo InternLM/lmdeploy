@@ -357,15 +357,16 @@ def _kernel_meta_sm8x(BLOCK_DK: int, shared_kv: bool):
     return BLOCK_M, BLOCK_N, num_warps, num_stages
 
 
-def _kernel_meta_sm9x(BLOCK_DK):
+def _kernel_meta_sm9x(BLOCK_DK: int, shared_kv: bool):
+
     num_warps = 8
-    num_stages = min(4, max(2, 768 // BLOCK_DK))
-    BLOCK_M = max(16, 16384 // BLOCK_DK)
-    BLOCK_N = 64
-    if num_stages == 2:
-        BLOCK_N = 128
-    elif num_stages == 3:
-        num_warps = 4
+    BLOCK_M = 128 if BLOCK_DK <= 256 else 64
+    if not shared_kv and BLOCK_DK >= 512:
+        BLOCK_M = 32
+
+    BLOCK_N = 128 if BLOCK_DK <= 128 else 64
+
+    num_stages = 3 if BLOCK_DK <= 128 else 2
     return BLOCK_M, BLOCK_N, num_warps, num_stages
 
 
@@ -435,7 +436,7 @@ def flash_attention_fwd(
     if _nv_cap[0] < 9:
         BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm8x(BLOCK_DK, shared_kv)
     else:
-        BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm9x(BLOCK_DK)
+        BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm9x(BLOCK_DK, shared_kv)
 
     BLOCK_M = min(128, BLOCK_M)
     _flash_prefill_fwd_kernel[grid](
