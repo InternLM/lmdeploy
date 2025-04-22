@@ -48,10 +48,10 @@ void invokeCurandInitialize(curandState_t*     state,
                             unsigned long long random_seed,
                             cudaStream_t       stream);
 
-void invokeCurandBatchInitialize(curandState_t*            states,
-                                 const size_t              batch_size,
-                                 const unsigned long long* random_seeds,
-                                 cudaStream_t              stream);
+void invokeCurandBatchInitialize(curandState_t*  states,
+                                 const size_t    batch_size,
+                                 const uint64_t* random_seeds,
+                                 cudaStream_t    stream);
 
 struct TopKSortFilterParams {
     void*  workspace;

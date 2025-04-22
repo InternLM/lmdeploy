@@ -7,16 +7,24 @@
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/llama/moe_ffn_layer.h"
 #include "src/turbomind/models/llama/unified_attention_layer.h"
-#include "src/turbomind/utils/cublasMMWrapper.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 
-template<typename T>
 class UnifiedDecoder {
-private:
-    void freeBuffer();
+public:
+    using WeightType = LlamaDecoderLayerWeight;
 
+    UnifiedDecoder(const ModelParam&     model,
+                   const EngineParam&    engine,
+                   const AttentionParam& attn,
+                   const MoeParam&       moe,
+                   const LoraParam&      lora,
+                   const Context&        ctx);
+
+    void Forward(TensorMap& args, const std::vector<WeightType*>& weights);
+
+private:
     const size_t layer_num_;
     const size_t hidden_units_;
 
@@ -29,58 +37,23 @@ private:
 
     const float        rmsnorm_eps_;
     cudaStream_t const stream_;
-    IAllocator* const  allocator_;
 
     comm::DeviceCommImpl* const d_comm_;
 
-    const DataType dtype_;
-    const int      tune_layer_num_;
-    bool           is_free_buffer_after_forward_{};
+    const int tune_layer_num_;
 
-    int* cu_q_len_{};
-    int* cu_k_len_{};
+    std::unique_ptr<UnifiedAttentionLayer> attn_layer_;
+    std::unique_ptr<LlamaFfnLayer>         ffn_layer_;
+    std::unique_ptr<MoeFfnLayer>           moe_ffn_layer_;
 
-    int* h_cu_q_len_{};
-    int* h_cu_k_len_{};
-
-    std::unique_ptr<UnifiedAttentionLayer<T>> attn_layer_;
-    std::unique_ptr<LlamaFfnLayer<T>>         ffn_layer_;
-    std::unique_ptr<MoeFfnLayer<T>>           moe_ffn_layer_;
-
-    cudaEvent_t ev_h_cu_x_{};
-
-    using WeightType = LlamaDecoderLayerWeight<T>;
-
-    void forwardSelfAttn(T*                attn_io,
-                         TensorMap*        _outputs,
-                         const TensorMap*  _inputs,
-                         size_t            token_num,
-                         size_t            batch_size,
-                         int               layer_id,
-                         const WeightType* weight);
-
-    void AllreduceResidualRMSnorm(T*         hidden_states,
-                                  T*         residual,
-                                  const T*   bias,
-                                  const T*   weight,
-                                  int        token_num,
-                                  int        t0,
-                                  int        t1,
-                                  const int* local_token_nums);
-
-public:
-    UnifiedDecoder(const ModelParam&     model,
-                   const EngineParam&    engine,
-                   const AttentionParam& attn,
-                   const MoeParam&       moe,
-                   const LoraParam&      lora,
-                   const Context<T>&     ctx);
-
-    void allocateBuffer(size_t max_batch_size);
-
-    ~UnifiedDecoder();
-
-    void forward(TensorMap* outputs, const TensorMap* inputs, const std::vector<WeightType*>* weights);
+    void AllreduceResidualRMSnorm(Tensor&       hidden_states,
+                                  Tensor&       residual,
+                                  const Tensor& bias,
+                                  const Tensor& weight,
+                                  int           token_num,
+                                  int           t0,
+                                  int           t1,
+                                  const int*    local_token_nums);
 };
 
 }  // namespace turbomind

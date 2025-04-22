@@ -7,34 +7,34 @@
 #include <regex>
 #include <string>
 
+#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/models/llama/llama_rope.h"
-#include "src/turbomind/models/llama/weight_type.h"
 
 namespace turbomind {
 
 struct MLAParam {
-    size_t q_lora_rank;
-    size_t kv_lora_rank;
-    size_t qk_rope_dim;
-    size_t v_head_dim;
+    int q_lora_rank;
+    int kv_lora_rank;
+    int qk_rope_dim;
+    int v_head_dim;
 };
 
 struct ModelParam {
-    size_t     head_num;
-    size_t     head_dim;
-    size_t     kv_head_num;
-    size_t     hidden_units;
-    size_t     layer_num;
-    size_t     vocab_size;
-    size_t     embedding_size;
-    float      norm_eps;
-    int        quant_policy;
-    bool       attn_bias;
-    WeightType weight_type;
-    int        group_size;
-    MLAParam   mla;
-    bool       qk_norm;
-    int        tune_layer_num;
+    size_t   head_num;
+    size_t   head_dim;
+    size_t   kv_head_num;
+    size_t   hidden_units;
+    size_t   layer_num;
+    size_t   vocab_size;
+    size_t   embedding_size;
+    float    norm_eps;
+    int      quant_policy;
+    bool     attn_bias;
+    DataType weight_type;
+    int      group_size;
+    MLAParam mla;
+    bool     qk_norm;
+    int      tune_layer_num;
 
     std::vector<int> inter_size;
 };
@@ -81,7 +81,7 @@ struct EngineParam {
     bool  enable_prefix_caching;
 
     // chunking params
-    int max_prefill_token_num;
+    int max_forward_token_num;
     int max_context_token_num;
     int num_tokens_per_iter;
     int max_prefill_iters;
