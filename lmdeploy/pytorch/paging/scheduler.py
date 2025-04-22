@@ -320,13 +320,19 @@ class Scheduler:
 
     def has_unfinished(self):
         """Check if there are any unfinished message."""
-        return self.has_running() or self.has_waiting()
+        return self.has_running() or self.has_waiting() # or self.has_migration_running() or self.has_migration_waiting()
 
     def has_running(self):
         return self.num_running() > 0
 
     def has_waiting(self):
         return self.num_waiting() > 0
+
+    def has_migration_running(self):
+        return self.num_running() > 0
+
+    def has_migration_waiting(self):
+        return self.num_migration_waiting() > 0
 
     def get_block_tables(self, seqs: SeqList):
         """get block table of the sequences."""
@@ -339,6 +345,14 @@ class Scheduler:
     def num_waiting(self):
         """num waiting."""
         return self.seq_manager.num_sequences(MessageStatus.WAITING)
+
+    def num_migration_running(self):
+        """num running."""
+        return self.seq_manager.num_sequences(MessageStatus.RUNNING_MIGRATION)
+
+    def num_migration_waiting(self):
+        """num waiting."""
+        return self.seq_manager.num_sequences(MessageStatus.WAITING_MIGRATION)
 
     def num_locked(self):
         """num locked."""

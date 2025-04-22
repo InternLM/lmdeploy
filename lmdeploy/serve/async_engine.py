@@ -889,8 +889,9 @@ class AsyncEngine(LogitsMixin):
     def free_cache(self, session_id: int):
         if session_id in self.engine.scheduler.sessions:
             self.engine.scheduler.end_session(session_id)
+            logger.info(f"successfully free session {session_id}")
         else:
-            logger.warning("Invalid Free.")
+            logger.warning(f"Invalid Free session {session_id}.")
 
     def p2p_initialize(self, init_request: DistServeInitRequest):
         return self.engine.executor.p2p_initialize(init_request)

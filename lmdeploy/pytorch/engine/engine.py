@@ -200,7 +200,7 @@ class InputsMakerAsync(InputsMakerBase):
         num_waiting = scheduler.num_waiting()
         max_batches = self.scheduler_config.max_batches
         # prefill if too much waiting
-        permitted_waiting = 4 if (self.engine.engine_config.role != EngineRole.Prefill) else 0
+        permitted_waiting = 4 if (self.engine.engine_config.role != EngineRole.Prefill) else 1
         if num_waiting >= permitted_waiting:
             return True
         # prefill if no enough running
@@ -937,6 +937,7 @@ class Engine:
             else:
                 resps = (await que.get()).values()
             await self._await_forward_event(forward_event)
+            logger.info("sending")
             __send_resps(resps)
 
     @torch.inference_mode()
@@ -952,14 +953,16 @@ class Engine:
                         f"{migration_request.remote_engine_id}/distserve/free_cache",
                         json={"session_id": migration_request.remote_session_id}
                     ) as response:
+                        logger.info(f"free remote session id {migration_request.remote_session_id}")
                         await response.json()
 
     @torch.inference_mode()
     async def _async_loop_migration(self, resp_que: asyncio.Queue, has_runable_event: asyncio.Event):
         """async loop migration."""
         while True:
+            await asyncio.sleep(0.00005)
             migration_running = self.scheduler._schedule_migration()
-            if not self.scheduler.running_migration and not self.scheduler.waiting_migration:
+            if not migration_running:
                 await self.migration_event.wait()
             else:
                 self.migration_event.clear()
@@ -984,9 +987,10 @@ class Engine:
                         protocol=migration_request.protocol,
                         requests=migration_execution_requests
                     )
+                    logger.info(f"migrating session: {msg.session_id}")
                     await self.executor.migrate(migration_inputs)
                 for msg in migration_running:
-                    self.free_que.put_nowait(migration_request)
+                    self.free_que.put_nowait(msg.migration_request)
                     self.free_event.set()
                     
                 # generate output
