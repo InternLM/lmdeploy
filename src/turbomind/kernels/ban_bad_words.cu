@@ -15,10 +15,39 @@
  */
 
 #include "src/turbomind/kernels/ban_bad_words.h"
-#include "src/turbomind/kernels/reduce_kernel_utils.cuh"
-#include "src/turbomind/utils/cuda_utils.h"
+#include <cfloat>
+// #include "src/turbomind/kernels/reduce_kernel_utils.cuh"
+// #include "src/turbomind/utils/cuda_utils.h"
+#include <cuda_bf16.h>
+#include <cuda_fp16.h>
 
 namespace turbomind {
+
+template<typename T>
+__device__ inline T getMaxValue();
+
+template<>
+__device__ inline float getMaxValue<float>()
+{
+    return FLT_MAX;
+}
+
+template<>
+__device__ inline half getMaxValue<half>()
+{
+    return __ushort_as_half((unsigned short)0x7BFFU);
+}
+
+#ifdef ENABLE_BF16
+template<>
+__device__ inline __nv_bfloat16 getMaxValue<__nv_bfloat16>()
+{
+#if __CUDA_ARCH__ >= 800
+    return __ushort_as_bfloat16((unsigned short)0x7F7FU);
+#endif
+    return {};
+}
+#endif
 
 template<typename T>
 __global__ void ban_bad_words(T*         logits,
@@ -117,7 +146,6 @@ void invokeBanBadWords(T*           logits,
                                               id_offset,
                                               vocab_size_padded,
                                               step);
-    sync_check_cuda_error();
 }
 
 #define INSTANTIATE_INVOKE_BAN_BAD_WORDS(T)                                                                            \

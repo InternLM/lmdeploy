@@ -20,7 +20,7 @@
 #include <cuda_runtime.h>
 #include <unordered_map>
 
-#include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/core/core.h"
 #include "src/turbomind/utils/memory_utils.h"
 
 namespace turbomind {
@@ -131,20 +131,6 @@ void invokeFindContextDups(int*         shared_contexts,
                            cudaStream_t stream = 0);
 
 template<typename T>
-void handleOptArg(TensorMap* input_tensors, const std::string& arg_name, T* d_ptr, T default_value, size_t size)
-{
-    if (input_tensors->isExist(arg_name)) {
-        FT_CHECK(input_tensors->at(arg_name).size() == size);
-        cudaH2Dcpy(d_ptr, input_tensors->at(arg_name).getPtr<const T>(), size);
-    }
-    else {
-        deviceFill(d_ptr, size, default_value);
-    }
-}
-
-void setSeqLimitLen(uint32_t* seq_len_d, Tensor seq_len, int limit_len_offset, int batch_size);
-
-template<typename T>
 void invokeCompactInputs(T*           compact_input,
                          T*           compact_attention_mask,
                          int*         compact_input_lengths,
@@ -252,5 +238,10 @@ void invokeTranspose2D(T* dst, const T* src, int rows, int cols, cudaStream_t st
         FT_CHECK(0);
     }
 }
+
+void invokeEmbeddingLookup(Ref<Tensor>         out_,
+                           const Buffer_<int>& token_ids,
+                           const Tensor&       embedding_table,
+                           cudaStream_t        st);
 
 }  // namespace turbomind
