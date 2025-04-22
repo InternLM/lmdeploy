@@ -351,6 +351,7 @@ def _kernel_meta_sm8x(BLOCK_DK: int, shared_kv: bool):
     num_warps = 8
     min_m = 64 if shared_kv else 16
     BLOCK_M = max(min_m, 16384 // BLOCK_DK)
+    BLOCK_M = min(128, BLOCK_M)
     BLOCK_N = BLOCK_M
     num_stages = 3 if BLOCK_DK <= 128 else 2
 
