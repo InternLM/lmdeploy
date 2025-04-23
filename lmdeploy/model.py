@@ -1050,7 +1050,7 @@ class Qwen2d5Chat(Qwen7BChat):
                             tool_call = tool_call['function']
                         if isinstance(tool_call['arguments'], str):
                             tool_call['arguments'] = json.loads(tool_call['arguments'])
-                        ret += f'{self.separator}<tool_call>{self.separator}{{"name": "{tool_call['name']}", "arguments": {json.dumps(tool_call['arguments'], ensure_ascii=False)}}}{self.separator}</tool_call>'  # noqa
+                        ret += f'{self.separator}<tool_call>{self.separator}{{"name": "{tool_call["name"]}", "arguments": {json.dumps(tool_call["arguments"], ensure_ascii=False)}}}{self.separator}</tool_call>'  # noqa
                 ret += self.eosys
             if message['role'] == 'tool':
                 if index == 0 or messages[index - 1]['role'] != 'tool':
