@@ -169,6 +169,7 @@ class Attn(Module):
         self.tp = model.attn_tp_size
         self.head_dim = model.model_config.size_per_head
         self.attn_bias = model.model_config.attn_bias
+        self.qk_norm = model.model_config.qk_norm
 
     def _reorder_and_merge(self, qkvo):
         q, k, v, o = qkvo
@@ -228,6 +229,13 @@ class Attn(Module):
     def apply(self, i: int, r: BaseReader):
         for e in get_params(r.attn(i, None), bias=self.attn_bias):
             e(self._export, partial(r.attn, i), i)
+        if self.qk_norm:
+            q, k = r.qk_norm(i)
+            if self.model.permute_qk:
+                q = permute_v2(q, self.head_dim)
+                k = permute_v2(k, self.head_dim)
+            self.model.save_split(q, self._attn.format(i, 'q_norm', '')[:-1])
+            self.model.save_split(k, self._attn.format(i, 'k_norm', '')[:-1])
 
 
 class MLA(Module):
@@ -311,7 +319,8 @@ class Misc(Module):
         if output_weight is not None:
             tp = self.model.attn_tp_size
             output_weight = pad_weight(output_weight, tp=tp)
-            self.model.save_split(output_weight, 'output.weight', split_dim=0, split_num=tp)
+            # transpose
+            self.model.save_split(output_weight.t(), 'output.weight', split_dim=1, split_num=tp)
 
 
 class Transformer:

@@ -9,7 +9,6 @@
 #include <cuda_runtime.h>
 
 #include "src/turbomind/comm/host_comm.h"
-#include "src/turbomind/utils/Tensor.h"
 
 namespace turbomind::comm {
 

@@ -5,7 +5,6 @@
 
 #include "src/turbomind/comm/serialize.h"
 #include "src/turbomind/engine/request.h"
-#include "src/turbomind/utils/Tensor.h"
 
 namespace turbomind::comm {
 
@@ -94,28 +93,51 @@ void deserialize(std::istream& is, SessionParam& sess)
     deserialize(is, sess.kill_flag);
 }
 
-//--------------------------- below may not right ---------------------------
+void serialize(std::ostream& os, const Layout& layout)
+{
+    serialize(os, layout.shape());
+    serialize(os, layout.stride());
+}
+
+void deserialize(std::istream& is, Layout& layout)
+{
+    std::vector<ssize_t> shape;
+    std::vector<ssize_t> stride;
+    deserialize(is, shape);
+    deserialize(is, stride);
+    layout = Layout(std::move(shape), std::move(stride));
+}
+
+void serialize(std::ostream& os, const Buffer& buffer) {
+    FT_CHECK(buffer.device() == turbomind::core::Device(kCPU));
+    serialize(os, buffer.size());
+    serialize(os, buffer.dtype());
+    os.write((char*)buffer.raw_data(), buffer.byte_size());
+}
+
+void deserialize(std::istream& is, Buffer& buffer) {
+    ssize_t size;
+    DataType dtype;
+    deserialize(is, size);
+    deserialize(is, dtype);
+    buffer = Buffer(size, dtype, turbomind::core::Device(kCPU));
+    is.read((char*)buffer.raw_data(), buffer.byte_size());
+}
 
 void serialize(std::ostream& os, const Tensor& tensor)
 {
-    serialize(os, tensor.where);
-    serialize(os, tensor.type);
-    serialize(os, tensor.shape);
-    serialize(os, tensor.offsets);
-    os.write(tensor.getPtr<char>(), tensor.sizeBytes());
+    FT_CHECK(tensor.is_contiguous());
+    serialize(os, tensor.layout());
+    serialize(os, tensor.buffer());
 }
 
-void deserialize(std::istream& is, ManagedTensor& holder)
+void deserialize(std::istream& is, Tensor& tensor)
 {
-    Tensor tensor{};
-    deserialize(is, tensor.where);
-    deserialize(is, tensor.type);
-    deserialize(is, tensor.shape);
-    deserialize(is, tensor.offsets);  // not used
-    int64_t byte_size{};
-    holder = ManagedTensor::create(
-        tensor.type, tensor.where, std::vector<int64_t>(tensor.shape.begin(), tensor.shape.end()), byte_size);
-    is.read(holder->getPtr<char>(), byte_size);
+    Layout layout;
+    Buffer buffer;
+    deserialize(is, layout);
+    deserialize(is, buffer);
+    tensor = Tensor(std::move(buffer), std::move(layout));
 }
 
 void serialize(std::ostream& os, const TensorMap& map)
@@ -128,19 +150,16 @@ void serialize(std::ostream& os, const TensorMap& map)
     }
 }
 
-void deserialize(std::istream& is, TensorMap& map, Request::TensorMap_& map_)
+void deserialize(std::istream& is, TensorMap& map)
 {
     int size;
     deserialize(is, size);
     for (int i = 0; i < size; ++i) {
         std::string key;
         deserialize(is, key);
-
-        ManagedTensor tensor;
+        Tensor tensor;
         deserialize(is, tensor);
-        map_.emplace(key, tensor);
-
-        map.insert(key, *tensor);
+        map.emplace(key, tensor);
     }
 }
 
@@ -163,8 +182,8 @@ void deserialize(std::istream& is, Request& req)
     deserialize(is, req.session);
     deserialize(is, req.gen_cfg);
     deserialize(is, req.stream_output);
-    deserialize(is, req.inputs, req.ipc_buffer);
-    deserialize(is, req.outputs, req.ipc_buffer);
+    deserialize(is, req.inputs);
+    deserialize(is, req.outputs);
     deserialize(is, req.ec);
 
     req.output_ids      = req.outputs.at("output_ids");

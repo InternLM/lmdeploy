@@ -9,8 +9,8 @@
 #include <type_traits>
 #include <vector>
 
+#include "src/turbomind/core/tensor.h"
 #include "src/turbomind/engine/request.h"
-#include "src/turbomind/utils/Tensor.h"
 
 namespace turbomind::comm {
 
@@ -69,13 +69,21 @@ void serialize(std::ostream& os, const SessionParam& sess);
 
 void deserialize(std::istream& is, SessionParam& sess);
 
+void serialize(std::ostream& os, const Layout& layout);
+
+void deserialize(std::istream& is, Layout& layout);
+
+void serialize(std::ostream& os, const Buffer& buffer);
+
+void deserialize(std::istream& is, Buffer& buffer);
+
 void serialize(std::ostream& os, const Tensor& tensor);
 
-void deserialize(std::istream& is, ManagedTensor& holder);
+void deserialize(std::istream& is, Tensor& tensor);
 
 void serialize(std::ostream& os, const TensorMap& map);
 
-void deserialize(std::istream& is, TensorMap& map, Request::TensorMap_& map_);
+void deserialize(std::istream& is, TensorMap& map);
 
 void serialize(std::ostream& os, const Request& req);
 

@@ -2,19 +2,13 @@
 
 #include <cuda_runtime.h>
 
-#include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/core/core.h"
 
 namespace turbomind {
 
-template<class T>
-void invokeRMSNorm(
-    T* dst, int dst_ld, const T* src, int src_ld, const T* weights, int dims, int num, float eps, cudaStream_t st);
+void invokeRMSNorm(Tensor& out, const Tensor& x, const Tensor& w, float eps, cudaStream_t st);
 
-template<class T>
-void invokeRMSNorm(T* dst, const T* src, const T* weights, int dims, int num, float eps, cudaStream_t st)
-{
-    invokeRMSNorm(dst, dims, src, dims, weights, dims, num, eps, st);
-}
+void invokeRMSNormQK(Tensor& x, const Tensor& w, float eps, cudaStream_t st);
 
 template<class T>
 void invokeBiasResidualRMSNorm(

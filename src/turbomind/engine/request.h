@@ -10,7 +10,7 @@
 #include <memory>
 #include <ostream>
 
-#include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/core/core.h"
 
 namespace turbomind {
 
@@ -122,8 +122,8 @@ struct Request {
     TensorMap inputs;
     TensorMap outputs;
     // fast path for accessing common output buffers
-    Tensor output_ids;
-    Tensor sequence_length;
+    Tensor_<int> output_ids;
+    Tensor_<int> sequence_length;
 
     std::function<void(int)> end_cb;
 
@@ -147,10 +147,6 @@ struct Request {
         kFinish   = 7,
         kCancel   = 8,
     };
-
-    // data holder(tensor) for inter-process
-    using TensorMap_ = std::unordered_map<std::string, ManagedTensor>;
-    TensorMap_ ipc_buffer;
 };
 
 inline void UpdateState(Request& r, int status, int seq_len)

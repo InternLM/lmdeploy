@@ -243,6 +243,7 @@ class ModelInputs:
 
         return ret
 
+    @torch.inference_mode()
     def to_device(self, device: str, non_blocking: bool = False):
         """to device."""
         out_dict = dict()
@@ -335,6 +336,7 @@ class StepContext:
     kv_quant_policy: Literal[0, 4, 8] = 0
     model_metas: List[Dict[str, Any]] = None
     dp_meta: DPMeta = None
+    enable_microbatch: bool = False
 
     _outputs: Dict = field(default_factory=dict)
 

@@ -12,6 +12,14 @@ from ..default import DefaultOpsBackend
 logger = get_logger('lmdeploy')
 
 
+def _get_meta_flashmla(kv_seqlens, num_attention_heads):
+    """get meta for flashmla."""
+    import flash_mla_cuda
+    tile_scheduler_metadata, num_splits = flash_mla_cuda.get_mla_metadata(kv_seqlens.to(torch.int32),
+                                                                          num_attention_heads, 1)
+    return tile_scheduler_metadata, num_splits
+
+
 class CudaOpsBackend(DefaultOpsBackend):
     """cuda layer backend."""
 
@@ -104,6 +112,17 @@ class CudaOpsBackend(DefaultOpsBackend):
         )
 
     @classmethod
+    def update_meta_flashmla(cls, attn_metadata, num_attention_heads):
+        """update meta for flashmla."""
+        tile_scheduler_metadata, num_splits = _get_meta_flashmla(attn_metadata.kv_seqlens.to(torch.int32),
+                                                                 num_attention_heads)
+        attn_metadata.tile_scheduler_metadata = tile_scheduler_metadata
+        attn_metadata.num_splits = num_splits
+
+        if attn_metadata.block_offsets.dtype != torch.int32:
+            attn_metadata.block_offsets = attn_metadata.block_offsets.to(torch.int32)
+
+    @classmethod
     def update_step_context(cls, step_context):
         """update step context."""
         attn_meta_cls = cls.get_attention_metadata_cls()
@@ -127,11 +146,7 @@ class CudaOpsBackend(DefaultOpsBackend):
         )
         if getattr(step_context.model_config, 'use_flash_mla', False) is True:
             if step_context.is_decoding is True:
-                import flash_mla_cuda
-                tile_scheduler_metadata, num_splits = flash_mla_cuda.get_mla_metadata(
-                    attn_metadata.kv_seqlens.to(torch.int32), step_context.model_config.num_attention_heads, 1)
-                attn_metadata.tile_scheduler_metadata = tile_scheduler_metadata
-                attn_metadata.num_splits = num_splits
+                cls.update_meta_flashmla(attn_metadata, step_context.model_config.num_attention_heads)
 
         cross_seqlens = step_context.cross_seqlens
         cross_kv_seqlens = step_context.cross_kv_seqlens
@@ -166,6 +181,17 @@ class CudaOpsBackend(DefaultOpsBackend):
                            backend_config: BackendConfig, device: torch.device):
         """build graph runner."""
         from .graph_runner import CUDAGraphRunner
+        from .warmup_manager import WarmupMeta, get_warmup_manager
+
+        # warmup ops.
+        warmup_meta = WarmupMeta(
+            max_num_tokens=cache_config.max_prefill_token_num,
+            max_batch_size=cache_config.max_batches,
+            dtype=model_config.dtype,
+        )
+        get_warmup_manager().warmup(warmup_meta)
+
+        # make graph runner.
         return CUDAGraphRunner(model, model_config, cache_config, backend_config, device)
 
     @staticmethod

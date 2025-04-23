@@ -387,3 +387,19 @@ def is_bf16_supported(device_type: str = 'cuda'):
         return True
     else:
         return False
+
+
+def try_import_deeplink(device_type: str):
+    deeplink_device_type_list = [
+        'ascend',
+        'npu',
+        'maca',
+        'camb',
+    ]
+    if device_type in deeplink_device_type_list:
+        try:
+            import dlinfer.framework.lmdeploy_ext  # noqa: F401
+        except Exception as e:
+            logger = get_logger('lmdeploy')
+            logger.error(f'{type(e).__name__}: {e}')
+            exit(1)

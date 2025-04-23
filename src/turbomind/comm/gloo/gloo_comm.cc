@@ -215,13 +215,13 @@ struct GlooCommImpl: public HostCommImpl {
 
         auto dispatch = [&]() -> ReduceFunc {
             switch (dtype) {
-                case DataType::TYPE_INT32:
+                case kInt32:
                     return dispatch_op(int32_t{});
-                case DataType::TYPE_INT64:
+                case kInt64:
                     return dispatch_op(int64_t{});
-                case DataType::TYPE_UINT32:
+                case kUint32:
                     return dispatch_op(uint32_t{});
-                case DataType::TYPE_UINT64:
+                case kUint64:
                     return dispatch_op(uint64_t{});
                 default:
                     return {};
@@ -243,16 +243,16 @@ struct GlooCommImpl: public HostCommImpl {
         opts.setTimeout(std::chrono::milliseconds(1000 * 60 * 30));
         opts.setReduceFunction(getReduceFunc(dtype, red_op));
         switch (dtype) {
-            case DataType::TYPE_INT32:
+            case kInt32:
                 opts.setOutput((int32_t*)data, count);
                 break;
-            case DataType::TYPE_INT64:
+            case kInt64:
                 opts.setOutput((int64_t*)data, count);
                 break;
-            case DataType::TYPE_UINT32:
+            case kUint32:
                 opts.setOutput((uint32_t*)data, count);
                 break;
-            case DataType::TYPE_UINT64:
+            case kUint64:
                 opts.setOutput((uint64_t*)data, count);
                 break;
             default:

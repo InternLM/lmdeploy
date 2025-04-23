@@ -31,7 +31,10 @@ class DeepSeekVisionModel(VisonModel):
     def build_preprocessor(self):
         check_deepseek_vl_install()
         from deepseek_vl.models import VLChatProcessor
-        self.image_processor = VLChatProcessor.from_pretrained(self.model_path).image_processor
+        vl_chat_processor = VLChatProcessor.from_pretrained(self.model_path)
+        tokenizer = vl_chat_processor.tokenizer
+        self.image_token_id = tokenizer.vocab.get(vl_chat_processor.image_tag)
+        self.image_processor = vl_chat_processor.image_processor
 
     def build_model(self):
         """build the vision part of a VLM model when backend is turbomind, or

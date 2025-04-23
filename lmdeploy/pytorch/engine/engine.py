@@ -84,12 +84,11 @@ def _build_backend_config(engine_config: PytorchEngineConfig):
 
 def _build_dist_config(engine_config: PytorchEngineConfig):
     """build dist config."""
-    dist_config = DistConfig(
-        dp=engine_config.dp,
-        tp=engine_config.tp,
-        ep=1,
-        dp_rank=engine_config.dp_rank,
-    )
+    dist_config = DistConfig(dp=engine_config.dp,
+                             tp=engine_config.tp,
+                             ep=engine_config.ep,
+                             dp_rank=engine_config.dp_rank,
+                             enable_microbatch=engine_config.enable_microbatch)
     return dist_config
 
 
@@ -292,10 +291,6 @@ class Engine:
         tp = engine_config.tp
         dp = engine_config.dp
         dp_rank = engine_config.dp_rank
-        if dp > 1 and tp > 1 and not engine_config.eager_mode:
-            logger.warning('Enable eager mode on dp > 1.')
-            # TODO: support eager with dp
-            engine_config.eager_mode = True
 
         self.tokenizer = tokenizer
         self.tp = tp
@@ -571,6 +566,7 @@ class Engine:
             return torch.int32
         return torch.int64
 
+    @torch.inference_mode()
     @logging_timer('CreateModelInputs', logger)
     def create_model_inputs(self, messages: SeqList, is_prefill: bool):
         """create model inputs from messages.
@@ -698,12 +694,13 @@ class Engine:
             if msg.status != MessageStatus.LOCKED:
                 continue
             update_token = token
+
+            # fill token
+            msg.update_token_ids(update_token, model_meta=model_meta)
+            msg.num_new_tokens += 1
             if stop:
                 update_token = _EMPTY_TOKEN
-            else:
-                msg.num_new_tokens += 1
-            msg.update_token_ids(update_token, model_meta=model_meta)
-            if stop:
+                msg.update_token_ids(update_token, model_meta=model_meta)
                 msg.status = MessageStatus.STOPPED
 
     def _make_infer_outputs(self, next_token_ids: torch.LongTensor, running: SeqList, logits: torch.Tensor,

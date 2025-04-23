@@ -1,5 +1,10 @@
 // Copyright (c) OpenMMLab. All rights reserved.
+
+#include <cuda_bf16.h>
+
+#include "src/turbomind/core/check.h"
 #include "src/turbomind/kernels/core/array_ops.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 
@@ -78,16 +83,37 @@ void invokeMLACopyQKV(T*           qkv,
         qkv, q, kv_a, kv_b, head_num, head_dim, nope_dim, rope_dim, kv_lora_rank, v_head_dim);
 }
 
-template void invokeMLACopyQKV(uint16_t*       qkv,
-                               const uint16_t* q,
-                               const uint16_t* kv_a,
-                               const uint16_t* kv_b,
-                               int             token_num,
-                               int             head_num,
-                               int             nope_dim,
-                               int             rope_dim,
-                               int             kv_lora_rank,
-                               int             v_head_dim,
-                               cudaStream_t    stream);
+void MLACopyQKV(DataType     dtype,
+                void*        qkv,
+                const void*  q,
+                const void*  kv_a,
+                const void*  kv_b,
+                int          token_num,
+                int          head_num,
+                int          nope_dim,
+                int          rope_dim,
+                int          kv_lora_rank,
+                int          v_head_dim,
+                cudaStream_t stream)
+{
+    auto invoke = [&](auto t) {
+        using T = decltype(t);
+        invokeMLACopyQKV((T*)qkv,
+                         (const T*)q,
+                         (const T*)kv_a,
+                         (const T*)kv_b,
+                         token_num,
+                         head_num,
+                         nope_dim,
+                         rope_dim,
+                         kv_lora_rank,
+                         v_head_dim,
+                         stream);
+    };
+
+    TM_CHECK_EQ(byte_size(dtype, 1), 2) << "unsupported data type: " << dtype;
+
+    return invoke(uint16_t{});
+}
 
 }  // namespace turbomind

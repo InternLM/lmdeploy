@@ -267,7 +267,7 @@ class TurboMind:
 
         model_comm = _tm.AbstractTransformerModel.create_llama_model(model_dir='',
                                                                      config=yaml.safe_dump(self.config_dict),
-                                                                     data_type=self.config.model_config.weight_type)
+                                                                     weight_type=self.config.model_config.weight_type)
 
         # create empty weight
         self._create_weight(model_comm)
@@ -301,7 +301,7 @@ class TurboMind:
         weight_dir = osp.join(model_path, 'triton_models', 'weights')
         model_comm = _tm.AbstractTransformerModel.create_llama_model(model_dir=weight_dir,
                                                                      config=yaml.safe_dump(self.config_dict),
-                                                                     data_type=self.config.weight_type)
+                                                                     weight_type=self.config.weight_type)
 
         # create weight and load params
         self._create_weight(model_comm)

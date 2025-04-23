@@ -55,6 +55,7 @@ class ModelConfig:
     inter_size: List[int] = None
     norm_eps: float = None
     attn_bias: int = 0
+    qk_norm: bool = False
     size_per_head: int = 128
     group_size: int = 64
     weight_type: str = None

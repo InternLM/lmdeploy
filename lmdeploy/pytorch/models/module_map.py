@@ -15,6 +15,12 @@ MODULE_MAP.update({
     'LlamaForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama.LlamaForCausalLM',
 })
 
+# llama4
+MODULE_MAP.update({
+    'Llama4ForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama4.Llama4ForConditionalGeneration',
+})
+
 # Falcon Models in transformer / on hub
 MODULE_MAP.update({
     'FalconForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.falcon.FalconForCausalLM',
@@ -106,6 +112,16 @@ MODULE_MAP.update({
 # qwen2 moe
 MODULE_MAP.update({
     'Qwen2MoeForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen2_moe.Qwen2MoeForCausalLM',
+})
+
+# qwen3
+MODULE_MAP.update({
+    'Qwen3ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3.Qwen3ForCausalLM',
+})
+
+# qwen3 moe
+MODULE_MAP.update({
+    'Qwen3MoeForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen3_moe.Qwen3MoeForCausalLM',
 })
 
 # qwen2_vl

@@ -51,8 +51,7 @@ def get_lora_adapters(adapters: List[str]):
             assert '=' in pair, f'Multiple lora paths must in format of ' \
                                  f'xxx=yyy. But given: {pair}'
             name, path = pair.strip().split('=', 1)
-            assert name not in output, f'Multiple lora paths with ' \
-                                       f'repeated lora name: {name}'
+            assert name not in output, f'Multiple lora paths with repeated lora name: {name}'
             output[name] = path
     return output
 
@@ -160,6 +159,15 @@ class ArgumentHelper:
                                    type=int,
                                    default=1,
                                    help='data parallelism. dp_rank is required when pytorch engine is used.')
+
+    @staticmethod
+    def ep(parser):
+        """Add argument ep to parser."""
+
+        return parser.add_argument('--ep',
+                                   type=int,
+                                   default=1,
+                                   help='expert parallelism. dp is required when pytorch engine is used.')
 
     @staticmethod
     def dp_rank(parser):
@@ -529,3 +537,11 @@ class ArgumentHelper:
                                    default='nccl',
                                    choices=['nccl', 'native'],
                                    help='Communication backend for multi-GPU inference')
+
+    @staticmethod
+    def enable_microbatch(parser):
+        """Add argument enable_microbatch to parser."""
+
+        return parser.add_argument('--enable-microbatch',
+                                   action='store_true',
+                                   help='enable microbatch for specified model')

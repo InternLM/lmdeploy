@@ -6,10 +6,12 @@
 #include <memory>
 #include <stdexcept>
 #include <type_traits>
+#include <vector>
+#include <cstring>
 
-#include "src/turbomind/comm/serialize.h"
-#include "src/turbomind/utils/Tensor.h"
+#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/utils/logger.h"
+#include "src/turbomind/comm/serialize.h"
 
 namespace turbomind::comm {
 
@@ -81,12 +83,12 @@ template<class T>
 void Broadcast(HostCommImpl* comm, T* data, int n, int root)
 {
     if constexpr (std::is_trivially_copyable_v<T>) {
-        comm->Broadcast((char*)data, sizeof(T) * n, TYPE_INT8, root, detail::copy_fn<char>);
+        comm->Broadcast(data, sizeof(T) * n, data_type_v<uint8_t>, root, detail::copy_fn<uint8_t>);
     }
     else {
         if (comm->is_same_process()) {
             /// TODO: Constness should be considered
-            comm->Broadcast(data, n, TYPE_INVALID, root, detail::copy_fn<T>);
+            comm->Broadcast(data, n, kNull, root, detail::copy_fn<T>);
         }
         else {
             try {
@@ -96,7 +98,7 @@ void Broadcast(HostCommImpl* comm, T* data, int n, int root)
                 size_t size = buf.size();
                 Broadcast(comm, &size, 1, root);
                 buf.resize(size);
-                comm->Broadcast(buf.data(), buf.size(), TYPE_INT8, root, detail::copy_fn<char>);
+                comm->Broadcast(buf.data(), buf.size(), data_type_v<uint8_t>, root, detail::copy_fn<char>);
                 if (comm->rank() != root) {
                     // some field in data may be not shared by all rank
                     deserialize(data, n, buf);
@@ -114,12 +116,12 @@ template<class T>
 void AllGather(HostCommImpl* comm, T* data, int n)
 {
     if constexpr (std::is_trivially_copyable_v<T>) {
-        comm->AllGather(data, sizeof(T) * n, TYPE_INT8, detail::copy_fn<char>);
+        comm->AllGather(data, sizeof(T) * n, data_type_v<uint8_t>, detail::copy_fn<uint8_t>);
     }
     else {
         if (comm->is_same_process()) {
             /// TODO: Constness should be considered
-            comm->AllGather(data, n, TYPE_INVALID, detail::copy_fn<T>);
+            comm->AllGather(data, n, kNull, detail::copy_fn<T>);
         }
         else {
             try {
@@ -131,10 +133,10 @@ void AllGather(HostCommImpl* comm, T* data, int n)
                     rbuf.insert(rbuf.end(), ibuf.begin(), ibuf.end());
                 }
                 int size = rbuf.size();
-                comm->AllReduce(&size, 1, TYPE_INT32, RedOp::kMax);
+                comm->AllReduce(&size, 1, data_type_v<int>, RedOp::kMax);
                 std::vector<char> buf(size * comm->n_ranks());
-                memcpy(buf.data() + comm->rank() * size, rbuf.data(), rbuf.size());
-                comm->AllGather(buf.data(), size, TYPE_INT8, detail::copy_fn<char>);
+                std::memcpy(buf.data() + comm->rank() * size, rbuf.data(), rbuf.size());
+                comm->AllGather(buf.data(), size, data_type_v<uint8_t>, detail::copy_fn<char>);
                 for (int i = 0; i < comm->n_ranks(); ++i) {
                     if (i != comm->rank()) {
                         // some field in data may be not shared by all rank
@@ -154,7 +156,7 @@ void AllGather(HostCommImpl* comm, T* data, int n)
 template<class T>
 void AllReduce(HostCommImpl* comm, T* data, int n, RedOp red_op)
 {
-    comm->AllReduce(data, n, getTensorType<T>(), red_op);
+    comm->AllReduce(data, n, data_type_v<T>, red_op);
 }
 
 //////////////////////////////////////////////////////////////////////////////////

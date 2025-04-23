@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Tuple
 
 import torch
 
+from lmdeploy.pytorch.backends.selector import get_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.pytorch.model_inputs import StepContext
 from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMeta
@@ -117,6 +118,7 @@ class CUDAGraphRunner(GraphRunner):
 
         self.graph_pool_handle = torch.cuda.graph_pool_handle()
         self._runner_map: Dict[Any, CUDASingleGraphRunner] = dict()
+        self.has_try_compile_model: bool = False
 
     def check_enable_graph(self):
         """check enable graph."""
@@ -125,17 +127,34 @@ class CUDAGraphRunner(GraphRunner):
 
         return getattr(self.model, 'support_cuda_graph', _false)
 
+    def _try_compile_model_once(self):
+        if self.has_try_compile_model:
+            return
+
+        if hasattr(self.model, 'compile_model'):
+            method = getattr(self.model, 'compile_model')
+            method()
+
+        self.has_try_compile_model = True
+
     def get_graph_key(self, input_ids: torch.Tensor, position_ids: torch.Tensor, past_key_values: List,
                       attn_metadata: Any, inputs_embeds: torch.Tensor, **kwargs):
         """get graph key."""
         context = self.ctx_mgr.current_context()
         is_decoding = context.is_decoding
         num_tokens = input_ids.numel()
-        new_num_tokens = next_power_of_2(num_tokens)
+        meta = self.get_meta()
+        if meta.padding_batch_size is None:
+            new_num_tokens = next_power_of_2(num_tokens)
+        else:
+            new_num_tokens = next_power_of_2(meta.padding_batch_size)
         return (new_num_tokens, is_decoding)
 
     def __call__(self, **kwargs):
         """call."""
+        if not self.backend_config.eager_mode and get_backend().get_name() == 'cuda':
+            self._try_compile_model_once()
+
         enable_graph = self.enable_graph(**kwargs)
 
         if not enable_graph:
@@ -176,3 +195,16 @@ class CUDAGraphRunner(GraphRunner):
     def reset(self):
         """remove all graphs to prevent hanging on exit."""
         self._runner_map.clear()
+
+    def update_inputs(self, inputs):
+        """update inputs."""
+        if self.backend_config.eager_mode:
+            return inputs
+        is_decoding = inputs.is_decoding
+        dp_meta = inputs.dp_meta
+        if is_decoding and dp_meta is not None:
+            meta = self.get_meta()
+            padding_batch_size = meta.padding_batch_size
+            tp_size = next_power_of_2(padding_batch_size)
+            dp_meta.tp_sizes = [tp_size] * len(dp_meta.tp_sizes)
+        return inputs

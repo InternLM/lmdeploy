@@ -165,9 +165,8 @@ class SubCliServe:
         quant_policy = ArgumentHelper.quant_policy(pt_group)
         dp_act = ArgumentHelper.dp(pt_group)
         ArgumentHelper.dp_rank(pt_group)
-        # multi-node serving args
-        ArgumentHelper.node_rank(parser)
-        ArgumentHelper.num_nodes(parser)
+        ArgumentHelper.ep(pt_group)
+        ArgumentHelper.enable_microbatch(pt_group)
 
         # turbomind args
         tb_group = parser.add_argument_group('TurboMind engine arguments')
@@ -187,6 +186,8 @@ class SubCliServe:
         ArgumentHelper.num_tokens_per_iter(tb_group)
         ArgumentHelper.max_prefill_iters(tb_group)
         ArgumentHelper.communicator(tb_group)
+        ArgumentHelper.num_nodes(tb_group)
+        ArgumentHelper.node_rank(tb_group)
         ArgumentHelper.ngpus_per_node(tb_group)
 
         # vlm args
@@ -301,6 +302,7 @@ class SubCliServe:
                                                  tp=args.tp,
                                                  dp=args.dp,
                                                  dp_rank=args.dp_rank,
+                                                 ep=args.ep,
                                                  max_batch_size=max_batch_size,
                                                  cache_max_entry_count=args.cache_max_entry_count,
                                                  block_size=args.cache_block_seq_len,
@@ -310,7 +312,8 @@ class SubCliServe:
                                                  device_type=args.device,
                                                  quant_policy=args.quant_policy,
                                                  eager_mode=args.eager_mode,
-                                                 max_prefill_token_num=args.max_prefill_token_num)
+                                                 max_prefill_token_num=args.max_prefill_token_num,
+                                                 enable_microbatch=args.enable_microbatch)
         else:
             from lmdeploy.messages import TurbomindEngineConfig
             backend_config = TurbomindEngineConfig(dtype=args.dtype,
