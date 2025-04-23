@@ -588,6 +588,13 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
             self.use_deep_gemm = False
             logger.warning('For higher performance, please install DeepGEMM https://github.com/deepseek-ai/DeepGEMM')
 
+        try:
+            from dlblas.layers.moe.ep_moe import build_deepep_moe
+            self.use_dlblas = True
+        except ImportError:
+            self.use_dlblas = False
+            logger.warning('For higher performance, please install dlBLAS https://github.com/DeepLink-org/dlBLAS')
+
     def forward(self,
                 hidden_states: torch.Tensor,
                 topk_weights: torch.Tensor,
@@ -610,7 +617,10 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
         return _renormalize(topk_weights, self.renormalize)
 
     def fusedmoe_build(self, low_latency_mode: bool = False):
-        if low_latency_mode:
+        if self.use_dlblas:
+            return build_deepep_moe(low_latency_mode, self.ep_size, self.ep_group, self.num_experts, self.hidden_dim, self.block_size,
+                                      self.out_dtype)
+        elif low_latency_mode:
             return FusedMoELowLatency(self.ep_size, self.ep_group, self.num_experts, self.hidden_dim, self.block_size,
                                       self.out_dtype)
         else:
