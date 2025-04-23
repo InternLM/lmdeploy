@@ -12,6 +12,10 @@ from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 from ..backends import OpType, get_backend
 from .utils import div_up
 
+import os
+enable_eplb = os.environ.get('EPLB_ENABLED', '0') == '1'
+from collections import defaultdict
+
 
 class MoeType(Enum):
     """batch ecex type."""
@@ -73,10 +77,15 @@ class LinearWeights(nn.Module):
         self.half_out = out_features // 2
 
         if self.ep:
-            self.expert_map = dict((eid, idx) for idx, eid in enumerate(expert_list))
-            self.weight.weight_loader = self.weight_loader_ep
+            if enable_eplb:
+                self.expert_map = defaultdict(list)
+                for idx, eid in enumerate(expert_list):
+                    self.expert_map[eid].append(idx)
+            else:
+                self.expert_map = dict((eid, idx) for idx, eid in enumerate(expert_list))
+            self.scale.weight_loader = self.weight_loader_scale_ep
         else:
-            self.weight.weight_loader = self.weight_loader_tp
+            self.scale.weight_loader = self.weight_loader_scale_tp
 
     def update_weight(self, weight: torch.Tensor):
         """update weight."""
@@ -110,16 +119,49 @@ class LinearWeights(nn.Module):
             return
 
         expert_map = self.expert_map
-        param_id = expert_map[expert_id]
-        if shard_id == 'gate':
-            param_data = param.data[param_id, :self.half_out]
-        elif shard_id == 'up':
-            param_data = param.data[param_id, self.half_out:]
-        elif shard_id == 'down':
-            param_data = param.data[param_id]
+        if not enable_eplb:
+            param_id = expert_map[expert_id]
+            if shard_id == 'gate':
+                param_data = param.data[param_id, :self.half_out]
+            elif shard_id == 'up':
+                param_data = param.data[param_id, self.half_out:]
+            elif shard_id == 'down':
+                param_data = param.data[param_id]
+            else:
+                raise RuntimeError(f'Unknown shard_id: {shard_id}')
+            param_data.copy_(loaded_weight)
         else:
-            raise RuntimeError(f'Unknown shard_id: {shard_id}')
-        param_data.copy_(loaded_weight)
+            param_ids = expert_map[expert_id]
+            for param_id in param_ids:
+                if param.data.dtype == torch.float8_e4m3fn:
+                    # 临时转为 float16 做索引
+                    temp_param = param.data.to(torch.float16)
+                    
+                    if shard_id == 'gate':
+                        param_data = temp_param[param_id, :self.half_out]
+                    elif shard_id == 'up':
+                        param_data = temp_param[param_id, self.half_out:]
+                    elif shard_id == 'down':
+                        param_data = temp_param[param_id]
+                    else:
+                        raise RuntimeError(f'Unknown shard_id: {shard_id}')
+                    
+                    # 将 loaded_weight 也转成 float16
+                    weight_to_copy = loaded_weight.to(torch.float16)
+                    param_data.copy_(weight_to_copy)
+
+                    # 再写回原始 param.data（转换回 float8）
+                    param.data.copy_(temp_param.to(torch.float8_e4m3fn))
+                else:
+                    if shard_id == 'gate':
+                        param_data = param.data[param_id, :self.half_out]
+                    elif shard_id == 'up':
+                        param_data = param.data[param_id, self.half_out:]
+                    elif shard_id == 'down':
+                        param_data = param.data[param_id]
+                    else:
+                        raise RuntimeError(f'Unknown shard_id: {shard_id}')
+                    param_data.copy_(loaded_weight.to(param_data.dtype))
 
 
 def _gather_input(x: torch.Tensor, tp_sizes: List[int]):
@@ -428,7 +470,12 @@ class LinearWeightsBlockedF8(LinearWeights):
         self.register_parameter('scale', scale)
 
         if self.ep:
-            self.expert_map = dict((eid, idx) for idx, eid in enumerate(expert_list))
+            if enable_eplb:
+                self.expert_map = defaultdict(list)
+                for idx, eid in enumerate(expert_list):
+                    self.expert_map[eid].append(idx)
+            else:
+                self.expert_map = dict((eid, idx) for idx, eid in enumerate(expert_list))
             self.scale.weight_loader = self.weight_loader_scale_ep
         else:
             self.scale.weight_loader = self.weight_loader_scale_tp
@@ -445,9 +492,14 @@ class LinearWeightsBlockedF8(LinearWeights):
                                shard_id: str):
         expert_list = self.expert_list
         if expert_id not in expert_list:
-            return
-        expert_id = self.expert_map[expert_id]
-        self.weight_loader_scale_tp(param, loaded_weight, expert_id, shard_id)
+            return   
+        if not enable_eplb:
+            expert_id = self.expert_map[expert_id]
+            self.weight_loader_scale_tp(param, loaded_weight, expert_id, shard_id)
+        else:
+            expert_ids = self.expert_map[expert_id]
+            for expert_id in expert_ids:
+                self.weight_loader_scale_tp(param, loaded_weight, expert_id, shard_id)
 
     def weight_loader_scale_tp(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, expert_id: int,
                                shard_id: str):

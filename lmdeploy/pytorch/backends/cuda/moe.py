@@ -20,6 +20,8 @@ from lmdeploy.utils import get_logger
 from ..moe import (FusedMoEBlockedF8Builder, FusedMoEBlockedF8Impl, FusedMoEBuilder, FusedMoEImpl, FusedMoEW8A8Builder,
                    FusedMoEW8A8Impl)
 
+from typing import List, Tuple
+
 logger = get_logger('lmdeploy')
 
 
