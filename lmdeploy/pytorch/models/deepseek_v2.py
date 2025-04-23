@@ -21,6 +21,8 @@ from lmdeploy.pytorch.nn.rotary_embedding import YarnParameters
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
 from .utils.cudagraph import CudaGraphMixin
+import os
+enable_eplb = os.environ.get('EPLB_ENABLED', '0') == '1'
 
 
 # microbatch
@@ -655,7 +657,10 @@ class DeepseekV2MoE(nn.Module):
         quantization_config = getattr(config, 'quantization_config', None)
         self.hidden_dim = config.hidden_size
         self.ffn_dim = config.moe_intermediate_size
-        self.num_experts = config.n_routed_experts
+        if enable_eplb:
+            self.num_experts = config.n_routed_experts + 32
+        else:
+            self.num_experts = config.n_routed_experts
         self.top_k = config.num_experts_per_tok
         self.norm_topk_prob = config.norm_topk_prob
         self.routed_scaling_factor = config.routed_scaling_factor
