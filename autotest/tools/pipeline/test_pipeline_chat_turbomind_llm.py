@@ -29,8 +29,6 @@ def test_pipeline_chat_tp2(config, common_case_config, model, communicator, work
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    if ('MiniCPM-V-2_6' in model or 'InternVL2_5-26B' in model) and communicator == 'native':
-        return
     run_pipeline_chat_test(config, common_case_config, model, 'turbomind', worker_id, {'communicator': communicator})
 
 
@@ -75,9 +73,6 @@ def test_pipeline_chat_kvint4_tp2(config, common_case_config, model, communicato
     if 'gw' in worker_id:
         os.environ['CUDA_VISIBLE_DEVICES'] = get_cuda_id_by_workerid(worker_id, tp_num=2)
         os.environ['MASTER_PORT'] = str(int(worker_id.replace('gw', '')) + 29500)
-    if ('MiniCPM-V-2_6' in model or 'InternVL2_5-26B' in model or 'InternVL2-26B' in model
-            or 'InternVL3-38B' in model) and communicator == 'native':
-        return
     run_pipeline_chat_test(config, common_case_config, model, 'turbomind-kvint', worker_id, {
         'quant_policy': 4,
         'communicator': communicator
