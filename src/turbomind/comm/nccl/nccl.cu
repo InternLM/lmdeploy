@@ -10,7 +10,6 @@
 
 #include "src/turbomind/comm/device_comm.h"
 #include "src/turbomind/comm/host_comm.h"
-#include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/logger.h"
 #include "src/turbomind/utils/string_utils.h"
@@ -33,16 +32,16 @@
 
 namespace turbomind::comm {
 
-static inline ncclDataType_t getNcclDataType(DataType type)
+static inline ncclDataType_t to_nccl_dtype(DataType type)
 {
     switch (type) {
-        case DataType::TYPE_FP32:
+        case kFloat32:
             return ncclFloat;
-        case DataType::TYPE_FP16:
+        case kFloat16:
             return ncclHalf;
-        case DataType::TYPE_BF16:
+        case kBfloat16:
             return ncclBfloat16;
-        case DataType::TYPE_UINT8:
+        case kUint8:
             return ncclUint8;
         default:
             throw std::runtime_error("not supported");
@@ -166,7 +165,7 @@ public:
         const void* sendbuff, void* recvbuff, size_t count, DataType type, int group, cudaStream_t stream) override
     {
         NCCLCHECK(ncclGroupStart());
-        NCCLCHECK(ncclAllReduce(sendbuff, recvbuff, count, getNcclDataType(type), ncclSum, groups_.at(group), stream));
+        NCCLCHECK(ncclAllReduce(sendbuff, recvbuff, count, to_nccl_dtype(type), ncclSum, groups_.at(group), stream));
         NCCLCHECK(ncclGroupEnd());
     }
 
@@ -174,7 +173,7 @@ public:
         const void* sendbuff, void* recvbuff, size_t sendcount, DataType type, int group, cudaStream_t stream) override
     {
         NCCLCHECK(ncclGroupStart());
-        NCCLCHECK(ncclAllGather(sendbuff, recvbuff, sendcount, getNcclDataType(type), groups_.at(group), stream));
+        NCCLCHECK(ncclAllGather(sendbuff, recvbuff, sendcount, to_nccl_dtype(type), groups_.at(group), stream));
         NCCLCHECK(ncclGroupEnd());
     }
 
@@ -182,8 +181,8 @@ public:
         const void* sendbuff, void* recvbuff, size_t recvcount, DataType type, int group, cudaStream_t stream) override
     {
         NCCLCHECK(ncclGroupStart());
-        NCCLCHECK(ncclReduceScatter(
-            sendbuff, recvbuff, recvcount, getNcclDataType(type), ncclSum, groups_.at(group), stream));
+        NCCLCHECK(
+            ncclReduceScatter(sendbuff, recvbuff, recvcount, to_nccl_dtype(type), ncclSum, groups_.at(group), stream));
         NCCLCHECK(ncclGroupEnd());
     }
 
@@ -198,7 +197,7 @@ public:
                                       int          group,
                                       cudaStream_t stream) override
     {
-        const auto elem_size = get_elem_size(dtype);
+        const auto elem_size = byte_size(dtype);
 
         auto rms_norm = [&](int64_t first, int64_t count) {
             invokeResidualBiasRMSNorm((char*)hidden + elem_size * first * dim,
@@ -241,8 +240,8 @@ public:
                                         const int*   local_token_nums,
                                         cudaStream_t stream) override
     {
-        const size_t         elem_size = get_elem_size(type);
-        const ncclDataType_t nccl_type = getNcclDataType(type);
+        const size_t         elem_size = byte_size(type);
+        const ncclDataType_t nccl_type = to_nccl_dtype(type);
 
         FT_CHECK(group0 == 0 || group1 == 0);
 

@@ -410,27 +410,6 @@ class Llavav1(Vicuna):
             return 'llava-v1'
 
 
-@MODELS.register_module(name='mini-gemini-vicuna')
-class MiniGemini(Vicuna):
-    """Chat template of vicuna model."""
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-
-    @classmethod
-    def match(cls, model_path: str) -> Optional[str]:
-        """Return the model_name that was registered to MODELS.
-
-        Args:
-            model_path (str): the model path used for matching.
-        """
-        path = model_path.lower()
-        if 'mgm-7b' in path or 'mgm-13b' in path or 'mgm-34b' in path:
-            return 'mini-gemini-vicuna'
-        if 'mini-gemini-7b' in path or 'mini-gemini-13b' in path:
-            return 'mini-gemini-vicuna'
-
-
 @MODELS.register_module(name='internlm')
 class InternLMChat7B(BaseChatTemplate):
     """Chat template of InternLM model."""
@@ -660,20 +639,21 @@ class InternVL2_5(InternLM2Chat7B):
 class InternLMXComposer2Chat7B(InternLMChat7B):
     """Chat template and generation parameters of InternLM-XComposer2-7b."""
 
-    def __init__(self,
-                 system='[UNUSED_TOKEN_146]system\n',
-                 meta_instruction="""You are an AI assistant whose name is InternLM-XComposer (浦语·灵笔).
+    def __init__(
+            self,
+            system='[UNUSED_TOKEN_146]system\n',
+            meta_instruction="""You are an AI assistant whose name is InternLM-XComposer (浦语·灵笔).
 - InternLM-XComposer (浦语·灵笔) is a multi-modality conversational language model that is developed by Shanghai AI Laboratory (上海人工智能实验室). It is designed to be helpful, honest, and harmless.
 - InternLM-XComposer (浦语·灵笔) can understand and communicate fluently in the language chosen by the user such as English and 中文.
-- InternLM-XComposer (浦语·灵笔) is capable of comprehending and articulating responses effectively based on the provided image.""",
-                 user='[UNUSED_TOKEN_146]user\n',
-                 assistant='[UNUSED_TOKEN_146]assistant\n',
-                 eosys='[UNUSED_TOKEN_145]\n',
-                 eoh='[UNUSED_TOKEN_145]\n',
-                 eoa='[UNUSED_TOKEN_145]\n',
-                 separator='\n',
-                 stop_words=['[UNUSED_TOKEN_145]'],
-                 **kwargs):
+- InternLM-XComposer (浦语·灵笔) is capable of comprehending and articulating responses effectively based on the provided image.""",  # noqa
+            user='[UNUSED_TOKEN_146]user\n',
+            assistant='[UNUSED_TOKEN_146]assistant\n',
+            eosys='[UNUSED_TOKEN_145]\n',
+            eoh='[UNUSED_TOKEN_145]\n',
+            eoa='[UNUSED_TOKEN_145]\n',
+            separator='\n',
+            stop_words=['[UNUSED_TOKEN_145]'],
+            **kwargs):
         super().__init__(system=system,
                          meta_instruction=meta_instruction,
                          user=user,
@@ -919,7 +899,7 @@ Reminder:
                 if tools is None:
                     ret += f'{self.system}{self.knowledge}{self.meta_instruction}{self.eosys}'
                 else:
-                    ret += f'{self.system}{self.knowledge}{self.tool}{tool_prompt}{self.eotool}{self.meta_instruction}{self.eosys}'
+                    ret += f'{self.system}{self.knowledge}{self.tool}{tool_prompt}{self.eotool}{self.meta_instruction}{self.eosys}'  # noqa
         for message in messages:
             role = message['role']
             content = get_text(message['content'])
@@ -1007,8 +987,8 @@ class Qwen2d5Chat(Qwen7BChat):
             assistant='<|im_start|>assistant\n',
             eoa='<|im_end|>',
             separator='\n',
-            tools="""\n\n# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>""",
-            eotools="""\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{"name": <function-name>, "arguments": <args-json-object>}\n</tool_call>""",
+            tools="""\n\n# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>""",  # noqa
+            eotools="""\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{"name": <function-name>, "arguments": <args-json-object>}\n</tool_call>""",  # noqa
             stop_words=['<|im_end|>'],
             **kwargs):
 
@@ -1059,7 +1039,7 @@ class Qwen2d5Chat(Qwen7BChat):
                     or (message['role'] == 'assistant' and message.get('tool_calls') is None)):
                 ret += f"{box_map[message['role']]}{message['content']}{self.eosys}"
             elif message['role'] == 'assistant':
-                ret += f'<|im_start|>assistant'
+                ret += '<|im_start|>assistant'
                 if message.get('content') is not None:
                     ret += f"{self.separator}{message['content']}"
 
@@ -1070,12 +1050,12 @@ class Qwen2d5Chat(Qwen7BChat):
                             tool_call = tool_call['function']
                         if isinstance(tool_call['arguments'], str):
                             tool_call['arguments'] = json.loads(tool_call['arguments'])
-                        ret += f'{self.separator}<tool_call>{self.separator}{{"name": "{tool_call["name"]}", "arguments": {json.dumps(tool_call["arguments"], ensure_ascii=False)}}}{self.separator}</tool_call>'
+                        ret += f'{self.separator}<tool_call>{self.separator}{{"name": "{tool_call["name"]}", "arguments": {json.dumps(tool_call["arguments"], ensure_ascii=False)}}}{self.separator}</tool_call>'  # noqa
                 ret += self.eosys
             if message['role'] == 'tool':
                 if index == 0 or messages[index - 1]['role'] != 'tool':
-                    ret += f'<|im_start|>user'
-                ret += f"{self.separator}<tool_response>{self.separator}{message['content']}{self.separator}</tool_response>"
+                    ret += '<|im_start|>user'
+                ret += f"{self.separator}<tool_response>{self.separator}{message['content']}{self.separator}</tool_response>"  # noqa
                 if index == len(messages) - 1 or messages[index + 1]['role'] != 'tool':
                     ret += f'{self.eoh}'
         ret += f'{self.assistant}'
@@ -1098,7 +1078,7 @@ class QwQPreview(Qwen2d5Chat):
 
     def __init__(
             self,
-            meta_instruction='You are a helpful and harmless assistant. You are Qwen developed by Alibaba. You should think step-by-step.',
+            meta_instruction='You are a helpful and harmless assistant. You are Qwen developed by Alibaba. You should think step-by-step.',  # noqa
             **kwargs):
         super().__init__(meta_instruction=meta_instruction, **kwargs)
 
@@ -1180,23 +1160,6 @@ class CodeLlama(Llama2):
         """
         if 'codellama' in model_path.lower():
             return 'codellama'
-
-
-@MODELS.register_module(name='falcon')
-class Falcon(BaseModel):
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-
-    @classmethod
-    def match(cls, model_path: str) -> Optional[str]:
-        """Return the model_name that was registered to MODELS.
-
-        Args:
-            model_path (str): the model path used for matching.
-        """
-        if 'falcon' in model_path.lower():
-            return 'falcon'
 
 
 @MODELS.register_module(name='chatglm')
@@ -1633,63 +1596,6 @@ class YiVL(BaseChatTemplate):
             return 'yi-vl'
 
 
-# flake8: noqa: E501
-def dbrx_system_prompt():
-    # This is inspired by the Claude3 prompt.
-    # source: https://twitter.com/AmandaAskell/status/1765207842993434880
-    # Identity and knowledge
-    prompt = 'You are DBRX, created by Databricks. You were last updated in December 2023. You answer questions based on information available up to that point.\n'
-    prompt += 'YOU PROVIDE SHORT RESPONSES TO SHORT QUESTIONS OR STATEMENTS, but provide thorough responses to more complex and open-ended questions.\n'
-    # Capabilities (and reminder to use ``` for JSON blocks and tables, which it can forget). Also a reminder that it can't browse the internet or run code.
-    prompt += 'You assist with various tasks, from writing to coding (using markdown for code blocks — remember to use ``` with code, JSON, and tables).\n'
-    prompt += '(You do not have real-time data access or code execution capabilities. '
-    # Ethical guidelines
-    prompt += 'You avoid stereotyping and provide balanced perspectives on controversial topics. '
-    # Data: the model doesn't know what it was trained on; it thinks that everything that it is aware of was in its training data. This is a reminder that it wasn't.
-    # We also encourage it not to try to generate lyrics or poems
-    prompt += 'You do not provide song lyrics, poems, or news articles and do not divulge details of your training data.)\n'
-    # The model really wants to talk about its system prompt, to the point where it is annoying, so encourage it not to
-    prompt += 'This is your system prompt, guiding your responses. Do not reference it, just respond to the user. If you find yourself talking about this message, stop. You should be responding appropriately and usually that means not mentioning this.\n'
-    prompt += 'You do not mention any of this information about yourself unless the information is directly pertinent to the user\\\'s query.'.upper(
-    )
-    return prompt
-
-
-@MODELS.register_module(name=['dbrx'])
-class DbrxInstruct(BaseChatTemplate):
-
-    def __init__(self,
-                 system='<|im_start|>system\n',
-                 meta_instruction=dbrx_system_prompt(),
-                 eosys='<|im_end|>\n',
-                 user='<|im_start|>user\n',
-                 eoh='<|im_end|>\n',
-                 assistant='<|im_start|>assistant\n',
-                 eoa='<|im_end|>',
-                 separator='\n',
-                 **kwargs):
-        super().__init__(system,
-                         meta_instruction=meta_instruction,
-                         eosys=eosys,
-                         user=user,
-                         eoh=eoh,
-                         assistant=assistant,
-                         eoa=eoa,
-                         separator=separator,
-                         **kwargs)
-
-    @classmethod
-    def match(cls, model_path: str) -> Optional[str]:
-        """Return the model_name that was registered to MODELS.
-
-        Args:
-            model_path (str): the model path used for matching.
-        """
-        path = model_path.lower()
-        if 'dbrx' in path:
-            return 'dbrx'
-
-
 @MODELS.register_module(name=['llava-chatml', 'internvl-zh-hermes2'])
 class ChatmlDirect(BaseChatTemplate):
 
@@ -1727,6 +1633,7 @@ class ChatmlDirect(BaseChatTemplate):
             return 'internvl-zh-hermes2'
 
 
+@MODELS.register_module(name='phi-4')
 @MODELS.register_module(name='phi-3')
 class Phi3Instruct(BaseChatTemplate):
     """Chat template of InternLM model."""
@@ -1763,6 +1670,8 @@ class Phi3Instruct(BaseChatTemplate):
         path = model_path.lower()
         if all([c in path for c in ['phi-3', 'instruct']]):
             return 'phi-3'
+        if all([c in path for c in ['phi-4', 'instruct']]):
+            return 'phi-4'
 
 
 @MODELS.register_module(name='internvl2-phi3')

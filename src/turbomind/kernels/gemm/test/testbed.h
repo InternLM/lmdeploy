@@ -2,6 +2,20 @@
 
 #pragma once
 
+#include <algorithm>
+#include <climits>
+#include <cstdlib>
+#include <fstream>
+#include <iomanip>
+#include <iterator>
+#include <numeric>
+#include <random>
+#include <type_traits>
+
+#include <thrust/universal_vector.h>
+
+#include "src/turbomind/core/core.h"
+
 #include "src/turbomind/kernels/core/array.h"
 #include "src/turbomind/kernels/core/data_type.h"
 #include "src/turbomind/kernels/core/math.h"
@@ -16,16 +30,6 @@
 #include "src/turbomind/kernels/gemm/test/test_utils.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gemm/utils.h"
-#include <algorithm>
-#include <climits>
-#include <cstdlib>
-#include <fstream>
-#include <iomanip>
-#include <iterator>
-#include <numeric>
-#include <random>
-#include <thrust/universal_vector.h>
-#include <type_traits>
 
 namespace turbomind::gemm {
 
@@ -110,9 +114,9 @@ public:
         b_.resize(n * k * E);
         c_.resize(m * n);
 
-        a_desc_ = MatrixLayout{get_data_type_v<Tc>, order_a, m, k, mk2cs<order_a>(m, k).x, 0};
-        b_desc_ = MatrixLayout{get_data_type_v<Tc>, order_b, k, n, _kn2cs<order_b>(k, n).x, 0};
-        c_desc_ = MatrixLayout{get_data_type_v<Tc>, order_c, m, n, mk2cs<order_c>(m, n).x, 0};
+        a_desc_ = MatrixLayout{data_type_v<Tc>, order_a, m, k, mk2cs<order_a>(m, k).x, 0};
+        b_desc_ = MatrixLayout{data_type_v<Tc>, order_b, k, n, _kn2cs<order_b>(k, n).x, 0};
+        c_desc_ = MatrixLayout{data_type_v<Tc>, order_c, m, n, mk2cs<order_c>(m, n).x, 0};
 
         c_f_.resize(c_.size());
         c_ref_.resize(c_.size());
@@ -151,7 +155,7 @@ public:
         if constexpr (is_quant_a) {
             static_assert(pack_a && pack_u);
             Quantize<Ta>(a_, m, k, order_a, g, a_f_, a_q_, u_, stream);
-            u_pack_desc_ = u_desc_ = {DataType::U32, kColMajor, m, ceil_div(k, g), m};
+            u_pack_desc_ = u_desc_ = {kUint32, kColMajor, m, ceil_div(k, g), m};
             u_pack_desc_.pack      = pack_u;
             u_pack_.resize(u_.size());
             CHECK(!Convert(u_.data().get(), u_desc_, u_pack_.data().get(), u_pack_desc_, stream_));
@@ -172,7 +176,7 @@ public:
             Quantize<Tb>(b_, n * E, k, _order_b, g, b_f_, b_q_, v_, stream);
             quant_b_ = {QuantType::kDefault, g};
 
-            v_pack_desc_ = v_desc_ = {DataType::U32, kRowMajor, ceil_div(k, g), n, int(n * E)};
+            v_pack_desc_ = v_desc_ = {kUint32, kRowMajor, ceil_div(k, g), n, int(n * E)};
             v_pack_desc_.pack      = pack_v;
             v_pack_.resize(v_.size());
             auto v_src_data = (uint32_t*)v_.data().get();
@@ -194,7 +198,7 @@ public:
         }
 
         if constexpr (pack_a) {
-            a_pack_desc_.type = get_data_type_v<Ta>;
+            a_pack_desc_.type = data_type_v<Ta>;
             a_pack_desc_.pack = pack_a;
             const auto a_data = is_quant_a ? (void*)a_q_.data().get() : (void*)a_.data().get();
             CHECK(!Convert(a_data, a_desc_, a_pack_.data().get(), a_pack_desc_, stream_));
@@ -206,7 +210,7 @@ public:
 
         if constexpr (pack_b) {
             // CHECK(experts == 0);
-            b_pack_desc_.type = get_data_type_v<Tb>;
+            b_pack_desc_.type = data_type_v<Tb>;
             b_pack_desc_.pack = pack_b;
             // clang-format off
             auto b_src_data = [&] {
@@ -367,8 +371,11 @@ public:
         c_e_ref_.resize(c_e_.size());
 
         for (int i = 0; i < 10; ++i) {
-            dispatchMoeGather(
-                a_e_.data().get(), a_f_.data().get(), moe_f2n_.data().get(), batch_size_, top_e, input_dims_, stream_);
+            invokeMoeDispatch(Tensor{a_e_.data().get(), {top_e * batch_size_, input_dims_}, kDEVICE},
+                              Tensor{a_f_.data().get(), {batch_size_, input_dims_}, kDEVICE},
+                              moe_f2n_.data().get(),
+                              top_e,
+                              stream_);
         }
 
         a_pack_desc_.num = b_pack_desc_.num = c_desc_.num = experts_;
@@ -510,27 +517,23 @@ public:
             Compare(c_.data().get(), c_ref_.data().get(), dims, dims, bsz, 0);
         }
         else {
-            invokeMoeReduce(c_.data().get(),
-                            c_e_.data().get(),
-                            moe_scales_.data().get(),
-                            moe_en2f_.data().get(),
-                            nullptr,
-                            batch_size_,
-                            expert_ids_.size() / batch_size_,
-                            output_dims_,
-                            0.f,
-                            stream_);
+            invokeMoeCombine(Tensor{c_.data().get(), {batch_size_, output_dims_}, kDEVICE},
+                             Tensor{c_e_.data().get(), {(int)expert_ids_.size(), output_dims_}, kDEVICE},
+                             moe_scales_.data().get(),
+                             moe_en2f_.data().get(),
+                             nullptr,
+                             expert_ids_.size() / batch_size_,
+                             0.f,
+                             stream_);
 
-            invokeMoeReduce(c_ref_.data().get(),
-                            c_e_ref_.data().get(),
-                            moe_scales_.data().get(),
-                            moe_en2f_.data().get(),
-                            nullptr,
-                            batch_size_,
-                            expert_ids_.size() / batch_size_,
-                            output_dims_,
-                            0.f,
-                            stream_);
+            invokeMoeCombine(Tensor{c_ref_.data().get(), {batch_size_, output_dims_}, kDEVICE},
+                             Tensor{c_e_ref_.data().get(), {(int)expert_ids_.size(), output_dims_}, kDEVICE},
+                             moe_scales_.data().get(),
+                             moe_en2f_.data().get(),
+                             nullptr,
+                             expert_ids_.size() / batch_size_,
+                             0.f,
+                             stream_);
 
             cudaDeviceSynchronize();
 
@@ -586,13 +589,14 @@ public:
     int64_t get_global_memory_reads()
     {
         if (experts_ == 0) {
-            return get_size(a_pack_desc_) + get_size(b_pack_desc_) + get_size(u_pack_desc_) + get_size(v_pack_desc_);
+            return byte_size(a_pack_desc_) + byte_size(b_pack_desc_) + byte_size(u_pack_desc_)
+                   + byte_size(v_pack_desc_);
         }
         else {
-            size_t    size = get_size(a_pack_desc_) + get_size(u_pack_desc_);
+            size_t    size = byte_size(a_pack_desc_) + byte_size(u_pack_desc_);
             const int nnz =
                 std::accumulate(moe_cnt_.begin(), moe_cnt_.end(), 0, [](auto a, auto x) { return a + (x > 0); });
-            size += nnz * (get_size(b_pack_desc_) + get_size(v_pack_desc_));
+            size += nnz * (byte_size(b_pack_desc_) + byte_size(v_pack_desc_));
             return size;
         }
     }
@@ -600,13 +604,13 @@ public:
     int64_t get_ref_global_memory_reads()
     {
         if (experts_ == 0) {
-            return get_size(a_desc_) + get_size(b_desc_);
+            return byte_size(a_desc_) + byte_size(b_desc_);
         }
         else {
-            size_t    size = get_size(a_desc_);
+            size_t    size = byte_size(a_desc_);
             const int nnz =
                 std::accumulate(moe_cnt_.begin(), moe_cnt_.end(), 0, [](auto a, auto x) { return a + (x > 0); });
-            size += nnz * get_size(b_desc_);
+            size += nnz * byte_size(b_desc_);
             return size;
         }
     }

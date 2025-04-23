@@ -319,7 +319,8 @@ class Misc(Module):
         if output_weight is not None:
             tp = self.model.attn_tp_size
             output_weight = pad_weight(output_weight, tp=tp)
-            self.model.save_split(output_weight, 'output.weight', split_dim=0, split_num=tp)
+            # transpose
+            self.model.save_split(output_weight.t(), 'output.weight', split_dim=1, split_num=tp)
 
 
 class Transformer:

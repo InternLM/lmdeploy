@@ -39,7 +39,6 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |             ChemVLM              |     8B - 26B     | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |       MiniCPM-Llama3-V-2_5       |        -         | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
 |          MiniCPM-V-2_6           |        -         | MLLM |    Yes    |   Yes   |   Yes   |  Yes  |
-|         MiniGeminiLlama          |        7B        | MLLM |    Yes    |    -    |    -    |  Yes  |
 |               GLM4               |        9B        | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |            CodeGeeX4             |        9B        | LLM  |    Yes    |   Yes   |   Yes   |   -   |
 |              Molmo               |     7B-D,72B     | MLLM |    Yes    |   Yes   |   Yes   |  No   |
@@ -69,7 +68,6 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |           Baichuan2            |       7B        | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  No   |
 |           Baichuan2            |       13B       | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 |            ChatGLM2            |       6B        | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
-|             Falcon             |    7B - 180B    | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 |               YI               |    6B - 34B     | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |            Mistral             |       7B        | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |            Mixtral             |   8x7B, 8x22B   | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
@@ -87,10 +85,10 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |            MiniCPM3            |       4B        | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 |         MiniCPM-V-2_6          |       8B        | LLM  |    Yes    |   No    |   No    |  No  |  Yes  |
 |             Gemma              |      2B-7B      | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
-|              Dbrx              |      132B       | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 |           StarCoder2           |     3B-15B      | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 |           Phi-3-mini           |      3.8B       | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |          Phi-3-vision          |      4.2B       | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
+|           Phi-4-mini           |      3.8B       | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |          CogVLM-Chat           |       17B       | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
 |          CogVLM2-Chat          |       19B       | MLLM |    Yes    |   Yes   |   Yes   |  -   |   -   |
 | LLaVA(1.5,1.6)<sup>\[2\]</sup> |     7B-34B      | MLLM |    No     |   No    |   No    |  No  |  No   |
@@ -107,6 +105,7 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |          Phi-3.5-mini          |      3.8B       | LLM  |    Yes    |   Yes   |   No    |  -   |   -   |
 |          Phi-3.5-MoE           |     16x3.8B     | LLM  |    Yes    |   Yes   |   No    |  -   |   -   |
 |         Phi-3.5-vision         |      4.2B       | MLLM |    Yes    |   Yes   |   No    |  -   |   -   |
+|           Phi-4-mini           |      3.8B       | LLM  |    Yes    |   Yes   |   No    |  -   |   -   |
 
 ```{note}
 * [1] Currently Mono-InternVL does not support FP16 due to numerical instability. Please use BF16 instead.
