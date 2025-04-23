@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
-from typing import Any, Dict, List, Literal
+from typing import Any, Dict, List, Literal, Optional
 
 import torch
 
@@ -10,6 +10,9 @@ import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.config import ModelConfig
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
+
+from lmdeploy.disagg.messages import MigrationExecutionBatch
+from lmdeploy.disagg.request import MigrationRequest
 
 
 def _broadcast_tensor(value: torch.Tensor, src: int = 0, device: str = 'cuda'):
@@ -151,6 +154,8 @@ class ModelInputs:
     history_cross_length: torch.LongTensor = None
     model_metas: List[Dict[str, Any]] = None
     dp_meta: 'DPMeta' = None
+    migration_inputs: Optional[MigrationExecutionBatch] = None
+    migration_requests: Optional[MigrationRequest] = None
 
     def update(self, input_ids: torch.LongTensor):
         """update input ids."""

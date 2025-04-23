@@ -565,9 +565,9 @@ class Engine:
                 msg = next(iter(sess.sequences.values()))
                 __update_max_new_tokens(msg)
                 scheduler.add_sequence(msg)
-                if migration_request:
-                    self.scheduler._set_message_status(msg, MessageStatus.WAITING_MIGRATION)
-                    self.migration_event.set()
+                # if migration_request:
+                #     self.scheduler._set_message_status(msg, MessageStatus.WAITING_MIGRATION)
+                #     self.migration_event.set()
             else:
                 msg = next(iter(sess.sequences.values()))
                 msg.update_token_ids(
@@ -703,6 +703,8 @@ class Engine:
             cross_length = None
             history_cross_length = None
 
+        migration_inputs = [msg.migration_inputs for msg in messages]
+        migration_reqs = [msg.migration_request for msg in messages]
         return ModelInputs(
             input_ids=input_ids,
             seq_length=seq_length,
@@ -715,6 +717,8 @@ class Engine:
             cross_length=cross_length,
             history_cross_length=history_cross_length,
             model_metas=model_metas,
+            migration_inputs=migration_inputs,
+            migration_requests=migration_reqs,
         )
 
     def update_running(self, running: SeqList, next_token_ids: torch.Tensor, stopped: torch.Tensor,
@@ -1011,7 +1015,7 @@ class Engine:
                 for msg in migration_running:
                     self.free_que.put_nowait(msg.migration_request)
                     self.free_event.set()
-                    
+
                 # generate output
                 outputs: Dict[int, InferOutput] = dict()
                 self.scheduler.lock_running_migration(migration_running)
@@ -1031,7 +1035,7 @@ class Engine:
                     )
                 resp_que.put_nowait(outputs)
                 self.scheduler.unlock_running_migration(migration_running)
-                has_runable_event.set()
+                has_runable_event.event.set()
 
     @torch.inference_mode()
     async def _async_loop_main(
@@ -1049,9 +1053,12 @@ class Engine:
         next_running = None
 
         while True:
+            logger.info("begin loop")
             if next_running is None:
                 await has_runable_event.wait()
+                # scheduler.collect_migration_done()
                 forward_inputs, next_running = await inputs_maker.send_next_inputs()
+            # scheduler.collect_migration_done()
             num_loops = forward_inputs['loop_count']
             running = next_running
             next_running = None
@@ -1059,12 +1066,16 @@ class Engine:
             for idx in range(num_loops):
                 if idx >= num_loops - 1:
                     forward_inputs, next_running = await inputs_maker.prefetch_next_inputs()
+                logger.info("inputs forwarding done")
                 out = await self.executor.get_output_async()
+                logger.info("get_output_async done")
                 if len(out) > 0:
                     step_outputs = self._make_infer_outputs(**out, running=running)
                     resp_que.put_nowait(step_outputs)
+                logger.info("send response done")
             scheduler.unlock_running(running)
             has_runable_event.set()
+            logger.info("end loop")
 
     @staticmethod
     def _add_loop_tasks_done_callback(tasks: List[asyncio.Task]):

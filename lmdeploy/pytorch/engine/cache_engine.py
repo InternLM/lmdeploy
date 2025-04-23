@@ -375,7 +375,7 @@ class CacheEngine:
             blocks_to_migration = migration_exe_req[1]
             remote_layer_stride = self.migration_backend_impl.links[remote_engine_id].remote_engine_config.num_gpu_blocks * assignment_len
             target_offset, source_offset = get_offset(blocks_to_migration, assignment_len, layer_stride, remote_layer_stride)
-
+            
             for i, t in enumerate(self.full_gpu_cache):
                 if t.numel() == 0:
                     continue

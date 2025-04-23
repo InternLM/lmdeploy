@@ -345,7 +345,7 @@ class RayExecutor(ExecutorBase):
     async def _prefetch_outputs(self):
         while True:
             outs = await self.workers[0].get_outputs.remote()
-            logger.debug(f'Receive {len(outs)} outputs from worker[0].')
+            logger.info(f'Receive {len(outs)} outputs from worker[0].')
             for out in outs:
                 # pack pytorch
                 for k, v in out.items():
@@ -357,11 +357,11 @@ class RayExecutor(ExecutorBase):
         try:
             task.result()
         except asyncio.CancelledError:
-            logger.debug(f'{task.get_name()} cancelled.')
+            logger.info(f'{task.get_name()} cancelled.')
         except KeyboardInterrupt:
-            logger.debug(f'{task.get_name()} KeyboardInterrupt.')
+            logger.info(f'{task.get_name()} KeyboardInterrupt.')
         except BaseException:
-            logger.exception(f'{task.get_name()} task failed.')
+            logger.info(f'{task.get_name()} task failed.')
 
     def start(self, forward_event: asyncio.Event):
         """start engine loop."""

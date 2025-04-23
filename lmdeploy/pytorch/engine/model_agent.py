@@ -4,10 +4,15 @@ import functools
 from contextlib import contextmanager
 from typing import Any, Dict
 
+import time
+
 import torch
 import torch.distributed as dist
 
 from lmdeploy.utils import get_logger
+
+from lmdeploy.disagg.config import EngineRole
+from lmdeploy.disagg.messages import MigrationExecutionBatch
 
 from ..backends import get_backend
 from ..config import BackendConfig, CacheConfig, ModelConfig
@@ -124,6 +129,7 @@ class AutoModelAgent:
 
         self.dist_ctx = dist_ctx
         self.device_ctx = device_ctx
+        self.lock = asyncio.Lock()
 
     @contextmanager
     def all_context(self):
@@ -329,6 +335,11 @@ class AutoModelAgent:
 
         return next_token_ids
 
+    async def migrate(self, inputs: MigrationExecutionBatch):
+        async with self.lock:
+            ret = await self.cache_engine.migrate(inputs)
+            return ret
+
     async def _async_step_background(
         self,
         inputs: ModelInputs,
@@ -367,6 +378,8 @@ class AutoModelAgent:
         rank = dist_ctx.rank
         tp = dist_ctx.tp
         dp = dist_ctx.dp
+        tp_cpu_group = dist_ctx.tp_cpu_group
+        # tp_gpu_group = dist_ctx.tp_gpu_group
 
         logger.info(f'<ForwardTask> rank[{rank}]: '
                     f'batch_size={inputs.seq_length.size(0)} '
@@ -374,104 +387,130 @@ class AutoModelAgent:
                     f'is_decoding={inputs.is_decoding}')
 
         is_decoding = inputs.is_decoding
-        eager_mode = self.backend_config.eager_mode
-        if dp > 1:
-            if is_decoding and not eager_mode:
-                batch_size = inputs.seq_length.numel()
-                all_batch_sizes = torch.tensor([0] * dp, device='cuda')
-                lc_handle = dist.all_gather_into_tensor(all_batch_sizes,
-                                                        all_batch_sizes.new_tensor(batch_size),
-                                                        async_op=True)
-            else:
-                all_sync_flags = torch.tensor([False] * dp, device='cuda')
-                lc_handle = dist.all_gather_into_tensor(all_sync_flags,
-                                                        torch.tensor(sync_long_context, device='cuda'),
-                                                        async_op=True)
-
-        non_blocking = True
-        inputs = _try_to_cuda(inputs, non_blocking=non_blocking)
-        all_ids = _try_to_cuda(all_ids, non_blocking=non_blocking)
-        guided_input_ids = _try_to_cuda(guided_input_ids, non_blocking=non_blocking)
-        sampling_inputs = _try_to_cuda(sampling_inputs, non_blocking=non_blocking)
-        num_appendable_ids = _try_to_cuda(num_appendable_ids, non_blocking=non_blocking)
-        num_ignore_eos = _try_to_cuda(num_ignore_eos, non_blocking=non_blocking)
-
-        self.stream.synchronize()
-
-        if dp > 1:
-            if is_decoding and not eager_mode:
-                await __await_distworker(lc_handle)
-                padding_batch_size = all_batch_sizes.cpu().max().item()
-                meta = self.patched_model.get_meta()
-                meta.padding_batch_size = padding_batch_size
-                logger.debug(f'padding_batch_size={padding_batch_size}')
-            else:
-                await __await_distworker(lc_handle)
-                sync_long_context = all_sync_flags.any()
-                logger.debug(f'sync_long_context={sync_long_context}')
-            inputs.build_dp_meta()
-            inputs = self.patched_model.update_inputs(inputs)
-        else:
-            sync_long_context = False
-
-        need_output = dp > 1 or rank % tp == 0
-
-        for idx in range(loop_count):
-            # inference
-            logger.debug(f'<ForwardTask> rank[{rank}]: model forward [{idx}].')
-            output = await self._async_model_forward(
-                inputs,
-                swap_in_map=swap_in_map,
-                swap_out_map=swap_out_map,
-                return_logits=return_logits,
-                sync_long_context=sync_long_context,
-            )
-            logits = output['logits']
-            logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
-
-            if is_dummy:
-                self._out_que.put_nowait(None)
-                continue
-
-            need_broadcast_next = (dp == 1 and tp > 1 and idx < loop_count - 1)
-            if need_output:
-                # sampling
-                logger.debug(f'<ForwardTask> rank[{rank}]: Sampling [{idx}].')
-                next_token_ids = await self.async_sampling_logits(logits, all_ids, guided_input_ids, sampling_inputs,
-                                                                  inputs, num_ignore_eos > 0)
-                num_ignore_eos = num_ignore_eos - 1
-
-                # stopping criteria
-                stopped, num_appendable_ids = _batch_stopping_criteria(next_token_ids, sampling_inputs.stop_words,
-                                                                       num_appendable_ids)
-            else:
-                next_token_ids = torch.empty_like(num_ignore_eos)
-                stopped = None
-
-            if need_broadcast_next:
-                logger.debug(f'<ForwardTask> rank[{rank}]: synchornize token ids [{idx}]')
-                tp_gpu_group = dist_ctx.tp_gpu_group
-                dist.broadcast(next_token_ids, src=rank // tp * tp, group=tp_gpu_group)
-
-            # send output
-            model_metas = output.get('model_metas')
+        if not is_decoding and self.cache_config.role == EngineRole.Decode:
+            # Migration
+            need_output = dp > 1 or rank % tp == 0
+            next_token_ids = torch.empty_like(num_ignore_eos)
+            model_metas = None
+            done = torch.tensor(True)
+            begin = time.time()
+            for i, migration_inputs in enumerate(inputs.migration_inputs):
+                await self.cache_engine.migrate(migration_inputs)
+                next_token_ids[i] = inputs.migration_requests[i].remote_token_id
+            end = time.time()
+            if tp > 1:
+                dist.all_reduce(done, group=tp_cpu_group, async_op=False)
+            print(f"migration latency per request: {(end-begin) / len(inputs.migration_inputs) * 1e3} ms")
             if need_output:
                 event = torch.cuda.Event()
                 event.record()
                 output = dict(next_token_ids=next_token_ids,
-                              logits=logits if return_logits else None,
-                              stopped=stopped,
+                              logits=None,
+                              stopped=torch.tensor([False] * len(inputs.migration_inputs)),
                               model_metas=model_metas,
                               event=event)
-                logger.debug(f'<ForwardTask> rank[{rank}]: Output [{idx}]')
                 self._out_que.put_nowait(output)
+        else:
+            eager_mode = self.backend_config.eager_mode
+            if dp > 1:
+                if is_decoding and not eager_mode:
+                    batch_size = inputs.seq_length.numel()
+                    all_batch_sizes = torch.tensor([0] * dp, device='cuda')
+                    lc_handle = dist.all_gather_into_tensor(all_batch_sizes,
+                                                            all_batch_sizes.new_tensor(batch_size),
+                                                            async_op=True)
+                else:
+                    all_sync_flags = torch.tensor([False] * dp, device='cuda')
+                    lc_handle = dist.all_gather_into_tensor(all_sync_flags,
+                                                            torch.tensor(sync_long_context, device='cuda'),
+                                                            async_op=True)
 
-            # update for next loop
-            if is_decoding and idx < loop_count - 1:
-                swap_in_map = dict()
-                swap_out_map = dict()
-                inputs.model_metas = model_metas
-                __update_inputs(next_token_ids)
+            non_blocking = True
+            inputs = _try_to_cuda(inputs, non_blocking=non_blocking)
+            all_ids = _try_to_cuda(all_ids, non_blocking=non_blocking)
+            guided_input_ids = _try_to_cuda(guided_input_ids, non_blocking=non_blocking)
+            sampling_inputs = _try_to_cuda(sampling_inputs, non_blocking=non_blocking)
+            num_appendable_ids = _try_to_cuda(num_appendable_ids, non_blocking=non_blocking)
+            num_ignore_eos = _try_to_cuda(num_ignore_eos, non_blocking=non_blocking)
+
+            self.stream.synchronize()
+
+            if dp > 1:
+                if is_decoding and not eager_mode:
+                    await __await_distworker(lc_handle)
+                    padding_batch_size = all_batch_sizes.cpu().max().item()
+                    meta = self.patched_model.get_meta()
+                    meta.padding_batch_size = padding_batch_size
+                    logger.debug(f'padding_batch_size={padding_batch_size}')
+                else:
+                    await __await_distworker(lc_handle)
+                    sync_long_context = all_sync_flags.any()
+                    logger.debug(f'sync_long_context={sync_long_context}')
+                inputs.build_dp_meta()
+                inputs = self.patched_model.update_inputs(inputs)
+            else:
+                sync_long_context = False
+
+            need_output = dp > 1 or rank % tp == 0
+
+            for idx in range(loop_count):
+                # inference
+                logger.info(f'<ForwardTask> rank[{rank}]: model forward [{idx}].')
+                output = await self._async_model_forward(
+                    inputs,
+                    swap_in_map=swap_in_map,
+                    swap_out_map=swap_out_map,
+                    return_logits=return_logits,
+                    sync_long_context=sync_long_context,
+                )
+                logits = output['logits']
+                logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
+
+                if is_dummy:
+                    self._out_que.put_nowait(None)
+                    continue
+
+                need_broadcast_next = (dp == 1 and tp > 1 and idx < loop_count - 1)
+                if need_output:
+                    # sampling
+                    logger.debug(f'<ForwardTask> rank[{rank}]: Sampling [{idx}].')
+                    next_token_ids = await self.async_sampling_logits(logits, all_ids, guided_input_ids, sampling_inputs,
+                                                                    inputs, num_ignore_eos > 0)
+                    num_ignore_eos = num_ignore_eos - 1
+
+                    # stopping criteria
+                    stopped, num_appendable_ids = _batch_stopping_criteria(next_token_ids, sampling_inputs.stop_words,
+                                                                        num_appendable_ids)
+                else:
+                    next_token_ids = torch.empty_like(num_ignore_eos)
+                    stopped = None
+
+                torch.cuda.synchronize()
+                next_token_ids = next_token_ids.cpu()
+                if need_broadcast_next:
+                    logger.info(f'<ForwardTask> rank[{rank}]: synchornize token ids [{idx}]')
+                    dist.broadcast(next_token_ids, src=rank // tp * tp, group=tp_cpu_group)
+                next_token_ids = next_token_ids.cuda()
+
+                # send output
+                model_metas = output.get('model_metas')
+                if need_output:
+                    event = torch.cuda.Event()
+                    event.record()
+                    output = dict(next_token_ids=next_token_ids,
+                                logits=logits if return_logits else None,
+                                stopped=stopped,
+                                model_metas=model_metas,
+                                event=event)
+                    logger.info(f'<ForwardTask> rank[{rank}]: Output [{idx}]')
+                    self._out_que.put_nowait(output)
+
+                # update for next loop
+                if is_decoding and idx < loop_count - 1:
+                    swap_in_map = dict()
+                    swap_out_map = dict()
+                    inputs.model_metas = model_metas
+                    __update_inputs(next_token_ids)
 
     @torch.inference_mode()
     async def _async_loop_background(self, forward_event: asyncio.Event = None):
@@ -541,8 +580,10 @@ class AutoModelAgent:
             return dict()
 
         event = out.pop('event')
+        logger.info("querying")
         while not event.query():
             await asyncio.sleep(0.001)
+        logger.info("query done")
         with torch.cuda.stream(self.out_stream):
             out['next_token_ids'] = out['next_token_ids'].cpu()
             out['stopped'] = out['stopped'].cpu()

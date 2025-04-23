@@ -1,5 +1,9 @@
 from typing import Dict
 
+import asyncio
+
+from lmdeploy.logger import get_logger
+
 from lmdeploy.disagg.request import DistServeConnectionRequest
 from lmdeploy.disagg.messages import (
     DistServeRegisterMRMessage,
@@ -9,8 +13,6 @@ from lmdeploy.disagg.messages import (
 from lmdeploy.disagg.backend.base import MigrationBackendImpl
 from lmdeploy.disagg.backend.backend import register_migration_backend
 
-from dlslime import RDMAEndpoint, available_nic
-
 from lmdeploy.disagg.config import (
     DistServeEngineConfig,
     MigrationBackend,
@@ -18,13 +20,18 @@ from lmdeploy.disagg.config import (
 )
 from lmdeploy.disagg.request import DistServeInitRequest
 
+from dlslime import RDMAEndpoint, available_nic
+
+
+logger = get_logger("lmdeploy")
+
 
 class DLSlimeMigrationManagement:
     def __init__(self, init_request: DistServeInitRequest):
         self.rank = init_request.rank
         self.local_engine_config: DistServeEngineConfig = init_request.local_engine_config
         self.remote_engine_config: DistServeEngineConfig = init_request.remote_engine_config
-        self.endpoint: Dict[str, RDMAEndpoint] = {
+        self.endpoint: Dict[MigrationProtocol, RDMAEndpoint] = {
             MigrationProtocol.TCP: None,
             MigrationProtocol.RDMA: None,
             MigrationProtocol.NVLINK: None,
@@ -32,6 +39,7 @@ class DLSlimeMigrationManagement:
         if init_request.rdma_config:
             nics = self.local_engine_config.available_nics or available_nic()
             device_name = nics[self.rank % len(nics)]
+            logger.info(f"use device {device_name} for kv migration")
             self.endpoint[MigrationProtocol.RDMA] = RDMAEndpoint(
                 device_name=device_name,
                 ib_port=1,
@@ -55,12 +63,12 @@ class DLSlimeMigrationManagement:
     async def p2p_migrate(self, assignment: MigrationAssignment):
         max_batch = 4096 + 2048
         for i in range(0, len(assignment.target_offset), max_batch):
-            await self.endpoint[assignment.protocol].read_batch_async(
-                assignment.mr_key,
-                assignment.target_offset[i: i+max_batch],
-                assignment.source_offset[i: i+max_batch],
-                assignment.length
-            )
+            await asyncio.wait_for(self.endpoint[assignment.protocol].read_batch_async(
+                    assignment.mr_key,
+                    assignment.target_offset[i: i+max_batch],
+                    assignment.source_offset[i: i+max_batch],
+                    assignment.length
+                ), 15)
 
 
 @register_migration_backend(MigrationBackend.DLSlime)

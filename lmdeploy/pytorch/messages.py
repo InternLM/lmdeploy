@@ -8,6 +8,7 @@ import numpy as np
 from torch import Tensor
 
 from lmdeploy.disagg.request import MigrationRequest
+from lmdeploy.disagg.messages import MigrationExecutionBatch
 from lmdeploy.messages import GenerationConfig, LogitsProcessor
 from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
 from lmdeploy.utils import get_logger
@@ -145,6 +146,7 @@ class MessageStatus(enum.Enum):
     WAITING_MIGRATION = enum.auto()
     RUNNING_MIGRATION = enum.auto()
     MIGRATION_LOCKED = enum.auto()
+    MIGRATION_DONE = enum.auto()
 
 
 _SEQ_COUNT = 0
@@ -464,6 +466,7 @@ class SchedulerSequence:
     migration_request: Optional[MigrationRequest] = None
     resp_cache: bool = False
     preserve_cache: bool = False
+    migration_inputs: Optional[MigrationExecutionBatch] = None
 
     def __post_init__(self):
         """post init."""
