@@ -64,7 +64,6 @@ class TmaDescKernelParam:
             triton.runtime.driver.active.utils.fill_1d_tma_descriptor(ptr, dims[0], block_dims[0], element_size,
                                                                       self.desc.data_ptr())
         else:
-            breakpoint()
             triton.runtime.driver.active.utils.fill_2d_tma_descriptor(ptr, dims[0], dims[1], block_dims[0],
                                                                       block_dims[1], element_size, self.desc.data_ptr())
 

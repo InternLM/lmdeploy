@@ -63,16 +63,10 @@ def _config_prune_func(config: dict, *args, **kwargs):
         return config[num_sm9x:]
 
 
-def _fused_moe_do_bench(kernel, quantiles):
-    """fused moe do bench."""
-    triton.testing.do_bench(kernel, quantiles=quantiles, warmup=5, rep=20)
-
-
 @triton.autotune(
     configs=get_cuda_autotune_config(),
     key=['N', 'K', 'tune_hint'],
     prune_configs_by=dict(early_config_prune=_config_prune_func),
-    do_bench=_fused_moe_do_bench,
 )
 @triton.jit
 def fused_moe_kernel(
