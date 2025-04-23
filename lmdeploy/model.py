@@ -1633,6 +1633,7 @@ class ChatmlDirect(BaseChatTemplate):
             return 'internvl-zh-hermes2'
 
 
+@MODELS.register_module(name='phi-4')
 @MODELS.register_module(name='phi-3')
 class Phi3Instruct(BaseChatTemplate):
     """Chat template of InternLM model."""
@@ -1669,6 +1670,8 @@ class Phi3Instruct(BaseChatTemplate):
         path = model_path.lower()
         if all([c in path for c in ['phi-3', 'instruct']]):
             return 'phi-3'
+        if all([c in path for c in ['phi-4', 'instruct']]):
+            return 'phi-4'
 
 
 @MODELS.register_module(name='internvl2-phi3')
