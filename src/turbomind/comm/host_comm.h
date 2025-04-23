@@ -3,15 +3,15 @@
 #pragma once
 
 #include <algorithm>
+#include <cstring>
 #include <memory>
 #include <stdexcept>
 #include <type_traits>
 #include <vector>
-#include <cstring>
 
+#include "src/turbomind/comm/serialize.h"
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/utils/logger.h"
-#include "src/turbomind/comm/serialize.h"
 
 namespace turbomind::comm {
 

@@ -108,15 +108,17 @@ void deserialize(std::istream& is, Layout& layout)
     layout = Layout(std::move(shape), std::move(stride));
 }
 
-void serialize(std::ostream& os, const Buffer& buffer) {
+void serialize(std::ostream& os, const Buffer& buffer)
+{
     FT_CHECK(buffer.device() == turbomind::core::Device(kCPU));
     serialize(os, buffer.size());
     serialize(os, buffer.dtype());
     os.write((char*)buffer.raw_data(), buffer.byte_size());
 }
 
-void deserialize(std::istream& is, Buffer& buffer) {
-    ssize_t size;
+void deserialize(std::istream& is, Buffer& buffer)
+{
+    ssize_t  size;
     DataType dtype;
     deserialize(is, size);
     deserialize(is, dtype);
