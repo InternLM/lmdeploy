@@ -35,11 +35,9 @@ class LogitsMixin:
         assert all(isinstance(x, int) for x in input_ids) or all(isinstance(x, List) for x in input_ids)
         # Make input_ids a list of token_id list
         input_ids = [input_ids] if isinstance(input_ids[0], int) else input_ids
-        logits, session_ids = self._run(coro=self._async_get_logits(input_ids=input_ids)).result()
+        logits = self._run(coro=self._async_get_logits(input_ids=input_ids)).result()
         logits = [x.squeeze() for x in logits]
         scores = [x[-1].cpu().item() for x in logits]
-        for session_id in session_ids:
-            self.end_session(session_id)
         return scores
 
     async def _async_get_logits(self,
@@ -75,8 +73,10 @@ class LogitsMixin:
         session_ids = list(range(len(input_ids)))
         tasks = [_proc(i) for i in range(len(input_ids))]
         await asyncio.gather(*tasks)
-
-        return logits, session_ids
+        if sequence_end and self.backend == 'pytorch':
+            for session_id in session_ids:
+                await self.end_session(session_id)
+        return logits
 
     def get_ppl(self, input_ids: Union[List[int], List[List[int]]]) -> List[float]:
         """Get perplexity scores given a list of input tokens that have to be
@@ -109,17 +109,15 @@ class LogitsMixin:
             logger.info(f'start: {start}, end: {end}')
             if start == end:
                 _input_ids = input_ids[indices[start]]
-                res, session_ids = self._get_long_text_ppl(input_ids=_input_ids, max_input_len=max_input_len)
+                res = self._get_long_text_ppl(input_ids=_input_ids, max_input_len=max_input_len)
                 result.append(res)
             else:
                 _input_ids = [input_ids[indices[i]] for i in range(start, end)]
-                res, session_ids = self._get_ppl(
+                res = self._get_ppl(
                     input_ids=_input_ids,
                     max_input_len=max_input_len,
                 )
                 result.extend(res)
-            for session_id in session_ids:
-                self.end_session(session_id)
         output = list(range(len(result)))
         for index, sorted_index in enumerate(indices):
             output[sorted_index] = result[index]
@@ -155,24 +153,23 @@ class LogitsMixin:
 
         losses = []
         target_counts = []
-        session_ids = []
         for i in range(0, seq_len, max_input_len):
             token_ids = input_ids[i:i + max_input_len]
             step = [i]
             # shift token_ids by 1 to the left
             target_ids = input_ids[i + 1:i + 1 + max_input_len]
-            loss, session_ids = self._get_ppl(input_ids=[token_ids],
-                                              max_input_len=len(token_ids),
-                                              target_ids=[target_ids],
-                                              steps=step,
-                                              sequence_start=(i == 0),
-                                              sequence_end=False)
+            loss = self._get_ppl(input_ids=[token_ids],
+                                 max_input_len=len(token_ids),
+                                 target_ids=[target_ids],
+                                 steps=step,
+                                 sequence_start=(i == 0),
+                                 sequence_end=False)
             losses.extend(loss)
             target_counts.append(len(target_ids))
         losses = [loss * target_count for loss, target_count in zip(losses, target_counts)]
         loss_sum = sum(losses)
         target_count = sum(target_counts)
-        return loss_sum / target_count, session_ids
+        return loss_sum / target_count
 
     def _get_ppl(self,
                  input_ids,
@@ -193,7 +190,7 @@ class LogitsMixin:
                     f'total_len: {total_len}, steps: {steps}')
         torch.cuda.empty_cache()
 
-        logits, session_ids = self._run(coro=self._async_get_logits(
+        logits = self._run(coro=self._async_get_logits(
             input_ids=input_ids, steps=steps, sequence_start=sequence_start, sequence_end=sequence_end)).result()
         padding_token_id = -100
         if target_ids is None:
@@ -222,4 +219,4 @@ class LogitsMixin:
             target_count = target_mask.sum()
             result.append(loss.item() / target_count.item())
         logger.info(f'ppl result: {result}')
-        return result, session_ids
+        return result
