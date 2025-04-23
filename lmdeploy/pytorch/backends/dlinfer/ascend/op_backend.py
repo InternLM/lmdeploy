@@ -25,7 +25,7 @@ class SocVersion:
     def device_name(cls) -> str:
         try:
             import torch_npu
-            return torch_npu.npu.get_device_name()[:10]
+            return torch_npu.npu.get_device_name()
         except ImportError:
             logger.warning('Failed to import torch_npu. Please make sure torch_npu is installed correctly. ')
         except Exception as e:
@@ -34,11 +34,11 @@ class SocVersion:
 
     @classmethod
     def is_Ascend310P(cls) -> bool:
-        return cls.device_name() == cls.Ascend310P
+        return cls.device_name().startswith(cls.Ascend310P)
 
     @classmethod
     def is_Ascend910B(cls) -> bool:
-        return cls.device_name() == cls.Ascend910B
+        return cls.device_name().startswith(cls.Ascend910B)
 
 
 class AscendKVQuantMeta:
