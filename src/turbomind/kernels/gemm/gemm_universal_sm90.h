@@ -279,15 +279,6 @@ struct GemmUniversalSm90 {
             for (int n = 0; n < MMA_ITER_N; ++n) {
                 PRAGMA_UNROLL
                 for (int i = 0; i < MMA_N; i += 8) {
-                    // int mm = offset_m + m * MMA_M + lane_id / 4 + warp_id * 16;
-                    // int nn = offset_n + n * MMA_N + (lane_id & 3) * 2 + i;
-                    // PRAGMA_UNROLL
-                    // for (int s = 0; s < 2; ++s) {
-                    //     PRAGMA_UNROLL
-                    //     for (int c = 0; c < 2; ++c) {
-                    //         C[(nn + c) * ldC + mm + s * 8] = (Tc)frag_C[m][n][i / 2 + s * 2 + c];
-                    //     }
-                    // }
                     int mm = m * MMA_M + lane_id / 4 + warp_id * 16;
                     int nn = n * MMA_N + (lane_id & 3) * 2 + i;
                     PRAGMA_UNROLL
@@ -301,7 +292,6 @@ struct GemmUniversalSm90 {
             }
         }
 #else
-
         // (M,N):(1,M)
         PRAGMA_UNROLL
         for (int m = 0; m < MMA_ITER_M; ++m) {
