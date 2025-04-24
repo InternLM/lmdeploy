@@ -63,13 +63,10 @@ class MigrationProtocol(enum.Enum):
 
 
 class RDMALinkType(enum.Enum):
-    """RDMA Link Type.
-
-    TODO: rename Ethernet to RoCE.
-    """
+    """RDMA Link Type."""
 
     IB = enum.auto()
-    Ethernet = enum.auto()
+    RoCE = enum.auto()
 
 
 class DistServeRDMAConfig(BaseModel):
@@ -77,7 +74,7 @@ class DistServeRDMAConfig(BaseModel):
 
     Args:
         with_gdr: default to True.
-        link_type: default to `RDMALinkType.Ethernet`.
+        link_type: default to `RDMALinkType.RoCE`.
 
     Warning: Only GDR is supported by now.
     Warning: Technically, both RoCE and IB are supported.
@@ -87,7 +84,7 @@ class DistServeRDMAConfig(BaseModel):
 
     # RDMA with GPU Direct RDMA Access
     with_gdr: bool = True
-    link_type: RDMALinkType = RDMALinkType.Ethernet
+    link_type: RDMALinkType = RDMALinkType.RoCE
 
 
 class DistServeTCPConfig(BaseModel):

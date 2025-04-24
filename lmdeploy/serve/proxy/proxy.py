@@ -79,7 +79,7 @@ class NodeManager:
                  serving_strategy: str = 'Hybrid',
                  routing_strategy: str = 'min_expected_latency',
                  migration_protocol: str = 'RDMA',
-                 link_type: str = 'Ethernet',
+                 link_type: str = 'RoCE',
                  with_gdr: bool = True,
                  cache_status: Optional[bool] = True) -> None:
         self.nodes = dict()
@@ -757,7 +757,7 @@ def proxy(server_name: str = '0.0.0.0',
           disable_cache_status: bool = False,
           *,
           disable_gdr: bool,
-          link_type: Literal['Ethernet', 'IB'],
+          link_type: Literal['RoCE', 'IB'],
           migration_protocol: MigrationProtocol,
           **kwargs):
     """To launch the proxy server.

@@ -233,7 +233,8 @@ class SubCliServe:
                             type=str,
                             choices=['Hybrid', 'DistServe'],
                             default='Hybrid',
-                            help='the strategy to dispatch requests to nodes')
+                            help='the strategy to serve, Hybrid for colocating Prefill and Decode'
+                            'workloads into same engine, DistServe for Prefill-Decode Disaggregation')
         parser.add_argument('--routing-strategy',
                             type=str,
                             choices=['random', 'min_expected_latency', 'min_observed_latency'],
@@ -250,11 +251,7 @@ class SubCliServe:
                             choices=['TCP', 'RDMA', 'NVLINK'],
                             default='RDMA',
                             help='transport protocol of KV migration')
-        parser.add_argument('--link-type',
-                            type=str,
-                            choices=['Ethernet', 'IB'],
-                            default='Ethernet',
-                            help='RDMA Link Type')
+        parser.add_argument('--link-type', type=str, choices=['RoCE', 'IB'], default='RoCE', help='RDMA Link Type')
         parser.add_argument('--disable-gdr', action='store_true', help='with GPU Direct Memory Access')
 
         ArgumentHelper.api_keys(parser)

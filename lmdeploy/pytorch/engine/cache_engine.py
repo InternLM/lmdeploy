@@ -316,7 +316,7 @@ class CacheEngine:
 
     def p2p_initialize(self, migration_init_request: DistServeInitRequest):
         if not self.migration_backend_impl:
-            self.migration_backend_impl = MIGRATION_BACKENDS[self.cache_config.migration_backend]()
+            self.migration_backend_impl = MIGRATION_BACKENDS.module_dict[self.cache_config.migration_backend.name]()
         migration_init_request.rank = self.rank
         self.migration_backend_impl.p2p_initialize(migration_init_request)
         for i, t in enumerate(self.full_gpu_cache):
