@@ -156,22 +156,26 @@ struct GemmUniversalSm90 {
 
         MMA_Atom::CRegisters frag_C[MMA_ITER_M][MMA_ITER_N]{};  // zero fill
 
+        auto smem_desc_A = make_smem_desc(&storage.A, 1);
+        auto smem_desc_B = make_smem_desc(&storage.B, 1);
+
         while (k_iter > -Stages) {
             if (1) {
                 int pipe = read_state.index();
                 ProducerBar::wait(&producer_bar[pipe], read_state.phase());
                 cute::warpgroup_arrive();  // wgmma.fence.sync.aligned
-                Ta* smem_a_ptr = &storage.A[pipe * CTA_M * CTA_K];
-                Tb* smem_b_ptr = &storage.B[pipe * CTA_N * CTA_K];
+
                 PRAGMA_UNROLL
                 for (int m = 0; m < MMA_ITER_M; ++m) {
                     PRAGMA_UNROLL
                     for (int n = 0; n < MMA_ITER_N; ++n) {
                         PRAGMA_UNROLL
                         for (int k = 0; k < MMA_ITER_K; ++k) {
-                            auto desc_A = make_smem_desc(smem_a_ptr + (m * MMA_M) * CTA_K + k * MMA_K, 1);
-                            auto desc_B = make_smem_desc(smem_b_ptr + (n * MMA_N) * CTA_K + k * MMA_K, 1);
-                            wgmma<MMA_Atom>(desc_A, desc_B, frag_C[m][n]);
+                            // clang-format off
+                            auto smem_A = smem_desc_A + pipe * ((sizeof(Ta) * CTA_M * CTA_K) >> 4) + (sizeof(Ta) * ((m * MMA_M) * CTA_K + k * MMA_K) >> 4);
+                            auto smem_B = smem_desc_B + pipe * ((sizeof(Tb) * CTA_N * CTA_K) >> 4) + (sizeof(Tb) * ((n * MMA_N) * CTA_K + k * MMA_K) >> 4);
+                            // clang-format of
+                            wgmma<MMA_Atom>(smem_A, smem_B, frag_C[m][n]);
                         }
                     }
                 }
