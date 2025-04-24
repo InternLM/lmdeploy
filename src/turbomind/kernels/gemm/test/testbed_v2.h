@@ -89,7 +89,9 @@ public:
         tie(b_, b_desc_) = create_(K, N, Tc, Ob);
         tie(c_, c_desc_) = create_(M, N, Tc, Oc);
 
-        if (0) {
+        c_o_ = empty_like(c_);
+
+        if (1) {
             std::cout << "A " << a_ << "\n";
             std::cout << "B " << b_ << "\n";
             std::cout << "C " << c_ << "\n";
@@ -101,12 +103,11 @@ public:
         if (Ta == kFloat8_e4m3) {
             QuantizeSymm(a_q_, a_s_, a_, stream);
             DequantizeSymm(a_f_, a_q_, a_s_, stream);
-        }
-
-        if (1) {
-            std::cout << "a_q " << a_q_ << "\n";
-            std::cout << "a_s " << a_s_ << "\n";
-            std::cout << "a_f " << a_f_ << "\n";
+            if (0) {
+                std::cout << "a_q " << a_q_ << "\n";
+                std::cout << "a_s " << a_s_ << "\n";
+                std::cout << "a_f " << a_f_ << "\n";
+            }
         }
 
         if (Tb == kFloat8_e4m3) {
@@ -117,12 +118,11 @@ public:
                 b_s_ = b_s_.t();
                 b_f_ = b_f_.t();
             }
-        }
-
-        if (0) {
-            std::cout << "b_q " << b_q_ << "\n";
-            std::cout << "b_s " << b_s_ << "\n";
-            std::cout << "b_f " << b_f_ << "\n";
+            if (0) {
+                std::cout << "b_q " << b_q_ << "\n";
+                std::cout << "b_s " << b_s_ << "\n";
+                std::cout << "b_f " << b_f_ << "\n";
+            }
         }
     }
 
@@ -145,9 +145,9 @@ public:
                                 b_s_.data_or((void*)nullptr),
                                 v_desc_,
                                 0.f,
-                                c_.raw_data(),
+                                c_o_.raw_data(),
                                 c_desc_,
-                                c_.raw_data(),
+                                c_o_.raw_data(),
                                 c_desc_,
                                 {},
                                 stream_);
@@ -235,7 +235,7 @@ private:
 };
 
 enum class TestPreset : int {
-    kANY_bf16_bf16_bf16_TTT,
+    kANY_bf16_bf16_bf16_TNN,
     kANY_e4m3_e4m3_bf16_TTT,
 };
 
@@ -243,8 +243,8 @@ inline std::unique_ptr<Testbed_v2> get_test(TestPreset preset)
 {
     Testbed_v2::Config config{};
     switch (preset) {
-        case TestPreset::kANY_bf16_bf16_bf16_TTT:
-            config = {kBfloat16, kBfloat16, kBfloat16, kRowMajor, kRowMajor, kRowMajor};
+        case TestPreset::kANY_bf16_bf16_bf16_TNN:
+            config = {kBfloat16, kBfloat16, kBfloat16, kRowMajor, kColMajor, kColMajor};
             break;
         case TestPreset::kANY_e4m3_e4m3_bf16_TTT:
             config = {kFloat8_e4m3, kFloat8_e4m3, kBfloat16, kRowMajor, kRowMajor, kRowMajor};

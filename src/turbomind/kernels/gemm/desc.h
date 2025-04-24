@@ -40,6 +40,7 @@ enum class OpClass
     kSIMT,
     kMMA_s884,
     kMMA_s16816,
+    kGMMA_s64n16
 };
 
 inline const char* to_string(OpClass op)

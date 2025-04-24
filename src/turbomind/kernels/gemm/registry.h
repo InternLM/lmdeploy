@@ -38,6 +38,8 @@ private:
     template<class T>
     void sm90_s16816_dynamic();
 
+    void sm90_s64n32_dynamic();
+
     void u4g128_f16_f16_nnn_sm80_s16816();
 
 private:

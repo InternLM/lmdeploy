@@ -65,9 +65,9 @@ add_library(sampling_kernels STATIC sampling_kernels.cu)
 set_property(TARGET sampling_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET sampling_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 
-if (BUILD_TEST)
-    add_subdirectory(flash_attention)
-endif ()
+# if (BUILD_TEST)
+#     add_subdirectory(flash_attention)
+# endif ()
 
 add_subdirectory(attention)
 add_subdirectory(gemm)
