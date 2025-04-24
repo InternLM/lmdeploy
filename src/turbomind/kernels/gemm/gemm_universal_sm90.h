@@ -80,6 +80,26 @@ inline __device__ void wgmma(uint64_t desc_a, uint64_t desc_b, float (&frag_C)[N
     return wgmma_impl<MMA_Atom>(desc_a, desc_b, frag_C, std::make_index_sequence<N>{});
 }
 
+inline __device__ void warpgroup_fence_operand(float& reg)
+{
+    asm volatile("" : "+f"(reg)::"memory");
+}
+
+template<int M, int N, int K>
+inline __device__ void warpgroup_fence_operand(float (&x)[M][N][K])
+{
+    PRAGMA_UNROLL
+    for (int m = 0; m < M; ++m) {
+        PRAGMA_UNROLL
+        for (int n = 0; n < N; ++n) {
+            PRAGMA_UNROLL
+            for (int k = 0; k < K; ++k) {
+                warpgroup_fence_operand(x[m][n][k]);
+            }
+        }
+    }
+}
+
 template<class Arch_, class Scheduler_>
 struct GemmUniversalSm90 {
 
@@ -214,8 +234,10 @@ struct GemmUniversalSm90 {
             if (1) {
                 int pipe = read_state.index();
                 ProducerBar::wait(&producer_bar[pipe], read_state.phase());
-                cute::warpgroup_arrive();  // wgmma.fence.sync.aligned
 
+                warpgroup_fence_operand(frag_C);
+
+                cute::warpgroup_arrive();  // wgmma.fence.sync.aligned
                 PRAGMA_UNROLL
                 for (int k = 0; k < MMA_ITER_K; ++k) {
                     PRAGMA_UNROLL
@@ -242,6 +264,9 @@ struct GemmUniversalSm90 {
                 smem_iter_B.Advance(read_state.index());
 
                 cute::warpgroup_wait<0>();
+                
+                warpgroup_fence_operand(frag_C);
+
                 ConsumerBar::arrive(&consumer_bar[pipe]);
             }
 

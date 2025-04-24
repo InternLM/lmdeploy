@@ -18,6 +18,8 @@
 
 #include "src/turbomind/kernels/gemm/tma.h"
 
+#include "src/turbomind/utils/cuda_utils.h"
+
 namespace turbomind::gemm {
 
 // PFN_cuTensorMapEncodeTiled
@@ -184,7 +186,25 @@ public:
         const auto grid  = sched.get_grid_shape();
         const auto block = Gemm::CTA_SIZE;
 
-        gemm_kernel_sm90<Gemm><<<grid, block, smem_size_, stream>>>(tm_a, tm_b, tm_c, (Tc*)C, Cdesc.ld, sched);
+        
+
+        cudaLaunchAttribute attrs[1];
+        attrs[0].val.clusterDim.x = 1;
+        attrs[0].val.clusterDim.y = 1;
+        attrs[0].val.clusterDim.z = 1;
+
+        cudaLaunchConfig_t config{};
+        config.gridDim          = grid;
+        config.blockDim         = block;
+        config.dynamicSmemBytes = smem_size_;
+        config.stream           = stream;
+        config.attrs            = attrs;
+
+        auto func = gemm_kernel_sm90<Gemm>;
+
+        check_cuda_error(cudaLaunchKernelEx(&config, func, tm_a, tm_b, tm_c, (Tc*)C, Cdesc.ld, sched));
+
+        // gemm_kernel_sm90<Gemm><<<grid, block, smem_size_, stream>>>(tm_a, tm_b, tm_c, (Tc*)C, Cdesc.ld, sched);
 
         // if constexpr (0) {
         //     [[maybe_unused]] static const int _ = [] {
