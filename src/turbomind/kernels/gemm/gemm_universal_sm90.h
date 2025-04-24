@@ -14,7 +14,7 @@
 
 namespace turbomind::gemm {
 
-inline __device__ uint64_t make_smem_desc(void* smem_ptr, int layout_type)
+inline __device__ cute::GmmaDescriptor make_smem_desc(void* smem_ptr, int layout_type)
 {
     auto uint_ptr = cast_smem_ptr_to_uint(smem_ptr);
 
@@ -24,8 +24,46 @@ inline __device__ uint64_t make_smem_desc(void* smem_ptr, int layout_type)
     desc.bitfield.leading_byte_offset_ = 0;
     desc.bitfield.stride_byte_offset_  = 1024 >> 4;
     desc.bitfield.base_offset_         = 0;
+
     return desc;
 }
+
+template<int Step>
+struct SmemDescIterV2 {
+    union {
+        uint32_t u32_[2];
+        uint64_t u64_;
+    };
+
+    uint32_t base_;
+
+    __device__ SmemDescIterV2(uint64_t desc): u64_{desc}, base_{u32_[0]} {}
+
+    __device__ void Advance(int stage)
+    {
+        u32_[0] += Step;
+        if (stage == 0) {
+            u32_[0] = base_;
+        }
+    }
+
+    __device__ SmemDescIterV2& operator+=(int offset)
+    {
+        u32_[0] += offset;
+        return *this;
+    }
+
+    __device__ SmemDescIterV2& operator-=(int offset)
+    {
+        u32_[0] -= offset;
+        return *this;
+    }
+
+    __device__ operator uint64_t()
+    {
+        return u64_;
+    }
+};
 
 template<class MMA_Atom, size_t... Is>
 inline __device__ void wgmma_impl(uint64_t desc_a, uint64_t desc_b, float* frag_C, std::index_sequence<Is...>)
@@ -56,7 +94,7 @@ struct GemmUniversalSm90 {
     static constexpr int MMA_ITER_N = CTA_N / MMA_N;
     static constexpr int MMA_ITER_K = CTA_K / MMA_K;
 
-    static constexpr int Stages = 3;
+    static constexpr int Stages = 4;
 
     static constexpr bool kSplitK     = false;
     static constexpr int  kChunkSizeK = CTA_K;
@@ -154,6 +192,14 @@ struct GemmUniversalSm90 {
         auto smem_desc_A = make_smem_desc(&storage.A[warpgroup_id * 64 * CTA_K], 1);
         auto smem_desc_B = make_smem_desc(&storage.B, 1);
 
+        SmemDescIterV2<((sizeof(Ta) * CTA_M * CTA_K) >> 4)> smem_iter_A{smem_desc_A};
+        SmemDescIterV2<((sizeof(Tb) * CTA_N * CTA_K) >> 4)> smem_iter_B{smem_desc_B};
+
+        constexpr int kStepMA = (sizeof(Ta) * MMA_M * CTA_K) >> 4;
+        constexpr int kStepNB = (sizeof(Tb) * MMA_N * CTA_K) >> 4;
+        constexpr int kStepKA = (sizeof(Ta) * MMA_K) >> 4;
+        constexpr int kStepKB = (sizeof(Tb) * MMA_K) >> 4;
+
         while (k_iter > -Stages) {
             if (1) {
                 int pipe = read_state.index();
@@ -161,23 +207,32 @@ struct GemmUniversalSm90 {
                 cute::warpgroup_arrive();  // wgmma.fence.sync.aligned
 
                 PRAGMA_UNROLL
-                for (int m = 0; m < MMA_ITER_M; ++m) {
+                for (int k = 0; k < MMA_ITER_K; ++k) {
                     PRAGMA_UNROLL
-                    for (int n = 0; n < MMA_ITER_N; ++n) {
+                    for (int m = 0; m < MMA_ITER_M; ++m) {
                         PRAGMA_UNROLL
-                        for (int k = 0; k < MMA_ITER_K; ++k) {
-                            // clang-format off
-                            auto smem_A = smem_desc_A + pipe * ((sizeof(Ta) * CTA_M * CTA_K) >> 4) + (sizeof(Ta) * ((m * MMA_M) * CTA_K + k * MMA_K) >> 4);
-                            auto smem_B = smem_desc_B + pipe * ((sizeof(Tb) * CTA_N * CTA_K) >> 4) + (sizeof(Tb) * ((n * MMA_N) * CTA_K + k * MMA_K) >> 4);
-                            // clang-format of
-                            wgmma<MMA_Atom>(smem_A, smem_B, frag_C[m][n]);
+                        for (int n = 0; n < MMA_ITER_N; ++n) {
+                            wgmma<MMA_Atom>(smem_iter_A, smem_iter_B, frag_C[m][n]);
+                            smem_iter_B += kStepNB;
                         }
+                        smem_iter_B -= MMA_ITER_N * kStepNB;
+                        smem_iter_A += kStepMA;
                     }
+                    smem_iter_A -= MMA_ITER_M * kStepMA;
+                    smem_iter_A += kStepKA;
+                    smem_iter_B += kStepKB;
                 }
+                smem_iter_A -= MMA_ITER_K * kStepKA;
+                smem_iter_B -= MMA_ITER_K * kStepKB;
+
                 cute::warpgroup_commit_batch();
+
+                ++read_state;
+                smem_iter_A.Advance(read_state.index());
+                smem_iter_B.Advance(read_state.index());
+
                 cute::warpgroup_wait<0>();
                 ConsumerBar::arrive(&consumer_bar[pipe]);
-                ++read_state;
             }
 
             if (threadIdx.x == 0) {
