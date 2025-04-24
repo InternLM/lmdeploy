@@ -13,6 +13,7 @@ logger = get_logger('lmdeploy')
 
 TRITON_VERSION = version.parse(triton.__version__)
 VERSION_300 = version.parse('3.0.0')
+VERSION_320 = version.parse('3.2.0')
 assert TRITON_VERSION >= version.parse('2.2.0')
 
 # TODO: fast op might not work on non-nv device
@@ -364,6 +365,11 @@ def _kernel_meta_sm9x(BLOCK_DK: int, shared_kv: bool):
     BLOCK_M = 128 if BLOCK_DK <= 256 else 64
     if not shared_kv and BLOCK_DK >= 512:
         BLOCK_M = 32
+
+    # fix crash on triton<3.2.0
+    if BLOCK_DK >= 512 and TRITON_VERSION < VERSION_320:
+        BLOCK_M = 32
+        num_warps = 4
 
     BLOCK_N = 128 if BLOCK_DK <= 128 else 64
 
