@@ -179,11 +179,12 @@ public:
 
         auto tm_a = make_2d_tma_desc((void*)A, Adesc.type, m, k, CTA_M, CTA_K, kRowMajor, CU_TENSOR_MAP_SWIZZLE_128B);
         auto tm_b = make_2d_tma_desc((void*)B, Bdesc.type, k, n, CTA_K, CTA_N, kColMajor, CU_TENSOR_MAP_SWIZZLE_128B);
+        auto tm_c = make_2d_tma_desc((void*)C, Cdesc.type, m, n, CTA_M, CTA_N, kColMajor, CU_TENSOR_MAP_SWIZZLE_NONE);
 
         const auto grid  = sched.get_grid_shape();
         const auto block = Gemm::CTA_SIZE;
 
-        gemm_kernel_sm90<Gemm><<<grid, block, smem_size_, stream>>>(tm_a, tm_b, {}, (Tc*)C, Cdesc.ld, sched);
+        gemm_kernel_sm90<Gemm><<<grid, block, smem_size_, stream>>>(tm_a, tm_b, tm_c, (Tc*)C, Cdesc.ld, sched);
 
         // if constexpr (0) {
         //     [[maybe_unused]] static const int _ = [] {

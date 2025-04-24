@@ -2,12 +2,15 @@
 
 #include <utility>
 
+#include "cute/arch/copy_sm90.hpp"
+#include "cute/arch/copy_sm90_tma.hpp"
 #include "cute/arch/mma_sm90_desc.hpp"
 #include "cute/arch/mma_sm90_gmma.hpp"
 #include "cutlass/arch/barrier.h"
 #include "cutlass/cutlass.h"
 #include "cutlass/pipeline/sm90_pipeline.hpp"
 
+#include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/smem.h"
 #include "src/turbomind/kernels/gemm/iterator_sm90.h"
@@ -267,23 +270,66 @@ struct GemmUniversalSm90 {
         const int warp_id = threadIdx.x / WARP_SIZE;
         const int lane_id = threadIdx.x % WARP_SIZE;
 
+        auto& smem_C = storage.C;
+
+#if 0
         PRAGMA_UNROLL
         for (int m = 0; m < MMA_ITER_M; ++m) {
             PRAGMA_UNROLL
             for (int n = 0; n < MMA_ITER_N; ++n) {
                 PRAGMA_UNROLL
                 for (int i = 0; i < MMA_N; i += 8) {
-                    int mm = offset_m + m * MMA_M + lane_id / 4 + warp_id * 16;
-                    int nn = offset_n + n * MMA_N + (lane_id & 3) * 2 + i;
+                    // int mm = offset_m + m * MMA_M + lane_id / 4 + warp_id * 16;
+                    // int nn = offset_n + n * MMA_N + (lane_id & 3) * 2 + i;
+                    // PRAGMA_UNROLL
+                    // for (int s = 0; s < 2; ++s) {
+                    //     PRAGMA_UNROLL
+                    //     for (int c = 0; c < 2; ++c) {
+                    //         C[(nn + c) * ldC + mm + s * 8] = (Tc)frag_C[m][n][i / 2 + s * 2 + c];
+                    //     }
+                    // }
+                    int mm = m * MMA_M + lane_id / 4 + warp_id * 16;
+                    int nn = n * MMA_N + (lane_id & 3) * 2 + i;
                     PRAGMA_UNROLL
                     for (int s = 0; s < 2; ++s) {
                         PRAGMA_UNROLL
                         for (int c = 0; c < 2; ++c) {
-                            C[(nn + c) * ldC + mm + s * 8] = (Tc)frag_C[m][n][i / 2 + s * 2 + c];
+                            smem_C[(nn + c) * CTA_M + mm + s * 8] = (Tc)frag_C[m][n][i / 2 + s * 2 + c];
                         }
                     }
                 }
             }
+        }
+#else
+
+        // (M,N):(1,M)
+        PRAGMA_UNROLL
+        for (int m = 0; m < MMA_ITER_M; ++m) {
+            PRAGMA_UNROLL
+            for (int n = 0; n < MMA_ITER_N; ++n) {
+                PRAGMA_UNROLL
+                for (int i = 0; i < MMA_N; i += 16) {
+                    // clang-format off
+                    const int mm   = m * MMA_M + warp_id * 16 + (lane_id & 8);
+                    const int nn   = n * MMA_N +     i        + (lane_id & 7) + (lane_id & 16) / 2;
+                    // clang-format on
+                    __align__(16) Array<Tc, 8> tvec = cast<Tc>(*(Array<float, 8>*)&frag_C[m][n][i / 2]);
+                    cute::SM90_U16x8_STSM_T::copy((uint32_t&)tvec[0],
+                                                  (uint32_t&)tvec[2],
+                                                  (uint32_t&)tvec[4],
+                                                  (uint32_t&)tvec[6],
+                                                  (cutlass::uint128_t&)smem_C[nn * CTA_M + mm]);
+                }
+            }
+        }
+#endif
+        cute::tma_store_fence();
+        __syncthreads();
+
+        if (threadIdx.x == 0) {
+            cute::SM90_TMA_STORE_2D::copy(&tm_c, &smem_C, offset_m, offset_n);
+            cute::tma_store_arrive();
+            cute::tma_store_wait<0>();
         }
 
         // end
