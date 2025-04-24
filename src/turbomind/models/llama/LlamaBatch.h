@@ -229,12 +229,10 @@ private:
     Buffer_<int> input_ids_buf_;
 
     // lengths
-    Buffer_<int> input_length_buf_;    // input + cache missed length
     Buffer_<int> context_length_buf_;  // history length + input_length
+    Buffer_<int> sequence_lengths_;    // current sequence length, updated by sampling
     Buffer_<int> init_context_length_;
 
-    Buffer_<int> sequence_lengths_;  // current sequence length
-    Buffer_<int> init_ctx_lens_;
     Buffer_<int> lora_mask_buf_;  // lora
 
     Buffer_<float>    sampled_logprobs_;

@@ -704,7 +704,6 @@ void LlamaBatch::AllocateBuffer(ssize_t batch_size, ssize_t session_len, int cac
 
     decoder_output_buf_ = {{batchxbeam, hidden_units}, data_type_, kDEVICE};
 
-    input_length_buf_    = {batchxbeam, kDEVICE};
     context_length_buf_  = {batchxbeam, kDEVICE};
     init_context_length_ = {batchxbeam, kDEVICE};
 
@@ -1530,12 +1529,6 @@ bool LlamaBatch::Forward(GenerationState& g)
     }
     if (pf_offset < 0) {
         pf_offset = active_size;
-    }
-
-    // These buffers are only accessed when there are prefill workloads
-    if (pf_offset != active_size) {
-        Copy(state_->h_context_length, active_size, context_length_buf_);
-        Copy(h_input_length_buf_, active_size, input_length_buf_);
     }
 
     // Find mini-batch offsets: input length > 1 ? prefill() : decode()
