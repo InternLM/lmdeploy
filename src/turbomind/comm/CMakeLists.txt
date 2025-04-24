@@ -24,7 +24,7 @@ if (BUILD_MULTI_GPU)
     target_link_libraries(host_comm INTERFACE gloo_comm)
 
     add_library(serialize STATIC serialize.cc)
-    target_link_libraries(serialize INTERFACE core)
+    target_link_libraries(serialize PRIVATE core)
     set_property(TARGET serialize PROPERTY POSITION_INDEPENDENT_CODE ON)
     target_link_libraries(host_comm INTERFACE serialize)
 
