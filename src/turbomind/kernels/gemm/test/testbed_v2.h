@@ -9,6 +9,7 @@
 #include "src/turbomind/kernels/gemm/test/test_utils.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/quantization.h"
+#include <cstdlib>
 
 namespace turbomind::gemm {
 
@@ -44,6 +45,17 @@ public:
         Pack     pu;
         Pack     pv;
     };
+
+    DispatchPolicy get_dispatch_policy()
+    {
+        static DispatchPolicy policy = [] {
+            if (std::getenv("TM_GEMM_TUNE")) {
+                return DispatchPolicy::kMeasure;
+            }
+            return DispatchPolicy::kDefault;
+        }();
+        return policy;
+    }
 
     Testbed_v2(Config c)
     {
@@ -128,7 +140,7 @@ public:
 
     void Run()
     {
-        const Operation operation{DispatchPolicy::kDefault,  //
+        const Operation operation{DispatchPolicy::kMeasure,  //
                                   Epilogue::kNone,
                                   {},
                                   {},

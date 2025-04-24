@@ -39,8 +39,6 @@ __attribute__((noinline)) CUtensorMap make_2d_tma_desc(void*              global
     uint64_t global_stride[1] = {stride_in_bytes};
     uint32_t elem_strides[2]  = {1, 1};
 
-    std::cout << stride_in_bytes << "\n";
-
     auto encode_func = get_cuTensorMapEncodeTiled();
 
     CUtensorMap tensor_map = {};
