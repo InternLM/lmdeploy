@@ -4,12 +4,11 @@ from typing import Dict
 
 import numpy as np
 
-from ...messages import SchedulerSequence
-
 from lmdeploy.logger import get_logger
 
+from ...messages import SchedulerSequence
 
-logger = get_logger("lmdeploy")
+logger = get_logger('lmdeploy')
 
 
 class LogicalMemory:
@@ -69,8 +68,8 @@ class PhysicalAllocator:
         if self.get_num_free_blocks() >= num_blocks:
             num_used = self._num_blocks - self._free_count
             blocks = self._free_blocks[num_used:num_used + num_blocks]
-            self._free_count -= num_blocks 
-            print(f"allocate {num_blocks} blocks, total block {self._num_blocks}, free count: {self._free_count}")
+            self._free_count -= num_blocks
+            print(f'allocate {num_blocks} blocks, total block {self._num_blocks}, free count: {self._free_count}')
             return blocks
         else:
             raise MemoryError('No enough free memory blocks.')
@@ -130,7 +129,7 @@ class LogicalAllocator:
             self._log_mem.ref_count.put(blocks, 1)
             self.update_access_time(blocks)
             self._free_count -= num_blocks
-            print(f"allocate {num_blocks} blocks, total block {self._num_blocks}, free count: {self._free_count}")
+            print(f'allocate {num_blocks} blocks, total block {self._num_blocks}, free count: {self._free_count}')
             return blocks.copy()
         else:
             raise MemoryError('No enough free memory blocks.')

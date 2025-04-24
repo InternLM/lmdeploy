@@ -87,7 +87,6 @@ class CacheConfig:
     migration_backend: MigrationBackend = MigrationBackend.DLSlime
     available_nics: Optional[List[str]] = None
 
-
     def __post_init__(self):
         """post init."""
         from lmdeploy.utils import get_logger

@@ -7,12 +7,11 @@ import torch
 
 # from torch import distributed as dist
 import lmdeploy.pytorch.distributed as dist
+from lmdeploy.disagg.messages import MigrationExecutionBatch
+from lmdeploy.disagg.request import MigrationRequest
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.config import ModelConfig
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
-
-from lmdeploy.disagg.messages import MigrationExecutionBatch
-from lmdeploy.disagg.request import MigrationRequest
 
 
 def _broadcast_tensor(value: torch.Tensor, src: int = 0, device: str = 'cuda'):

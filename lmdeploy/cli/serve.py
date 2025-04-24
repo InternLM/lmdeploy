@@ -1,6 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from lmdeploy.disagg.config import MigrationBackend
-from lmdeploy.disagg.config import EngineRole, MigrationProtocol
+from lmdeploy.disagg.config import EngineRole, MigrationBackend
 from lmdeploy.utils import get_max_batch_size
 
 from .cli import CLI
@@ -131,18 +130,14 @@ class SubCliServe:
                             default='Hybrid',
                             choices=['Hybrid', 'Prefill', 'Decode'],
                             help='Hybrid for Non-Disaggregated Engine;'
-                                 'Prefill for Disaggregated Prefill Engine;'
-                                 'Decode fro Disaggregated Decode Engine;')
+                            'Prefill for Disaggregated Prefill Engine;'
+                            'Decode for Disaggregated Decode Engine;')
         parser.add_argument('--migration-backend',
                             type=str,
                             default='DLSlime',
                             choices=['DLSlime', 'Mooncake', 'InfiniStore'],
                             help='kvcache migration management backend when PD disaggregation')
-        parser.add_argument('--available-nics',
-                            type=str,
-                            nargs="+",
-                            default=None,
-                            help='available-nics')
+        parser.add_argument('--available-nics', type=str, nargs='+', default=None, help='available-nics')
         # common args
         ArgumentHelper.backend(parser)
         ArgumentHelper.log_level(parser)
@@ -260,9 +255,7 @@ class SubCliServe:
                             choices=['Ethernet', 'IB'],
                             default='Ethernet',
                             help='RDMA Link Type')
-        parser.add_argument('--disable-gdr',
-                            action="store_true",
-                            help='with GPU Direct Memory Access')
+        parser.add_argument('--disable-gdr', action='store_true', help='with GPU Direct Memory Access')
 
         ArgumentHelper.api_keys(parser)
         ArgumentHelper.ssl(parser)

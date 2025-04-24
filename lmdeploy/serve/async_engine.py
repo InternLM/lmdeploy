@@ -761,7 +761,13 @@ class AsyncEngine(LogitsMixin):
                         spaces_between_special_tokens=gen_config.spaces_between_special_tokens)
                     res = token_ids[ids_offset:]
 
-                    out = GenOut(response, history_len, input_len, gen_len, finish_reason, res, cache_block_ids=outputs.cache_block_ids)
+                    out = GenOut(response,
+                                 history_len,
+                                 input_len,
+                                 gen_len,
+                                 finish_reason,
+                                 res,
+                                 cache_block_ids=outputs.cache_block_ids)
 
                     if outputs.logprobs is not None:
                         log_offset = ids_offset - start_ids_offset
@@ -790,7 +796,8 @@ class AsyncEngine(LogitsMixin):
                     logger.info(f'session {session_id} finished, reason '
                                 f'"{finish_reason}", input_tokens '
                                 f'{len(input_ids)}, outupt_tokens {gen_len}')
-                    yield GenOut(response, self.id2step[session_id], len(input_ids), gen_len, finish_reason, outputs.cache_block_ids)
+                    yield GenOut(response, self.id2step[session_id], len(input_ids), gen_len, finish_reason,
+                                 outputs.cache_block_ids)
                 else:
                     logger.error(f'session {session_id} finished, '
                                  'reason "error"')
@@ -884,18 +891,20 @@ class AsyncEngine(LogitsMixin):
             session.generator = None
 
         return session
-    
+
     """ DistServe Async Engine API Begin """
+
     def free_cache(self, session_id: int):
         if session_id in self.engine.scheduler.sessions:
             self.engine.scheduler.end_session(session_id)
-            logger.info(f"successfully free session {session_id}")
+            logger.info(f'successfully free session {session_id}')
         else:
-            logger.warning(f"Invalid Free session {session_id}.")
+            logger.warning(f'Invalid Free session {session_id}.')
 
     def p2p_initialize(self, init_request: DistServeInitRequest):
         return self.engine.executor.p2p_initialize(init_request)
 
     def p2p_connect(self, conn_request: List[DistServeConnectionRequest]):
         return self.engine.executor.p2p_connect(conn_request)
+
     """ DistServe Async Engine API End """

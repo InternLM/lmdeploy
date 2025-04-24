@@ -1,17 +1,16 @@
+# Copyright (c) OpenMMLab. All rights reserved.
 import enum
-
 from typing import List, Optional
 
 from pydantic import BaseModel
 
 
 class ServingStrategy(enum.Enum):
-    """
-    Serving Strategy.
+    """Serving Strategy.
 
     Attributes:
         Hybrid: Prefill and Decode workload are co-located in one engine.
-        DistServe: Prefill and Decode worload are assigned to different
+        DistServe: Prefill and Decode workload are assigned to different
             engines. After the execution of prefill phase in Prefill Engine,
             KVCache is migrated from Prefill to Decode Engine.
     """
@@ -21,8 +20,7 @@ class ServingStrategy(enum.Enum):
 
 
 class EngineRole(enum.Enum):
-    """
-    Role of Engine.
+    """Role of Engine.
 
     Note: In the implementation of LMDeploy-Distserve, all engine is hybrid
         engine technically, the role of engine is up to what kind of request is
@@ -48,8 +46,7 @@ class MigrationBackend(enum.Enum):
 
 
 class MigrationProtocol(enum.Enum):
-    """
-    Migration Transport Protocol.
+    """Migration Transport Protocol.
 
     Attributes:
         TCP: TCP for General Purpose Transport Protocol.
@@ -57,7 +54,7 @@ class MigrationProtocol(enum.Enum):
         NVLINK: High device-to-device link.
 
     Warning: By now, only `GPU Directed RDMA` is supported in DistServe.
-        We preserve several protocal and will be implemented in the future.
+        We preserve several protocol and will be implemented in the future.
     """
 
     TCP = enum.auto()
@@ -66,8 +63,7 @@ class MigrationProtocol(enum.Enum):
 
 
 class RDMALinkType(enum.Enum):
-    """
-    RDMA Link Type.
+    """RDMA Link Type.
 
     TODO: rename Ethernet to RoCE.
     """
@@ -77,8 +73,7 @@ class RDMALinkType(enum.Enum):
 
 
 class DistServeRDMAConfig(BaseModel):
-    """
-    DistServe RDMA Config.
+    """DistServe RDMA Config.
 
     Args:
         with_gdr: default to True.
@@ -104,8 +99,7 @@ class DistServeNVLinkConfig(BaseModel):
 
 
 class DistServeEngineConfig(BaseModel):
-    """
-    DistServe Engine Config.
+    """DistServe Engine Config.
 
     In Disaggregated LLM Serving, we need to get engine info of each
     PD Peer for the following reason:

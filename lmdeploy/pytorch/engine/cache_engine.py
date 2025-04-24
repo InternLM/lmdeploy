@@ -4,20 +4,10 @@ from typing import Dict, List, Literal, Optional, Tuple
 
 import torch
 
-from lmdeploy.disagg.config import EngineRole
-from lmdeploy.disagg.messages import (
-    DistServeRegisterMRMessage,
-    MigrationExecutionBatch,
-    MigrationAssignment,
-)
-
-from lmdeploy.disagg.backend.base import MigrationBackendImpl
 from lmdeploy.disagg.backend.backend import MIGRATION_BACKENDS
-
-from lmdeploy.disagg.request import (
-    DistServeInitRequest,
-    DistServeConnectionRequest
-)
+from lmdeploy.disagg.backend.base import MigrationBackendImpl
+from lmdeploy.disagg.messages import DistServeRegisterMRMessage, MigrationAssignment, MigrationExecutionBatch
+from lmdeploy.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.utils import get_logger
 
@@ -78,7 +68,6 @@ class CacheEngine:
 
         logger.debug(f'Initialize cache engine with {cache_config.num_gpu_blocks}'
                      f' gpu blocks and {cache_config.num_cpu_blocks} cpu blocks.')
-
 
     @property
     def cpu_cache(self):
@@ -324,6 +313,7 @@ class CacheEngine:
         return total
 
     """ Metheds for PD Disaggregation Begin. """
+
     def p2p_initialize(self, migration_init_request: DistServeInitRequest):
         if not self.migration_backend_impl:
             self.migration_backend_impl = MIGRATION_BACKENDS[self.cache_config.migration_backend]()
@@ -332,22 +322,20 @@ class CacheEngine:
         for i, t in enumerate(self.full_gpu_cache):
             if t.numel() == 0:
                 continue
-            register_mr_request = DistServeRegisterMRMessage(
-                protocol=migration_init_request.protocol,
-                remote_engine_id=migration_init_request.remote_engine_id,
-                mr_key=str(i),
-                addr=t.data_ptr() + t.storage_offset(),
-                length=t.numel() * t.itemsize
-            )
+            register_mr_request = DistServeRegisterMRMessage(protocol=migration_init_request.protocol,
+                                                             remote_engine_id=migration_init_request.remote_engine_id,
+                                                             mr_key=str(i),
+                                                             addr=t.data_ptr() + t.storage_offset(),
+                                                             length=t.numel() * t.itemsize)
             self.migration_backend_impl.register_memory_region(register_mr_request)
-        return self.migration_backend_impl.endpoint_info(
-            migration_init_request.remote_engine_id,
-            migration_init_request.protocol)
+        return self.migration_backend_impl.endpoint_info(migration_init_request.remote_engine_id,
+                                                         migration_init_request.protocol)
 
     def p2p_connect(self, migration_conn_request: DistServeConnectionRequest):
         self.migration_backend_impl.p2p_connect(migration_conn_request[self.tp_rank])
 
     async def migrate(self, migration_execution_inputs: MigrationExecutionBatch):
+
         def get_assignment_len():
             head_dim = self.model_config.get_head_size()
             num_heads = self.model_config.num_key_value_heads // self.world_size
@@ -360,12 +348,10 @@ class CacheEngine:
         def get_offset(block_ids, assignment_len, layer_stride, remote_layer_stride):
             target_offset = [
                 block_id[0] * assignment_len + layer * remote_layer_stride
-                for layer in range(self.model_config.num_layers)
-                for block_id in block_ids
+                for layer in range(self.model_config.num_layers) for block_id in block_ids
             ]
             source_offset = [
-                block_id[1] * assignment_len + layer * layer_stride
-                for layer in range(self.model_config.num_layers)
+                block_id[1] * assignment_len + layer * layer_stride for layer in range(self.model_config.num_layers)
                 for block_id in block_ids
             ]
             return target_offset, source_offset
@@ -373,20 +359,20 @@ class CacheEngine:
         for migration_exe_req in migration_execution_inputs.requests:
             remote_engine_id = migration_exe_req[0]
             blocks_to_migration = migration_exe_req[1]
-            remote_layer_stride = self.migration_backend_impl.links[remote_engine_id].remote_engine_config.num_gpu_blocks * assignment_len
-            target_offset, source_offset = get_offset(blocks_to_migration, assignment_len, layer_stride, remote_layer_stride)
-            
+            remote_layer_stride = self.migration_backend_impl.links[
+                remote_engine_id].remote_engine_config.num_gpu_blocks * assignment_len
+            target_offset, source_offset = get_offset(blocks_to_migration, assignment_len, layer_stride,
+                                                      remote_layer_stride)
+
             for i, t in enumerate(self.full_gpu_cache):
                 if t.numel() == 0:
                     continue
                 await self.migration_backend_impl.p2p_migrate(
-                    MigrationAssignment(
-                        protocol=migration_execution_inputs.protocol,
-                        remote_engine_id=remote_engine_id,
-                        mr_key=str(i),
-                        target_offset=target_offset,
-                        source_offset=source_offset,
-                        length=assignment_len
-                    )
-                )
+                    MigrationAssignment(protocol=migration_execution_inputs.protocol,
+                                        remote_engine_id=remote_engine_id,
+                                        mr_key=str(i),
+                                        target_offset=target_offset,
+                                        source_offset=source_offset,
+                                        length=assignment_len))
+
     """ Metheds for PD Disaggregation End. """

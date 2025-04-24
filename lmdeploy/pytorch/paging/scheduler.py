@@ -3,16 +3,15 @@
 
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
+from lmdeploy.disagg.messages import MigrationExecutionBatch
 from lmdeploy.utils import get_logger, logging_timer
 
 from ..config import CacheConfig, SchedulerConfig
 from ..messages import MessageStatus, SchedulerSequence, SchedulerSession, SequenceManager
 from .block_manager import build_block_manager
 from .block_trie import BlockTrie
-
-from lmdeploy.disagg.messages import MigrationExecutionBatch
 
 logger = get_logger('lmdeploy')
 
@@ -76,7 +75,7 @@ class Scheduler:
         """get waiting sequence."""
         seq_map = self.seq_manager.get_sequences(MessageStatus.LOCKED)
         return list(seq_map.values())
-    
+
     @property
     def waiting_migration(self):
         """get migration sequence."""
@@ -136,8 +135,8 @@ class Scheduler:
 
         # push message to waiting queue
         self._set_message_status(seq, MessageStatus.WAITING)
-    
-    @logging_timer("ScheduleMigration", logger)
+
+    @logging_timer('ScheduleMigration', logger)
     def _schedule_migration(self):
 
         running_migration: SeqList = []
@@ -196,26 +195,18 @@ class Scheduler:
             nonlocal token_count
             token_count += seq.num_token_ids
             if seq.migration_request:
-                migration_execution_requests: List[
-                    Tuple[int, List[Tuple[int, int]]]
-                ] = []
+                migration_execution_requests: List[Tuple[int, List[Tuple[int, int]]]] = []
                 migration_request = seq.migration_request
                 prefill_block_ids = migration_request.remote_block_ids
-                decode_block_ids = list(
-                    self.block_manager.get_block_table(msg=seq)
-                )
+                decode_block_ids = list(self.block_manager.get_block_table(msg=seq))
 
                 assert len(prefill_block_ids) == len(decode_block_ids)
-                migration_execution_requests.append(
-                    (
-                        migration_request.remote_engine_id,
-                        list(zip(prefill_block_ids, decode_block_ids)),
-                    )
-                )
-                migration_inputs = MigrationExecutionBatch(
-                    protocol=migration_request.protocol,
-                    requests=migration_execution_requests
-                )
+                migration_execution_requests.append((
+                    migration_request.remote_engine_id,
+                    list(zip(prefill_block_ids, decode_block_ids)),
+                ))
+                migration_inputs = MigrationExecutionBatch(protocol=migration_request.protocol,
+                                                           requests=migration_execution_requests)
                 seq.migration_inputs = migration_inputs
 
         def __evict_for_seq(seq: SchedulerSequence, waiting):
@@ -350,7 +341,8 @@ class Scheduler:
 
     def has_unfinished(self):
         """Check if there are any unfinished message."""
-        return self.has_running() or self.has_waiting() # or self.has_migration_running() or self.has_migration_waiting()
+        return self.has_running() or self.has_waiting(
+        )  # or self.has_migration_running() or self.has_migration_waiting()
 
     def has_running(self):
         return self.num_running() > 0
@@ -407,7 +399,7 @@ class Scheduler:
 
     def unlock_running_migration(self, locked: SeqList):
         for seq in locked:
-            logger.info(f"unlock_running_migration: {seq.status}")
+            logger.info(f'unlock_running_migration: {seq.status}')
             if seq.status == MessageStatus.MIGRATION_LOCKED:
                 self._set_message_status(seq, MessageStatus.MIGRATION_DONE)
 

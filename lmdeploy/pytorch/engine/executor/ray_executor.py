@@ -12,10 +12,8 @@ import torch
 from ray.util.placement_group import PlacementGroup
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
-from lmdeploy.disagg.messages import (
-    MigrationExecutionBatch,
-)
-from lmdeploy.disagg.request import DistServeInitRequest, DistServeConnectionRequest
+from lmdeploy.disagg.messages import MigrationExecutionBatch
+from lmdeploy.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.pytorch.backends.selector import init_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, ModelConfig
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
@@ -527,14 +525,16 @@ class RayExecutor(ExecutorBase):
             raise ValueError(f'Unsupported device type: {device_str}')
 
     """ PD Disaggregation API Begin """
+
     def p2p_initialize(self, init_request: DistServeInitRequest):
-        return self.collective_rpc("p2p_initialize", (init_request, ))
+        return self.collective_rpc('p2p_initialize', (init_request, ))
 
     def p2p_connect(self, conn_request: List[DistServeConnectionRequest]):
         """rdma connect."""
-        return self.collective_rpc("p2p_connect", (conn_request,))
+        return self.collective_rpc('p2p_connect', (conn_request, ))
 
     async def migrate(self, batch: MigrationExecutionBatch):
         jobs = (worker.migrate.remote(batch) for worker in self.workers)
         return await asyncio.gather(*jobs)
+
     """ PD Disaggregation API Begin """

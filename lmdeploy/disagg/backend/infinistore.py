@@ -1,24 +1,18 @@
-from lmdeploy.disagg.messages import (
-    DistServeRegisterMRMessage,
-    MigrationAssignment
-)
-
-from lmdeploy.disagg.backend.backend import register_migration_backend
+# Copyright (c) OpenMMLab. All rights reserved.
+from lmdeploy.disagg.backend.backend import MIGRATION_BACKENDS
 from lmdeploy.disagg.backend.base import MigrationBackendImpl
-from lmdeploy.disagg.config import MigrationProtocol
-from lmdeploy.disagg.request import (
-    DistServeInitRequest,
-    DistServeConnectionRequest
-)
-from lmdeploy.disagg.config import MigrationBackend
+from lmdeploy.disagg.config import MigrationBackend, MigrationProtocol
+from lmdeploy.disagg.messages import DistServeRegisterMRMessage, MigrationAssignment
+from lmdeploy.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 
 
-@register_migration_backend(MigrationBackend.InfiniStore)
+@MIGRATION_BACKENDS.register_module(MigrationBackend.InfiniStore.name)
 class InfiniStoreBackend(MigrationBackendImpl):
+
     def p2p_initialize(self, init_request: DistServeInitRequest):
         raise NotImplementedError
 
-    def register_memory_region(self, register_mr_request:DistServeRegisterMRMessage):
+    def register_memory_region(self, register_mr_request: DistServeRegisterMRMessage):
         raise NotImplementedError
 
     def endpoint_info(self, remote_engine_id: int, protocol: MigrationProtocol):

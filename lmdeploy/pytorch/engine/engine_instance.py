@@ -147,7 +147,7 @@ class EngineInstance:
         while True:
             resp = await self.req_sender.async_recv(resp)
 
-            cache_block_ids = resp.data.get("cache_block_ids", None)
+            cache_block_ids = resp.data.get('cache_block_ids', None)
             if resp.type == ResponseType.SUCCESS:
                 token_ids = resp.data['token_ids']
                 num_ids = len(token_ids)

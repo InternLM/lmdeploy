@@ -6,15 +6,11 @@ from typing import Callable, Dict, List, Literal, Optional
 import torch
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 
-from lmdeploy.disagg.config import EngineRole, DistServeEngineConfig, MigrationProtocol
+from lmdeploy.disagg.config import EngineRole, MigrationBackend
 from lmdeploy.disagg.request import MigrationRequest
 
 from .tokenizer import Tokenizer
 from .utils import get_logger
-
-from lmdeploy.disagg.config import (
-    MigrationBackend,
-)
 
 logger = get_logger('lmdeploy')
 
@@ -313,7 +309,7 @@ class PytorchEngineConfig:
         role (EngineRole): role of engin, options: ['Hybrid', 'Prefill',
             'Decode']. Default to `EngineRole.Hybrid`.
         migration_backend: migration backend. options: ['DLSlime', 'Mooncake',
-            'InfiniStore']. Deafult to `MigrationBackend.DLSlime`.
+            'InfiniStore']. Default to `MigrationBackend.DLSlime`.
         available_nics: Available NICs when kvcache migration. If set to None,
             the `MigrationBackend` will find available NICs by self.
     """

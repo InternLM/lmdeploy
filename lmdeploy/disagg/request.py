@@ -1,15 +1,10 @@
-from typing import List
+# Copyright (c) OpenMMLab. All rights reserved.
+from typing import List, Optional
+
 from pydantic import BaseModel
 
-from typing import Optional
-
-from lmdeploy.disagg.config import (
-    DistServeEngineConfig,
-    DistServeNVLinkConfig,
-    DistServeRDMAConfig,
-    DistServeTCPConfig,
-    MigrationProtocol
-)
+from lmdeploy.disagg.config import (DistServeEngineConfig, DistServeNVLinkConfig, DistServeRDMAConfig,
+                                    DistServeTCPConfig, MigrationProtocol)
 
 
 class DistServeConnectionRequest(BaseModel):

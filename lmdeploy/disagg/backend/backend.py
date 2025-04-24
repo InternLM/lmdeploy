@@ -1,12 +1,4 @@
-from lmdeploy.disagg.config import MigrationBackend
+# Copyright (c) OpenMMLab. All rights reserved.
+from mmengine.registry import Registry
 
-
-MIGRATION_BACKENDS = {}
-
-
-def register_migration_backend(backend_name: MigrationBackend):
-    def register(cls):
-        MIGRATION_BACKENDS[backend_name] = cls
-        return cls
-
-    return register
+MIGRATION_BACKENDS = Registry('migration_backend', locations=['lmdeploy.disagg.backend.backend'])

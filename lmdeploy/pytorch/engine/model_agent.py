@@ -1,18 +1,16 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import functools
+import time
 from contextlib import contextmanager
 from typing import Any, Dict
-
-import time
 
 import torch
 import torch.distributed as dist
 
-from lmdeploy.utils import get_logger
-
 from lmdeploy.disagg.config import EngineRole
 from lmdeploy.disagg.messages import MigrationExecutionBatch
+from lmdeploy.utils import get_logger
 
 from ..backends import get_backend
 from ..config import BackendConfig, CacheConfig, ModelConfig
@@ -400,7 +398,7 @@ class AutoModelAgent:
             end = time.time()
             if tp > 1:
                 dist.all_reduce(done, group=tp_cpu_group, async_op=False)
-            print(f"migration latency per request: {(end-begin) / len(inputs.migration_inputs) * 1e3} ms")
+            print(f'migration latency per request: {(end-begin) / len(inputs.migration_inputs) * 1e3} ms')
             if need_output:
                 event = torch.cuda.Event()
                 event.record()
@@ -474,13 +472,13 @@ class AutoModelAgent:
                 if need_output:
                     # sampling
                     logger.debug(f'<ForwardTask> rank[{rank}]: Sampling [{idx}].')
-                    next_token_ids = await self.async_sampling_logits(logits, all_ids, guided_input_ids, sampling_inputs,
-                                                                    inputs, num_ignore_eos > 0)
+                    next_token_ids = await self.async_sampling_logits(logits, all_ids, guided_input_ids,
+                                                                      sampling_inputs, inputs, num_ignore_eos > 0)
                     num_ignore_eos = num_ignore_eos - 1
 
                     # stopping criteria
                     stopped, num_appendable_ids = _batch_stopping_criteria(next_token_ids, sampling_inputs.stop_words,
-                                                                        num_appendable_ids)
+                                                                           num_appendable_ids)
                 else:
                     next_token_ids = torch.empty_like(num_ignore_eos)
                     stopped = None
@@ -498,10 +496,10 @@ class AutoModelAgent:
                     event = torch.cuda.Event()
                     event.record()
                     output = dict(next_token_ids=next_token_ids,
-                                logits=logits if return_logits else None,
-                                stopped=stopped,
-                                model_metas=model_metas,
-                                event=event)
+                                  logits=logits if return_logits else None,
+                                  stopped=stopped,
+                                  model_metas=model_metas,
+                                  event=event)
                     logger.info(f'<ForwardTask> rank[{rank}]: Output [{idx}]')
                     self._out_que.put_nowait(output)
 
@@ -580,10 +578,10 @@ class AutoModelAgent:
             return dict()
 
         event = out.pop('event')
-        logger.info("querying")
+        logger.info('querying')
         while not event.query():
             await asyncio.sleep(0.001)
-        logger.info("query done")
+        logger.info('query done')
         with torch.cuda.stream(self.out_stream):
             out['next_token_ids'] = out['next_token_ids'].cpu()
             out['stopped'] = out['stopped'].cpu()
@@ -679,7 +677,11 @@ class BaseModelAgent(AutoModelAgent):
             attn_dist_cfg = dist_ctx.dist_config.attn_config
             tp = attn_dist_cfg.tp
 
-            self.cache_engine = CacheEngine(self.cache_config, self.model_config, rank=self.rank, tp_rank=self.tp_rank, world_size=tp)
+            self.cache_engine = CacheEngine(self.cache_config,
+                                            self.model_config,
+                                            rank=self.rank,
+                                            tp_rank=self.tp_rank,
+                                            world_size=tp)
 
     def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
         cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)

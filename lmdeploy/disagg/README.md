@@ -1,10 +1,12 @@
 # LMDeploy-DistServe
 
 ## Key Components
+
 1. ​**Router Service**: Coordinates between prefill/decode engines
-4. ​**Migration Manager**: Facilitates high-performance memory sharing
+2. ​**Migration Manager**: Facilitates high-performance memory sharing
 
 ## Installation
+
 ```
 # Inference Engine
 pip install lmdeploy[all] >= 0.7.0
@@ -14,10 +16,12 @@ pip install dlslime==0.0.1.post2
 ```
 
 ## Quick Start
+
 ### 1. Configure Endpoints
+
 First deploy your prefill and decode engines.
 
-``` shell
+```shell
 # Prefill Engine
 CUDA_VISIBLE_DEVICES=0,1 lmdeploy serve api_server internlm/internlm2_5-7b-chat --server-port 23333 --role Prefill --tp 2 --cache-block-seq 32
 # Decode Engine
@@ -26,7 +30,7 @@ CUDA_VISIBLE_DEVICES=2,3 lmdeploy serve api_server internlm/internlm2_5-7b-chat 
 
 ### 2. Launch Router Service
 
-``` shell
+```shell
 lmdeploy serve proxy
     --server-name 10.130.8.139
     --server-port 5000
@@ -50,22 +54,27 @@ curl -X POST "http://localhost:5000/v1/completions" \
 
 ### RDMA Connection Failed:
 
-``` bash
+```bash
 ibstatus      # Verify IB device status
 ibv_devinfo   # Check device capabilities
 ```
 
 ### Check NVSHMEM configuration:
+
 Make sure to verify NVSHMEM installation.
 
 ## Fault tolerance
+
 ### CacheFree Issue​​
+
 When the ​​Decode Engine​​ completes migration, it sends a ​​FreeCache​​ request to the ​​Prefill Engine​​. However, if the connection fails or the Decode Engine encounters an exception, ​​Cache Free may fail​​, leading to ​​memory leaks​​. Future improvements may include:
 
 - ​​Exception monitoring in the Proxy​​ to automatically release unreferenced memory.
 - ​​Adding a timeout mechanism​​ to force cache release if a response is delayed.
-​​
+  ​​
+
 ### ConnectionPool Issue​​
+
 Currently, if the ​​Proxy disconnects​​, the connection pool must be ​​warmed up again​​. A future enhancement could involve:
 
 A ​​dedicated connection pool management server​​ (e.g., using ​​Raft-based tools like ETCD​​, as mentioned in ​​Mooncake​​) to improve ​​connection discovery​​ and avoid repeated warmups.

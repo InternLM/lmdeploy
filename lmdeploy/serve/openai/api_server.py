@@ -17,12 +17,8 @@ from fastapi.security.http import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from lmdeploy.archs import get_task
-from lmdeploy.disagg.request import DistServeConnectionRequest
-from lmdeploy.disagg.config import DistServeEngineConfig
-from lmdeploy.disagg.config import (
-    EngineRole,
-)
-from lmdeploy.disagg.request import DistServeInitRequest, MigrationRequest
+from lmdeploy.disagg.config import DistServeEngineConfig, EngineRole
+from lmdeploy.disagg.request import DistServeConnectionRequest, DistServeInitRequest, MigrationRequest
 from lmdeploy.messages import GenerationConfig, LogitsProcessor, PytorchEngineConfig, TurbomindEngineConfig
 from lmdeploy.model import ChatTemplateConfig
 from lmdeploy.serve.async_engine import AsyncEngine
@@ -332,9 +328,9 @@ async def chat_completions_v1(raw_request: Request = None):
     """
     json_request = await raw_request.json()
     request = ChatCompletionRequest.model_validate(json_request)
-    migration_request = json_request.pop("migration_request", None)
-    with_cache = json_request.pop("with_cache", False)
-    preserve_cache = json_request.pop("preserve_cache", False)
+    migration_request = json_request.pop('migration_request', None)
+    with_cache = json_request.pop('with_cache', False)
+    preserve_cache = json_request.pop('preserve_cache', False)
     if migration_request:
         migration_request = MigrationRequest.model_validate(migration_request)
 
@@ -504,8 +500,8 @@ async def chat_completions_v1(raw_request: Request = None):
                                                         logprobs=logprobs,
                                                         usage=usage)
             if res.cache_block_ids is not None:
-                response_json["cache_block_ids"] = res.cache_block_ids
-                response_json["remote_token_ids"] = res.token_ids
+                response_json['cache_block_ids'] = res.cache_block_ids
+                response_json['remote_token_ids'] = res.token_ids
             yield f'data: {response_json}\n\n'
         yield 'data: [DONE]\n\n'
 
@@ -587,8 +583,8 @@ async def chat_completions_v1(raw_request: Request = None):
     ).model_dump()
 
     if with_cache:
-        response["cache_block_ids"] = cache_block_ids
-        response["remote_token_ids"] = remote_token_ids
+        response['cache_block_ids'] = cache_block_ids
+        response['remote_token_ids'] = remote_token_ids
 
     return response
 
@@ -637,9 +633,9 @@ async def completions_v1(raw_request: Request = None):
     """
     json_request = await raw_request.json()
     request = CompletionRequest.model_validate(json_request)
-    migration_request = json_request.pop("migration_request", None)
-    with_cache = json_request.pop("with_cache", False)
-    preserve_cache = json_request.pop("preserve_cache", False)
+    migration_request = json_request.pop('migration_request', None)
+    with_cache = json_request.pop('with_cache', False)
+    preserve_cache = json_request.pop('preserve_cache', False)
     if migration_request:
         migration_request = MigrationRequest.model_validate(migration_request)
 
@@ -740,8 +736,8 @@ async def completions_v1(raw_request: Request = None):
                                                             logprobs=logprobs,
                                                             usage=usage)
                 if res.cache_block_ids is not None:
-                    response_json["cache_block_ids"] = res.cache_block_ids
-                    response_json["remote_token_ids"] = res.token_ids
+                    response_json['cache_block_ids'] = res.cache_block_ids
+                    response_json['remote_token_ids'] = res.token_ids
                 yield f'data: {json.dumps(response_json)}\n\n'
         yield 'data: [DONE]\n\n'
 
@@ -754,6 +750,7 @@ async def completions_v1(raw_request: Request = None):
     choices = [None] * len(generators)
     cache_block_ids = []
     remote_token_ids = []
+
     async def _inner_call(i, generator):
         nonlocal cache_block_ids, remote_token_ids
         final_logprobs = []
@@ -791,7 +788,7 @@ async def completions_v1(raw_request: Request = None):
             logprobs=logprobs,
         )
         choices[i] = choice_data
-        
+
         if with_cache:
             cache_block_ids = cache_block_ids[0]
             remote_token_ids = [remote_token_ids[0][-1]]
@@ -812,8 +809,8 @@ async def completions_v1(raw_request: Request = None):
     ).model_dump()
 
     if with_cache:
-        response["cache_block_ids"] = cache_block_ids
-        response["remote_token_ids"] = remote_token_ids
+        response['cache_block_ids'] = cache_block_ids
+        response['remote_token_ids'] = remote_token_ids
 
     return response
 
@@ -852,54 +849,63 @@ async def encode(request: EncodeRequest, raw_request: Request = None):
             length.append(len(ids))
         return EncodeResponse(input_ids=encoded, length=length)
 
+
 """ PD Disaggregation API Begin """
-@router.get("/distserve/engine_info")
+
+
+@router.get('/distserve/engine_info')
 async def engine_info():
     engine = VariableInterface.async_engine.engine
 
-    response = DistServeEngineConfig(
-        tp_size=engine.engine_config.tp,
-        dp_size=engine.engine_config.dp,
-        pp_size=None,
-        ep_size=engine.engine_config.ep,
-        dp_rank=engine.engine_config.dp_rank,
-        block_size=engine.engine_config.block_size,
-        num_cpu_blocks=engine.scheduler.block_manager.num_cpu_blocks,
-        num_gpu_blocks=engine.scheduler.block_manager.num_gpu_blocks,
-        available_nics=engine.engine_config.available_nics
-    )
+    response = DistServeEngineConfig(tp_size=engine.engine_config.tp,
+                                     dp_size=engine.engine_config.dp,
+                                     pp_size=None,
+                                     ep_size=engine.engine_config.ep,
+                                     dp_rank=engine.engine_config.dp_rank,
+                                     block_size=engine.engine_config.block_size,
+                                     num_cpu_blocks=engine.scheduler.block_manager.num_cpu_blocks,
+                                     num_gpu_blocks=engine.scheduler.block_manager.num_gpu_blocks,
+                                     available_nics=engine.engine_config.available_nics)
 
     return response.model_dump_json()
 
-@router.post("/distserve/p2p_initialize")
+
+@router.post('/distserve/p2p_initialize')
 async def p2p_initialize(init_request: DistServeInitRequest):
     return VariableInterface.async_engine.p2p_initialize(init_request)
 
-@router.post("/distserve/p2p_connect")
+
+@router.post('/distserve/p2p_connect')
 async def p2p_connect(conn_request: List[DistServeConnectionRequest]):
     return VariableInterface.async_engine.p2p_connect(conn_request)
 
-@router.post("/distserve/set_engine_to_prefill")
+
+@router.post('/distserve/set_engine_to_prefill')
 async def set_engine_to_prefill() -> JSONResponse:
     VariableInterface.async_engine.engine.engine_config.role = EngineRole.Prefill
-    return {"status": "SUCCESS"}
+    return {'status': 'SUCCESS'}
 
-@router.post("/distserve/set_engine_to_decode")
-async def set_engine_to_hybrid() -> JSONResponse:
+
+@router.post('/distserve/set_engine_to_decode')
+async def set_engine_to_decode() -> JSONResponse:
     VariableInterface.async_engine.engine.engine_config.role = EngineRole.Decode
-    return {"status": "SUCCESS"}
+    return {'status': 'SUCCESS'}
 
-@router.post("/distserve/set_engine_to_hybrid")
-async def set_engine_to_hybrid() -> JSONResponse:
+
+@router.post('/distserve/set_engine_to_hybrid')
+async def set_engine_to_hubrid() -> JSONResponse:
     VariableInterface.async_engine.engine.engine_config.role = EngineRole.Hybrid
-    return {"status": "SUCCESS"}
+    return {'status': 'SUCCESS'}
 
-@router.post("/distserve/free_cache")
+
+@router.post('/distserve/free_cache')
 async def free_cache(raw_request: Request) -> JSONResponse:
     config = await raw_request.json()
-    session_id = int(config["session_id"])
+    session_id = int(config['session_id'])
     VariableInterface.async_engine.free_cache(session_id)
-    return {"status": "SUCCESS"}
+    return {'status': 'SUCCESS'}
+
+
 """ PD Disaggregation API End """
 
 
@@ -1064,7 +1070,13 @@ async def startup_event():
         import requests
         engine_config = VariableInterface.async_engine.engine.engine_config
         url = f'{VariableInterface.proxy_url}/nodes/add'
-        data = {'url': VariableInterface.api_server_url, 'status': {'models': get_model_list(), 'role': engine_config.role.value}}
+        data = {
+            'url': VariableInterface.api_server_url,
+            'status': {
+                'models': get_model_list(),
+                'role': engine_config.role.value
+            }
+        }
         headers = {'accept': 'application/json', 'Content-Type': 'application/json'}
         response = requests.post(url, headers=headers, json=data)
 

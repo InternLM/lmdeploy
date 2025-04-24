@@ -24,6 +24,7 @@ def _reduce_scatter_input(out: torch.Tensor, rank: int, tp_sizes: List[int]):
 
 class DefaultLinearImpl(LinearImpl):
     """Linear implementation api."""
+
     def forward(self,
                 x,
                 weight: torch.Tensor,

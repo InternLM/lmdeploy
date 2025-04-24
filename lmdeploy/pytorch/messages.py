@@ -7,8 +7,8 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 from torch import Tensor
 
-from lmdeploy.disagg.request import MigrationRequest
 from lmdeploy.disagg.messages import MigrationExecutionBatch
+from lmdeploy.disagg.request import MigrationRequest
 from lmdeploy.messages import GenerationConfig, LogitsProcessor
 from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
 from lmdeploy.utils import get_logger
@@ -139,7 +139,7 @@ class MessageStatus(enum.Enum):
 
     # PD Disaggregation
     # WAITING_MIGRATION: state of Unmigrated Requests
-    # in both prefill and decode engines are taged by
+    # in both prefill and decode engines are tagged by
     # RUNNING_MIGRATION: state of Migrating Requests
     # in decode engine
     TO_BE_MIGRATED = enum.auto()
@@ -231,7 +231,7 @@ class SchedulerSession:
                      input_embeddings: List[InputEmbeddings] = None,
                      migration_request: Optional[MigrationRequest] = None,
                      resp_cache: bool = False,
-                     preserve_cache:bool = False) -> 'SchedulerSequence':
+                     preserve_cache: bool = False) -> 'SchedulerSequence':
         """Add a new message."""
         if isinstance(token_ids, Tensor):
             token_ids = token_ids.numpy()
