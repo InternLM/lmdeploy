@@ -54,24 +54,28 @@ curl -X POST "http://localhost:5000/v1/completions" \
 
 ### RDMA Connection Failed:
 
+Make sure ibverbs is correctly installed:
+
+```
+# on Ubuntu
+sudo apt install libibverbs-dev
+# on CentOS
+sudo yum install ibverbs-devel
+```
+
 ```bash
 ibstatus      # Verify IB device status
 ibv_devinfo   # Check device capabilities
 ```
 
-### Check NVSHMEM configuration:
+### Check GPU Direct RDMA:
 
-Make sure to verify NVSHMEM installation.
+By now, lmdeploy-distserve use GPUDirect RDMA to perform KVTransfer. Make sure GPUDirect RDMA Driver is loaded to kernel.
 
-## Fault tolerance
-
-### CacheFree Issue​​
-
-When the ​​Decode Engine​​ completes migration, it sends a ​​FreeCache​​ request to the ​​Prefill Engine​​. However, if the connection fails or the Decode Engine encounters an exception, ​​Cache Free may fail​​, leading to ​​memory leaks​​. Future improvements may include:
-
-- ​​Exception monitoring in the Proxy​​ to automatically release unreferenced memory.
-- ​​Adding a timeout mechanism​​ to force cache release if a response is delayed.
-  ​​
+```bash
+lsmod | grep nv_peer_mem
+# GPUDirect RDMA info will be printed If GPUDirect RDMA is correctly loaded.
+```
 
 ### ConnectionPool Issue​​
 
