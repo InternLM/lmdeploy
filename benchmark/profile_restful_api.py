@@ -491,6 +491,8 @@ def sample_random_requests(
         dataset = [data for data in dataset if len(data['conversations']) >= 2]
         # Only keep the first two turns of each conversation.
         dataset = [(data['conversations'][0]['value'], data['conversations'][1]['value']) for data in dataset]
+        # remove the empty prompt
+        dataset = [(query, answer) for query, answer in dataset if len(query) > 0]
 
         # Shuffle the dataset.
         random.shuffle(dataset)

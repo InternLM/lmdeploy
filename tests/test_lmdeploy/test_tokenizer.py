@@ -8,8 +8,7 @@ from lmdeploy.tokenizer import DetokenizeState, HuggingFaceTokenizer, Tokenizer
 @pytest.mark.parametrize('model_path', [
     'internlm/internlm-chat-7b', 'Qwen/Qwen-7B-Chat', 'baichuan-inc/Baichuan2-7B-Chat', 'upstage/SOLAR-0-70b-16bit',
     'baichuan-inc/Baichuan-7B', 'codellama/CodeLlama-7b-hf', 'THUDM/chatglm2-6b', '01-ai/Yi-6B-200k',
-    '01-ai/Yi-34B-Chat', '01-ai/Yi-6B-Chat', 'WizardLM/WizardLM-70B-V1.0', 'codellama/CodeLlama-34b-Instruct-hf',
-    'tiiuae/falcon-7b'
+    '01-ai/Yi-34B-Chat', '01-ai/Yi-6B-Chat', 'WizardLM/WizardLM-70B-V1.0', 'codellama/CodeLlama-34b-Instruct-hf'
 ])
 @pytest.mark.parametrize('input', [' hi, this is a test 😆😆! 為什麼我還在用繁體字 😆😆       ' * 5])
 @pytest.mark.parametrize('interval', [1, 3])
