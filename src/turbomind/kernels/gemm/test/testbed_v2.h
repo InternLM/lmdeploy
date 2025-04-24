@@ -140,7 +140,7 @@ public:
 
     void Run()
     {
-        const Operation operation{DispatchPolicy::kMeasure,  //
+        const Operation operation{get_dispatch_policy(),  //
                                   Epilogue::kNone,
                                   {},
                                   {},
