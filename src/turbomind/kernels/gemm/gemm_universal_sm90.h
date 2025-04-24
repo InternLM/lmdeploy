@@ -5,6 +5,7 @@
 #include "cute/arch/mma_sm90_desc.hpp"
 #include "cute/arch/mma_sm90_gmma.hpp"
 #include "cutlass/arch/barrier.h"
+#include "cutlass/cutlass.h"
 #include "cutlass/pipeline/sm90_pipeline.hpp"
 
 #include "src/turbomind/kernels/core/common.h"
@@ -42,26 +43,30 @@ template<class Arch_, class Scheduler_>
 struct GemmUniversalSm90 {
 
     static constexpr int CTA_M = 128;
-    static constexpr int CTA_N = 128;
+    static constexpr int CTA_N = 256;
     static constexpr int CTA_K = 64;
 
-    static constexpr int MMA_M = 64;
-    static constexpr int MMA_N = 128;
+    static constexpr int WARPGORUPS = 2;
+
+    static constexpr int MMA_M = 64 * WARPGORUPS;
+    static constexpr int MMA_N = 256;
     static constexpr int MMA_K = 16;
 
     static constexpr int MMA_ITER_M = CTA_M / MMA_M;
     static constexpr int MMA_ITER_N = CTA_N / MMA_N;
     static constexpr int MMA_ITER_K = CTA_K / MMA_K;
 
-    static constexpr int Stages = 2;
+    static constexpr int Stages = 3;
 
     static constexpr bool kSplitK     = false;
     static constexpr int  kChunkSizeK = CTA_K;
 
-    static constexpr int CTA_SIZE = 128;
+    static constexpr int WARPGROUP_SIZE = 128;
+
+    static constexpr int CTA_SIZE = WARPGROUP_SIZE * WARPGORUPS;
 
     using MMA_Atom =
-        cute::SM90::GMMA::MMA_64x128x16_F32BF16BF16_SS<cute::SM90::GMMA::Major::K, cute::SM90::GMMA::Major::K>;
+        cute::SM90::GMMA::MMA_64x256x16_F32BF16BF16_SS<cute::SM90::GMMA::Major::K, cute::SM90::GMMA::Major::K>;
 
     using Ta = nv_bfloat16;
     using Tb = nv_bfloat16;
@@ -105,18 +110,6 @@ struct GemmUniversalSm90 {
         const int offset_n = tile_offset.y * CTA_N;
         const int offset_k = 0 * CTA_K;
 
-        // if (threadIdx.x == 0) {
-        //     printf("(%d %d %d) (%d %d) (%d %d %d)\n",
-        //            (int)blockIdx.x,
-        //            (int)blockIdx.y,
-        //            (int)blockIdx.z,
-        //            tile_offset.x,
-        //            tile_offset.y,
-        //            offset_m,
-        //            offset_n,
-        //            offset_k);
-        // }
-
         if (offset_m >= M || offset_n >= N || offset_k >= K) {  // empty tile
             return;
         }
@@ -156,7 +149,9 @@ struct GemmUniversalSm90 {
 
         MMA_Atom::CRegisters frag_C[MMA_ITER_M][MMA_ITER_N]{};  // zero fill
 
-        auto smem_desc_A = make_smem_desc(&storage.A, 1);
+        const int warpgroup_id = cutlass::canonical_warp_group_idx();
+
+        auto smem_desc_A = make_smem_desc(&storage.A[warpgroup_id * 64 * CTA_K], 1);
         auto smem_desc_B = make_smem_desc(&storage.B, 1);
 
         while (k_iter > -Stages) {
