@@ -135,7 +135,7 @@ class SubCliServe:
         parser.add_argument('--migration-backend',
                             type=str,
                             default='DLSlime',
-                            choices=['DLSlime', 'Mooncake', 'InfiniStore'],
+                            choices=['DLSlime'],
                             help='kvcache migration management backend when PD disaggregation')
         parser.add_argument('--available-nics', type=str, nargs='+', default=None, help='available-nics')
         # common args
