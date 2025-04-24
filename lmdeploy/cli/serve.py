@@ -136,7 +136,8 @@ class SubCliServe:
                             type=str,
                             default='DLSlime',
                             choices=['DLSlime'],
-                            help='kvcache migration management backend when PD disaggregation')
+                            help='kvcache migration management backend when PD disaggregation, '
+                            'Mooncake and InfiniStore will be supported in the future')
         parser.add_argument('--available-nics', type=str, nargs='+', default=None, help='available-nics')
         # common args
         ArgumentHelper.backend(parser)

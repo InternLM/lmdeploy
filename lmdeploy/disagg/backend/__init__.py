@@ -21,4 +21,4 @@ try:
 except ImportError:
     logger.warning('Disable InfiniStoreBackend Backend')
 
-__all__ = [DLSlimeBackend, MooncakeBackend, InfiniStoreBackend]
+__all__ = ['DLSlimeBackend', 'MooncakeBackend', 'InfiniStoreBackend']
