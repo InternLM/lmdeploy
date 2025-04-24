@@ -119,9 +119,14 @@ struct GemmUniversalSm90 {
     static constexpr int kTmaTxBytes = sizeof(Ta) * (CTA_M * CTA_K) + sizeof(Tb) * (CTA_K * CTA_N);
 
     struct SharedStorage {
-        __align__(16) Array<Ta, Stages * CTA_M * CTA_K> A;
-        __align__(16) Array<Tb, Stages * CTA_K * CTA_N> B;
-        // __align__(16) Array<Tc, CTA_M * CTA_N> C;
+        struct Source {
+            __align__(16) Array<Ta, Stages * CTA_M * CTA_K> A;
+            __align__(16) Array<Tb, Stages * CTA_K * CTA_N> B;
+        };
+        union {
+            Source source;
+            __align__(16) Array<Tc, CTA_M * CTA_N> C;
+        };
         uint64_t producer_bar[Stages];
         uint64_t consumer_bar[Stages];
     };
@@ -157,6 +162,8 @@ struct GemmUniversalSm90 {
         GmemIteratorSm90<false> gmem_A{&tm_a, {offset_k, offset_m}, {CTA_K, 0}};
         GmemIteratorSm90<false> gmem_B{&tm_b, {offset_k, offset_n}, {CTA_K, 0}};
 
+        auto&     smem_A       = storage.source.A;
+        auto&     smem_B       = storage.source.B;
         uint64_t* producer_bar = storage.producer_bar;
         uint64_t* consumer_bar = storage.consumer_bar;
 
@@ -175,8 +182,8 @@ struct GemmUniversalSm90 {
             PRAGMA_UNROLL
             for (int s = 0; s < Stages; ++s) {
                 ProducerBar::arrive_and_expect_tx(&producer_bar[s], kTmaTxBytes);
-                gmem_A.Load(&producer_bar[s], &storage.A[s * CTA_M * CTA_K]);
-                gmem_B.Load(&producer_bar[s], &storage.B[s * CTA_N * CTA_K]);
+                gmem_A.Load(&producer_bar[s], &smem_A[s * CTA_M * CTA_K]);
+                gmem_B.Load(&producer_bar[s], &smem_B[s * CTA_N * CTA_K]);
             }
         }
 
@@ -189,8 +196,8 @@ struct GemmUniversalSm90 {
 
         const int warpgroup_id = cutlass::canonical_warp_group_idx();
 
-        auto smem_desc_A = make_smem_desc(&storage.A[warpgroup_id * 64 * CTA_K], 1);
-        auto smem_desc_B = make_smem_desc(&storage.B, 1);
+        auto smem_desc_A = make_smem_desc(&smem_A[warpgroup_id * 64 * CTA_K], 1);
+        auto smem_desc_B = make_smem_desc(&smem_B, 1);
 
         SmemDescIterV2<((sizeof(Ta) * CTA_M * CTA_K) >> 4)> smem_iter_A{smem_desc_A};
         SmemDescIterV2<((sizeof(Tb) * CTA_N * CTA_K) >> 4)> smem_iter_B{smem_desc_B};
@@ -239,13 +246,22 @@ struct GemmUniversalSm90 {
                 int pipe = write_state.index();
                 ConsumerBar::wait(&consumer_bar[pipe], write_state.phase());
                 ProducerBar::arrive_and_expect_tx(&producer_bar[pipe], kTmaTxBytes);
-                gmem_A.Load(&producer_bar[pipe], &storage.A[pipe * CTA_M * CTA_K]);
-                gmem_B.Load(&producer_bar[pipe], &storage.B[pipe * CTA_N * CTA_K]);
+                gmem_A.Load(&producer_bar[pipe], &smem_A[pipe * CTA_M * CTA_K]);
+                gmem_B.Load(&producer_bar[pipe], &smem_B[pipe * CTA_N * CTA_K]);
                 ++write_state;
             }
 
             --k_iter;
         }
+
+        if (threadIdx.x == 0) {  // flush pending TMA ops
+            PRAGMA_UNROLL
+            for (int s = 0; s < Stages; ++s) {
+                ProducerBar::wait(&producer_bar[read_state.index()], read_state.phase());
+                ++read_state;
+            }
+        }
+        __syncthreads();
 
         // epilogue
         const int warp_id = threadIdx.x / WARP_SIZE;
