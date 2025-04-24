@@ -83,7 +83,7 @@ class NodeManager:
                  with_gdr: bool = True,
                  cache_status: Optional[bool] = True) -> None:
         self.nodes = dict()
-        self.serving_strategy = ServingStrategy.__members__[serving_strategy]
+        self.serving_strategy = ServingStrategy[serving_strategy]
         self.routing_strategy = RoutingStrategy.from_str(routing_strategy)
 
         self.cache_status = cache_status
@@ -105,8 +105,8 @@ class NodeManager:
         self.aiotimeout = aiohttp.ClientTimeout(total=AIOHTTP_TIMEOUT)
 
         # For PD Disaggregation
-        self.migration_protocol = MigrationProtocol.__members__[migration_protocol]
-        self.rdma_config = DistServeRDMAConfig(with_gdr=with_gdr, link_type=RDMALinkType.__members__[link_type])
+        self.migration_protocol = MigrationProtocol[migration_protocol]
+        self.rdma_config = DistServeRDMAConfig(with_gdr=with_gdr, link_type=RDMALinkType[link_type])
         self.pd_connection_pool = PDConnectionPool()
         self.initialized = False
 
@@ -775,15 +775,15 @@ def proxy(server_name: str = '0.0.0.0',
         disable_cache_status (str): Whether to cache the proxy status to
              proxy_config.yml.
     """  # noqa
-    node_manager.serving_strategy = ServingStrategy.__members__[serving_strategy]
+    node_manager.serving_strategy = ServingStrategy[serving_strategy]
     node_manager.routing_strategy = RoutingStrategy.from_str(routing_strategy)
-    node_manager.migration_protocol = MigrationProtocol.__members__[migration_protocol]
+    node_manager.migration_protocol = MigrationProtocol[migration_protocol]
 
     if serving_strategy == ServingStrategy.DistServe:
         assert not disable_gdr, 'Bynow, only GDRDMA migration is supported in DistServe'
 
     node_manager.rdma_config = DistServeRDMAConfig(
-        link_type=RDMALinkType.__members__[link_type],
+        link_type=RDMALinkType[link_type],
         with_gdr=not disable_gdr,
     )
     node_manager.cache_status = not disable_cache_status
