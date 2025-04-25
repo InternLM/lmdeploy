@@ -11,7 +11,7 @@ FROM ${CUDA_VERSION} AS final
 ARG PYTHON_VERSION=3.10
 
 RUN apt-get update -y && apt-get install -y software-properties-common wget vim git curl openssh-server ssh sudo &&\
-    apt-get install libibverbs1 ibverbs-providers ibverbs-utils librdmacm1 -y &&\
+    apt-get install libibverbs1 ibverbs-providers ibverbs-utils librdmacm1 libibverbs-dev rdma-core -y &&\
     curl https://sh.rustup.rs -sSf | sh -s -- -y &&\
     add-apt-repository ppa:deadsnakes/ppa -y && apt-get update -y && apt-get install -y --no-install-recommends \
     ninja-build rapidjson-dev libgoogle-glog-dev gdb python${PYTHON_VERSION} python${PYTHON_VERSION}-dev python${PYTHON_VERSION}-venv \
