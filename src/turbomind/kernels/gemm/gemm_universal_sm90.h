@@ -119,11 +119,12 @@ struct GemmUniversalSm90 {
     static constexpr int MMA_ITER_K = CTA_K / MMA_K;
 
     static constexpr int kMulticastA = 1;
-    static constexpr int kMulticastB = 1;
+    static constexpr int kMulticastB = 2;
 
     static constexpr int kClusterSize = kMulticastA * kMulticastB;
 
-    static constexpr int Stages = 4;
+    static constexpr int Stages   = 4;
+    static constexpr int MMA_PIPE = 1;
 
     static constexpr bool kSplitK     = false;
     static constexpr int  kChunkSizeK = CTA_K;
@@ -233,9 +234,11 @@ struct GemmUniversalSm90 {
         }
 
         k_iter -= Stages;
+        auto g_iter = k_iter;
 
         cutlass::PipelineState<Stages> write_state{};
         cutlass::PipelineState<Stages> read_state{};
+        cutlass::PipelineState<Stages> release_state{};
 
         MMA_Atom::CRegisters frag_C[MMA_ITER_M][MMA_ITER_N]{};  // zero fill
 
@@ -252,72 +255,75 @@ struct GemmUniversalSm90 {
         constexpr int kStepKA = (sizeof(Ta) * MMA_K) >> 4;
         constexpr int kStepKB = (sizeof(Tb) * MMA_K) >> 4;
 
-        while (k_iter > -Stages) {
-            if (1) {
-                int pipe = read_state.index();
-                ProducerBar::wait(&producer_bar[pipe], read_state.phase());
-
-                warpgroup_fence_operand(frag_C);
-
-                cute::warpgroup_arrive();  // wgmma.fence.sync.aligned
+        auto tile_gemm = [&] {
+            PRAGMA_UNROLL
+            for (int k = 0; k < MMA_ITER_K; ++k) {
                 PRAGMA_UNROLL
-                for (int k = 0; k < MMA_ITER_K; ++k) {
+                for (int m = 0; m < MMA_ITER_M; ++m) {
                     PRAGMA_UNROLL
-                    for (int m = 0; m < MMA_ITER_M; ++m) {
-                        PRAGMA_UNROLL
-                        for (int n = 0; n < MMA_ITER_N; ++n) {
-                            wgmma<MMA_Atom>(smem_iter_A, smem_iter_B, frag_C[m][n]);
-                            smem_iter_B += kStepNB;
-                        }
-                        smem_iter_B -= MMA_ITER_N * kStepNB;
-                        smem_iter_A += kStepMA;
+                    for (int n = 0; n < MMA_ITER_N; ++n) {
+                        wgmma<MMA_Atom>(smem_iter_A, smem_iter_B, frag_C[m][n]);
+                        smem_iter_B += kStepNB;
                     }
-                    smem_iter_A -= MMA_ITER_M * kStepMA;
-                    smem_iter_A += kStepKA;
-                    smem_iter_B += kStepKB;
+                    smem_iter_B -= MMA_ITER_N * kStepNB;
+                    smem_iter_A += kStepMA;
                 }
-                smem_iter_A -= MMA_ITER_K * kStepKA;
-                smem_iter_B -= MMA_ITER_K * kStepKB;
+                smem_iter_A -= MMA_ITER_M * kStepMA;
+                smem_iter_A += kStepKA;
+                smem_iter_B += kStepKB;
+            }
+            smem_iter_A -= MMA_ITER_K * kStepKA;
+            smem_iter_B -= MMA_ITER_K * kStepKB;
+            cute::warpgroup_commit_batch();
+            ++read_state;
+            smem_iter_A.Advance(read_state.index());
+            smem_iter_B.Advance(read_state.index());
+            --k_iter;
+        };
 
-                cute::warpgroup_commit_batch();
+        warpgroup_fence_operand(frag_C);
+        PRAGMA_UNROLL
+        for (int s = 0; s < MMA_PIPE; ++s) {
+            ProducerBar::wait(&producer_bar[read_state.index()], read_state.phase());
+            cute::warpgroup_arrive();
+            tile_gemm();
+        }
+        warpgroup_fence_operand(frag_C);
 
-                ++read_state;
-                smem_iter_A.Advance(read_state.index());
-                smem_iter_B.Advance(read_state.index());
+        while (k_iter > -Stages) {
+            ProducerBar::wait(&producer_bar[read_state.index()], read_state.phase());
+            warpgroup_fence_operand(frag_C);
+            cute::warpgroup_arrive();
+            tile_gemm();
+            cute::warpgroup_wait<MMA_PIPE>();
+            warpgroup_fence_operand(frag_C);
 
-                cute::warpgroup_wait<0>();
-                warpgroup_fence_operand(frag_C);
-
-                if constexpr (kClusterSize > 1) {
-                    ConsumerBar::arrive(
-                        &consumer_bar[pipe], threadIdx.x % WARPGROUP_SIZE, threadIdx.x % WARPGROUP_SIZE < kClusterSize);
-                }
-                else {
-                    if (threadIdx.x % WARPGROUP_SIZE == 0) {
-                        ConsumerBar::arrive(&consumer_bar[pipe]);
-                    }
+            if constexpr (kClusterSize > 1) {
+                ConsumerBar::arrive(&consumer_bar[release_state.index()],
+                                    threadIdx.x % WARPGROUP_SIZE,
+                                    threadIdx.x % WARPGROUP_SIZE < kClusterSize);
+            }
+            else {
+                if (threadIdx.x % WARPGROUP_SIZE == 0) {
+                    ConsumerBar::arrive(&consumer_bar[release_state.index()]);
                 }
             }
+            ++release_state;
 
-            if (threadIdx.x == 0) {
+            if (threadIdx.x == 0 && g_iter > 0) {
                 int pipe = write_state.index();
                 ConsumerBar::wait(&consumer_bar[pipe], write_state.phase());
                 ProducerBar::arrive_and_expect_tx(&producer_bar[pipe], kTmaTxBytes);
                 gmem_A.Load(&producer_bar[pipe], &smem_A[pipe * CTA_M * CTA_K + mc_offset_m * CTA_K]);
                 gmem_B.Load(&producer_bar[pipe], &smem_B[pipe * CTA_N * CTA_K + mc_offset_n * CTA_K]);
                 ++write_state;
-            }
-
-            --k_iter;
-        }
-
-        if (threadIdx.x == 0) {  // flush pending TMA ops
-            PRAGMA_UNROLL
-            for (int s = 0; s < Stages; ++s) {
-                ProducerBar::wait(&producer_bar[read_state.index()], read_state.phase());
-                ++read_state;
+                --g_iter;
             }
         }
+
+        cute::warpgroup_wait<0>();
+        warpgroup_fence_operand(frag_C);
+
         __syncthreads();
 
         // epilogue
