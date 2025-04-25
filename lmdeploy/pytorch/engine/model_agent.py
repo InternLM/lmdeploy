@@ -386,6 +386,9 @@ class AutoModelAgent:
 
         is_decoding = inputs.is_decoding
         if not is_decoding and self.cache_config.role == EngineRole.Decode:
+            if is_dummy:
+                self._out_que.put_nowait(None)
+                return
             # Migration
             need_output = dp > 1 or rank % tp == 0
             next_token_ids = torch.empty_like(num_ignore_eos)
