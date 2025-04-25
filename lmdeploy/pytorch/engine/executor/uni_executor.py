@@ -1,7 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
-from typing import Any, Dict
+from typing import Any, Dict, List
 
+from lmdeploy.disagg.messages import MigrationExecutionBatch
+from lmdeploy.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, ModelConfig
 from lmdeploy.pytorch.devices import DeviceContext
 from lmdeploy.pytorch.engine.model_agent import build_model_agent
@@ -97,3 +99,22 @@ class UniExecutor(ExecutorBase):
     def get_input_processor(self):
         """get input processor."""
         return self.model_agent.get_input_processor()
+
+    """ PD Disaggregation API Begin """
+
+    def p2p_initialize(self, init_request: DistServeInitRequest):
+        """init rdma link.
+
+        note: return list to be composible with multiprocess executor like ray.
+        """
+        return [self.model_agent.cache_engine.p2p_initialize(init_request)]
+
+    def p2p_connect(self, conn_request: List[DistServeConnectionRequest]):
+        """rdma_connect."""
+        self.model_agent.cache_engine.p2p_connect(conn_request)
+
+    async def migrate(self, batch: MigrationExecutionBatch):
+        """KV Cache Migration."""
+        await self.model_agent.migrate(batch)
+
+    """ PD Disaggregation API End """

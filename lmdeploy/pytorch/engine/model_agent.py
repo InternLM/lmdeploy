@@ -483,7 +483,6 @@ class AutoModelAgent:
                     next_token_ids = torch.empty_like(num_ignore_eos)
                     stopped = None
 
-                torch.cuda.synchronize()
                 next_token_ids = next_token_ids.cpu()
                 if need_broadcast_next:
                     logger.info(f'<ForwardTask> rank[{rank}]: synchornize token ids [{idx}]')

@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import asyncio
 from typing import Dict
 
 from dlslime import RDMAEndpoint, available_nic
@@ -46,13 +45,8 @@ class DLSlimeMigrationManagement:
         self.endpoint[connect_request.protocol].connect_to(connect_request.remote_endpoint_info)
 
     async def p2p_migrate(self, assignment: MigrationAssignment):
-        max_batch = 4096 + 2048
-        for i in range(0, len(assignment.target_offset), max_batch):
-            await asyncio.wait_for(
-                self.endpoint[assignment.protocol].read_batch_async(assignment.mr_key,
-                                                                    assignment.target_offset[i:i + max_batch],
-                                                                    assignment.source_offset[i:i + max_batch],
-                                                                    assignment.length), 15)
+        await self.endpoint[assignment.protocol].read_batch_async(assignment.mr_key, assignment.target_offset,
+                                                                  assignment.source_offset, assignment.length)
 
 
 @MIGRATION_BACKENDS.register_module(MigrationBackend.DLSlime.name)

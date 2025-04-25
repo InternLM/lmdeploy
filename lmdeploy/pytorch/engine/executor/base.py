@@ -3,9 +3,8 @@
 import asyncio
 from typing import Any, Dict, List
 
-from lmdeploy.disagg.config import DistServeEngineConfig
 from lmdeploy.disagg.messages import MigrationExecutionBatch
-from lmdeploy.disagg.request import DistServeConnectionRequest
+from lmdeploy.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, ModelConfig
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine
 from lmdeploy.utils import get_logger
@@ -95,7 +94,7 @@ class ExecutorBase:
 
     """ PD Disaggregation API Begin """
 
-    def p2p_initialize(self, remote_engine_id: int, remote_engine_config: DistServeEngineConfig):
+    def p2p_initialize(self, remote_engine_config: DistServeInitRequest):
         """init rdma link."""
         raise NotImplementedError('Not implemented')
 
