@@ -241,6 +241,8 @@ class AscendOpsBackend(DlinferOpsBackend):
             if not step_context.is_decoding:
                 if is_unpaged_prefill:
                     attention_mask = [mask.half() for mask in attention_mask]
+                    if SocVersion.is_Ascend310P():
+                        attention_mask = [torch.cat([mask.unsqueeze(0) for mask in attention_mask])]
                 else:
                     attention_mask = [
                         torch.cat([mask.half() * cls.half_negative_inf for mask in attention_mask]).unsqueeze(1)
