@@ -796,8 +796,13 @@ class AsyncEngine(LogitsMixin):
                     logger.info(f'session {session_id} finished, reason '
                                 f'"{finish_reason}", input_tokens '
                                 f'{len(input_ids)}, outupt_tokens {gen_len}')
-                    yield GenOut(response, self.id2step[session_id], len(input_ids), gen_len, finish_reason,
-                                 outputs.cache_block_ids)
+                    yield GenOut(response,
+                                 self.id2step[session_id],
+                                 len(input_ids),
+                                 gen_len,
+                                 finish_reason,
+                                 token_ids=token_ids,
+                                 cache_block_ids=outputs.cache_block_ids)
                 else:
                     logger.error(f'session {session_id} finished, '
                                  'reason "error"')
