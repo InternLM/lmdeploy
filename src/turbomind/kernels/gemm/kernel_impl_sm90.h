@@ -175,32 +175,49 @@ public:
             }
         }();
 
+        constexpr int kMulticastA = Gemm::kMulticastA;
+        constexpr int kMulticastB = Gemm::kMulticastB;
+
         // using Ta = typename Gemm::Ta;
         // using Tb = typename Gemm::Tb;
         using Tc = typename Gemm::Tc;
 
-        auto tm_a = make_2d_tma_desc((void*)A, Adesc.type, m, k, CTA_M, CTA_K, kRowMajor, CU_TENSOR_MAP_SWIZZLE_128B);
-        auto tm_b = make_2d_tma_desc((void*)B, Bdesc.type, k, n, CTA_K, CTA_N, kColMajor, CU_TENSOR_MAP_SWIZZLE_128B);
+        auto tm_a = make_2d_tma_desc(
+            (void*)A, Adesc.type, m, k, CTA_M / kMulticastA, CTA_K, kRowMajor, CU_TENSOR_MAP_SWIZZLE_128B);
+        auto tm_b = make_2d_tma_desc(
+            (void*)B, Bdesc.type, k, n, CTA_K, CTA_N / kMulticastB, kColMajor, CU_TENSOR_MAP_SWIZZLE_128B);
         auto tm_c = make_2d_tma_desc((void*)C, Cdesc.type, m, n, CTA_M, CTA_N, kColMajor, CU_TENSOR_MAP_SWIZZLE_NONE);
 
         const auto grid  = sched.get_grid_shape();
         const auto block = Gemm::CTA_SIZE;
-
-        
-
-        cudaLaunchAttribute attrs[1];
-        attrs[0].val.clusterDim.x = 1;
-        attrs[0].val.clusterDim.y = 1;
-        attrs[0].val.clusterDim.z = 1;
 
         cudaLaunchConfig_t config{};
         config.gridDim          = grid;
         config.blockDim         = block;
         config.dynamicSmemBytes = smem_size_;
         config.stream           = stream;
-        config.attrs            = attrs;
 
         auto func = gemm_kernel_sm90<Gemm>;
+
+        int max_cluster_size = 0;
+        cudaOccupancyMaxPotentialClusterSize(&max_cluster_size, func, &config);
+
+        // std::cout << "max cluster size: " << max_cluster_size << "\n";
+
+        cudaLaunchAttribute attrs[1];
+
+        attrs[0].id               = cudaLaunchAttributeClusterDimension;
+        attrs[0].val.clusterDim.x = Gemm::kClusterSize;
+        attrs[0].val.clusterDim.y = 1;
+        attrs[0].val.clusterDim.z = 1;
+
+        // attrs[1].id                                    = cudaLaunchAttributeClusterSchedulingPolicyPreference;
+        // attrs[1].val.clusterSchedulingPolicyPreference = cudaClusterSchedulingPolicyLoadBalancing;
+
+        config.attrs    = attrs;
+        config.numAttrs = std::size(attrs);
+
+        // std::cout << "swizzle: " << swizzle << ", split: " << splits << "\n";
 
         check_cuda_error(cudaLaunchKernelEx(&config, func, tm_a, tm_b, tm_c, (Tc*)C, Cdesc.ld, sched));
 

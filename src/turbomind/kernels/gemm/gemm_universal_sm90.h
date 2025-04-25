@@ -2,6 +2,7 @@
 
 #include <utility>
 
+#include "cute/arch/cluster_sm90.hpp"
 #include "cute/arch/copy_sm90.hpp"
 #include "cute/arch/copy_sm90_tma.hpp"
 #include "cute/arch/mma_sm90_desc.hpp"
@@ -117,6 +118,11 @@ struct GemmUniversalSm90 {
     static constexpr int MMA_ITER_N = CTA_N / MMA_N;
     static constexpr int MMA_ITER_K = CTA_K / MMA_K;
 
+    static constexpr int kMulticastA = 1;
+    static constexpr int kMulticastB = 1;
+
+    static constexpr int kClusterSize = kMulticastA * kMulticastB;
+
     static constexpr int Stages = 4;
 
     static constexpr bool kSplitK     = false;
@@ -182,8 +188,16 @@ struct GemmUniversalSm90 {
 
         SharedStorage& storage = *reinterpret_cast<SharedStorage*>(smem_buf);
 
-        GmemIteratorSm90<false> gmem_A{&tm_a, {offset_k, offset_m}, {CTA_K, 0}};
-        GmemIteratorSm90<false> gmem_B{&tm_b, {offset_k, offset_n}, {CTA_K, 0}};
+        const int cta_id = cute::block_id_in_cluster().x;
+
+        static_assert(CTA_M % kMulticastA == 0);
+        static_assert(CTA_N % kMulticastB == 0);
+
+        const int mc_offset_m = kMulticastA > 1 ? cta_id * (CTA_M / kMulticastA) : 0;
+        const int mc_offset_n = kMulticastB > 1 ? cta_id * (CTA_N / kMulticastB) : 0;
+
+        GmemIteratorSm90<kMulticastA> gmem_A{&tm_a, {offset_k, offset_m + mc_offset_m}, {CTA_K, 0}};
+        GmemIteratorSm90<kMulticastB> gmem_B{&tm_b, {offset_k, offset_n + mc_offset_n}, {CTA_K, 0}};
 
         auto&     smem_A       = storage.source.A;
         auto&     smem_B       = storage.source.B;
@@ -194,19 +208,27 @@ struct GemmUniversalSm90 {
             PRAGMA_UNROLL
             for (int s = 0; s < Stages; ++s) {
                 ProducerBar::init(&producer_bar[s], 1);
-                ConsumerBar::init(&consumer_bar[s], CTA_SIZE);
+                ConsumerBar::init(&consumer_bar[s], kClusterSize * WARPGORUPS);
             }
             cutlass::arch::fence_view_async_shared();
+            if constexpr (kClusterSize > 1) {
+                cutlass::arch::fence_barrier_init();
+            }
         }
 
-        __syncthreads();
+        if constexpr (kClusterSize > 1) {
+            cute::cluster_sync();
+        }
+        else {
+            __syncthreads();
+        }
 
         if (threadIdx.x == 0) {
             PRAGMA_UNROLL
             for (int s = 0; s < Stages; ++s) {
                 ProducerBar::arrive_and_expect_tx(&producer_bar[s], kTmaTxBytes);
-                gmem_A.Load(&producer_bar[s], &smem_A[s * CTA_M * CTA_K]);
-                gmem_B.Load(&producer_bar[s], &smem_B[s * CTA_N * CTA_K]);
+                gmem_A.Load(&producer_bar[s], &smem_A[s * CTA_M * CTA_K + mc_offset_m * CTA_K]);
+                gmem_B.Load(&producer_bar[s], &smem_B[s * CTA_N * CTA_K + mc_offset_n * CTA_K]);
             }
         }
 
@@ -264,18 +286,25 @@ struct GemmUniversalSm90 {
                 smem_iter_B.Advance(read_state.index());
 
                 cute::warpgroup_wait<0>();
-                
                 warpgroup_fence_operand(frag_C);
 
-                ConsumerBar::arrive(&consumer_bar[pipe]);
+                if constexpr (kClusterSize > 1) {
+                    ConsumerBar::arrive(
+                        &consumer_bar[pipe], threadIdx.x % WARPGROUP_SIZE, threadIdx.x % WARPGROUP_SIZE < kClusterSize);
+                }
+                else {
+                    if (threadIdx.x % WARPGROUP_SIZE == 0) {
+                        ConsumerBar::arrive(&consumer_bar[pipe]);
+                    }
+                }
             }
 
             if (threadIdx.x == 0) {
                 int pipe = write_state.index();
                 ConsumerBar::wait(&consumer_bar[pipe], write_state.phase());
                 ProducerBar::arrive_and_expect_tx(&producer_bar[pipe], kTmaTxBytes);
-                gmem_A.Load(&producer_bar[pipe], &smem_A[pipe * CTA_M * CTA_K]);
-                gmem_B.Load(&producer_bar[pipe], &smem_B[pipe * CTA_N * CTA_K]);
+                gmem_A.Load(&producer_bar[pipe], &smem_A[pipe * CTA_M * CTA_K + mc_offset_m * CTA_K]);
+                gmem_B.Load(&producer_bar[pipe], &smem_B[pipe * CTA_N * CTA_K + mc_offset_n * CTA_K]);
                 ++write_state;
             }
 
