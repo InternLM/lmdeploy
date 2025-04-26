@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Dict
+from typing import Dict, List
 
 from dlslime import RDMAEndpoint, available_nic
 
@@ -44,7 +44,7 @@ class DLSlimeMigrationManagement:
     def connect_to(self, connect_request: DistServeConnectionRequest):
         self.endpoint[connect_request.protocol].connect_to(connect_request.remote_endpoint_info)
 
-    async def p2p_migrate(self, assignment: MigrationAssignment):
+    async def p2p_migrate(self, assignment: List[MigrationAssignment]):
         await self.endpoint[assignment.protocol].read_batch_async(assignment.mr_key, assignment.target_offset,
                                                                   assignment.source_offset, assignment.length)
 

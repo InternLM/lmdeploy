@@ -558,9 +558,9 @@ class Engine:
                 msg = next(iter(sess.sequences.values()))
                 __update_max_new_tokens(msg)
                 scheduler.add_sequence(msg)
-                # if migration_request:
-                #     self.scheduler._set_message_status(msg, MessageStatus.WAITING_MIGRATION)
-                #     self.migration_event.set()
+                if migration_request:
+                    self.scheduler._set_message_status(msg, MessageStatus.WAITING_MIGRATION)
+                    self.migration_event.set()
             else:
                 msg = next(iter(sess.sequences.values()))
                 msg.update_token_ids(
@@ -696,8 +696,8 @@ class Engine:
             cross_length = None
             history_cross_length = None
 
-        migration_inputs = [msg.migration_inputs for msg in messages]
-        migration_reqs = [msg.migration_request for msg in messages]
+        # migration_inputs = [msg.migration_inputs for msg in messages]
+        # migration_reqs = [msg.migration_request for msg in messages]
         return ModelInputs(
             input_ids=input_ids,
             seq_length=seq_length,
@@ -710,8 +710,8 @@ class Engine:
             cross_length=cross_length,
             history_cross_length=history_cross_length,
             model_metas=model_metas,
-            migration_inputs=migration_inputs,
-            migration_requests=migration_reqs,
+            # migration_inputs=migration_inputs,
+            # migration_requests=migration_reqs,
         )
 
     def update_running(self, running: SeqList, next_token_ids: torch.Tensor, stopped: torch.Tensor,
@@ -1039,7 +1039,7 @@ class Engine:
             logger.info('begin loop')
             if next_running is None:
                 await has_runable_event.wait()
-                # scheduler.collect_migration_done()
+                scheduler.collect_migration_done()
                 forward_inputs, next_running = await inputs_maker.send_next_inputs()
             # scheduler.collect_migration_done()
             num_loops = forward_inputs['loop_count']
