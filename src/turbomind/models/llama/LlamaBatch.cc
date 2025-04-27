@@ -712,7 +712,7 @@ void LlamaBatch::AllocateBuffer(ssize_t batch_size, ssize_t session_len, int cac
     cu_block_counts_ = {batch_size + 1, kDEVICE};
     block_ptrs_      = {max_batch_block_count, kDEVICE};
 
-    sampled_logprobs_ = {batchxbeam * kMaxLogProb, kDEVICE};
+    sampled_logprobs_ = {batchxbeam * kMaxLogProb, data_type_, kDEVICE};
     sampled_indexes_  = {batchxbeam * kMaxLogProb, kDEVICE};
     sampled_nums_     = {batchxbeam, kDEVICE};
 
@@ -759,7 +759,7 @@ void LlamaBatch::AllocateBuffer(ssize_t batch_size, ssize_t session_len, int cac
 
     h_output_ids_ = {batch_size * session_len_, kCPUpinned};
 
-    h_sampled_logprobs_ = {batch_size * kMaxLogProb, kCPUpinned};
+    h_sampled_logprobs_ = {batch_size * kMaxLogProb, data_type_, kCPUpinned};
     h_sampled_indexes_  = {batch_size * kMaxLogProb, kCPUpinned};
     h_sampled_nums_     = {batch_size, kCPUpinned};
 }
@@ -1139,29 +1139,34 @@ void LlamaBatch::Finish(GenerationState& g, std::vector<Signal>& signals)
     // ! Only rank-0 writes to output
     if (tp_rank_ == 0 && output_logprobs) {
         NvtxScope scope("logprobs");
-        // output logprobs, should be set before sequence_length
-        float*    sampled_logprobs_ptr = h_sampled_logprobs_.data();
-        uint32_t* sampled_indexes_ptr  = h_sampled_indexes_.data();
-        uint32_t* sampled_nums_ptr     = h_sampled_nums_.data();
-        for (int i = 0; i < batch_size - g.partial; ++i) {
-            if (state_->requests[i] && state_->requests[i]->gen_cfg.output_logprobs) {
-                auto logprob_vals    = state_->requests[i]->outputs.at("logprob_vals").data<float>();
-                auto logprob_indexes = state_->requests[i]->outputs.at("logprob_indexes").data<int32_t>();
-                auto logprob_nums    = state_->requests[i]->outputs.at("logprob_nums").data<int32_t>();
 
-                int offset = state_->h_context_length[i] - state_->h_prompt_length[i] - 1;
-                std::copy(sampled_logprobs_ptr,
-                          sampled_logprobs_ptr + *sampled_nums_ptr,
-                          logprob_vals + offset * kMaxLogProb);
-                std::copy(sampled_indexes_ptr,
-                          sampled_indexes_ptr + *sampled_nums_ptr,
-                          logprob_indexes + offset * kMaxLogProb);
-                *(logprob_nums + offset) = *sampled_nums_ptr;
+        auto invokeOutputLogprobs = [&](auto t) {
+            // output logprobs, should be set before sequence_length
+            using T                        = decltype(t);
+            T*        sampled_logprobs_ptr = h_sampled_logprobs_.data<T>();
+            uint32_t* sampled_indexes_ptr  = h_sampled_indexes_.data();
+            uint32_t* sampled_nums_ptr     = h_sampled_nums_.data();
+            for (int i = 0; i < batch_size - g.partial; ++i) {
+                if (state_->requests[i] && state_->requests[i]->gen_cfg.output_logprobs) {
+                    auto logprob_vals    = state_->requests[i]->outputs.at("logprob_vals").data<T>();
+                    auto logprob_indexes = state_->requests[i]->outputs.at("logprob_indexes").data<int32_t>();
+                    auto logprob_nums    = state_->requests[i]->outputs.at("logprob_nums").data<int32_t>();
+
+                    int offset = state_->h_context_length[i] - state_->h_prompt_length[i] - 1;
+                    std::copy(sampled_logprobs_ptr,
+                              sampled_logprobs_ptr + *sampled_nums_ptr,
+                              logprob_vals + offset * kMaxLogProb);
+                    std::copy(sampled_indexes_ptr,
+                              sampled_indexes_ptr + *sampled_nums_ptr,
+                              logprob_indexes + offset * kMaxLogProb);
+                    *(logprob_nums + offset) = *sampled_nums_ptr;
+                }
+                sampled_logprobs_ptr += kMaxLogProb;
+                sampled_indexes_ptr += kMaxLogProb;
+                sampled_nums_ptr++;
             }
-            sampled_logprobs_ptr += kMaxLogProb;
-            sampled_indexes_ptr += kMaxLogProb;
-            sampled_nums_ptr++;
-        }
+        };
+        TM_DISPATCH_PRIMARY_DTYPES(data_type_, invokeOutputLogprobs);
     }
 
     // ! Only rank-0 writes to output
@@ -1580,8 +1585,8 @@ bool LlamaBatch::Forward(GenerationState& g)
                               init_context_length_,
                               state_->h_context_length,
                               state_->h_prompt_length,
-                              output_logprobs ? sampled_indexes_ : Buffer{},  // <- indicator
-                              sampled_logprobs_,
+                              output_logprobs ? sampled_logprobs_ : Buffer{},  // <- indicator
+                              sampled_indexes_,
                               sampled_nums_,
                               g.step,
                               g.max_init_ctx_len);
