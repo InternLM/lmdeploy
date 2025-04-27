@@ -345,6 +345,13 @@ class PytorchEngineConfig:
             self.block_size = 16
             logger.warning('Currently, camb device requires block size to be 16, \
                     setting block size to 16')
+        if self.device_type == 'ascend':
+            import os
+
+            from .pytorch.backends.dlinfer.ascend import SocVersion
+            if SocVersion.is_Ascend310P() and os.getenv('DLINER_LINEAR_USE_NZ_FORMAT', '0') != '1':
+                logger.warning('Ascend310P device need weight of linear to be NZ format.\
+                    Please set DLINER_LINEAR_USE_NZ_FORMAT=1 to get good performance !')
 
 
 class ResponseType(enum.Enum):

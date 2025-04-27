@@ -17,6 +17,10 @@ class DlinferLinearImpl(LinearImpl):
         """update weights."""
         if os.getenv('DLINER_LINEAR_USE_NN_LAYOUT', '0') == '1':
             weight = weight.data.t().contiguous()
+        if os.getenv('DLINER_LINEAR_USE_NZ_FORMAT', '0') == '1':
+            # Ascend 310P device need weight to be NZ format, so Transdata it initially.
+            from .ascend import AscendOpsBackend
+            weight = AscendOpsBackend.get_transdata_func()(weight, 2)
         return weight, bias
 
     def forward(self,
