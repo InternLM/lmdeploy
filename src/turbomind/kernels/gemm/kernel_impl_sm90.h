@@ -188,7 +188,7 @@ public:
             (void*)B, Bdesc.type, k, n, CTA_K, CTA_N / kMulticastB, kColMajor, CU_TENSOR_MAP_SWIZZLE_128B);
         auto tm_c = make_2d_tma_desc((void*)C, Cdesc.type, m, n, CTA_M, CTA_N, kColMajor, CU_TENSOR_MAP_SWIZZLE_NONE);
 
-        const auto grid  = sched.get_grid_shape();
+        const auto grid  = 132;  // sched.get_grid_shape();
         const auto block = Gemm::CTA_SIZE;
 
         cudaLaunchConfig_t config{};
@@ -219,7 +219,7 @@ public:
 
         // std::cout << "swizzle: " << swizzle << ", split: " << splits << "\n";
 
-        check_cuda_error(cudaLaunchKernelEx(&config, func, tm_a, tm_b, tm_c, (Tc*)C, Cdesc.ld, sched));
+        check_cuda_error(cudaLaunchKernelEx(&config, func, tm_a, tm_b, tm_c, sched));
 
         // gemm_kernel_sm90<Gemm><<<grid, block, smem_size_, stream>>>(tm_a, tm_b, tm_c, (Tc*)C, Cdesc.ld, sched);
 
