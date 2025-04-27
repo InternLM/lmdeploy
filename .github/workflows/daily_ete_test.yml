@@ -65,6 +65,8 @@ jobs:
       PYTHON_VERSION: ${{ matrix.pyver }}
       PLAT_NAME: manylinux2014_x86_64
       DOCKER_TAG: cuda11.8
+      NCCL_INCLUDE_DIR: /usr/local/cuda/include/
+      NCCL_LIB_DIR: /usr/local/cuda/lib64
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3

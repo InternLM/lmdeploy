@@ -1,6 +1,7 @@
 import pytest
 from utils.config_utils import get_communicator_list, get_turbomind_model_list, get_workerid
-from utils.run_restful_chat import run_all_step, run_reasoning_case, run_tools_case, start_restful_api, stop_restful_api
+from utils.run_restful_chat import (run_all_step, run_reasoning_case, run_tools_case, start_restful_api,
+                                    stop_restful_api, test_logprobs)
 
 DEFAULT_PORT = 23333
 
@@ -324,6 +325,22 @@ def test_restful_chat_fallback_backend_tp2(config, common_case_config, worker_id
                          indirect=True)
 def test_restful_chat_pr(config, common_case_config):
     run_all_step(config, {key: value for key, value in common_case_config.items() if key == 'memory_test'})
+
+
+@pytest.mark.order(7)
+@pytest.mark.restful_api
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.gpu_num_2
+@pytest.mark.pr_test
+@pytest.mark.parametrize('prepare_environment', [{
+    'model': 'internlm/internlm2_5-20b-chat',
+    'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6',
+    'tp_num': 2
+}],
+                         indirect=True)
+def test_restful_logprobs(worker_id):
+
+    test_logprobs(worker_id)
 
 
 @pytest.mark.order(7)

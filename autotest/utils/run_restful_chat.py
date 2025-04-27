@@ -11,6 +11,7 @@ from openai import OpenAI
 from pytest_assume.plugin import assume
 from utils.config_utils import get_cuda_prefix_by_workerid, get_workerid
 from utils.get_run_config import get_command_with_extra
+from utils.restful_return_check import assert_chat_completions_batch_return
 from utils.rule_condition_assert import assert_result
 from utils.run_client_chat import command_line_test
 
@@ -252,6 +253,28 @@ def get_model(url):
         return model_name.split('/')[-1]
     except Exception:
         return None
+
+
+def test_logprobs(worker_id: str = None):
+    worker_num = get_workerid(worker_id)
+    if worker_num is None:
+        port = DEFAULT_PORT
+    else:
+        port = DEFAULT_PORT + worker_num
+    http_url = BASE_HTTP_URL + ':' + str(port)
+    api_client = APIClient(http_url)
+    model_name = api_client.available_models[0]
+    for output in api_client.chat_completions_v1(model=model_name,
+                                                 messages='Hi, pls intro yourself',
+                                                 max_tokens=5,
+                                                 temperature=0.01,
+                                                 logprobs=True,
+                                                 top_logprobs=10):
+        continue
+    print(output)
+    assert_chat_completions_batch_return(output, model_name, check_logprobs=True, logprobs_num=10)
+    assert output.get('choices')[0].get('finish_reason') == 'length'
+    assert output.get('usage').get('completion_tokens') == 6 or output.get('usage').get('completion_tokens') == 5
 
 
 PIC = 'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg'  # noqa E501
