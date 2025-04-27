@@ -619,7 +619,15 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
 
     def fusedmoe_build(self, low_latency_mode: bool = False):
         if self.use_dlblas:
-            return self.build_deepep_moe(low_latency_mode, self.ep_size, self.ep_group, self.num_experts, self.hidden_dim, self.block_size, self.top_k, self.out_dtype, chunk_size = 16 * 1024)
+            return self.build_deepep_moe(low_latency_mode,
+                                         self.ep_size,
+                                         self.ep_group,
+                                         self.num_experts,
+                                         self.hidden_dim,
+                                         self.block_size,
+                                         self.top_k,
+                                         self.out_dtype,
+                                         chunk_size=16 * 1024)
         elif low_latency_mode:
             return FusedMoELowLatency(self.ep_size, self.ep_group, self.num_experts, self.hidden_dim, self.block_size,
                                       self.out_dtype)

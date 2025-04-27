@@ -6,7 +6,6 @@ from enum import Enum, auto
 from os import getenv
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from lmdeploy.utils import get_logger
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -20,9 +19,12 @@ from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_down_linear,
 from lmdeploy.pytorch.nn.moe import MoeType, SoftmaxTopK, build_fused_moe
 from lmdeploy.pytorch.nn.rotary_embedding import YarnParameters
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
+from lmdeploy.utils import get_logger
 
 from .utils.cudagraph import CudaGraphMixin
+
 logger = get_logger('lmdeploy')
+
 
 # microbatch
 class ExecType(Enum):
@@ -597,7 +599,6 @@ class MoEGate(nn.Module):
             self.dlblas_fused_gate = None
             logger.warning('For higher performance, please install dlBLAS https://github.com/DeepLink-org/dlBLAS')
 
-
     def _compute_scores(self, logits: torch.Tensor):
         """compute scores."""
         if self.scoring_func == 'softmax':
@@ -626,9 +627,10 @@ class MoEGate(nn.Module):
             grouped_logits = grouped_logits.masked_fill(group_mask, 0.0)
             scores = grouped_logits.flatten(1, 2)
             topk_weight, topk_idx = self.softmax_topk(scores)
-        elif self.topk_method == 'noaux_tc' and self.scoring_func == 'sigmoid' and self.renormalize and self.dlblas_fused_gate is not None:
-            topk_weight, topk_idx = self.dlblas_fused_gate(router_logits, self.e_score_correction_bias, 
-                                   self.n_group, self.topk_group, self.top_k)
+        elif (self.topk_method == 'noaux_tc' and self.scoring_func == 'sigmoid' and self.renormalize
+              and self.dlblas_fused_gate is not None):
+            topk_weight, topk_idx = self.dlblas_fused_gate(router_logits, self.e_score_correction_bias, self.n_group,
+                                                           self.topk_group, self.top_k)
         elif self.topk_method == 'noaux_tc':
             scores = self._compute_scores(router_logits)
             scores_for_choice = scores.view(sequence_length, -1) + self.e_score_correction_bias[None]
