@@ -29,7 +29,7 @@ Layout::Layout(vector<ssize_t> shape, vector<ssize_t> stride): shape_{std::move(
 
 ssize_t Layout::cosize() const noexcept
 {
-    if (rank() == 0) {
+    if (rank() == 0 || size() == 0) {
         return 0;
     }
     ssize_t value{1};

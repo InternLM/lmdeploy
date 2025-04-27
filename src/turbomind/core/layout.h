@@ -64,6 +64,9 @@ public:
 
     bool is_contiguous() const noexcept
     {
+        if (size() == 0) {
+            return true;
+        }
         if (stride_.back() != 1) {
             return false;
         }

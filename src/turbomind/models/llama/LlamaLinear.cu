@@ -400,7 +400,9 @@ Tensor LlamaLinear::forward(const Tensor&           input,  //
         out = Tensor({in.shape(0), output_dim}, input.dtype(), input.device());
     }
 
-    impl_->forward(out, in, dense, type);
+    if (out.size() > 0 && in.size() > 0) {
+        impl_->forward(out, in, dense, type);
+    }
 
     auto shape   = input.shape();
     shape.back() = out.shape(-1);

@@ -22,6 +22,10 @@ Buffer Buffer::view(DataType dtype) const
 
 Buffer Buffer::slice(ssize_t base, ssize_t size) const
 {
+    if (size_ == 0) {
+        TM_CHECK(this->base_ == 0 && size == 0);
+        return *this;
+    }
     TM_CHECK_LE(base + size, size_);
     auto b = *this;
     b.base_ += base;
