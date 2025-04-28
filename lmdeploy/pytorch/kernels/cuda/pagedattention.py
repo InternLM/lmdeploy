@@ -31,16 +31,6 @@ else:
     tl_exp2 = tl.math.exp2
 
 
-@triton.autotune(
-    configs=[
-        triton.Config({}, num_stages=2, num_warps=16),
-        triton.Config({}, num_stages=2, num_warps=8),
-        triton.Config({}, num_stages=2, num_warps=4),
-    ],
-    key=['BLOCK_H', 'BLOCK_N', 'BLOCK_DMODEL', 'BLOCK_DV'],
-    warmup=10,
-    rep=25,
-)
 @triton.jit
 def _fwd_grouped_split_kernel(
     Q,
@@ -72,6 +62,7 @@ def _fwd_grouped_split_kernel(
     head_size_v: tl.constexpr,
     num_heads_q: tl.constexpr,
     logit_softcapping: tl.constexpr,
+    shared_kv: tl.constexpr,
     SPLIT_K: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
     BLOCK_DV: tl.constexpr,
@@ -158,7 +149,10 @@ def _fwd_grouped_split_kernel(
         if BLOCK_DMODEL1 != 0:
             k1 = tl.load(k1_ptrs + b_offset * stride_kp)
 
-        v = tl.load(v_ptrs + b_offset * stride_vp)
+        if shared_kv:
+            v = k.trans(1, 0)
+        else:
+            v = tl.load(v_ptrs + b_offset * stride_vp)
 
         qk = tl.zeros([BLOCK_H, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
@@ -209,12 +203,6 @@ def _fwd_grouped_split_kernel(
     tl.store(Acc_out + off_meta + 1, l_i, mask=mask_h)
 
 
-@triton.autotune(configs=[
-    triton.Config({}, num_stages=2, num_warps=16),
-    triton.Config({}, num_stages=2, num_warps=8),
-    triton.Config({}, num_stages=2, num_warps=4),
-],
-                 key=['BLOCK_H', 'BLOCK_N', 'BLOCK_DMODEL', 'BLOCK_DV'])
 @triton.jit
 def _fwd_grouped_split_quant_kernel(
     Q,
@@ -488,6 +476,29 @@ def _convert_pv(p, v):
     return p, v
 
 
+_nv_cap = None
+
+
+def _kernel_meta_default(BLOCK_DMODEL: int, BLOCK_H: int):
+    """kernel meta default."""
+    return 4, 2
+
+
+def _kernel_meta_sm8x(BLOCK_DMODEL: int, BLOCK_H: int):
+    """kernel meta default."""
+    num_stages = 2
+    if BLOCK_DMODEL * BLOCK_H > 8192:
+        num_warps = 8
+    else:
+        num_warps = 4
+    return num_warps, num_stages
+
+
+def _kernel_meta_sm9x(BLOCK_DMODEL: int, BLOCK_H: int):
+    """kernel meta default."""
+    return _kernel_meta_default(BLOCK_DMODEL, BLOCK_H)
+
+
 def paged_attention_fwd(
     q: Tensor,
     k: Tensor,
@@ -517,6 +528,10 @@ def paged_attention_fwd(
         BLOCK (int): The kernel block size.
     """
 
+    global _nv_cap
+    if _nv_cap is None:
+        _nv_cap = torch.cuda.get_device_capability()
+
     if kv_layout == 'bshd':
         b_dim, s_dim, h_dim, d_dim = (0, 1, 2, 3)
     elif kv_layout == 'bhsd':
@@ -529,6 +544,8 @@ def paged_attention_fwd(
 
     if logit_softcapping is None:
         logit_softcapping = -1.0
+
+    shared_kv = k.data_ptr() == v.data_ptr()
 
     def _get_block_d(Lk):
         """get block d."""
@@ -576,6 +593,14 @@ def paged_attention_fwd(
         SPLIT_K,
         batch,
     )
+
+    if _nv_cap[0] < 8:
+        num_warps, num_stages = _kernel_meta_default(BLOCK_DMODEL, BLOCK_H)
+    elif _nv_cap[0] < 9:
+        num_warps, num_stages = _kernel_meta_sm8x(BLOCK_DMODEL, BLOCK_H)
+    else:
+        num_warps, num_stages = _kernel_meta_sm9x(BLOCK_DMODEL, BLOCK_H)
+
     if quant_policy > 0:
         _fwd_grouped_split_quant_kernel[grid](q,
                                               k,
@@ -622,7 +647,9 @@ def paged_attention_fwd(
                                               BLOCK_DV=BLOCK_DV,
                                               BLOCK_N=BLOCK,
                                               BLOCK_H=BLOCK_H,
-                                              BLOCK_DMODEL1=BLOCK_DMODEL1)
+                                              BLOCK_DMODEL1=BLOCK_DMODEL1,
+                                              num_warps=num_warps,
+                                              num_stages=num_stages)
 
     else:
         _fwd_grouped_split_kernel[grid](q,
@@ -654,12 +681,15 @@ def paged_attention_fwd(
                                         head_size_v=Lv,
                                         num_heads_q=head,
                                         logit_softcapping=logit_softcapping,
+                                        shared_kv=shared_kv,
                                         SPLIT_K=SPLIT_K,
                                         BLOCK_DMODEL=BLOCK_DMODEL,
                                         BLOCK_DV=BLOCK_DV,
                                         BLOCK_N=BLOCK,
                                         BLOCK_H=BLOCK_H,
-                                        BLOCK_DMODEL1=BLOCK_DMODEL1)
+                                        BLOCK_DMODEL1=BLOCK_DMODEL1,
+                                        num_warps=num_warps,
+                                        num_stages=num_stages)
 
     num_warps = 4
     grid = (batch, head)

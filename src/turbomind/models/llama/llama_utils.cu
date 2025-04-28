@@ -70,7 +70,8 @@ void CmpRead(T* ptr, size_t size, std::string key, cudaStream_t stream)
 
     Tacc asum{};
     Tacc rsum{};
-    Tacc amean{};
+    Tacc amean_r{};
+    Tacc amean_x{};
     for (size_t i = 0; i < size; ++i) {
         Tacc x        = (Tacc)h_b[i];
         Tacc r        = (Tacc)h_a[i];
@@ -78,10 +79,18 @@ void CmpRead(T* ptr, size_t size, std::string key, cudaStream_t stream)
         Tacc rel_diff = abs_diff / std::max(std::max(std::abs(r), std::abs(x)), eps);
         asum += abs_diff;
         rsum += rel_diff;
-        amean += std::abs(r);
+        amean_x += std::abs(x);
+        amean_r += std::abs(r);
     }
 
-    std::cerr << key << ": " << amean / size << " " << asum << " " << asum / size << " " << rsum / size << "\n";
+    fprintf(stderr,
+            "%12s%12f%12f%12f%12f%12f\n",
+            key.c_str(),
+            (float)amean_x / (float)size,
+            (float)amean_r / (float)size,
+            (float)asum,
+            (float)asum / (float)size,
+            (float)rsum / (float)size);
 
     check_cuda_error(cudaMemcpyAsync(ptr, h_a.data(), sizeof(T) * h_a.size(), cudaMemcpyDefault, stream));
     check_cuda_error(cudaStreamSynchronize(stream));
@@ -123,19 +132,6 @@ template void Compare(__nv_bfloat16* ptr, size_t size, std::string key, CmpMode 
 
 template void CheckNan(const float* ptr, size_t size, std::string key, cudaStream_t stream);
 template void CheckNan(const half* ptr, size_t size, std::string key, cudaStream_t stream);
-
-std::string format(const std::pair<std::string, Tensor>& p)
-{
-    std::stringstream ss;
-    ss << p.first << " [";
-    bool first = true;
-    for (const auto& x : p.second.shape) {
-        ss << (first ? "" : ", ") << x;
-        first = false;
-    }
-    ss << "]";
-    return ss.str();
-}
 
 size_t curandStateGetSize()
 {

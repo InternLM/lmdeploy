@@ -212,7 +212,6 @@ turbomind_base_model:
     - codellama/CodeLlama-7b-hf
 
 pytorch_base_model:
-    - tiiuae/falcon-7b
     - internlm/internlm2_5-7b
     - internlm/internlm2_5-1_8b
     - internlm/internlm2_5-20b

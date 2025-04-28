@@ -9,6 +9,7 @@ from lmdeploy.model import MODELS, best_match_model
     ('models--internlm--internlm-chat-7b/snapshots/1234567', ['internlm']),
     ('Qwen/Qwen-7B-Chat', ['qwen']),
     ('Qwen/Qwen2.5-7B-Instruct', ['qwen2d5']),
+    ('Qwen/Qwen2.5-VL-7B-Instruct', ['qwen2d5-vl']),
     ('codellama/CodeLlama-7b-hf', ['codellama']),
     ('upstage/SOLAR-0-70b', ['solar', 'solar-70b']),
     ('meta-llama/Llama-2-7b-chat-hf', ['llama2']),
@@ -23,7 +24,6 @@ from lmdeploy.model import MODELS, best_match_model
     ('deepseek-ai/deepseek-moe-16b-chat', ['deepseek']),
     ('internlm/internlm-xcomposer2-4khd-7b', ['internlm-xcomposer2']),
     ('internlm/internlm-xcomposer2d5-7b', ['internlm-xcomposer2d5']),
-    ('tiiuae/falcon-7b', ['falcon']),
     ('workspace', ['base']),
     ('OpenGVLab/InternVL2_5-1B', ['internvl2_5']),
     ('OpenGVLab/InternVL3-1B', ['internvl2_5']),
@@ -582,6 +582,30 @@ def test_qwen2d5():
                    "'celsius'}\n</tool_response><|im_end|>\n<|im_start"
                    '|>assistant\n')
     assert model.messages2prompt(messages, tools=tools) == tool_prompt
+
+
+def test_qwen2d5_vl():
+    prompt = 'hello, can u introduce yourself'
+    model = MODELS.get('qwen2d5-vl')(capability='completion')
+    assert model.get_prompt(prompt, sequence_start=True) == prompt
+    assert model.get_prompt(prompt, sequence_start=False) == prompt
+
+    model = MODELS.get('qwen2d5-vl')(capability='chat')
+
+    messages = [dict(role='user', content='What\'s the temperature in San Francisco now?')]
+    res = ('<|im_start|>system\nYou are a helpful '
+           "assistant.<|im_end|>\n<|im_start|>user\nWhat's the "
+           'temperature in San Francisco '
+           'now?<|im_end|>\n<|im_start|>assistant\n')
+    assert model.messages2prompt(messages) == res
+
+    messages.append({'role': 'assistant', 'content': 'I don\'t know.'})
+    res = ('<|im_start|>system\nYou are a helpful '
+           "assistant.<|im_end|>\n<|im_start|>user\nWhat's the "
+           'temperature in San Francisco '
+           "now?<|im_end|>\n<|im_start|>assistant\nI don't "
+           'know.<|im_end|>\n<|im_start|>assistant\n')
+    assert model.messages2prompt(messages) == res
 
 
 def test_codellama_completion():

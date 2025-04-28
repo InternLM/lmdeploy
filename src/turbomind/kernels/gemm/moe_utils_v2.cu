@@ -11,6 +11,7 @@
 #include <cub/block/block_scan.cuh>
 #include <cub/warp/warp_scan.cuh>
 
+#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/math.h"
@@ -690,19 +691,20 @@ __global__ void MoeGatherKernel(T*         dst,  // [e*n, d]
     }
 }
 
-template<class T>
-void invokeMoeGather(T* dst, const T* src, const int* f2n, int tokens, int experts_per_token, int dims, cudaStream_t st)
+void invokeMoeDispatch(Ref<Tensor> out_, const Tensor& src, const int* f2n, int expert_per_token, cudaStream_t st)
 {
+    using T = uint16_t;
+    TM_CHECK_EQ(byte_size(src.dtype()), byte_size<T>());
+    auto& out              = out_.get();
+    auto [num, dim]        = src.shapes(0, 1);
     constexpr int threads  = 256;
     constexpr int vec_size = 16 / sizeof(T);
-    MoeGatherKernel<vec_size, threads><<<tokens * experts_per_token, threads, 0, st>>>(  //
-        dst,
-        src,
+    MoeGatherKernel<vec_size, threads><<<num * expert_per_token, threads, 0, st>>>(  //
+        (T*)out.raw_data(),
+        (const T*)src.raw_data(),
         f2n,
-        dims / vec_size);
+        dim / vec_size);
 }
-
-template void invokeMoeGather(uint16_t*, const uint16_t*, const int*, int, int, int, cudaStream_t);
 
 template<int vec_size, int exp_k, int block_dim, class T>
 __global__ void MoeReduceKernel(T*           dst,         // [  n, d]
@@ -819,12 +821,36 @@ void invokeMoeReduce(T*           dst,
     }
 }
 
-template void
-invokeMoeReduce(half*, const half*, const float*, const int*, const float*, int, int, int, float, cudaStream_t);
-#ifdef ENABLE_BF16
-template void invokeMoeReduce(
-    nv_bfloat16*, const nv_bfloat16*, const float*, const int*, const float*, int, int, int, float, cudaStream_t);
-#endif
+void invokeMoeCombine(Ref<Tensor>   out_,
+                      const Tensor& src,
+                      const float*  scales,
+                      const int*    en2f,
+                      const float*  dst_scales,
+                      int           experts_per_token,
+                      float         dst_scale,
+                      cudaStream_t  st)
+{
+    auto& out = out_.get();
+
+    const int tokens = out.shape(0);
+    TM_CHECK_EQ(src.shape(0), tokens * experts_per_token);
+
+    auto invoke = [&](auto t) {
+        using T = decltype(t);
+        return invokeMoeReduce(out.data<T>(),
+                               src.data<T>(),
+                               scales,
+                               en2f,
+                               dst_scales,
+                               tokens,
+                               experts_per_token,
+                               src.shape(1),
+                               dst_scale,
+                               st);
+    };
+
+    TM_DISPATCH_PRIMARY_DTYPES(src.dtype(), invoke);
+}
 
 std::vector<int> SampleUniform(int token_num, int expert_num, int exp_per_tok, std::mt19937& g)
 {
