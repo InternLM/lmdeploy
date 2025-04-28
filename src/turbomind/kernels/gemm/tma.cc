@@ -51,7 +51,7 @@ __attribute__((noinline)) CUtensorMap make_2d_tma_desc(void*              global
                               elem_strides,
                               CUtensorMapInterleave::CU_TENSOR_MAP_INTERLEAVE_NONE,
                               swizzle,
-                              CUtensorMapL2promotion::CU_TENSOR_MAP_L2_PROMOTION_L2_128B,
+                              CUtensorMapL2promotion::CU_TENSOR_MAP_L2_PROMOTION_L2_256B,
                               CUtensorMapFloatOOBfill::CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
 
     TM_CHECK_EQ(result, CUDA_SUCCESS);

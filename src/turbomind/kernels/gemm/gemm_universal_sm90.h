@@ -145,7 +145,7 @@ struct GemmUniversalSm90 {
     using Tc = nv_bfloat16;
 
     using Arch      = Arch_;
-    using Scheduler = TileScheduler<kRowMajor>;
+    using Scheduler = TileScheduler<kRowMajor, kMulticastB, kMulticastA>;
 
     using ProducerBar = cutlass::arch::ClusterTransactionBarrier;
     using ConsumerBar = cutlass::arch::ClusterBarrier;
@@ -206,6 +206,12 @@ struct GemmUniversalSm90 {
             if (threadIdx.x == WARPGORUPS * WARPGROUP_SIZE) {
                 cutlass::PipelineState<Stages> write_state{0, 1, 0};
                 while (sched.next()) {
+
+                    if (!sched.is_valid_tile()) {
+                        // OOB tile caused by fixed swizzle pattern
+                        continue;
+                    }
+
                     const auto tile_offset              = sched.tile_offset();
                     const auto [iter_k_beg, iter_k_end] = sched.iter_k_range();
 
@@ -251,6 +257,12 @@ struct GemmUniversalSm90 {
             cutlass::PipelineState<Stages> release_state{};
 
             while (sched.next()) {
+
+                if (!sched.is_valid_tile()) {
+                    // OOB tile caused by fixed swizzle pattern
+                    continue;
+                }
+
                 MMA_Atom::CRegisters frag_C[MMA_ITER_M][MMA_ITER_N]{};  // zero fill
 
                 const auto tile_offset              = sched.tile_offset();
@@ -358,7 +370,7 @@ struct GemmUniversalSm90 {
                         }
                     }
                 }
-                cute::tma_store_fence();
+                cute::tma_store_fence();  // visibility: smem -> async proxy
 
                 cutlass::arch::NamedBarrier(WARPGORUPS * WARPGROUP_SIZE);
 
@@ -368,6 +380,7 @@ struct GemmUniversalSm90 {
                     cute::tma_store_arrive();
                 }
             }  // scheduler loop
+
             if (threadIdx.x == 0) {
                 cute::tma_store_wait<0>();
             }

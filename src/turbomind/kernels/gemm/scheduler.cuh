@@ -7,11 +7,12 @@
 #include "src/turbomind/kernels/gemm/cta_map.h"
 #include "src/turbomind/kernels/gemm/types.h"
 
+#include "cute/arch/cluster_sm90.hpp"
 #include "cutlass/cutlass.h"
 
 namespace turbomind::gemm {
 
-template<Order order>
+template<Order order, int cluster_m, int cluster_n>
 class TileScheduler {
     int4 gemm_shape_;
     int4 tiled_shape_;
@@ -24,9 +25,14 @@ class TileScheduler {
     int4 tile_offset_;
     int2 iter_k_range_;
 
-    int cta_idx_;
+    int cluster_idx_;
 
-    dim3 grid_shape_;
+    int4 cluster_tiled_shape_;
+
+    dim3 swizzled_shape_;
+    int  clusters_;
+
+    bool is_valid_;
 
 public:
     TM_HOST_DEVICE
@@ -40,7 +46,13 @@ public:
 
         chunk_offset_ = splits - chunk_cnt % splits;
 
-        grid_shape_ = get_grid_shape(tiled_shape_, log_tile_);
+        cluster_tiled_shape_   = tiled_shape_;
+        cluster_tiled_shape_.x = cdiv(tiled_shape_.x, cluster_m);
+        cluster_tiled_shape_.y = cdiv(tiled_shape_.y, cluster_n);
+
+        swizzled_shape_ = get_swizzled_shape(cluster_tiled_shape_, log_tile_);
+
+        clusters_ = swizzled_shape_.x * swizzled_shape_.y * swizzled_shape_.z;
     }
 
     TM_HOST_DEVICE static int get_log_tile(int2 tiled_mn, int tile_size)
@@ -48,38 +60,38 @@ public:
         return gemm::get_log_tile(order == kColMajor ? tiled_mn.y : tiled_mn.x, tile_size);
     }
 
-    TM_HOST_DEVICE static dim3 get_grid_shape(int4 tiled_shape, int log_tile)
+    TM_HOST_DEVICE static dim3 get_swizzled_shape(int4 tiled_shape, int log_tile)
     {
         const int tile = 1 << log_tile;
         if constexpr (order == kColMajor) {
-            return {(unsigned)(tiled_shape.x * tile), (unsigned)(cdiv(tiled_shape.y, tile)), (unsigned)(tiled_shape.z)};
+            return {unsigned(tiled_shape.x * tile), (unsigned)cdiv(tiled_shape.y, tile), unsigned(tiled_shape.z)};
         }
         else {
-            return {(unsigned)(tiled_shape.y * tile), (unsigned)(cdiv(tiled_shape.x, tile)), (unsigned)(tiled_shape.z)};
+            return {unsigned(tiled_shape.y * tile), (unsigned)cdiv(tiled_shape.x, tile), unsigned(tiled_shape.z)};
         }
     }
 
-    TM_HOST_DEVICE dim3 get_grid_shape() const
+    TM_DEVICE void unswizzle()
     {
-        return grid_shape_.x * grid_shape_.y * grid_shape_.z;
-    }
+        int cluster_idx_x = cluster_idx_ % swizzled_shape_.x;
+        int cluster_idx_y = cluster_idx_ / swizzled_shape_.x % swizzled_shape_.y;
+        int cluster_idx_z = cluster_idx_ / swizzled_shape_.x / swizzled_shape_.y;
 
-    TM_DEVICE void grid_init()
-    {
-        cta_idx_ = (int)blockIdx.x - (int)gridDim.x;
-    }
+        int cluster_cta_m = cute::block_id_in_cluster().x % cluster_m;  // M-major cluster shape
+        int cluster_cta_n = cute::block_id_in_cluster().x / cluster_m;
 
-    TM_HOST_DEVICE bool init(int block_idx_x, int block_idx_y, int block_idx_z)
-    {
+        const int offset_x = cluster_cta_m * cluster_tiled_shape_.x;
+        const int offset_y = cluster_cta_n * cluster_tiled_shape_.y;
+
         if constexpr (order == kColMajor) {
-            tile_offset_ = {(block_idx_x >> log_tile_),
-                            (block_idx_y << log_tile_) + (block_idx_x & ((1 << log_tile_) - 1)),
-                            (block_idx_z)};
+            tile_offset_ = {offset_x + (cluster_idx_x >> log_tile_),
+                            offset_y + (cluster_idx_y << log_tile_) + (cluster_idx_x & ((1 << log_tile_) - 1)),
+                            cluster_idx_z};
         }
         else {
-            tile_offset_ = {(block_idx_y << log_tile_) + (block_idx_x & ((1 << log_tile_) - 1)),
-                            (block_idx_x >> log_tile_),
-                            (block_idx_z)};
+            tile_offset_ = {offset_x + (cluster_idx_y << log_tile_) + (cluster_idx_x & ((1 << log_tile_) - 1)),
+                            offset_y + (cluster_idx_x >> log_tile_),
+                            cluster_idx_z};
         }
         tile_offset_.w       = 0;
         const int chunk_id   = tile_offset_.z * chunks_per_split_ + max(tile_offset_.z - chunk_offset_, 0);
@@ -87,16 +99,31 @@ public:
         const int iter_k_cnt = (chunks_per_split_ + int(tile_offset_.z >= chunk_offset_)) * iter_k_per_chunk_;
         iter_k_range_        = {iter_k_beg, iter_k_beg + iter_k_cnt};
 
-        return tile_offset_.x < tiled_shape_.x && tile_offset_.y < tiled_shape_.y && tile_offset_.z < tiled_shape_.z;
+        is_valid_ =
+            tile_offset_.x < tiled_shape_.x && tile_offset_.y < tiled_shape_.y && tile_offset_.z < tiled_shape_.z;
+    }
+
+    TM_DEVICE void grid_init()
+    {
+        cluster_idx_ = (int)cute::cluster_id_in_grid().x - (int)cute::cluster_grid_dims().x;
     }
 
     TM_DEVICE bool next()
     {
-        cta_idx_ += gridDim.x;
-        int cta_idx_x = cta_idx_ % grid_shape_.x;
-        int cta_idx_y = cta_idx_ / grid_shape_.x % grid_shape_.y;
-        int cta_idx_z = cta_idx_ / grid_shape_.x / grid_shape_.y;
-        return init(cta_idx_x, cta_idx_y, cta_idx_z);
+        cluster_idx_ += (int)cute::cluster_grid_dims().x;
+
+        if (cluster_idx_ >= clusters_) {
+            return false;
+        }
+
+        unswizzle();
+
+        return true;
+    }
+
+    TM_DEVICE bool is_valid_tile() const
+    {
+        return is_valid_;
     }
 
     TM_DEVICE int4 gemm_shape() const

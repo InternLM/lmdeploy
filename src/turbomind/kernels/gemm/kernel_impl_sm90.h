@@ -178,17 +178,13 @@ public:
         constexpr int kMulticastA = Gemm::kMulticastA;
         constexpr int kMulticastB = Gemm::kMulticastB;
 
-        // using Ta = typename Gemm::Ta;
-        // using Tb = typename Gemm::Tb;
-        using Tc = typename Gemm::Tc;
-
         auto tm_a = make_2d_tma_desc(
             (void*)A, Adesc.type, m, k, CTA_M / kMulticastA, CTA_K, kRowMajor, CU_TENSOR_MAP_SWIZZLE_128B);
         auto tm_b = make_2d_tma_desc(
             (void*)B, Bdesc.type, k, n, CTA_K, CTA_N / kMulticastB, kColMajor, CU_TENSOR_MAP_SWIZZLE_128B);
         auto tm_c = make_2d_tma_desc((void*)C, Cdesc.type, m, n, CTA_M, CTA_N, kColMajor, CU_TENSOR_MAP_SWIZZLE_NONE);
 
-        const auto grid  = 132;  // sched.get_grid_shape();
+        const auto grid  = 132;
         const auto block = Gemm::CTA_SIZE;
 
         cudaLaunchConfig_t config{};
@@ -199,10 +195,12 @@ public:
 
         auto func = gemm_kernel_sm90<Gemm>;
 
-        int max_cluster_size = 0;
-        cudaOccupancyMaxPotentialClusterSize(&max_cluster_size, func, &config);
-
-        // std::cout << "max cluster size: " << max_cluster_size << "\n";
+        [[maybe_unused]] static bool _ = [&] {
+            int max_cluster_size = 0;
+            cudaOccupancyMaxPotentialClusterSize(&max_cluster_size, func, &config);
+            std::cout << "max cluster size: " << max_cluster_size << "\n";
+            return false;
+        }();
 
         cudaLaunchAttribute attrs[1];
 
