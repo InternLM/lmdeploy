@@ -235,10 +235,10 @@ private:
     Buffer_<int> init_ctx_lens_;
     Buffer_<int> lora_mask_buf_;  // lora
 
-    Buffer_<float>    sampled_logprobs_;
+    Buffer            sampled_logprobs_;
     Buffer_<uint32_t> sampled_indexes_;
     Buffer_<uint32_t> sampled_nums_;
-    Buffer_<float>    h_sampled_logprobs_;
+    Buffer            h_sampled_logprobs_;
     Buffer_<uint32_t> h_sampled_indexes_;
     Buffer_<uint32_t> h_sampled_nums_;
 
