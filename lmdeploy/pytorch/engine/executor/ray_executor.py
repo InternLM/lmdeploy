@@ -414,8 +414,10 @@ class RayExecutor(ExecutorBase):
         if self.dag is None:
             self.dag = self._compile_dag()
         inputs = ray.put(inputs)
-        self.dag.execute(inputs)
-        await self.dag.get_object_refs_from_last_execute()
+        # make sure in order
+        outs = self.dag.execute(inputs)
+        await asyncio.sleep(0)
+        ray.get(outs)
 
     async def get_output_async(self):
         """get output async."""

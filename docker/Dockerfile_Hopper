@@ -9,10 +9,6 @@ ARG CUDA_HOME=/usr/local/cuda
 ARG GDRCOPY_HOME
 ARG NVSHMEM_PREFIX
 
-# upgrade rdma-core
-RUN sudo apt update -y && \
-    sudo apt install libibverbs-dev rdma-core -y
-
 # GDRCopy
 WORKDIR /tmp
 RUN dpkg -r libgdrapi gdrcopy && \

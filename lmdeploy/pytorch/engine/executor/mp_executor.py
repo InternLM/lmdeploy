@@ -16,7 +16,7 @@ import torch.multiprocessing as mp
 
 from lmdeploy.pytorch.backends.selector import init_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, ModelConfig
-from lmdeploy.utils import get_logger
+from lmdeploy.utils import get_logger, try_import_deeplink
 
 from .base import ExecutorBase
 from .base_worker import WorkerWrapperBase
@@ -510,6 +510,7 @@ class ExecutorProc:
                                  device_type=device_type,
                                  tokenizer=tokenizer,
                                  log_level=log_level)
+        try_import_deeplink(device_type)
         worker.init_process_group(proc_id)
         comm_buf = SharedBuffer(proc_id, notifier=comm_notifier, name=comm_buf_name)
         ret_buf = SharedBuffer(-1, notifier=ret_notifier, name=ret_buf_name)
