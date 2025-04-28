@@ -193,6 +193,7 @@ void LogitsProcessorLayer<T>::Setup(const std::vector<const Request*>& rs, const
 
     sync_check_cuda_error();
 
+    bad_words_ten_ = {};
     init_stop_bad_words(&GenerationConfig::bad_ids,  //
                         "bad_words",
                         rs,
