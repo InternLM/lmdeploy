@@ -483,7 +483,8 @@ class FusedMoEBlockedF8(nn.Module):
                  dtype: Optional[torch.dtype] = None,
                  device: Optional[torch.device] = None,
                  all_reduce: bool = True,
-                 enable_ep: bool = False):
+                 enable_ep: bool = False,
+                 layer_idx: int = 0):
         super().__init__()
         if device is None:
             device = torch.device('cpu')
@@ -499,7 +500,8 @@ class FusedMoEBlockedF8(nn.Module):
                                        block_size=self.block_size,
                                        ep_size=self.ep_size,
                                        ep_group=dist_ctx.ep_gpu_group,
-                                       out_dtype=dtype)
+                                       out_dtype=dtype,
+                                       layer_idx=layer_idx)
 
         if self.ep_size > 1:
             expert_list = self.impl.ep_expert_list(self.ep_size, rank)
@@ -719,6 +721,7 @@ def build_fused_moe(
     all_reduce: bool = True,
     enable_ep: bool = False,
     quant_config: Any = None,
+    layer_idx: int = 0,
 ):
     """fused moe builder."""
 
@@ -769,6 +772,7 @@ def build_fused_moe(
             device=device,
             all_reduce=all_reduce,
             enable_ep=enable_ep,
+            layer_idx=layer_idx,
         )
     else:
         raise RuntimeError(f'Unsupported quant method: {quant_method}')

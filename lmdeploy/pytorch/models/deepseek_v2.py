@@ -663,7 +663,7 @@ class MoEGate(nn.Module):
 class DeepseekV2MoE(nn.Module):
     """Deepseek v2 MoE."""
 
-    def __init__(self, config: Any, dtype: torch.dtype = None, device: torch.device = None):
+    def __init__(self, config: Any, layer_idx, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         self.hidden_dim = config.hidden_size
@@ -693,6 +693,7 @@ class DeepseekV2MoE(nn.Module):
             device=device,
             all_reduce=moe_all_reduce,
             quant_config=quantization_config,
+            layer_idx=layer_idx,
         )
 
         self.shared_experts = None
@@ -813,7 +814,7 @@ class DeepseekV2DecoderLayer(nn.Module):
             self.self_attn = LlamaAttention(config, dtype=dtype, device=device)
 
         # mlp
-        self.mlp = (DeepseekV2MoE(config, dtype=dtype, device=device) if
+        self.mlp = (DeepseekV2MoE(config, layer_idx, dtype=dtype, device=device) if
                     (config.n_routed_experts is not None and layer_idx >= config.first_k_dense_replace
                      and layer_idx % config.moe_layer_freq == 0) else DeepseekV2MLP(config, dtype=dtype, device=device))
 
