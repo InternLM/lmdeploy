@@ -22,6 +22,7 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |      Qwen2<sup>\[2\]</sup>       |    0.5B - 72B    | LLM  |    Yes    |  Yes\*  |  Yes\*  |  Yes  |
 |            Qwen2-MoE             |     57BA14B      | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |     Qwen2.5<sup>\[2\]</sup>      |    0.5B - 72B    | LLM  |    Yes    |  Yes\*  |  Yes\*  |  Yes  |
+|              Qwen3               |    0.6B-235B     | LLM  |    Yes    |   Yes   |  Yes\*  | Yes\* |
 |     Mistral<sup>\[1\]</sup>      |        7B        | LLM  |    Yes    |   Yes   |   Yes   |  No   |
 |             Mixtral              |   8x7B, 8x22B    | LLM  |    Yes    |   Yes   |   Yes   |  Yes  |
 |           DeepSeek-V2            |    16B, 236B     | LLM  |    Yes    |   Yes   |   Yes   |  No   |
@@ -77,6 +78,7 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |          QWen1.5-MoE           |      A2.7B      | LLM  |    Yes    |   Yes   |   Yes   |  No  |  No   |
 |             QWen2              |   0.5B - 72B    | LLM  |    Yes    |   Yes   |   No    | Yes  |  Yes  |
 |            Qwen2.5             |   0.5B - 72B    | LLM  |    Yes    |   Yes   |   No    | Yes  |  Yes  |
+|             Qwen3              |   0.6B - 235B   | LLM  |    Yes    |   Yes   |  Yes\*  |  -   | Yes\* |
 |            QWen2-VL            |     2B, 7B      | MLLM |    Yes    |   Yes   |   No    |  No  |  Yes  |
 |           QWen2.5-VL           |    3B - 72B     | MLLM |    Yes    |   No    |   No    |  No  |  No   |
 |          DeepSeek-MoE          |       16B       | LLM  |    Yes    |   No    |   No    |  No  |  No   |
@@ -116,24 +118,25 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 
 ## PyTorchEngine on Huawei Ascend Platform
 
-|     Model      |   Size   | Type | FP16/BF16(eager) | FP16/BF16(graph) | W8A8(graph) | W4A16(eager) |
-| :------------: | :------: | :--: | :--------------: | :--------------: | :---------: | :----------: |
-|     Llama2     | 7B - 70B | LLM  |       Yes        |       Yes        |     Yes     |     Yes      |
-|     Llama3     |    8B    | LLM  |       Yes        |       Yes        |     Yes     |     Yes      |
-|    Llama3.1    |    8B    | LLM  |       Yes        |       Yes        |     Yes     |     Yes      |
-|   InternLM2    | 7B - 20B | LLM  |       Yes        |       Yes        |     Yes     |     Yes      |
-|  InternLM2.5   | 7B - 20B | LLM  |       Yes        |       Yes        |     Yes     |     Yes      |
-|   InternLM3    |    8B    | LLM  |       Yes        |       Yes        |     Yes     |     Yes      |
-|    Mixtral     |   8x7B   | LLM  |       Yes        |       Yes        |     No      |      No      |
-|  QWen1.5-MoE   |  A2.7B   | LLM  |       Yes        |        -         |     No      |      No      |
-|   QWen2(.5)    |    7B    | LLM  |       Yes        |       Yes        |     Yes     |     Yes      |
-|    QWen2-VL    |  2B, 7B  | MLLM |       Yes        |       Yes        |      -      |      -       |
-|   QWen2.5-VL   | 3B - 72B | MLLM |       Yes        |       Yes        |      -      |      -       |
-|   QWen2-MoE    | A14.57B  | LLM  |       Yes        |        -         |     No      |      No      |
-|  DeepSeek-V2   |   16B    | LLM  |        No        |       Yes        |     No      |      No      |
-| InternVL(v1.5) |  2B-26B  | MLLM |       Yes        |        -         |     Yes     |     Yes      |
-|   InternVL2    |  1B-40B  | MLLM |       Yes        |       Yes        |     Yes     |     Yes      |
-|  InternVL2.5   |  1B-78B  | MLLM |       Yes        |       Yes        |     Yes     |     Yes      |
-|   InternVL3    |  1B-78B  | MLLM |       Yes        |       Yes        |     Yes     |     Yes      |
-|  CogVLM2-chat  |   19B    | MLLM |       Yes        |        No        |      -      |      -       |
-|     GLM4V      |    9B    | MLLM |       Yes        |        No        |      -      |      -       |
+|     Model      |   Size    | Type | FP16/BF16(eager) | FP16/BF16(graph) | W8A8(graph) | W4A16(eager) |
+| :------------: | :-------: | :--: | :--------------: | :--------------: | :---------: | :----------: |
+|     Llama2     | 7B - 70B  | LLM  |       Yes        |       Yes        |     Yes     |     Yes      |
+|     Llama3     |    8B     | LLM  |       Yes        |       Yes        |     Yes     |     Yes      |
+|    Llama3.1    |    8B     | LLM  |       Yes        |       Yes        |     Yes     |     Yes      |
+|   InternLM2    | 7B - 20B  | LLM  |       Yes        |       Yes        |     Yes     |     Yes      |
+|  InternLM2.5   | 7B - 20B  | LLM  |       Yes        |       Yes        |     Yes     |     Yes      |
+|   InternLM3    |    8B     | LLM  |       Yes        |       Yes        |     Yes     |     Yes      |
+|    Mixtral     |   8x7B    | LLM  |       Yes        |       Yes        |     No      |      No      |
+|  QWen1.5-MoE   |   A2.7B   | LLM  |       Yes        |        -         |     No      |      No      |
+|   QWen2(.5)    |    7B     | LLM  |       Yes        |       Yes        |     Yes     |     Yes      |
+|    QWen2-VL    |  2B, 7B   | MLLM |       Yes        |       Yes        |      -      |      -       |
+|   QWen2.5-VL   | 3B - 72B  | MLLM |       Yes        |       Yes        |      -      |      -       |
+|   QWen2-MoE    |  A14.57B  | LLM  |       Yes        |        -         |     No      |      No      |
+|     QWen3      | 0.6B-235B | LLM  |       Yes        |       Yes        |     No      |      No      |
+|  DeepSeek-V2   |    16B    | LLM  |        No        |       Yes        |     No      |      No      |
+| InternVL(v1.5) |  2B-26B   | MLLM |       Yes        |        -         |     Yes     |     Yes      |
+|   InternVL2    |  1B-40B   | MLLM |       Yes        |       Yes        |     Yes     |     Yes      |
+|  InternVL2.5   |  1B-78B   | MLLM |       Yes        |       Yes        |     Yes     |     Yes      |
+|   InternVL3    |  1B-78B   | MLLM |       Yes        |       Yes        |     Yes     |     Yes      |
+|  CogVLM2-chat  |    19B    | MLLM |       Yes        |        No        |      -      |      -       |
+|     GLM4V      |    9B     | MLLM |       Yes        |        No        |      -      |      -       |
