@@ -162,7 +162,6 @@ public:
         const auto& a_desc = a_q_ ? a_q_desc_ : a_desc_;
         const auto& b_desc = b_q_ ? b_q_desc_ : b_desc_;
 
-        cudaDeviceSynchronize();
         auto status = gemm_.Run(operation,
                                 1.f,
                                 a.raw_data(),
@@ -180,7 +179,6 @@ public:
                                 c_desc_,
                                 {},
                                 stream_);
-        cudaDeviceSynchronize();
 
         TM_CHECK_EQ(status, 0);
     }
