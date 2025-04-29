@@ -766,7 +766,7 @@ class AsyncEngine(LogitsMixin):
                                  input_len,
                                  gen_len,
                                  finish_reason,
-                                 res,
+                                 token_ids=res,
                                  cache_block_ids=outputs.cache_block_ids)
 
                     if outputs.logprobs is not None:

@@ -69,7 +69,6 @@ class PhysicalAllocator:
             num_used = self._num_blocks - self._free_count
             blocks = self._free_blocks[num_used:num_used + num_blocks]
             self._free_count -= num_blocks
-            print(f'allocate {num_blocks} blocks, total block {self._num_blocks}, free count: {self._free_count}')
             return blocks
         else:
             raise MemoryError('No enough free memory blocks.')
@@ -129,7 +128,6 @@ class LogicalAllocator:
             self._log_mem.ref_count.put(blocks, 1)
             self.update_access_time(blocks)
             self._free_count -= num_blocks
-            print(f'allocate {num_blocks} blocks, total block {self._num_blocks}, free count: {self._free_count}')
             return blocks.copy()
         else:
             raise MemoryError('No enough free memory blocks.')
