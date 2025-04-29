@@ -176,6 +176,7 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
                  dtype: torch.dtype = None,
                  device: torch.device = None):
         super().__init__()
+        # TODO: zhouxinyu, determine modules_to_not_convert from config file
         quantization_config = getattr(config, 'quantization_config', None)
         self.layer_idx = layer_idx
         self.hidden_dim = config.hidden_size
@@ -191,7 +192,6 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
             bias=False,
             dtype=dtype,
             device=device,
-            quant_config=quantization_config,
             is_tp=False,
         )
 
