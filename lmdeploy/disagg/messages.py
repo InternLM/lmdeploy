@@ -13,15 +13,19 @@ class MigrationExecutionBatch(BaseModel):
     requests: List[Tuple[str, List[Tuple[int, int]]]] = []
 
 
+class AssignmentInstruct(BaseModel):
+    """Assignment Batch."""
+    mr_key: str
+    target_offset: int
+    source_offset: int
+    length: int
+
+
 class MigrationAssignment(BaseModel):
     """Migration Assignment."""
     protocol: MigrationProtocol
-
     remote_engine_id: str
-    mr_key: str
-    target_offset: List[int]
-    source_offset: List[int]
-    length: int
+    batch: List[AssignmentInstruct]
 
 
 class PDConnectionMessage(BaseModel):

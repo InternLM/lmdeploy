@@ -332,7 +332,7 @@ class AutoModelAgent:
         return next_token_ids
 
     async def migrate(self, inputs: MigrationExecutionBatch):
-        return await self.cache_engine.migrate(inputs)
+        return self.cache_engine.migrate(inputs)
 
     async def _async_step_background(
         self,
@@ -381,33 +381,6 @@ class AutoModelAgent:
                     f'is_decoding={inputs.is_decoding}')
 
         is_decoding = inputs.is_decoding
-        # if not is_decoding and self.cache_config.role == EngineRole.Decode:
-        #     if is_dummy:
-        #         self._out_que.put_nowait(None)
-        #         return
-        #     # Migration
-        #     need_output = dp > 1 or rank % tp == 0
-        #     next_token_ids = torch.empty_like(num_ignore_eos)
-        #     model_metas = None
-        #     done = torch.tensor(True)
-        #     begin = time.time()
-        #     for i, migration_inputs in enumerate(inputs.migration_inputs):
-        #         await self.cache_engine.migrate(migration_inputs)
-        #         next_token_ids[i] = inputs.migration_requests[i].remote_token_id
-        #     end = time.time()
-        #     if tp > 1:
-        #         dist.all_reduce(done, group=tp_cpu_group, async_op=False)
-        #     print(f'migration latency per request: {(end-begin) / len(inputs.migration_inputs) * 1e3} ms')
-        #     if need_output:
-        #         event = torch.cuda.Event()
-        #         event.record()
-        #         output = dict(next_token_ids=next_token_ids,
-        #                       logits=None,
-        #                       stopped=torch.tensor([False] * len(inputs.migration_inputs)),
-        #                       model_metas=model_metas,
-        #                       event=event)
-        #         self._out_que.put_nowait(output)
-        # else:
         eager_mode = self.backend_config.eager_mode
         if dp > 1:
             if is_decoding and not eager_mode:

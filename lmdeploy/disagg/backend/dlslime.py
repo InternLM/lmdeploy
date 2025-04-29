@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Dict, List
+from typing import Dict
 
+from dlslime import Assignment as DLSlimeAssignment
 from dlslime import RDMAEndpoint, available_nic
 
 from lmdeploy.disagg.backend.backend import MIGRATION_BACKENDS
@@ -44,9 +45,16 @@ class DLSlimeMigrationManagement:
     def connect_to(self, connect_request: DistServeConnectionRequest):
         self.endpoint[connect_request.protocol].connect_to(connect_request.remote_endpoint_info)
 
-    async def p2p_migrate(self, assignment: List[MigrationAssignment]):
-        await self.endpoint[assignment.protocol].read_batch_async(assignment.mr_key, assignment.target_offset,
-                                                                  assignment.source_offset, assignment.length)
+    def p2p_migrate(self, assignment: MigrationAssignment, async_op=False):
+        self.endpoint[assignment.protocol].read_batch_async([
+            DLSlimeAssignment(
+                mr_key=assign.mr_key,
+                target_offset=assign.target_offset,
+                source_offset=assign.source_offset,
+                length=assign.length,
+            ) for assign in assignment.batch
+        ],
+                                                            async_op=async_op)
 
 
 @MIGRATION_BACKENDS.register_module(MigrationBackend.DLSlime.name)
@@ -67,11 +75,11 @@ class DLSlimeBackend(MigrationBackendImpl):
     def p2p_connect(self, conn_req: DistServeConnectionRequest):
         self.links[conn_req.remote_engine_id].connect_to(conn_req)
 
-    async def p2p_migrate(self, assignment: MigrationAssignment):
-        await self.links[assignment.remote_engine_id].p2p_migrate(assignment)
+    def p2p_migrate(self, assignment: MigrationAssignment, async_op: bool = False):
+        self.links[assignment.remote_engine_id].p2p_migrate(assignment, async_op=async_op)
 
-    async def store(self, assignment: MigrationAssignment):
+    def store(self, assignment: MigrationAssignment, async_op: bool = False):
         raise NotImplementedError
 
-    async def load(self, assignment: MigrationAssignment):
+    def load(self, assignment: MigrationAssignment, async_op: bool = False):
         raise NotImplementedError

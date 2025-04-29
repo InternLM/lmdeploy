@@ -975,7 +975,6 @@ class Engine:
     async def _async_loop_migration(self, resp_que: asyncio.Queue, has_runable_event: asyncio.Event):
         """async loop migration."""
         while True:
-            await asyncio.sleep(0.00005)
             migration_running = self.scheduler._schedule_migration()
             if not migration_running:
                 await self.migration_event.wait()
@@ -1041,7 +1040,6 @@ class Engine:
                 await has_runable_event.wait()
                 scheduler.collect_migration_done()
                 forward_inputs, next_running = await inputs_maker.send_next_inputs()
-            # scheduler.collect_migration_done()
             num_loops = forward_inputs['loop_count']
             running = next_running
             next_running = None
