@@ -1,4 +1,6 @@
-
+#include <cstdlib>
+#include <functional>
+#include <numeric>
 
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/core.h"
@@ -9,7 +11,6 @@
 #include "src/turbomind/kernels/gemm/test/test_utils.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/quantization.h"
-#include <cstdlib>
 
 namespace turbomind::gemm {
 
@@ -89,6 +90,12 @@ public:
         return std::make_pair(t, m);
     }
 
+    template<class T>
+    auto prod_(const std::vector<T>& x)
+    {
+        return std::accumulate(x.begin(), x.end(), 1, std::multiplies<>{});
+    }
+
     void Initialize(int m, int n, int k, cudaStream_t stream)
     {
         stream_ = stream;
@@ -113,24 +120,28 @@ public:
         rng_.UniformFloat(b_, 1.);
 
         if (Ta == kFloat8_e4m3) {
-            QuantizeSymm(a_q_, a_s_, a_, stream);
-            DequantizeSymm(a_f_, a_q_, a_s_, stream);
-            if (0) {
+            QuantizeSymmBlock(a_q_, a_s_, a_, stream);
+            DequantizeSymmBlock(a_f_, a_q_, a_s_, stream);
+            a_q_desc_ = {a_q_.dtype(), kRowMajor, (int)a_q_.shape(0), (int)a_q_.shape(1), (int)prod_(a_q_.stride())};
+            u_desc_   = {a_s_.dtype(), kRowMajor, (int)a_s_.shape(0), (int)a_s_.shape(1), (int)prod_(a_s_.stride())};
+            if (1) {
                 std::cout << "a_q " << a_q_ << "\n";
                 std::cout << "a_s " << a_s_ << "\n";
                 std::cout << "a_f " << a_f_ << "\n";
             }
         }
 
-        if (Tb == kFloat8_e4m3) {
-            QuantizeSymmBlock(b_q_, b_s_, trans_(b_, Ob == kColMajor), stream);
-            DequantizeSymmBlock(b_f_, b_q_, b_s_, stream);
+        if (Tb == kFloat8_e4m3) {  // b is k-major & b_s is n-major
+            QuantizeSymm(b_q_, b_s_, trans_(b_, Ob == kColMajor), stream);
+            DequantizeSymm(b_f_, b_q_, b_s_, stream);
             if (Ob == kColMajor) {
                 b_q_ = b_q_.t();
                 b_s_ = b_s_.t();
                 b_f_ = b_f_.t();
             }
-            if (0) {
+            b_q_desc_ = {b_q_.dtype(), kColMajor, (int)b_q_.shape(0), (int)b_q_.shape(1), (int)prod_(b_q_.stride())};
+            v_desc_   = {b_s_.dtype(), kRowMajor, (int)b_s_.shape(0), (int)b_s_.shape(1), (int)prod_(b_s_.stride())};
+            if (1) {
                 std::cout << "b_q " << b_q_ << "\n";
                 std::cout << "b_s " << b_s_ << "\n";
                 std::cout << "b_f " << b_f_ << "\n";
@@ -142,18 +153,24 @@ public:
     {
         const Operation operation{get_dispatch_policy(),  //
                                   Epilogue::kNone,
-                                  {},
-                                  {},
+                                  {QuantType::kDefault, 128},
+                                  {QuantType::kDefault, 128},
                                   0};
 
+        const auto& a      = a_q_ ? a_q_ : a_;
+        const auto& b      = b_q_ ? b_q_ : b_;
+        const auto& a_desc = a_q_ ? a_q_desc_ : a_desc_;
+        const auto& b_desc = b_q_ ? b_q_desc_ : b_desc_;
+
+        cudaDeviceSynchronize();
         auto status = gemm_.Run(operation,
                                 1.f,
-                                a_.raw_data(),
-                                a_desc_,
+                                a.raw_data(),
+                                a_desc,
                                 a_s_.data_or((void*)nullptr),
                                 u_desc_,
-                                b_.raw_data(),
-                                b_desc_,
+                                b.raw_data(),
+                                b_desc,
                                 b_s_.data_or((void*)nullptr),
                                 v_desc_,
                                 0.f,
@@ -163,6 +180,7 @@ public:
                                 c_desc_,
                                 {},
                                 stream_);
+        cudaDeviceSynchronize();
 
         TM_CHECK_EQ(status, 0);
     }
@@ -228,6 +246,8 @@ private:
     MatrixLayout c_desc_;
     MatrixLayout u_desc_;
     MatrixLayout v_desc_;
+    MatrixLayout a_q_desc_;
+    MatrixLayout b_q_desc_;
 
     Tensor a_q_;  // quant(a)
     Tensor a_f_;  // dequant(a_q)
@@ -248,7 +268,7 @@ private:
 
 enum class TestPreset : int {
     kANY_bf16_bf16_bf16_TNN,
-    kANY_e4m3_e4m3_bf16_TTT,
+    kANY_e4m3_e4m3_bf16_TNN,
 };
 
 inline std::unique_ptr<Testbed_v2> get_test(TestPreset preset)
@@ -258,8 +278,8 @@ inline std::unique_ptr<Testbed_v2> get_test(TestPreset preset)
         case TestPreset::kANY_bf16_bf16_bf16_TNN:
             config = {kBfloat16, kBfloat16, kBfloat16, kRowMajor, kColMajor, kColMajor};
             break;
-        case TestPreset::kANY_e4m3_e4m3_bf16_TTT:
-            config = {kFloat8_e4m3, kFloat8_e4m3, kBfloat16, kRowMajor, kRowMajor, kRowMajor};
+        case TestPreset::kANY_e4m3_e4m3_bf16_TNN:
+            config = {kFloat8_e4m3, kFloat8_e4m3, kBfloat16, kRowMajor, kColMajor, kColMajor};
             break;
         default:
             TM_CHECK(0) << "not implemented";

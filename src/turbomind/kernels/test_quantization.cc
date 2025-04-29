@@ -25,7 +25,8 @@ int main()
     Tensor_<bfloat16_t> x_f{{m, n}, kDEVICE};
     Tensor_<fp8_e4m3_t> x_q{{m, n}, kDEVICE};
 
-    Tensor_<float> x_s{{m, n / gs}, kDEVICE};
+    // Tensor_<float> x_s{{{m, n / gs}, {1, round_up(m, 4)}}, kDEVICE};
+    Tensor_<float> x_s;
 
     RNG r;
     r.set_stream(stream);

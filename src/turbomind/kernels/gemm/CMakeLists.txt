@@ -34,6 +34,8 @@ add_library(gemm2
 target_link_libraries(gemm2 PRIVATE parser nvidia::cutlass::cutlass CUDA::cuda_driver)
 
 
+target_compile_definitions(gemm2 PRIVATE -DCUTE_SM90_EXTENDED_MMA_SHAPES_ENABLED)
+
 target_compile_options(gemm2 PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:
                 -Xptxas=-v

@@ -64,15 +64,15 @@ public:
         desc_.pack_u = {};  // OpU::kPack;
         desc_.pack_v = {};  // OpV::kPack;
 
-        desc_.quant_a = QuantDesc{};
-        desc_.quant_b = QuantDesc{};
+        // desc_.quant_a = QuantDesc{};
+        // desc_.quant_b = QuantDesc{};
 
         // if constexpr (OpU::SmemLayout::kSize > 1) {
-        //     desc_.quant_a = QuantDesc{QuantType::kDefault, OpU::kGroupSize};
+        desc_.quant_a = QuantDesc{QuantType::kDefault, 128};
         // }
 
         // if constexpr (OpV::SmemLayout::kSize > 1) {
-        //     desc_.quant_b = QuantDesc{QuantType::kDefault, OpV::kGroupSize};
+        desc_.quant_b = QuantDesc{QuantType::kDefault, 128};
         // }
 
         desc_.cta_tile = {CTA_M, CTA_N, CTA_K};
@@ -147,8 +147,9 @@ public:
             return x;
         };
 
+        // (K, N) -> (N, K)
         MatrixLayout Bdesc = transpose(_Bdesc);
-        // MatrixLayout Vdesc = transpose(_Vdesc);
+        MatrixLayout Vdesc = transpose(_Vdesc);
 
         auto sched = [&] {
             if constexpr (0) {
@@ -184,6 +185,16 @@ public:
             (void*)B, Bdesc.type, k, n, CTA_K, CTA_N / kMulticastB, kColMajor, CU_TENSOR_MAP_SWIZZLE_128B);
         auto tm_c = make_2d_tma_desc((void*)C, Cdesc.type, m, n, CTA_M, CTA_N, kColMajor, CU_TENSOR_MAP_SWIZZLE_NONE);
 
+        CUtensorMap tm_u{};
+        CUtensorMap tm_v{};
+
+        if (V) {
+            TM_CHECK_EQ(CTA_K, 128);
+            // std::cout << Vdesc.type << " " << Vdesc.rows << " " << Vdesc.cols << " " << (int)Vdesc.order << "\n";
+            tm_v = make_2d_tma_desc(
+                (void*)V, Vdesc.type, Vdesc.rows, Vdesc.cols, CTA_N, 1, Vdesc.order, CU_TENSOR_MAP_SWIZZLE_NONE);
+        }
+
         const auto grid  = 132;
         const auto block = Gemm::CTA_SIZE;
 
@@ -209,15 +220,13 @@ public:
         attrs[0].val.clusterDim.y = 1;
         attrs[0].val.clusterDim.z = 1;
 
-        // attrs[1].id                                    = cudaLaunchAttributeClusterSchedulingPolicyPreference;
-        // attrs[1].val.clusterSchedulingPolicyPreference = cudaClusterSchedulingPolicyLoadBalancing;
-
         config.attrs    = attrs;
         config.numAttrs = std::size(attrs);
 
         // std::cout << "swizzle: " << swizzle << ", split: " << splits << "\n";
 
-        check_cuda_error(cudaLaunchKernelEx(&config, func, tm_a, tm_b, tm_c, sched));
+        auto ec = cudaLaunchKernelEx(&config, func, tm_a, tm_b, tm_c, tm_u, tm_v, U, Udesc.ld, V, Vdesc.ld, sched);
+        TM_CHECK_EQ(ec, cudaSuccess) << cudaGetErrorString(ec);
 
         // gemm_kernel_sm90<Gemm><<<grid, block, smem_size_, stream>>>(tm_a, tm_b, tm_c, (Tc*)C, Cdesc.ld, sched);
 

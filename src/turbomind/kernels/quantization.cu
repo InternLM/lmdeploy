@@ -11,34 +11,36 @@
 namespace turbomind {
 
 template<int vec_size, int group_size, class Tout, class Tscale, class T>
-__global__ void quant_symm_row(Tout* out, Tscale* scales, const T* src, Tscale qmax, int64_t n)
+__global__ void quant_symm_row(
+    Tout* out, int out_ld, Tscale* scales, int scales_ld, const T* src, int src_ld, int num, int dim, Tscale qmax)
 {
-    const int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    n /= vec_size;
     static_assert(group_size % vec_size == 0);
     constexpr int threads = group_size / vec_size;
-    for (int64_t i = idx; i < n; i += gridDim.x * blockDim.x) {
-        Array<T, vec_size> vec;
-        Ldg(vec, src + i * vec_size);
-        auto         absmax    = static_cast<Tscale>(find_absmax<threads>(vec));
-        const Tscale scale     = absmax / qmax;
-        const Tscale inv_scale = qmax / absmax;
-        if (threadIdx.x % threads == 0) {
-            scales[i / threads] = scale;
+    for (int ti = blockIdx.x; ti < num; ti += gridDim.x) {
+        for (int di = threadIdx.x * vec_size; di < dim; di += blockDim.x * vec_size) {
+            Array<T, vec_size> vec;
+            Ldg(vec, src + ti * src_ld + di);
+            auto         absmax    = static_cast<Tscale>(find_absmax<threads>(vec));
+            const Tscale scale     = absmax / qmax;
+            const Tscale inv_scale = qmax / absmax;
+            if (threadIdx.x % threads == 0) {
+                // column-major
+                scales[(di / group_size) * scales_ld + ti] = scale;
+            }
+            Array<Tout, vec_size> tmp;
+            PRAGMA_UNROLL
+            for (int c = 0; c < vec_size; ++c) {
+                tmp[c] = Tout(static_cast<Tscale>(vec[c]) * inv_scale);
+            }
+            Store(out + ti * out_ld + di, tmp);
         }
-        Array<Tout, vec_size> tmp;
-        PRAGMA_UNROLL
-        for (int c = 0; c < vec_size; ++c) {
-            tmp[c] = Tout(static_cast<Tscale>(vec[c]) * inv_scale);
-        }
-        Store(out + i * vec_size, tmp);
     }
 }
 
 void QuantizeSymm(Tensor& out, Tensor& scale, const Tensor& src, cudaStream_t st)
 {
     TM_CHECK_EQ(src.ndim(), 2);
-    TM_CHECK(src.is_contiguous());
+    TM_CHECK_EQ(src.stride(1), 1);  // row-major
 
     const auto [num, dim] = src.shapes(0, 1);
 
@@ -49,47 +51,55 @@ void QuantizeSymm(Tensor& out, Tensor& scale, const Tensor& src, cudaStream_t st
     constexpr int group_size = 128;
     constexpr int vec_size   = 8;
 
+    constexpr int alignment = 16 / sizeof(Tscale);
+
     if (!out) {
-        out = Tensor_<Tout>{src.layout(), kDEVICE};
+        out = Tensor_<Tout>{src.shape(), kDEVICE};
     }
     else {
-        TM_CHECK(out.layout() == src.layout());
+        TM_CHECK(out.shape() == src.shape());
     }
 
+    const int aligned_num = round_up<int>(num, alignment);
+
     if (!scale) {
-        scale = Tensor_<Tscale>({num, dim / group_size}, kDEVICE);
+        scale = Tensor_<Tscale>({{num, dim / group_size}, {1, aligned_num}}, kDEVICE);
     }
     else {
         TM_CHECK(std::make_tuple(num, dim / group_size) == scale.shapes(0, 1));
+        TM_CHECK(scale.stride(1) % alignment == 0);
     }
 
     constexpr int block_dim = 512;
-    int           grid_dim  = (int)cdiv<int64_t>(src.size(), block_dim * vec_size);
 
-    quant_symm_row<vec_size, group_size><<<grid_dim, block_dim, 0, st>>>(out.data<Tout>(),  //
-                                                                         scale.data<Tscale>(),
-                                                                         src.data<T>(),
-                                                                         448.f,
-                                                                         src.size());
+    quant_symm_row<vec_size, group_size><<<num, block_dim, 0, st>>>(out.data<Tout>(),  //
+                                                                    out.stride(0),
+                                                                    scale.data<Tscale>(),
+                                                                    scale.stride(1),
+                                                                    src.data<T>(),
+                                                                    src.stride(0),
+                                                                    num,
+                                                                    dim,
+                                                                    448.f);
 }
 
 template<int vec_size, int group_size, class Tout, class Tscale, class T>
-__global__ void dequant_symm_row(Tout* out, const T* src, const Tscale* scales, int64_t n)
+__global__ void
+dequant_symm_row(Tout* out, int out_ld, const T* src, int src_ld, const Tscale* scales, int scales_ld, int num, int dim)
 {
-    const int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    n /= vec_size;
     static_assert(group_size % vec_size == 0);
-    constexpr int threads = group_size / vec_size;
-    for (int64_t i = idx; i < n; i += gridDim.x * blockDim.x) {
-        Array<T, vec_size> vec;
-        Ldg(vec, src + i * vec_size);
-        const auto            scale = __ldg(&scales[i / threads]);
-        Array<Tout, vec_size> tmp;
-        PRAGMA_UNROLL
-        for (int c = 0; c < vec_size; ++c) {
-            tmp[c] = Tout(static_cast<Tscale>(vec[c]) * scale);
+    for (int ti = blockIdx.x; ti < num; ti += gridDim.x) {
+        for (int di = threadIdx.x * vec_size; di < dim; di += blockDim.x * vec_size) {
+            Array<T, vec_size> vec;
+            Ldg(vec, src + ti * src_ld + di);
+            const auto            scale = __ldg(&scales[(di / group_size) * scales_ld + ti]);
+            Array<Tout, vec_size> tmp;
+            PRAGMA_UNROLL
+            for (int c = 0; c < vec_size; ++c) {
+                tmp[c] = Tout(static_cast<Tscale>(vec[c]) * scale);
+            }
+            Store(out + ti * out_ld + di, tmp);
         }
-        Store(out + i * vec_size, tmp);
     }
 }
 
@@ -106,16 +116,21 @@ void DequantizeSymm(Tensor& out, const Tensor& src, const Tensor& scale, cudaStr
         TM_CHECK(out.layout() == src.layout());
     }
 
+    auto [num, dim] = src.shapes(0, 1);
+
     constexpr int group_size = 128;
     constexpr int vec_size   = 8;
 
     constexpr int block_dim = 512;
-    int           grid_dim  = (int)cdiv<int64_t>(src.size(), block_dim * vec_size);
 
-    dequant_symm_row<vec_size, group_size, Tout, Tscale, T><<<grid_dim, block_dim, 0, st>>>(out.data<Tout>(),  //
-                                                                                            src.data<T>(),
-                                                                                            scale.data<Tscale>(),
-                                                                                            src.size());
+    dequant_symm_row<vec_size, group_size, Tout, Tscale, T><<<num, block_dim, 0, st>>>(out.data<Tout>(),  //
+                                                                                       out.stride(0),
+                                                                                       src.data<T>(),
+                                                                                       src.stride(0),
+                                                                                       scale.data<Tscale>(),
+                                                                                       scale.stride(1),
+                                                                                       num,
+                                                                                       dim);
 }
 
 template<int vec_size, int cta_size, int block_size, class Tout, class Tscale, class T>
