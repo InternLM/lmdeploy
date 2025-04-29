@@ -31,6 +31,7 @@ StopCriteriaLayer<T>::StopCriteriaLayer(const BaseParam& param): BaseDynamicDeco
 template<typename T>
 void StopCriteriaLayer<T>::Setup(const std::vector<const Request*>& rs, const TensorMap&)
 {
+    stop_words_ten_ = {};
     init_stop_bad_words(&GenerationConfig::stop_ids,  //
                         "stop_words",
                         rs,
