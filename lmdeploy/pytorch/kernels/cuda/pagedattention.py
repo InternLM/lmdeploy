@@ -505,7 +505,10 @@ def _get_split_k(device_idx: int, head_grid: int, batch_size: int):
     """get split k."""
     props = get_device_props(device_idx)
     num_sm = props['multi_processor_count']
-    SPLIT_K = triton.cdiv(num_sm // head_grid, triton.next_power_of_2(batch_size))
+    # estimated occupancy 12.5%
+    warps_per_sm = props['warps_per_sm'] // 8
+
+    SPLIT_K = triton.cdiv(num_sm * warps_per_sm // head_grid, triton.next_power_of_2(batch_size))
     SPLIT_K = 1 << (SPLIT_K.bit_length() - 1)
     SPLIT_K = max(min(SPLIT_K, 64), 4)
     return SPLIT_K
