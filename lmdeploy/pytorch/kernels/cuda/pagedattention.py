@@ -11,6 +11,8 @@ from torch import Tensor
 
 from lmdeploy.utils import get_logger
 
+from .utils import get_device_props
+
 logger = get_logger('lmdeploy')
 
 TRITON_VERSION = version.parse(triton.__version__)
@@ -499,6 +501,16 @@ def _kernel_meta_sm9x(BLOCK_DMODEL: int, BLOCK_H: int):
     return _kernel_meta_default(BLOCK_DMODEL, BLOCK_H)
 
 
+def _get_split_k(device_idx: int, head_grid: int, batch_size: int):
+    """get split k."""
+    props = get_device_props(device_idx)
+    num_sm = props['multi_processor_count']
+    SPLIT_K = triton.cdiv(num_sm // head_grid, triton.next_power_of_2(batch_size))
+    SPLIT_K = 1 << (SPLIT_K.bit_length() - 1)
+    SPLIT_K = min(SPLIT_K, 64)
+    return SPLIT_K
+
+
 def paged_attention_fwd(
     q: Tensor,
     k: Tensor,
@@ -579,15 +591,18 @@ def paged_attention_fwd(
     is_decoding = q.shape[-3] == kv_seqlens.size(0)
     assert is_decoding, 'we only support decoding paged attention.'
 
-    SPLIT_K = 4
-    if quant_policy != 4:
-        acc = q.new_empty(batch, head, SPLIT_K, Lv + 2, dtype=torch.float32)
-    else:
-        acc = q.new_empty(batch, head, SPLIT_K, o.shape[-1] + 2, dtype=torch.float32)
     BLOCK_DMODEL, BLOCK_DMODEL1, BLOCK_DV = _get_block_d(Lq)
     p2_kv_group_num = triton.next_power_of_2(kv_group_num)
     BLOCK_H = max(16, min(BLOCK, p2_kv_group_num))
     grid_1 = triton.cdiv(head, min(BLOCK_H, kv_group_num))
+
+    SPLIT_K = _get_split_k(q.device.index, grid_1, batch)
+
+    if quant_policy != 4:
+        acc = q.new_empty(batch, head, SPLIT_K, Lv + 2, dtype=torch.float32)
+    else:
+        acc = q.new_empty(batch, head, SPLIT_K, o.shape[-1] + 2, dtype=torch.float32)
+
     grid = (
         grid_1,
         SPLIT_K,
