@@ -370,7 +370,7 @@ __device__ __forceinline__ TopK<T, MAX_K> reduce_topk_op(const TopK<T, MAX_K>& a
 
 template<typename T>
 struct TopK_2 {
-    int p = -1;
+    int p = 0;
     T   u = -getInfValue<T>();
 
     __device__ __forceinline__ void insert(T elem, int elem_id)
