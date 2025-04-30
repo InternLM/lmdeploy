@@ -363,6 +363,7 @@ __global__ void castLogitsToFloat(T* logits, float* output, int vocab_size_padde
     const int vi = blockIdx.x * blockDim.x + threadIdx.x;
     const int bi = blockIdx.y;
     logits += (size_t)bi * vocab_size_padded;
+    output += (size_t)bi * vocab_size_padded;
 
     const int step = gridDim.x * blockDim.x * vec_size;
 

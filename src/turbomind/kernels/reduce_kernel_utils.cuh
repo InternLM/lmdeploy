@@ -384,7 +384,7 @@ struct TopK_2 {
     __device__ __forceinline__ void init()
     {
         u = -getInfValue<T>();
-        p = -1;
+        p = 0;
     }
 };
 
