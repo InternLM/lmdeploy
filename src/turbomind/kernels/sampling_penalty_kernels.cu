@@ -268,7 +268,7 @@ __global__ void batchApplyTemperaturePenalty_v2(T*           logits,
                 vec[c] = (float)vec[c] * scale;
             }
             else {
-                vec[c] = -getMaxValue<T>();
+                vec[c] = -getInfValue<T>();
             }
         }
 

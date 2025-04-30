@@ -79,6 +79,32 @@ __device__ inline __nv_bfloat16 getMaxValue<__nv_bfloat16>()
 }
 #endif
 
+template<typename T>
+__device__ inline T getInfValue();
+
+template<>
+__device__ inline float getInfValue<float>()
+{
+    return INFINITY;
+}
+
+template<>
+__device__ inline half getInfValue<half>()
+{
+    return __ushort_as_half((unsigned short)0x7C00U);
+}
+
+#ifdef ENABLE_BF16
+template<>
+__device__ inline __nv_bfloat16 getInfValue<__nv_bfloat16>()
+{
+#if __CUDA_ARCH__ >= 800
+    return __ushort_as_bfloat16((unsigned short)0x7F80U);
+#endif
+    return {};
+}
+#endif
+
 template<int Bytes>
 __device__ inline void copy(const void* local, void* data)
 {
@@ -345,11 +371,11 @@ __device__ __forceinline__ TopK<T, MAX_K> reduce_topk_op(const TopK<T, MAX_K>& a
 template<typename T>
 struct TopK_2 {
     int p = -1;
-    T   u = -getMaxValue<T>();
+    T   u = -getInfValue<T>();
 
     __device__ __forceinline__ void insert(T elem, int elem_id)
     {
-        if (elem > u) {
+        if (elem >= u) {
             u = elem;
             p = elem_id;
         }
@@ -357,7 +383,7 @@ struct TopK_2 {
 
     __device__ __forceinline__ void init()
     {
-        u = -getMaxValue<T>();
+        u = -getInfValue<T>();
         p = -1;
     }
 };
