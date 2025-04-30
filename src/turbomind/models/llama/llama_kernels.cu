@@ -358,11 +358,11 @@ template void invokeMask(__nv_bfloat16* output, const int* mask, int batch_size,
 #endif
 
 template<typename T, int vec_size>
-__global__ void castLogitsToFloat(T* logits, float* output, int vocab_size_padded)
+__global__ void castFloat2D(const T* input, float* output, int vocab_size_padded)
 {
     const int vi = blockIdx.x * blockDim.x + threadIdx.x;
     const int bi = blockIdx.y;
-    logits += (size_t)bi * vocab_size_padded;
+    input += (size_t)bi * vocab_size_padded;
     output += (size_t)bi * vocab_size_padded;
 
     const int step = gridDim.x * blockDim.x * vec_size;
@@ -371,12 +371,12 @@ __global__ void castLogitsToFloat(T* logits, float* output, int vocab_size_padde
         Array<T, vec_size> src;
 
         if constexpr (sizeof(src) >= sizeof(uint)) {
-            Load(src, logits + i);
+            Load(src, input + i);
         }
         else {
             PRAGMA_UNROLL
             for (int j = 0; j < vec_size; ++j) {
-                src[j] = logits[i + j];
+                src[j] = input[i + j];
             }
         }
 
@@ -387,22 +387,24 @@ __global__ void castLogitsToFloat(T* logits, float* output, int vocab_size_padde
     }
 }
 
-void invokeCastLogitsToFloat(
-    core::Tensor logits, float* output, int batch_size, int vocab_size_padded, cudaStream_t stream)
+void invokeCastFloat2D(const core::Tensor& src, core::Tensor& dst, cudaStream_t stream)
 {
+    auto batch_size        = src.shape(0);
+    auto vocab_size_padded = src.shape(1);
+
     auto invoke = [&](auto t, auto vec_size) {
         using T                      = decltype(t);
         constexpr int threads        = 256;
         const int     blocks_per_tok = (vocab_size_padded + threads * vec_size - 1) / (threads * vec_size);
         const dim3    blocks(blocks_per_tok, batch_size);
-        castLogitsToFloat<T, vec_size.value><<<blocks, threads, 0, stream>>>(  //
-            logits.data<T>(),
-            output,
+        castFloat2D<T, vec_size.value><<<blocks, threads, 0, stream>>>(  //
+            src.data<T>(),
+            dst.data<float>(),
             vocab_size_padded);
     };
 
     auto dispatch_t = [&](auto vec_size) {
-        switch (logits.dtype()) {
+        switch (src.dtype()) {
             case kFloat32:
                 return invoke(float{}, vec_size);
                 break;

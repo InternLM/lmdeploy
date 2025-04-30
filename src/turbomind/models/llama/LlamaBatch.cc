@@ -1571,7 +1571,7 @@ bool LlamaBatch::Forward(GenerationState& g)
             return false;
         }();
 
-        invokeCastLogitsToFloat(logits, sampling_logits_.data(), logits.shape(0), logits.shape(1), stream_);
+        invokeCastFloat2D(logits, sampling_logits_, stream_);
         sync_check_cuda_error();
 
         // stop-words & bad-words require the matched tokens to be contiguous, so item size > 1 is not supported
