@@ -596,6 +596,11 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         this to False. This is setup to True in slow tokenizers.
     - top_k (int): The number of the highest probability vocabulary
         tokens to keep for top-k-filtering
+    - min_p (float): Minimum token probability, which will be scaled by the
+        probability of the most likely token. It must be a value between
+        0 and 1. Typical values are in the 0.01-0.2 range, comparably
+        selective as setting `top_p` in the 0.99-0.8 range (use the
+        opposite of normal `top_p` values)
 
     Currently we do not support the following features:
     - logprobs (not supported yet)
@@ -633,6 +638,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
                                   ignore_eos=request.ignore_eos,
                                   stop_words=request.stop,
                                   skip_special_tokens=request.skip_special_tokens,
+                                  min_p=request.min_p,
                                   random_seed=random_seed,
                                   spaces_between_special_tokens=request.spaces_between_special_tokens)
     generators = []
