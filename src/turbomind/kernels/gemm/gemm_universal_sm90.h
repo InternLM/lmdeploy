@@ -117,19 +117,19 @@ template<class Arch_>
 struct GemmUniversalSm90 {
 
     // using MMA_Atom = GMMA::MMA_64x128x16_F32BF16BF16_SS<GMMA::Major::K, GMMA::Major::K>;
-    using MMA_Atom = GMMA::MMA_64x224x32_F32E4M3E4M3_SS_TN<>;
+    using MMA_Atom = GMMA::MMA_64x96x32_F32E4M3E4M3_SS_TN<>;
     static constexpr typename cute::MMA_Traits<MMA_Atom>::Shape_MNK MMA_Shape{};
 
     static constexpr int MMA_ATOM_M = cute::get<0>(MMA_Shape);
     static constexpr int MMA_ATOM_N = cute::get<1>(MMA_Shape);
     static constexpr int MMA_ATOM_K = cute::get<2>(MMA_Shape);
 
-    static constexpr int CTA_M = 128;
-    static constexpr int CTA_N = MMA_ATOM_N;
-    static constexpr int CTA_K = 128;
+    static constexpr int kWorkGroupM = 1;
+    static constexpr int kWorkGroupN = 2;
 
-    static constexpr int kWorkGroupM = 2;
-    static constexpr int kWorkGroupN = 1;
+    static constexpr int CTA_M = 128;
+    static constexpr int CTA_N = MMA_ATOM_N * kWorkGroupN;
+    static constexpr int CTA_K = 128;
 
     static constexpr int WARPGORUPS = kWorkGroupM * kWorkGroupN;
 
@@ -137,9 +137,9 @@ struct GemmUniversalSm90 {
     static constexpr int MMA_N = MMA_ATOM_N * kWorkGroupN;
     static constexpr int MMA_K = MMA_ATOM_K;
 
-    static constexpr int MMA_ITER_M = CTA_M / MMA_M;
-    static constexpr int MMA_ITER_N = CTA_N / MMA_N;
-    static constexpr int MMA_ITER_K = CTA_K / MMA_K;
+    static constexpr int MMA_ITER_M = CTA_M / MMA_M;  // 2
+    static constexpr int MMA_ITER_N = CTA_N / MMA_N;  // 1
+    static constexpr int MMA_ITER_K = CTA_K / MMA_K;  // 4
 
     static constexpr int kMulticastA = 1;
     static constexpr int kMulticastB = 2;
@@ -245,10 +245,10 @@ struct GemmUniversalSm90 {
                 cutlass::PipelineState<Stages> write_state{0, 1, 0};
                 while (sched.next()) {
 
-                    if (!sched.is_valid_tile()) {
-                        // OOB tile caused by fixed swizzle pattern
-                        continue;
-                    }
+                    // if (!sched.is_valid_tile()) {
+                    //     // OOB tile caused by fixed swizzle pattern
+                    //     continue;
+                    // }
 
                     const auto tile_offset              = sched.tile_offset();
                     const auto [iter_k_beg, iter_k_end] = sched.iter_k_range();
@@ -324,10 +324,10 @@ struct GemmUniversalSm90 {
 
             while (sched.next()) {
 
-                if (!sched.is_valid_tile()) {
-                    // OOB tile caused by fixed swizzle pattern
-                    continue;
-                }
+                // if (!sched.is_valid_tile()) {
+                //     // OOB tile caused by fixed swizzle pattern
+                //     continue;
+                // }
 
                 MMA_Atom::CRegisters frag_C[MMA_ITER_M][MMA_ITER_N];
                 MMA_Atom::CRegisters accum_C[MMA_ITER_M][MMA_ITER_N]{};  /// TODO: check the z-fill is eliminated
@@ -385,8 +385,8 @@ struct GemmUniversalSm90 {
 
                 auto scale_accum = [&]() {  // cta_n = mma_iter_n * wg_n * mma_atom_n
                     PRAGMA_UNROLL
-                    for (int i = threadIdx.x % WARPGROUP_SIZE; i < CTA_N; i += WARPGROUP_SIZE) {
-                        smem_UV[i] = scale_U * smem_V[read_state.index()][i];
+                    for (int i = threadIdx.x % WARPGROUP_SIZE; i < MMA_ATOM_N; i += WARPGROUP_SIZE) {
+                        smem_UV[i] = scale_U * smem_V[read_state.index()][i + warp_group_id_n * MMA_ATOM_N];
                     }
                     cute::warpgroup_wait<0>();
 
@@ -398,13 +398,9 @@ struct GemmUniversalSm90 {
                     for (int n = 0; n < MMA_ITER_N; ++n) {
                         PRAGMA_UNROLL
                         for (int c = 0; c < MMA_ATOM_N; c += 8) {
-                            Array<float, 2> scale_Vs{1, 1};
+                            Array<float, 2> scale_Vs;
                             int             idx = n * MMA_N + c + (lane_id & 3) * 2;
-                            // Load(scale_Vs, &smem_V[read_state.index()][idx]);
                             Load(scale_Vs, &smem_UV[idx]);
-
-                            using namespace ops;
-                            // scale_Vs = scale_Vs * scale_U;
                             PRAGMA_UNROLL
                             for (int m = 0; m < MMA_ITER_M; ++m) {
                                 accum_C[m][n][c / 2 + 0] += frag_C[m][n][c / 2 + 0] * scale_Vs[0];
@@ -462,10 +458,12 @@ struct GemmUniversalSm90 {
                     PRAGMA_UNROLL
                     for (int n = 0; n < MMA_ITER_N; ++n) {
                         PRAGMA_UNROLL
-                        for (int i = 0; i < MMA_N; i += 16) {
+                        for (int i = 0; i < MMA_ATOM_N; i += 16) {
                             // clang-format off
-                            const int mm   = m * MMA_M + warp_id * 16 + (lane_id & 8);
-                            const int nn   = n * MMA_N +     i        + (lane_id & 7) + (lane_id & 16) / 2;
+                            // const int mm   = m * MMA_M + warp_id * 16 + (lane_id & 8);
+                            // const int nn   = n * MMA_N +     i        + (lane_id & 7) + (lane_id & 16) / 2;
+                            const int mm   = m * MMA_M + (warp_id & 3) * 16 + (lane_id & 8);
+                            const int nn   = n * MMA_N + warp_group_id_n * MMA_ATOM_N + i + (lane_id & 7) + (lane_id & 16) / 2;
                             // clang-format on
                             __align__(16) Array<Tc, 8> tvec = cast<Tc>(*(Array<float, 8>*)&accum_C[m][n][i / 2]);
                             cute::SM90_U16x8_STSM_T::copy((uint32_t&)tvec[0],
