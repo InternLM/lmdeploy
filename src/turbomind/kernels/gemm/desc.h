@@ -35,8 +35,22 @@ struct GemmDesc {
     int       num;
 };
 
-enum class OpClass
+inline GemmDesc transpose(GemmDesc d)
 {
+    std::swap(d.type_a, d.type_b);
+    std::swap(d.order_a, d.order_b);
+    d.order_a = ~d.order_a;
+    d.order_b = ~d.order_b;
+    d.order_c = ~d.order_c;
+    std::swap(d.striding_a, d.striding_b);
+    std::swap(d.pack_a, d.pack_b);
+    std::swap(d.pack_u, d.pack_v);
+    std::swap(d.quant_a, d.quant_b);
+    std::swap(d.m, d.n);
+    return d;
+}
+
+enum class OpClass {
     kSIMT,
     kMMA_s884,
     kMMA_s16816,
