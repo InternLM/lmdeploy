@@ -32,7 +32,7 @@ class TileScheduler {
     dim3 swizzled_shape_;
     int  clusters_;
 
-    bool is_valid_;
+    int2 is_valid_;  // {is_valid_cta_tile, is_valid_cluster_tile}
 
 public:
     TM_HOST_DEVICE
@@ -83,24 +83,26 @@ public:
         const int offset_x = cluster_cta_m * cluster_tiled_shape_.x;
         const int offset_y = cluster_cta_n * cluster_tiled_shape_.y;
 
+        int2 cluster_tile_offset;
+
         if constexpr (order == kColMajor) {
-            tile_offset_ = {offset_x + (cluster_idx_x >> log_tile_),
-                            offset_y + (cluster_idx_y << log_tile_) + (cluster_idx_x & ((1 << log_tile_) - 1)),
-                            cluster_idx_z};
+            cluster_tile_offset = {(cluster_idx_x >> log_tile_),
+                                   (cluster_idx_y << log_tile_) + (cluster_idx_x & ((1 << log_tile_) - 1))};
         }
         else {
-            tile_offset_ = {offset_x + (cluster_idx_y << log_tile_) + (cluster_idx_x & ((1 << log_tile_) - 1)),
-                            offset_y + (cluster_idx_x >> log_tile_),
-                            cluster_idx_z};
+            cluster_tile_offset = {(cluster_idx_y << log_tile_) + (cluster_idx_x & ((1 << log_tile_) - 1)),
+                                   (cluster_idx_x >> log_tile_)};
         }
-        tile_offset_.w       = 0;
+
+        tile_offset_         = {offset_x + cluster_tile_offset.x, offset_y + cluster_tile_offset.y, cluster_idx_z, 0};
         const int chunk_id   = tile_offset_.z * chunks_per_split_ + max(tile_offset_.z - chunk_offset_, 0);
         const int iter_k_beg = chunk_id * iter_k_per_chunk_;
         const int iter_k_cnt = (chunks_per_split_ + int(tile_offset_.z >= chunk_offset_)) * iter_k_per_chunk_;
         iter_k_range_        = {iter_k_beg, iter_k_beg + iter_k_cnt};
 
-        is_valid_ =
+        is_valid_.x =
             tile_offset_.x < tiled_shape_.x && tile_offset_.y < tiled_shape_.y && tile_offset_.z < tiled_shape_.z;
+        is_valid_.y = cluster_tile_offset.x < cluster_tiled_shape_.x && cluster_tile_offset.y < cluster_tiled_shape_.y;
     }
 
     TM_DEVICE void grid_init()
@@ -121,7 +123,7 @@ public:
         return true;
     }
 
-    TM_DEVICE bool is_valid_tile() const
+    TM_DEVICE int2 is_valid_tile() const
     {
         return is_valid_;
     }

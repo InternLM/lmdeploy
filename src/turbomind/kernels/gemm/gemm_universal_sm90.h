@@ -117,7 +117,7 @@ template<class Arch_>
 struct GemmUniversalSm90 {
 
     // using MMA_Atom = GMMA::MMA_64x128x16_F32BF16BF16_SS<GMMA::Major::K, GMMA::Major::K>;
-    using MMA_Atom = GMMA::MMA_64x96x32_F32E4M3E4M3_SS_TN<>;
+    using MMA_Atom = GMMA::MMA_64x112x32_F32E4M3E4M3_SS_TN<>;
     static constexpr typename cute::MMA_Traits<MMA_Atom>::Shape_MNK MMA_Shape{};
 
     static constexpr int MMA_ATOM_M = cute::get<0>(MMA_Shape);
@@ -244,11 +244,12 @@ struct GemmUniversalSm90 {
             if (threadIdx.x == WARPGORUPS * WARPGROUP_SIZE) {
                 cutlass::PipelineState<Stages> write_state{0, 1, 0};
                 while (sched.next()) {
+                    auto [valid_cta_tile_p, cluster_tile_p] = sched.is_valid_tile();
 
-                    // if (!sched.is_valid_tile()) {
-                    //     // OOB tile caused by fixed swizzle pattern
-                    //     continue;
-                    // }
+                    if (!cluster_tile_p) {
+                        // OOB tile caused by swizzle pattern
+                        continue;
+                    }
 
                     const auto tile_offset              = sched.tile_offset();
                     const auto [iter_k_beg, iter_k_end] = sched.iter_k_range();
@@ -278,16 +279,10 @@ struct GemmUniversalSm90 {
                         gmem_A.Load(&producer_bar[pipe], &smem_A[pipe * CTA_M * CTA_K]);
                         // {
                         //     // printf("%f\n", *gmem_U);
-                        //     smem_U[pipe][0] = *gmem_U;
-                        //     gmem_U += step_U;
+                        // smem_U[pipe][0] = *gmem_U;
+                        // gmem_U += step_U;
                         // }
                         gmem_B.Load(&producer_bar[pipe], &smem_B[pipe * CTA_N * CTA_K]);
-                        // PRAGMA_UNROLL
-                        // for (int i = 0; i < CTA_N; ++i) {
-                        //     smem_V[pipe][i] = gmem_V[i];
-                        //     // printf("%f\n", gmem_V[i]);
-                        // }
-                        // gmem_V += step_V;
                         gmem_V.Load(&producer_bar[pipe], &smem_V[pipe][0]);
 
                         ++write_state;
@@ -323,11 +318,12 @@ struct GemmUniversalSm90 {
             cutlass::PipelineState<Stages> release_state{};
 
             while (sched.next()) {
+                auto [cta_tile_p, cluster_tile_p] = sched.is_valid_tile();
 
-                // if (!sched.is_valid_tile()) {
-                //     // OOB tile caused by fixed swizzle pattern
-                //     continue;
-                // }
+                if (!cluster_tile_p) {
+                    // OOB tile caused by swizzle pattern
+                    continue;
+                }
 
                 MMA_Atom::CRegisters frag_C[MMA_ITER_M][MMA_ITER_N];
                 MMA_Atom::CRegisters accum_C[MMA_ITER_M][MMA_ITER_N]{};  /// TODO: check the z-fill is eliminated
@@ -381,9 +377,30 @@ struct GemmUniversalSm90 {
                     }
                 };
 
+                if constexpr (kClusterSize > 1) {
+                    if (!cta_tile_p) {
+                        // other CTAs in the cluster are still alive
+                        for (; k_iter > 0; --k_iter) {
+                            ProducerBar::wait(&producer_bar[read_state.index()], read_state.phase());
+                            consumer_arrive();
+                            smem_iter_A.Advance(read_state.index());
+                            smem_iter_B.Advance(read_state.index());
+                            ++read_state;
+                            ++release_state;
+                        }
+                        continue;
+                    }
+                }
+
                 float scale_U{};
+                auto  Load_U = [&] {
+                    scale_U = *gmem_U;
+                    gmem_U += step_U;
+                };
 
                 auto scale_accum = [&]() {  // cta_n = mma_iter_n * wg_n * mma_atom_n
+                    // auto scale_U = smem_U[read_state.index()][0];
+
                     PRAGMA_UNROLL
                     for (int i = threadIdx.x % WARPGROUP_SIZE; i < MMA_ATOM_N; i += WARPGROUP_SIZE) {
                         smem_UV[i] = scale_U * smem_V[read_state.index()][i + warp_group_id_n * MMA_ATOM_N];
@@ -391,7 +408,6 @@ struct GemmUniversalSm90 {
                     cute::warpgroup_wait<0>();
 
                     const int lane_id = threadIdx.x % WARP_SIZE;
-                    // auto      scale_U = smem_U[read_state.index()][0];
 
                     cutlass::arch::NamedBarrier(WARPGROUP_SIZE, warpgroup_id + 1).sync();
                     PRAGMA_UNROLL
@@ -412,8 +428,7 @@ struct GemmUniversalSm90 {
                     }
                 };
 
-                scale_U = *gmem_U;
-                gmem_U += step_U;
+                Load_U();
                 ProducerBar::wait(&producer_bar[read_state.index()], read_state.phase());
                 cute::warpgroup_arrive();
                 warpgroup_fence_operand(frag_C);
@@ -426,8 +441,7 @@ struct GemmUniversalSm90 {
                 ++release_state;
 
                 while (k_iter > 0) {
-                    scale_U = *gmem_U;
-                    gmem_U += step_U;
+                    Load_U();
                     ProducerBar::wait(&producer_bar[read_state.index()], read_state.phase());
                     cute::warpgroup_arrive();
                     warpgroup_fence_operand(frag_C);
