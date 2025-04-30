@@ -60,4 +60,7 @@ void invokeGetFeatureOfLastToken(
 template<typename T>
 void invokeMask(T* output, const int* mask, int batch_size, int dim, cudaStream_t stream);
 
+template<typename T>
+void invokeCastLogitsToFloat(T* input, float* output, int batch_size, int vocab_size_padded, cudaStream_t stream);
+
 }  // namespace turbomind

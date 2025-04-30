@@ -9,6 +9,7 @@
 #include <cub/block/block_reduce.cuh>
 
 #include "src/turbomind/kernels/core/array.h"
+#include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -354,6 +355,70 @@ template void invokeMask(float* output, const int* mask, int batch_size, int dim
 template void invokeMask(half* output, const int* mask, int batch_size, int dim, cudaStream_t stream);
 #ifdef ENABLE_BF16
 template void invokeMask(__nv_bfloat16* output, const int* mask, int batch_size, int dim, cudaStream_t stream);
+#endif
+
+template<typename T, int vec_size>
+__global__ void castLogitsToFloat(T* logits, float* output, int vocab_size_padded)
+{
+    const int vi = blockIdx.x * blockDim.x + threadIdx.x;
+    const int bi = blockIdx.y;
+    logits += (size_t)bi * vocab_size_padded;
+
+    const int step = gridDim.x * blockDim.x * vec_size;
+
+    for (int i = vi * vec_size; i < vocab_size_padded; i += step) {
+        Array<T, vec_size> src;
+
+        if constexpr (sizeof(src) >= sizeof(uint)) {
+            Load(src, logits + i);
+        }
+        else {
+            PRAGMA_UNROLL
+            for (int j = 0; j < vec_size; ++j) {
+                src[j] = logits[i + j];
+            }
+        }
+
+        auto dst = cast<float>(src);
+
+        // store
+        Store(output + i, dst);
+    }
+}
+
+template<typename T>
+void invokeCastLogitsToFloat(T* logits, float* output, int batch_size, int vocab_size_padded, cudaStream_t stream)
+{
+    auto invoke = [&](auto vec_size) {
+        constexpr int threads        = 256;
+        const int     blocks_per_tok = (vocab_size_padded + threads * vec_size - 1) / (threads * vec_size);
+        const dim3    blocks(blocks_per_tok, batch_size);
+        castLogitsToFloat<T, vec_size.value><<<blocks, threads, 0, stream>>>(  //
+            logits,
+            output,
+            vocab_size_padded);
+    };
+
+    if (vocab_size_padded % 4 == 0) {
+        invoke(std::integral_constant<int, 4>{});
+    }
+    else if (vocab_size_padded % 2 == 0) {
+        invoke(std::integral_constant<int, 2>{});
+    }
+    else {
+        invoke(std::integral_constant<int, 1>{});
+    }
+}
+
+#ifdef ENABLE_FP32
+template void
+invokeCastLogitsToFloat(float* logits, float* output, int batch_size, int vocab_size_padded, cudaStream_t stream);
+#endif
+template void
+invokeCastLogitsToFloat(half* logits, float* output, int batch_size, int vocab_size_padded, cudaStream_t stream);
+#ifdef ENABLE_BF16
+template void invokeCastLogitsToFloat(
+    __nv_bfloat16* logits, float* output, int batch_size, int vocab_size_padded, cudaStream_t stream);
 #endif
 
 }  // namespace turbomind

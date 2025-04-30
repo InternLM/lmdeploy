@@ -244,12 +244,6 @@ void invokeTopKSortFilter(TopKSortFilterParams& params, cudaStream_t stream)
     }
 }
 
-#ifdef ENABLE_FP32
 template void invokeTopKSortFilter<float>(TopKSortFilterParams& params, cudaStream_t stream);
-#endif
-template void invokeTopKSortFilter<half>(TopKSortFilterParams& params, cudaStream_t stream);
-#ifdef ENABLE_BF16
-template void invokeTopKSortFilter<nv_bfloat16>(TopKSortFilterParams& params, cudaStream_t stream);
-#endif
 
 }  // namespace turbomind

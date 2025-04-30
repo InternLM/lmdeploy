@@ -375,7 +375,7 @@ struct TopK_2 {
 
     __device__ __forceinline__ void insert(T elem, int elem_id)
     {
-        if (elem >= u) {
+        if (elem > u) {
             u = elem;
             p = elem_id;
         }
