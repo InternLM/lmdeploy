@@ -1571,14 +1571,8 @@ bool LlamaBatch::Forward(GenerationState& g)
             return false;
         }();
 
-        {
-            auto invoke = [&](auto t) {
-                using T = decltype(t);
-                invokeCastLogitsToFloat(
-                    logits.data<T>(), sampling_logits_.data(), logits.shape(0), logits.shape(1), stream_);
-            };
-            TM_DISPATCH_PRIMARY_DTYPES(data_type_, invoke);
-        }
+        invokeCastLogitsToFloat(logits, sampling_logits_.data(), logits.shape(0), logits.shape(1), stream_);
+        sync_check_cuda_error();
 
         // stop-words & bad-words require the matched tokens to be contiguous, so item size > 1 is not supported
         model_->dynamicDecode(token_ids_buf_,

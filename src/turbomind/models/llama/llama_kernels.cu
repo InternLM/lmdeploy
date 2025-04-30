@@ -386,39 +386,47 @@ __global__ void castLogitsToFloat(T* logits, float* output, int vocab_size_padde
     }
 }
 
-template<typename T>
-void invokeCastLogitsToFloat(T* logits, float* output, int batch_size, int vocab_size_padded, cudaStream_t stream)
+void invokeCastLogitsToFloat(
+    core::Tensor logits, float* output, int batch_size, int vocab_size_padded, cudaStream_t stream)
 {
-    auto invoke = [&](auto vec_size) {
+    auto invoke = [&](auto t, auto vec_size) {
+        using T                      = decltype(t);
         constexpr int threads        = 256;
         const int     blocks_per_tok = (vocab_size_padded + threads * vec_size - 1) / (threads * vec_size);
         const dim3    blocks(blocks_per_tok, batch_size);
         castLogitsToFloat<T, vec_size.value><<<blocks, threads, 0, stream>>>(  //
-            logits,
+            logits.data<T>(),
             output,
             vocab_size_padded);
     };
 
+    auto dispatch_t = [&](auto vec_size) {
+        switch (logits.dtype()) {
+            case kFloat32:
+                return invoke(float{}, vec_size);
+                break;
+            case kFloat16:
+                return invoke(half{}, vec_size);
+                break;
+#ifdef ENABLE_BF16
+            case kBfloat16:
+                return invoke(__nv_bfloat16{}, vec_size);
+                break;
+#endif
+            default:
+                TM_UNREACHABLE;
+        }
+    };
+
     if (vocab_size_padded % 4 == 0) {
-        invoke(std::integral_constant<int, 4>{});
+        return dispatch_t(std::integral_constant<int, 4>{});
     }
     else if (vocab_size_padded % 2 == 0) {
-        invoke(std::integral_constant<int, 2>{});
+        return dispatch_t(std::integral_constant<int, 2>{});
     }
     else {
-        invoke(std::integral_constant<int, 1>{});
+        return dispatch_t(std::integral_constant<int, 1>{});
     }
 }
-
-#ifdef ENABLE_FP32
-template void
-invokeCastLogitsToFloat(float* logits, float* output, int batch_size, int vocab_size_padded, cudaStream_t stream);
-#endif
-template void
-invokeCastLogitsToFloat(half* logits, float* output, int batch_size, int vocab_size_padded, cudaStream_t stream);
-#ifdef ENABLE_BF16
-template void invokeCastLogitsToFloat(
-    __nv_bfloat16* logits, float* output, int batch_size, int vocab_size_padded, cudaStream_t stream);
-#endif
 
 }  // namespace turbomind

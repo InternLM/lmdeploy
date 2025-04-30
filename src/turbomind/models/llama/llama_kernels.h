@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include "src/turbomind/core/tensor.h"
+
 #include <cstdint>
 
 #include <cuda_runtime.h>
@@ -60,7 +62,7 @@ void invokeGetFeatureOfLastToken(
 template<typename T>
 void invokeMask(T* output, const int* mask, int batch_size, int dim, cudaStream_t stream);
 
-template<typename T>
-void invokeCastLogitsToFloat(T* input, float* output, int batch_size, int vocab_size_padded, cudaStream_t stream);
+
+void invokeCastLogitsToFloat(core::Tensor input, float* output, int batch_size, int vocab_size_padded, cudaStream_t stream);
 
 }  // namespace turbomind
