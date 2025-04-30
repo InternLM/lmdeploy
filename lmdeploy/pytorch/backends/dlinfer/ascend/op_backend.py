@@ -91,6 +91,8 @@ class AscendOpsBackend(DlinferOpsBackend):
     enable_graph = False
     half_negative_inf = torch.finfo(torch.float16).min
     total_slots = None
+    # compiled atb Transdataoperation to convert tensor from ACL_FORMAT_ND to ACL_FORMAT_FRACTAL_NZ format.
+    transdata_func = None
 
     @staticmethod
     def get_name() -> str:
@@ -216,11 +218,13 @@ class AscendOpsBackend(DlinferOpsBackend):
                         single_attention_mask = torch.triu(single_attention_mask, diagonal=1)
                         attention_mask.append(single_attention_mask)
                 else:
+                    # Transdata needs dtype to be float16 or int8
                     single_attention_mask = torch.triu(
-                        torch.ones(max_q_seq_len, max_kv_seq_len).fill_(-float('inf')).cuda(),
+                        torch.ones(max_q_seq_len, max_kv_seq_len, dtype=torch.float16).fill_(-float('inf')).cuda(),
                         diagonal=max_kv_seq_len - max_q_seq_len + 1,
                     )
-                    attention_mask.append(single_attention_mask)
+                    # Convert to NZ format
+                    attention_mask.append(cls.get_transdata_func()(single_attention_mask, 2))
             else:
                 raise ValueError(f"dlinfer doesn't support {SocVersion.device_name()} device currently.")
         else:
@@ -240,13 +244,21 @@ class AscendOpsBackend(DlinferOpsBackend):
             kv_seqlens = step_context.kv_seqlens.to(torch.int32)
             if not step_context.is_decoding:
                 if is_unpaged_prefill:
-                    attention_mask = [mask.half() for mask in attention_mask]
-                    if SocVersion.is_Ascend310P():
-                        attention_mask = [torch.cat([mask.unsqueeze(0) for mask in attention_mask])]
+                    if SocVersion.is_Ascend910B():
+                        attention_mask = [mask.half() for mask in attention_mask]
                 else:
-                    attention_mask = [
-                        torch.cat([mask.half() * cls.half_negative_inf for mask in attention_mask]).unsqueeze(1)
-                    ]
+                    if SocVersion.is_Ascend910B():
+                        attention_mask = [
+                            torch.cat([mask.half() * cls.half_negative_inf for mask in attention_mask]).unsqueeze(1)
+                        ]
+                    elif SocVersion.is_Ascend310P():
+                        # Convert mask to NZ format.
+                        attention_mask = [
+                            cls.get_transdata_func()(torch.cat(
+                                [mask.half() * cls.half_negative_inf for mask in attention_mask]).unsqueeze(1), 2)
+                        ]
+                    else:
+                        raise ValueError(f"dlinfer doesn't support {SocVersion.device_name()} device currently.")
                     kv_seqlens = kv_seqlens.repeat_interleave(step_context.q_seqlens, 0)
         else:
             if step_context.is_decoding:
@@ -301,6 +313,21 @@ class AscendOpsBackend(DlinferOpsBackend):
         ascend_graph_runner = AscendGraphRunner(model, model_config, cache_config, backend_config, device)
         AscendOpsBackend.enable_graph = ascend_graph_runner.enable_graph
         return ascend_graph_runner
+
+    @staticmethod
+    def get_transdata_func():
+        """get transdata function."""
+        if AscendOpsBackend.transdata_func is None:
+            import dlinfer
+            from dlinfer.ops import transdata
+            dlinfer.graph.config.enable_graph_mode = True
+            if torch.distributed.is_initialized():
+                torch._inductor.config.compile_threads = 1
+            AscendOpsBackend.transdata_func = torch.compile(transdata,
+                                                            fullgraph=True,
+                                                            dynamic=False,
+                                                            backend='atbgraph')
+        return AscendOpsBackend.transdata_func
 
     @staticmethod
     def init():
