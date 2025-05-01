@@ -224,6 +224,8 @@ private:
 
     Tensor decoder_output_buf_;
 
+    Tensor_<float> sampling_logits_;
+
     Buffer_<int> input_ids_buf_;
 
     // lengths
@@ -235,10 +237,10 @@ private:
     Buffer_<int> init_ctx_lens_;
     Buffer_<int> lora_mask_buf_;  // lora
 
-    Buffer            sampled_logprobs_;
+    Buffer_<float>    sampled_logprobs_;
     Buffer_<uint32_t> sampled_indexes_;
     Buffer_<uint32_t> sampled_nums_;
-    Buffer            h_sampled_logprobs_;
+    Buffer_<float>    h_sampled_logprobs_;
     Buffer_<uint32_t> h_sampled_indexes_;
     Buffer_<uint32_t> h_sampled_nums_;
 

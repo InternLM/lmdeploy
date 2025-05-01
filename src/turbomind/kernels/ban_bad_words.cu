@@ -163,12 +163,6 @@ void invokeBanBadWords(T*           logits,
                                        size_t       step,                                                              \
                                        cudaStream_t stream);
 
-#ifdef ENABLE_FP32
 INSTANTIATE_INVOKE_BAN_BAD_WORDS(float);
-#endif
-INSTANTIATE_INVOKE_BAN_BAD_WORDS(half);
-#ifdef ENABLE_BF16
-INSTANTIATE_INVOKE_BAN_BAD_WORDS(__nv_bfloat16);
-#endif
 
 }  // namespace turbomind
