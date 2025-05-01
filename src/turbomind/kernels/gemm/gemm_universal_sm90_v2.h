@@ -113,6 +113,12 @@ inline __device__ void warpgroup_fence_operand(float (&x)[M][N][K])
     }
 }
 
+template<class Func, size_t... Is>
+__device__ void for_(std::index_sequence<Is...>, Func func)
+{
+    return (func(constant<Is>{}), ...);
+}
+
 template<class Arch_>
 struct GemmUniversalSm90_v2 {
 
@@ -339,24 +345,44 @@ struct GemmUniversalSm90_v2 {
                 int k_iter = iter_k_end - iter_k_beg;
 
                 auto tile_gemm = [&] {
+                    // PRAGMA_UNROLL
+                    // for (int k = 0; k < MMA_ITER_K; ++k) {
+                    //     PRAGMA_UNROLL
+                    //     for (int m = 0; m < MMA_ITER_M; ++m) {
+                    //         PRAGMA_UNROLL
+                    //         for (int n = 0; n < MMA_ITER_N; ++n) {
+                    //             wgmma<MMA_Atom>(smem_iter_A, smem_iter_B, frag_C[m][n], k == 0);
+                    //             smem_iter_B += kStepNB;
+                    //         }
+                    //         smem_iter_B -= MMA_ITER_N * kStepNB;
+                    //         smem_iter_A += kStepMA;
+                    //     }
+                    //     smem_iter_A += kStepKA - MMA_ITER_M * kStepMA;
+                    //     smem_iter_B += kStepKB;
+                    // }
+                    // smem_iter_A -= MMA_ITER_K * kStepKA;
+                    // smem_iter_B -= MMA_ITER_K * kStepKB;
+                    // cute::warpgroup_commit_batch();
+
                     PRAGMA_UNROLL
-                    for (int k = 0; k < MMA_ITER_K; ++k) {
+                    for (int m = 0; m < MMA_ITER_M; ++m) {
                         PRAGMA_UNROLL
-                        for (int m = 0; m < MMA_ITER_M; ++m) {
+                        for (int k = 0; k < MMA_ITER_K; ++k) {
                             PRAGMA_UNROLL
                             for (int n = 0; n < MMA_ITER_N; ++n) {
                                 wgmma<MMA_Atom>(smem_iter_A, smem_iter_B, frag_C[m][n], k == 0);
                                 smem_iter_B += kStepNB;
                             }
                             smem_iter_B -= MMA_ITER_N * kStepNB;
-                            smem_iter_A += kStepMA;
+                            smem_iter_A += kStepKA;
+                            smem_iter_B += kStepKB;
                         }
-                        smem_iter_A += kStepKA - MMA_ITER_M * kStepMA;
-                        smem_iter_B += kStepKB;
+                        cute::warpgroup_commit_batch();
+                        smem_iter_A -= MMA_ITER_K * kStepKA;
+                        smem_iter_B -= MMA_ITER_K * kStepKB;
+                        smem_iter_A += kStepMA;
                     }
-                    smem_iter_A -= MMA_ITER_K * kStepKA;
-                    smem_iter_B -= MMA_ITER_K * kStepKB;
-                    cute::warpgroup_commit_batch();
+                    smem_iter_A -= MMA_ITER_M * kStepMA;
 
                     smem_iter_A.Advance(read_state.index());
                     smem_iter_B.Advance(read_state.index());
@@ -404,15 +430,16 @@ struct GemmUniversalSm90_v2 {
                     //     smem_UV[i] = scale_U * smem_V[read_state.index()][i + warp_group_id_n * MMA_ATOM_N];
                     // }
 
-                    cute::warpgroup_wait<0>();
+                    // cute::warpgroup_wait<0>();
 
                     // cutlass::arch::NamedBarrier(WARPGROUP_SIZE, warpgroup_id + 1).sync();
 
                     const int warp_id = threadIdx.x / WARP_SIZE;
                     const int lane_id = threadIdx.x % WARP_SIZE;
 
-                    PRAGMA_UNROLL
-                    for (int m = 0; m < MMA_ITER_M; ++m) {
+                    // PRAGMA_UNROLL
+                    // for (int m = 0; m < MMA_ITER_M; ++m) {
+                    for_(std::make_index_sequence<MMA_ITER_M>{}, [&](auto m) {
                         float scale_U_0 = 1.f;
                         float scale_U_1 = 1.f;
 
@@ -420,7 +447,7 @@ struct GemmUniversalSm90_v2 {
                         scale_U_1 = smem_U[read_state.index()][m * MMA_M + warp_id % 4 * 16 + lane_id / 4 + 8];
                         scale_U_0 *= scale_V;
                         scale_U_1 *= scale_V;
-
+                        cute::warpgroup_wait<MMA_ITER_M - 1 - m>();
                         PRAGMA_UNROLL
                         for (int n = 0; n < MMA_ITER_N; ++n) {
                             PRAGMA_UNROLL
@@ -431,7 +458,7 @@ struct GemmUniversalSm90_v2 {
                                 accum_C[m][n][c / 2 + 3] += frag_C[m][n][c / 2 + 3] * scale_U_1;
                             }
                         }
-                    }
+                    });
                 };
 
                 Load_V();
