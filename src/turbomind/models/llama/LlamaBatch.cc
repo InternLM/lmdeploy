@@ -1571,7 +1571,8 @@ bool LlamaBatch::Forward(GenerationState& g)
             return false;
         }();
 
-        invokeCastFloat2D(logits, sampling_logits_, stream_);
+        auto sampling_logits = sampling_logits_.slice(0, bsz);
+        invokeCastFloat2D(logits, sampling_logits, stream_);
         sync_check_cuda_error();
 
         // stop-words & bad-words require the matched tokens to be contiguous, so item size > 1 is not supported
@@ -1579,7 +1580,7 @@ bool LlamaBatch::Forward(GenerationState& g)
                               finished_buf_,
                               sequence_lengths_,
                               state_->curand_state,
-                              sampling_logits_.slice(0, bsz),  // <- batch size indicator
+                              sampling_logits,  // <- batch size indicator
                               seq_limit_len_,
                               init_context_length_,
                               state_->h_context_length,
