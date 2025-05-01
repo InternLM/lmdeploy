@@ -391,7 +391,7 @@ void invokeCastFloat2D(const core::Tensor& src, core::Tensor& dst, cudaStream_t 
 {
     TM_CHECK(src.is_contiguous());
     TM_CHECK(dst.is_contiguous());
-    TM_CHECK(src.shape(0) == dst.shape(0));
+    TM_CHECK(src.shape() == dst.shape());
 
     auto batch_size = src.shape(0);
     auto channels   = src.shape(1);
