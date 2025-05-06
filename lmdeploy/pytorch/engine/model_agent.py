@@ -455,7 +455,7 @@ class AutoModelAgent:
                 # Avoid adding the ADInplaceOrView dispatch key to `next_token_ids`,
                 # as it can trigger recompilation on different ranks when using torch.compile.
                 with torch.inference_mode():
-                    next_token_ids = torch.empty_like(num_ignore_eos)
+                    next_token_ids = torch.zeros_like(num_ignore_eos)
                 stopped = None
 
             if need_broadcast_next:
