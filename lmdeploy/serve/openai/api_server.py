@@ -17,7 +17,7 @@ from fastapi.security.http import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from lmdeploy.archs import get_task
-from lmdeploy.disagg.config import DistServeEngineConfig, EngineRole
+from lmdeploy.disagg.config import DistServeEngineConfig
 from lmdeploy.disagg.request import DistServeConnectionRequest, DistServeInitRequest, MigrationRequest
 from lmdeploy.messages import GenerationConfig, LogitsProcessor, PytorchEngineConfig, TurbomindEngineConfig
 from lmdeploy.model import ChatTemplateConfig
@@ -878,24 +878,6 @@ async def p2p_initialize(init_request: DistServeInitRequest):
 @router.post('/distserve/p2p_connect')
 async def p2p_connect(conn_request: List[DistServeConnectionRequest]):
     return VariableInterface.async_engine.p2p_connect(conn_request)
-
-
-@router.post('/distserve/set_engine_to_prefill')
-async def set_engine_to_prefill() -> JSONResponse:
-    VariableInterface.async_engine.engine.engine_config.role = EngineRole.Prefill
-    return {'status': 'SUCCESS'}
-
-
-@router.post('/distserve/set_engine_to_decode')
-async def set_engine_to_decode() -> JSONResponse:
-    VariableInterface.async_engine.engine.engine_config.role = EngineRole.Decode
-    return {'status': 'SUCCESS'}
-
-
-@router.post('/distserve/set_engine_to_hybrid')
-async def set_engine_to_hubrid() -> JSONResponse:
-    VariableInterface.async_engine.engine.engine_config.role = EngineRole.Hybrid
-    return {'status': 'SUCCESS'}
 
 
 @router.post('/distserve/free_cache')

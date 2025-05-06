@@ -134,7 +134,7 @@ class NodeManager:
             with open(self.config_path, 'w') as config_file:  # update cfg yml
                 json.dump({
                     node_url: node_status.model_dump_json()
-                    for node_url, node_status in self.nodes.items()
+                    for node_url, node_status in nodes.items()
                 },
                           config_file,
                           indent=2)
@@ -749,16 +749,14 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
 
 def proxy(server_name: str = '0.0.0.0',
           server_port: int = 8000,
-          serving_strategy: Literal['NonDisaggregated', 'Disaggregated'] = 'NonDisaggregated',
+          serving_strategy: Literal['Hybrid', 'DistServe'] = 'NonDisaggregated',
           routing_strategy: Literal['random', 'min_expected_latency', 'min_observed_latency'] = 'min_expected_latency',
           api_keys: Optional[Union[List[str], str]] = None,
           ssl: bool = False,
           log_level: str = 'INFO',
           disable_cache_status: bool = False,
-          *,
-          disable_gdr: bool,
-          link_type: Literal['RoCE', 'IB'],
-          migration_protocol: MigrationProtocol,
+          link_type: Literal['RoCE', 'IB'] = 'ROCE',
+          migration_protocol: Literal['RDMA'] = 'RDMA',
           **kwargs):
     """To launch the proxy server.
 
@@ -779,12 +777,9 @@ def proxy(server_name: str = '0.0.0.0',
     node_manager.routing_strategy = RoutingStrategy.from_str(routing_strategy)
     node_manager.migration_protocol = MigrationProtocol[migration_protocol]
 
-    if serving_strategy == ServingStrategy.DistServe:
-        assert not disable_gdr, 'Bynow, only GDRDMA migration is supported in DistServe'
-
     node_manager.rdma_config = DistServeRDMAConfig(
         link_type=RDMALinkType[link_type],
-        with_gdr=not disable_gdr,
+        with_gdr=True,
     )
     node_manager.cache_status = not disable_cache_status
     if api_keys is not None:
