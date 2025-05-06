@@ -18,11 +18,12 @@ int main()
     test->Ref(0);  // c   <- a   * b
     test->Ref(1);  // c_f <- a_f * b_f
 
-    test->Run();
+    test->Run(); // c[2] <- a_q * b_q
 
     FC_Header();
     FC_Print(test->Compare(1, 0));
     FC_Print(test->Compare(2, 0));
+    FC_Print(test->Compare(2, 1));
     // FC_Print(test->Compare(2, 1));
     // test->Check();
 

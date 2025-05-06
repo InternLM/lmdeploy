@@ -116,8 +116,8 @@ public:
             std::cout << "C " << c_ << "\n";
         }
 
-        rng_.UniformFloat(a_, 1.);
-        rng_.UniformFloat(b_, 1.);
+        rng_.NormalFloat(a_, 1.);
+        rng_.NormalFloat(b_, 1.);
 
         if (Ta == kFloat8_e4m3) {
             QuantizeSymmBlock(a_q_, a_s_, a_, stream);

@@ -160,7 +160,7 @@ std::vector<float> FastCompare(const Tensor& x, const Tensor& r, cudaStream_t st
 
 void FC_Header()
 {
-    printf("%12s%12s%12s%12s%12s%12s%12s\n",
+    printf("%16s%16s%16s%16s%16s%16s%16s\n",
            "amean",
            "amean_ref",
            "absdiff",
@@ -172,7 +172,7 @@ void FC_Header()
 
 void FC_Print(const std::vector<float>& d)
 {
-    printf("%12f%12f%12f%12f%12f%12f%12f\n", d[0], d[1], d[2], d[3], d[4], d[5], d[6]);
+    printf("%16f%16f%16f%16f%16f%16f%16f\n", d[0], d[1], d[2], d[3], d[4], d[5], d[6]);
 }
 
 void LoadBinary(const std::string& path, size_t size, void* dst)
