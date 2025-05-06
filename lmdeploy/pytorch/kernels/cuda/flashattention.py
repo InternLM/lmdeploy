@@ -460,7 +460,7 @@ def flash_attention_fwd(
     if _nv_cap[0] < 8:
         BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm7x(BLOCK_DK)
     if _nv_cap[0] < 9:
-        if _nv_cap[1] == 6:
+        if _nv_cap[1] in [6, 9]:
             BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm86(BLOCK_DK, shared_kv)
         else:
             BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm8x(BLOCK_DK, shared_kv)
