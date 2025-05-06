@@ -4,11 +4,7 @@ from typing import Dict
 
 import numpy as np
 
-from lmdeploy.logger import get_logger
-
 from ...messages import SchedulerSequence
-
-logger = get_logger('lmdeploy')
 
 
 class LogicalMemory:
