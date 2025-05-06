@@ -138,7 +138,6 @@ class SubCliServe:
                             choices=['DLSlime'],
                             help='kvcache migration management backend when PD disaggregation, '
                             'Mooncake and InfiniStore will be supported in the future')
-        parser.add_argument('--available-nics', type=str, nargs='+', default=None, help='available-nics')
         # common args
         ArgumentHelper.backend(parser)
         ArgumentHelper.log_level(parser)
@@ -342,8 +341,7 @@ class SubCliServe:
                                                  max_prefill_token_num=args.max_prefill_token_num,
                                                  enable_microbatch=args.enable_microbatch,
                                                  role=EngineRole[args.role],
-                                                 migration_backend=MigrationBackend[args.migration_backend],
-                                                 available_nics=args.available_nics)
+                                                 migration_backend=MigrationBackend[args.migration_backend])
         else:
             from lmdeploy.messages import TurbomindEngineConfig
             backend_config = TurbomindEngineConfig(dtype=args.dtype,

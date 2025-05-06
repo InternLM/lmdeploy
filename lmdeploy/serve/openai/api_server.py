@@ -870,8 +870,7 @@ async def engine_info():
                                      dp_rank=engine.engine_config.dp_rank,
                                      block_size=engine.engine_config.block_size,
                                      num_cpu_blocks=engine.scheduler.block_manager.num_cpu_blocks,
-                                     num_gpu_blocks=engine.scheduler.block_manager.num_gpu_blocks,
-                                     available_nics=engine.engine_config.available_nics)
+                                     num_gpu_blocks=engine.scheduler.block_manager.num_gpu_blocks)
 
     return response.model_dump_json()
 

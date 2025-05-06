@@ -310,8 +310,6 @@ class PytorchEngineConfig:
             'Decode']. Default to `EngineRole.Hybrid`.
         migration_backend: migration backend. options: ['DLSlime', 'Mooncake',
             'InfiniStore']. Default to `MigrationBackend.DLSlime`.
-        available_nics: Available NICs when kvcache migration. If set to None,
-            the `MigrationBackend` will find available NICs by self.
     """
     dtype: str = 'auto'
     tp: int = 1
@@ -340,7 +338,6 @@ class PytorchEngineConfig:
 
     role: EngineRole = EngineRole.Hybrid
     migration_backend: MigrationBackend = MigrationBackend.DLSlime
-    available_nics: Optional[List[str]] = None
 
     def __post_init__(self):
         """Check input validation."""

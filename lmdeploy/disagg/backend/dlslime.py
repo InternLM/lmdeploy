@@ -27,7 +27,7 @@ class DLSlimeMigrationManagement:
             MigrationProtocol.NVLINK: None,
         }
         if init_request.rdma_config:
-            nics = self.local_engine_config.available_nics or available_nic()
+            nics = available_nic()
             device_name = nics[self.rank % len(nics)]
             logger.info(f'use device {device_name} for kv migration')
             self.endpoint[MigrationProtocol.RDMA] = RDMAEndpoint(device_name=device_name,

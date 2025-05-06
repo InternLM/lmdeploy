@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
-from typing import List, Optional
+from typing import Optional
 
 from pydantic import BaseModel
 
@@ -125,9 +125,6 @@ class DistServeEngineConfig(BaseModel):
     block_size: int
     num_cpu_blocks: int
     num_gpu_blocks: int
-
-    # avaliable_nics
-    available_nics: Optional[List[str]] = []
 
 
 class DistServeConfig(BaseModel):

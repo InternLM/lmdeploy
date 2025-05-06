@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from dataclasses import dataclass
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal
 
 import torch
 
@@ -85,7 +85,6 @@ class CacheConfig:
     # For PD Disaggregation
     role: EngineRole = EngineRole.Hybrid
     migration_backend: MigrationBackend = MigrationBackend.DLSlime
-    available_nics: Optional[List[str]] = None
 
     def __post_init__(self):
         """post init."""

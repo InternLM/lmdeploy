@@ -75,8 +75,7 @@ def _build_cache_config(engine_config: PytorchEngineConfig):
                                quant_policy=engine_config.quant_policy,
                                device_type=engine_config.device_type,
                                migration_backend=engine_config.migration_backend,
-                               role=engine_config.role,
-                               available_nics=engine_config.available_nics)
+                               role=engine_config.role)
     return cache_config
 
 
