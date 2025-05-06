@@ -43,4 +43,5 @@ class DistServeRegisterMRMessage(BaseModel):
     remote_engine_id: str
     mr_key: str
     addr: int
+    offset: int
     length: int

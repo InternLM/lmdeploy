@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import json
 from typing import Dict
 
 from dlslime import Assignment as DLSlimeAssignment
@@ -40,13 +41,14 @@ class DLSlimeMigrationManagement:
     def register_memory_region(self, register_mr_request: DistServeRegisterMRMessage):
         self.endpoint[register_mr_request.protocol].register_memory_region(register_mr_request.mr_key,
                                                                            register_mr_request.addr,
+                                                                           register_mr_request.offset,
                                                                            register_mr_request.length)
 
-    def connect_to(self, connect_request: DistServeConnectionRequest):
-        self.endpoint[connect_request.protocol].connect_to(connect_request.remote_endpoint_info)
+    def connect(self, connect_request: DistServeConnectionRequest):
+        self.endpoint[connect_request.protocol].connect(json.loads(connect_request.remote_endpoint_info))
 
     def p2p_migrate(self, assignment: MigrationAssignment, async_op=False):
-        self.endpoint[assignment.protocol].read_batch_async([
+        self.endpoint[assignment.protocol].read_batch([
             DLSlimeAssignment(
                 mr_key=assign.mr_key,
                 target_offset=assign.target_offset,
@@ -54,7 +56,7 @@ class DLSlimeMigrationManagement:
                 length=assign.length,
             ) for assign in assignment.batch
         ],
-                                                            async_op=async_op)
+                                                      async_op=async_op)
 
 
 @MIGRATION_BACKENDS.register_module(MigrationBackend.DLSlime.name)
@@ -70,10 +72,10 @@ class DLSlimeBackend(MigrationBackendImpl):
         self.links[register_mr_request.remote_engine_id].register_memory_region(register_mr_request)
 
     def endpoint_info(self, remote_engine_id: int, protocol: MigrationProtocol):
-        return self.links[remote_engine_id].endpoint[protocol].local_endpoint_info
+        return self.links[remote_engine_id].endpoint[protocol].endpoint_info
 
     def p2p_connect(self, conn_req: DistServeConnectionRequest):
-        self.links[conn_req.remote_engine_id].connect_to(conn_req)
+        self.links[conn_req.remote_engine_id].connect(conn_req)
 
     def p2p_migrate(self, assignment: MigrationAssignment, async_op: bool = False):
         self.links[assignment.remote_engine_id].p2p_migrate(assignment, async_op=async_op)

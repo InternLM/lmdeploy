@@ -326,7 +326,8 @@ class CacheEngine:
             register_mr_request = DistServeRegisterMRMessage(protocol=migration_init_request.protocol,
                                                              remote_engine_id=migration_init_request.remote_engine_id,
                                                              mr_key=str(i),
-                                                             addr=t.data_ptr() + t.storage_offset(),
+                                                             addr=t.data_ptr(),
+                                                             offset=t.storage_offset(),
                                                              length=t.numel() * t.itemsize)
             self.migration_backend_impl.register_memory_region(register_mr_request)
         return self.migration_backend_impl.endpoint_info(migration_init_request.remote_engine_id,
