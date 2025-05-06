@@ -55,14 +55,15 @@ __global__ void curandBatchInitialize(curandState_t* states, const int size, con
     }
 }
 
-void invokeCurandBatchInitialize(curandState_t*            states,
-                                 const size_t              batch_size,
-                                 const unsigned long long* random_seeds,
-                                 cudaStream_t              stream)
+void invokeCurandBatchInitialize(curandState_t*  states,
+                                 const size_t    batch_size,
+                                 const uint64_t* random_seeds,
+                                 cudaStream_t    stream)
 {
     dim3 block(256);
     dim3 grid((int)(ceil(batch_size * 1.0 / 256)));
-    curandBatchInitialize<<<grid, block, 0, stream>>>(states, batch_size, random_seeds);
+    static_assert(sizeof(uint64_t) == sizeof(unsigned long long));
+    curandBatchInitialize<<<grid, block, 0, stream>>>(states, batch_size, (unsigned long long*)random_seeds);
 }
 
 template<typename T, int BLOCK_SIZE, int BLOCKS_PER_BEAM>
@@ -107,7 +108,7 @@ __global__ void topKSortStage1(T*         logits,
         if (tid == 0) {
             topk_tmp_id_buf[ite]  = total.p;
             topk_tmp_val_buf[ite] = total.u;
-            if (total.p != -1) {
+            if (total.u != -getInfValue<T>()) {
                 logits[total.p] = -MAX_T_VAL;
             }
         }
@@ -243,12 +244,6 @@ void invokeTopKSortFilter(TopKSortFilterParams& params, cudaStream_t stream)
     }
 }
 
-#ifdef ENABLE_FP32
 template void invokeTopKSortFilter<float>(TopKSortFilterParams& params, cudaStream_t stream);
-#endif
-template void invokeTopKSortFilter<half>(TopKSortFilterParams& params, cudaStream_t stream);
-#ifdef ENABLE_BF16
-template void invokeTopKSortFilter<nv_bfloat16>(TopKSortFilterParams& params, cudaStream_t stream);
-#endif
 
 }  // namespace turbomind

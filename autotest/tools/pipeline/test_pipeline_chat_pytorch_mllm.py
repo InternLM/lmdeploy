@@ -10,6 +10,7 @@ BACKEND_KVINT = 'pytorch-kvint'
 
 @pytest.mark.order(6)
 @pytest.mark.pipeline_chat
+@pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_1
 @pytest.mark.parametrize('model', get_torch_model_list(tp_num=1, model_type='vl_model'))
 def test_pipeline_chat_tp1(config, model, worker_id):
@@ -20,6 +21,7 @@ def test_pipeline_chat_tp1(config, model, worker_id):
 
 @pytest.mark.order(6)
 @pytest.mark.pipeline_chat
+@pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_2
 @pytest.mark.parametrize('model', get_torch_model_list(tp_num=2, model_type='vl_model'))
 def test_pipeline_chat_tp2(config, model, worker_id):
@@ -31,6 +33,7 @@ def test_pipeline_chat_tp2(config, model, worker_id):
 
 @pytest.mark.order(6)
 @pytest.mark.pipeline_chat
+@pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_4
 @pytest.mark.parametrize('model', get_torch_model_list(tp_num=4, model_type='vl_model'))
 def test_pipeline_chat_tp4(config, model, worker_id):
@@ -42,6 +45,7 @@ def test_pipeline_chat_tp4(config, model, worker_id):
 
 @pytest.mark.order(6)
 @pytest.mark.pipeline_chat
+@pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_1
 @pytest.mark.parametrize('model', get_torch_model_list(tp_num=1, quant_policy=4, model_type='vl_model'))
 def test_pipeline_chat_kvint4_tp1(config, model, worker_id):
@@ -52,6 +56,7 @@ def test_pipeline_chat_kvint4_tp1(config, model, worker_id):
 
 @pytest.mark.order(6)
 @pytest.mark.pipeline_chat
+@pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_2
 @pytest.mark.parametrize('model', get_torch_model_list(tp_num=2, quant_policy=4, model_type='vl_model'))
 def test_pipeline_chat_kvint4_tp2(config, model, worker_id):
@@ -63,6 +68,7 @@ def test_pipeline_chat_kvint4_tp2(config, model, worker_id):
 
 @pytest.mark.order(6)
 @pytest.mark.pipeline_chat
+@pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_4
 @pytest.mark.parametrize('model', get_torch_model_list(tp_num=4, quant_policy=4, model_type='vl_model'))
 def test_pipeline_chat_kvint4_tp4(config, model, worker_id):
@@ -74,6 +80,7 @@ def test_pipeline_chat_kvint4_tp4(config, model, worker_id):
 
 @pytest.mark.order(6)
 @pytest.mark.pipeline_chat
+@pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_1
 @pytest.mark.parametrize('model', get_torch_model_list(tp_num=1, quant_policy=8, model_type='vl_model'))
 def test_pipeline_chat_kvint8_tp1(config, model, worker_id):
@@ -84,6 +91,7 @@ def test_pipeline_chat_kvint8_tp1(config, model, worker_id):
 
 @pytest.mark.order(6)
 @pytest.mark.pipeline_chat
+@pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_2
 @pytest.mark.parametrize('model', get_torch_model_list(tp_num=2, quant_policy=8, model_type='vl_model'))
 def test_pipeline_chat_kvint8_tp2(config, model, worker_id):
@@ -95,6 +103,7 @@ def test_pipeline_chat_kvint8_tp2(config, model, worker_id):
 
 @pytest.mark.order(6)
 @pytest.mark.pipeline_chat
+@pytest.mark.flaky(reruns=0)
 @pytest.mark.gpu_num_4
 @pytest.mark.parametrize('model', get_torch_model_list(tp_num=4, quant_policy=8, model_type='vl_model'))
 def test_pipeline_chat_kvint8_tp4(config, model, worker_id):

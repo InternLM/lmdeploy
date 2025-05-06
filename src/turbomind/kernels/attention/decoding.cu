@@ -1,11 +1,13 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
+#include <type_traits>
+#include <utility>
+
 #include "decoding.h"
 #include "decoding_config.h"
 #include "src/turbomind/kernels/attention/arch.h"
 #include "src/turbomind/models/llama/llama_utils.h"
-#include <type_traits>
-#include <utility>
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 

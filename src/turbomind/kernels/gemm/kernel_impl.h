@@ -39,9 +39,9 @@ public:
         desc_.order_b = transpose(OpB::kOrder);
         desc_.order_c = Gemm::kOrderC;
 
-        desc_.type_a = get_data_type_v<typename Gemm::Ta>;
-        desc_.type_b = get_data_type_v<typename Gemm::Tb>;
-        desc_.type_c = get_data_type_v<typename Gemm::Tc>;
+        desc_.type_a = data_type_v<typename Gemm::Ta>;
+        desc_.type_b = data_type_v<typename Gemm::Tb>;
+        desc_.type_c = data_type_v<typename Gemm::Tc>;
 
         using IterA = typename OpA::GmemIter;
         using IterB = typename OpB::GmemIter;
@@ -127,9 +127,9 @@ public:
 
         MatrixLayout Adesc = _Adesc;
 
-        const int m = Ddesc.rows;
-        const int n = Ddesc.cols;
-        const int k = Adesc.cols;
+        [[maybe_unused]] const int m = Ddesc.rows;
+        [[maybe_unused]] const int n = Ddesc.cols;
+        [[maybe_unused]] const int k = Adesc.cols;
 
         auto transpose = [](MatrixLayout x) {
             std::swap(x.rows, x.cols);

@@ -21,11 +21,6 @@ MODULE_MAP.update({
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.llama4.Llama4ForConditionalGeneration',
 })
 
-# Falcon Models in transformer / on hub
-MODULE_MAP.update({
-    'FalconForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.falcon.FalconForCausalLM',
-})
-
 # baichuan
 MODULE_MAP.update({
     'BaichuanForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.baichuan.BaichuanForCausalLM',
@@ -134,11 +129,6 @@ MODULE_MAP.update({
 MODULE_MAP.update({
     'Qwen2_5_VLForConditionalGeneration':
     f'{LMDEPLOY_PYTORCH_MODEL_PATH}.qwen2_5_vl.Qwen2_5_VLForConditionalGeneration',
-})
-
-# dbrx
-MODULE_MAP.update({
-    'DbrxForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.dbrx.DbrxForCausalLM',
 })
 
 # starcoder2

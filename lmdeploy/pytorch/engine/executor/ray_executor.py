@@ -78,11 +78,41 @@ def _wait_until_pg_ready(current_placement_group: 'PlacementGroup'):
                          '`ray status` to make sure the cluster has enough resources.') from None
 
 
-def init_ray_cluster(world_size: int, ray_address: str = None):
+def _get_obj_store_memory(dp: int = 1):
+    """get obj store memory."""
+    import psutil
+    DEFAULT_OBJECT_STORE_MEMORY_PROPORTION = os.getenv('RAY_DEFAULT_OBJECT_STORE_MEMORY_PROPORTION', '0.3')
+    DEFAULT_OBJECT_STORE_MEMORY_PROPORTION = float(DEFAULT_OBJECT_STORE_MEMORY_PROPORTION)
+    DEFAULT_OBJECT_STORE_MAX_MEMORY_BYTES = os.getenv('RAY_DEFAULT_OBJECT_STORE_MAX_MEMORY_BYTES', None)
+    if DEFAULT_OBJECT_STORE_MAX_MEMORY_BYTES is None:
+        DEFAULT_OBJECT_STORE_MAX_MEMORY_BYTES = 200 * (10**9)
+    else:
+        DEFAULT_OBJECT_STORE_MAX_MEMORY_BYTES = int(DEFAULT_OBJECT_STORE_MAX_MEMORY_BYTES)
+    total_mem = psutil.virtual_memory().total
+    obj_store_mem = int(total_mem * DEFAULT_OBJECT_STORE_MEMORY_PROPORTION)
+    obj_store_mem = min(DEFAULT_OBJECT_STORE_MAX_MEMORY_BYTES, obj_store_mem)
+    if dp > 1:
+        obj_store_mem = obj_store_mem // min(8, dp)
+    return obj_store_mem
+
+
+def init_ray_cluster(world_size: int, ray_address: str = None, dp: int = 1):
     """init ray cluster."""
     # modifier from vLLM
     if not ray.is_initialized():
-        ray.init(address=ray_address, ignore_reinit_error=True, num_cpus=16)
+        try:
+            num_cpus = world_size
+            object_store_memory = _get_obj_store_memory(dp=dp)
+            ray.init(address=ray_address,
+                     ignore_reinit_error=True,
+                     num_cpus=num_cpus,
+                     object_store_memory=object_store_memory)
+        except ValueError as e:
+            if e.args is not None and len(e.args) >= 1 and e.args[
+                    0] == 'When connecting to an existing cluster, num_cpus and num_gpus must not be provided.':
+                ray.init(address=ray_address, ignore_reinit_error=True)
+            else:
+                raise
 
     device_str = get_device_str()
 
@@ -250,7 +280,7 @@ class RayExecutor(ExecutorBase):
             ray_world_size = self.world_size
             if self.dp > 1:
                 ray_world_size = 1
-            placement_group = init_ray_cluster(ray_world_size)
+            placement_group = init_ray_cluster(ray_world_size, dp=dist_config.dp)
             self.placement_group = placement_group
 
             if self.dp == 1:
@@ -416,9 +446,10 @@ class RayExecutor(ExecutorBase):
         if self.dag is None:
             self.dag = self._compile_dag()
         inputs = ray.put(inputs)
-        # self.dag.execute(inputs)
-        # await self.dag.get_object_refs_from_last_execute()
-        ray.get(self.dag.execute(inputs))
+        # make sure in order
+        outs = self.dag.execute(inputs)
+        await asyncio.sleep(0)
+        ray.get(outs)
 
     async def get_output_async(self):
         """get output async."""

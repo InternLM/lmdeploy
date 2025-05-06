@@ -124,7 +124,16 @@ def apply_rotary_pos_emb(q: Tensor,
 
     seq_len = cos.numel() // cos.size(-1)
     BLOCK = 16
-    half_size = q.size(-1) // 2
+
+    if q.size(-1) == cos.size(-1):
+        half_size = q.size(-1) // 2
+    elif q.size(-1) > cos.size(-1):
+        # only do rope with rope_dim size
+        half_size = cos.size(-1) // 2
+    else:
+        raise ValueError('Not support head_dim < rope_dim, '
+                         f'but given head_dim={q.size(-1)} '
+                         f'rope_dim={cos.size(-1)}')
     BLOCK_N = triton.next_power_of_2(half_size)
     num_heads_q = q.size(-2)
     num_heads_k = k.size(-2)
