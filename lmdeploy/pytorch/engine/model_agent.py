@@ -444,7 +444,10 @@ class AutoModelAgent:
                 stopped, num_appendable_ids = _batch_stopping_criteria(next_token_ids, sampling_inputs.stop_words,
                                                                        num_appendable_ids)
             else:
-                next_token_ids = torch.empty_like(num_ignore_eos)
+                # Avoid adding the ADInplaceOrView dispatch key to `next_token_ids`,
+                # as it can trigger recompilation on different ranks when using torch.compile.
+                with torch.inference_mode():
+                    next_token_ids = torch.empty_like(num_ignore_eos)
                 stopped = None
 
             if need_broadcast_next:
