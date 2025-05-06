@@ -514,10 +514,11 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
+    check_response = await node_manager.check_request_model(request.model)
+    if check_response is not None:
+        return check_response
+
     if node_manager.serving_strategy == ServingStrategy.Hybrid:
-        check_response = await node_manager.check_request_model(request.model)
-        if check_response is not None:
-            return check_response
         node_url = node_manager.get_node_url(request.model)
         if not node_url:
             return node_manager.handle_unavailable_model(request.model)
@@ -534,10 +535,6 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             node_manager.post_call(node_url, start)
             return JSONResponse(json.loads(response))
     elif node_manager.serving_strategy == ServingStrategy.DistServe:
-        check_response = await node_manager.check_request_model(request.model)
-        if check_response is not None:
-            return check_response
-
         request_dict = request.model_dump()
 
         # Prefill
@@ -642,10 +639,10 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
+    check_response = await node_manager.check_request_model(request.model)
+    if check_response is not None:
+        return check_response
     if node_manager.serving_strategy == ServingStrategy.Hybrid:
-        check_response = await node_manager.check_request_model(request.model)
-        if check_response is not None:
-            return check_response
         node_url = node_manager.get_node_url(request.model)
         if not node_url:
             return node_manager.handle_unavailable_model(request.model)
@@ -662,25 +659,6 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
             node_manager.post_call(node_url, start)
             return JSONResponse(json.loads(response))
     elif node_manager.serving_strategy == ServingStrategy.DistServe:
-        if not node_manager.initialized:
-            conns = []
-            for p_url in node_manager.prefill_nodes:
-                for d_url in node_manager.decode_nodes:
-                    conns.append(
-                        node_manager.pd_connection_pool.connect(
-                            PDConnectionMessage(
-                                p_url=p_url,
-                                d_url=d_url,
-                                protocol=node_manager.migration_protocol,
-                                rdma_config=node_manager.rdma_config,
-                            )))
-            await asyncio.gather(*conns)
-            node_manager.initialized = True
-
-        check_response = await node_manager.check_request_model(request.model)
-        if check_response is not None:
-            return check_response
-
         request_dict = request.model_dump()
 
         # Prefill
@@ -763,7 +741,9 @@ def proxy(server_name: str = '0.0.0.0',
     Args:
         server_name (str): the server name of the proxy. Default to '0.0.0.0'.
         server_port (str): the server port. Default to 8000.
-        strategy ('random' | 'min_expected_latency' | 'min_observed_latency'):
+        serving_strategy ('Hybrid' | 'DistServe'):  the strategy to serving. Hybrid default.
+            DistServe for PD Disaggregation.
+        route_strategy ('random' | 'min_expected_latency' | 'min_observed_latency'):
             the strategy to dispatch requests to nodes. Default to
             'min_expected_latency'
         api_keys (List[str] | str | None): Optional list of API keys. Accepts string type as
@@ -772,6 +752,7 @@ def proxy(server_name: str = '0.0.0.0',
         log_level (str): Set the log level. Default to INFO.
         disable_cache_status (str): Whether to cache the proxy status to
              proxy_config.yml.
+        migration_protocol: migration protocol when PD disaggregation. RDMA default.
     """  # noqa
     node_manager.serving_strategy = ServingStrategy[serving_strategy]
     node_manager.routing_strategy = RoutingStrategy.from_str(routing_strategy)

@@ -308,8 +308,8 @@ class PytorchEngineConfig:
         enable_microbatch (bool): enable microbatch for specified model
         role (EngineRole): role of engin, options: ['Hybrid', 'Prefill',
             'Decode']. Default to `EngineRole.Hybrid`.
-        migration_backend: migration backend. options: ['DLSlime', 'Mooncake',
-            'InfiniStore']. Default to `MigrationBackend.DLSlime`.
+        migration_backend: migration backend. options: ['DLSlime'].
+            Default to `MigrationBackend.DLSlime`.
     """
     dtype: str = 'auto'
     tp: int = 1

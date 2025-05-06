@@ -12,10 +12,12 @@
 pip install lmdeploy[all] >= 0.7.0
 
 # Transfer Engine
-pip install dlslime==0.0.1.post3
+pip install dlslime>=0.0.1.post7
 ```
 
 ## Quick Start
+
+A PD disaggregated deployment of DeepSeekV3 is shown below:
 
 ### 1. Configure Endpoints
 

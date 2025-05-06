@@ -136,8 +136,7 @@ class SubCliServe:
                             type=str,
                             default='DLSlime',
                             choices=['DLSlime'],
-                            help='kvcache migration management backend when PD disaggregation, '
-                            'Mooncake and InfiniStore will be supported in the future')
+                            help='kvcache migration management backend when PD disaggregation')
         # common args
         ArgumentHelper.backend(parser)
         ArgumentHelper.log_level(parser)
