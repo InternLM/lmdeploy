@@ -588,6 +588,20 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
             self.use_deep_gemm = False
             logger.warning('For higher performance, please install DeepGEMM https://github.com/deepseek-ai/DeepGEMM')
 
+        try:
+            from dlblas.layers.moe.ep_moe import FusedMoEBlockedF8Impl
+            self.dlblas_moe = FusedMoEBlockedF8Impl(ep_size=ep_size,
+                                                    ep_group=ep_group,
+                                                    top_k=top_k,
+                                                    num_experts=num_experts,
+                                                    hidden_dim=hidden_dim,
+                                                    renormalize=renormalize,
+                                                    block_size=block_size,
+                                                    out_dtype=out_dtype)
+        except ImportError:
+            self.dlblas_moe = None
+            logger.warning('For higher performance, please install dlblas https://github.com/DeepLink-org/dlBlas')
+
     def forward(self,
                 hidden_states: torch.Tensor,
                 topk_weights: torch.Tensor,
@@ -598,8 +612,11 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
                 down_scale: torch.Tensor,
                 expert_list: List[int] = None):
         """forward."""
-        topk_weights = self.do_renormalize(topk_weights)
         step_ctx = get_step_ctx_manager().current_context()
+        if self.dlblas_moe is not None:
+            return self.dlblas_moe.forward(hidden_states, topk_weights, topk_ids, gate_up_weights, gate_up_scale,
+                                           down_weights, down_scale, step_ctx.is_decoding, expert_list)
+        topk_weights = self.do_renormalize(topk_weights)
         low_latency_mode = step_ctx.is_decoding and self.use_deep_gemm
         moe = self.fusedmoe_build(low_latency_mode)
         out_states = moe.forward(hidden_states, topk_weights, topk_ids, gate_up_weights, gate_up_scale, down_weights,
