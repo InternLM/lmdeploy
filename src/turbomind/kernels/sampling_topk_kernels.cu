@@ -108,7 +108,7 @@ __global__ void topKSortStage1(T*         logits,
         if (tid == 0) {
             topk_tmp_id_buf[ite]  = total.p;
             topk_tmp_val_buf[ite] = total.u;
-            if (total.p != -1) {
+            if (total.u != -getInfValue<T>()) {
                 logits[total.p] = -MAX_T_VAL;
             }
         }
@@ -244,12 +244,6 @@ void invokeTopKSortFilter(TopKSortFilterParams& params, cudaStream_t stream)
     }
 }
 
-#ifdef ENABLE_FP32
 template void invokeTopKSortFilter<float>(TopKSortFilterParams& params, cudaStream_t stream);
-#endif
-template void invokeTopKSortFilter<half>(TopKSortFilterParams& params, cudaStream_t stream);
-#ifdef ENABLE_BF16
-template void invokeTopKSortFilter<nv_bfloat16>(TopKSortFilterParams& params, cudaStream_t stream);
-#endif
 
 }  // namespace turbomind

@@ -224,6 +224,8 @@ private:
 
     Tensor decoder_output_buf_;
 
+    Tensor_<float> sampling_logits_;
+
     Buffer_<int> input_ids_buf_;
 
     // lengths

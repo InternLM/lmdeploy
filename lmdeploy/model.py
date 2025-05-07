@@ -1069,8 +1069,26 @@ class Qwen2d5Chat(Qwen7BChat):
             model_path (str): the model path used for matching.
         """
         lower_path = model_path.lower()
-        if 'qwen2.5' in lower_path or 'qwen2_5' in lower_path:
+        if ('qwen2.5' in lower_path or 'qwen2_5' in lower_path) and 'vl' not in lower_path:
             return 'qwen2d5'
+
+
+@MODELS.register_module(name='qwen2d5-vl')
+class Qwen2d5VL(Qwen2d5Chat):
+
+    def __init__(self, meta_instruction='You are a helpful assistant.', **kwargs):
+        super().__init__(meta_instruction=meta_instruction, **kwargs)
+
+    @classmethod
+    def match(cls, model_path: str) -> Optional[str]:
+        """Return the model_name that was registered to MODELS.
+
+        Args:
+            model_path (str): the model path used for matching.
+        """
+        lower_path = model_path.lower()
+        if ('qwen2.5' in lower_path or 'qwen2_5' in lower_path) and 'vl' in lower_path:
+            return 'qwen2d5-vl'
 
 
 @MODELS.register_module(name='qwq_preview')

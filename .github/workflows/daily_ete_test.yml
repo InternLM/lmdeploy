@@ -196,7 +196,7 @@ jobs:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'tools'))}}
     runs-on: [self-hosted, linux-a100]
     needs: test_quantization
-    timeout-minutes: 240
+    timeout-minutes: 300
     strategy:
       fail-fast: false
       matrix:

@@ -31,6 +31,7 @@ StopCriteriaLayer<T>::StopCriteriaLayer(const BaseParam& param): BaseDynamicDeco
 template<typename T>
 void StopCriteriaLayer<T>::Setup(const std::vector<const Request*>& rs, const TensorMap&)
 {
+    stop_words_ten_ = {};
     init_stop_bad_words(&GenerationConfig::stop_ids,  //
                         "stop_words",
                         rs,
@@ -76,12 +77,6 @@ void StopCriteriaLayer<T>::Forward(TensorMap& args)
     TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
 }
 
-#ifdef ENABLE_FP32
 template class StopCriteriaLayer<float>;
-#endif
-template class StopCriteriaLayer<half>;
-#ifdef ENABLE_BF16
-template class StopCriteriaLayer<nv_bfloat16>;
-#endif
 
 }  // namespace turbomind

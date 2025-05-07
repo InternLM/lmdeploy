@@ -26,6 +26,7 @@ class Qwen3MoeAttention(nn.Module):
         num_key_value_heads = config.num_key_value_heads
         hidden_size = config.hidden_size
         head_dim = getattr(config, 'head_dim', hidden_size // num_heads)
+        num_replicate_kv_heads = getattr(config, 'num_replicate_key_value_heads', 1)
 
         # packed qkv
         # Qwen3 uses 'config.attention_bias = False' for q/k/o projections
@@ -36,6 +37,7 @@ class Qwen3MoeAttention(nn.Module):
             head_size=head_dim,
             bias=config.attention_bias,
             quant_config=quantization_config,
+            num_replicate_kv_heads=num_replicate_kv_heads,
             dtype=dtype,
             device=device,
         )
@@ -174,6 +176,8 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
                  dtype: torch.dtype = None,
                  device: torch.device = None):
         super().__init__()
+        # TODO: zhouxinyu, determine modules_to_not_convert from config file
+        quantization_config = getattr(config, 'quantization_config', None)
         self.layer_idx = layer_idx
         self.hidden_dim = config.hidden_size
         self.ffn_dim = config.moe_intermediate_size
@@ -204,6 +208,7 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
             renormalize=self.renormalize,
             dtype=dtype,
             device=device,
+            quant_config=quantization_config,
             all_reduce=_all_reduce,
         )
 
@@ -490,6 +495,7 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
             down_param = ('.experts.down', f'.experts.{exp_id}.down_proj', exp_id, 'down')
             expert_params_mapping += [gate_param, up_param, down_param]
 
+        scale_suffix = '.weight_scale_inv'
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:
             if 'rotary_emb.inv_freq' in name:
@@ -498,6 +504,8 @@ class Qwen3MoeForCausalLM(nn.Module, CudaGraphMixin):
                 continue
             if self.config.tie_word_embeddings and 'lm_head.weight' in name:
                 continue
+            if name.endswith(scale_suffix):
+                name = name[:-len(scale_suffix)] + '.scale'
 
             if '.experts' in name:
                 self._load_weight_experts(name, loaded_weight, params_dict, expert_params_mapping=expert_params_mapping)
