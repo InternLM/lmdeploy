@@ -445,7 +445,6 @@ def remove_node(node_url: str):
 
 @app.post('/distserve/connection_warmup')
 async def connection_warmup():
-    print([(p_url, d_url) for p_url in node_manager.prefill_nodes for d_url in node_manager.decode_nodes])
     await asyncio.gather(*[
         node_manager.pd_connection_pool.connect(
             PDConnectionMessage(

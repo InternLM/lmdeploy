@@ -725,12 +725,11 @@ class Engine:
                 msg.update_token_ids(update_token, model_meta=model_meta)
                 msg.status = MessageStatus.STOPPED
 
-    def update_running_migration(self, running: SeqList, next_token_ids: torch.Tensor, stopped: torch.Tensor,
+    def update_running_migration(self, running: SeqList, next_token_ids: np.ndarray, stopped: torch.Tensor,
                                  model_metas: List[Dict[str, Any]]):
         """update scheduler."""
         if model_metas is None:
             model_metas = [None] * len(running)
-        next_token_ids = next_token_ids.numpy()
         for token, msg, stop, model_meta in zip(next_token_ids, running, stopped, model_metas):
             if msg.status != MessageStatus.MIGRATION_LOCKED:
                 continue
@@ -770,7 +769,7 @@ class Engine:
             out = InferOutput(session_id=session_id,
                               resp=msg.resp,
                               finish=finish,
-                              token_ids=token_ids.tolist(),
+                              token_ids=token_ids,
                               cache_block_ids=cache_block_ids)
             outputs[session_id] = out
 
@@ -986,10 +985,10 @@ class Engine:
                         session_id=session_id,
                         resp=msg.resp,
                         finish=False,
-                        token_ids=token_ids,
+                        token_ids=np.array(token_ids),
                     )
                     outputs[session_id] = out
-                    self.update_running_migration([msg], torch.tensor([token_ids]), [False], [None])
+                    self.update_running_migration([msg], np.array([token_ids]), [False], [None])
                 resp_que.put_nowait(outputs)
                 self.scheduler.unlock_running_migration(migration_running)
                 has_runable_event.event.set()

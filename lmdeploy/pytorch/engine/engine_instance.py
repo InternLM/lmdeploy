@@ -149,13 +149,13 @@ class EngineInstance:
 
             cache_block_ids = resp.data.get('cache_block_ids', None)
             if resp.type == ResponseType.SUCCESS:
-                token_ids = resp.data['token_ids']
+                token_ids = resp.data['token_ids'].tolist()
                 num_ids = len(token_ids)
                 logger.debug(f'session[{session_id}] success: num_out_ids={num_ids}.')
                 yield EngineOutput(resp.type, token_ids, num_ids, cache_block_ids=cache_block_ids)
             elif resp.type == ResponseType.FINISH:
                 resp_data = resp.data
-                token_ids = resp_data['token_ids']
+                token_ids = resp_data['token_ids'].tolist()
                 logits = resp_data['logits']
                 num_ids = len(token_ids)
                 logger.debug(f'session[{session_id}] finish: num_out_ids={num_ids}.')
