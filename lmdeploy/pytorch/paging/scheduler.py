@@ -404,8 +404,8 @@ class Scheduler:
                 self._set_message_status(seq, MessageStatus.MIGRATION_LOCKED)
 
     def unlock_running_migration(self, locked: SeqList):
+        """unlock running migration."""
         for seq in locked:
-            logger.info(f'unlock_running_migration: {seq.status}')
             if seq.status == MessageStatus.MIGRATION_LOCKED:
                 self._set_message_status(seq, MessageStatus.MIGRATION_DONE)
 

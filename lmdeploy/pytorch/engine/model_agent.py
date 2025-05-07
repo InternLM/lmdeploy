@@ -371,10 +371,10 @@ class AutoModelAgent:
         tp_cpu_group = dist_ctx.tp_cpu_group
         # tp_gpu_group = dist_ctx.tp_gpu_group
 
-        logger.info(f'<ForwardTask> rank[{rank}]: '
-                    f'batch_size={inputs.seq_length.size(0)} '
-                    f'num_tokens={inputs.input_ids.size(-1)} '
-                    f'is_decoding={inputs.is_decoding}')
+        logger.debug(f'<ForwardTask> rank[{rank}]: '
+                     f'batch_size={inputs.seq_length.size(0)} '
+                     f'num_tokens={inputs.input_ids.size(-1)} '
+                     f'is_decoding={inputs.is_decoding}')
 
         is_decoding = inputs.is_decoding
         eager_mode = self.backend_config.eager_mode
@@ -421,7 +421,7 @@ class AutoModelAgent:
 
         for idx in range(loop_count):
             # inference
-            logger.info(f'<ForwardTask> rank[{rank}]: model forward [{idx}].')
+            logger.debug(f'<ForwardTask> rank[{rank}]: model forward [{idx}].')
             output = await self._async_model_forward(
                 inputs,
                 swap_in_map=swap_in_map,
@@ -469,7 +469,7 @@ class AutoModelAgent:
                               stopped=stopped,
                               model_metas=model_metas,
                               event=event)
-                logger.info(f'<ForwardTask> rank[{rank}]: Output [{idx}]')
+                logger.debug(f'<ForwardTask> rank[{rank}]: Output [{idx}]')
                 self._out_que.put_nowait(output)
 
             # update for next loop
@@ -547,10 +547,8 @@ class AutoModelAgent:
             return dict()
 
         event = out.pop('event')
-        logger.info('querying')
         while not event.query():
             await asyncio.sleep(0.001)
-        logger.info('query done')
         with torch.cuda.stream(self.out_stream):
             out['next_token_ids'] = out['next_token_ids'].cpu()
             out['stopped'] = out['stopped'].cpu()

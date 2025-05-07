@@ -902,7 +902,7 @@ class AsyncEngine(LogitsMixin):
     def free_cache(self, session_id: int):
         if session_id in self.engine.scheduler.sessions:
             self.engine.scheduler.end_session(session_id)
-            logger.info(f'successfully free session {session_id}')
+            logger.debug(f'successfully free session {session_id}')
         else:
             logger.warning(f'Invalid Free session {session_id}.')
 
