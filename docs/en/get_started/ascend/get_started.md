@@ -1,4 +1,4 @@
-# Get Started with Huawei Ascend (Atlas 800T A2)
+# Get Started with Huawei Ascend (Atlas 800T A2 & Atlas 300I Duo)
 
 The usage of lmdeploy on a Huawei Ascend device is almost the same as its usage on CUDA with PytorchEngine in lmdeploy.
 Please read the original [Get Started](../get_started.md) guide before reading this tutorial.
@@ -7,11 +7,11 @@ Here is the [supported model list](../../supported_models/supported_models.md#Py
 
 > \[!IMPORTANT\]
 > We have uploaded a docker image with KUNPENG CPU to aliyun(from lmdeploy 0.7.1 + dlinfer 0.1.6).
-> Please try to pull the image by following command:  
-> Atlas 800T A2:  
-> `docker pull crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:910b-latest`  
-> 300I Duo:  
-> `docker pull crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:310p-latest`  
+> Please try to pull the image by following command:
+> Atlas 800T A2:
+> `docker pull crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:910b-latest`
+> 300I Duo:
+> `docker pull crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:310p-latest`
 > The dockerfile described below still works, you can try
 > both pulling image and build your own image by dockerfile.
 

@@ -1,4 +1,4 @@
-# 华为昇腾（Atlas 800T A2 & 300I Duo）
+# 华为昇腾（Atlas 800T A2 & Atlas 300I Duo）
 
 我们基于 LMDeploy 的 PytorchEngine，增加了华为昇腾设备的支持。所以，在华为昇腾上使用 LDMeploy 的方法与在英伟达 GPU 上使用 PytorchEngine 后端的方法几乎相同。在阅读本教程之前，请先阅读原版的[快速开始](../get_started.md)。
 
@@ -6,11 +6,11 @@
 
 > \[!IMPORTANT\]
 > 我们已经在阿里云上提供了构建完成的鲲鹏CPU版本的镜像(从lmdeploy 0.7.1 + dlinfer 0.1.6开始)。
-> 请使用下面的命令来拉取镜像:  
-> Atlas 800T A2:  
-> `docker pull crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:910b-latest`  
-> Atlas 300I Duo:  
-> `docker pull crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:310p-latest`  
+> 请使用下面的命令来拉取镜像:
+> Atlas 800T A2:
+> `docker pull crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:910b-latest`
+> Atlas 300I Duo:
+> `docker pull crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:310p-latest`
 > 下述的dockerfile依然是可以执行的，您可以直接拉取镜像，也可以使用dockerfile来自己构建。
 
 ## 安装
