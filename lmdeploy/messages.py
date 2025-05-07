@@ -343,8 +343,13 @@ class PytorchEngineConfig:
                    'kv cache quantization only works for CUDA and ASCEND.'
         if self.device_type == 'camb' and self.block_size != 16:
             self.block_size = 16
-            logger.warning('Currently, camb device requires block size to be 16, \
-                    setting block size to 16')
+            logger.warning('Currently, camb device requires block size to be 16, setting block size to 16')
+        if self.device_type == 'ascend':
+            from lmdeploy.pytorch.backends.dlinfer.ascend import SocVersion
+            if SocVersion.is_Ascend310P() and self.block_size != 128:
+                self.block_size = 128
+            logger.warning('Ascend310P device requires block size to be 128, '
+                           'other block size may trigger error in some cases, setting block size to 128')
 
 
 class ResponseType(enum.Enum):
