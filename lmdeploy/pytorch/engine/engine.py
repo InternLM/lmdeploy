@@ -1018,3 +1018,10 @@ class Engine:
         """
         from .engine_instance import EngineInstance
         return EngineInstance(self)
+
+    def start_loop(self):
+        """start engine loop."""
+        if self.req_manager.is_loop_alive():
+            return True
+        self.req_manager.create_loop_task()
+        return True

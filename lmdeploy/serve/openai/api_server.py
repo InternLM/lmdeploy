@@ -941,6 +941,13 @@ async def chat_interactive_v1(request: GenerateRequest, raw_request: Request = N
         return JSONResponse(ret)
 
 
+@router.post('/v1/warmup', dependencies=[Depends(check_api_key)])
+async def warmup(raw_request: Request = None):
+    """try warmup engine."""
+    async_engine = VariableInterface.async_engine
+    return async_engine.warmup()
+
+
 def handle_torchrun():
     """To disable mmengine logging logic when using torchrun."""
 
