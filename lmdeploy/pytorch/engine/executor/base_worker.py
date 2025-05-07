@@ -171,6 +171,6 @@ class WorkerWrapperBase:
         return self.model_agent.cache_engine.p2p_connect(conn_request)
 
     async def migrate(self, inputs: MigrationExecutionBatch):
-        return await self.model_agent.migrate(inputs)
+        return await self.model_agent.cache_engine.migrate(inputs)
 
     """ PD Disaggregation API End """

@@ -7,7 +7,6 @@ from typing import Any, Dict
 import torch
 import torch.distributed as dist
 
-from lmdeploy.disagg.messages import MigrationExecutionBatch
 from lmdeploy.utils import get_logger
 
 from ..backends import get_backend
@@ -330,9 +329,6 @@ class AutoModelAgent:
         next_token_ids = logits_processor.sampling(logits)
 
         return next_token_ids
-
-    async def migrate(self, inputs: MigrationExecutionBatch):
-        return self.cache_engine.migrate(inputs)
 
     async def _async_step_background(
         self,
