@@ -364,7 +364,7 @@ class Engine:
         self._loop_main = None
 
         # for migration loop management
-        self.migration_event = asyncio.Event()
+        self.migration_event: asyncio.Event = None
 
     @classmethod
     def from_pretrained(cls,
@@ -1068,6 +1068,9 @@ class Engine:
             # forward task
             forward_event = asyncio.Event()
             forward_event.set()
+
+            # migration task
+            self.migration_event = asyncio.Event()
 
             logger.info('Starting executor.')
             self.executor.start(forward_event)
