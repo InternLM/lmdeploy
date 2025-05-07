@@ -20,8 +20,9 @@
 
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
+#include "src/turbomind/kernels/core/layout.h"
+#include "src/turbomind/kernels/core/meta.h"
 #include "src/turbomind/kernels/core/smem.h"
-#include "src/turbomind/kernels/gemm/iterator_sm70.h"
 #include "src/turbomind/kernels/gemm/iterator_sm90.h"
 #include "src/turbomind/kernels/gemm/scheduler.cuh"
 #include "src/turbomind/kernels/gemm/types.h"
@@ -196,6 +197,19 @@ struct GemmUniversalSm90_v2 {
         __align__(128) uint64_t producer_bar[Stages];
         __align__(128) uint64_t consumer_bar[Stages];
     };
+
+    static constexpr int kSmemSize = sizeof(SharedStorage);
+
+    // static constexpr int kSwizzleC = 128;
+    // using LayoutC                  = SmemLayoutV2<CTA_M, CTA_N, -1, 64>;
+
+    // static constexpr int kSwizzleC = 0;
+    // using LayoutC                  = SmemLayoutV2<CTA_M, CTA_N, -1, 64>;
+
+    static constexpr int kSwizzleC = 0;
+    using LayoutC                  = SmemLayoutV2<CTA_M, CTA_N>;
+
+    static_assert(LayoutC::S1 == 1);
 
     __device__ void operator()(const CUtensorMap& tm_a,
                                const CUtensorMap& tm_b,
@@ -512,51 +526,91 @@ struct GemmUniversalSm90_v2 {
                     ++pipe_state;
                 }
 
-                if (threadIdx.x == 0) {
+                if (threadIdx.x < LayoutC::C1) {
                     cute::tma_store_wait<0>();
                 }
 
                 cutlass::arch::NamedBarrier(WARPGORUPS * WARPGROUP_SIZE).sync();
 
                 // epilogue
-                auto& smem_C = storage.C;
-
-                // (M,N):(1,M)
                 PRAGMA_UNROLL
                 for (int m = 0; m < MMA_ITER_M; ++m) {
                     PRAGMA_UNROLL
                     for (int n = 0; n < MMA_ITER_N; ++n) {
+
+                        const int m0 = m * MMA_M + warp_group_id_m * MMA_ATOM_M;
+                        const int n0 = n * MMA_N + warp_group_id_n * MMA_ATOM_N;
+
                         PRAGMA_UNROLL
                         for (int i = 0; i < MMA_ATOM_N; i += 16) {
-                            // clang-format off
-                            // const int mm   = m * MMA_M + warp_id * 16 + (lane_id & 8);
-                            // const int nn   = n * MMA_N +     i        + (lane_id & 7) + (lane_id & 16) / 2;
-                            //                                110000              01111               
-                            const int mm   = m * MMA_M + warp_group_id_m * MMA_ATOM_M + (warp_id & 3) * 16 + (lane_id & 15) ;
-                            const int nn   = n * MMA_N + warp_group_id_n * MMA_ATOM_N + (lane_id & 16) / 2 + i;
-                            // clang-format on
                             __align__(16) Array<Tc, 8> tvec = cast<Tc>(*(Array<float, 8>*)&accum_C[m][n][i / 2]);
-                            // for (auto& x : tvec) {
-                            //     x = 255.f;
-                            // }
-                            cute::SM90_U32x4_STSM_N::copy((uint32_t&)tvec[0],
-                                                          (uint32_t&)tvec[2],
-                                                          (uint32_t&)tvec[4],
-                                                          (uint32_t&)tvec[6],
-                                                          (cutlass::uint128_t&)smem_C[mm * CTA_N + nn]);
+
+                            if constexpr (0) {
+                                // for (auto& x : tvec) {
+                                //     x = 255.f;
+                                // }
+                                int mm = m * MMA_M + warp_group_id_m * MMA_ATOM_M + (warp_id & 3) * 16 + lane_id / 4;
+                                int nn = n * MMA_N + warp_group_id_n * MMA_ATOM_N + (lane_id & 3) * 2 + i;
+                                if (0) {
+                                    tvec[0] = mm;
+                                    tvec[1] = mm;
+                                    tvec[2] = mm + 8;
+                                    tvec[3] = mm + 8;
+                                    tvec[4] = mm;
+                                    tvec[5] = mm;
+                                    tvec[6] = mm + 8;
+                                    tvec[7] = mm + 8;
+                                }
+                                else {
+                                    tvec[0] = nn;
+                                    tvec[1] = nn + 1;
+                                    tvec[2] = nn;
+                                    tvec[3] = nn + 1;
+                                    tvec[4] = nn + 8;
+                                    tvec[5] = nn + 8 + 1;
+                                    tvec[6] = nn + 8;
+                                    tvec[7] = nn + 8 + 1;
+                                    for (auto& x : tvec) {
+                                        x /= 8;
+                                    }
+                                }
+                            }
+
+                            int addr{};
+
+                            if constexpr (kSwizzleC == 128) {
+                                int mm = m0 + (warp_id & 3) * 16 + (lane_id & 8);
+                                int nn = n0 + i / 64 * 64;
+                                int s  = (lane_id & 7);
+                                int c  = (lane_id & 16) / 2 + i % 64;
+                                c ^= ((s + 4) % 8 << 3);  // Why +4 is required?
+                                addr = (nn / 64 * CTA_M * 64) + (mm * 64) + (s * 64 + c);
+                            }
+                            else if constexpr (kSwizzleC == 0) {
+                                int mm = m0 + (warp_id & 3) * 16 + (lane_id & 15);
+                                int nn = n0 + (lane_id & 16) / 2 + i;
+                                addr   = mm * CTA_N + nn;
+                            }
+
+                            auto& uvec = (Array<uint32_t, 4>&)tvec;
+                            cute::SM90_U32x4_STSM_N::copy(
+                                uvec[0], uvec[1], uvec[2], uvec[3], (cutlass::uint128_t&)storage.C[addr]);
                         }
                     }
                 }
+
                 cute::tma_store_fence();  // visibility: smem -> async proxy
                 cutlass::arch::NamedBarrier(WARPGORUPS * WARPGROUP_SIZE).sync();
 
-                if (threadIdx.x == 0) {
-                    cute::SM90_TMA_STORE_2D::copy(&tm_c, &smem_C, offset_n, offset_m);
+                if (threadIdx.x < LayoutC::C1) {
+                    const int tma_n = threadIdx.x * LayoutC::C0;
+                    cute::SM90_TMA_STORE::copy(&tm_c, &storage.C[CTA_M * tma_n], offset_n + tma_n, offset_m);
                     cute::tma_store_arrive();
                 }
+
             }  // scheduler loop
 
-            if (threadIdx.x == 0) {
+            if (threadIdx.x < LayoutC::C1) {
                 cute::tma_store_wait<0>();
             }
         }

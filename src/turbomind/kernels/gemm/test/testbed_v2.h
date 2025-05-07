@@ -1,4 +1,5 @@
 #include <cstdlib>
+#include <cuda_bf16.h>
 #include <functional>
 #include <numeric>
 
@@ -181,6 +182,17 @@ public:
                                 stream_);
 
         TM_CHECK_EQ(status, 0);
+
+        // Tensor h_c = empty_like(c_o_.t(), kCPU);
+        // Copy(c_o_.t(), h_c);
+        // core::Context::stream().Sync();
+        // TM_CHECK(h_c.shapes(0, 1) == std::make_tuple(128, 128));
+        // for (int i = 0; i < 128; ++i) {
+        //     for (int j = 0; j < 128; ++j) {
+        //         printf("%4d", (int)h_c.data<nv_bfloat16>()[i * 128 + j]);
+        //     }
+        //     printf("\n");
+        // }
     }
 
     void Ref(bool f)

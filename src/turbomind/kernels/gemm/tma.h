@@ -1,6 +1,7 @@
 #include <cuda.h>
 #include <cudaTypedefs.h>
 #include <cuda_runtime.h>
+#include <stdexcept>
 
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/kernels/gemm/types.h"
@@ -15,5 +16,22 @@ CUtensorMap make_2d_tma_desc(void*              global_address,
                              uint32_t           smem_cols,
                              Order              order,
                              CUtensorMapSwizzle swizzle);
+
+constexpr CUtensorMapSwizzle get_tma_swizzle(int bytes)
+{
+    switch (bytes) {
+        case 128:
+            return CU_TENSOR_MAP_SWIZZLE_128B;
+        case 64:
+            return CU_TENSOR_MAP_SWIZZLE_64B;
+        case 32:
+            return CU_TENSOR_MAP_SWIZZLE_32B;
+        case 0:
+            return CU_TENSOR_MAP_SWIZZLE_NONE;
+        default:
+            throw std::logic_error("unsupported swizzle type: " + std::to_string(bytes));
+    }
+    return {};
+}
 
 }  // namespace turbomind::gemm

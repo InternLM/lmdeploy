@@ -88,7 +88,7 @@ public:
         desc_.c_tile   = {CTA_M, CTA_N};  // {Gemm::Epilogue::TM, Gemm::Epilogue::TN};
         desc_.op_class = OpClass::kGMMA_s64n16;
 
-        smem_size_ = sizeof(typename Gemm::SharedStorage);
+        smem_size_ = Gemm::kSmemSize;
 
         desc_.stages  = Gemm::Stages;
         desc_.split_k = 1;      // Gemm::kSplitK;
@@ -185,12 +185,20 @@ public:
         std::cout << "B: " << Bdesc << "\n";
         auto tm_b = make_2d_tma_desc(
             (void*)B, Bdesc.type, n, k, CTA_N / kMulticastB, CTA_K, kRowMajor, CU_TENSOR_MAP_SWIZZLE_128B);
+
         std::cout << "C: " << Cdesc << "\n";
-        auto tm_c = make_2d_tma_desc((void*)C, Cdesc.type, m, n, CTA_M, CTA_N, kRowMajor, CU_TENSOR_MAP_SWIZZLE_NONE);
+        using LayoutC            = typename Gemm::LayoutC;
+        constexpr auto kSwizzleC = get_tma_swizzle(Gemm::kSwizzleC);
+        auto           tm_c      = make_2d_tma_desc((void*)C,  //
+                                     Cdesc.type,
+                                     m,
+                                     n,
+                                     LayoutC::S0,
+                                     LayoutC::C0,
+                                     kRowMajor,
+                                     kSwizzleC);
 
         CUtensorMap tm_u{};
-        CUtensorMap tm_v{};
-
         if (U) {
             TM_CHECK_EQ(CTA_K, 128);
             // std::cout << "U: " << Udesc.type << " " << Udesc.rows << " " << Udesc.cols << " " <<
@@ -200,6 +208,7 @@ public:
                 (void*)U, Udesc.type, Udesc.rows, Udesc.cols, CTA_M, 1, Udesc.order, CU_TENSOR_MAP_SWIZZLE_NONE);
         }
 
+        CUtensorMap tm_v{};
         if (V) {
             std::cout << "V: " << Vdesc << "\n";
         }
