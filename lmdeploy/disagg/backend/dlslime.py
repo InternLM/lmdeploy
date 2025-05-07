@@ -3,7 +3,7 @@ import json
 from typing import Dict
 
 from dlslime import Assignment as DLSlimeAssignment
-from dlslime import RDMAEndpoint, available_nic
+from dlslime import NVLinkEndpoint, RDMAEndpoint, available_nic
 
 from lmdeploy.disagg.backend.backend import MIGRATION_BACKENDS
 from lmdeploy.disagg.backend.base import MigrationBackendImpl
@@ -26,17 +26,15 @@ class DLSlimeMigrationManagement:
             MigrationProtocol.RDMA: None,
             MigrationProtocol.NVLINK: None,
         }
-        if init_request.rdma_config:
+        if init_request.protocol == MigrationProtocol.RDMA:
             nics = available_nic()
             device_name = nics[self.rank % len(nics)]
             logger.info(f'use device {device_name} for kv migration')
             self.endpoint[MigrationProtocol.RDMA] = RDMAEndpoint(device_name=device_name,
                                                                  ib_port=1,
                                                                  link_type=init_request.rdma_config.link_type.name)
-        if init_request.nvlink_init_request:
-            raise NotImplementedError
-        if init_request.tcp_init_request:
-            raise NotImplementedError
+        elif init_request.protocol == MigrationProtocol.NVLINK:
+            self.endpoint[MigrationProtocol.NVLINK] = NVLinkEndpoint()
 
     def register_memory_region(self, register_mr_request: DistServeRegisterMRMessage):
         self.endpoint[register_mr_request.protocol].register_memory_region(register_mr_request.mr_key,
@@ -55,8 +53,7 @@ class DLSlimeMigrationManagement:
                 source_offset=assign.source_offset,
                 length=assign.length,
             ) for assign in assignment.batch
-        ],
-                                                      async_op=async_op)
+        ])
 
 
 @MIGRATION_BACKENDS.register_module(MigrationBackend.DLSlime.name)

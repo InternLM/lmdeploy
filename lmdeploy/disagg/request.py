@@ -24,9 +24,9 @@ class DistServeInitRequest(BaseModel):
 
     rank: Optional[int] = None
 
-    tcp_init_request: Optional[DistServeTCPConfig] = None
+    tcp_config: Optional[DistServeTCPConfig] = None
     rdma_config: Optional[DistServeRDMAConfig] = None
-    nvlink_init_request: Optional[DistServeNVLinkConfig] = None
+    nvlink_config: Optional[DistServeNVLinkConfig] = None
 
 
 class MigrationRequest(BaseModel):

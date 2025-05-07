@@ -7,7 +7,7 @@ from typing import Dict, List, Tuple
 
 import aiohttp
 
-from lmdeploy.disagg.config import DistServeEngineConfig, MigrationProtocol
+from lmdeploy.disagg.config import DistServeEngineConfig
 from lmdeploy.disagg.messages import PDConnectionMessage
 from lmdeploy.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.logger import get_logger
@@ -118,37 +118,36 @@ class PDConnectionPool:
                     remote_engine_id=conn_req.d_url,
                     remote_engine_config=decode_engine_config,
                     rdma_config=conn_req.rdma_config,
+                    nvlink_config=conn_req.nvlink_config,
                 )
-                decode_init_req = DistServeInitRequest(
-                    protocol=conn_req.protocol,
-                    local_engine_id=conn_req.d_url,
-                    local_engine_config=decode_engine_config,
-                    remote_engine_id=conn_req.p_url,
-                    remote_engine_config=prefill_engine_config,
-                    rdma_config=conn_req.rdma_config,
-                )
+                decode_init_req = DistServeInitRequest(protocol=conn_req.protocol,
+                                                       local_engine_id=conn_req.d_url,
+                                                       local_engine_config=decode_engine_config,
+                                                       remote_engine_id=conn_req.p_url,
+                                                       remote_engine_config=prefill_engine_config,
+                                                       rdma_config=conn_req.rdma_config,
+                                                       nvlink_config=conn_req.nvlink_config)
 
                 prefill_endpoint_info = await p2p_initialize(conn_req.p_url, prefill_init_req)
                 decode_endpoint_info = await p2p_initialize(conn_req.d_url, decode_init_req)
 
                 # Step 3. Connection
-                if conn_req.protocol == MigrationProtocol.RDMA:
-                    prefill_endpoint_conn_reqs = [
-                        DistServeConnectionRequest(
-                            protocol=conn_req.protocol,
-                            remote_engine_id=conn_req.d_url,
-                            remote_endpoint_info=json.dumps(info),
-                        ) for info in decode_endpoint_info
-                    ]
-                    decode_endpoint_conn_reqs = [
-                        DistServeConnectionRequest(
-                            protocol=conn_req.protocol,
-                            remote_engine_id=conn_req.p_url,
-                            remote_endpoint_info=json.dumps(info),
-                        ) for info in prefill_endpoint_info
-                    ]
-                    await p2p_connect(conn_req.p_url, prefill_endpoint_conn_reqs)
-                    await p2p_connect(conn_req.d_url, decode_endpoint_conn_reqs)
+                prefill_endpoint_conn_reqs = [
+                    DistServeConnectionRequest(
+                        protocol=conn_req.protocol,
+                        remote_engine_id=conn_req.d_url,
+                        remote_endpoint_info=json.dumps(info),
+                    ) for info in decode_endpoint_info
+                ]
+                decode_endpoint_conn_reqs = [
+                    DistServeConnectionRequest(
+                        protocol=conn_req.protocol,
+                        remote_engine_id=conn_req.p_url,
+                        remote_endpoint_info=json.dumps(info),
+                    ) for info in prefill_endpoint_info
+                ]
+                await p2p_connect(conn_req.p_url, prefill_endpoint_conn_reqs)
+                await p2p_connect(conn_req.d_url, decode_endpoint_conn_reqs)
                 self.pool[link].set_status(PDConnectionStatus.Connected)
                 logger.debug(f'{(conn_req.p_url, conn_req.d_url)} connected')
             except Exception as e:
