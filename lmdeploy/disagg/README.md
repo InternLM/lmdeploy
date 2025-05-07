@@ -19,18 +19,7 @@ pip install dlslime>=0.0.1.post7
 
 A PD disaggregated deployment of DeepSeekV3 is shown below:
 
-### 1. Configure Endpoints
-
-First deploy your prefill and decode engines.
-
-```shell
-# Prefill Engine
-CUDA_VISIBLE_DEVICES=0,1 lmdeploy serve api_server internlm/internlm2_5-7b-chat --server-port 23333 --role Prefill --tp 2
-# Decode Engine
-CUDA_VISIBLE_DEVICES=2,3 lmdeploy serve api_server internlm/internlm2_5-7b-chat --server-port 23334 --role Decode --tp 2
-```
-
-### 2. Launch Router Service
+### 1. Launch Router Service
 
 ```shell
 lmdeploy serve proxy
@@ -39,6 +28,17 @@ lmdeploy serve proxy
     --routing-strategy "min_expected_latency"
     --serving-strategy DistServe
     --log-level INFO
+```
+
+### 2. Configure Endpoints
+
+First deploy your prefill and decode engines.
+
+```shell
+# Prefill Engine
+CUDA_VISIBLE_DEVICES=0,1 lmdeploy serve api_server internlm/internlm2_5-7b-chat --server-port 23333 --role Prefill --tp 2 --proxy-url http://0.0.0.0:8000
+# Decode Engine
+CUDA_VISIBLE_DEVICES=2,3 lmdeploy serve api_server internlm/internlm2_5-7b-chat --server-port 23334 --role Decode --tp 2 --proxy-url http://0.0.0.0:8000
 ```
 
 ## API Usage
