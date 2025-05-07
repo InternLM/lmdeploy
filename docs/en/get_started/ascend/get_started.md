@@ -176,3 +176,8 @@ Please check [supported_models](../../supported_models/supported_models.md) befo
 Ascend backend has supported offline int8 KV-cache Quantization on eager mode.
 
 Please refer this [doc](https://github.com/DeepLink-org/dlinfer/blob/main/docs/quant/ascend_kv_quant.md) for details.
+
+## Limitations on 300I Duo
+
+1. only support dtype=float16.
+2. only support graph mode, please do not add --eager-mode.
