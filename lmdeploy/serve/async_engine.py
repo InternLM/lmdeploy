@@ -881,8 +881,8 @@ class AsyncEngine(LogitsMixin):
 
         return session
 
-    def warmup(self):
-        """warmup engine."""
+    def start_loop(self):
+        """start engine loop."""
         if hasattr(self.engine, 'start_loop'):
             return self.engine.start_loop()
         else:
