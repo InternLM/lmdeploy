@@ -12,7 +12,7 @@ int main()
 
     auto test = gemm::get_test(gemm::TestPreset::kANY_e4m3_e4m3_bf16_TNN);
 
-    test->Initialize(8192 * 2, 8192 * 2, 8192 * 2, core::Context::stream().handle());
+    test->Initialize(8192 * 4, 8192 * 4, 8192 * 4, core::Context::stream().handle());
     // test->Initialize(128 * 10, 128 * 10, 128 * 100, core::Context::stream().handle());
 
     test->Ref(0);  // c   <- a   * b

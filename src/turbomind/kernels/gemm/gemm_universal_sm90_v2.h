@@ -153,7 +153,7 @@ struct GemmUniversalSm90_v2 {
 
     static constexpr int kClusterSize = kMulticastA * kMulticastB;
 
-    static constexpr int Stages = 3;
+    static constexpr int Stages = 4;
 
     static constexpr bool kSplitK     = false;
     static constexpr int  kChunkSizeK = CTA_K;
@@ -306,8 +306,7 @@ struct GemmUniversalSm90_v2 {
             constexpr int kStepKA = (sizeof(Ta) * MMA_K) >> 4;
             constexpr int kStepKB = (sizeof(Tb) * MMA_K) >> 4;
 
-            cutlass::PipelineState<Stages> read_state{};
-            cutlass::PipelineState<Stages> release_state{};
+            cutlass::PipelineState<Stages> pipe_state{};
 
             while (sched.next()) {
                 auto [cta_tile_p, cluster_tile_p] = sched.is_valid_tile();
@@ -337,47 +336,47 @@ struct GemmUniversalSm90_v2 {
                 int k_iter = iter_k_end - iter_k_beg;
 
                 auto tile_gemm = [&] {
-                    // PRAGMA_UNROLL
-                    // for (int k = 0; k < MMA_ITER_K; ++k) {
-                    //     PRAGMA_UNROLL
-                    //     for (int m = 0; m < MMA_ITER_M; ++m) {
-                    //         PRAGMA_UNROLL
-                    //         for (int n = 0; n < MMA_ITER_N; ++n) {
-                    //             wgmma<MMA_Atom>(smem_iter_A, smem_iter_B, frag_C[m][n], k == 0);
-                    //             smem_iter_B += kStepNB;
-                    //         }
-                    //         smem_iter_B -= MMA_ITER_N * kStepNB;
-                    //         smem_iter_A += kStepMA;
-                    //     }
-                    //     smem_iter_A += kStepKA - MMA_ITER_M * kStepMA;
-                    //     smem_iter_B += kStepKB;
-                    // }
-                    // smem_iter_A -= MMA_ITER_K * kStepKA;
-                    // smem_iter_B -= MMA_ITER_K * kStepKB;
-                    // cute::warpgroup_commit_batch();
-
                     PRAGMA_UNROLL
-                    for (int m = 0; m < MMA_ITER_M; ++m) {
+                    for (int k = 0; k < MMA_ITER_K; ++k) {
                         PRAGMA_UNROLL
-                        for (int k = 0; k < MMA_ITER_K; ++k) {
+                        for (int m = 0; m < MMA_ITER_M; ++m) {
                             PRAGMA_UNROLL
                             for (int n = 0; n < MMA_ITER_N; ++n) {
                                 wgmma<MMA_Atom>(smem_iter_A, smem_iter_B, frag_C[m][n], k == 0);
                                 smem_iter_B += kStepNB;
                             }
                             smem_iter_B -= MMA_ITER_N * kStepNB;
-                            smem_iter_A += kStepKA;
-                            smem_iter_B += kStepKB;
+                            smem_iter_A += kStepMA;
                         }
-                        cute::warpgroup_commit_batch();
-                        smem_iter_A -= MMA_ITER_K * kStepKA;
-                        smem_iter_B -= MMA_ITER_K * kStepKB;
-                        smem_iter_A += kStepMA;
+                        smem_iter_A += kStepKA - MMA_ITER_M * kStepMA;
+                        smem_iter_B += kStepKB;
                     }
-                    smem_iter_A -= MMA_ITER_M * kStepMA;
+                    smem_iter_A -= MMA_ITER_K * kStepKA;
+                    smem_iter_B -= MMA_ITER_K * kStepKB;
+                    cute::warpgroup_commit_batch();
 
-                    smem_iter_A.Advance(read_state.index());
-                    smem_iter_B.Advance(read_state.index());
+                    // PRAGMA_UNROLL
+                    // for (int m = 0; m < MMA_ITER_M; ++m) {
+                    //     PRAGMA_UNROLL
+                    //     for (int k = 0; k < MMA_ITER_K; ++k) {
+                    //         PRAGMA_UNROLL
+                    //         for (int n = 0; n < MMA_ITER_N; ++n) {
+                    //             wgmma<MMA_Atom>(smem_iter_A, smem_iter_B, frag_C[m][n], k == 0);
+                    //             smem_iter_B += kStepNB;
+                    //         }
+                    //         smem_iter_B -= MMA_ITER_N * kStepNB;
+                    //         smem_iter_A += kStepKA;
+                    //         smem_iter_B += kStepKB;
+                    //     }
+                    //     cute::warpgroup_commit_batch();
+                    //     smem_iter_A -= MMA_ITER_K * kStepKA;
+                    //     smem_iter_B -= MMA_ITER_K * kStepKB;
+                    //     smem_iter_A += kStepMA;
+                    // }
+                    // smem_iter_A -= MMA_ITER_M * kStepMA;
+
+                    smem_iter_A.Advance(pipe_state.index());
+                    smem_iter_B.Advance(pipe_state.index());
                 };
 
                 const int warp_id = threadIdx.x / WARP_SIZE;
@@ -386,11 +385,11 @@ struct GemmUniversalSm90_v2 {
                 auto consumer_arrive = [&] {
                     __syncwarp();
                     if constexpr (kClusterSize > 1) {
-                        ConsumerBar::arrive(&consumer_bar[release_state.index()], lane_id, lane_id < kClusterSize);
+                        ConsumerBar::arrive(&consumer_bar[pipe_state.index()], lane_id, lane_id < kClusterSize);
                     }
                     else {
                         if (lane_id == 0) {
-                            ConsumerBar::arrive(&consumer_bar[release_state.index()]);
+                            ConsumerBar::arrive(&consumer_bar[pipe_state.index()]);
                         }
                     }
                 };
@@ -399,12 +398,11 @@ struct GemmUniversalSm90_v2 {
                     if (!cta_tile_p) {
                         // other CTAs in the cluster are still alive
                         for (; k_iter > 0; --k_iter) {
-                            ProducerBar::wait(&producer_bar[read_state.index()], read_state.phase());
+                            ProducerBar::wait(&producer_bar[pipe_state.index()], pipe_state.phase());
                             consumer_arrive();
-                            smem_iter_A.Advance(read_state.index());
-                            smem_iter_B.Advance(read_state.index());
-                            ++read_state;
-                            ++release_state;
+                            smem_iter_A.Advance(pipe_state.index());
+                            smem_iter_B.Advance(pipe_state.index());
+                            ++pipe_state;
                         }
                         continue;
                     }
@@ -436,6 +434,8 @@ struct GemmUniversalSm90_v2 {
 
                     int phase = 128 - wg_offset_n % 128;
                     pred_V    = (mask << (phase / OUTER_N)) & mask;
+
+                    // pred_V = (1 << (phase / OUTER_N)) & mask;
                 }
 
                 float scale_V[2];
@@ -455,8 +455,8 @@ struct GemmUniversalSm90_v2 {
                         float scale_U_0 = 1.f;
                         float scale_U_1 = 1.f;
 
-                        scale_U_0 = smem_U[read_state.index()][offset_U + m * MMA_M];
-                        scale_U_1 = smem_U[read_state.index()][offset_U + m * MMA_M + 8];
+                        scale_U_0 = smem_U[pipe_state.index()][offset_U + m * MMA_M];
+                        scale_U_1 = smem_U[pipe_state.index()][offset_U + m * MMA_M + 8];
 
                         float scales[2][2];
 
@@ -490,28 +490,26 @@ struct GemmUniversalSm90_v2 {
                 };
 
                 Load_V();
-                ProducerBar::wait(&producer_bar[read_state.index()], read_state.phase());
+                ProducerBar::wait(&producer_bar[pipe_state.index()], pipe_state.phase());
                 cute::warpgroup_arrive();
                 warpgroup_fence_operand(frag_C);
                 tile_gemm();
                 warpgroup_fence_operand(frag_C);
                 scale_accum();
                 consumer_arrive();
-                ++read_state;
-                ++release_state;
+                ++pipe_state;
                 --k_iter;
 
                 for (; k_iter > 0; --k_iter) {
                     Load_V();
-                    ProducerBar::wait(&producer_bar[read_state.index()], read_state.phase());
+                    ProducerBar::wait(&producer_bar[pipe_state.index()], pipe_state.phase());
                     cute::warpgroup_arrive();
                     warpgroup_fence_operand(frag_C);
                     tile_gemm();
                     warpgroup_fence_operand(frag_C);
                     scale_accum();
                     consumer_arrive();
-                    ++read_state;
-                    ++release_state;
+                    ++pipe_state;
                 }
 
                 if (threadIdx.x == 0) {
