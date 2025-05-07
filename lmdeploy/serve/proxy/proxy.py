@@ -727,7 +727,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
 
 def proxy(server_name: str = '0.0.0.0',
           server_port: int = 8000,
-          serving_strategy: Literal['Hybrid', 'DistServe'] = 'NonDisaggregated',
+          serving_strategy: Literal['Hybrid', 'DistServe'] = 'Hybrid',
           routing_strategy: Literal['random', 'min_expected_latency', 'min_observed_latency'] = 'min_expected_latency',
           api_keys: Optional[Union[List[str], str]] = None,
           ssl: bool = False,
