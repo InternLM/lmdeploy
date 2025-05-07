@@ -7,6 +7,7 @@ from typing import Any, Dict
 import torch
 import torch.distributed as dist
 
+from lmdeploy.disagg.config import EngineRole
 from lmdeploy.utils import get_logger
 
 from ..backends import get_backend
@@ -368,7 +369,7 @@ class AutoModelAgent:
         tp = dist_ctx.tp
         dp = dist_ctx.dp
         tp_cpu_group = dist_ctx.tp_cpu_group
-        # tp_gpu_group = dist_ctx.tp_gpu_group
+        tp_gpu_group = dist_ctx.tp_gpu_group
 
         logger.debug(f'<ForwardTask> rank[{rank}]: '
                      f'batch_size={inputs.seq_length.size(0)} '
@@ -455,8 +456,11 @@ class AutoModelAgent:
 
             if need_broadcast_next:
                 logger.info(f'<ForwardTask> rank[{rank}]: synchornize token ids [{idx}]')
-                next_token_ids = next_token_ids.cpu()
-                dist.all_reduce(next_token_ids, op=dist.ReduceOp.SUM, group=tp_cpu_group)
+                if self.cache_config.role == EngineRole.Decode:
+                    next_token_ids = next_token_ids.cpu()
+                    dist.all_reduce(next_token_ids, op=dist.ReduceOp.SUM, group=tp_cpu_group)
+                else:
+                    dist.broadcast(next_token_ids, src=0, group=tp_gpu_group)
 
             # send output
             model_metas = output.get('model_metas')
