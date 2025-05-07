@@ -247,7 +247,7 @@ class SubCliServe:
         # For Disaggregation
         parser.add_argument('--migration-protocol',
                             type=str,
-                            choices=['TCP', 'RDMA', 'NVLINK'],
+                            choices=['RDMA', 'NVLINK'],
                             default='RDMA',
                             help='transport protocol of KV migration')
         parser.add_argument('--link-type', type=str, choices=['RoCE', 'IB'], default='RoCE', help='RDMA Link Type')
