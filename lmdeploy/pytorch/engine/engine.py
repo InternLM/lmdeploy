@@ -692,8 +692,6 @@ class Engine:
             cross_length = None
             history_cross_length = None
 
-        # migration_inputs = [msg.migration_inputs for msg in messages]
-        # migration_reqs = [msg.migration_request for msg in messages]
         return ModelInputs(
             input_ids=input_ids,
             seq_length=seq_length,
@@ -706,8 +704,6 @@ class Engine:
             cross_length=cross_length,
             history_cross_length=history_cross_length,
             model_metas=model_metas,
-            # migration_inputs=migration_inputs,
-            # migration_requests=migration_reqs,
         )
 
     def update_running(self, running: SeqList, next_token_ids: torch.Tensor, stopped: torch.Tensor,

@@ -124,7 +124,6 @@ class AutoModelAgent:
 
         self.dist_ctx = dist_ctx
         self.device_ctx = device_ctx
-        self.lock = asyncio.Lock()
 
     @contextmanager
     def all_context(self):
