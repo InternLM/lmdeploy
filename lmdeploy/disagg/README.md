@@ -22,13 +22,10 @@ A PD disaggregated deployment of DeepSeekV3 is shown below:
 ### 1. Launch Router Service
 
 ```shell
-lmdeploy serve proxy
-    --server-name 0.0.0.0
-    --server-port 8000
-    --routing-strategy "min_expected_latency"
-    --serving-strategy DistServe
-    --log-level INFO
+lmdeploy serve proxy --server-name 0.0.0.0 --server-port 8000 --routing-strategy "min_expected_latency" --serving-strategy DistServe --log-level INFO
 ```
+
+LMDeploy-DistServe support both NVLink and RDMA for kvcache transferring from Prefill Engine to Decode Engine. RDMA is default model. Set `--migration-protocol NVLink` for NVLink transport.
 
 ### 2. Configure Endpoints
 
@@ -36,9 +33,9 @@ First deploy your prefill and decode engines.
 
 ```shell
 # Prefill Engine
-CUDA_VISIBLE_DEVICES=0,1 lmdeploy serve api_server internlm/internlm2_5-7b-chat --server-port 23333 --role Prefill --tp 2 --proxy-url http://0.0.0.0:8000
+CUDA_VISIBLE_DEVICES=0 lmdeploy serve api_server internlm/internlm2_5-7b-chat --server-port 23333 --role Prefill --proxy-url http://0.0.0.0:8000
 # Decode Engine
-CUDA_VISIBLE_DEVICES=2,3 lmdeploy serve api_server internlm/internlm2_5-7b-chat --server-port 23334 --role Decode --tp 2 --proxy-url http://0.0.0.0:8000
+CUDA_VISIBLE_DEVICES=1 lmdeploy serve api_server internlm/internlm2_5-7b-chat --server-port 23334 --role Decode --proxy-url http://0.0.0.0:8000
 ```
 
 ## API Usage
@@ -80,7 +77,7 @@ sudo yum install ibverbs-devel
 ```
 
 ```bash
-ibstatus      # Verify IB device status
+ibstat        # Verify IB device status
 ibv_devinfo   # Check device capabilities
 ```
 
@@ -93,14 +90,12 @@ lsmod | grep nv_peer_mem
 # GPUDirect RDMA info will be printed If GPUDirect RDMA is correctly loaded.
 ```
 
-### Fault tolerance
-
-#### Connection Pool
+### Connection Pool
 
 Currently, if the ​​Proxy disconnects​​, the connection pool must be ​​warmed up again​​. A future enhancement could involve:
 
 A ​​dedicated connection pool management server​​ (e.g., using ​​Raft-based tools like ETCD​​, as mentioned in ​​Mooncake​​) to improve ​​connection discovery​​ and avoid repeated warmups.
 
-#### Proxy
+### Proxy
 
 Do not add an engine nodes to **different proxy** because it is not supported and is not considered as a right usage by now.
