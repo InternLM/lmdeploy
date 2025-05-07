@@ -93,8 +93,14 @@ lsmod | grep nv_peer_mem
 # GPUDirect RDMA info will be printed If GPUDirect RDMA is correctly loaded.
 ```
 
-### ConnectionPool Issue​​
+### Fault tolerance
+
+#### Connection Pool
 
 Currently, if the ​​Proxy disconnects​​, the connection pool must be ​​warmed up again​​. A future enhancement could involve:
 
 A ​​dedicated connection pool management server​​ (e.g., using ​​Raft-based tools like ETCD​​, as mentioned in ​​Mooncake​​) to improve ​​connection discovery​​ and avoid repeated warmups.
+
+#### Proxy
+
+Do not add an engine nodes to **different proxy** because it is not supported and is not considered as a right usage by now.
