@@ -2,6 +2,7 @@
 # yapf: disable
 import asyncio
 import copy
+import json
 import os
 import time
 from functools import partial
@@ -18,6 +19,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from lmdeploy.archs import get_task
 from lmdeploy.messages import GenerationConfig, LogitsProcessor, PytorchEngineConfig, TurbomindEngineConfig
 from lmdeploy.model import ChatTemplateConfig
+from lmdeploy.pytorch.disagg.config import DistServeEngineConfig
+from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest, MigrationRequest
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.openai.protocol import ChatCompletionResponse  # noqa: E501
 from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, ChatCompletionResponseChoice,
@@ -263,7 +266,7 @@ def logit_bias_logits_processor(logit_bias: Union[Dict[int, float], Dict[str, fl
 
 
 @router.post('/v1/chat/completions', dependencies=[Depends(check_api_key)])
-async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Request = None):
+async def chat_completions_v1(raw_request: Request = None):
     """Completion API similar to OpenAI's API.
 
     Refer to  `https://platform.openai.com/docs/api-reference/chat/create`
@@ -323,6 +326,14 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
+    json_request = await raw_request.json()
+    request = ChatCompletionRequest.model_validate(json_request)
+    migration_request = json_request.pop('migration_request', None)
+    with_cache = json_request.pop('with_cache', False)
+    preserve_cache = json_request.pop('preserve_cache', False)
+    if migration_request:
+        migration_request = MigrationRequest.model_validate(migration_request)
+
     if request.session_id == -1:
         VariableInterface.session_id += 1
         request.session_id = VariableInterface.session_id
@@ -376,7 +387,10 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                                   min_new_tokens=request.min_new_tokens,
                                   min_p=request.min_p,
                                   random_seed=random_seed,
-                                  spaces_between_special_tokens=request.spaces_between_special_tokens)
+                                  spaces_between_special_tokens=request.spaces_between_special_tokens,
+                                  migration_request=migration_request,
+                                  with_cache=with_cache,
+                                  preserve_cache=preserve_cache)
 
     tools = None
     if request.tools and request.tool_choice != 'none':
@@ -485,6 +499,9 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                                                         finish_reason=res.finish_reason,
                                                         logprobs=logprobs,
                                                         usage=usage)
+            if res.cache_block_ids is not None:
+                response_json['cache_block_ids'] = res.cache_block_ids
+                response_json['remote_token_ids'] = res.token_ids
             yield f'data: {response_json}\n\n'
         yield 'data: [DONE]\n\n'
 
@@ -497,6 +514,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     final_token_ids = []
     final_res = None
     text = ''
+    cache_block_ids = []
+    remote_token_ids = []
     async for res in result_generator:
         if await raw_request.is_disconnected():
             # Abort the request if the client disconnects.
@@ -508,6 +527,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             final_token_ids.extend(res.token_ids)
         if res.logprobs:
             final_logprobs.extend(res.logprobs)
+        cache_block_ids.append(res.cache_block_ids)
+        remote_token_ids.append(res.token_ids)
 
     tool_calls = None
     reasoning_content = None
@@ -543,6 +564,10 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     )
     choices.append(choice_data)
 
+    if with_cache:
+        cache_block_ids = cache_block_ids[0]
+        remote_token_ids = [remote_token_ids[0][-1]]
+
     total_tokens = sum([final_res.history_token_len, final_res.input_token_len, final_res.generate_token_len])
     usage = UsageInfo(
         prompt_tokens=final_res.input_token_len,
@@ -555,13 +580,17 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         model=model_name,
         choices=choices,
         usage=usage,
-    )
+    ).model_dump()
+
+    if with_cache:
+        response['cache_block_ids'] = cache_block_ids
+        response['remote_token_ids'] = remote_token_ids
 
     return response
 
 
 @router.post('/v1/completions', dependencies=[Depends(check_api_key)])
-async def completions_v1(request: CompletionRequest, raw_request: Request = None):
+async def completions_v1(raw_request: Request = None):
     """Completion API similar to OpenAI's API.
 
     Go to `https://platform.openai.com/docs/api-reference/completions/create`
@@ -607,6 +636,14 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
+    json_request = await raw_request.json()
+    request = CompletionRequest.model_validate(json_request)
+    migration_request = json_request.pop('migration_request', None)
+    with_cache = json_request.pop('with_cache', False)
+    preserve_cache = json_request.pop('preserve_cache', False)
+    if migration_request:
+        migration_request = MigrationRequest.model_validate(migration_request)
+
     if request.session_id == -1:
         VariableInterface.session_id += 1
         request.session_id = VariableInterface.session_id
@@ -640,7 +677,10 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
                                   skip_special_tokens=request.skip_special_tokens,
                                   min_p=request.min_p,
                                   random_seed=random_seed,
-                                  spaces_between_special_tokens=request.spaces_between_special_tokens)
+                                  spaces_between_special_tokens=request.spaces_between_special_tokens,
+                                  migration_request=migration_request,
+                                  with_cache=with_cache,
+                                  preserve_cache=preserve_cache)
     generators = []
     for i in range(len(request.prompt)):
         result_generator = VariableInterface.async_engine.generate(
@@ -670,8 +710,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
             choices=[choice_data],
             usage=usage,
         )
-        response_json = response.model_dump_json()
-
+        response_json = response.model_dump()
         return response_json
 
     async def completion_stream_generator() -> AsyncGenerator[str, None]:
@@ -702,7 +741,10 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
                                                             finish_reason=res.finish_reason,
                                                             logprobs=logprobs,
                                                             usage=usage)
-                yield f'data: {response_json}\n\n'
+                if res.cache_block_ids is not None:
+                    response_json['cache_block_ids'] = res.cache_block_ids
+                    response_json['remote_token_ids'] = res.token_ids
+                yield f'data: {json.dumps(response_json)}\n\n'
         yield 'data: [DONE]\n\n'
 
     # Streaming response
@@ -712,8 +754,11 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     # Non-streaming response
     usage = UsageInfo()
     choices = [None] * len(generators)
+    cache_block_ids = []
+    remote_token_ids = []
 
     async def _inner_call(i, generator):
+        nonlocal cache_block_ids, remote_token_ids
         final_logprobs = []
         final_token_ids = []
         final_res = None
@@ -725,6 +770,8 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
                 return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
             final_res = res
             text += res.response
+            cache_block_ids.append(res.cache_block_ids)
+            remote_token_ids.append(res.token_ids)
             if res.token_ids:
                 final_token_ids.extend(res.token_ids)
             if res.logprobs:
@@ -748,6 +795,10 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         )
         choices[i] = choice_data
 
+        if with_cache:
+            cache_block_ids = cache_block_ids[0]
+            remote_token_ids = [remote_token_ids[0][-1]]
+
         total_tokens = sum([final_res.history_token_len, final_res.input_token_len, final_res.generate_token_len])
         usage.prompt_tokens += final_res.input_token_len
         usage.completion_tokens += final_res.generate_token_len
@@ -761,7 +812,11 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         model=model_name,
         choices=choices,
         usage=usage,
-    )
+    ).model_dump()
+
+    if with_cache:
+        response['cache_block_ids'] = cache_block_ids
+        response['remote_token_ids'] = remote_token_ids
 
     return response
 
@@ -799,6 +854,46 @@ async def encode(request: EncodeRequest, raw_request: Request = None):
             encoded.append(ids)
             length.append(len(ids))
         return EncodeResponse(input_ids=encoded, length=length)
+
+
+""" PD Disaggregation API Begin """
+
+
+@router.get('/distserve/engine_info')
+async def engine_info():
+    engine = VariableInterface.async_engine.engine
+
+    response = DistServeEngineConfig(tp_size=engine.engine_config.tp,
+                                     dp_size=engine.engine_config.dp,
+                                     pp_size=None,
+                                     ep_size=engine.engine_config.ep,
+                                     dp_rank=engine.engine_config.dp_rank,
+                                     block_size=engine.engine_config.block_size,
+                                     num_cpu_blocks=engine.scheduler.block_manager.num_cpu_blocks,
+                                     num_gpu_blocks=engine.scheduler.block_manager.num_gpu_blocks)
+
+    return response.model_dump_json()
+
+
+@router.post('/distserve/p2p_initialize')
+async def p2p_initialize(init_request: DistServeInitRequest):
+    return VariableInterface.async_engine.p2p_initialize(init_request)
+
+
+@router.post('/distserve/p2p_connect')
+async def p2p_connect(conn_request: List[DistServeConnectionRequest]):
+    return VariableInterface.async_engine.p2p_connect(conn_request)
+
+
+@router.post('/distserve/free_cache')
+async def free_cache(raw_request: Request) -> JSONResponse:
+    config = await raw_request.json()
+    session_id = int(config['session_id'])
+    VariableInterface.async_engine.free_cache(session_id)
+    return {'status': 'SUCCESS'}
+
+
+""" PD Disaggregation API End """
 
 
 @router.post('/v1/chat/interactive', dependencies=[Depends(check_api_key)])
@@ -960,14 +1055,20 @@ async def startup_event():
         return
     try:
         import requests
+        engine_config = VariableInterface.async_engine.engine.engine_config
         url = f'{VariableInterface.proxy_url}/nodes/add'
-        data = {'url': VariableInterface.api_server_url, 'status': {'models': get_model_list()}}
+        data = {
+            'url': VariableInterface.api_server_url,
+            'status': {
+                'models': get_model_list(),
+                'role': engine_config.role.value
+            }
+        }
         headers = {'accept': 'application/json', 'Content-Type': 'application/json'}
         response = requests.post(url, headers=headers, json=data)
 
         if response.status_code != 200:
             raise HTTPException(status_code=400, detail='Service registration failed')
-        print(response.text)
     except Exception as e:
         print(f'Service registration failed: {e}')
 
