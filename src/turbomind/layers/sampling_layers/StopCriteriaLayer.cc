@@ -77,12 +77,6 @@ void StopCriteriaLayer<T>::Forward(TensorMap& args)
     TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
 }
 
-#ifdef ENABLE_FP32
 template class StopCriteriaLayer<float>;
-#endif
-template class StopCriteriaLayer<half>;
-#ifdef ENABLE_BF16
-template class StopCriteriaLayer<nv_bfloat16>;
-#endif
 
 }  // namespace turbomind

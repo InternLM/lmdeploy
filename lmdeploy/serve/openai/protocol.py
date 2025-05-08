@@ -276,6 +276,7 @@ class CompletionRequest(BaseModel):
     spaces_between_special_tokens: Optional[bool] = True
     top_k: Optional[int] = 40  # for opencompass
     seed: Optional[int] = None
+    min_p: float = 0.0
 
 
 class CompletionResponseChoice(BaseModel):

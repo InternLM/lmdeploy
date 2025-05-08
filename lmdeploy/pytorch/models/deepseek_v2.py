@@ -19,8 +19,11 @@ from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_down_linear,
 from lmdeploy.pytorch.nn.moe import MoeType, SoftmaxTopK, build_fused_moe
 from lmdeploy.pytorch.nn.rotary_embedding import YarnParameters
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
+from lmdeploy.utils import get_logger
 
 from .utils.cudagraph import CudaGraphMixin
+
+logger = get_logger('lmdeploy')
 
 
 # microbatch
@@ -589,6 +592,12 @@ class MoEGate(nn.Module):
             self.e_score_correction_bias = nn.Parameter(
                 torch.empty((self.n_routed_experts, ), dtype=dtype, device=device))
         self.softmax_topk = SoftmaxTopK(self.top_k)
+        try:
+            import dlblas
+            self.dlblas_fused_gate = dlblas.moe_fused_gate
+        except Exception:
+            self.dlblas_fused_gate = None
+            logger.warning('For higher performance, please install dlBLAS https://github.com/DeepLink-org/dlBLAS')
 
     def _compute_scores(self, logits: torch.Tensor):
         """compute scores."""
@@ -605,7 +614,6 @@ class MoEGate(nn.Module):
         """forward."""
         sequence_length, hidden_dim = hidden_states.shape
         router_logits = F.linear(hidden_states, self.weight)
-
         if self.topk_method == 'greedy':
             topk_weight, topk_idx = self.softmax_topk(router_logits)
         elif self.topk_method == 'group_limited_greedy':
@@ -619,6 +627,10 @@ class MoEGate(nn.Module):
             grouped_logits = grouped_logits.masked_fill(group_mask, 0.0)
             scores = grouped_logits.flatten(1, 2)
             topk_weight, topk_idx = self.softmax_topk(scores)
+        elif (self.topk_method == 'noaux_tc' and self.scoring_func == 'sigmoid' and self.renormalize
+              and self.dlblas_fused_gate is not None):
+            topk_weight, topk_idx = self.dlblas_fused_gate(router_logits, self.e_score_correction_bias, self.n_group,
+                                                           self.topk_group, self.top_k)
         elif self.topk_method == 'noaux_tc':
             scores = self._compute_scores(router_logits)
             scores_for_choice = scores.view(sequence_length, -1) + self.e_score_correction_bias[None]
@@ -636,7 +648,7 @@ class MoEGate(nn.Module):
         else:
             raise RuntimeError(f'Unsupported topk_method: {self.topk_method}')
 
-        if self.renormalize:
+        if self.renormalize and self.dlblas_fused_gate is None:
             denominator = topk_weight.sum(dim=-1, keepdim=True) + 1e-20
             topk_weight = topk_weight / denominator
             if not topk_weight.is_contiguous():
@@ -644,13 +656,14 @@ class MoEGate(nn.Module):
 
         if not self.renormalize or self.topk_method == 'noaux_tc':
             topk_weight = topk_weight * self.routed_scaling_factor
+
         return topk_weight, topk_idx
 
 
 class DeepseekV2MoE(nn.Module):
     """Deepseek v2 MoE."""
 
-    def __init__(self, config: Any, dtype: torch.dtype = None, device: torch.device = None):
+    def __init__(self, config: Any, layer_idx, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         self.hidden_dim = config.hidden_size
@@ -680,6 +693,7 @@ class DeepseekV2MoE(nn.Module):
             device=device,
             all_reduce=moe_all_reduce,
             quant_config=quantization_config,
+            layer_idx=layer_idx,
         )
 
         self.shared_experts = None
@@ -800,7 +814,7 @@ class DeepseekV2DecoderLayer(nn.Module):
             self.self_attn = LlamaAttention(config, dtype=dtype, device=device)
 
         # mlp
-        self.mlp = (DeepseekV2MoE(config, dtype=dtype, device=device) if
+        self.mlp = (DeepseekV2MoE(config, layer_idx, dtype=dtype, device=device) if
                     (config.n_routed_experts is not None and layer_idx >= config.first_k_dense_replace
                      and layer_idx % config.moe_layer_freq == 0) else DeepseekV2MLP(config, dtype=dtype, device=device))
 

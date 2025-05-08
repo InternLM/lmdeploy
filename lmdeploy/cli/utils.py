@@ -527,3 +527,22 @@ class ArgumentHelper:
         return parser.add_argument('--enable-microbatch',
                                    action='store_true',
                                    help='enable microbatch for specified model')
+
+    # For Disaggregation
+    @staticmethod
+    def role(parser):
+        return parser.add_argument('--role',
+                                   type=str,
+                                   default='Hybrid',
+                                   choices=['Hybrid', 'Prefill', 'Decode'],
+                                   help='Hybrid for Non-Disaggregated Engine;'
+                                   'Prefill for Disaggregated Prefill Engine;'
+                                   'Decode for Disaggregated Decode Engine;')
+
+    @staticmethod
+    def migration_backend(parser):
+        return parser.add_argument('--migration-backend',
+                                   type=str,
+                                   default='DLSlime',
+                                   choices=['DLSlime'],
+                                   help='kvcache migration management backend when PD disaggregation')

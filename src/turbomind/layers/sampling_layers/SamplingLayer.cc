@@ -178,12 +178,6 @@ void SamplingLayer<T>::Setup(const std::vector<const Request*>& rs, const Tensor
     core::Copy(min_p_.data(), bsz, min_p_buf_.data());
 }
 
-#ifdef ENABLE_FP32
 template class SamplingLayer<float>;
-#endif
-template class SamplingLayer<half>;
-#ifdef ENABLE_BF16
-template class SamplingLayer<nv_bfloat16>;
-#endif
 
 }  // namespace turbomind

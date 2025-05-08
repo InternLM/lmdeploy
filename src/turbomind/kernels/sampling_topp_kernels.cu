@@ -145,13 +145,7 @@ void invokeSoftmax(T*           logits,
                                    const int*   kept,                                                                  \
                                    cudaStream_t stream);
 
-#ifdef ENABLE_FP32
 INSTANTIATE_INVOKE_SOFTMAX(float);
-#endif
-INSTANTIATE_INVOKE_SOFTMAX(half);
-#ifdef ENABLE_BF16
-INSTANTIATE_INVOKE_SOFTMAX(nv_bfloat16);
-#endif
 
 template<typename T, int MAX_K, int THREADBLOCK_SIZE>
 __launch_bounds__(THREADBLOCK_SIZE) __global__ void topp_beam_topk_kernel(const T*     logits,
@@ -290,13 +284,7 @@ void invokeTopPSort(TopPSortParams& params, cudaStream_t stream)
                                                                         stream));       // cudaStream_t
 }
 
-#ifdef ENABLE_FP32
 template void invokeTopPSort<float>(TopPSortParams& params, cudaStream_t stream);
-#endif
-template void invokeTopPSort<half>(TopPSortParams& params, cudaStream_t stream);
-#ifdef ENABLE_BF16
-template void invokeTopPSort<nv_bfloat16>(TopPSortParams& params, cudaStream_t stream);
-#endif
 
 template<typename T, int BLOCK_SIZE>
 __global__ void topPMinPFilter(T*           sorted_logits,
@@ -404,12 +392,6 @@ void invokeTopPMinPFilter(TopPMinPFilterParams& params, cudaStream_t stream)
                                                                   params.min_ps);
 }
 
-#ifdef ENABLE_FP32
 template void invokeTopPMinPFilter<float>(TopPMinPFilterParams& params, cudaStream_t stream);
-#endif
-template void invokeTopPMinPFilter<half>(TopPMinPFilterParams& params, cudaStream_t stream);
-#ifdef ENABLE_BF16
-template void invokeTopPMinPFilter<nv_bfloat16>(TopPMinPFilterParams& params, cudaStream_t stream);
-#endif
 
 }  // namespace turbomind
