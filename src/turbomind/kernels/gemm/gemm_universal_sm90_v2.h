@@ -460,22 +460,25 @@ struct GemmUniversalSm90_v2 {
                     gmem_V += step_V;
                 };
 
+                float scale_U[MMA_ITER_M][2];
+
                 const int offset_U = warp_group_id_m * MMA_ATOM_M + warp_id % 4 * 16 + lane_id / 4;
+
+                auto Load_U = [&] {
+                    for (int m = 0; m < MMA_ITER_M; ++m) {
+                        scale_U[m][0] = smem_U[pipe_state.index()][offset_U + m * MMA_M];
+                        scale_U[m][1] = smem_U[pipe_state.index()][offset_U + m * MMA_M + 8];
+                    }
+                };
 
                 auto scale_accum = [&]() {  // cta_n = mma_iter_n * wg_n * mma_atom_n
                     for_(std::make_index_sequence<MMA_ITER_M>{}, [&](auto m) {
-                        float scale_U_0 = 1.f;
-                        float scale_U_1 = 1.f;
-
-                        scale_U_0 = smem_U[pipe_state.index()][offset_U + m * MMA_M];
-                        scale_U_1 = smem_U[pipe_state.index()][offset_U + m * MMA_M + 8];
-
                         float scales[2][2];
 
-                        scales[0][0] = scale_U_0 * scale_V[0];
-                        scales[1][0] = scale_U_1 * scale_V[0];
-                        scales[0][1] = scale_U_0 * scale_V[1];
-                        scales[1][1] = scale_U_1 * scale_V[1];
+                        scales[0][0] = scale_U[m][0] * scale_V[0];
+                        scales[1][0] = scale_U[m][1] * scale_V[0];
+                        scales[0][1] = scale_U[m][0] * scale_V[1];
+                        scales[1][1] = scale_U[m][1] * scale_V[1];
 
                         cute::warpgroup_wait<MMA_ITER_M - 1 - m>();
 
@@ -498,11 +501,11 @@ struct GemmUniversalSm90_v2 {
                         }
                     });
 
-                    // gmem_V += step_V;
                 };
 
                 Load_V();
                 ProducerBar::wait(&producer_bar[pipe_state.index()], pipe_state.phase());
+                Load_U();
                 cute::warpgroup_arrive();
                 warpgroup_fence_operand(frag_C);
                 tile_gemm();
@@ -515,6 +518,7 @@ struct GemmUniversalSm90_v2 {
                 for (; k_iter > 0; --k_iter) {
                     Load_V();
                     ProducerBar::wait(&producer_bar[pipe_state.index()], pipe_state.phase());
+                    Load_U();
                     cute::warpgroup_arrive();
                     warpgroup_fence_operand(frag_C);
                     tile_gemm();
@@ -538,7 +542,7 @@ struct GemmUniversalSm90_v2 {
 
                         const int m0 = m * MMA_M + warp_group_id_m * MMA_ATOM_M;
                         const int n0 = n * MMA_N + warp_group_id_n * MMA_ATOM_N;
-#if 0
+#if 1
                         PRAGMA_UNROLL
                         for (int i = 0; i < MMA_ATOM_N; i += 16) {
                             __align__(16) Array<Tc, 8> tvec = cast<Tc>(*(Array<float, 8>*)&accum_C[m][n][i / 2]);
