@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from lmdeploy.disagg.config import EngineRole, MigrationBackend
+from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
 from lmdeploy.utils import get_max_batch_size
 
 from .cli import CLI
@@ -125,18 +125,6 @@ class SubCliServe:
                             'engine’s tasks once the maximum number of concurrent requests is '
                             'reached, regardless of any additional requests sent by clients '
                             'concurrently during that time. Default to None.')
-        parser.add_argument('--role',
-                            type=str,
-                            default='Hybrid',
-                            choices=['Hybrid', 'Prefill', 'Decode'],
-                            help='Hybrid for Non-Disaggregated Engine;'
-                            'Prefill for Disaggregated Prefill Engine;'
-                            'Decode for Disaggregated Decode Engine;')
-        parser.add_argument('--migration-backend',
-                            type=str,
-                            default='DLSlime',
-                            choices=['DLSlime'],
-                            help='kvcache migration management backend when PD disaggregation')
         # common args
         ArgumentHelper.backend(parser)
         ArgumentHelper.log_level(parser)
@@ -179,6 +167,8 @@ class SubCliServe:
         ArgumentHelper.dp_rank(pt_group)
         ArgumentHelper.ep(pt_group)
         ArgumentHelper.enable_microbatch(pt_group)
+        ArgumentHelper.role(pt_group)
+        ArgumentHelper.migration_backend(pt_group)
 
         # turbomind args
         tb_group = parser.add_argument_group('TurboMind engine arguments')
@@ -244,6 +234,7 @@ class SubCliServe:
                             help='Whether to disable cache status of the '
                             'proxy. If set, the proxy will forget the status '
                             'of the previous time')
+
         # For Disaggregation
         parser.add_argument('--migration-protocol',
                             type=str,
@@ -252,7 +243,6 @@ class SubCliServe:
                             help='transport protocol of KV migration')
         parser.add_argument('--link-type', type=str, choices=['RoCE', 'IB'], default='RoCE', help='RDMA Link Type')
         parser.add_argument('--disable-gdr', action='store_true', help='with GPU Direct Memory Access')
-
         ArgumentHelper.api_keys(parser)
         ArgumentHelper.ssl(parser)
         ArgumentHelper.log_level(parser)

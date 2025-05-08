@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Literal
 
 import torch
 
-from lmdeploy.disagg.config import EngineRole, MigrationBackend
+from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
 
 
 def _update_torch_dtype(config: 'ModelConfig', dtype: str):

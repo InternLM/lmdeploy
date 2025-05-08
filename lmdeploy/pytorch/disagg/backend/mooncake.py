@@ -1,13 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from lmdeploy.disagg.backend.backend import MIGRATION_BACKENDS
-from lmdeploy.disagg.backend.base import MigrationBackendImpl
-from lmdeploy.disagg.config import MigrationBackend, MigrationProtocol
-from lmdeploy.disagg.messages import DistServeRegisterMRMessage, MigrationAssignment
-from lmdeploy.disagg.request import DistServeConnectionRequest, DistServeInitRequest
+from lmdeploy.pytorch.disagg.backend.backend import MIGRATION_BACKENDS
+from lmdeploy.pytorch.disagg.backend.base import MigrationBackendImpl
+from lmdeploy.pytorch.disagg.config import MigrationBackend, MigrationProtocol
+from lmdeploy.pytorch.disagg.messages import DistServeRegisterMRMessage, MigrationAssignment
+from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 
 
-@MIGRATION_BACKENDS.register_module(MigrationBackend.InfiniStore.name)
-class InfiniStoreBackend(MigrationBackendImpl):
+@MIGRATION_BACKENDS.register_module(MigrationBackend.Mooncake.name)
+class MooncakeBackend(MigrationBackendImpl):
 
     def p2p_initialize(self, init_request: DistServeInitRequest):
         raise NotImplementedError
@@ -18,7 +18,7 @@ class InfiniStoreBackend(MigrationBackendImpl):
     def endpoint_info(self, remote_engine_id: int, protocol: MigrationProtocol):
         return NotImplementedError
 
-    def p2p_connect(self, conn_req: DistServeConnectionRequest):
+    def p2p_connect(self, connect_request: DistServeConnectionRequest):
         raise NotImplementedError
 
     def p2p_migrate(self, assignment: MigrationAssignment, async_op: bool = False):

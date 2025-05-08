@@ -2,11 +2,11 @@
 import asyncio
 from typing import Any, Dict, List
 
-from lmdeploy.disagg.messages import MigrationExecutionBatch
-from lmdeploy.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.pytorch.backends.selector import get_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, ModelConfig
 from lmdeploy.pytorch.devices import DeviceContext
+from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
+from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.pytorch.distributed import DistContext
 from lmdeploy.pytorch.engine.model_agent import build_model_agent
 from lmdeploy.utils import get_logger

@@ -7,10 +7,10 @@ from typing import Dict, List, Tuple
 
 import aiohttp
 
-from lmdeploy.disagg.config import DistServeEngineConfig
-from lmdeploy.disagg.messages import PDConnectionMessage
-from lmdeploy.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.logger import get_logger
+from lmdeploy.pytorch.disagg.config import DistServeEngineConfig
+from lmdeploy.pytorch.disagg.messages import PDConnectionMessage
+from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 
 logger = get_logger('lmdeploy')
 

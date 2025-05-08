@@ -1,16 +1,16 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import json
-from typing import Dict
+from typing import Dict, List
 
 from dlslime import Assignment as DLSlimeAssignment
 from dlslime import NVLinkEndpoint, RDMAEndpoint, available_nic
 
-from lmdeploy.disagg.backend.backend import MIGRATION_BACKENDS
-from lmdeploy.disagg.backend.base import MigrationBackendImpl
-from lmdeploy.disagg.config import DistServeEngineConfig, MigrationBackend, MigrationProtocol
-from lmdeploy.disagg.messages import DistServeRegisterMRMessage, MigrationAssignment
-from lmdeploy.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.logger import get_logger
+from lmdeploy.pytorch.disagg.backend.backend import MIGRATION_BACKENDS
+from lmdeploy.pytorch.disagg.backend.base import MigrationBackendImpl
+from lmdeploy.pytorch.disagg.config import DistServeEngineConfig, MigrationBackend, MigrationProtocol
+from lmdeploy.pytorch.disagg.messages import DistServeRegisterMRMessage, MigrationAssignment
+from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 
 logger = get_logger('lmdeploy')
 
@@ -46,14 +46,25 @@ class DLSlimeMigrationManagement:
         self.endpoint[connect_request.protocol].connect(json.loads(connect_request.remote_endpoint_info))
 
     def p2p_migrate(self, assignment: MigrationAssignment, async_op=False):
-        self.endpoint[assignment.protocol].read_batch([
+        MAX_NUM_READ_BATCH = 4096
+
+        def split(batch: List[DLSlimeAssignment]):
+            batch_split = []
+            for i in range(0, len(batch), MAX_NUM_READ_BATCH):
+                batch_split.append(batch[i:i + MAX_NUM_READ_BATCH])
+            return batch_split
+
+        batch = [
             DLSlimeAssignment(
                 mr_key=assign.mr_key,
                 target_offset=assign.target_offset,
                 source_offset=assign.source_offset,
                 length=assign.length,
             ) for assign in assignment.batch
-        ])
+        ]
+        batch_splited = split(batch)
+        for b_split in batch_splited:
+            self.endpoint[assignment.protocol].read_batch(b_split)
 
 
 @MIGRATION_BACKENDS.register_module(MigrationBackend.DLSlime.name)

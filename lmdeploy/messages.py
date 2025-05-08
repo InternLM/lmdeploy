@@ -6,8 +6,8 @@ from typing import Callable, Dict, List, Literal, Optional
 import torch
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 
-from lmdeploy.disagg.config import EngineRole, MigrationBackend
-from lmdeploy.disagg.request import MigrationRequest
+from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
+from lmdeploy.pytorch.disagg.request import MigrationRequest
 
 from .tokenizer import Tokenizer
 from .utils import get_logger

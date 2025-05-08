@@ -21,10 +21,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from lmdeploy.disagg.config import DistServeRDMAConfig, EngineRole, MigrationProtocol, RDMALinkType, ServingStrategy
-from lmdeploy.disagg.conn import PDConnectionPool
-from lmdeploy.disagg.messages import PDConnectionMessage
-from lmdeploy.disagg.request import MigrationRequest
+from lmdeploy.pytorch.disagg.config import (DistServeRDMAConfig, EngineRole, MigrationProtocol, RDMALinkType,
+                                            ServingStrategy)
+from lmdeploy.pytorch.disagg.conn import PDConnectionPool
+from lmdeploy.pytorch.disagg.messages import PDConnectionMessage
+from lmdeploy.pytorch.disagg.request import MigrationRequest
 from lmdeploy.serve.openai.api_server import check_api_key, create_error_response
 from lmdeploy.serve.openai.protocol import ModelCard  # noqa: E501
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, CompletionRequest, ModelList, ModelPermission

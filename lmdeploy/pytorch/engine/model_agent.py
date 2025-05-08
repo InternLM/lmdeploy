@@ -7,7 +7,7 @@ from typing import Any, Dict
 import torch
 import torch.distributed as dist
 
-from lmdeploy.disagg.config import EngineRole
+from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.utils import get_logger
 
 from ..backends import get_backend

@@ -3,8 +3,8 @@ from typing import List, Optional
 
 from pydantic import BaseModel
 
-from lmdeploy.disagg.config import (DistServeEngineConfig, DistServeNVLinkConfig, DistServeRDMAConfig,
-                                    DistServeTCPConfig, MigrationProtocol)
+from lmdeploy.pytorch.disagg.config import (DistServeEngineConfig, DistServeNVLinkConfig, DistServeRDMAConfig,
+                                            DistServeTCPConfig, MigrationProtocol)
 
 
 class DistServeConnectionRequest(BaseModel):

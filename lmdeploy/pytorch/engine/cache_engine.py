@@ -4,12 +4,12 @@ from typing import Dict, List, Literal, Optional, Tuple
 
 import torch
 
-from lmdeploy.disagg.backend.backend import MIGRATION_BACKENDS
-from lmdeploy.disagg.backend.base import MigrationBackendImpl
-from lmdeploy.disagg.messages import (AssignmentInstruct, DistServeRegisterMRMessage, MigrationAssignment,
-                                      MigrationExecutionBatch)
-from lmdeploy.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.disagg.backend.backend import MIGRATION_BACKENDS
+from lmdeploy.pytorch.disagg.backend.base import MigrationBackendImpl
+from lmdeploy.pytorch.disagg.messages import (AssignmentInstruct, DistServeRegisterMRMessage, MigrationAssignment,
+                                              MigrationExecutionBatch)
+from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.utils import get_logger
 
 from ..config import CacheConfig, ModelConfig

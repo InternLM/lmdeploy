@@ -7,10 +7,10 @@ import torch
 
 # from torch import distributed as dist
 import lmdeploy.pytorch.distributed as dist
-from lmdeploy.disagg.messages import MigrationExecutionBatch
-from lmdeploy.disagg.request import MigrationRequest
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.config import ModelConfig
+from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
+from lmdeploy.pytorch.disagg.request import MigrationRequest
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
 
 

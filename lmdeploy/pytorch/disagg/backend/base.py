@@ -1,9 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import abstractmethod
 
-from lmdeploy.disagg.config import MigrationProtocol
-from lmdeploy.disagg.messages import DistServeRegisterMRMessage, MigrationAssignment
-from lmdeploy.disagg.request import DistServeConnectionRequest, DistServeInitRequest
+from lmdeploy.pytorch.disagg.config import MigrationProtocol
+from lmdeploy.pytorch.disagg.messages import DistServeRegisterMRMessage, MigrationAssignment
+from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 
 
 class MigrationBackendImpl:

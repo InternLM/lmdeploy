@@ -17,10 +17,10 @@ from fastapi.security.http import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from lmdeploy.archs import get_task
-from lmdeploy.disagg.config import DistServeEngineConfig
-from lmdeploy.disagg.request import DistServeConnectionRequest, DistServeInitRequest, MigrationRequest
 from lmdeploy.messages import GenerationConfig, LogitsProcessor, PytorchEngineConfig, TurbomindEngineConfig
 from lmdeploy.model import ChatTemplateConfig
+from lmdeploy.pytorch.disagg.config import DistServeEngineConfig
+from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest, MigrationRequest
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.openai.protocol import ChatCompletionResponse  # noqa: E501
 from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, ChatCompletionResponseChoice,
