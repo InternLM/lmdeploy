@@ -185,29 +185,27 @@ struct GemmUniversalSm90_v2 {
     static constexpr int kTmaTxBytes =
         sizeof(Ta) * (CTA_M * CTA_K) + sizeof(Tb) * (CTA_K * CTA_N) + sizeof(Tu) * CTA_M_U * CTA_K_U;
 
+    // ! Smem addr must be SBO aligned for TMA load/store
     struct SharedStorage {
         struct Source {
-            __align__(128) Array<Ta, Stages * CTA_M * CTA_K> A;
-            __align__(128) Array<Tb, Stages * CTA_K * CTA_N> B;
+            __align__(1024) Array<Ta, Stages * CTA_M * CTA_K> A;
+            __align__(1024) Array<Tb, Stages * CTA_K * CTA_N> B;
             __align__(128) Tu U[Stages][round_up(CTA_M_U * CTA_K_U, 32)];
             __align__(128) Tv V[Stages][round_up(CTA_N_V * CTA_K_V, 32)];  // (k1,n256)
         };
         Source source;
-        __align__(128) Array<Tc, CTA_M * CTA_N> C;
+        __align__(1024) Array<Tc, CTA_M * CTA_N> C;
         __align__(128) uint64_t producer_bar[Stages];
         __align__(128) uint64_t consumer_bar[Stages];
     };
 
     static constexpr int kSmemSize = sizeof(SharedStorage);
 
-    // static constexpr int kSwizzleC = 128;
-    // using LayoutC                  = SmemLayoutV2<CTA_M, CTA_N, -1, 64>;
+    static constexpr int kSwizzleC = 16;
 
-    // static constexpr int kSwizzleC = 0;
-    // using LayoutC                  = SmemLayoutV2<CTA_M, CTA_N, -1, 64>;
-
-    static constexpr int kSwizzleC = 0;
-    using LayoutC                  = SmemLayoutV2<CTA_M, CTA_N>;
+    using LayoutC = std::conditional_t<kSwizzleC >= 32,
+                                       SmemLayoutV2<CTA_M, CTA_N, -1, kSwizzleC / sizeof(Tc)>,
+                                       SmemLayoutV2<CTA_M, CTA_N>>;
 
     static_assert(LayoutC::S1 == 1);
 
@@ -540,7 +538,7 @@ struct GemmUniversalSm90_v2 {
 
                         const int m0 = m * MMA_M + warp_group_id_m * MMA_ATOM_M;
                         const int n0 = n * MMA_N + warp_group_id_n * MMA_ATOM_N;
-
+#if 0
                         PRAGMA_UNROLL
                         for (int i = 0; i < MMA_ATOM_N; i += 16) {
                             __align__(16) Array<Tc, 8> tvec = cast<Tc>(*(Array<float, 8>*)&accum_C[m][n][i / 2]);
@@ -570,32 +568,67 @@ struct GemmUniversalSm90_v2 {
                                     tvec[5] = nn + 8 + 1;
                                     tvec[6] = nn + 8;
                                     tvec[7] = nn + 8 + 1;
+                                    // for (auto& x : tvec) {
+                                    //     x /= 8;
+                                    // }
+                                }
+                            }
+
+                            constexpr int N       = LayoutC::C0;
+                            constexpr int SW_bits = log2(kSwizzleC / 16);
+
+                            int mm = m0 + warp_id % 4 * 16 + (lane_id & 8);
+                            int nn = n0 + i / N * N;
+
+                            int s = lane_id % 8;
+                            int c = (lane_id & 16) / 2 + i % N;
+
+                            int addr = (nn / N * CTA_M * N) + (mm * N) + Swizzle<SW_bits, 3, 3>::apply(s * N + c);
+
+                            auto& uvec = (Array<uint32_t, 4>&)tvec;
+                            cute::SM90_U32x4_STSM_N::copy(
+                                uvec[0], uvec[1], uvec[2], uvec[3], (cutlass::uint128_t&)storage.C[addr]);
+                        }
+#else
+                        PRAGMA_UNROLL
+                        for (int i = 0; i < MMA_ATOM_N; i += 8) {
+                            __align__(16) Array<Tc, 4> tvec = cast<Tc>(*(Array<float, 4>*)&accum_C[m][n][i / 2]);
+
+                            if constexpr (0) {
+                                int mm = m * MMA_M + warp_group_id_m * MMA_ATOM_M + (warp_id & 3) * 16 + lane_id / 4;
+                                int nn = n * MMA_N + warp_group_id_n * MMA_ATOM_N + (lane_id & 3) * 2 + i;
+                                if (0) {
+                                    tvec[0] = mm;
+                                    tvec[1] = mm;
+                                    tvec[2] = mm + 8;
+                                    tvec[3] = mm + 8;
+                                }
+                                else {
+                                    tvec[0] = nn;
+                                    tvec[1] = nn + 1;
+                                    tvec[2] = nn;
+                                    tvec[3] = nn + 1;
                                     for (auto& x : tvec) {
                                         x /= 8;
                                     }
                                 }
                             }
 
-                            int addr{};
+                            constexpr int N       = LayoutC::C0;
+                            constexpr int SW_bits = log2(kSwizzleC / 16);
 
-                            if constexpr (kSwizzleC == 128) {
-                                int mm = m0 + (warp_id & 3) * 16 + (lane_id & 8);
-                                int nn = n0 + i / 64 * 64;
-                                int s  = (lane_id & 7);
-                                int c  = (lane_id & 16) / 2 + i % 64;
-                                c ^= ((s + 4) % 8 << 3);  // Why +4 is required?
-                                addr = (nn / 64 * CTA_M * 64) + (mm * 64) + (s * 64 + c);
-                            }
-                            else if constexpr (kSwizzleC == 0) {
-                                int mm = m0 + (warp_id & 3) * 16 + (lane_id & 15);
-                                int nn = n0 + (lane_id & 16) / 2 + i;
-                                addr   = mm * CTA_N + nn;
-                            }
+                            int mm = m0 + warp_id % 4 * 16 + (lane_id & 8);
+                            int nn = n0 + i / N * N;
 
-                            auto& uvec = (Array<uint32_t, 4>&)tvec;
-                            cute::SM90_U32x4_STSM_N::copy(
-                                uvec[0], uvec[1], uvec[2], uvec[3], (cutlass::uint128_t&)storage.C[addr]);
+                            int s = lane_id % 8;
+                            int c = i % N;
+
+                            int addr = (nn / N * CTA_M * N) + (mm * N) + Swizzle<SW_bits, 3, 3>::apply(s * N + c);
+
+                            auto& uvec = (Array<uint32_t, 2>&)tvec;
+                            cute::SM90_U32x2_STSM_N::copy(uvec[0], uvec[1], (cutlass::uint128_t&)storage.C[addr]);
                         }
+#endif
                     }
                 }
 

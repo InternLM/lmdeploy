@@ -26,6 +26,7 @@ constexpr CUtensorMapSwizzle get_tma_swizzle(int bytes)
             return CU_TENSOR_MAP_SWIZZLE_64B;
         case 32:
             return CU_TENSOR_MAP_SWIZZLE_32B;
+        case 16: // unit swizzle is equivalent to "none"
         case 0:
             return CU_TENSOR_MAP_SWIZZLE_NONE;
         default:
