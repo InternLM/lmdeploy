@@ -86,14 +86,14 @@ __global__ void RMSNorm(T*       dst,
 
 void invokeRMSNorm(Tensor& out, const Tensor& x, const Tensor& w, float eps, cudaStream_t st)
 {
+    if (x.size() == 0) {
+        return;
+    }
+
     TM_CHECK(x.ndim() == 2);
     TM_CHECK(out.shape() == x.shape());
     TM_CHECK(out.dtype() == x.dtype());
     TM_CHECK(w.dtype() == x.dtype() && w.shape(-1) == x.shape(-1));
-
-    if (x.size() == 0) {
-        return;
-    }
 
     auto invoke = [&](auto t) {
         using T = decltype(t);

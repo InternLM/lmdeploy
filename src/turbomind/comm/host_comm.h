@@ -3,12 +3,15 @@
 #pragma once
 
 #include <algorithm>
+#include <cstring>
 #include <memory>
 #include <stdexcept>
 #include <type_traits>
 #include <vector>
 
+#include "src/turbomind/comm/serialize.h"
 #include "src/turbomind/core/data_type.h"
+#include "src/turbomind/utils/logger.h"
 
 namespace turbomind::comm {
 
@@ -88,7 +91,23 @@ void Broadcast(HostCommImpl* comm, T* data, int n, int root)
             comm->Broadcast(data, n, kNull, root, detail::copy_fn<T>);
         }
         else {
-            throw std::runtime_error("not implemented");
+            try {
+                // buf may have different size on different ranks
+                std::vector<char> buf;
+                serialize(data, n, buf);
+                size_t size = buf.size();
+                Broadcast(comm, &size, 1, root);
+                buf.resize(size);
+                comm->Broadcast(buf.data(), buf.size(), data_type_v<uint8_t>, root, detail::copy_fn<char>);
+                if (comm->rank() != root) {
+                    // some field in data may be not shared by all rank
+                    deserialize(data, n, buf);
+                }
+            }
+            catch (const std::invalid_argument& e) {
+                TM_LOG_ERROR("Broadcast failed: %s", e.what());
+                throw;
+            }
         }
     }
 }
@@ -105,8 +124,31 @@ void AllGather(HostCommImpl* comm, T* data, int n)
             comm->AllGather(data, n, kNull, detail::copy_fn<T>);
         }
         else {
-            /// serialize data
-            throw std::runtime_error("not implemented");
+            try {
+                // buf may have different size on different ranks
+                std::vector<char> rbuf;
+                for (int i = 0; i < n; ++i) {
+                    std::vector<char> ibuf;
+                    serialize(data + n * comm->rank() + i, 1, ibuf);
+                    rbuf.insert(rbuf.end(), ibuf.begin(), ibuf.end());
+                }
+                int size = rbuf.size();
+                comm->AllReduce(&size, 1, data_type_v<int>, RedOp::kMax);
+                std::vector<char> buf(size * comm->n_ranks());
+                std::memcpy(buf.data() + comm->rank() * size, rbuf.data(), rbuf.size());
+                comm->AllGather(buf.data(), size, data_type_v<uint8_t>, detail::copy_fn<char>);
+                for (int i = 0; i < comm->n_ranks(); ++i) {
+                    if (i != comm->rank()) {
+                        // some field in data may be not shared by all rank
+                        deserialize(
+                            data + n * i, n, std::vector<char>(buf.begin() + i * size, buf.begin() + (i + 1) * size));
+                    }
+                }
+            }
+            catch (const std::invalid_argument& e) {
+                TM_LOG_ERROR("AllGather failed: %s", e.what());
+                throw;
+            }
         }
     }
 }
