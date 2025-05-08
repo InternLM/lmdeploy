@@ -7,6 +7,7 @@ from typing import Any, Dict
 import torch
 import torch.distributed as dist
 
+from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.utils import get_logger
 
 from ..backends import get_backend
@@ -367,10 +368,13 @@ class AutoModelAgent:
         rank = dist_ctx.rank
         tp = dist_ctx.tp
         dp = dist_ctx.dp
+        tp_cpu_group = dist_ctx.tp_cpu_group
+        tp_gpu_group = dist_ctx.tp_gpu_group
 
-        logger.info(f'<ForwardTask> rank[{rank}]: '
-                    f'batch_size={inputs.seq_length.size(0)} '
-                    f'num_tokens={inputs.input_ids.size(-1)}')
+        logger.debug(f'<ForwardTask> rank[{rank}]: '
+                     f'batch_size={inputs.seq_length.size(0)} '
+                     f'num_tokens={inputs.input_ids.size(-1)} '
+                     f'is_decoding={inputs.is_decoding}')
 
         is_decoding = inputs.is_decoding
         eager_mode = self.backend_config.eager_mode
@@ -447,13 +451,16 @@ class AutoModelAgent:
                 # Avoid adding the ADInplaceOrView dispatch key to `next_token_ids`,
                 # as it can trigger recompilation on different ranks when using torch.compile.
                 with torch.inference_mode():
-                    next_token_ids = torch.empty_like(num_ignore_eos)
+                    next_token_ids = torch.zeros_like(num_ignore_eos)
                 stopped = None
 
             if need_broadcast_next:
-                logger.debug(f'<ForwardTask> rank[{rank}]: synchornize token ids [{idx}]')
-                tp_gpu_group = dist_ctx.tp_gpu_group
-                dist.broadcast(next_token_ids, src=rank // tp * tp, group=tp_gpu_group)
+                logger.info(f'<ForwardTask> rank[{rank}]: synchornize token ids [{idx}]')
+                if self.cache_config.role == EngineRole.Decode:
+                    next_token_ids = next_token_ids.cpu()
+                    dist.all_reduce(next_token_ids, op=dist.ReduceOp.SUM, group=tp_cpu_group)
+                else:
+                    dist.broadcast(next_token_ids, src=0, group=tp_gpu_group)
 
             # send output
             model_metas = output.get('model_metas')
@@ -640,7 +647,11 @@ class BaseModelAgent(AutoModelAgent):
             attn_dist_cfg = dist_ctx.dist_config.attn_config
             tp = attn_dist_cfg.tp
 
-            self.cache_engine = CacheEngine(self.cache_config, self.model_config, world_size=tp)
+            self.cache_engine = CacheEngine(self.cache_config,
+                                            self.model_config,
+                                            rank=self.rank,
+                                            tp_rank=self.tp_rank,
+                                            world_size=tp)
 
     def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
         cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
