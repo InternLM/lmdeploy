@@ -185,13 +185,15 @@ struct GemmUniversalSm90_v2 {
     static constexpr int kTmaTxBytes =
         sizeof(Ta) * (CTA_M * CTA_K) + sizeof(Tb) * (CTA_K * CTA_N) + sizeof(Tu) * CTA_M_U * CTA_K_U;
 
+    static constexpr int MAX_K = 32768;
+
     // ! Smem addr must be SBO aligned for TMA load/store
     struct SharedStorage {
         struct Source {
             __align__(1024) Array<Ta, Stages * CTA_M * CTA_K> A;
             __align__(1024) Array<Tb, Stages * CTA_K * CTA_N> B;
             __align__(128) Tu U[Stages][round_up(CTA_M_U * CTA_K_U, 32)];
-            __align__(128) Tv V[Stages][round_up(CTA_N_V * CTA_K_V, 32)];  // (k1,n256)
+            __align__(128) Tv V[2][cdiv(MAX_K, 128)];
         };
         Source source;
         __align__(1024) Array<Tc, CTA_M * CTA_N> C;
@@ -258,7 +260,6 @@ struct GemmUniversalSm90_v2 {
             auto  smem_A = storage.source.A.data() + mc_offset_m * CTA_K;
             auto  smem_B = storage.source.B.data() + mc_offset_n * CTA_K;
             auto& smem_U = storage.source.U;
-            auto& smem_V = storage.source.V;
 
             if (threadIdx.x == WARPGORUPS * WARPGROUP_SIZE) {
                 cutlass::PipelineState<Stages> write_state{0, 1, 0};
@@ -320,6 +321,8 @@ struct GemmUniversalSm90_v2 {
 
             cutlass::PipelineState<Stages> pipe_state{};
 
+            cutlass::arch::NamedBarrier barrier{WARPGORUPS * WARPGROUP_SIZE};
+
             while (sched.next()) {
                 auto [cta_tile_p, cluster_tile_p] = sched.is_valid_tile();
 
@@ -340,12 +343,41 @@ struct GemmUniversalSm90_v2 {
                 const int offset_n = tile_offset.y * CTA_N;
                 const int offset_k = 0;
 
-                const int wg_offset_n = offset_n + warp_group_id_n * MMA_ATOM_N;
-
-                auto gmem_V = (const Tv*)V_ + (wg_offset_n / 128) * ldV + (offset_k / 128);
-                auto step_V = 1;
-
                 int k_iter = iter_k_end - iter_k_beg;
+
+                uint32_t pred_V{};
+
+                constexpr int OUTER_N = std::gcd(MMA_ATOM_N, 128);
+                if constexpr (OUTER_N != 128) {
+
+                    static_assert(MMA_ATOM_N <= 128 + OUTER_N, "Single MMA op is covering more than 2 scale blocks");
+
+                    constexpr uint32_t mask = (1UL << (MMA_ATOM_N / OUTER_N)) - 1;
+
+                    const int wg_offset_n = offset_n + warp_group_id_n * MMA_ATOM_N;
+
+                    int phase = 128 - wg_offset_n % 128;
+                    pred_V    = (mask << (phase / OUTER_N)) & mask;
+
+                    // pred_V = (1 << (phase / OUTER_N)) & mask;
+                }
+
+                {
+                    auto      gmem_V = (const Tv*)V_ + (offset_n / 128) * ldV + (offset_k / 128);
+                    const int kV     = cdiv(K, 128);
+                    auto      Copy   = [kV](Tv* dst, const Tv* src) {
+                        for (int i = threadIdx.x; i < kV; i += WARPGORUPS * WARPGROUP_SIZE) {
+                            dst[i] = __ldg(&src[i]);
+                        }
+                    };
+                    Copy(storage.source.V[0], gmem_V);
+                    if (pred_V && cdiv(offset_n, 128) + 1 < cdiv(N, 128)) {
+                        Copy(storage.source.V[1], gmem_V + ldV);
+                    }
+                    barrier.sync();
+                }
+
+                int iter_V = 0;
 
                 auto tile_gemm = [&] {
                     PRAGMA_UNROLL
@@ -422,42 +454,14 @@ struct GemmUniversalSm90_v2 {
 
                 static_assert(MMA_ITER_N == 1);
 
-                bool has_V_1 = wg_offset_n + 128 < M;
-
-                uint32_t pred_V{};
-
-                constexpr int OUTER_N = std::gcd(MMA_ATOM_N, 128);
-                if constexpr (OUTER_N != 128) {
-
-                    static_assert(MMA_ATOM_N <= 128 + OUTER_N, "Single MMA op is covering more than 2 scale blocks");
-
-                    // int next_V = MMA_ATOM_N;
-                    // PRAGMA_UNROLL
-                    // for (int c = 0; c < MMA_ATOM_N; c += OUTER_N) {
-                    //     if (c && (wg_offset_n + c) % 128 == 0) {
-                    //         next_V = c;
-                    //     }
-                    //     if (c >= next_V) {
-                    //         pred_V |= 1U << c / OUTER_N;
-                    //     }
-                    // }
-
-                    constexpr uint32_t mask = (1UL << (MMA_ATOM_N / OUTER_N)) - 1;
-
-                    int phase = 128 - wg_offset_n % 128;
-                    pred_V    = (mask << (phase / OUTER_N)) & mask;
-
-                    // pred_V = (1 << (phase / OUTER_N)) & mask;
-                }
-
                 float scale_V[2];
 
                 auto Load_V = [&] {
-                    scale_V[0] = __ldg(gmem_V);
-                    if (pred_V && has_V_1) {
-                        scale_V[1] = __ldg(gmem_V + ldV);
+                    scale_V[0] = storage.source.V[0][iter_V];
+                    if (pred_V) {
+                        scale_V[1] = storage.source.V[1][iter_V];
                     }
-                    gmem_V += step_V;
+                    ++iter_V;
                 };
 
                 float scale_U[MMA_ITER_M][2];
