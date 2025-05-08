@@ -169,13 +169,13 @@ def awq_linear_kernel(
 
     for k in tl.range(k_start, k_last, SPLIT_K, num_stages=NUM_STAGES):
 
-        # load a
-        a = tl.load(a_ptrs)
-
         # unpack b
         z = _unpack_weight(qz)
         w = _unpack_weight(qw)
         b = (w - z) * s
+
+        # load a
+        a = tl.load(a_ptrs)
 
         # load next q
         mask = k + SPLIT_K < k_last
