@@ -543,37 +543,6 @@ struct GemmUniversalSm90_v2 {
                         for (int i = 0; i < MMA_ATOM_N; i += 16) {
                             __align__(16) Array<Tc, 8> tvec = cast<Tc>(*(Array<float, 8>*)&accum_C[m][n][i / 2]);
 
-                            if constexpr (0) {
-                                // for (auto& x : tvec) {
-                                //     x = 255.f;
-                                // }
-                                int mm = m * MMA_M + warp_group_id_m * MMA_ATOM_M + (warp_id & 3) * 16 + lane_id / 4;
-                                int nn = n * MMA_N + warp_group_id_n * MMA_ATOM_N + (lane_id & 3) * 2 + i;
-                                if (0) {
-                                    tvec[0] = mm;
-                                    tvec[1] = mm;
-                                    tvec[2] = mm + 8;
-                                    tvec[3] = mm + 8;
-                                    tvec[4] = mm;
-                                    tvec[5] = mm;
-                                    tvec[6] = mm + 8;
-                                    tvec[7] = mm + 8;
-                                }
-                                else {
-                                    tvec[0] = nn;
-                                    tvec[1] = nn + 1;
-                                    tvec[2] = nn;
-                                    tvec[3] = nn + 1;
-                                    tvec[4] = nn + 8;
-                                    tvec[5] = nn + 8 + 1;
-                                    tvec[6] = nn + 8;
-                                    tvec[7] = nn + 8 + 1;
-                                    // for (auto& x : tvec) {
-                                    //     x /= 8;
-                                    // }
-                                }
-                            }
-
                             constexpr int N       = LayoutC::C0;
                             constexpr int SW_bits = log2(kSwizzleC / 16);
 
@@ -593,26 +562,6 @@ struct GemmUniversalSm90_v2 {
                         PRAGMA_UNROLL
                         for (int i = 0; i < MMA_ATOM_N; i += 8) {
                             __align__(16) Array<Tc, 4> tvec = cast<Tc>(*(Array<float, 4>*)&accum_C[m][n][i / 2]);
-
-                            if constexpr (0) {
-                                int mm = m * MMA_M + warp_group_id_m * MMA_ATOM_M + (warp_id & 3) * 16 + lane_id / 4;
-                                int nn = n * MMA_N + warp_group_id_n * MMA_ATOM_N + (lane_id & 3) * 2 + i;
-                                if (0) {
-                                    tvec[0] = mm;
-                                    tvec[1] = mm;
-                                    tvec[2] = mm + 8;
-                                    tvec[3] = mm + 8;
-                                }
-                                else {
-                                    tvec[0] = nn;
-                                    tvec[1] = nn + 1;
-                                    tvec[2] = nn;
-                                    tvec[3] = nn + 1;
-                                    for (auto& x : tvec) {
-                                        x /= 8;
-                                    }
-                                }
-                            }
 
                             constexpr int N       = LayoutC::C0;
                             constexpr int SW_bits = log2(kSwizzleC / 16);
