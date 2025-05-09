@@ -179,14 +179,14 @@ public:
         constexpr int kMulticastA = Gemm::kMulticastA;
         constexpr int kMulticastB = Gemm::kMulticastB;
 
-        std::cout << "A: " << Adesc << "\n";
+        // std::cout << "A: " << Adesc << "\n";
         auto tm_a = make_2d_tma_desc(
             (void*)A, Adesc.type, m, k, CTA_M / kMulticastA, CTA_K, kRowMajor, CU_TENSOR_MAP_SWIZZLE_128B);
-        std::cout << "B: " << Bdesc << "\n";
+        // std::cout << "B: " << Bdesc << "\n";
         auto tm_b = make_2d_tma_desc(
             (void*)B, Bdesc.type, n, k, CTA_N / kMulticastB, CTA_K, kRowMajor, CU_TENSOR_MAP_SWIZZLE_128B);
 
-        std::cout << "C: " << Cdesc << "\n";
+        // std::cout << "C: " << Cdesc << "\n";
         using LayoutC            = typename Gemm::LayoutC;
         constexpr auto kSwizzleC = get_tma_swizzle(Gemm::kSwizzleC);
         auto           tm_c      = make_2d_tma_desc((void*)C,  //
@@ -203,14 +203,14 @@ public:
             TM_CHECK_EQ(CTA_K, 128);
             // std::cout << "U: " << Udesc.type << " " << Udesc.rows << " " << Udesc.cols << " " <<
             // to_string(Udesc.order) << "\n";
-            std::cout << "U: " << Udesc << "\n";
+            // std::cout << "U: " << Udesc << "\n";
             tm_u = make_2d_tma_desc(
                 (void*)U, Udesc.type, Udesc.rows, Udesc.cols, CTA_M, 1, Udesc.order, CU_TENSOR_MAP_SWIZZLE_NONE);
         }
 
         CUtensorMap tm_v{};
         if (V) {
-            std::cout << "V: " << Vdesc << "\n";
+            // std::cout << "V: " << Vdesc << "\n";
         }
 
         // if (V) {
