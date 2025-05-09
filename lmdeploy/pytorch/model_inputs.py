@@ -285,9 +285,14 @@ class ModelInputs:
         self.dp_meta = DPMeta.build(self.input_ids.numel())
 
     @classmethod
-    def make_dummy(cls, batch_size: int, is_decoding: bool, device: str = 'cpu', dummy_block_id: int = 0):
+    def make_dummy(cls,
+                   batch_size: int,
+                   is_decoding: bool,
+                   device: str = 'cpu',
+                   dummy_block_id: int = 0,
+                   vocab_size: int = 1):
         """make dummy inputs."""
-        input_ids = torch.zeros((
+        input_ids = torch.randint(0, vocab_size, (
             1,
             batch_size,
         ), dtype=torch.long, device=device)
