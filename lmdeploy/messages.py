@@ -1,11 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
+import time
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Literal, Optional
 
 import torch
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 
+from .metrics.stats import IterationStats, RequestStateStats, SchedulerStats
 from .tokenizer import Tokenizer
 from .utils import get_logger
 
@@ -298,6 +300,7 @@ class PytorchEngineConfig:
         distributed_executor_backend (str): backend of distributed backend,
             options: ['uni', 'mp', 'ray']
         enable_microbatch (bool): enable microbatch for specified model
+        log_stats (bool): Whether log stats to cli / prometheus
     """
     dtype: str = 'auto'
     tp: int = 1
@@ -323,6 +326,7 @@ class PytorchEngineConfig:
     quant_policy: Literal[0, 4, 8] = 0
     distributed_executor_backend: str = None
     enable_microbatch: bool = False
+    log_stats: bool = False
 
     def __post_init__(self):
         """Check input validation."""
@@ -392,6 +396,34 @@ class Response:
     last_hidden_state: torch.Tensor = None
     index: int = 0
 
+    scheduler_stats: SchedulerStats = None
+    iteration_stats: IterationStats = None
+
+
+# copy from https://github.com/vllm-project/vllm/blob/main/vllm/v1/engine/__init__.py
+class EngineCoreEventType(enum.IntEnum):
+    """The type of engine core request event."""
+    QUEUED = 1
+    SCHEDULED = 2
+    PREEMPTED = 3  # FIXME, currently ignored for simplicity
+
+
+# copy from https://github.com/vllm-project/vllm/blob/main/vllm/v1/engine/__init__.py
+@dataclass
+class EngineCoreEvent():
+    """A timestamped engine core event associated with a request.
+
+    The timestamp is a monotonic timestamps and is used for by the engine frontend to calculate intervals between engine
+    core events. These timestamps should not be compared with timestamps from other processes.
+    """
+    type: EngineCoreEventType
+    timestamp: float
+
+    @classmethod
+    def new_event(cls, event_type: EngineCoreEventType, timestamp: Optional[float] = None) -> 'EngineCoreEvent':
+        timestamp = time.monotonic() if timestamp is None else timestamp
+        return cls(event_type, timestamp)
+
 
 @dataclass
 class EngineOutput:
@@ -411,6 +443,27 @@ class EngineOutput:
     logprobs: List[Dict[int, float]] = None
     logits: torch.Tensor = None
     last_hidden_state: torch.Tensor = None
+
+    # engine-side time stamp, for logging
+    timestamp: float = 0.0
+    scheduler_stats: SchedulerStats = None
+    iteration_stats: IterationStats = None
+    events: List[EngineCoreEvent] = None
+
+    def __post_init__(self):
+        if self.timestamp == 0.0:
+            self.timestamp = time.monotonic()
+
+
+@dataclass
+class RequestState:
+    """per request state."""
+
+    def __init__(self, arrival_time: float, prompt_len: int, is_prefilling: bool, log_stats: bool):
+
+        self.prompt_len: int = prompt_len
+        self.is_prefilling: bool = is_prefilling
+        self.stats = RequestStateStats(arrival_time=arrival_time) if log_stats else None
 
 
 @dataclass

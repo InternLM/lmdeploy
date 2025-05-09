@@ -125,7 +125,11 @@ class EngineInstance:
             int: The number of the output tokens.
         """
         if len(input_ids) > self.max_input_len:
-            yield EngineOutput(ResponseType.INPUT_LENGTH_ERROR, [], 0)
+            yield EngineOutput(status=ResponseType.INPUT_LENGTH_ERROR,
+                               token_ids=[],
+                               num_token=0,
+                               scheduler_stats=None,
+                               iteration_stats=None)
             return
         gen_config = gen_config or GenerationConfig()
         sampling_param = SamplingParam.from_gen_config(gen_config=gen_config)
@@ -143,23 +147,41 @@ class EngineInstance:
 
         while True:
             resp = await self.req_sender.async_recv(resp)
+            print(f'=> finally get resp {resp}')
 
             if resp.type == ResponseType.SUCCESS:
                 token_ids = resp.data['token_ids'].tolist()
                 num_ids = len(token_ids)
                 logger.debug(f'session[{session_id}] success: num_out_ids={num_ids}.')
-                yield EngineOutput(resp.type, token_ids, num_ids)
+                yield EngineOutput(status=resp.type,
+                                   token_ids=token_ids,
+                                   num_token=num_ids,
+                                   scheduler_stats=resp.scheduler_stats,
+                                   iteration_stats=resp.iteration_stats,
+                                   events=resp.events)
             elif resp.type == ResponseType.FINISH:
                 resp_data = resp.data
                 token_ids = resp_data['token_ids'].tolist()
                 logits = resp_data['logits']
                 num_ids = len(token_ids)
                 logger.debug(f'session[{session_id}] finish: num_out_ids={num_ids}.')
-                yield EngineOutput(resp.type, token_ids, num_ids, logits=logits)
+                yield EngineOutput(status=resp.type,
+                                   token_ids=token_ids,
+                                   num_token=num_ids,
+                                   logits=logits,
+                                   scheduler_stats=resp.scheduler_stats,
+                                   iteration_stats=resp.iteration_stats,
+                                   events=resp.events)
                 break
             else:
                 logger.debug(f'session[{session_id}] failed.')
-                yield EngineOutput(resp.type, [], 0)
+                yield EngineOutput(status=resp.type,
+                                   token_ids=[],
+                                   num_token=0,
+                                   scheduler_stats=resp.scheduler_stats,
+                                   iteration_stats=resp.iteration_stats,
+                                   events=resp.events)
+                # FIXME, should be None for scheduler_stats etc ?
                 break
 
     async def async_infer(self,

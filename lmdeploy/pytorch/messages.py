@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 from torch import Tensor
 
-from lmdeploy.messages import GenerationConfig, LogitsProcessor
+from lmdeploy.messages import EngineCoreEvent, EngineCoreEventType, GenerationConfig, LogitsProcessor
 from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
 from lmdeploy.utils import get_logger
 
@@ -443,6 +443,9 @@ class SchedulerSequence:
     num_ignored_history: int = 0
     model_meta: Dict[str, Any] = None
 
+    # events for logging
+    events: List[EngineCoreEvent] = field(default_factory=list)
+
     def __post_init__(self):
         """post init."""
         self._num_history_ids: int = 0
@@ -625,3 +628,11 @@ class SchedulerSequence:
         if self.history_multimodals is not None:
             self._num_history_cross = self.history_multimodals.get_encoder_len(0, self.num_history_ids)
             self._num_cross = self.history_multimodals.get_encoder_len(self._num_history_ids, num_all_ids)
+
+    def record_event(
+        self,
+        event_type: EngineCoreEventType,
+        timestamp: Optional[float] = None,
+    ) -> None:
+        print(f'=> record event {event_type}, {timestamp}')
+        self.events.append(EngineCoreEvent.new_event(event_type, timestamp))

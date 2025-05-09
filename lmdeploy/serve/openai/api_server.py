@@ -8,6 +8,7 @@ from functools import partial
 from http import HTTPStatus
 from typing import AsyncGenerator, Dict, List, Literal, Optional, Union
 
+import prometheus_client
 import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -1018,6 +1019,7 @@ def serve(model_path: str,
           max_log_len: int = None,
           disable_fastapi_docs: bool = False,
           max_concurrent_requests: Optional[int] = None,
+          log_stats: Optional[bool] = True,
           reasoning_parser: Optional[str] = None,
           tool_call_parser: Optional[str] = None,
           **kwargs):
@@ -1069,36 +1071,13 @@ def serve(model_path: str,
             process the engine’s tasks once the maximum number of concurrent
             requests is reached, regardless of any additional requests sent by
             clients concurrently during that time. Default to None.
+        log_stats: Whether log stats to cli / prometheus
         reasoning_parser (str): The reasoning parser name.
         tool_call_parser (str): The tool call parser name.
     """
     if os.getenv('TM_LOG_LEVEL') is None:
         os.environ['TM_LOG_LEVEL'] = log_level
     logger.setLevel(log_level)
-
-    if disable_fastapi_docs:
-        app = FastAPI(
-            docs_url=None,
-            redoc_url=None,
-            openapi_url=None,
-        )
-    else:
-        app = FastAPI(docs_url='/')
-
-    app.include_router(router)
-
-    if allow_origins:
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origins=allow_origins,
-            allow_credentials=allow_credentials,
-            allow_methods=allow_methods,
-            allow_headers=allow_headers,
-        )
-
-    # Set the maximum number of concurrent requests
-    if max_concurrent_requests is not None:
-        app.add_middleware(ConcurrencyLimitMiddleware, max_concurrent_requests=max_concurrent_requests)
 
     if api_keys is not None:
         if isinstance(api_keys, str):
@@ -1118,9 +1097,61 @@ def serve(model_path: str,
                                                     backend_config=backend_config,
                                                     chat_template_config=chat_template_config,
                                                     max_log_len=max_log_len,
+                                                    log_stats=log_stats,
                                                     **kwargs)
     # set reasoning parser and tool parser
     set_parsers(reasoning_parser, tool_call_parser)
+
+    logger.info(f'log stats {log_stats}')
+
+    _running_tasks: set[asyncio.Task] = set()
+
+    async def lifespan(app: FastAPI):
+        async_engine = VariableInterface.async_engine
+        task = None
+        try:
+            if log_stats:
+                log_interval = 1.  # FIXME: change this
+
+                async def _force_log():
+                    while True:
+                        await asyncio.sleep(log_interval)
+
+                        await async_engine.do_log_stats()
+
+                task = asyncio.create_task(_force_log())
+                _running_tasks.add(task)
+                task.add_done_callback(_running_tasks.remove)
+
+            yield
+        finally:
+            if task:
+                task.cancel()
+
+    if disable_fastapi_docs:
+        app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+    else:
+        app = FastAPI(docs_url='/', lifespan=lifespan)
+
+    app.include_router(router)
+
+    if log_stats:
+        # add prometheus asgi middleware to route '/metrics' requests
+        metrics_app = prometheus_client.make_asgi_app()
+        app.mount('/metrics', metrics_app)
+
+    if allow_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=allow_origins,
+            allow_credentials=allow_credentials,
+            allow_methods=allow_methods,
+            allow_headers=allow_headers,
+        )
+
+    # Set the maximum number of concurrent requests
+    if max_concurrent_requests is not None:
+        app.add_middleware(ConcurrencyLimitMiddleware, max_concurrent_requests=max_concurrent_requests)
 
     if proxy_url is not None:
         VariableInterface.proxy_url = proxy_url

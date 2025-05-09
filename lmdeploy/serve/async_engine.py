@@ -20,7 +20,10 @@ import tqdm
 from lmdeploy import Tokenizer
 from lmdeploy.archs import get_model_arch
 from lmdeploy.logger import RequestLogger
-from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, Response, ResponseType, TurbomindEngineConfig
+from lmdeploy.messages import (EngineOutput, GenerationConfig, PytorchEngineConfig, RequestState, Response,
+                               ResponseType, TurbomindEngineConfig)
+from lmdeploy.metrics.loggers import LoggingStatLogger, PrometheusStatLogger, StatLoggerBase
+from lmdeploy.metrics.stats import IterationStats, SchedulerStats
 from lmdeploy.model import MODELS, BaseChatTemplate, ChatTemplateConfig, best_match_model
 from lmdeploy.serve.utils import LogitsMixin
 from lmdeploy.tokenizer import DetokenizeState
@@ -246,6 +249,7 @@ class AsyncEngine(LogitsMixin):
             Default to None.
         max_log_len (int): Max number of prompt characters or prompt tokens
             being printed in log. Default: Unlimited
+        log_stats (bool): Whether log stats to cli / prometheus
     """
 
     def __init__(self,
@@ -255,7 +259,18 @@ class AsyncEngine(LogitsMixin):
                  backend_config: Optional[Union[TurbomindEngineConfig, PytorchEngineConfig]] = None,
                  chat_template_config: Optional[ChatTemplateConfig] = None,
                  max_log_len: int = None,
+                 log_stats: Optional[bool] = True,
                  **kwargs) -> None:
+
+        # setup stat loggers
+        backend_config.log_stats = log_stats
+        self.log_stats = log_stats
+        self.stat_loggers: List[StatLoggerBase] = None
+        if log_stats:
+            # TODO: zhouxinyu, independent set for each DP rank
+            self.stat_loggers = [LoggingStatLogger(), PrometheusStatLogger()]
+
+        # setup chat template
         logger.info(f'input backend={backend}, backend_config={backend_config}')
         logger.info(f'input chat_template_config={chat_template_config}')
 
@@ -297,6 +312,12 @@ class AsyncEngine(LogitsMixin):
         self.request_logger = RequestLogger(max_log_len)
         self.internal_thread = _EventLoopThread(daemon=True)
         self.limiter: asyncio.Semaphore = None
+
+        # # TODO: add outputs queue, to put output processing in another process, non-blocking engine process
+        # self.outputs_queue = Queue[Union[EngineOutput, Exception]]()
+
+        # # TODO: a separate output_handler loop runs in a background AsyncIO task
+        # self.output_handler: Optional[asyncio.Task] = None
 
     def close(self):
         self.internal_thread.close()
@@ -372,6 +393,10 @@ class AsyncEngine(LogitsMixin):
                                 adapter_name=adapter_name,
                                 use_tqdm=use_tqdm,
                                 **kwargs)
+
+    async def do_log_stats(self, ) -> None:
+        for stat_logger in self.stat_loggers:
+            stat_logger.log()
 
     async def stop_session(self, session_id: int):
         """Stop a session by a session_id."""
@@ -597,6 +622,39 @@ class AsyncEngine(LogitsMixin):
         finally:
             await generator.aclose()
 
+    def _update_stats_from_output(self, req_state: RequestState, engine_core_output: EngineOutput,
+                                  iteration_stats: Optional[IterationStats]):
+        print('update from output')
+        if iteration_stats is None:
+            return
+
+        assert req_state.stats is not None
+        iteration_stats.update_from_output(engine_core_output, engine_core_output.timestamp, req_state.is_prefilling,
+                                           req_state.prompt_len, req_state.stats)
+
+    def _update_stats_from_finished(self, req_state: RequestState, finish_reason: Optional[ResponseType],
+                                    iteration_stats: Optional[IterationStats]):
+
+        if iteration_stats is None:
+            return
+
+        assert finish_reason is not None
+        assert req_state.stats is not None
+        iteration_stats.update_from_finished_request(
+            finish_reason=finish_reason,
+            num_prompt_tokens=req_state.prompt_len,
+            # max_tokens_param=req_state.max_tokens_param,
+            req_stats=req_state.stats)
+
+    @staticmethod
+    def _record_stats(
+        stat_loggers: StatLoggerBase,
+        scheduler_stats: SchedulerStats,
+        iteration_stats: Optional[IterationStats],
+    ):
+        for stat_logger in stat_loggers:
+            stat_logger.record(scheduler_stats=scheduler_stats, iteration_stats=iteration_stats)
+
     async def generate(
             self,
             messages,
@@ -725,7 +783,10 @@ class AsyncEngine(LogitsMixin):
                                      step=history_len) as gen:
                 prev_len = 0
                 hit_stop_token = 0
+                iteration_stats = IterationStats() if self.log_stats else None
                 async for outputs in gen:
+                    print(f'=> async engine step outputs {type(outputs)}, {outputs}')
+
                     # decode res
                     if is_error(outputs.status):
                         break
@@ -772,8 +833,34 @@ class AsyncEngine(LogitsMixin):
                         if hit_stop_token:
                             out.logits = out.logits[:-hit_stop_token]
 
+                    # update stats from per iteration engine outputs (i.e. step output)
+                    req_state = RequestState(
+                        arrival_time=outputs.timestamp,
+                        prompt_len=input_len,
+                        is_prefilling=(output_len == 0),  # FIXME: is this logic correct ?
+                        log_stats=self.log_stats)
+                    self._update_stats_from_output(req_state=req_state,
+                                                   engine_core_output=outputs,
+                                                   iteration_stats=iteration_stats)
                     yield out
                 # end of generator loop
+
+                # update stats from per finished requests engine
+                self._update_stats_from_finished(
+                    req_state=req_state,
+                    finish_reason=outputs.status,  # ResponseType
+                    iteration_stats=iteration_stats)
+                print(f'=> check async engine output {type(outputs)} {outputs}')
+
+                # perform logging
+                if self.stat_loggers:
+                    assert outputs.scheduler_stats is not None
+
+                    AsyncEngine._record_stats(
+                        self.stat_loggers,
+                        scheduler_stats=outputs.scheduler_stats,
+                        iteration_stats=iteration_stats,
+                    )
 
                 if not is_error(outputs.status):
                     finish_reason = 'length' \

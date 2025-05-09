@@ -125,6 +125,11 @@ class SubCliServe:
                             'engine’s tasks once the maximum number of concurrent requests is '
                             'reached, regardless of any additional requests sent by clients '
                             'concurrently during that time. Default to None.')
+        # FIXME: change default value to False
+        parser.add_argument('--log-stats',
+                            action='store_true',
+                            default=True,
+                            help='Whether log stats to cli / prometheus')
         # common args
         ArgumentHelper.backend(parser)
         ArgumentHelper.log_level(parser)
@@ -255,7 +260,8 @@ class SubCliServe:
                                                  device_type=args.device,
                                                  quant_policy=args.quant_policy,
                                                  eager_mode=args.eager_mode,
-                                                 max_prefill_token_num=args.max_prefill_token_num)
+                                                 max_prefill_token_num=args.max_prefill_token_num,
+                                                 log_stats=args.log_stats)
         else:
             backend_config = TurbomindEngineConfig(dtype=args.dtype,
                                                    tp=args.tp,
@@ -347,6 +353,7 @@ class SubCliServe:
                        max_log_len=args.max_log_len,
                        disable_fastapi_docs=args.disable_fastapi_docs,
                        max_concurrent_requests=args.max_concurrent_requests,
+                       log_stats=args.log_stats,
                        reasoning_parser=args.reasoning_parser,
                        tool_call_parser=args.tool_call_parser)
 

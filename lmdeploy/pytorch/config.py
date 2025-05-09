@@ -64,6 +64,8 @@ class SchedulerConfig:
     prefill_interval: int = 16
     max_active_adapters: int = 64
 
+    log_stats: bool = False
+
 
 @dataclass
 class CacheConfig:

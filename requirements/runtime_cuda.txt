@@ -8,6 +8,7 @@ openai
 outlines
 peft<=0.14.0
 pillow
+prometheus_client >= 0.18.0
 protobuf
 pydantic>2.0.0
 pynvml
