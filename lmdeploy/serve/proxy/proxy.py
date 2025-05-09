@@ -179,6 +179,35 @@ class NodeManager:
             for conn in dropped_conn:
                 self.pd_connection_pool.drop(*conn)
 
+    def terminate_node(self, node_url: str):
+        """terminate a node."""
+        success = True
+        if node_url in self.nodes:
+            self.nodes.pop(node_url)
+            headers = {'accept': 'application/json'}
+            try:
+                response = requests.get(f'{node_url}/terminate', headers=headers)
+                if response.status_code != 200:
+                    success = False
+                    logger.error(f'Failed to terminate node {node_url}, '
+                                 f'error_code={response.status_code}, '
+                                 f'error_msg={response.text}')
+            except:  # noqa
+                success = False
+        else:
+            success = False
+        self.update_config_file()
+        return success
+
+    def terminate_all_nodes(self):
+        """terminate all nodes."""
+        node_url_li = list(self.nodes.keys())
+        all_success = True
+        for node_url in node_url_li:
+            if not self.terminate_node(node_url):
+                all_success = False
+        return all_success
+
     def remove_stale_nodes_by_expiration(self):
         """remove stale nodes."""
         to_be_deleted = []
@@ -433,15 +462,43 @@ def add_node(node: Node, raw_request: Request = None):
 
 
 @app.post('/nodes/remove', dependencies=[Depends(check_api_key)])
-def remove_node(node_url: str):
+def remove_node(node: Node):
     """Show available models."""
     try:
+        node_url = node.url
         node_manager.remove(node_url)
         logger.info(f'delete node {node_url} successfully')
         return 'Deleted successfully'
     except:  # noqa
         logger.error(f'delete node {node_url} failed.')
         return 'Failed to delete, please check the input url.'
+
+
+@app.post('/nodes/terminate', dependencies=[Depends(check_api_key)])
+def terminate_node(node: Node):
+    """terminate nodes."""
+    try:
+        node_url = node.url
+        success = node_manager.terminate_node(node_url)
+        if not success:
+            return f'Failed to terminate node {node_url}'
+        return 'Terminated successfully'
+    except:  # noqa
+        logger.error(f'Terminate node {node_url} failed.')
+        return 'Failed to terminate node {node_url}, please check the input url.'
+
+
+@app.get('/nodes/terminate_all', dependencies=[Depends(check_api_key)])
+def terminate_node_all():
+    """terminate nodes."""
+    try:
+        success = node_manager.terminate_all_nodes()
+        if not success:
+            return 'Failed to terminate all nodes'
+        return 'All nodes terminated successfully'
+    except:  # noqa
+        logger.error('Failed to terminate all nodes')
+        return 'Failed to terminate all nodes.'
 
 
 @app.post('/distserve/connection_warmup')
