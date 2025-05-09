@@ -403,3 +403,25 @@ def try_import_deeplink(device_type: str):
             logger = get_logger('lmdeploy')
             logger.error(f'{type(e).__name__}: {e}')
             exit(1)
+
+
+def serialize_state_dict(state_dict: dict) -> str:
+    """Serialize state dict to str.
+
+    the consumer should use it on same node
+    Args:
+        state_dict (dict[str, torch.Tensor]): state dict to serialize.
+    Returns:
+        str: serialized state dict.
+    """
+    import base64
+    from io import BytesIO
+    from multiprocessing.reduction import ForkingPickler
+
+    from torch.multiprocessing.reductions import reduce_tensor
+    assert all(v.device.type == 'cuda' for v in state_dict.values())
+    data = [(k, reduce_tensor(v)) for k, v in state_dict.items()]
+    buf = BytesIO()
+    ForkingPickler(buf).dump(data)
+    buf.seek(0)
+    return base64.b64encode(buf.read()).decode('utf-8')

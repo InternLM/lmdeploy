@@ -380,14 +380,14 @@ def add_node(node: Node, raw_request: Request = None):
 
 
 @app.post('/nodes/remove', dependencies=[Depends(check_api_key)])
-def remove_node(node_url: str):
+def remove_node(node: Node):
     """Show available models."""
     try:
-        node_manager.remove(node_url)
-        logger.info(f'delete node {node_url} successfully')
+        node_manager.remove(node.url)
+        logger.info(f'delete node {node.url} successfully')
         return 'Deleted successfully'
     except:  # noqa
-        logger.error(f'delete node {node_url} failed.')
+        logger.error(f'delete node {node.url} failed.')
         return 'Failed to delete, please check the input url.'
 
 
