@@ -126,15 +126,15 @@ template<class Arch_>
 struct GemmUniversalSm90_v2 {
 
     // using MMA_Atom = GMMA::MMA_64x128x16_F32BF16BF16_SS<GMMA::Major::K, GMMA::Major::K>;
-    using MMA_Atom = GMMA::MMA_64x96x32_F32E4M3E4M3_SS_TN<>;
+    using MMA_Atom = GMMA::MMA_64x192x32_F32E4M3E4M3_SS_TN<>;
     static constexpr typename cute::MMA_Traits<MMA_Atom>::Shape_MNK MMA_Shape{};
 
     static constexpr int MMA_ATOM_M = cute::get<0>(MMA_Shape);
     static constexpr int MMA_ATOM_N = cute::get<1>(MMA_Shape);
     static constexpr int MMA_ATOM_K = cute::get<2>(MMA_Shape);
 
-    static constexpr int kWorkGroupM = 1;
-    static constexpr int kWorkGroupN = 2;
+    static constexpr int kWorkGroupM = 2;
+    static constexpr int kWorkGroupN = 1;
 
     static constexpr int CTA_M = 128;
     static constexpr int CTA_N = MMA_ATOM_N * kWorkGroupN;
@@ -155,7 +155,7 @@ struct GemmUniversalSm90_v2 {
 
     static constexpr int kClusterSize = kMulticastA * kMulticastB;
 
-    static constexpr int Stages = 3;
+    static constexpr int Stages = 4;
 
     static constexpr bool kSplitK     = false;
     static constexpr int  kChunkSizeK = CTA_K;
@@ -204,7 +204,7 @@ struct GemmUniversalSm90_v2 {
 
     static constexpr int kSmemSize = sizeof(SharedStorage);
 
-    static constexpr int kSwizzleC = 16;
+    static constexpr int kSwizzleC = 128;
 
     using LayoutC = std::conditional_t<kSwizzleC >= 32,
                                        SmemLayoutV2<CTA_M, CTA_N, -1, kSwizzleC / sizeof(Tc)>,
@@ -373,11 +373,10 @@ struct GemmUniversalSm90_v2 {
                     }
                 }
 
-                const int kV   = cdiv(K, 128);
-                auto      Copy = [kV](Tv* dst, const Tv* src) {
+                auto Copy = [k = cdiv(K, 128)](Tv* dst, const Tv* src) {
                     constexpr uint32_t skip = 32;
                     if (threadIdx.x >= skip) {
-                        for (int i = threadIdx.x - skip; i < kV; i += WARPGORUPS * WARPGROUP_SIZE - skip) {
+                        for (int i = threadIdx.x - skip; i < k; i += WARPGORUPS * WARPGROUP_SIZE - skip) {
                             dst[i] = __ldg(&src[i]);
                         }
                     }
@@ -411,44 +410,47 @@ struct GemmUniversalSm90_v2 {
                 int iter_V = 0;
 
                 auto tile_gemm = [&] {
-                    // PRAGMA_UNROLL
-                    // for (int k = 0; k < MMA_ITER_K; ++k) {
-                    //     PRAGMA_UNROLL
-                    //     for (int m = 0; m < MMA_ITER_M; ++m) {
-                    //         PRAGMA_UNROLL
-                    //         for (int n = 0; n < MMA_ITER_N; ++n) {
-                    //             wgmma<MMA_Atom>(smem_iter_A, smem_iter_B, frag_C[m][n], k == 0);
-                    //             smem_iter_B += kStepNB;
-                    //         }
-                    //         smem_iter_B -= MMA_ITER_N * kStepNB;
-                    //         smem_iter_A += kStepMA;
-                    //     }
-                    //     smem_iter_A += kStepKA - MMA_ITER_M * kStepMA;
-                    //     smem_iter_B += kStepKB;
-                    // }
-                    // smem_iter_A -= MMA_ITER_K * kStepKA;
-                    // smem_iter_B -= MMA_ITER_K * kStepKB;
-                    // cute::warpgroup_commit_batch();
-
-                    PRAGMA_UNROLL
-                    for (int m = 0; m < MMA_ITER_M; ++m) {
+                    if constexpr (MMA_ITER_M == 1) {
                         PRAGMA_UNROLL
                         for (int k = 0; k < MMA_ITER_K; ++k) {
                             PRAGMA_UNROLL
-                            for (int n = 0; n < MMA_ITER_N; ++n) {
-                                wgmma<MMA_Atom>(smem_iter_A, smem_iter_B, frag_C[m][n], k == 0);
-                                smem_iter_B += kStepNB;
+                            for (int m = 0; m < MMA_ITER_M; ++m) {
+                                PRAGMA_UNROLL
+                                for (int n = 0; n < MMA_ITER_N; ++n) {
+                                    wgmma<MMA_Atom>(smem_iter_A, smem_iter_B, frag_C[m][n], k == 0);
+                                    smem_iter_B += kStepNB;
+                                }
+                                smem_iter_B -= MMA_ITER_N * kStepNB;
+                                smem_iter_A += kStepMA;
                             }
-                            smem_iter_B -= MMA_ITER_N * kStepNB;
-                            smem_iter_A += kStepKA;
+                            smem_iter_A += kStepKA - MMA_ITER_M * kStepMA;
                             smem_iter_B += kStepKB;
                         }
-                        cute::warpgroup_commit_batch();
                         smem_iter_A -= MMA_ITER_K * kStepKA;
                         smem_iter_B -= MMA_ITER_K * kStepKB;
-                        smem_iter_A += kStepMA;
+                        cute::warpgroup_commit_batch();
                     }
-                    smem_iter_A -= MMA_ITER_M * kStepMA;
+                    else {
+                        PRAGMA_UNROLL
+                        for (int m = 0; m < MMA_ITER_M; ++m) {
+                            PRAGMA_UNROLL
+                            for (int k = 0; k < MMA_ITER_K; ++k) {
+                                PRAGMA_UNROLL
+                                for (int n = 0; n < MMA_ITER_N; ++n) {
+                                    wgmma<MMA_Atom>(smem_iter_A, smem_iter_B, frag_C[m][n], k == 0);
+                                    smem_iter_B += kStepNB;
+                                }
+                                smem_iter_B -= MMA_ITER_N * kStepNB;
+                                smem_iter_A += kStepKA;
+                                smem_iter_B += kStepKB;
+                            }
+                            cute::warpgroup_commit_batch();
+                            smem_iter_A -= MMA_ITER_K * kStepKA;
+                            smem_iter_B -= MMA_ITER_K * kStepKB;
+                            smem_iter_A += kStepMA;
+                        }
+                        smem_iter_A -= MMA_ITER_M * kStepMA;
+                    }
 
                     smem_iter_A.Advance(pipe_state.index());
                     smem_iter_B.Advance(pipe_state.index());

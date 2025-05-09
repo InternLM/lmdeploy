@@ -180,45 +180,26 @@ public:
         constexpr int kMulticastB = Gemm::kMulticastB;
 
         // std::cout << "A: " << Adesc << "\n";
-        auto tm_a = make_2d_tma_desc(
-            (void*)A, Adesc.type, m, k, CTA_M / kMulticastA, CTA_K, kRowMajor, CU_TENSOR_MAP_SWIZZLE_128B);
+        auto tm_a = make_2d_tma_desc((void*)A, Adesc, {CTA_M / kMulticastA, CTA_K}, CU_TENSOR_MAP_SWIZZLE_128B);
+
         // std::cout << "B: " << Bdesc << "\n";
-        auto tm_b = make_2d_tma_desc(
-            (void*)B, Bdesc.type, n, k, CTA_N / kMulticastB, CTA_K, kRowMajor, CU_TENSOR_MAP_SWIZZLE_128B);
+        auto tm_b = make_2d_tma_desc((void*)B, Bdesc, {CTA_N / kMulticastB, CTA_K}, CU_TENSOR_MAP_SWIZZLE_128B);
 
         // std::cout << "C: " << Cdesc << "\n";
-        using LayoutC            = typename Gemm::LayoutC;
-        constexpr auto kSwizzleC = get_tma_swizzle(Gemm::kSwizzleC);
-        auto           tm_c      = make_2d_tma_desc((void*)C,  //
-                                     Cdesc.type,
-                                     m,
-                                     n,
-                                     LayoutC::S0,
-                                     LayoutC::C0,
-                                     kRowMajor,
-                                     kSwizzleC);
+        using LayoutC = typename Gemm::LayoutC;
+        auto tm_c     = make_2d_tma_desc((void*)C, Cdesc, {LayoutC::S0, LayoutC::C0}, get_tma_swizzle(Gemm::kSwizzleC));
 
         CUtensorMap tm_u{};
         if (U) {
             TM_CHECK_EQ(CTA_K, 128);
-            // std::cout << "U: " << Udesc.type << " " << Udesc.rows << " " << Udesc.cols << " " <<
-            // to_string(Udesc.order) << "\n";
             // std::cout << "U: " << Udesc << "\n";
-            tm_u = make_2d_tma_desc(
-                (void*)U, Udesc.type, Udesc.rows, Udesc.cols, CTA_M, 1, Udesc.order, CU_TENSOR_MAP_SWIZZLE_NONE);
+            tm_u = make_2d_tma_desc((void*)U, Udesc, {CTA_M, 1}, CU_TENSOR_MAP_SWIZZLE_NONE);
         }
 
         CUtensorMap tm_v{};
         if (V) {
             // std::cout << "V: " << Vdesc << "\n";
         }
-
-        // if (V) {
-        //     TM_CHECK_EQ(CTA_K, 128);
-        //     std::cout << Vdesc.type << " " << Vdesc.rows << " " << Vdesc.cols << " " << (int)Vdesc.order << "\n";
-        //     tm_v = make_2d_tma_desc(
-        //         (void*)V, Vdesc.type, Vdesc.rows, Vdesc.cols, CTA_N, 1, Vdesc.order, CU_TENSOR_MAP_SWIZZLE_NONE);
-        // }
 
         const auto grid  = 132;
         const auto block = Gemm::CTA_SIZE;

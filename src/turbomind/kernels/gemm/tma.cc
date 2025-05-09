@@ -68,20 +68,27 @@ CUtensorMap make_2d_tma_desc(void*              global_address,
                              uint32_t           smem_rows,
                              uint32_t           smem_cols,
                              Order              order,
-                             CUtensorMapSwizzle swizzle)
+                             CUtensorMapSwizzle swizzle,
+                             int                ld)
 {
     if (order == kRowMajor) {
         uint64_t gmem_dims[] = {gmem_cols, gmem_rows};
         uint32_t smem_dims[] = {smem_cols, smem_rows};
         return make_2d_tma_desc(
-            global_address, data_type, gmem_dims, byte_size(data_type, gmem_cols), smem_dims, swizzle);
+            global_address, data_type, gmem_dims, byte_size(data_type, ld ? ld : gmem_cols), smem_dims, swizzle);
     }
     else {
         uint64_t gmem_dims[] = {gmem_rows, gmem_cols};
         uint32_t smem_dims[] = {smem_rows, smem_cols};
         return make_2d_tma_desc(
-            global_address, data_type, gmem_dims, byte_size(data_type, gmem_rows), smem_dims, swizzle);
+            global_address, data_type, gmem_dims, byte_size(data_type, ld ? ld : gmem_rows), smem_dims, swizzle);
     }
+}
+
+CUtensorMap make_2d_tma_desc(void* ptr, const MatrixLayout& desc, uint2 smem_shape, CUtensorMapSwizzle swizzle)
+{
+    return make_2d_tma_desc(
+        ptr, desc.type, desc.rows, desc.cols, smem_shape.x, smem_shape.y, desc.order, swizzle, desc.ld);
 }
 
 }  // namespace turbomind::gemm

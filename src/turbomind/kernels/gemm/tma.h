@@ -15,7 +15,10 @@ CUtensorMap make_2d_tma_desc(void*              global_address,
                              uint32_t           smem_rows,
                              uint32_t           smem_cols,
                              Order              order,
-                             CUtensorMapSwizzle swizzle);
+                             CUtensorMapSwizzle swizzle,
+                             int                ld = 0);
+
+CUtensorMap make_2d_tma_desc(void* ptr, const MatrixLayout& desc, uint2 smem_shape, CUtensorMapSwizzle swizzle);
 
 constexpr CUtensorMapSwizzle get_tma_swizzle(int bytes)
 {
@@ -26,7 +29,7 @@ constexpr CUtensorMapSwizzle get_tma_swizzle(int bytes)
             return CU_TENSOR_MAP_SWIZZLE_64B;
         case 32:
             return CU_TENSOR_MAP_SWIZZLE_32B;
-        case 16: // unit swizzle is equivalent to "none"
+        case 16:  // unit swizzle is equivalent to "none"
         case 0:
             return CU_TENSOR_MAP_SWIZZLE_NONE;
         default:
