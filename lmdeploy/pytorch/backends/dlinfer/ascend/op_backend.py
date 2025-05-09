@@ -325,7 +325,7 @@ class AscendOpsBackend(DlinferOpsBackend):
                 torch._inductor.config.compile_threads = 1
             AscendOpsBackend.transdata_func = torch.compile(transdata,
                                                             fullgraph=True,
-                                                            dynamic=False,
+                                                            dynamic=True,
                                                             backend='atbgraph')
         return AscendOpsBackend.transdata_func
 
