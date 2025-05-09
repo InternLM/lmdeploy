@@ -43,10 +43,12 @@ class CUDASingleGraphRunner:
         num_blocks: int,
         is_decoding: bool,
         pool: Tuple[int, int],
+        model_config: ModelConfig,
         device: torch.device,
     ):
         self.model = model
         self.ctx_mgr = model.ctx_mgr
+        self.model_config = model_config
 
         self.meta = CudaGraphMeta(
             max_batchs=max_batches,
@@ -56,6 +58,7 @@ class CUDASingleGraphRunner:
             device=device,
             input_buffers=dict(),
             output_buffers=dict(),
+            vocab_size=self.model_config.vocab_size,
         )
         self.device = device
         self.max_batches = max_batches
@@ -171,6 +174,7 @@ class CUDAGraphRunner(GraphRunner):
                                            num_blocks=self.num_blocks,
                                            is_decoding=is_decoding,
                                            pool=self.graph_pool_handle,
+                                           model_config=self.model_config,
                                            device=self.device)
             runner.capture(**kwargs)
             self._runner_map[graph_key] = runner

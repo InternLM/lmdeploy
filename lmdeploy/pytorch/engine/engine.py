@@ -835,7 +835,7 @@ class Engine:
             num_loops = 1 if prefill else prefill_interval
             return dict(
                 running=[],
-                inputs=ModelInputs.make_dummy(1, is_decoding=not prefill),
+                inputs=ModelInputs.make_dummy(1, is_decoding=not prefill, vocab_size=self.model_config.vocab_size),
                 swap_in_map=dict(),
                 swap_out_map=dict(),
                 loop_count=num_loops,

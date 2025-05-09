@@ -33,6 +33,7 @@ class CudaGraphMeta:
     device: torch.device
     input_buffers: BuffType = None
     output_buffers: BuffType = None
+    vocab_size: int = 1
 
 
 class CudaGraphMixin:
@@ -58,7 +59,10 @@ class CudaGraphMixin:
         device = graph_meta.device
 
         input_buffers: BuffType = dict()
-        input_buffers['input_ids'] = torch.zeros(1, max_tokens, dtype=torch.int64, device=device)
+        input_buffers['input_ids'] = torch.randint(0,
+                                                   graph_meta.vocab_size, (1, max_tokens),
+                                                   dtype=torch.int64,
+                                                   device=device)
         input_buffers['position_ids'] = torch.zeros((1, max_tokens), dtype=torch.int64, device=device)
         if getattr(self.config, 'use_flash_mla', False) is True:
             import flash_mla_cuda
@@ -96,6 +100,7 @@ class CudaGraphMixin:
         num_tokens = input_ids.size(-1)
 
         # fill buffer
+        input_buffers['input_ids'].random_(0, graph_meta.vocab_size)
         input_buffers['input_ids'][:, :num_tokens] = input_ids
         input_buffers['position_ids'][:, :num_tokens] = position_ids
         input_buffers['block_offsets'][:batch_size, :num_blocks] = block_offsets
