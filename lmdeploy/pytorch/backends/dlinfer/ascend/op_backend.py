@@ -323,10 +323,7 @@ class AscendOpsBackend(DlinferOpsBackend):
             dlinfer.graph.config.enable_graph_mode = True
             if torch.distributed.is_initialized():
                 torch._inductor.config.compile_threads = 1
-            AscendOpsBackend.transdata_func = torch.compile(transdata,
-                                                            fullgraph=True,
-                                                            dynamic=True,
-                                                            backend='atbgraph')
+            AscendOpsBackend.transdata_func = torch.compile(transdata, fullgraph=True, dynamic=True, backend='atbgraph')
         return AscendOpsBackend.transdata_func
 
     @staticmethod
