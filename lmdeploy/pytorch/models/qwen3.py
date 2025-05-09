@@ -403,7 +403,6 @@ class Qwen3ForCausalLM(nn.Module, CudaGraphMixin):
             ('.gate_up_proj', '.up_proj', 1),
         ]
 
-        scale_suffix = '.weight_scale_inv'
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:
             if 'rotary_emb.inv_freq' in name:
@@ -412,8 +411,6 @@ class Qwen3ForCausalLM(nn.Module, CudaGraphMixin):
                 continue
             if self.config.tie_word_embeddings and 'lm_head.weight' in name:
                 continue
-            if name.endswith(scale_suffix):
-                name = name[:-len(scale_suffix)] + '.scale'
 
             for (param_name, weight_name, shard_id) in stacked_params_mapping:
                 if weight_name not in name:

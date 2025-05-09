@@ -1273,8 +1273,8 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             if name.endswith('.weight'):
                 weight_name = name
                 scale_name = name.replace('.weight', '.scale')
-            elif name.endswith('.scale'):
-                weight_name = name.replace('.scale', '.weight')
+            elif name.endswith('.weight_scale_inv'):
+                weight_name = name.replace('.weight_scale_inv', '.weight')
                 scale_name = name
             self._load_buffers[name] = loaded_weight
             if (weight_name in self._load_buffers and scale_name in self._load_buffers):
@@ -1288,7 +1288,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
         for (mod_name, head_dim, pe_dim_offset) in update_pe_mapping:
             if mod_name not in name:
                 continue
-            if name.endswith('.scale'):
+            if name.endswith('.weight_scale_inv'):
                 weight = loaded_weight
             else:
                 loaded_weight = loaded_weight.to(device)
@@ -1327,8 +1327,6 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             ('.gate_up_proj', '.gate_proj', 0),
             ('.gate_up_proj', '.up_proj', 1),
         ]
-
-        scale_suffix = '.weight_scale_inv'
 
         config = self.config
 
@@ -1375,8 +1373,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                     continue
             if self.config.tie_word_embeddings and 'lm_head.weight' in name:
                 continue
-            if name.endswith(scale_suffix):
-                name = name[:-len(scale_suffix)] + '.scale'
+
             if '.experts' in name:
                 self._load_weight_experts(name, loaded_weight, params_dict, expert_params_mapping=expert_params_mapping)
             elif '.self_attn' in name and getattr(config, 'use_mla', True):
