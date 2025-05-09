@@ -8,6 +8,8 @@ import numpy as np
 from torch import Tensor
 
 from lmdeploy.messages import EngineCoreEvent, EngineCoreEventType, GenerationConfig, LogitsProcessor
+from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
+from lmdeploy.pytorch.disagg.request import MigrationRequest
 from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
 from lmdeploy.utils import get_logger
 
@@ -135,6 +137,17 @@ class MessageStatus(enum.Enum):
     ABORTED = enum.auto()
     LOCKED = enum.auto()
 
+    # PD Disaggregation
+    # WAITING_MIGRATION: state of Unmigrated Requests
+    # in both prefill and decode engines are tagged by
+    # RUNNING_MIGRATION: state of Migrating Requests
+    # in decode engine
+    TO_BE_MIGRATED = enum.auto()
+    WAITING_MIGRATION = enum.auto()
+    RUNNING_MIGRATION = enum.auto()
+    MIGRATION_LOCKED = enum.auto()
+    MIGRATION_DONE = enum.auto()
+
 
 _SEQ_COUNT = 0
 
@@ -215,7 +228,10 @@ class SchedulerSession:
                      adapter_name: str = None,
                      return_logits: bool = False,
                      multimodals: MultiModalInputs = None,
-                     input_embeddings: List[InputEmbeddings] = None) -> 'SchedulerSequence':
+                     input_embeddings: List[InputEmbeddings] = None,
+                     migration_request: Optional[MigrationRequest] = None,
+                     resp_cache: bool = False,
+                     preserve_cache: bool = False) -> 'SchedulerSequence':
         """Add a new message."""
         if isinstance(token_ids, Tensor):
             token_ids = token_ids.numpy()
@@ -237,6 +253,9 @@ class SchedulerSession:
             history_embeddings=HistoryEmbeddings(input_embeddings),
             history_multimodals=HistoryMultiModals(multimodals),
             return_logits=return_logits,
+            migration_request=migration_request,
+            resp_cache=resp_cache,
+            preserve_cache=preserve_cache,
         )
         self.sequences[seq.seq_id] = seq
         if self.seq_manager is not None:
@@ -442,6 +461,12 @@ class SchedulerSequence:
     _status: MessageStatus = field(default=MessageStatus.WAITING, init=False)
     num_ignored_history: int = 0
     model_meta: Dict[str, Any] = None
+
+    # For Disaggregation
+    migration_request: Optional[MigrationRequest] = None
+    resp_cache: bool = False
+    preserve_cache: bool = False
+    migration_inputs: Optional[MigrationExecutionBatch] = None
 
     # events for logging
     events: List[EngineCoreEvent] = field(default_factory=list)

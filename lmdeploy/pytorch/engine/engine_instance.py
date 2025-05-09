@@ -141,6 +141,9 @@ class EngineInstance:
             sampling_param=sampling_param,
             adapter_name=adapter_name,
             input_multimodals=multimodal,
+            migration_request=gen_config.migration_request,
+            with_cache=gen_config.with_cache,
+            preserve_cache=gen_config.preserve_cache,
         )
         logger.debug(f'session[{session_id}] add message: num_input_ids={len(input_ids)}.')
         resp = self.req_sender.send_async(RequestType.ADD_MESSAGE, msg)
@@ -149,6 +152,7 @@ class EngineInstance:
             resp = await self.req_sender.async_recv(resp)
             print(f'=> finally get resp {resp}')
 
+            cache_block_ids = resp.data.get('cache_block_ids', None)
             if resp.type == ResponseType.SUCCESS:
                 token_ids = resp.data['token_ids'].tolist()
                 num_ids = len(token_ids)
@@ -158,7 +162,8 @@ class EngineInstance:
                                    num_token=num_ids,
                                    scheduler_stats=resp.scheduler_stats,
                                    iteration_stats=resp.iteration_stats,
-                                   events=resp.events)
+                                   events=resp.events,
+                                   cache_block_ids=cache_block_ids)
             elif resp.type == ResponseType.FINISH:
                 resp_data = resp.data
                 token_ids = resp_data['token_ids'].tolist()
@@ -171,7 +176,8 @@ class EngineInstance:
                                    logits=logits,
                                    scheduler_stats=resp.scheduler_stats,
                                    iteration_stats=resp.iteration_stats,
-                                   events=resp.events)
+                                   events=resp.events,
+                                   cache_block_ids=cache_block_ids)
                 break
             else:
                 logger.debug(f'session[{session_id}] failed.')

@@ -572,7 +572,8 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
                  hidden_dim: int,
                  renormalize: bool = False,
                  block_size: int = 128,
-                 out_dtype: torch.dtype = torch.bfloat16):
+                 out_dtype: torch.dtype = torch.bfloat16,
+                 layer_idx: int = 0):
         super().__init__(top_k, num_experts, renormalize, block_size, out_dtype)
         self.num_experts = num_experts
         self.ep_size = ep_size
@@ -580,6 +581,7 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
         self.hidden_dim = hidden_dim
         self.block_size = block_size
         self.out_dtype = out_dtype
+        self.layer_idx = layer_idx
         try:
             import deep_gemm
             DeepEPExpertsDeepGEMM.deep_gemm = deep_gemm
@@ -587,6 +589,14 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
         except ImportError:
             self.use_deep_gemm = False
             logger.warning('For higher performance, please install DeepGEMM https://github.com/deepseek-ai/DeepGEMM')
+
+        try:
+            from dlblas.layers.moe.ep_moe import build_deepep_moe
+            self.use_dlblas = True
+            self.build_deepep_moe = build_deepep_moe
+        except ImportError:
+            self.use_dlblas = False
+            logger.warning('For higher performance, please install dlBLAS https://github.com/DeepLink-org/dlBLAS')
 
     def forward(self,
                 hidden_states: torch.Tensor,
@@ -610,7 +620,18 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
         return _renormalize(topk_weights, self.renormalize)
 
     def fusedmoe_build(self, low_latency_mode: bool = False):
-        if low_latency_mode:
+        if self.use_dlblas:
+            return self.build_deepep_moe(low_latency_mode,
+                                         self.ep_size,
+                                         self.ep_group,
+                                         self.num_experts,
+                                         self.hidden_dim,
+                                         self.block_size,
+                                         self.top_k,
+                                         self.out_dtype,
+                                         layer_idx=self.layer_idx,
+                                         chunk_size=16 * 1024)
+        elif low_latency_mode:
             return FusedMoELowLatency(self.ep_size, self.ep_group, self.num_experts, self.hidden_dim, self.block_size,
                                       self.out_dtype)
         else:
@@ -629,7 +650,8 @@ class TritonFusedMoEBlockedF8Builder(FusedMoEBlockedF8Builder):
               block_size: int = 128,
               ep_size: int = 1,
               ep_group: dist.ProcessGroup = None,
-              out_dtype: torch.dtype = torch.float16):
+              out_dtype: torch.dtype = torch.float16,
+              layer_idx: int = 0):
         """build from mlp."""
         if ep_size > 1:
             return FusedDeepEpMoEBlockedF8Impl(ep_size=ep_size,
@@ -639,7 +661,8 @@ class TritonFusedMoEBlockedF8Builder(FusedMoEBlockedF8Builder):
                                                hidden_dim=hidden_dim,
                                                renormalize=renormalize,
                                                block_size=block_size,
-                                               out_dtype=out_dtype)
+                                               out_dtype=out_dtype,
+                                               layer_idx=layer_idx)
         else:
             return TritonFusedMoEBlockedF8Impl(top_k=top_k,
                                                num_experts=num_experts,

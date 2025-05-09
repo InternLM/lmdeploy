@@ -1,4 +1,4 @@
-# 华为昇腾（Atlas 800T A2）
+# 华为昇腾（Atlas 800T A2 & Atlas 300I Duo）
 
 我们基于 LMDeploy 的 PytorchEngine，增加了华为昇腾设备的支持。所以，在华为昇腾上使用 LDMeploy 的方法与在英伟达 GPU 上使用 PytorchEngine 后端的方法几乎相同。在阅读本教程之前，请先阅读原版的[快速开始](../get_started.md)。
 
@@ -7,7 +7,10 @@
 > \[!IMPORTANT\]
 > 我们已经在阿里云上提供了构建完成的鲲鹏CPU版本的镜像(从lmdeploy 0.7.1 + dlinfer 0.1.6开始)。
 > 请使用下面的命令来拉取镜像:
-> `docker pull crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:latest `
+> Atlas 800T A2:
+> `docker pull crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:910b-latest`
+> Atlas 300I Duo:
+> `docker pull crpi-4crprmm5baj1v8iv.cn-hangzhou.personal.cr.aliyuncs.com/lmdeploy_dlinfer/ascend:310p-latest`
 > 下述的dockerfile依然是可以执行的，您可以直接拉取镜像，也可以使用dockerfile来自己构建。
 
 ## 安装
@@ -154,8 +157,23 @@ lmdeploy lite auto_awq $HF_MODEL --work-dir $WORK_DIR --device npu
 
 支持的模型列表请参考[支持的模型](../../supported_models/supported_models.md)。
 
+### w8a8 SMOOTH_QUANT
+
+运行下面的代码可以在Atlas 800T A2上对权重进行W8A8量化。
+
+```bash
+lmdeploy lite smooth_quant $HF_MODEL --work-dir $WORK_DIR --device npu
+```
+
+支持的模型列表请参考[支持的模型](../../supported_models/supported_models.md)。
+
 ### int8 KV-cache 量化
 
 昇腾后端现在支持了在eager模式下的离线int8 KV-cache量化。
 
 详细使用方式请请参考这篇[文章](https://github.com/DeepLink-org/dlinfer/blob/main/docs/quant/ascend_kv_quant.md)。
+
+## Atlas 300I Duo上的限制
+
+1. 只支持dtype=float16。
+2. 只支持图模式，请不要加上--eager-mode。
