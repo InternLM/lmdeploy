@@ -303,8 +303,8 @@ class BlockedF8Linear(nn.Module):
         """create weights."""
         weight = torch.empty((out_features, in_features), dtype=self.fp8_dtype, device=device)
         weight_scale_inv = torch.empty((div_up(out_features, self.block_size), div_up(in_features, self.block_size)),
-                            dtype=torch.float32,
-                            device=device)
+                                       dtype=torch.float32,
+                                       device=device)
         if bias:
             bias = torch.empty((out_features, ), dtype=dtype, device=device)
         else:

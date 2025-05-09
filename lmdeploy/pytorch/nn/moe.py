@@ -422,8 +422,8 @@ class LinearWeightsBlockedF8(LinearWeights):
         )
         self.block_size = block_size
         weight_scale_inv = torch.empty((num_experts, div_up(out_features, block_size), div_up(in_features, block_size)),
-                            dtype=torch.float32,
-                            device=device)
+                                       dtype=torch.float32,
+                                       device=device)
         weight_scale_inv = torch.nn.Parameter(weight_scale_inv, requires_grad=False)
         self.register_parameter('weight_scale_inv', weight_scale_inv)
 
@@ -628,7 +628,8 @@ class FusedMoEBlockedF8(nn.Module):
         if moe_type == MoeType.DSAsyncPrefill:
             if state['recv_hidden_states'].shape[0] > 0:
                 state['recv_hidden_states'] = state['fusedmoe'].fusedmoe_forward(state, self.gate_up.weight,
-                                                                                 self.gate_up.weight_scale_inv, self.down.weight,
+                                                                                 self.gate_up.weight_scale_inv,
+                                                                                 self.down.weight,
                                                                                  self.down.weight_scale_inv)
             gemm_state = {
                 'fusedmoe': state['fusedmoe'],
@@ -638,7 +639,8 @@ class FusedMoEBlockedF8(nn.Module):
             }
         elif moe_type == MoeType.DSAsyncDecode:
             state['recv_hidden_states'] = state['fusedmoe'].fusedmoe_forward(state, self.gate_up.weight,
-                                                                             self.gate_up.weight_scale_inv, self.down.weight,
+                                                                             self.gate_up.weight_scale_inv,
+                                                                             self.down.weight,
                                                                              self.down.weight_scale_inv)
             gemm_state = {
                 'fusedmoe': state['fusedmoe'],
