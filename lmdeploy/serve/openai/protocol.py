@@ -373,3 +373,10 @@ class GenerateResponse(BaseModel):
     input_tokens: int
     history_tokens: int
     finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error']] = None
+
+
+class UpdateParamsRequest(BaseModel):
+    """Update weights request."""
+    serialized_named_tensors: Union[str, bytes]
+    format: Optional[str] = None
+    finished: bool = False

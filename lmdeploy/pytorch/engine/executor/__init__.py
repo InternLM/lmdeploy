@@ -61,6 +61,7 @@ def build_executor(model_path: str,
                    adapters: Dict[str, str] = None,
                    device_type: str = 'cuda',
                    distributed_executor_backend: str = None,
+                   empty_init: bool = False,
                    dtype: str = 'auto') -> ExecutorBase:
     """build model agent executor."""
     logger = get_logger('lmdeploy')
@@ -68,6 +69,7 @@ def build_executor(model_path: str,
     world_size = dist_config.world_size
 
     model_config = ModelConfig.from_pretrained(model_path, trust_remote_code=True, dtype=dtype, dist_config=dist_config)
+    model_config.empty_init = empty_init
 
     if distributed_executor_backend is None:
         distributed_executor_backend = get_distributed_executor_backend(world_size, dp, device_type, logger)
@@ -75,6 +77,11 @@ def build_executor(model_path: str,
     if dp > 1:
         assert distributed_executor_backend == 'ray', (
             'dp>1 requires distributed_executor_backend="ray", ',
+            f'get distributed_executor_backend="{distributed_executor_backend}"')
+
+    if empty_init:
+        assert distributed_executor_backend == 'ray', (
+            'empty_init requires distributed_executor_backend="ray", ',
             f'get distributed_executor_backend="{distributed_executor_backend}"')
 
     if distributed_executor_backend is not None:

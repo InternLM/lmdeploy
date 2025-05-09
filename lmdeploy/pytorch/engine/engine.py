@@ -341,6 +341,7 @@ class Engine:
                                        adapters=adapters,
                                        device_type=engine_config.device_type,
                                        distributed_executor_backend=engine_config.distributed_executor_backend,
+                                       empty_init=engine_config.empty_init,
                                        dtype=engine_config.dtype)
         self.executor.init()
 
@@ -1059,6 +1060,10 @@ class Engine:
         logger.info('Cleanup executor.')
         self.executor.stop()
         self.executor.release()
+
+    def update_params(self, request: Any):
+        """update params."""
+        self.executor.update_params(request)
 
     async def async_loop(self):
         try:

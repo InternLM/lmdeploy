@@ -189,6 +189,7 @@ class RayWorkerWrapper(WorkerWrapperBase):
     def __init__(
         self,
         model_path: str,
+        model_config: ModelConfig,
         cache_config: CacheConfig,
         backend_config: BackendConfig,
         dist_config: DistConfig,
@@ -201,7 +202,6 @@ class RayWorkerWrapper(WorkerWrapperBase):
 
         from lmdeploy.tokenizer import Tokenizer
         tokenizer = Tokenizer(model_path).model.model
-        model_config = ModelConfig.from_pretrained(model_path, dtype=dtype, dist_config=dist_config)
         super().__init__(
             model_path=model_path,
             cache_config=cache_config,
@@ -295,6 +295,7 @@ class RayExecutor(ExecutorBase):
             # create workerwrapper actors
             worker_kwargs = dict(
                 model_path=model_path,
+                model_config=model_config,
                 cache_config=cache_config,
                 backend_config=backend_config,
                 dist_config=dist_config,
@@ -361,6 +362,10 @@ class RayExecutor(ExecutorBase):
     def build_cache_engine(self):
         """build cache engine."""
         self.collective_rpc('build_cache_engine')
+
+    def update_params(self, request: Any):
+        """update params."""
+        self.collective_rpc('update_params', (request, ))
 
     def warmup(self):
         """build cache engine."""

@@ -305,6 +305,8 @@ class PytorchEngineConfig:
             bit, set it to 4 or 8, respectively
         distributed_executor_backend (str): backend of distributed backend,
             options: ['uni', 'mp', 'ray']
+        empty_init (bool): Whether to load the model weights, you should set
+            it to True if you want to update weights after create the pipeline
         enable_microbatch (bool): enable microbatch for specified model
         role (EngineRole): role of engin, options: ['Hybrid', 'Prefill',
             'Decode']. Default to `EngineRole.Hybrid`.
@@ -334,6 +336,7 @@ class PytorchEngineConfig:
     revision: str = None
     quant_policy: Literal[0, 4, 8] = 0
     distributed_executor_backend: str = None
+    empty_init: bool = False
     enable_microbatch: bool = False
 
     role: EngineRole = EngineRole.Hybrid
