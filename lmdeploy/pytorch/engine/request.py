@@ -5,7 +5,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List
 
-from lmdeploy.messages import ResponseType
+from lmdeploy.messages import EngineCoreEvent, ResponseType
+from lmdeploy.metrics.stats import IterationStats, SchedulerStats
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -32,6 +33,11 @@ class Response:
     data: Any = None
     err_msg: str = ''
 
+    # for logging
+    scheduler_stats = SchedulerStats
+    iteration_stats = IterationStats
+    events: List[EngineCoreEvent] = None
+
 
 @dataclass
 class Request:
@@ -41,6 +47,9 @@ class Request:
     sender_id: int
     data: Any = None
     resp: Response = None
+
+    # engine-side request arrival time
+    arrival_time: float = None
 
 
 ReqList = List[Request]

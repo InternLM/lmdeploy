@@ -3,13 +3,15 @@ import asyncio
 import copy
 import logging
 import os
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import torch
 
-from lmdeploy.messages import PytorchEngineConfig, ResponseType
+from lmdeploy.messages import EngineCoreEvent, PytorchEngineConfig, ResponseType
+from lmdeploy.metrics.stats import IterationStats, SchedulerStats
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model, logging_timer
@@ -46,6 +48,9 @@ class InferOutput:
     # when Prefill Engine is Done.
     cache_block_ids: List[int] = None
 
+    # events for logging
+    events: List[EngineCoreEvent] = field(default_factory=list)
+
 
 def _tensorlize_block_offsets(block_offsets, dtype=torch.int32):
     """tensorlize block_offsets."""
@@ -59,7 +64,8 @@ def _build_scheduler_config(engine_config: PytorchEngineConfig):
     """build scheduler config."""
     scheduler_config = SchedulerConfig(max_batches=engine_config.max_batch_size,
                                        max_session_len=engine_config.session_len,
-                                       prefill_interval=engine_config.prefill_interval)
+                                       prefill_interval=engine_config.prefill_interval,
+                                       log_stats=engine_config.log_stats)
     return scheduler_config
 
 
@@ -427,13 +433,24 @@ class Engine:
         """start loop."""
         return self.req_manager.start_loop(self.async_loop)
 
-    def _response(self, resp: Response, resp_type: ResponseType, data: Any = None, err_msg: str = ''):
+    def _response(self,
+                  resp: Response,
+                  resp_type: ResponseType,
+                  scheduler_stats: SchedulerStats = None,
+                  iteration_stats: IterationStats = None,
+                  events: List[EngineCoreEvent] = None,
+                  data: Any = None,
+                  err_msg: str = ''):
         """response."""
         if resp.type == ResponseType.FINISH:
             return
         resp.type = resp_type
         resp.data = data
         resp.err_msg = err_msg
+
+        resp.scheduler_stats = scheduler_stats
+        resp.iteration_stats = iteration_stats
+        resp.events = events
         self.req_manager.response(resp)
 
     def _get_max_session_len(self):
@@ -498,6 +515,10 @@ class Engine:
     def _on_add_message(self, reqs: List[Request], **kwargs):
         """on add message callback."""
         for req in reqs:
+            # record arrival time, when requests arrive engine side
+            if req.arrival_time is None:
+                req.arrival_time = time.time()
+
             req_data = req.data
             if req_data.get('input_multimodals', None) is None:
                 continue
@@ -770,7 +791,8 @@ class Engine:
                               resp=msg.resp,
                               finish=finish,
                               token_ids=token_ids,
-                              cache_block_ids=cache_block_ids)
+                              cache_block_ids=cache_block_ids,
+                              events=msg.events)
             outputs[session_id] = out
 
             if msg.return_logits:
@@ -927,8 +949,16 @@ class Engine:
         def __send_resp(out: InferOutput):
             """send response."""
             resp_type = (ResponseType.FINISH if out.finish else ResponseType.SUCCESS)
+
+            scheduler_stats = SchedulerStats(num_running_reqs=self.scheduler.num_running(),
+                                             num_waiting_reqs=self.scheduler.num_waiting(),
+                                             gpu_cache_usage=None)
+
             self._response(out.resp,
                            resp_type,
+                           scheduler_stats=scheduler_stats,
+                           iteration_stats=None,
+                           events=out.events,
                            data=dict(token_ids=out.token_ids, logits=out.logits, cache_block_ids=out.cache_block_ids))
 
         def __send_resps(step_outputs: List[InferOutput]):
