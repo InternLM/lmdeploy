@@ -421,25 +421,25 @@ class LinearWeightsBlockedF8(LinearWeights):
             ep=ep,
         )
         self.block_size = block_size
-        scale = torch.empty((num_experts, div_up(out_features, block_size), div_up(in_features, block_size)),
+        weight_scale_inv = torch.empty((num_experts, div_up(out_features, block_size), div_up(in_features, block_size)),
                             dtype=torch.float32,
                             device=device)
-        scale = torch.nn.Parameter(scale, requires_grad=False)
-        self.register_parameter('scale', scale)
+        weight_scale_inv = torch.nn.Parameter(weight_scale_inv, requires_grad=False)
+        self.register_parameter('weight_scale_inv', weight_scale_inv)
 
         if self.ep:
             self.expert_map = dict((eid, idx) for idx, eid in enumerate(expert_list))
-            self.scale.weight_loader = self.weight_loader_scale_ep
+            self.weight_scale_inv.weight_loader = self.weight_loader_scale_ep
         else:
-            self.scale.weight_loader = self.weight_loader_scale_tp
+            self.weight_scale_inv.weight_loader = self.weight_loader_scale_tp
 
-    def update_weight(self, weight: torch.Tensor, scale: torch.Tensor):
+    def update_weight(self, weight: torch.Tensor, weight_scale_inv: torch.Tensor):
         """update weight."""
         super().update_weight(weight=weight)
-        weight_loader = self.scale.weight_loader
-        scale = torch.nn.Parameter(scale, requires_grad=False)
-        scale.weight_loader = weight_loader
-        self.register_parameter('scale', scale)
+        weight_loader = self.weight_scale_inv.weight_loader
+        weight_scale_inv = torch.nn.Parameter(weight_scale_inv, requires_grad=False)
+        weight_scale_inv.weight_loader = weight_loader
+        self.register_parameter('weight_scale_inv', weight_scale_inv)
 
     def weight_loader_scale_ep(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, expert_id: int,
                                shard_id: str):
@@ -545,8 +545,8 @@ class FusedMoEBlockedF8(nn.Module):
     def update_weights(self):
         """update weights."""
         (gate_up_weights, down_weights, gate_up_scale,
-         down_scale) = self.impl.update_weights(self.gate_up.weight, self.down.weight, self.gate_up.scale,
-                                                self.down.scale)
+         down_scale) = self.impl.update_weights(self.gate_up.weight, self.down.weight, self.gate_up.weight_scale_inv,
+                                                self.down.weight_scale_inv)
         self.gate_up.update_weight(gate_up_weights, gate_up_scale)
         self.down.update_weight(down_weights, down_scale)
 
@@ -628,8 +628,8 @@ class FusedMoEBlockedF8(nn.Module):
         if moe_type == MoeType.DSAsyncPrefill:
             if state['recv_hidden_states'].shape[0] > 0:
                 state['recv_hidden_states'] = state['fusedmoe'].fusedmoe_forward(state, self.gate_up.weight,
-                                                                                 self.gate_up.scale, self.down.weight,
-                                                                                 self.down.scale)
+                                                                                 self.gate_up.weight_scale_inv, self.down.weight,
+                                                                                 self.down.weight_scale_inv)
             gemm_state = {
                 'fusedmoe': state['fusedmoe'],
                 'hidden_states': state['recv_hidden_states'],
@@ -638,8 +638,8 @@ class FusedMoEBlockedF8(nn.Module):
             }
         elif moe_type == MoeType.DSAsyncDecode:
             state['recv_hidden_states'] = state['fusedmoe'].fusedmoe_forward(state, self.gate_up.weight,
-                                                                             self.gate_up.scale, self.down.weight,
-                                                                             self.down.scale)
+                                                                             self.gate_up.weight_scale_inv, self.down.weight,
+                                                                             self.down.weight_scale_inv)
             gemm_state = {
                 'fusedmoe': state['fusedmoe'],
                 'hidden_states': state['recv_hidden_states'],
@@ -650,8 +650,8 @@ class FusedMoEBlockedF8(nn.Module):
             }
         else:  # MoeType.Default
             hidden_states = self.impl.forward(state['hidden_states'], state['topk_weights'], state['topk_idx'],
-                                              self.gate_up.weight, self.gate_up.scale, self.down.weight,
-                                              self.down.scale, self.expert_list)
+                                              self.gate_up.weight, self.gate_up.weight_scale_inv, self.down.weight,
+                                              self.down.weight_scale_inv, self.expert_list)
             gemm_state = {'hidden_states': hidden_states, 'moe_type': state['moe_type']}
         return gemm_state
 

@@ -1328,8 +1328,6 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             ('.gate_up_proj', '.up_proj', 1),
         ]
 
-        scale_suffix = '.weight_scale_inv'
-
         config = self.config
 
         update_pe_mapping = []
@@ -1375,8 +1373,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                     continue
             if self.config.tie_word_embeddings and 'lm_head.weight' in name:
                 continue
-            if name.endswith(scale_suffix):
-                name = name[:-len(scale_suffix)] + '.scale'
+
             if '.experts' in name:
                 self._load_weight_experts(name, loaded_weight, params_dict, expert_params_mapping=expert_params_mapping)
             elif '.self_attn' in name and getattr(config, 'use_mla', True):
