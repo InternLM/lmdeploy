@@ -1,8 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import os
 from logging import Logger
 from typing import Any, Dict
 
+from lmdeploy.pytorch import envs
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, ModelConfig
 from lmdeploy.utils import get_logger
 
@@ -23,7 +23,7 @@ def get_distributed_executor_backend(world_size: int, dp: int, device_type: str,
         _log_info(message)
         return executor_backend
 
-    executor_backend = os.environ.get('LMDEPLOY_EXECUTOR_BACKEND', None)
+    executor_backend = envs.executor_backend
     if executor_backend is not None:
         return _log_and_set_backend('found environment LMDEPLOY_EXECUTOR_BACKEND.', executor_backend)
 

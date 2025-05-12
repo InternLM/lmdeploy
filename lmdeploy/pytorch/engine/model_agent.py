@@ -304,7 +304,7 @@ class AutoModelAgent:
 
         # compute dummy loop
         if dummy_loop > 0:
-            dummy_inputs = ModelInputs.make_dummy(1, False, 'cuda')
+            dummy_inputs = ModelInputs.make_dummy(1, False, 'cuda', vocab_size=self.model_config.vocab_size)
         for _ in range(dummy_loop):
             await __forward(dummy_inputs)
 
