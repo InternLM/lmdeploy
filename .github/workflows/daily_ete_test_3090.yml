@@ -187,7 +187,7 @@ jobs:
           chmod -R 777 $workdir
 
   test_tools:
-    if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'tools'))}}
+    if: ${{!cancelled() && success() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'tools'))}}
     runs-on: [self-hosted, 3090-r1]
     needs: test_quantization
     timeout-minutes: 300
@@ -267,7 +267,7 @@ jobs:
           chmod -R 777 $workdir
 
   test_restful:
-    if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'restful'))}}
+    if: ${{!cancelled() && success() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'restful'))}}
     runs-on: [self-hosted, 3090-r1]
     needs: test_quantization
     strategy:
@@ -356,7 +356,7 @@ jobs:
           chmod -R 777 $workdir
 
   test_benchmark:
-    if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'benchmark'))}}
+    if: ${{!cancelled() && success() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'benchmark'))}}
     runs-on: [self-hosted, 3090-r1]
     needs: test_quantization
     timeout-minutes: 120
@@ -404,7 +404,7 @@ jobs:
           chmod -R 777 $workdir
 
   test_evaluation:
-    if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'evaluation'))}}
+    if: ${{!cancelled() && success() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'evaluation'))}}
     runs-on: [self-hosted, 3090-r1]
     needs: test_quantization
     timeout-minutes: 120 # 2hours
@@ -471,7 +471,7 @@ jobs:
 
 
   get_benchmark_result:
-    if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'benchmark'))}}
+    if: ${{!cancelled() && success() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'benchmark'))}}
     needs: [test_benchmark]
     timeout-minutes: 5
     runs-on: [self-hosted, 3090-r1]
@@ -496,7 +496,7 @@ jobs:
 
 
   get_coverage_report:
-    if: ${{!cancelled()}}
+    if: ${{!cancelled() && success()}}
     runs-on: [self-hosted, 3090-r1]
     needs: [test_tools, test_restful, test_benchmark]
     timeout-minutes: 5
