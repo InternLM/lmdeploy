@@ -120,17 +120,17 @@ def create_error_response(status: HTTPStatus, message: str, error_type='invalid_
 async def check_request(request) -> Optional[JSONResponse]:
     """Check if a request is valid."""
     if hasattr(request, 'model') and request.model not in get_model_list():
-        return create_error_response(HTTPStatus.NOT_FOUND, f'The model "{request.model}" does not exist.')
+        return create_error_response(HTTPStatus.NOT_FOUND, f'The model `{request.model}` does not exist.')
     if hasattr(request, 'n') and request.n <= 0:
-        return create_error_response(HTTPStatus.BAD_REQUEST, f'The n "{request.n}" must be a positive int.')
+        return create_error_response(HTTPStatus.BAD_REQUEST, f'The n `{request.n}` must be a positive int.')
     if hasattr(request, 'top_p') and not (request.top_p > 0 and request.top_p <= 1):
-        return create_error_response(HTTPStatus.BAD_REQUEST, f'The top_p "{request.top_p}" must be in (0, 1].')
+        return create_error_response(HTTPStatus.BAD_REQUEST, f'The top_p `{request.top_p}` must be in (0, 1].')
     if hasattr(request, 'top_k') and request.top_k < 0:
         return create_error_response(HTTPStatus.BAD_REQUEST,
-                                     f'The top_k "{request.top_k}" cannot be a negative integer.')
+                                     f'The top_k `{request.top_k}` cannot be a negative integer.')
     if hasattr(request, 'temperature') and not (request.temperature <= 2 and request.temperature >= 0):
         return create_error_response(HTTPStatus.BAD_REQUEST,
-                                     f'The temperature "{request.temperature}" must be in [0, 2]')
+                                     f'The temperature `{request.temperature}` must be in [0, 2]')
     return
 
 
@@ -1113,6 +1113,10 @@ def serve(model_path: str,
     if proxy_url is not None:
         VariableInterface.proxy_url = proxy_url
         VariableInterface.api_server_url = f'{http_or_https}://{server_name}:{server_port}'  # noqa
+    for i in range(3):
+        print(f'HINT:    Please open \033[93m\033[1m{http_or_https}://'
+              f'{server_name}:{server_port}\033[0m in a browser for detailed api'
+              ' usage!!!')
     uvicorn.run(app=app,
                 host=server_name,
                 port=server_port,

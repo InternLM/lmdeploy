@@ -120,7 +120,7 @@ class LogitsMixin:
         session_ids = list(range(len(input_ids)))
         tasks = [_proc(i) for i in range(len(input_ids))]
         await asyncio.gather(*tasks)
-        if sequence_end and self.backend == 'pytorch':
+        if sequence_end:
             for session_id in session_ids:
                 await self.end_session(session_id)
         return logits
@@ -243,4 +243,4 @@ class LogitsMixin:
             result.append(loss.item() / target_count.item())
             target_counts.append(target_count)
         logger.info(f'ppl result: {result}')
-        return result
+        return result, target_counts

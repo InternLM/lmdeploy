@@ -934,14 +934,14 @@ void LlamaBatch::OutputLogits(const Tensor& logits, int first, int last, Generat
 {
     const auto& src_buf   = logits.buffer();
     const auto  elem_size = byte_size(logits.dtype(), 1);
-    // when `is_all` is true, logits only contains last token of the sequences
+    // when `is_all` is false, logits only contains last token of the sequences
     const bool is_all = out_type == GenerationConfig::kAll;
 
     int base = 0;
 
     for (int i = first; i < last; ++i) {
 
-        const int input_len = h_input_length_buf_[i];  // input lenght for this iter
+        const int input_len = h_input_length_buf_[i];  // input length for this iter
 
         if (state_->requests[i]->gen_cfg.output_logits == out_type) {
 
@@ -977,10 +977,10 @@ void LlamaBatch::OutputLogits(const Tensor& logits, int first, int last, Generat
 
             if (is_all) {
                 // Skip invalid tokens caused by cache miss
-                src_base += std::max(0, (history_len + offset) - cache_len);
+                src_base += std::max(0, diff);
             }
             // Skip previous chunks
-            int dst_base = std::max(0, cache_len - (history_len + offset));
+            int dst_base = std::max(0, -diff);
 
             check_cuda_error(cudaMemcpy2DAsync(dst_buf.raw_data(dst_base * model_->vocab_size_),
                                                elem_size * model_->vocab_size_,
