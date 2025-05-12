@@ -50,8 +50,8 @@ class InferOutput:
 def _tensorlize_block_offsets(block_offsets, dtype=torch.int32):
     """tensorlize block_offsets."""
     from torch.nn.utils.rnn import pad_sequence
-    block_offsets = [torch.from_numpy(off).to(dtype) for off in block_offsets]
-    block_offsets = pad_sequence(block_offsets, batch_first=True)
+    block_offsets = [torch.from_numpy(off) for off in block_offsets]
+    block_offsets = pad_sequence(block_offsets, batch_first=True).to(dtype)
     return block_offsets
 
 
@@ -563,6 +563,7 @@ class Engine:
                     req.data['token_ids'],
                     multimodals=req.data.get('input_multimodals'),
                     embeddings=req.data.get('input_embeddings'),
+                    append_tokens=True,
                 )
                 msg.num_new_tokens = 0
                 msg.sampling_param = sampling_param
@@ -721,8 +722,6 @@ class Engine:
             msg.update_token_ids(update_token, model_meta=model_meta)
             msg.num_new_tokens += 1
             if stop:
-                update_token = _EMPTY_TOKEN
-                msg.update_token_ids(update_token, model_meta=model_meta)
                 msg.status = MessageStatus.STOPPED
 
     def update_running_migration(self, running: SeqList, next_token_ids: np.ndarray, stopped: torch.Tensor,
