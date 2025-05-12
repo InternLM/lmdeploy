@@ -12,9 +12,12 @@ import torch
 from ray.util.placement_group import PlacementGroup
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.backends.selector import init_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, ModelConfig
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
+from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
+from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.utils import get_logger
 
 from .base import ExecutorBase
@@ -76,11 +79,41 @@ def _wait_until_pg_ready(current_placement_group: 'PlacementGroup'):
                          '`ray status` to make sure the cluster has enough resources.') from None
 
 
-def init_ray_cluster(world_size: int, ray_address: str = None):
+def _get_obj_store_memory(dp: int = 1):
+    """get obj store memory."""
+    import psutil
+    DEFAULT_OBJECT_STORE_MEMORY_PROPORTION = os.getenv('RAY_DEFAULT_OBJECT_STORE_MEMORY_PROPORTION', '0.3')
+    DEFAULT_OBJECT_STORE_MEMORY_PROPORTION = float(DEFAULT_OBJECT_STORE_MEMORY_PROPORTION)
+    DEFAULT_OBJECT_STORE_MAX_MEMORY_BYTES = os.getenv('RAY_DEFAULT_OBJECT_STORE_MAX_MEMORY_BYTES', None)
+    if DEFAULT_OBJECT_STORE_MAX_MEMORY_BYTES is None:
+        DEFAULT_OBJECT_STORE_MAX_MEMORY_BYTES = 200 * (10**9)
+    else:
+        DEFAULT_OBJECT_STORE_MAX_MEMORY_BYTES = int(DEFAULT_OBJECT_STORE_MAX_MEMORY_BYTES)
+    total_mem = psutil.virtual_memory().total
+    obj_store_mem = int(total_mem * DEFAULT_OBJECT_STORE_MEMORY_PROPORTION)
+    obj_store_mem = min(DEFAULT_OBJECT_STORE_MAX_MEMORY_BYTES, obj_store_mem)
+    if dp > 1:
+        obj_store_mem = obj_store_mem // min(8, dp)
+    return obj_store_mem
+
+
+def init_ray_cluster(world_size: int, ray_address: str = None, dp: int = 1):
     """init ray cluster."""
     # modifier from vLLM
     if not ray.is_initialized():
-        ray.init(address=ray_address, ignore_reinit_error=True)
+        try:
+            num_cpus = world_size
+            object_store_memory = _get_obj_store_memory(dp=dp)
+            ray.init(address=ray_address,
+                     ignore_reinit_error=True,
+                     num_cpus=num_cpus,
+                     object_store_memory=object_store_memory)
+        except ValueError as e:
+            if e.args is not None and len(e.args) >= 1 and e.args[
+                    0] == 'When connecting to an existing cluster, num_cpus and num_gpus must not be provided.':
+                ray.init(address=ray_address, ignore_reinit_error=True)
+            else:
+                raise
 
     device_str = get_device_str()
 
@@ -125,7 +158,7 @@ def _get_master_port():
 
 
 def get_ascend_device_rank_mapping(master_addr):
-    rank_table_file = os.environ.get('ASCEND_RANK_TABLE_FILE_PATH')
+    rank_table_file = _envs.ascend_rank_table_file
     if not rank_table_file:
         raise ValueError('ASCEND_RANK_TABLE_FILE_PATH is not set')
     with open(rank_table_file, 'r') as f:
@@ -149,6 +182,20 @@ def get_ascend_device_rank_mapping(master_addr):
         'ASCEND_RANK_TABLE_FILE_PATH': rank_table_file,
     }
     return rank_mapping, worker_ips, envs
+
+
+def _update_runtime_env_nsys(runtime_env: Dict):
+    """update runtime env for nsys."""
+    nsight_env = {
+        't': 'cuda,cudnn,cublas,nvtx',
+        'o': "'worker_process_%p'",
+        'stop-on-exit': 'true',
+    }
+    prefix_path = _envs.ray_nsys_output_prefix
+    if prefix_path is not None:
+        nsight_env['o'] = f'{prefix_path}%p'
+    runtime_env['nsight'] = nsight_env
+    return runtime_env
 
 
 class RayWorkerWrapper(WorkerWrapperBase):
@@ -248,15 +295,15 @@ class RayExecutor(ExecutorBase):
             ray_world_size = self.world_size
             if self.dp > 1:
                 ray_world_size = 1
-            placement_group = init_ray_cluster(ray_world_size)
+            placement_group = init_ray_cluster(ray_world_size, dp=dist_config.dp)
             self.placement_group = placement_group
 
             if self.dp == 1:
                 self.master_addr = _get_master_addr()
                 self.master_port = _get_master_port()
             else:
-                self.master_addr = os.environ.get('LMDEPLOY_DP_MASTER_ADDR', None)
-                self.master_port = os.environ.get('LMDEPLOY_DP_MASTER_PORT', None)
+                self.master_addr = _envs.dp_master_addr
+                self.master_port = _envs.dp_master_port
                 if self.master_addr is None or self.master_port is None:
                     raise RuntimeError('DP > 1 requires "LMDEPLOY_DP_MASTER_ADDR" and "LMDEPLOY_DP_MASTER_PORT".')
 
@@ -294,13 +341,17 @@ class RayExecutor(ExecutorBase):
                 logger.info('Warming up distribute environment, this might take long time, please waiting...')
                 ray.get([worker.warmup_dist.remote() for worker in self.workers])
 
-    def collective_rpc(self, method: str, args: Tuple[Any] = None, kwargs: Dict[str, Any] = None):
+    def collective_rpc(self,
+                       method: str,
+                       args: Tuple[Any] = None,
+                       kwargs: Dict[str, Any] = None,
+                       timeout: float = None):
         """collective rpc."""
         if args is None:
             args = list()
         if kwargs is None:
             kwargs = dict()
-        return ray.get([getattr(worker, method).remote(*args, **kwargs) for worker in self.workers])
+        return ray.get([getattr(worker, method).remote(*args, **kwargs) for worker in self.workers], timeout=timeout)
 
     def build_model(self):
         """build model."""
@@ -353,7 +404,7 @@ class RayExecutor(ExecutorBase):
         except KeyboardInterrupt:
             logger.debug(f'{task.get_name()} KeyboardInterrupt.')
         except BaseException:
-            logger.exception(f'{task.get_name()} task failed.')
+            logger.debug(f'{task.get_name()} task failed.')
 
     def start(self, forward_event: asyncio.Event):
         """start engine loop."""
@@ -377,8 +428,12 @@ class RayExecutor(ExecutorBase):
     def release(self):
         """release."""
         if self.dp == 1:
-            self.collective_rpc('release')
-            logger.debug('RayExecutor workers released.')
+            try:
+                self.collective_rpc('release', timeout=5.0)
+                logger.debug('RayExecutor workers released.')
+            except ray.exceptions.GetTimeoutError:
+                logger.info('Ray release timeout.')
+
             try:
                 self.collective_rpc('exit')
                 logger.debug('RayExecutor workers exited.')
@@ -406,7 +461,10 @@ class RayExecutor(ExecutorBase):
         if self.dag is None:
             self.dag = self._compile_dag()
         inputs = ray.put(inputs)
-        ray.get(self.dag.execute(inputs))
+        # make sure in order
+        outs = self.dag.execute(inputs)
+        await asyncio.sleep(0)
+        ray.get(outs)
 
     async def get_output_async(self):
         """get output async."""
@@ -484,10 +542,14 @@ class RayExecutor(ExecutorBase):
             )
 
             if device_str == 'GPU':
+                runtime_env = dict()
+                if _envs.ray_nsys_enable:
+                    runtime_env = _update_runtime_env_nsys(runtime_env)
                 worker = ray.remote(
                     num_cpus=0,
                     num_gpus=1.0,
                     scheduling_strategy=scheduling_strategy,
+                    runtime_env=runtime_env,
                 )(RayWorkerWrapper).remote(**worker_kwargs)
             else:
                 worker = ray.remote(
@@ -511,3 +573,18 @@ class RayExecutor(ExecutorBase):
             ray.get([worker.set_env.remote(envs) for worker in self.workers])
         else:
             raise ValueError(f'Unsupported device type: {device_str}')
+
+    """ PD Disaggregation API Begin """
+
+    def p2p_initialize(self, init_request: DistServeInitRequest):
+        return self.collective_rpc('p2p_initialize', (init_request, ))
+
+    def p2p_connect(self, conn_request: List[DistServeConnectionRequest]):
+        """rdma connect."""
+        return self.collective_rpc('p2p_connect', (conn_request, ))
+
+    async def migrate(self, batch: MigrationExecutionBatch):
+        jobs = (worker.migrate.remote(batch) for worker in self.workers)
+        return await asyncio.gather(*jobs)
+
+    """ PD Disaggregation API Begin """

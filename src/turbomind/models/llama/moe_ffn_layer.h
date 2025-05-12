@@ -7,89 +7,54 @@
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaFfnLayer.h"
 #include "src/turbomind/models/llama/llama_params.h"
-#include "src/turbomind/utils/cublasMMWrapper.h"
-#include <algorithm>
 
 namespace turbomind {
 
-template<class T>
 class MoeFfnLayer {
 public:
-    MoeFfnLayer(ModelParam model, const MoeParam& param, size_t tp_size, const Context<T>& ctx):
-        inter_size_(param.inter_size / tp_size),
-        hidden_dim_(model.hidden_units),
-        param_(param),
-        dtype_(getTensorType<T>()),
-        stream_(ctx.stream),
-        cublas_(ctx.cublas_wrapper.get()),
-        linear_(ctx.linear.get()),
-        allocator_(ctx.allocator.get())
-    {
-        FT_CHECK(!param.expert_num.empty());
-        const int max_expert_num = *std::max_element(param.expert_num.begin(), param.expert_num.end());
+    MoeFfnLayer(const ModelParam& model, const MoeParam& param, const EngineParam& engine, const Context& ctx);
 
-        if (param_.method == MoeParam::kFused) {
-            context_ = std::make_unique<gemm::MoeGemmContext>(
-                max_expert_num, param.experts_per_token, ctx.cuda_device_prop, stream_);
-        }
-        else {
-            expert_ffn_ = std::make_unique<LlamaFfnLayer<T>>(model, ctx);
-        }
+    struct ForwardParam {
+        Tensor              input;
+        Tensor              output;
+        const MoeFfnWeight* weights;
+        float               scale;
+        int                 layer_id;
+    };
 
-        h_offsets_ = (int*)allocator_->malloc(sizeof(int) * (max_expert_num + 1), false, true);
+    void Forward(ForwardParam& p);
 
-        offsets_ = (int*)allocator_->malloc(sizeof(int) * (max_expert_num + 1));
-        accum_   = (int*)allocator_->malloc(sizeof(int) * max_expert_num * kMoeGateMaxTiles);
-    }
+    void Combine(ForwardParam& p);
 
-    void AllocateBuffer(size_t tokens, size_t padded, size_t expert_num, size_t inter_buf_factor);
-
-    void FreeBuffer();
-
-    ~MoeFfnLayer()
-    {
-        FreeBuffer();
-    }
-
-    void forward(T* output, const T* input, int tokens, int layer_id, const MoeFfnWeight<T>& moe);
-
-    void reduce(T* output, int tokens, float output_scale, int layer_id, const MoeFfnWeight<T>& moe);
-
-    void gate(float* logits, const T* input, int tokens, const LlamaDenseWeight<T>& weight);
+private:
+    Tensor_<float> Gate(const Tensor& input, const LlamaDenseWeight& gate);
 
     void dump_logits(int token_num, int layer_id, int expert_num);
 
-private:
-    const size_t           inter_size_;
-    const size_t           hidden_dim_;
-    const MoeParam         param_;
-    const DataType         dtype_;
-    cudaStream_t const     stream_;
-    cublasMMWrapper* const cublas_;
-    LlamaLinear<T>* const  linear_;
-    IAllocator* const      allocator_;
+    const int      inter_size_;
+    const int      hidden_dim_;
+    const MoeParam param_;
 
-    std::unique_ptr<LlamaFfnLayer<T>>     expert_ffn_;
+    cudaStream_t const stream_;
+    LlamaLinear&       linear_;
+
+    std::unique_ptr<LlamaFfnLayer>        expert_ffn_;
     std::unique_ptr<gemm::MoeGemmContext> context_;
 
-    int* h_offsets_{};
+    ///////////////////////////////////////////////////////
+    /// runtime states
+    Buffer_<int> h_offsets_;
 
-    char* workspace_{};
+    Buffer_<int>   masks_;
+    Buffer_<int>   f2n_;
+    Buffer_<int>   en2f_;
+    Buffer_<float> scales_;
+    Buffer_<int>   accum_;
+    Buffer_<int>   offsets_;
 
-    T* inout_buf_{};  // [n * e, hidden_dim]
-    T* inter_buf_{};  // [n * e, inter_size]
-
-    float* logits_{};
-    int*   masks_{};
-
-    int*   f2n_{};
-    int*   en2f_{};
-    float* scales_{};
-
-    float* shared_scales_{};
-
-    int* accum_{};
-    int* offsets_{};
+    Tensor         temp_;
+    Tensor_<float> shared_scales_;
+    ///////////////////////////////////////////////////////
 };
 
 }  // namespace turbomind

@@ -35,7 +35,7 @@ class LogitsMixin:
         assert all(isinstance(x, int) for x in input_ids) or all(isinstance(x, List) for x in input_ids)
         # Make input_ids a list of token_id list
         input_ids = [input_ids] if isinstance(input_ids[0], int) else input_ids
-        logits, session_ids = self._run(coro=self._async_get_logits(input_ids=input_ids)).result()
+        logits = self._run(coro=self._async_get_logits(input_ids=input_ids)).result()
         logits = [x.squeeze() for x in logits]
         scores = [x[-1].cpu().item() for x in logits]
         return scores
@@ -120,9 +120,9 @@ class LogitsMixin:
         session_ids = list(range(len(input_ids)))
         tasks = [_proc(i) for i in range(len(input_ids))]
         await asyncio.gather(*tasks)
-        if sequence_end:
-            for i in session_ids:
-                await self.end_session(i)
+        if sequence_end and self.backend == 'pytorch':
+            for session_id in session_ids:
+                await self.end_session(session_id)
         return logits
 
     def get_ppl(self, input_ids: Union[List[int], List[List[int]]]) -> List[float]:
@@ -158,7 +158,7 @@ class LogitsMixin:
             else:
                 _input_ids = [input_ids[indices[i]] for i in range(start, end)]
                 steps = [0] * len(_input_ids)
-                res, _ = self._get_ppl(input_ids=_input_ids, steps=steps, max_input_len=max_input_len)
+                res = self._get_ppl(input_ids=_input_ids, steps=steps, max_input_len=max_input_len)
                 result.extend(res)
         output = list(range(len(result)))
         for index, sorted_index in enumerate(indices):
@@ -243,4 +243,4 @@ class LogitsMixin:
             result.append(loss.item() / target_count.item())
             target_counts.append(target_count)
         logger.info(f'ppl result: {result}')
-        return result, target_counts
+        return result

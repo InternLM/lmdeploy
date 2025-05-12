@@ -97,12 +97,6 @@ void invokeSampling(SamplingParams& params, cudaStream_t stream)
                                                    params.sampled_nums);
 }
 
-#ifdef ENABLE_FP32
 template void invokeSampling<float>(SamplingParams& params, cudaStream_t stream);
-#endif
-template void invokeSampling<half>(SamplingParams& params, cudaStream_t stream);
-#ifdef ENABLE_BF16
-template void invokeSampling<nv_bfloat16>(SamplingParams& params, cudaStream_t stream);
-#endif
 
 }  // namespace turbomind

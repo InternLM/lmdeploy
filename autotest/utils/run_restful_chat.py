@@ -9,6 +9,7 @@ from openai import OpenAI
 from pytest_assume.plugin import assume
 from utils.config_utils import get_cuda_prefix_by_workerid, get_workerid
 from utils.get_run_config import get_command_with_extra
+from utils.restful_return_check import assert_chat_completions_batch_return
 from utils.rule_condition_assert import assert_result
 from utils.run_client_chat import command_line_test
 
@@ -202,6 +203,28 @@ def get_model(url):
         return model_name.split('/')[-1]
     except Exception:
         return None
+
+
+def test_logprobs(worker_id: str = None):
+    worker_num = get_workerid(worker_id)
+    if worker_num is None:
+        port = DEFAULT_PORT
+    else:
+        port = DEFAULT_PORT + worker_num
+    http_url = BASE_HTTP_URL + ':' + str(port)
+    api_client = APIClient(http_url)
+    model_name = api_client.available_models[0]
+    for output in api_client.chat_completions_v1(model=model_name,
+                                                 messages='Hi, pls intro yourself',
+                                                 max_tokens=5,
+                                                 temperature=0.01,
+                                                 logprobs=True,
+                                                 top_logprobs=10):
+        continue
+    print(output)
+    assert_chat_completions_batch_return(output, model_name, check_logprobs=True, logprobs_num=10)
+    assert output.get('choices')[0].get('finish_reason') == 'length'
+    assert output.get('usage').get('completion_tokens') == 6 or output.get('usage').get('completion_tokens') == 5
 
 
 PIC = 'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg'  # noqa E501
@@ -503,8 +526,17 @@ def test_qwen_multiple_round_prompt(client, model):
                                               tools=tools)
     print(response)
     response_list = [response]
+    func1_name = response.choices[0].message.tool_calls[0].function.name
+    func1_args = response.choices[0].message.tool_calls[0].function.arguments
+    func2_name = response.choices[0].message.tool_calls[1].function.name
+    func2_args = response.choices[0].message.tool_calls[1].function.arguments
     with assume:
-        assert False, 'test'
+        assert response.choices[0].finish_reason == 'tool_calls'
+        assert func1_name == 'get_current_temperature'
+        assert func1_args == '{"location": "San Francisco, CA, USA"}'
+        assert func2_name == 'get_temperature_date'
+        assert func2_args == '{"location": "San Francisco, CA, USA", "date": "2024-11-15"}'
+        assert response.choices[0].message.tool_calls[0].type == 'function'
 
     messages.append(response.choices[0].message)
 
@@ -527,7 +559,8 @@ def test_qwen_multiple_round_prompt(client, model):
     print(response)
     response_list.append(response)
     with assume:
-        assert False, 'test'
+        assert response.choices[0].finish_reason == 'stop'
+        assert '26.1' in response.choices[0].message.content
 
     return response_list
 

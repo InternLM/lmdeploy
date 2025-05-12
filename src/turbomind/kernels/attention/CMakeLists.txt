@@ -63,7 +63,6 @@ if (BUILD_TEST)
         Llama
         unfused_attention_kernels
         logger
-        tensor
         cublas)
 
     add_executable(test_quant test_quant.cu test_utils.cu)

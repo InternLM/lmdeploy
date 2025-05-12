@@ -241,16 +241,16 @@ class BlockedF8Linear(nn.Module):
         self.impl = impl_builder.build(in_features, out_features, block_size=128, bias=bias is not None, dtype=dtype)
         self.block_size = 128
         self.fp8_dtype = fp8_dtype
-        weight, scale, bias = self.create_weights(in_features, out_features, bias, dtype, device)
+        weight, weight_scale_inv, bias = self.create_weights(in_features, out_features, bias, dtype, device)
         weight = torch.nn.Parameter(weight, requires_grad=False)
         weight.weight_loader = self.weight_loader
-        scale = torch.nn.Parameter(scale, requires_grad=False)
-        scale.weight_loader = self.weight_loader
+        weight_scale_inv = torch.nn.Parameter(weight_scale_inv, requires_grad=False)
+        weight_scale_inv.weight_loader = self.weight_loader
         if bias is not None:
             bias = torch.nn.Parameter(bias, requires_grad=False)
             bias.weight_loader = self.weight_loader
         self.register_parameter('weight', weight)
-        self.register_parameter('scale', scale)
+        self.register_parameter('weight_scale_inv', weight_scale_inv)
         self.register_parameter('bias', bias)
 
         self.in_features = in_features
@@ -302,27 +302,27 @@ class BlockedF8Linear(nn.Module):
     def create_weights(self, in_features: int, out_features: int, bias: bool, dtype: torch.dtype, device: torch.device):
         """create weights."""
         weight = torch.empty((out_features, in_features), dtype=self.fp8_dtype, device=device)
-        scale = torch.empty((div_up(out_features, self.block_size), div_up(in_features, self.block_size)),
-                            dtype=torch.float32,
-                            device=device)
+        weight_scale_inv = torch.empty((div_up(out_features, self.block_size), div_up(in_features, self.block_size)),
+                                       dtype=torch.float32,
+                                       device=device)
         if bias:
             bias = torch.empty((out_features, ), dtype=dtype, device=device)
         else:
             bias = None
-        return weight, scale, bias
+        return weight, weight_scale_inv, bias
 
     def update_weights(self):
         """update weights."""
-        weight, scale, bias = self.impl.update_weights(self.weight, self.scale, self.bias)
+        weight, weight_scale_inv, bias = self.impl.update_weights(self.weight, self.weight_scale_inv, self.bias)
         weight = torch.nn.Parameter(weight, requires_grad=False)
         self.weight.weight_loader = self.weight_loader
-        scale = torch.nn.Parameter(scale, requires_grad=False)
-        self.scale.weight_loader = self.weight_loader
+        weight_scale_inv = torch.nn.Parameter(weight_scale_inv, requires_grad=False)
+        self.weight_scale_inv.weight_loader = self.weight_loader
         if bias is not None:
             bias = torch.nn.Parameter(bias, requires_grad=False)
             self.bias.weight_loader = self.weight_loader
         self.register_parameter('weight', weight)
-        self.register_parameter('scale', scale)
+        self.register_parameter('weight_scale_inv', weight_scale_inv)
         self.register_parameter('bias', bias)
 
     def forward(self, x):
@@ -340,11 +340,11 @@ class BlockedF8Linear(nn.Module):
         if len(self.lora_adapters) == 0:
             if self.dp_scatter:
                 _, rank = get_tp_world_rank()
-                return self.impl.forward(x, self.weight, self.scale, self.bias, all_reduce, rank, tp_sizes)
+                return self.impl.forward(x, self.weight, self.weight_scale_inv, self.bias, all_reduce, rank, tp_sizes)
             else:
-                return self.impl.forward(x, self.weight, self.scale, self.bias, all_reduce)
+                return self.impl.forward(x, self.weight, self.weight_scale_inv, self.bias, all_reduce)
 
-        out = self.impl.forward(x, self.weight, self.scale, self.bias, False)
+        out = self.impl.forward(x, self.weight, self.weight_scale_inv, self.bias, False)
         for lora_adapter in self.lora_adapters.values():
             out = lora_adapter(x, out)
         if all_reduce:
@@ -393,12 +393,15 @@ class MergedBlockedF8Linear(BlockedF8Linear):
                          is_tp=is_tp,
                          dp_gather=dp_gather)
         self.weight.weight_loader = self.weight_loader
-        self.scale.weight_loader = self.weight_loader
+        self.weight._weight_type = 'qweight'
+        self.weight_scale_inv.weight_loader = self.weight_loader
+        self.weight_scale_inv._weight_type = 'scales'
         self.weight.weight_spliter = self.weight_spliter
-        self.scale.weight_spliter = self.weight_spliter
+        self.weight_scale_inv.weight_spliter = self.weight_spliter
         if self.bias is not None:
             self.bias.weight_loader = self.weight_loader
             self.bias.weight_spliter = self.weight_spliter
+            self.bias._weight_type = 'bias'
 
     def _get_io_features(self, in_features: int, out_features: int, colwise: bool):
         """get io features."""
@@ -419,7 +422,8 @@ class MergedBlockedF8Linear(BlockedF8Linear):
         """weight loader."""
         world_size, rank = _get_tp_world_rank(self.is_tp)
         shard_idx = self.out_names_map[shard_id]
-        if loaded_weight.dim() == 2 and loaded_weight.dtype == torch.float32:
+        if loaded_weight.dim() == 2 and loaded_weight.dtype != self.fp8_dtype:
+            loaded_weight = loaded_weight.to(torch.float32)
             all_out_features = [feats // self.block_size for feats in self.all_out_features]
             param_w = param.data.split(all_out_features, 0)[shard_idx]
         else:
@@ -430,12 +434,91 @@ class MergedBlockedF8Linear(BlockedF8Linear):
 
     def weight_spliter(self, loaded_weight: torch.Tensor):
         """weight spliter."""
-        if loaded_weight.dim() == 2 and loaded_weight.dtype == torch.float32:
+        if loaded_weight.dim() == 2 and loaded_weight.dtype != self.fp8_dtype:
             return loaded_weight.split(self.scale_split_section, dim=0)
         return loaded_weight.split(self.split_section, dim=0)
 
     def weight_spliter_lora_b(self, loaded_weight: torch.Tensor):
         return loaded_weight.split(self.split_section, dim=0)
+
+
+class QKVBlockedF8Linear(MergedBlockedF8Linear, QKVMixin):
+    """qkv blockedf8 linear."""
+
+    def __init__(self,
+                 in_features: int,
+                 num_q_heads: int,
+                 num_kv_heads: int,
+                 head_size: int,
+                 head_size_v: int,
+                 bias: bool = False,
+                 fp8_dtype: torch.dtype = torch.float8_e4m3fn,
+                 dtype: Optional[torch.dtype] = None,
+                 device: Optional[torch.device] = None,
+                 is_tp: bool = True,
+                 dp_gather: bool = False,
+                 num_replicate_kv_heads: int = 1):
+        self.is_tp = is_tp
+        self.block_size = 128
+        self.qkv_split_section = self._get_qkv_out_features(num_q_heads, num_kv_heads, head_size, head_size_v,
+                                                            num_replicate_kv_heads)
+
+        num_q_heads, num_kv_heads = self._update_num_heads(num_q_heads, num_kv_heads)
+        all_out_features = self._get_qkv_out_features(num_q_heads, num_kv_heads, head_size, head_size_v)
+        out_names = ('q', 'k', 'v')
+        self.num_q_heads = num_q_heads
+        self.num_kv_heads = num_kv_heads
+        self.head_size = head_size
+        self.head_size_v = head_size_v
+        self.num_replicate_kv_heads = num_replicate_kv_heads
+
+        super().__init__(in_features,
+                         all_out_features,
+                         dtype=dtype,
+                         fp8_dtype=fp8_dtype,
+                         bias=bias,
+                         device=device,
+                         is_tp=is_tp,
+                         out_names=out_names,
+                         dp_gather=dp_gather)
+
+    def _update_all_out_features(self, all_out_features: List[int], replicate: Optional[List[bool]]):
+        """update all out features."""
+        return all_out_features
+
+    def weight_loader(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, shard_id: Any):
+        """weight loader."""
+        _, rank = _get_tp_world_rank(self.is_tp)
+        shard_idx = self.out_names_map[shard_id]
+
+        num_head = self.num_q_heads if shard_id == 'q' \
+            else self.num_kv_heads
+        head_dim = self.head_size if shard_id in ['q', 'k'] \
+            else self.head_size_v
+        # update to duplicate k/v for tp_size > num_kv_heads
+        rank_idx = rank if shard_id == 'q' \
+            else rank // self.num_replicate_kv_heads
+        sec_len = num_head * head_dim
+        all_out_features = self.all_out_features
+        if param._weight_type == 'scales':
+            loaded_weight = loaded_weight.to(torch.float32)
+            all_out_features = [sec // self.block_size for sec in all_out_features]
+            sec_len = sec_len // self.block_size
+
+        sec_start = rank_idx * sec_len
+
+        loaded_weight = loaded_weight.narrow(dim=0, start=sec_start, length=sec_len)
+        param_w = param.data.split(all_out_features, 0)[shard_idx]
+        param_w.copy_(loaded_weight)
+
+    def weight_spliter(self, loaded_weight: torch.Tensor, layout: str = 'default'):
+        """weight spliter."""
+        _check_qkv_split_layout(layout)
+        assert layout == 'default'
+        qkv_split_section = self.qkv_split_section
+        if loaded_weight.dim() == 2 and loaded_weight.dtype != self.fp8_dtype:
+            qkv_split_section = [sec // self.block_size for sec in qkv_split_section]
+        return loaded_weight.split(qkv_split_section, dim=0)
 
 
 class AwqLinear(nn.Module):
@@ -712,7 +795,7 @@ class QKVAwqLinear(MergedAwqLinear, QKVMixin):
                  device: Optional[torch.device] = None,
                  is_tp: bool = True,
                  num_replicate_kv_heads: int = 1):
-
+        self.is_tp = is_tp
         self.qkv_split_section_s = self._get_qkv_out_features(num_q_heads, num_kv_heads, head_size, head_size_v,
                                                               num_replicate_kv_heads)
         elem_per_int = 32 // w_bit
@@ -1591,10 +1674,19 @@ def build_qkv_proj(in_features: int,
                    dtype: Optional[torch.dtype] = None,
                    device: Optional[torch.device] = None,
                    is_tp: bool = True,
-                   num_replicate_kv_heads: int = 1):
+                   num_replicate_kv_heads: int = 1,
+                   dp_disable_tp: bool = True,
+                   all_reduce: bool = False,
+                   dp_gather: bool = False):
     """build qkv proj."""
-    if is_tp:
-        is_tp, _ = _get_dp_tp_meta()
+    if dp_disable_tp and is_tp:
+        is_tp, _ = _get_dp_tp_meta(all_reduce)
+    elif is_tp:
+        is_tp = get_tp_world_rank()[0] > 1
+
+    if dp_gather:
+        assert not dp_disable_tp
+        dp_gather = _get_dp_gather(is_tp)
 
     if head_size_v is None:
         head_size_v = head_size
@@ -1642,6 +1734,26 @@ def build_qkv_proj(in_features: int,
                              is_tp=is_tp,
                              num_replicate_kv_heads=num_replicate_kv_heads,
                              quant_dtype=quant_dtype)
+    if quant_method == 'fp8':
+        fmt = quant_config.get('fmt', 'e4m3')
+        if fmt == 'e4m3':
+            fp8_dtype = torch.float8_e4m3fn
+        elif fmt == 'e5m2':
+            fp8_dtype = torch.float8_e5m2
+        else:
+            raise TypeError(f'Unsupported fp8 fmt: {fmt}')
+        return QKVBlockedF8Linear(in_features=in_features,
+                                  num_q_heads=num_q_heads,
+                                  num_kv_heads=num_kv_heads,
+                                  head_size=head_size,
+                                  head_size_v=head_size_v,
+                                  bias=bias,
+                                  fp8_dtype=fp8_dtype,
+                                  dtype=dtype,
+                                  device=device,
+                                  is_tp=is_tp,
+                                  dp_gather=dp_gather,
+                                  num_replicate_kv_heads=num_replicate_kv_heads)
     else:
         raise RuntimeError(f'Unsupported quant method: {quant_method}')
 

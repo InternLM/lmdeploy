@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-
+from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
 from lmdeploy.utils import get_max_batch_size
 
 from .cli import CLI
@@ -133,7 +133,7 @@ class SubCliServe:
         ArgumentHelper.model_name(parser)
         ArgumentHelper.max_log_len(parser)
         ArgumentHelper.disable_fastapi_docs(parser)
-
+        ArgumentHelper.allow_terminate_by_client(parser)
         # chat template args
         ArgumentHelper.chat_template(parser)
 
@@ -166,6 +166,9 @@ class SubCliServe:
         ArgumentHelper.dp(pt_group)
         ArgumentHelper.dp_rank(pt_group)
         ArgumentHelper.ep(pt_group)
+        ArgumentHelper.enable_microbatch(pt_group)
+        ArgumentHelper.role(pt_group)
+        ArgumentHelper.migration_backend(pt_group)
 
         # turbomind args
         tb_group = parser.add_argument_group('TurboMind engine arguments')
@@ -215,7 +218,13 @@ class SubCliServe:
         parser.set_defaults(run=SubCliServe.proxy)
         parser.add_argument('--server-name', type=str, default='0.0.0.0', help='Host ip for proxy serving')
         parser.add_argument('--server-port', type=int, default=8000, help='Server port of the proxy')
-        parser.add_argument('--strategy',
+        parser.add_argument('--serving-strategy',
+                            type=str,
+                            choices=['Hybrid', 'DistServe'],
+                            default='Hybrid',
+                            help='the strategy to serve, Hybrid for colocating Prefill and Decode'
+                            'workloads into same engine, DistServe for Prefill-Decode Disaggregation')
+        parser.add_argument('--routing-strategy',
                             type=str,
                             choices=['random', 'min_expected_latency', 'min_observed_latency'],
                             default='min_expected_latency',
@@ -225,6 +234,15 @@ class SubCliServe:
                             help='Whether to disable cache status of the '
                             'proxy. If set, the proxy will forget the status '
                             'of the previous time')
+
+        # For Disaggregation
+        parser.add_argument('--migration-protocol',
+                            type=str,
+                            choices=['RDMA', 'NVLINK'],
+                            default='RDMA',
+                            help='transport protocol of KV migration')
+        parser.add_argument('--link-type', type=str, choices=['RoCE', 'IB'], default='RoCE', help='RDMA Link Type')
+        parser.add_argument('--disable-gdr', action='store_true', help='with GPU Direct Memory Access')
         ArgumentHelper.api_keys(parser)
         ArgumentHelper.ssl(parser)
         ArgumentHelper.log_level(parser)
@@ -267,6 +285,8 @@ class SubCliServe:
                                                    cache_block_seq_len=args.cache_block_seq_len,
                                                    enable_prefix_caching=not args.disable_prefix_caching,
                                                    max_prefill_token_num=args.max_prefill_token_num,
+                                                   num_tokens_per_iter=args.num_tokens_per_iter,
+                                                   max_prefill_iters=args.max_prefill_iters,
                                                    communicator=args.communicator)
         chat_template_config = get_chat_template(args.chat_template)
         run(args.model_path_or_server,
@@ -307,7 +327,10 @@ class SubCliServe:
                                                  device_type=args.device,
                                                  quant_policy=args.quant_policy,
                                                  eager_mode=args.eager_mode,
-                                                 max_prefill_token_num=args.max_prefill_token_num)
+                                                 max_prefill_token_num=args.max_prefill_token_num,
+                                                 enable_microbatch=args.enable_microbatch,
+                                                 role=EngineRole[args.role],
+                                                 migration_backend=MigrationBackend[args.migration_backend])
         else:
             from lmdeploy.messages import TurbomindEngineConfig
             backend_config = TurbomindEngineConfig(dtype=args.dtype,
@@ -338,6 +361,7 @@ class SubCliServe:
                        allow_credentials=args.allow_credentials,
                        allow_methods=args.allow_methods,
                        allow_headers=args.allow_headers,
+                       allow_terminate_by_client=args.allow_terminate_by_client,
                        log_level=args.log_level.upper(),
                        api_keys=args.api_keys,
                        ssl=args.ssl,

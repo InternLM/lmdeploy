@@ -21,7 +21,8 @@ from lmdeploy import Tokenizer
 from lmdeploy.archs import get_model_arch
 from lmdeploy.logger import RequestLogger
 from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, Response, ResponseType, TurbomindEngineConfig
-from lmdeploy.model import MODELS, ChatTemplateConfig, best_match_model
+from lmdeploy.model import MODELS, BaseChatTemplate, ChatTemplateConfig, best_match_model
+from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.serve.utils import LogitsMixin
 from lmdeploy.tokenizer import DetokenizeState
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_hf_gen_cfg, get_logger
@@ -58,6 +59,9 @@ class GenOut:
     logprobs: List[Dict[int, float]] = None
     logits: Any = None
     last_hidden_state: Any = None
+
+    # for disaggregation
+    cache_block_ids: List[int] = None
 
 
 def _gen_out_to_response(out: GenOut, index) -> Response:
@@ -549,7 +553,9 @@ class AsyncEngine(LogitsMixin):
             chat_template = self.chat_template
             if adapter_name in MODELS.module_dict:
                 chat_template = MODELS.module_dict[adapter_name]()
-            prompt = chat_template.messages2prompt(prompt, sequence_start, tools=tools)
+        else:
+            chat_template = BaseChatTemplate()
+        prompt = chat_template.messages2prompt(prompt, sequence_start, tools=tools)
         if prompt is None:
             raise ValueError(
                 f'You are using base template to handle chat task. Please specify a `--chat-template` name chosen from `lmdeploy list` if you want to use OpenAI messages input.'  # noqa
@@ -744,7 +750,13 @@ class AsyncEngine(LogitsMixin):
                         spaces_between_special_tokens=gen_config.spaces_between_special_tokens)
                     res = token_ids[ids_offset:]
 
-                    out = GenOut(response, history_len, input_len, gen_len, finish_reason, res)
+                    out = GenOut(response,
+                                 history_len,
+                                 input_len,
+                                 gen_len,
+                                 finish_reason,
+                                 token_ids=res,
+                                 cache_block_ids=outputs.cache_block_ids)
 
                     if outputs.logprobs is not None:
                         log_offset = ids_offset - start_ids_offset
@@ -773,7 +785,13 @@ class AsyncEngine(LogitsMixin):
                     logger.info(f'session {session_id} finished, reason '
                                 f'"{finish_reason}", input_tokens '
                                 f'{len(input_ids)}, outupt_tokens {gen_len}')
-                    yield GenOut(response, self.id2step[session_id], len(input_ids), gen_len, finish_reason)
+                    yield GenOut(response,
+                                 self.id2step[session_id],
+                                 len(input_ids),
+                                 gen_len,
+                                 finish_reason,
+                                 token_ids=token_ids,
+                                 cache_block_ids=outputs.cache_block_ids)
                 else:
                     logger.error(f'session {session_id} finished, '
                                  'reason "error"')
@@ -872,3 +890,27 @@ class AsyncEngine(LogitsMixin):
             session.generator = None
 
         return session
+
+    def start_loop(self):
+        """start engine loop."""
+        if hasattr(self.engine, 'start_loop'):
+            return self.engine.start_loop()
+        else:
+            return True
+
+    """ DistServe Async Engine API Begin """
+
+    def free_cache(self, session_id: int):
+        if session_id in self.engine.scheduler.sessions:
+            self.engine.scheduler.end_session(session_id)
+            logger.debug(f'successfully free session {session_id}')
+        else:
+            logger.warning(f'Invalid Free session {session_id}.')
+
+    def p2p_initialize(self, init_request: DistServeInitRequest):
+        return self.engine.executor.p2p_initialize(init_request)
+
+    def p2p_connect(self, conn_request: List[DistServeConnectionRequest]):
+        return self.engine.executor.p2p_connect(conn_request)
+
+    """ DistServe Async Engine API End """

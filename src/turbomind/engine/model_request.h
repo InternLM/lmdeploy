@@ -4,8 +4,8 @@
 
 #include <memory>
 
+#include "src/turbomind/core/core.h"
 #include "src/turbomind/engine/gateway.h"
-#include "src/turbomind/utils/Tensor.h"
 
 namespace turbomind {
 
@@ -18,10 +18,8 @@ public:
     // Cancel running request
     void Cancel();
 
-    using TensorMap_ = std::unordered_map<std::string, ManagedTensor>;
-
     struct InputParam {
-        std::shared_ptr<TensorMap_> tensors;
+        std::shared_ptr<TensorMap> tensors;
 
         SessionParam     session;
         GenerationConfig gen_cfg;
@@ -30,7 +28,7 @@ public:
     };
 
     struct OutputParam {
-        std::shared_ptr<TensorMap_>         tensors;
+        std::shared_ptr<TensorMap>          tensors;
         std::shared_ptr<AtomicRequestState> state;
     };
 
@@ -49,8 +47,8 @@ protected:
 
     std::weak_ptr<Request> request_;
 
-    std::shared_ptr<TensorMap_> inputs_;   // owned by caller
-    std::shared_ptr<TensorMap_> outputs_;  // owned by `this`
+    std::shared_ptr<TensorMap> inputs_;
+    std::shared_ptr<TensorMap> outputs_;
 };
 
 }  // namespace turbomind
