@@ -145,7 +145,6 @@ class ModelConfig:
     cogvlm_style: bool = False
     custom_module_map: Dict[str, setattr] = None
     use_flash_mla: bool = False
-    empty_init: bool = False
 
     def get_head_size(self):
         """get head size."""
@@ -213,3 +212,9 @@ class ModelConfig:
             model_config.eos_token_id = [model_config.eos_token_id]
 
         return model_config
+
+
+@dataclass
+class MiscConfig:
+    custom_module_map: str = None
+    empty_init: bool = False

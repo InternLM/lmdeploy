@@ -14,7 +14,7 @@ from lmdeploy.serve.openai.protocol import UpdateParamsRequest
 from lmdeploy.utils import get_logger
 
 from ..backends import get_backend
-from ..config import BackendConfig, CacheConfig, ModelConfig
+from ..config import BackendConfig, CacheConfig, MiscConfig, ModelConfig
 from ..devices import DeviceContext, get_device_manager
 from ..distributed import DistContext, get_dist_manager
 from ..model_inputs import ModelInputs, step_ctx_manager
@@ -580,6 +580,7 @@ class BaseModelAgent(AutoModelAgent):
                  model_config: ModelConfig,
                  cache_config: CacheConfig,
                  backend_config: BackendConfig,
+                 misc_config: MiscConfig,
                  tokenizer: Any,
                  dist_ctx: DistContext,
                  device_ctx: DeviceContext,
@@ -593,6 +594,7 @@ class BaseModelAgent(AutoModelAgent):
         )
         device = 'cuda'
         self.backend_config = backend_config
+        self.misc_config = misc_config
         rank = dist_ctx.rank
 
         self.model_path = model_path
@@ -622,7 +624,7 @@ class BaseModelAgent(AutoModelAgent):
         logger.debug(msg_with_rank(rank, 'build model.'))
         patched_model = build_patched_model(self.model_config, device=device)
         logger.debug(msg_with_rank(rank, 'loading weights.'))
-        if not self.model_config.empty_init:
+        if not self.misc_config.empty_init:
             load_model_weights(patched_model, model_path, device=device)
         if adapters is not None:
             logger.debug(msg_with_rank(rank, 'loading adapters.'))
@@ -729,6 +731,7 @@ def build_model_agent(model_path: str,
                       model_config: ModelConfig,
                       cache_config: CacheConfig,
                       backend_config: BackendConfig,
+                      misc_config: MiscConfig,
                       tokenizer: Any,
                       dist_ctx: DistContext = None,
                       device_ctx: DeviceContext = None,
@@ -757,6 +760,7 @@ def build_model_agent(model_path: str,
         model_config=model_config,
         cache_config=cache_config,
         backend_config=backend_config,
+        misc_config=misc_config,
         tokenizer=tokenizer,
         adapters=adapters,
         dist_ctx=dist_ctx,

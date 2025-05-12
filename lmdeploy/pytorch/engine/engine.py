@@ -15,7 +15,7 @@ from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model, logging_timer
 
 from ..adapter.adapter import AdapterManager
-from ..config import BackendConfig, CacheConfig, DistConfig, ModelConfig, SchedulerConfig
+from ..config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SchedulerConfig
 from ..messages import MessageStatus, SchedulerSequence
 from ..model_inputs import ModelInputs, VisionModelInputs
 from ..paging import Scheduler
@@ -96,6 +96,12 @@ def _build_dist_config(engine_config: PytorchEngineConfig):
                              dp_rank=engine_config.dp_rank,
                              enable_microbatch=engine_config.enable_microbatch)
     return dist_config
+
+
+def _build_misc_config(engine_config: PytorchEngineConfig):
+    """build misc config."""
+    misc_config = MiscConfig(custom_module_map=engine_config.custom_module_map, empty_init=engine_config.empty_init)
+    return misc_config
 
 
 class RunableEventBase:
@@ -327,6 +333,7 @@ class Engine:
         cache_config = _build_cache_config(engine_config)
         backend_config = _build_backend_config(engine_config)
         dist_config = _build_dist_config(engine_config)
+        misc_config = _build_misc_config(engine_config)
         self.should_execute_dummy_batch = dist_config.need_dummy_batch()
 
         # build model agent
@@ -337,11 +344,11 @@ class Engine:
                                        cache_config=cache_config,
                                        backend_config=backend_config,
                                        dist_config=dist_config,
+                                       misc_config=misc_config,
                                        tokenizer=raw_tokenizer,
                                        adapters=adapters,
                                        device_type=engine_config.device_type,
                                        distributed_executor_backend=engine_config.distributed_executor_backend,
-                                       empty_init=engine_config.empty_init,
                                        dtype=engine_config.dtype)
         self.executor.init()
 
