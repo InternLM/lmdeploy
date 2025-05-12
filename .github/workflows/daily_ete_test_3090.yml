@@ -187,7 +187,7 @@ jobs:
           chmod -R 777 $workdir
 
   test_tools:
-    if: ${{!cancelled() && contains(needs.test_quantization.result, 'success') && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'tools'))}}
+    if: ${{!cancelled() && !contains(needs.test_quantization.result, 'fail') && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'tools'))}}
     runs-on: [self-hosted, 3090-r1]
     needs: test_quantization
     timeout-minutes: 300
@@ -232,7 +232,6 @@ jobs:
           pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
-          cp -r /root/lora .
           rm -rf allure-results
           # remove tmp log in testcase
           rm -rf /nvme/qa_test_models/autotest_model/log/*
@@ -267,7 +266,7 @@ jobs:
           chmod -R 777 $workdir
 
   test_restful:
-    if: ${{!cancelled() && contains(needs.test_quantization.result, 'success') && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'restful'))}}
+    if: ${{!cancelled() && !contains(needs.test_quantization.result, 'fail') && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'restful'))}}
     runs-on: [self-hosted, 3090-r1]
     needs: test_quantization
     strategy:
