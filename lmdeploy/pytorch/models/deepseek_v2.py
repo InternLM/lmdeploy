@@ -119,7 +119,7 @@ def execute_batch(inputs: list, fn, delta_stages: int = 0, exec_type: ExecType =
         before:
         A-attn0->A-attn1
         roll:
-        A-dis->B-attn0->B-attn1->A-dis_wait->B-dis->A-moe->B-dis_wait->A-comb->
+        B-attn0->B-attn1->A-dis->A-dis_wait->A-moe->B-dis->B-dis_wait->A-comb->
         B-moe->(A-share->A-comb_wait)->B-comb->A-attn0->A-attn1->(B-share->B-comb_wait)
         after:
         B-dis_wait->B-moe->B-comb->B-comb_wait and end
@@ -130,7 +130,7 @@ def execute_batch(inputs: list, fn, delta_stages: int = 0, exec_type: ExecType =
             worker_list[0].next()
 
         pipeline = [
-            '0-dis', '1-attn0', '1-attn1', '0-dis_wait', '1-dis', '0-moe', '1-dis_wait', '0-comb', '1-moe',
+            '1-attn0', '1-attn1', '0-dis', '0-dis_wait', '0-moe', '1-dis', '1-dis_wait', '0-comb', '1-moe',
             '0-share+0-comb_wait', '1-comb', '0-attn0', '0-attn1', '1-share+1-comb_wait'
         ]
         pipline_length = len(pipeline)
@@ -905,6 +905,8 @@ class DeepseekV2DecoderLayer(nn.Module):
             'raw_hidden_shape': hidden_shape,
             'moe_type': MoeType.DSAsyncDecode if is_decoding else MoeType.DSAsyncPrefill,
         }
+
+        self.mlp.experts.before_dispatch(state)
 
         # yield for attn1, dis (+share)
         yield
