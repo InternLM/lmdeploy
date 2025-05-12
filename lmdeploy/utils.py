@@ -408,7 +408,10 @@ def try_import_deeplink(device_type: str):
 def serialize_state_dict(state_dict: dict) -> str:
     """Serialize state dict to str.
 
-    the consumer should use it on same node
+    The consumer should use it on same node. As the producer and consumer may
+    have different GPU visibility, we use reduce_tensor instead of ForkingPickler.dumps
+    to fix the device_id when loading the serialized tensor.
+
     Args:
         state_dict (dict[str, torch.Tensor]): state dict to serialize.
     Returns:

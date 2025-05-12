@@ -870,7 +870,7 @@ async def encode(request: EncodeRequest, raw_request: Request = None):
         return EncodeResponse(input_ids=encoded, length=length)
 
 
-@router.post('/update_params', dependencies=[Depends(check_api_key)])
+@router.post('/update_weights', dependencies=[Depends(check_api_key)])
 def update_params(request: UpdateParamsRequest, raw_request: Request = None):
     """Update weights for the model."""
     if VariableInterface.async_engine.backend != 'pytorch':

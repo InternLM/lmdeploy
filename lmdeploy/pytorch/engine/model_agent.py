@@ -696,10 +696,11 @@ class BaseModelAgent(AutoModelAgent):
     def update_params(self, request: UpdateParamsRequest):
         """update params."""
 
+        # modified from https://github.com/vllm-project/vllm/blob/v0.8.5/examples/offline_inference/rlhf_utils.py#L82
         def _construct(item):
             func, args = item
             args = list(args)
-            args[6] = 0
+            args[6] = torch.cuda.current_device()  # device id.
             # clone() seems necessary otherwise the producer can not release the memory
             return func(*args).clone()
 
