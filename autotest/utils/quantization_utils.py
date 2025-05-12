@@ -20,16 +20,19 @@ def quantization(config,
 
     if quantization_type == 'awq':
         quantization_cmd = ' '.join(
-            [cuda_prefix, 'lmdeploy lite auto_awq', origin_model_path, '--work-dir', quantization_model_path])
+            ['lmdeploy lite auto_awq', origin_model_path, '--work-dir', quantization_model_path])
     elif quantization_type == 'gptq':
         quantization_cmd = ' '.join(
-            [cuda_prefix, 'lmdeploy lite auto_gptq', origin_model_path, '--work-dir', quantization_model_path])
+            ['lmdeploy lite auto_gptq', origin_model_path, '--work-dir', quantization_model_path])
     elif quantization_type == 'w8a8':
         quantization_cmd = ' '.join(
-            [cuda_prefix, 'lmdeploy lite smooth_quant', origin_model_path, '--work-dir', quantization_model_path])
+            ['lmdeploy lite smooth_quant', origin_model_path, '--work-dir', quantization_model_path])
     else:
         return False, 'quantization type should in [awq, gptq, w8a8], \
             now the type is ' + quantization_type
+
+    if cuda_prefix is not None:
+        quantization_cmd = ' '.join([cuda_prefix, quantization_cmd])
 
     if 'llama-3' in origin_model_name.lower():
         quantization_cmd += ' --search-scale'
