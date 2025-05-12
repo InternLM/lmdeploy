@@ -189,10 +189,10 @@ class RayWorkerWrapper(WorkerWrapperBase):
     def __init__(
         self,
         model_path: str,
-        model_config: ModelConfig,
         cache_config: CacheConfig,
         backend_config: BackendConfig,
         dist_config: DistConfig,
+        empty_init: bool = False,
         adapters: Dict[str, str] = None,
         device_type: str = 'cuda',
         dtype: str = 'auto',
@@ -202,6 +202,8 @@ class RayWorkerWrapper(WorkerWrapperBase):
 
         from lmdeploy.tokenizer import Tokenizer
         tokenizer = Tokenizer(model_path).model.model
+        model_config = ModelConfig.from_pretrained(model_path, dtype=dtype, dist_config=dist_config)
+        model_config.empty_init = empty_init
         super().__init__(
             model_path=model_path,
             cache_config=cache_config,
@@ -295,10 +297,10 @@ class RayExecutor(ExecutorBase):
             # create workerwrapper actors
             worker_kwargs = dict(
                 model_path=model_path,
-                model_config=model_config,
                 cache_config=cache_config,
                 backend_config=backend_config,
                 dist_config=dist_config,
+                empty_init=model_config.empty_init,
                 adapters=adapters,
                 device_type=device_type,
                 dtype=dtype,
