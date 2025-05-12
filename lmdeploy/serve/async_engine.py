@@ -22,7 +22,7 @@ from lmdeploy.archs import get_model_arch
 from lmdeploy.logger import RequestLogger
 from lmdeploy.messages import (EngineOutput, GenerationConfig, PytorchEngineConfig, RequestState, Response,
                                ResponseType, TurbomindEngineConfig)
-from lmdeploy.metrics.loggers import LoggingStatLogger, PrometheusStatLogger, StatLoggerBase
+from lmdeploy.metrics.loggers import StatLoggerBase, setup_loggers
 from lmdeploy.metrics.stats import IterationStats, SchedulerStats
 from lmdeploy.model import MODELS, BaseChatTemplate, ChatTemplateConfig, best_match_model
 from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
@@ -269,10 +269,7 @@ class AsyncEngine(LogitsMixin):
         # setup stat loggers
         backend_config.log_stats = log_stats
         self.log_stats = log_stats
-        self.stat_loggers: List[StatLoggerBase] = None
-        if log_stats:
-            # TODO: zhouxinyu, independent set for each DP rank
-            self.stat_loggers = [LoggingStatLogger(), PrometheusStatLogger()]
+        self.stat_loggers: List[List[StatLoggerBase]] = setup_loggers(log_stats=log_stats, engine_num=backend_config.dp)
 
         # setup chat template
         logger.info(f'input backend={backend}, backend_config={backend_config}')
@@ -316,12 +313,6 @@ class AsyncEngine(LogitsMixin):
         self.request_logger = RequestLogger(max_log_len)
         self.internal_thread = _EventLoopThread(daemon=True)
         self.limiter: asyncio.Semaphore = None
-
-        # # TODO: add outputs queue, to put output processing in another process, non-blocking engine process
-        # self.outputs_queue = Queue[Union[EngineOutput, Exception]]()
-
-        # # TODO: a separate output_handler loop runs in a background AsyncIO task
-        # self.output_handler: Optional[asyncio.Task] = None
 
     def close(self):
         self.internal_thread.close()
@@ -399,8 +390,9 @@ class AsyncEngine(LogitsMixin):
                                 **kwargs)
 
     async def do_log_stats(self, ) -> None:
-        for stat_logger in self.stat_loggers:
-            stat_logger.log()
+        for each_engine_loggers in self.stat_loggers:
+            for stat_logger in each_engine_loggers:
+                stat_logger.log()
 
     async def stop_session(self, session_id: int):
         """Stop a session by a session_id."""
@@ -656,8 +648,9 @@ class AsyncEngine(LogitsMixin):
         scheduler_stats: SchedulerStats,
         iteration_stats: Optional[IterationStats],
     ):
-        for stat_logger in stat_loggers:
-            stat_logger.record(scheduler_stats=scheduler_stats, iteration_stats=iteration_stats)
+        for each_engine_loggers in stat_loggers:
+            for stat_logger in each_engine_loggers:
+                stat_logger.record(scheduler_stats=scheduler_stats, iteration_stats=iteration_stats)
 
     async def generate(
             self,

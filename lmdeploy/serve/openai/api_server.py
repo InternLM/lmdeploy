@@ -1221,8 +1221,6 @@ def serve(model_path: str,
     # set reasoning parser and tool parser
     set_parsers(reasoning_parser, tool_call_parser)
 
-    logger.info(f'log stats {log_stats}')
-
     _running_tasks: set[asyncio.Task] = set()
 
     async def lifespan(app: FastAPI):

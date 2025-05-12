@@ -320,3 +320,15 @@ def build_1_2_5_buckets(max_value: int) -> list[int]:
     [1, 2, 5, 10, 20, 50, 100]
     """
     return build_buckets([1, 2, 5], max_value)
+
+
+def setup_loggers(log_stats: bool, engine_num: int):
+    if not log_stats:
+        return []
+
+    stat_loggers: list[list[StatLoggerBase]] = []
+    # independent set for each DP rank
+    for i in range(engine_num):
+        stat_loggers.append([LoggingStatLogger(), PrometheusStatLogger()])
+
+    return stat_loggers
