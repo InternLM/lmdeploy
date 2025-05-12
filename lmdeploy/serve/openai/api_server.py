@@ -55,6 +55,7 @@ class VariableInterface:
     reasoning_parser: Optional[ReasoningParser] = None
     # following is for tool parsers
     tool_parser: Optional[ToolParser] = None
+    allow_terminate_by_client: bool = False
 
 
 router = APIRouter()
@@ -232,6 +233,19 @@ def _create_chat_completion_logprobs(tokenizer: Tokenizer,
 @router.get('/health')
 async def health() -> Response:
     """Health check."""
+    return Response(status_code=200)
+
+
+@router.get('/terminate')
+async def terminate():
+    """terminate server."""
+    import signal
+
+    if not VariableInterface.allow_terminate_by_client:
+        return create_error_response(
+            HTTPStatus.BAD_REQUEST,
+            'The server can not be terminated. Please add --allow-terminate-by-client when start the server.')
+    os.kill(os.getpid(), signal.SIGTERM)
     return Response(status_code=200)
 
 
@@ -1057,21 +1071,16 @@ async def startup_event():
     try:
         import requests
         engine_config = VariableInterface.async_engine.engine.engine_config
+        engine_role = engine_config.role.value if hasattr(engine_config, 'role') else 1
         url = f'{VariableInterface.proxy_url}/nodes/add'
-        data = {
-            'url': VariableInterface.api_server_url,
-            'status': {
-                'models': get_model_list(),
-                'role': engine_config.role.value
-            }
-        }
+        data = {'url': VariableInterface.api_server_url, 'status': {'models': get_model_list(), 'role': engine_role}}
         headers = {'accept': 'application/json', 'Content-Type': 'application/json'}
         response = requests.post(url, headers=headers, json=data)
 
         if response.status_code != 200:
             raise HTTPException(status_code=400, detail='Service registration failed')
     except Exception as e:
-        print(f'Service registration failed: {e}')
+        logger.error(f'Service registration failed: {e}')
 
 
 class ConcurrencyLimitMiddleware(BaseHTTPMiddleware):
