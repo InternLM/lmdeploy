@@ -1129,6 +1129,7 @@ def serve(model_path: str,
           log_stats: Optional[bool] = True,
           reasoning_parser: Optional[str] = None,
           tool_call_parser: Optional[str] = None,
+          allow_terminate_by_client: bool = False,
           **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -1181,11 +1182,13 @@ def serve(model_path: str,
         log_stats: Whether log stats to cli / prometheus
         reasoning_parser (str): The reasoning parser name.
         tool_call_parser (str): The tool call parser name.
+        allow_terminate_by_client (bool): Allow request from client to terminate server.
     """
     if os.getenv('TM_LOG_LEVEL') is None:
         os.environ['TM_LOG_LEVEL'] = log_level
     logger.setLevel(log_level)
 
+    VariableInterface.allow_terminate_by_client = allow_terminate_by_client
     if api_keys is not None:
         if isinstance(api_keys, str):
             api_keys = api_keys.split(',')

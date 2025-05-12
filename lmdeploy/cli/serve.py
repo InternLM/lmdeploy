@@ -138,7 +138,7 @@ class SubCliServe:
         ArgumentHelper.model_name(parser)
         ArgumentHelper.max_log_len(parser)
         ArgumentHelper.disable_fastapi_docs(parser)
-
+        ArgumentHelper.allow_terminate_by_client(parser)
         # chat template args
         ArgumentHelper.chat_template(parser)
 
@@ -367,6 +367,7 @@ class SubCliServe:
                        allow_credentials=args.allow_credentials,
                        allow_methods=args.allow_methods,
                        allow_headers=args.allow_headers,
+                       allow_terminate_by_client=args.allow_terminate_by_client,
                        log_level=args.log_level.upper(),
                        api_keys=args.api_keys,
                        ssl=args.ssl,

@@ -1675,7 +1675,7 @@ def build_qkv_proj(in_features: int,
                    device: Optional[torch.device] = None,
                    is_tp: bool = True,
                    num_replicate_kv_heads: int = 1,
-                   dp_disable_tp: bool = False,
+                   dp_disable_tp: bool = True,
                    all_reduce: bool = False,
                    dp_gather: bool = False):
     """build qkv proj."""
