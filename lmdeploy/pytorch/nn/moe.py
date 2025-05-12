@@ -562,11 +562,22 @@ class FusedMoEBlockedF8(nn.Module):
         out_state = self.combine(gemm_state)
         return out_state['hidden_states']
 
-    def dispatch(self, state: Dict):
+    def before_dispatch(self, state: Dict):
         moe_type = state['moe_type']
         if moe_type == MoeType.DSAsyncPrefill:
             fusedmoe = self.fusedmoe_build(low_latency_mode=False)
+            state['fusedmoe'] = fusedmoe
+            if hasattr(fusedmoe, 'per_token_group_quant_fp8'):
+                state['hidden_states'] = fusedmoe.per_token_group_quant_fp8(state['hidden_states'])
             previous_event = fusedmoe.capture()
+            state['previous_event'] = previous_event
+        return state
+
+    def dispatch(self, state: Dict):
+        moe_type = state['moe_type']
+        if moe_type == MoeType.DSAsyncPrefill:
+            fusedmoe = state['fusedmoe']
+            previous_event = state['previous_event']
             (
                 recv_hidden_states,
                 recv_topk_idx,
@@ -626,7 +637,8 @@ class FusedMoEBlockedF8(nn.Module):
     def gemm(self, state: Dict):
         moe_type = state['moe_type']
         if moe_type == MoeType.DSAsyncPrefill:
-            if state['recv_hidden_states'].shape[0] > 0:
+            if (state['recv_hidden_states'][0]
+                    if isinstance(state['recv_hidden_states'], tuple) else state['recv_hidden_states']).shape[0] > 0:
                 state['recv_hidden_states'] = state['fusedmoe'].fusedmoe_forward(state, self.gate_up.weight,
                                                                                  self.gate_up.scale, self.down.weight,
                                                                                  self.down.scale)
