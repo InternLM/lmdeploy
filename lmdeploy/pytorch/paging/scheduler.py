@@ -55,6 +55,14 @@ class Scheduler:
         self.seq_manager = SequenceManager()
 
     @property
+    def usage(self) -> float:
+        """Get the KV cache usage.
+
+        The KV cache usage (between 0.0 and 1.0).
+        """
+        return self.block_manager.get_usage()
+
+    @property
     def waiting(self):
         """get waiting sequence."""
         seq_map = self.seq_manager.get_sequences(MessageStatus.WAITING)

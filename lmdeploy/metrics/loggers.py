@@ -70,27 +70,14 @@ class LoggingStatLogger(StatLoggerBase):
         logger.info(
             'Avg prompt throughput: %.1f tokens/s, '
             'Avg generation throughput: %.1f tokens/s, '
-            'Running: %d reqs, Waiting: %d reqs, ',
+            'Running: %d reqs, Waiting: %d reqs, '
+            'GPU KV cache usage: %.1f%%, ',
             prompt_throughput,
             generation_throughput,
             scheduler_stats.num_running_reqs,
             scheduler_stats.num_waiting_reqs,
+            scheduler_stats.gpu_cache_usage * 100,
         )
-        # logger.info(
-        #     "Engine %03d: "
-        #     "Avg prompt throughput: %.1f tokens/s, "
-        #     "Avg generation throughput: %.1f tokens/s, "
-        #     "Running: %d reqs, Waiting: %d reqs, "
-        #     "GPU KV cache usage: %.1f%%, "
-        #     "Prefix cache hit rate: %.1f%%",
-        #     self.engine_index,
-        #     prompt_throughput,
-        #     generation_throughput,
-        #     scheduler_stats.num_running_reqs,
-        #     scheduler_stats.num_waiting_reqs,
-        #     scheduler_stats.gpu_cache_usage * 100,
-        #     self.prefix_caching_metrics.hit_rate * 100,
-        # )
 
 
 class PrometheusStatLogger(StatLoggerBase):

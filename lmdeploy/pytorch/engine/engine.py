@@ -952,7 +952,7 @@ class Engine:
 
             scheduler_stats = SchedulerStats(num_running_reqs=self.scheduler.num_running(),
                                              num_waiting_reqs=self.scheduler.num_waiting(),
-                                             gpu_cache_usage=None)
+                                             gpu_cache_usage=self.scheduler.usage)
 
             self._response(out.resp,
                            resp_type,
