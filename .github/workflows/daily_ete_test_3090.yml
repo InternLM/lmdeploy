@@ -52,7 +52,6 @@ env:
   TEST_CODE_PATH: /nvme/qa_test_models/test_pkg/lmdeploy
   OFFLINE_CODE_PATH: /nvme/qa_test_models/offline_pkg/lmdeploy
   OFFLINE_REQUIREMENTS: /nvme/qa_test_models/offline_pkg/requirements.txt
-  DEEPSEEK_VL: /nvme/qa_test_models/offline_pkg/DeepSeek-VL
 
 jobs:
   linux-build:
@@ -110,10 +109,10 @@ jobs:
           ref: ${{github.event.inputs.repo_ref || 'main'}}
       - name: Copy repository
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
-        run: mv autotest/config-3090.yml autotest/config.yml && rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && cp -r . ${{env.TEST_CODE_PATH}}
+        run: rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && cp -r . ${{env.TEST_CODE_PATH}} && mv ${{env.TEST_CODE_PATH}}/autotest/config-3090.yml ${{env.TEST_CODE_PATH}}/autotest/config.yml
       - name: Copy repository - offline
         if: ${{inputs.offline_mode}}
-        run: rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && cp -r ${{env.OFFLINE_CODE_PATH}}/. ${{env.TEST_CODE_PATH}}
+        run: rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && cp -r ${{env.OFFLINE_CODE_PATH}}/. ${{env.TEST_CODE_PATH}} && mv ${{env.TEST_CODE_PATH}}/autotest/config-3090.yml ${{env.TEST_CODE_PATH}}/autotest/config.yml
       - name: Download Artifacts
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         uses: actions/download-artifact@v4
@@ -154,7 +153,6 @@ jobs:
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-          pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
           pip uninstall -y nvidia-nccl-cu11
@@ -228,8 +226,6 @@ jobs:
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-          rm -rf ${{env.DEEPSEEK_VL}}/build
-          pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
           pip uninstall -y nvidia-nccl-cu11
@@ -296,7 +292,6 @@ jobs:
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-          pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
           pip uninstall -y nvidia-nccl-cu11
@@ -382,7 +377,6 @@ jobs:
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-          pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
           pip uninstall -y nvidia-nccl-cu11
@@ -434,19 +428,16 @@ jobs:
           cp -r ${{env.TEST_CODE_PATH}}/. .
       - name: Install lmdeploy - dependency
         run: |
-          python3 -m pip install sentence_transformers==2.2.2 --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
           python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-          pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Install opencompass
         run: |
           git clone --depth=1 https://github.com/open-compass/opencompass.git
           cd opencompass
-          cp /nvme/qa_test_models/offline_pkg/requirements-oc.txt requirements/runtime.txt
-          python3 -m pip install -e .
+          python3 -m pip install -e ".[full]"
           echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
       - name: Check env
         run: |
