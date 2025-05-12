@@ -15,7 +15,7 @@ from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model, logging_timer
 
 from ..adapter.adapter import AdapterManager
-from ..config import BackendConfig, CacheConfig, DistConfig, ModelConfig, SchedulerConfig
+from ..config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SchedulerConfig
 from ..messages import MessageStatus, SchedulerSequence
 from ..model_inputs import ModelInputs, VisionModelInputs
 from ..paging import Scheduler
@@ -50,9 +50,27 @@ class InferOutput:
 def _tensorlize_block_offsets(block_offsets, dtype=torch.int32):
     """tensorlize block_offsets."""
     from torch.nn.utils.rnn import pad_sequence
-    block_offsets = [torch.from_numpy(off).to(dtype) for off in block_offsets]
-    block_offsets = pad_sequence(block_offsets, batch_first=True)
+    block_offsets = [torch.from_numpy(off) for off in block_offsets]
+    block_offsets = pad_sequence(block_offsets, batch_first=True).to(dtype)
     return block_offsets
+
+
+def _update_engine_config(engine_config: PytorchEngineConfig):
+    """update pytorch engine config."""
+    # make sure engine exits
+    if engine_config is None:
+        engine_config = PytorchEngineConfig()
+    else:
+        engine_config = copy.deepcopy(engine_config)
+
+    if engine_config.max_batch_size is None:
+        engine_config.max_batch_size = get_max_batch_size(engine_config.device_type)
+
+    if engine_config.dp != 1:
+        if engine_config.tp == 1 and engine_config.ep == 1:
+            engine_config.dp = 1
+
+    return engine_config
 
 
 def _build_scheduler_config(engine_config: PytorchEngineConfig):
@@ -96,6 +114,12 @@ def _build_dist_config(engine_config: PytorchEngineConfig):
                              dp_rank=engine_config.dp_rank,
                              enable_microbatch=engine_config.enable_microbatch)
     return dist_config
+
+
+def _build_misc_config(engine_config: PytorchEngineConfig):
+    """build misc config."""
+    misc_config = MiscConfig(custom_module_map=engine_config.custom_module_map)
+    return misc_config
 
 
 class RunableEventBase:
@@ -290,22 +314,13 @@ class Engine:
                  tokenizer: object,
                  engine_config: PytorchEngineConfig = None,
                  trust_remote_code: bool = True) -> None:
-        # make sure engine exits
-        if engine_config is None:
-            engine_config = PytorchEngineConfig()
-        else:
-            engine_config = copy.deepcopy(engine_config)
-        if engine_config.max_batch_size is None:
-            engine_config.max_batch_size = get_max_batch_size(engine_config.device_type)
+        engine_config = _update_engine_config(engine_config)
 
-        tp = engine_config.tp
-        dp = engine_config.dp
-        dp_rank = engine_config.dp_rank
-
+        # dist args
         self.tokenizer = tokenizer
-        self.tp = tp
-        self.dp = dp
-        self.dp_rank = dp_rank
+        self.tp = engine_config.tp
+        self.dp = engine_config.dp
+        self.dp_rank = engine_config.dp_rank
 
         # download models and adapters
         if not os.path.exists(model_path):
@@ -327,6 +342,7 @@ class Engine:
         cache_config = _build_cache_config(engine_config)
         backend_config = _build_backend_config(engine_config)
         dist_config = _build_dist_config(engine_config)
+        misc_config = _build_misc_config(engine_config)
         self.should_execute_dummy_batch = dist_config.need_dummy_batch()
 
         # build model agent
@@ -337,6 +353,7 @@ class Engine:
                                        cache_config=cache_config,
                                        backend_config=backend_config,
                                        dist_config=dist_config,
+                                       misc_config=misc_config,
                                        tokenizer=raw_tokenizer,
                                        adapters=adapters,
                                        device_type=engine_config.device_type,
@@ -355,6 +372,7 @@ class Engine:
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
         self.backend_config = backend_config
+        self.dist_config = dist_config
         self.max_session_len = self._get_max_session_len()
 
         self.req_manager = self._bind_request_manager()
@@ -439,7 +457,9 @@ class Engine:
     def _get_max_session_len(self):
         """get max session len."""
         session_len = self.scheduler_config.max_session_len
-        max_tokens = (self.cache_config.num_gpu_blocks * self.cache_config.block_size)
+        block_size = self.cache_config.block_size
+        # leave one block to avoid over allocate
+        max_tokens = (self.cache_config.num_gpu_blocks * block_size - block_size)
         window_size = self.cache_config.window_size
         if window_size > 0 and window_size <= max_tokens:
             max_tokens = (1 << 63) - 1
@@ -579,7 +599,10 @@ class Engine:
 
     @property
     def gpu_count(self):
-        return self.tp * self.dp
+        dist_config = self.dist_config
+        if dist_config.dp > 1:
+            return 1
+        return max(dist_config.tp, dist_config.ep)
 
     @property
     def torch_int_dtype(self):
@@ -1009,7 +1032,6 @@ class Engine:
         next_running = None
 
         while True:
-            logger.info('begin loop')
             if next_running is None:
                 await has_runable_event.wait()
                 scheduler.collect_migration_done()
@@ -1021,16 +1043,12 @@ class Engine:
             for idx in range(num_loops):
                 if idx >= num_loops - 1:
                     forward_inputs, next_running = await inputs_maker.prefetch_next_inputs()
-                logger.info('inputs forwarding done')
                 out = await self.executor.get_output_async()
-                logger.info('get_output_async done')
                 if len(out) > 0:
                     step_outputs = self._make_infer_outputs(**out, running=running)
                     resp_que.put_nowait(step_outputs)
-                logger.info('send response done')
             scheduler.unlock_running(running)
             has_runable_event.set()
-            logger.info('end loop')
 
     @staticmethod
     def _add_loop_tasks_done_callback(tasks: List[asyncio.Task]):

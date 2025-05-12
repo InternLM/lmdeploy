@@ -42,7 +42,7 @@ def run_chat(model_path: str,
     from lmdeploy import pipeline
 
     if gen_config is None:
-        gen_config = GenerationConfig(do_sample=True)
+        gen_config = GenerationConfig(max_new_tokens=4096, do_sample=True)
 
     adapter_name = None
     if engine_config.adapters is not None:
@@ -131,7 +131,7 @@ def main(model_path: str,
     if adapter is not None:
         adapters = dict(default=adapter)
     engine_config = PytorchEngineConfig(tp=tp, adapters=adapters)
-    gen_config = GenerationConfig(max_new_tokens=512,
+    gen_config = GenerationConfig(max_new_tokens=4096,
                                   top_k=top_k,
                                   top_p=top_p,
                                   temperature=temperature,

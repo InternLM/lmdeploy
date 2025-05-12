@@ -15,7 +15,7 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 
 from lmdeploy.pytorch.backends.selector import init_backend
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, ModelConfig
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig
 from lmdeploy.utils import get_logger, try_import_deeplink
 
 from .base import ExecutorBase
@@ -223,6 +223,7 @@ class MPExecutor(ExecutorBase):
                  cache_config: CacheConfig,
                  backend_config: BackendConfig,
                  dist_config: DistConfig,
+                 misc_config: MiscConfig,
                  tokenizer: Any,
                  adapters: Dict[str, str] = None,
                  device_type: str = 'cuda'):
@@ -233,6 +234,7 @@ class MPExecutor(ExecutorBase):
                          backend_config=backend_config,
                          tokenizer=tokenizer,
                          dist_config=dist_config,
+                         misc_config=misc_config,
                          adapters=adapters,
                          device_type=device_type)
 
@@ -263,6 +265,7 @@ class MPExecutor(ExecutorBase):
                        cache_config=cache_config,
                        backend_config=backend_config,
                        dist_config=dist_config,
+                       misc_config=misc_config,
                        tokenizer=tokenizer,
                        adapters=adapters,
                        device_type=device_type,
@@ -424,6 +427,7 @@ class MPWorkerWrapper(WorkerWrapperBase):
         backend_config: BackendConfig,
         model_config: ModelConfig,
         dist_config: DistConfig,
+        misc_config: MiscConfig,
         adapters: Dict[str, str] = None,
         device_type: str = 'cuda',
         tokenizer: Any = None,
@@ -435,6 +439,7 @@ class MPWorkerWrapper(WorkerWrapperBase):
             backend_config=backend_config,
             model_config=model_config,
             dist_config=dist_config,
+            misc_config=misc_config,
             adapters=adapters,
             device_type=device_type,
             tokenizer=tokenizer,
@@ -485,6 +490,7 @@ class ExecutorProc:
         cache_config: CacheConfig,
         backend_config: BackendConfig,
         dist_config: DistConfig,
+        misc_config: MiscConfig,
         tokenizer: Any,
         adapters: Dict[str, str] = None,
         device_type: str = 'cuda',
@@ -506,6 +512,7 @@ class ExecutorProc:
                                  backend_config=backend_config,
                                  model_config=model_config,
                                  dist_config=dist_config,
+                                 misc_config=misc_config,
                                  adapters=adapters,
                                  device_type=device_type,
                                  tokenizer=tokenizer,

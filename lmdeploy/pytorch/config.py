@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from dataclasses import dataclass
-from typing import Any, Dict, List, Literal
+from typing import Any, List, Literal
 
 import torch
 
@@ -143,7 +143,7 @@ class ModelConfig:
     vocab_size: int = 40000
     hf_config: Any = None
     cogvlm_style: bool = False
-    custom_module_map: Dict[str, setattr] = None
+    custom_module_map: str = None
     use_flash_mla: bool = False
 
     def get_head_size(self):
@@ -212,3 +212,8 @@ class ModelConfig:
             model_config.eos_token_id = [model_config.eos_token_id]
 
         return model_config
+
+
+@dataclass
+class MiscConfig:
+    custom_module_map: str = None

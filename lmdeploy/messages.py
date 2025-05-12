@@ -293,7 +293,7 @@ class PytorchEngineConfig:
         enable_prefix_caching (bool): Enable token match and sharing caches.
         device_type (str): The inference device type, options ['cuda']
         eager_mode (bool): Enable "eager" mode or not
-        custom_module_map (Dict): nn module map customized by users. Once
+        custom_module_map (str): nn module map customized by users. Once
             provided, the original nn modules of the model will be
             substituted by the mapping ones
         download_dir (str): Directory to download and load the weights,
@@ -329,7 +329,7 @@ class PytorchEngineConfig:
     enable_prefix_caching: bool = False
     device_type: str = 'cuda'
     eager_mode: bool = False
-    custom_module_map: Dict[str, str] = None
+    custom_module_map: str = None
     download_dir: str = None
     revision: str = None
     quant_policy: Literal[0, 4, 8] = 0

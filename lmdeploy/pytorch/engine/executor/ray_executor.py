@@ -14,7 +14,7 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.backends.selector import init_backend
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, ModelConfig
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
@@ -207,6 +207,7 @@ class RayWorkerWrapper(WorkerWrapperBase):
         cache_config: CacheConfig,
         backend_config: BackendConfig,
         dist_config: DistConfig,
+        misc_config: MiscConfig,
         adapters: Dict[str, str] = None,
         device_type: str = 'cuda',
         dtype: str = 'auto',
@@ -223,6 +224,7 @@ class RayWorkerWrapper(WorkerWrapperBase):
             backend_config=backend_config,
             model_config=model_config,
             dist_config=dist_config,
+            misc_config=misc_config,
             adapters=adapters,
             device_type=device_type,
             tokenizer=tokenizer,
@@ -274,6 +276,7 @@ class RayExecutor(ExecutorBase):
                  cache_config: CacheConfig,
                  backend_config: BackendConfig,
                  dist_config: DistConfig,
+                 misc_config: MiscConfig,
                  tokenizer: Any,
                  adapters: Dict[str, str] = None,
                  device_type: str = 'cuda',
@@ -284,6 +287,7 @@ class RayExecutor(ExecutorBase):
                          cache_config=cache_config,
                          backend_config=backend_config,
                          dist_config=dist_config,
+                         misc_config=misc_config,
                          tokenizer=tokenizer,
                          adapters=adapters,
                          device_type=device_type)
@@ -313,6 +317,7 @@ class RayExecutor(ExecutorBase):
                 cache_config=cache_config,
                 backend_config=backend_config,
                 dist_config=dist_config,
+                misc_config=misc_config,
                 adapters=adapters,
                 device_type=device_type,
                 dtype=dtype,
