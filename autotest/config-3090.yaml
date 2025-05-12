@@ -6,8 +6,8 @@ benchmark_path: /nvme/qa_test_models/benchmark-reports
 dataset_path: /nvme/qa_test_models/datasets/ShareGPT_V3_unfiltered_cleaned_split.json
 
 tp_config:
-    internlm2-chat-20b: 2
-    
+    empty: 2
+
 
 turbomind_chat_model:
     - meta-llama/Llama-3.2-3B-Instruct
@@ -49,6 +49,7 @@ turbomind_quatization:
     no_awq:
         - meta-llama/Meta-Llama-3-1-70B-Instruct
     gptq:
+        - empty
     no_kvint4:
         - Qwen/Qwen3-8B
         - Qwen/Qwen2.5-7B-Instruct
