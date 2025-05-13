@@ -194,20 +194,6 @@ class Scheduler:
             running.append(seq)
             nonlocal token_count
             token_count += seq.num_token_ids
-            if seq.migration_request:
-                migration_execution_requests: List[Tuple[int, List[Tuple[int, int]]]] = []
-                migration_request = seq.migration_request
-                prefill_block_ids = migration_request.remote_block_ids
-                decode_block_ids = list(self.block_manager.get_block_table(msg=seq))
-
-                assert len(prefill_block_ids) == len(decode_block_ids)
-                migration_execution_requests.append((
-                    migration_request.remote_engine_id,
-                    list(zip(prefill_block_ids, decode_block_ids)),
-                ))
-                migration_inputs = MigrationExecutionBatch(protocol=migration_request.protocol,
-                                                           requests=migration_execution_requests)
-                seq.migration_inputs = migration_inputs
 
         def __evict_for_seq(seq: SchedulerSequence, waiting):
             """evict until can append."""
