@@ -167,6 +167,69 @@ class ModelInputs:
 
     def split(self, split_size: int):
         """split inputs."""
+
+        def __get_flatten_mms(vision_inputs):
+            """get flatten multimodal data."""
+            input_mms = vision_inputs.input_multimodals[0]
+
+            flatten_mms = []
+            for k, mms in input_mms.items():
+                mms = [(k, mm) for mm in mms]
+                flatten_mms += mms
+
+            flatten_mms = sorted(flatten_mms, key=lambda mm: mm[1].start)
+            return flatten_mms
+
+        def __get_vision_inputs(flatten_mms, start):
+            """get vision inputs."""
+            nonlocal cross_length
+            mm_end = flatten_mms[0][1].end
+
+            # input_mms is the multimodal data for current split
+            input_mms = dict()
+            key, mm = flatten_mms.pop(0)
+            input_mms.setdefault(key, [])
+            input_mms[key].append(mm)
+            end = start + mm.end - mm.start
+
+            # iter over all multimodal data
+            while len(flatten_mms) > 0:
+                next_mm = flatten_mms[0]
+                next_start = next_mm[1].start
+                next_end = next_mm[1].end
+
+                # break if multimodal data is not in the range
+                if next_start >= mm_end:
+                    break
+
+                # update end
+                key = next_mm[0]
+                input_mms.setdefault(key, [])
+                input_mms[key].append(next_mm[1])
+                end += max(0, next_end - mm_end)
+
+                flatten_mms.pop(0)
+
+                # update for mllama(dirty)
+                if cross_length is not None:
+                    encoder_len = next_mm[1].encoder_len
+                    if encoder_len is not None:
+                        cross_length += encoder_len
+            vision_inputs = VisionModelInputs(input_multimodals=[input_mms], )
+            return vision_inputs, end
+
+        def __try_get_vision_inputs(flatten_mms, start):
+            """try get vision inputs."""
+            mm_start = flatten_mms[0][1].start
+
+            # vision inputs has not been arrived
+            if mm_start > self.history_lengths + start:
+                end = min(mm_start - self.history_lengths, start + split_size)
+                return None, end
+
+            # get vision inputs
+            return __get_vision_inputs(flatten_mms, start)
+
         assert len(self.seq_length) == 1, ('Can not perform split on batched input.')
 
         input_ids = self.input_ids
@@ -177,14 +240,7 @@ class ModelInputs:
         vision_inputs = self.vision_inputs
         if vision_inputs is not None:
             if vision_inputs.input_multimodals is not None:
-                input_mms = vision_inputs.input_multimodals[0]
-
-                flatten_mms = []
-                for k, mms in input_mms.items():
-                    mms = [(k, mm) for mm in mms]
-                    flatten_mms += mms
-
-                flatten_mms = sorted(flatten_mms, key=lambda mm: mm[1].start)
+                flatten_mms = __get_flatten_mms(vision_inputs)
 
         max_seq_len = self.seq_length[0].item()
         ret = []
@@ -194,37 +250,12 @@ class ModelInputs:
         if history_cross_length is not None:
             cross_length = self.history_cross_length.clone()
         while start < max_seq_len:
-            vision_inputs = None
             if len(flatten_mms) > 0:
-                mm_start = flatten_mms[0][1].start
-                mm_end = flatten_mms[0][1].end
-                if mm_start > self.history_lengths + start:
-                    end = min(mm_start - self.history_lengths, start + split_size)
-                else:
-                    input_mms = dict()
-                    key, mm = flatten_mms.pop(0)
-                    input_mms.setdefault(key, [])
-                    input_mms[key].append(mm)
-                    end = start + mm.end - mm.start
-                    while len(flatten_mms) > 0:
-                        next_mm = flatten_mms[0]
-                        next_start = next_mm[1].start
-                        next_end = next_mm[1].end
-                        if next_start < mm_end:
-                            key = next_mm[0]
-                            input_mms.setdefault(key, [])
-                            input_mms[key].append(next_mm[1])
-                            end += max(0, next_end - mm_end)
-                            flatten_mms.pop(0)
-
-                            if cross_length is not None:
-                                encoder_len = next_mm[1].encoder_len
-                                if encoder_len is not None:
-                                    cross_length += encoder_len
-                        else:
-                            break
-                    vision_inputs = VisionModelInputs(input_multimodals=[input_mms], )
+                # for inputs contain multimodal data
+                vision_inputs, end = __try_get_vision_inputs(flatten_mms, start)
             else:
+                # for language inputs
+                vision_inputs = None
                 end = min(max_seq_len, start + split_size)
 
             inp = ModelInputs(
