@@ -278,7 +278,7 @@ class SubCliServe:
                                                  quant_policy=args.quant_policy,
                                                  eager_mode=args.eager_mode,
                                                  max_prefill_token_num=args.max_prefill_token_num,
-                                                 log_stats=args.log_stats)
+                                                 enable_metrics=args.enable_metrics)
         else:
             backend_config = TurbomindEngineConfig(dtype=args.dtype,
                                                    tp=args.tp,
@@ -375,7 +375,7 @@ class SubCliServe:
                        max_log_len=args.max_log_len,
                        disable_fastapi_docs=args.disable_fastapi_docs,
                        max_concurrent_requests=args.max_concurrent_requests,
-                       log_stats=args.log_stats,
+                       enable_metrics=args.enable_metrics,
                        reasoning_parser=args.reasoning_parser,
                        tool_call_parser=args.tool_call_parser)
 

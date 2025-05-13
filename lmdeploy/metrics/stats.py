@@ -3,7 +3,7 @@
 
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from lmdeploy.messages import EngineCoreEvent, EngineOutput, ResponseType
@@ -43,7 +43,7 @@ class FinishedRequestStats:
     e2e_latency: float = 0.0
     num_prompt_tokens: int = 0
     num_generation_tokens: int = 0
-    max_tokens_param: Optional[int] = None
+    # max_tokens_param: Optional[int] = None
     queued_time: float = 0.0
     prefill_time: float = 0.0
     inference_time: float = 0.0
@@ -84,7 +84,7 @@ class IterationStats:
 
         # Process request-level engine core events
         if output.events is not None:
-            self.update_from_events(output.events, is_prefilling, req_stats)
+            self.update_from_events(output.events, req_stats)
 
         # Process the batch-level "new tokens" engine core event
         if is_prefilling:
@@ -95,9 +95,7 @@ class IterationStats:
 
         req_stats.last_token_ts = engine_core_timestamp
 
-    def update_from_events(self, events: list['EngineCoreEvent'], is_prefilling: bool, req_stats: RequestStateStats):
-        # FIXME: use is_prefilling?
-
+    def update_from_events(self, events: list['EngineCoreEvent'], req_stats: RequestStateStats):
         # Avoid circular dependency
         from lmdeploy.messages import EngineCoreEventType
 
@@ -117,8 +115,6 @@ class IterationStats:
             num_prompt_tokens: int,
             #  max_tokens_param: Optional[int],
             req_stats: RequestStateStats):
-        # Avoid circular dependency
-        # from lmdeploy.messages import ResponseType
 
         e2e_latency = self._time_since(req_stats.arrival_time)
 

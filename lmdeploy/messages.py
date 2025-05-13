@@ -312,7 +312,7 @@ class PytorchEngineConfig:
             'Decode']. Default to `EngineRole.Hybrid`.
         migration_backend: migration backend. options: ['DLSlime'].
             Default to `MigrationBackend.DLSlime`.
-        log_stats (bool): Whether log stats to cli / prometheus
+        enable_metrics (bool): Whether log stats to cli / prometheus
     """
     dtype: str = 'auto'
     tp: int = 1
@@ -341,7 +341,7 @@ class PytorchEngineConfig:
 
     role: EngineRole = EngineRole.Hybrid
     migration_backend: MigrationBackend = MigrationBackend.DLSlime
-    log_stats: bool = False
+    enable_metrics: bool = False
 
     def __post_init__(self):
         """Check input validation."""
@@ -478,11 +478,11 @@ class EngineOutput:
 class RequestState:
     """per request state."""
 
-    def __init__(self, arrival_time: float, prompt_len: int, is_prefilling: bool, log_stats: bool):
+    def __init__(self, arrival_time: float, prompt_len: int, is_prefilling: bool, enable_metrics: bool):
 
         self.prompt_len: int = prompt_len
         self.is_prefilling: bool = is_prefilling
-        self.stats = RequestStateStats(arrival_time=arrival_time) if log_stats else None
+        self.stats = RequestStateStats(arrival_time=arrival_time) if enable_metrics else None
 
 
 @dataclass

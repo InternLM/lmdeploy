@@ -1138,7 +1138,7 @@ def serve(model_path: str,
           max_log_len: int = None,
           disable_fastapi_docs: bool = False,
           max_concurrent_requests: Optional[int] = None,
-          log_stats: Optional[bool] = True,
+          enable_metrics: Optional[bool] = True,
           reasoning_parser: Optional[str] = None,
           tool_call_parser: Optional[str] = None,
           allow_terminate_by_client: bool = False,
@@ -1191,7 +1191,7 @@ def serve(model_path: str,
             process the engine’s tasks once the maximum number of concurrent
             requests is reached, regardless of any additional requests sent by
             clients concurrently during that time. Default to None.
-        log_stats: Whether log stats to cli / prometheus
+        enable_metrics: Whether log stats to cli / prometheus
         reasoning_parser (str): The reasoning parser name.
         tool_call_parser (str): The tool call parser name.
         allow_terminate_by_client (bool): Allow request from client to terminate server.
@@ -1219,7 +1219,7 @@ def serve(model_path: str,
                                                     backend_config=backend_config,
                                                     chat_template_config=chat_template_config,
                                                     max_log_len=max_log_len,
-                                                    log_stats=log_stats,
+                                                    enable_metrics=enable_metrics,
                                                     **kwargs)
     # set reasoning parser and tool parser
     set_parsers(reasoning_parser, tool_call_parser)
@@ -1230,7 +1230,7 @@ def serve(model_path: str,
         async_engine = VariableInterface.async_engine
         task = None
         try:
-            if log_stats:
+            if enable_metrics:
                 log_interval = 1.  # FIXME: change this
 
                 async def _force_log():
@@ -1255,7 +1255,7 @@ def serve(model_path: str,
 
     app.include_router(router)
 
-    if log_stats:
+    if enable_metrics:
         # add prometheus asgi middleware to route '/metrics' requests
         metrics_app = prometheus_client.make_asgi_app()
         app.mount('/metrics', metrics_app)

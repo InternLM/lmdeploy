@@ -329,8 +329,8 @@ def build_1_2_5_buckets(max_value: int) -> list[int]:
     return build_buckets([1, 2, 5], max_value)
 
 
-def setup_loggers(log_stats: bool, engine_num: int):
-    if not log_stats:
+def setup_loggers(enable_metrics: bool, engine_num: int):
+    if not enable_metrics:
         return []
 
     stat_loggers: list[list[StatLoggerBase]] = []

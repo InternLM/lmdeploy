@@ -253,7 +253,7 @@ class AsyncEngine(LogitsMixin):
             Default to None.
         max_log_len (int): Max number of prompt characters or prompt tokens
             being printed in log. Default: Unlimited
-        log_stats (bool): Whether log stats to cli / prometheus
+        enable_metrics (bool): Whether log stats to cli / prometheus
     """
 
     def __init__(self,
@@ -263,13 +263,14 @@ class AsyncEngine(LogitsMixin):
                  backend_config: Optional[Union[TurbomindEngineConfig, PytorchEngineConfig]] = None,
                  chat_template_config: Optional[ChatTemplateConfig] = None,
                  max_log_len: int = None,
-                 log_stats: Optional[bool] = True,
+                 enable_metrics: Optional[bool] = True,
                  **kwargs) -> None:
 
         # setup stat loggers
-        backend_config.log_stats = log_stats
-        self.log_stats = log_stats
-        self.stat_loggers: List[List[StatLoggerBase]] = setup_loggers(log_stats=log_stats, engine_num=backend_config.dp)
+        backend_config.enable_metrics = enable_metrics
+        self.enable_metrics = enable_metrics
+        self.stat_loggers: List[List[StatLoggerBase]] = setup_loggers(enable_metrics=enable_metrics,
+                                                                      engine_num=backend_config.dp)
 
         # setup chat template
         logger.info(f'input backend={backend}, backend_config={backend_config}')
@@ -780,7 +781,7 @@ class AsyncEngine(LogitsMixin):
                                      step=history_len) as gen:
                 prev_len = 0
                 hit_stop_token = 0
-                iteration_stats = IterationStats() if self.log_stats else None
+                iteration_stats = IterationStats() if self.enable_metrics else None
                 async for outputs in gen:
                     print(f'=> async engine step outputs {type(outputs)}, {outputs}')
 
@@ -841,14 +842,14 @@ class AsyncEngine(LogitsMixin):
                         arrival_time=outputs.timestamp,
                         prompt_len=input_len,
                         is_prefilling=(output_len == 0),  # FIXME: is this logic correct ?
-                        log_stats=self.log_stats)
+                        enable_metrics=self.enable_metrics)
                     self._update_stats_from_output(req_state=req_state,
                                                    engine_core_output=outputs,
                                                    iteration_stats=iteration_stats)
                     yield out
                 # end of generator loop
 
-                # update stats from per finished requests engine
+                # update stats from per finished requests engine outputs
                 self._update_stats_from_finished(
                     req_state=req_state,
                     finish_reason=outputs.status,  # ResponseType

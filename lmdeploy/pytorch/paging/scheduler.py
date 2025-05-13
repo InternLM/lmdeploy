@@ -146,7 +146,7 @@ class Scheduler:
         # push message to waiting queue
         self._set_message_status(seq, MessageStatus.WAITING)
 
-        if self.scheduler_config.log_stats:
+        if self.scheduler_config.enable_metrics:
             seq.record_event(EngineCoreEventType.QUEUED)
 
     @logging_timer('ScheduleMigration', logger)
@@ -257,7 +257,7 @@ class Scheduler:
             self.block_manager.allocate(seq)
             _to_running(seq)
 
-            if self.scheduler_config.log_stats:
+            if self.scheduler_config.enable_metrics:
                 seq.record_event(EngineCoreEventType.SCHEDULED, scheduled_timestamp)
 
         return running, swap_in_map, swap_out_map, copy_map

@@ -65,7 +65,7 @@ def _build_scheduler_config(engine_config: PytorchEngineConfig):
     scheduler_config = SchedulerConfig(max_batches=engine_config.max_batch_size,
                                        max_session_len=engine_config.session_len,
                                        prefill_interval=engine_config.prefill_interval,
-                                       log_stats=engine_config.log_stats)
+                                       enable_metrics=engine_config.enable_metrics)
     return scheduler_config
 
 
