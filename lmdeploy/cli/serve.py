@@ -126,7 +126,7 @@ class SubCliServe:
                             'reached, regardless of any additional requests sent by clients '
                             'concurrently during that time. Default to None.')
         # FIXME: change default value to False
-        parser.add_argument('--log-stats',
+        parser.add_argument('--enable-metrics',
                             action='store_true',
                             default=True,
                             help='Whether log stats to cli / prometheus')
