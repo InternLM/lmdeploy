@@ -19,11 +19,11 @@ struct GmemIteratorSm90 {
         step_     = step;
     }
 
-    __device__ void Load(uint64_t* mbar_ptr, void* smem_ptr, uint64_t cache_hint = 0)
+    __device__ void Load(uint64_t* mbar_ptr, void* smem_ptr, uint16_t mask, uint64_t cache_hint = 0)
     {
         if constexpr (multicast > 1) {
             cute::SM90_TMA_LOAD_MULTICAST_2D::copy(
-                desc_ptr_, mbar_ptr, (1 << multicast) - 1, cache_hint, smem_ptr, offset_.x, offset_.y);
+                desc_ptr_, mbar_ptr, mask, cache_hint, smem_ptr, offset_.x, offset_.y);
         }
         else {
             cute::SM90_TMA_LOAD_2D::copy(desc_ptr_, mbar_ptr, cache_hint, smem_ptr, offset_.x, offset_.y);

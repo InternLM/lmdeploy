@@ -126,15 +126,15 @@ template<class Arch_>
 struct GemmUniversalSm90_v2 {
 
     // using MMA_Atom = GMMA::MMA_64x128x16_F32BF16BF16_SS<GMMA::Major::K, GMMA::Major::K>;
-    using MMA_Atom = GMMA::MMA_64x96x32_F32E4M3E4M3_SS_TN<>;
+    using MMA_Atom = GMMA::MMA_64x192x32_F32E4M3E4M3_SS_TN<>;
     static constexpr typename cute::MMA_Traits<MMA_Atom>::Shape_MNK MMA_Shape{};
 
     static constexpr int MMA_ATOM_M = cute::get<0>(MMA_Shape);
     static constexpr int MMA_ATOM_N = cute::get<1>(MMA_Shape);
     static constexpr int MMA_ATOM_K = cute::get<2>(MMA_Shape);
 
-    static constexpr int kWorkGroupM = 1;
-    static constexpr int kWorkGroupN = 2;
+    static constexpr int kWorkGroupM = 2;
+    static constexpr int kWorkGroupN = 1;
 
     static constexpr int CTA_M = 128;
     static constexpr int CTA_N = MMA_ATOM_N * kWorkGroupN;
@@ -204,7 +204,7 @@ struct GemmUniversalSm90_v2 {
 
     static constexpr int kSmemSize = sizeof(SharedStorage);
 
-    static constexpr int kSwizzleC = 16;
+    static constexpr int kSwizzleC = 128;
 
     using LayoutC = std::conditional_t<kSwizzleC >= 32,
                                        SmemLayoutV2<CTA_M, CTA_N, -1, kSwizzleC / sizeof(Tc)>,
@@ -255,8 +255,12 @@ struct GemmUniversalSm90_v2 {
 
             const int cta_id = cute::block_id_in_cluster().x;
 
-            const int mc_offset_m = kMulticastA > 1 ? cta_id * (CTA_M / kMulticastA) : 0;
-            const int mc_offset_n = kMulticastB > 1 ? cta_id * (CTA_N / kMulticastB) : 0;
+            // NOTE: ternary operator is used to convince the compiler the result is constant in the trivial case
+            const int cta_id_m = kMulticastB > 1 ? cta_id % kMulticastB : 0;
+            const int cta_id_n = kMulticastA > 1 ? cta_id / kMulticastB : 0;
+
+            const int mc_offset_m = cta_id_n * (CTA_M / kMulticastA);
+            const int mc_offset_n = cta_id_m * (CTA_N / kMulticastB);
 
             auto  smem_A = storage.source.A.data() + mc_offset_m * CTA_K;
             auto  smem_B = storage.source.B.data() + mc_offset_n * CTA_K;
@@ -284,6 +288,25 @@ struct GemmUniversalSm90_v2 {
                     GmemIteratorSm90<kMulticastA> gmem_A{&tm_a, {offset_k, offset_m + mc_offset_m}, {CTA_K, 0}};
                     GmemIteratorSm90<kMulticastB> gmem_B{&tm_b, {offset_k, offset_n + mc_offset_n}, {CTA_K, 0}};
 
+                    constexpr uint16_t kBaseMaskB = (1 << kMulticastB) - 1;
+                    constexpr uint16_t kBaseMaskA = ((1 << kClusterSize) - 1) / kBaseMaskB;
+
+                    const uint16_t mask_B = kBaseMaskB << (cta_id_n * kMulticastB);
+                    const uint16_t mask_A = kBaseMaskA << (cta_id_m * 1);
+
+                    // if (!cta_id) {
+                    //     printf("base mask %x %x\n", (uint32_t)kBaseMaskA, (uint32_t)kBaseMaskB);
+                    // }
+
+                    // printf("producer arrive %d, %4d %4d, %2d %2d, %3x %3x\n",
+                    //        cta_id,
+                    //        offset_m,
+                    //        offset_n,
+                    //        cta_id_m,
+                    //        cta_id_n,
+                    //        (uint32_t)mask_A,
+                    //        (uint32_t)mask_B);
+
                     // column-major
                     GmemIteratorSm90<false> gmem_U{&tm_u, {offset_m, offset_k / 128}, {0, 1}};
 
@@ -291,9 +314,12 @@ struct GemmUniversalSm90_v2 {
                         int pipe = write_state.index();
                         ConsumerBar::wait(&consumer_bar[pipe], write_state.phase());
                         ProducerBar::arrive_and_expect_tx(&producer_bar[pipe], kTmaTxBytes);
-                        gmem_A.Load(&producer_bar[pipe], &smem_A[pipe * CTA_M * CTA_K]);
-                        gmem_B.Load(&producer_bar[pipe], &smem_B[pipe * CTA_N * CTA_K]);
-                        gmem_U.Load(&producer_bar[pipe], &smem_U[pipe][0]);
+
+                        gmem_A.Load(&producer_bar[pipe], &smem_A[pipe * CTA_M * CTA_K], mask_A);
+                        gmem_B.Load(&producer_bar[pipe], &smem_B[pipe * CTA_N * CTA_K], mask_B);
+
+                        gmem_U.Load(&producer_bar[pipe], &smem_U[pipe][0], 0);
+
                         ++write_state;
                     }
                 }
@@ -550,6 +576,8 @@ struct GemmUniversalSm90_v2 {
 
                         constexpr int N       = LayoutC::C0;
                         constexpr int SW_bits = log2(kSwizzleC / 16);
+
+                        static_assert(!SW_bits || MMA_ATOM_N % LayoutC::C0 == 0);
 
                         const int m0 = m * MMA_M + warp_group_id_m * MMA_ATOM_M;
                         const int n0 = n * MMA_N + warp_group_id_n * MMA_ATOM_N;
