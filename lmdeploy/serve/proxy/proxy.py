@@ -211,7 +211,8 @@ class NodeManager:
     def remove_stale_nodes_by_expiration(self):
         """remove stale nodes."""
         to_be_deleted = []
-        for node_url in self.nodes.keys():
+        node_urls = list(self.nodes.keys())
+        for node_url in node_urls:
             url = f'{node_url}/health'
             headers = {'accept': 'application/json'}
             try:
