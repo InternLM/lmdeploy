@@ -109,6 +109,14 @@ class PrometheusStatLogger(StatLoggerBase):
             labelnames=labelnames)
 
         #
+        # GPU cache
+        #
+        self.gauge_gpu_cache_usage = prometheus_client.Gauge(
+            name='lmdeploy:gpu_cache_usage_perc',
+            documentation='GPU KV-cache usage. 1 means 100 percent usage.',
+            labelnames=labelnames)
+
+        #
         # Counters
         #
         self.counter_prompt_tokens = prometheus_client.Counter(name='lmdeploy:prompt_tokens_total',
@@ -260,12 +268,11 @@ class PrometheusStatLogger(StatLoggerBase):
 
         self.gauge_scheduler_running.set(scheduler_stats.num_running_reqs)
         self.gauge_scheduler_waiting.set(scheduler_stats.num_waiting_reqs)
-        # self.gauge_gpu_cache_usage.set(scheduler_stats.gpu_cache_usage) # TODO
+
+        self.gauge_gpu_cache_usage.set(scheduler_stats.gpu_cache_usage)
 
         if iteration_stats is None:
             return
-        else:
-            print(iteration_stats.__dict__)
 
         self.counter_prompt_tokens.inc(iteration_stats.num_prompt_tokens)
         self.counter_generation_tokens.inc(iteration_stats.num_generation_tokens)
