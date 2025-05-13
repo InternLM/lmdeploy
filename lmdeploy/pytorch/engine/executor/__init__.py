@@ -78,6 +78,11 @@ def build_executor(model_path: str,
             'dp>1 requires distributed_executor_backend="ray", ',
             f'get distributed_executor_backend="{distributed_executor_backend}"')
 
+    if misc_config.empty_init:
+        assert distributed_executor_backend == 'ray', (
+            'empty_init requires distributed_executor_backend="ray", ',
+            f'get distributed_executor_backend="{distributed_executor_backend}"')
+
     if distributed_executor_backend is not None:
         logger.info(f'Build <{distributed_executor_backend}> executor.')
     if distributed_executor_backend == 'uni':

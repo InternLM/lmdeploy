@@ -70,6 +70,10 @@ class ExecutorBase:
         """warmup."""
         raise NotImplementedError('Not Implemented.')
 
+    def update_params(self, request: Any):
+        """update params."""
+        raise NotImplementedError('Not Implemented.')
+
     def get_input_processor(self):
         """get input processor."""
         raise NotImplementedError('Not Implemented.')

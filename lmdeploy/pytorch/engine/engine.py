@@ -118,7 +118,7 @@ def _build_dist_config(engine_config: PytorchEngineConfig):
 
 def _build_misc_config(engine_config: PytorchEngineConfig):
     """build misc config."""
-    misc_config = MiscConfig(custom_module_map=engine_config.custom_module_map)
+    misc_config = MiscConfig(custom_module_map=engine_config.custom_module_map, empty_init=engine_config.empty_init)
     return misc_config
 
 
@@ -1076,6 +1076,10 @@ class Engine:
         logger.info('Cleanup executor.')
         self.executor.stop()
         self.executor.release()
+
+    def update_params(self, request: Any):
+        """update params."""
+        self.executor.update_params(request)
 
     async def async_loop(self):
         try:

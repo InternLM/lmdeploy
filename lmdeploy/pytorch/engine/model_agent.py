@@ -1,13 +1,16 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import base64
 import functools
 from contextlib import asynccontextmanager, contextmanager
+from multiprocessing.reduction import ForkingPickler
 from typing import Any, Dict
 
 import torch
 import torch.distributed as dist
 
 from lmdeploy.pytorch.disagg.config import EngineRole
+from lmdeploy.serve.openai.protocol import UpdateParamsRequest
 from lmdeploy.utils import get_logger
 
 from ..backends import get_backend
@@ -163,13 +166,14 @@ class BaseModelAgent:
         model_path = self.model_path
         adapters = self.adapters
         device = self.device
-        custom_module_map = self.misc_config.custom_module_map
+        custom_module_map = self.model_config.custom_module_map
         if custom_module_map is not None:
             update_custom_module_map(custom_module_map)
         logger.debug(self.warp_msg('build model.'))
         patched_model = build_patched_model(self.model_config, device=device)
         logger.debug(self.warp_msg('loading weights.'))
-        load_model_weights(patched_model, model_path, device=device)
+        if not self.misc_config.empty_init:
+            load_model_weights(patched_model, model_path, device=device)
         if adapters is not None:
             logger.debug(self.warp_msg('loading adapters.'))
             add_adapters(patched_model, adapters, dtype=self.model_config.dtype, device=device)
@@ -663,6 +667,31 @@ class BaseModelAgent:
         """reset graph runner to prevent tp hanging."""
         if hasattr(self.patched_model, 'reset'):
             self.patched_model.reset()
+
+    @torch.inference_mode()
+    def update_params(self, request: UpdateParamsRequest):
+        """update params."""
+
+        # modified from https://github.com/vllm-project/vllm/blob/v0.8.5/examples/offline_inference/rlhf_utils.py#L82
+        def _construct(item):
+            func, args = item
+            args = list(args)
+            args[6] = torch.cuda.current_device()  # device id.
+            # clone() seems necessary otherwise the producer can not release the memory
+            return func(*args).clone()
+
+        with self.all_context():
+            weights = ForkingPickler.loads(base64.b64decode(request.serialized_named_tensors))
+            weights = [(k, _construct(v)) for k, v in weights]
+            self.patched_model.get_model().load_weights(weights)
+
+            if request.finished:
+                for _, mod in self.patched_model.get_model().named_modules():
+                    if not hasattr(mod, 'update_weights'):
+                        continue
+                    mod.update_weights()
+
+            torch.cuda.empty_cache()
 
     def release(self):
         """release."""

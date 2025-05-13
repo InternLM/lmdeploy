@@ -382,6 +382,10 @@ class RayExecutor(ExecutorBase):
         """build cache engine."""
         self.collective_rpc('build_cache_engine')
 
+    def update_params(self, request: Any):
+        """update params."""
+        self.collective_rpc('update_params', (request, ))
+
     def warmup(self):
         """build cache engine."""
         self.collective_rpc('warmup')

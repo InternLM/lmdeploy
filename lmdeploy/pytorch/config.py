@@ -217,3 +217,4 @@ class ModelConfig:
 @dataclass
 class MiscConfig:
     custom_module_map: str = None
+    empty_init: bool = False

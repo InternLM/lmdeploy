@@ -122,6 +122,10 @@ class WorkerWrapperBase:
         """build cache engine."""
         self.model_agent.build_cache_engine()
 
+    def update_params(self, request: Any):
+        """update params."""
+        self.model_agent.update_params(request)
+
     def warmup(self):
         """warmup."""
         self.model_agent.warmup()
