@@ -595,11 +595,15 @@ class SchedulerSequence:
                          token_ids: Tensor,
                          multimodals: MultiModalInputs = None,
                          embeddings: List[InputEmbeddings] = None,
-                         model_meta: Dict[str, Any] = None):
+                         model_meta: Dict[str, Any] = None,
+                         append_tokens: bool = False):
         """Update token ids, old token ids will be added to history."""
         old_num_history_ids = self._num_history_ids
 
-        self._num_history_ids += self._num_token_ids
+        # update history
+        if not append_tokens:
+            self._num_history_ids += self._num_token_ids
+
         # update history image nums
         self._num_history_images += self._num_images
         self._num_images = 0
@@ -629,7 +633,10 @@ class SchedulerSequence:
             token_ids = np.array(token_ids)
         if token_ids.ndim == 0:
             token_ids = token_ids[None]
-        self._num_token_ids = len(token_ids)
+        if append_tokens:
+            self._num_token_ids += len(token_ids)
+        else:
+            self._num_token_ids = len(token_ids)
         self.history_cache.append(token_ids)
         self.random_offsets += 1
         self.arrive_time = time.time()

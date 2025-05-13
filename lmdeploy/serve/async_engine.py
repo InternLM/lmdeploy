@@ -977,6 +977,13 @@ class AsyncEngine(LogitsMixin):
 
         return session
 
+    def start_loop(self):
+        """start engine loop."""
+        if hasattr(self.engine, 'start_loop'):
+            return self.engine.start_loop()
+        else:
+            return True
+
     """ DistServe Async Engine API Begin """
 
     def free_cache(self, session_id: int):

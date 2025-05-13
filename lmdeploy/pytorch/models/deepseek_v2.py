@@ -119,7 +119,7 @@ def execute_batch(inputs: list, fn, delta_stages: int = 0, exec_type: ExecType =
         before:
         A-attn0->A-attn1
         roll:
-        A-dis->B-attn0->B-attn1->A-dis_wait->B-dis->A-moe->B-dis_wait->A-comb->
+        B-attn0->B-attn1->A-dis->A-dis_wait->A-moe->B-dis->B-dis_wait->A-comb->
         B-moe->(A-share->A-comb_wait)->B-comb->A-attn0->A-attn1->(B-share->B-comb_wait)
         after:
         B-dis_wait->B-moe->B-comb->B-comb_wait and end
@@ -130,7 +130,7 @@ def execute_batch(inputs: list, fn, delta_stages: int = 0, exec_type: ExecType =
             worker_list[0].next()
 
         pipeline = [
-            '0-dis', '1-attn0', '1-attn1', '0-dis_wait', '1-dis', '0-moe', '1-dis_wait', '0-comb', '1-moe',
+            '1-attn0', '1-attn1', '0-dis', '0-dis_wait', '0-moe', '1-dis', '1-dis_wait', '0-comb', '1-moe',
             '0-share+0-comb_wait', '1-comb', '0-attn0', '0-attn1', '1-share+1-comb_wait'
         ]
         pipline_length = len(pipeline)
@@ -906,6 +906,8 @@ class DeepseekV2DecoderLayer(nn.Module):
             'moe_type': MoeType.DSAsyncDecode if is_decoding else MoeType.DSAsyncPrefill,
         }
 
+        self.mlp.experts.before_dispatch(state)
+
         # yield for attn1, dis (+share)
         yield
         recv_state = self.mlp.experts.dispatch(state)
@@ -1273,8 +1275,8 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             if name.endswith('.weight'):
                 weight_name = name
                 scale_name = name.replace('.weight', '.scale')
-            elif name.endswith('.scale'):
-                weight_name = name.replace('.scale', '.weight')
+            elif name.endswith('.weight_scale_inv'):
+                weight_name = name.replace('.weight_scale_inv', '.weight')
                 scale_name = name
             self._load_buffers[name] = loaded_weight
             if (weight_name in self._load_buffers and scale_name in self._load_buffers):
@@ -1288,7 +1290,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
         for (mod_name, head_dim, pe_dim_offset) in update_pe_mapping:
             if mod_name not in name:
                 continue
-            if name.endswith('.scale'):
+            if name.endswith('.weight_scale_inv'):
                 weight = loaded_weight
             else:
                 loaded_weight = loaded_weight.to(device)
@@ -1327,8 +1329,6 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             ('.gate_up_proj', '.gate_proj', 0),
             ('.gate_up_proj', '.up_proj', 1),
         ]
-
-        scale_suffix = '.weight_scale_inv'
 
         config = self.config
 
@@ -1375,8 +1375,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                     continue
             if self.config.tie_word_embeddings and 'lm_head.weight' in name:
                 continue
-            if name.endswith(scale_suffix):
-                name = name[:-len(scale_suffix)] + '.scale'
+
             if '.experts' in name:
                 self._load_weight_experts(name, loaded_weight, params_dict, expert_params_mapping=expert_params_mapping)
             elif '.self_attn' in name and getattr(config, 'use_mla', True):
