@@ -126,15 +126,15 @@ template<class Arch_>
 struct GemmUniversalSm90_v2 {
 
     // using MMA_Atom = GMMA::MMA_64x128x16_F32BF16BF16_SS<GMMA::Major::K, GMMA::Major::K>;
-    using MMA_Atom = GMMA::MMA_64x192x32_F32E4M3E4M3_SS_TN<>;
+    using MMA_Atom = GMMA::MMA_64x96x32_F32E4M3E4M3_SS_TN<>;
     static constexpr typename cute::MMA_Traits<MMA_Atom>::Shape_MNK MMA_Shape{};
 
     static constexpr int MMA_ATOM_M = cute::get<0>(MMA_Shape);
     static constexpr int MMA_ATOM_N = cute::get<1>(MMA_Shape);
     static constexpr int MMA_ATOM_K = cute::get<2>(MMA_Shape);
 
-    static constexpr int kWorkGroupM = 2;
-    static constexpr int kWorkGroupN = 1;
+    static constexpr int kWorkGroupM = 1;
+    static constexpr int kWorkGroupN = 2;
 
     static constexpr int CTA_M = 128;
     static constexpr int CTA_N = MMA_ATOM_N * kWorkGroupN;
@@ -204,7 +204,7 @@ struct GemmUniversalSm90_v2 {
 
     static constexpr int kSmemSize = sizeof(SharedStorage);
 
-    static constexpr int kSwizzleC = 128;
+    static constexpr int kSwizzleC = 16;
 
     using LayoutC = std::conditional_t<kSwizzleC >= 32,
                                        SmemLayoutV2<CTA_M, CTA_N, -1, kSwizzleC / sizeof(Tc)>,

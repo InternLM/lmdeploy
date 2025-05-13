@@ -201,7 +201,11 @@ public:
             // std::cout << "V: " << Vdesc << "\n";
         }
 
-        const auto grid  = 132;
+        static constexpr int sm_count = 132;
+
+        static constexpr int cluster_size = Gemm::kClusterSize;
+
+        auto       grid  = sm_count / cluster_size * cluster_size;
         const auto block = Gemm::CTA_SIZE;
 
         cudaLaunchConfig_t config{};
@@ -222,12 +226,18 @@ public:
         cudaLaunchAttribute attrs[1];
 
         attrs[0].id               = cudaLaunchAttributeClusterDimension;
-        attrs[0].val.clusterDim.x = Gemm::kClusterSize;
+        attrs[0].val.clusterDim.x = cluster_size;
         attrs[0].val.clusterDim.y = 1;
         attrs[0].val.clusterDim.z = 1;
 
         config.attrs    = attrs;
         config.numAttrs = std::size(attrs);
+
+        int max_active_cluster{};
+        cudaOccupancyMaxActiveClusters(&max_active_cluster, func, &config);
+        config.gridDim = max_active_cluster * cluster_size;
+
+        // std::cout << "max active cluster: " << max_active_cluster << "\n";
 
         // std::cout << "swizzle: " << swizzle << ", split: " << splits << "\n";
 

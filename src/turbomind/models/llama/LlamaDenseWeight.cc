@@ -1,5 +1,6 @@
 #include "src/turbomind/models/llama/LlamaDenseWeight.h"
 
+#include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/kernels/gemm/cast.h"
 #include "src/turbomind/kernels/gemm/gemm.h"
@@ -7,6 +8,7 @@
 #include "src/turbomind/kernels/gpt_kernels.h"
 
 #include "src/turbomind/utils/memory_utils.h"
+#include <utility>
 
 namespace turbomind {
 
@@ -19,17 +21,21 @@ void LlamaDenseWeight::emplace(
     this->output_dim  = output_dim;
     this->group_size  = group_size;
 
-    const auto wbits = byte_size(weight_type, 8);
+    const bool is_qweight = weight_type == kUint4 || weight_type == kUint8;
 
     weight = Tensor({input_dim, output_dim}, weight_type, kDEVICE);
-    register_parameter(wbits < 16 ? "qweight" : "weight", weight);
+    register_parameter(is_qweight ? "qweight" : "weight", weight);
 
     if (bias) {
         this->bias = Tensor{{output_dim}, data_type, kDEVICE};
         register_parameter("bias", this->bias);
     }
 
-    if (wbits < 16) {
+    if (weight_type == kFloat8_e4m3) {
+        scales = Tensor{{cdiv(input_dim, 128), cdiv(output_dim, 128)}, kFloat, kDEVICE};
+        register_parameter("scales", scales);
+    }
+    else if (is_qweight) {
         TM_CHECK(input_dim % group_size == 0) << input_dim << " " << group_size;
         scales = Tensor{{input_dim / group_size, output_dim}, data_type, kDEVICE};
         zeros  = Tensor{{input_dim / group_size, output_dim}, data_type, kDEVICE};
@@ -158,7 +164,28 @@ static void convert_fp(LlamaDenseWeight& dense, bool is_fused_moe, bool use_simt
     dense.k_desc = dst;
 }
 
-static void convert(LlamaDenseWeight& dense, bool is_fused_moe, DataType data_type, bool use_simt, cudaStream_t st) {}
+static void convert_f8(LlamaDenseWeight& dense, cudaStream_t stream)
+{
+    using namespace gemm;
+
+    auto process = [&](Tensor& x, MatrixLayout& d, auto dtype) {
+        using T = decltype(dtype);
+        Tensor trans{{x.shape(1), x.shape(0)}, x.dtype(), kDEVICE};
+        invokeTransposeAxis01((T*)trans.raw_data(), (T*)x.raw_data(), x.shape(0), x.shape(1), 1, stream);
+        x = std::move(trans);
+        d = MatrixLayout{x.dtype(),  //
+                         kColMajor,
+                         (int)x.shape(1),
+                         (int)x.shape(0),
+                         (int)x.stride(0)};
+    };
+
+    TM_CHECK_EQ(dense.weight.dtype(), kFloat8_e4m3);
+    process(dense.weight, dense.k_desc, uint8_t{});
+
+    TM_CHECK_EQ(dense.scales.dtype(), kFloat);
+    process(dense.scales, dense.q_desc, float{});
+}
 
 void LlamaDenseWeight::prepare(bool fused_moe, bool use_simt)
 {
@@ -171,6 +198,10 @@ void LlamaDenseWeight::prepare(bool fused_moe, bool use_simt)
     if (weight_type == data_type_v<uint4_t>) {
         TM_CHECK_EQ(data_type, data_type_v<half_t>);
         convert_u4(*this, fused_moe, use_simt, stream);
+    }
+    else if (weight_type == data_type_v<fp8_e4m3_t>) {
+        TM_CHECK_EQ(data_type, data_type_v<bfloat16_t>);
+        convert_f8(*this, stream);
     }
     else {
         convert_fp(*this, fused_moe, use_simt, stream);
@@ -340,6 +371,7 @@ void chunk(LlamaDenseWeight& c, LlamaDenseWeight& a, LlamaDenseWeight& b, DataTy
             cudaMemcpy2DAsync((char*)c + width, width * 2, b, width, width, height, cudaMemcpyDefault, st));
     };
 
+    // TODO: remove unused branches
     auto invoke = [&](auto t) {
         using T = decltype(t);
         if (c.weight_type == data_type_v<uint4_t>) {
@@ -362,7 +394,21 @@ void chunk(LlamaDenseWeight& c, LlamaDenseWeight& a, LlamaDenseWeight& b, DataTy
         sync_check_cuda_error();
     };
 
-    TM_DISPATCH_DTYPES(data_type, invoke, half_t, bfloat16_t);
+    if (c.weight_type == kFloat8_e4m3) {
+        _chunks(c.scales.data<float>(),
+                a.scales.data<float>(),
+                b.scales.data<float>(),
+                cdiv(a.input_dim, a.group_size),
+                sizeof(float) * cdiv(a.output_dim, a.group_size));
+        _chunks(c.weight.data<fp8_e4m3_t>(),
+                a.weight.data<fp8_e4m3_t>(),
+                b.weight.data<fp8_e4m3_t>(),
+                a.input_dim,
+                a.output_dim);
+    }
+    else {
+        TM_DISPATCH_DTYPES(data_type, invoke, half_t, bfloat16_t);
+    }
 }
 
 void LlamaFfnWeight::prepare(bool fused_moe, bool use_simt)
@@ -371,6 +417,7 @@ void LlamaFfnWeight::prepare(bool fused_moe, bool use_simt)
 
     auto stream = core::Context().stream().handle();
 
+    // if (fuse_up_and_gate && gating.weight_type != DataType::kFloat8_e4m3) {
     if (fuse_up_and_gate) {
         auto& fused_up_and_gate = fused_gating_intermediate;
 

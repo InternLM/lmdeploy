@@ -1,11 +1,15 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
+#include "src/turbomind/core/cuda_data_type.h"
+#include "src/turbomind/core/data_type.h"
+
 #include "src/turbomind/kernels/gemm/gemm.h"
 #include "src/turbomind/kernels/gemm/types.h"
-#include "src/turbomind/models/llama/LlamaLinear.h"
-#include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/kernels/quantization.h"
 
-#include "src/turbomind/core/cuda_data_type.h"
+#include "src/turbomind/models/llama/LlamaLinear.h"
+
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 
@@ -41,6 +45,7 @@ struct LlamaLinear::Impl {
 
     void forward(Tensor& output, const Tensor& input, const LlamaDenseWeight& dense, Type type)
     {
+        // std::cout << dense.weight << std::endl;
         switch (dense.weight_type) {
             case kFloat16:
             case kFloat32:
@@ -48,6 +53,8 @@ struct LlamaLinear::Impl {
                 return forwardFp(output, input, dense.weight);
             case kUint4:
                 return forwardInt4(output, input, dense, type);
+            case kFloat8_e4m3:
+                return forwardFp8(output, input, dense, type);
             default:
                 TM_CHECK(0) << "not implemented for weight type: " << dense.weight_type;
         }
@@ -95,6 +102,77 @@ struct LlamaLinear::Impl {
                                       output.stride(0) * output.stride(1),  // one of these is 1
                                       CUDA_R_32F,
                                       CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+    }
+
+    void forwardFp8(Tensor& output, const Tensor& input, const LlamaDenseWeight& dense, Type type)
+    {
+        TM_CHECK_EQ(output.ndim(), 2);  // A [m, k]
+        TM_CHECK_EQ(input.ndim(), 2);   // C [m, n]
+
+        TM_CHECK_EQ(input.stride(1), 1) << "input must be row-major";
+        TM_CHECK_EQ(output.stride(1), 1) << "output must be row-major";
+
+        TM_CHECK_EQ(output.shape(0), input.shape(0));
+        TM_CHECK_EQ(input.shape(1), dense.input_dim);
+        // TM_CHECK_EQ(output.shape(1), dense.output_dim);
+
+        using namespace gemm;
+
+        const Operation operation{dispatch_policy_,
+                                  type == kFusedSiluFfn ? Epilogue::kGatedSilu : Epilogue::kNone,
+                                  {QuantType::kDefault, 128},
+                                  {QuantType::kDefault, 128},
+                                  0};
+
+        Tensor quant;
+        Tensor scale;
+        QuantizeSymm(quant, scale, input, stream_);
+
+        const MatrixLayout a_desc{
+            quant.dtype(),
+            kRowMajor,
+            (int)quant.shape(0),
+            dense.input_dim,
+            (int)quant.stride(0),
+        };
+
+        const MatrixLayout u_desc{
+            scale.dtype(),  //
+            kColMajor,
+            (int)scale.shape(0),
+            (int)scale.shape(1),
+            (int)scale.stride(0) * (int)scale.stride(1)
+        };
+
+        const MatrixLayout c_desc{
+            output.dtype(),  //
+            kRowMajor,
+            (int)output.shape(0),
+            dense.output_dim,
+            (int)output.stride(0),
+        };
+
+        auto ec = gemm_.Run(operation,
+                            1.f,
+                            quant.raw_data(),
+                            a_desc,
+                            scale.raw_data(),
+                            u_desc,
+                            dense.weight.raw_data(),
+                            dense.k_desc,
+                            dense.scales.raw_data(),
+                            dense.q_desc,
+                            type == kFusedAdd ? 1.0f : 0.0f,
+                            output.raw_data(),
+                            c_desc,
+                            output.raw_data(),
+                            c_desc,
+                            workspace_,
+                            stream_);
+
+        if (ec) {
+            TM_LOG_ERROR("%s: %d", __PRETTY_FUNCTION__, ec);
+        }
     }
 
     void forwardInt4(Tensor& output, const Tensor& input, const LlamaDenseWeight& dense, Type type)

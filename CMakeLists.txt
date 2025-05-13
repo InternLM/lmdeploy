@@ -54,7 +54,9 @@ FetchContent_Declare(
   GIT_SHALLOW ON
 )
 
+set(CUTLASS_ENABLE_SM90_EXTENDED_MMA_SHAPES ON CACHE BOOL "Enable extended GMMA shapes")
 set(CUTLASS_ENABLE_HEADERS_ONLY ON CACHE BOOL "Enable only the header library")
+
 FetchContent_MakeAvailable(repo-cutlass)
 
 FetchContent_Declare(

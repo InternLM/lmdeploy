@@ -12,6 +12,7 @@
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 
+#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/core/tensor.h"
 #include "src/turbomind/engine/model_request.h"
 #include "src/turbomind/python/dlpack.h"
@@ -382,7 +383,7 @@ PYBIND11_MODULE(_turbomind, m)
                 // take ownership of capsule's payload
                 cap.set_name("used_dltensor");
 
-                TM_CHECK_EQ(self.byte_size(), src->byte_size());
+                TM_CHECK_EQ(self.byte_size(), src->byte_size()) << self << " " << *src;
                 safe_memcpy(self.raw_data(), src->raw_data(), self.byte_size());
             },
             "tensor"_a)
@@ -498,6 +499,9 @@ PYBIND11_MODULE(_turbomind, m)
 #else
                     throw std::runtime_error("Error: turbomind has not been built with bf16 support.");
 #endif
+                }
+                else if (weight_type == "fp8") {
+                    data_type = turbomind::kBfloat16;
                 }
                 else {
 #ifdef ENABLE_FP32
