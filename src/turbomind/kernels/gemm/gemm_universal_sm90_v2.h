@@ -188,16 +188,18 @@ struct GemmUniversalSm90_v2 {
 
     static constexpr int MAX_K = 32768;
 
+    static constexpr int WG_M = CTA_M / kWorkGroupM;
+
     // ! Smem addr must be SBO aligned for TMA load/store
     struct SharedStorage {
         struct Source {
             __align__(1024) Array<Ta, Stages * CTA_M * CTA_K> A;
             __align__(1024) Array<Tb, Stages * CTA_K * CTA_N> B;
             __align__(128) Tu U[Stages][round_up(CTA_M_U * CTA_K_U, 32)];
-            __align__(128) Tv V[2][cdiv(MAX_K, 128)];
+            __align__(128) Tv V[2][kWorkGroupM][cdiv(MAX_K, 128)];
         };
         Source source;
-        __align__(1024) Array<Tc, CTA_M * CTA_N> C;
+        __align__(1024) Array<Tc, WG_M * CTA_N> C[2];
         __align__(128) uint64_t producer_bar[Stages];
         __align__(128) uint64_t consumer_bar[Stages];
     };
@@ -207,10 +209,8 @@ struct GemmUniversalSm90_v2 {
     static constexpr int kSwizzleC = 128;
 
     using LayoutC = std::conditional_t<kSwizzleC >= 32,
-                                       SmemLayoutV2<CTA_M, CTA_N, -1, kSwizzleC / sizeof(Tc)>,
-                                       SmemLayoutV2<CTA_M, CTA_N>>;
-
-    static_assert(LayoutC::S1 == 1);
+                                       SmemLayoutV2<WG_M, CTA_N, -1, kSwizzleC / sizeof(Tc)>,
+                                       SmemLayoutV2<WG_M, CTA_N>>;
 
     __device__ void operator()(const CUtensorMap& tm_a,
                                const CUtensorMap& tm_b,
@@ -400,15 +400,12 @@ struct GemmUniversalSm90_v2 {
                 }
 
                 auto Copy = [k = cdiv(K, 128)](Tv* dst, const Tv* src) {
-                    constexpr uint32_t skip = 32;
-                    if (threadIdx.x >= skip) {
-                        for (int i = threadIdx.x - skip; i < k; i += WARPGORUPS * WARPGROUP_SIZE - skip) {
-                            dst[i] = __ldg(&src[i]);
-                        }
+                    for (int i = threadIdx.x % WARPGROUP_SIZE; i < k; i += WARPGROUP_SIZE) {
+                        dst[i] = __ldg(&src[i]);
                     }
                 };
                 auto gmem_V = (const Tv*)V_ + (offset_n / 128) * ldV + (offset_k / 128);
-                Copy(storage.source.V[0], gmem_V);
+                Copy(storage.source.V[0][warp_group_id_m], gmem_V);
 
                 uint32_t pred_V{};
 
@@ -423,7 +420,7 @@ struct GemmUniversalSm90_v2 {
                     pred_V    = (mask << (phase / OUTER_N)) & mask;
 
                     if (pred_V && offset_n / 128 + 1 < cdiv(N, 128)) {
-                        Copy(storage.source.V[1], gmem_V + ldV);
+                        Copy(storage.source.V[1][warp_group_id_m], gmem_V + ldV);
                     }
 
                     if constexpr (kWorkGroupN > 1) {
@@ -431,7 +428,7 @@ struct GemmUniversalSm90_v2 {
                         pred_V              = (pred_V >> (warp_group_id_n * tiles)) & ((1 << tiles) - 1);
                     }
                 }
-                cutlass::arch::NamedBarrier{WARPGORUPS * WARPGROUP_SIZE}.sync();
+                cutlass::arch::NamedBarrier(WARPGROUP_SIZE, warpgroup_id + 1).sync();
 
                 int iter_V = 0;
 
@@ -487,9 +484,9 @@ struct GemmUniversalSm90_v2 {
                 float scale_V[2];
 
                 auto Load_V = [&] {
-                    scale_V[0] = storage.source.V[0][iter_V];
+                    scale_V[0] = storage.source.V[0][warp_group_id_m][iter_V];
                     if (pred_V) {
-                        scale_V[1] = storage.source.V[1][iter_V];
+                        scale_V[1] = storage.source.V[1][warp_group_id_m][iter_V];
                     }
                     ++iter_V;
                 };
@@ -562,11 +559,13 @@ struct GemmUniversalSm90_v2 {
                     ++pipe_state;
                 }
 
-                if (threadIdx.x < LayoutC::C1) {
+                const int wg_thread_id = threadIdx.x % WARPGROUP_SIZE;
+
+                if (wg_thread_id < LayoutC::C1) {
                     cute::tma_store_wait<0>();
                 }
 
-                cutlass::arch::NamedBarrier(WARPGORUPS * WARPGROUP_SIZE).sync();
+                cutlass::arch::NamedBarrier(WARPGROUP_SIZE, warpgroup_id + 1).sync();
 
                 // epilogue
                 PRAGMA_UNROLL
@@ -579,7 +578,7 @@ struct GemmUniversalSm90_v2 {
 
                         static_assert(!SW_bits || MMA_ATOM_N % LayoutC::C0 == 0);
 
-                        const int m0 = m * MMA_M + warp_group_id_m * MMA_ATOM_M;
+                        const int m0 = m * MMA_M;  // + warp_group_id_m * MMA_ATOM_M;
                         const int n0 = n * MMA_N + warp_group_id_n * MMA_ATOM_N;
 
 #if 1
@@ -590,7 +589,7 @@ struct GemmUniversalSm90_v2 {
                             int mm = m0 + warp_id % 4 * 16 + (lane_id & 8);
                             int nn = n0 + i / N * N;
 
-                            int addr = ((nn / N) * CTA_M * N) + (mm * N) + (nn % N);
+                            int addr = ((nn / N) * WG_M * N) + (mm * N) + (nn % N);
 
                             int s = lane_id % 8;
                             int c = (lane_id & 16) / 2 + i % N;
@@ -598,8 +597,11 @@ struct GemmUniversalSm90_v2 {
                             addr += Swizzle<SW_bits, 3, 3>::apply(s * N + c);
 
                             auto& uvec = (Array<uint32_t, 4>&)tvec;
-                            cute::SM90_U32x4_STSM_N::copy(
-                                uvec[0], uvec[1], uvec[2], uvec[3], (cutlass::uint128_t&)storage.C[addr]);
+                            cute::SM90_U32x4_STSM_N::copy(uvec[0],
+                                                          uvec[1],
+                                                          uvec[2],
+                                                          uvec[3],
+                                                          (cutlass::uint128_t&)storage.C[warp_group_id_m][addr]);
                         }
 #else
                         PRAGMA_UNROLL
@@ -624,17 +626,21 @@ struct GemmUniversalSm90_v2 {
                 }
 
                 cute::tma_store_fence();  // visibility: smem -> async proxy
-                cutlass::arch::NamedBarrier(WARPGORUPS * WARPGROUP_SIZE).sync();
+                cutlass::arch::NamedBarrier(WARPGROUP_SIZE, warpgroup_id + 1).sync();
 
-                if (threadIdx.x < LayoutC::C1) {
-                    const int tma_n = threadIdx.x * LayoutC::C0;
-                    cute::SM90_TMA_STORE::copy(&tm_c, &storage.C[CTA_M * tma_n], offset_n + tma_n, offset_m);
+                if (wg_thread_id < LayoutC::C1) {
+                    const int tma_n = wg_thread_id * LayoutC::C0;
+                    const int tma_m = warp_group_id_m * WG_M;
+                    cute::SM90_TMA_STORE::copy(&tm_c,
+                                               &storage.C[warp_group_id_m][wg_thread_id * WG_M * LayoutC::C0],
+                                               offset_n + tma_n,
+                                               offset_m + tma_m);
                     cute::tma_store_arrive();
                 }
 
             }  // scheduler loop
 
-            if (threadIdx.x < LayoutC::C1) {
+            if (threadIdx.x % WARPGROUP_SIZE < LayoutC::C1) {
                 cute::tma_store_wait<0>();
             }
         }
