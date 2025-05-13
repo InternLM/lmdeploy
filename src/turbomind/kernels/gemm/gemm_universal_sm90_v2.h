@@ -248,7 +248,7 @@ struct GemmUniversalSm90_v2 {
         const int warpgroup_id = cutlass::canonical_warp_group_idx();
 
         if (warpgroup_id == WARPGORUPS) {
-            cutlass::arch::warpgroup_reg_dealloc<32>();
+            cutlass::arch::warpgroup_reg_dealloc<40>();
 
             static_assert(CTA_M % kMulticastA == 0);
             static_assert(CTA_N % kMulticastB == 0);
