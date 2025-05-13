@@ -1,0 +1,44 @@
+num_promts: &num_prompts 512
+dataset_path: &dataset_path "/workspace/shared/ShareGPT_V3_unfiltered_cleaned_split.json"
+xpuyu_dataset_path: &xpuyu_dataset_path "/workspace/shared/xpuyu.csv"
+dataset_name: &dataset_name "sharegpt"
+server:
+  - tp: 4
+    "max-batch-size": 512
+    "cache-max-entry-count": 0.9
+    # "log-level": INFO
+  # - tp: 4
+  #   "max-batch-size": 512
+  #   "cache-max-entry-count": 0.8
+data:
+  - "dataset-name": *dataset_name
+    "dataset-path": *dataset_path
+    "sharegpt-input-len": 200
+    "sharegpt-output-len": 15000
+    "num-prompts": *num_prompts
+  # - "dataset-name": "sharegpt"
+  #   "dataset-path": *dataset_path
+  #   "num-prompts": *num_prompts
+  - "dataset-name": *dataset_name
+    "dataset-path": *dataset_path
+    "sharegpt-output-len": 2048
+    "num-prompts": *num_prompts
+  - "dataset-name": *dataset_name
+    "dataset-path": *dataset_path
+    "sharegpt-output-len": 4096
+    "num-prompts": *num_prompts
+  - "dataset-name": *dataset_name
+    "dataset-path": *dataset_path
+    "sharegpt-output-len": 8192
+    "num-prompts": *num_prompts
+  - "dataset-name": *dataset_name
+    "dataset-path": *dataset_path
+    "sharegpt-output-len": 16384
+    "num-prompts": *num_prompts
+  - "dataset-name": *dataset_name
+    "dataset-path": *dataset_path
+    "sharegpt-output-len": 32768
+    "num-prompts": *num_prompts
+  # - "dataset-name": "xpuyu"
+  #   "dataset-path": "/workspace/shared/xpuyu.csv"
+  #   "num-prompts": 8192

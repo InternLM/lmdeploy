@@ -526,6 +526,30 @@ def sample_random_requests(
     return input_requests
 
 
+def sample_xpuyu_requests(
+    num_prompts: int,
+    tokenizer: PreTrainedTokenizerBase,
+    dataset_path: str,
+) -> List[Tuple[str, int, int]]:
+    with open(dataset_path, 'r', encoding='utf-8') as f:
+        try:
+            import csv
+            reader = csv.reader(f)
+            # skip the table title row
+            next(reader)
+            data = [(row[0], int(row[2])) for row in reader]
+            # xpuyu rollout 16 generation for each request
+            num_prompts = min(len(data) // 16, num_prompts // 16) * 16
+            data = data[:num_prompts]
+            prompts, output_len = zip(*data)
+            input_len = [len(tokenizer.encode(prompt)) for prompt in prompts]
+            input_requests = list(zip(prompts, input_len, output_len))
+            return input_requests
+        except Exception as e:
+            print(f'sample xpuyu dataset failed, {e}')
+            return None
+
+
 async def get_request(
     input_requests: List[Tuple[str, int, int]],
     request_rate: float,
@@ -627,24 +651,26 @@ async def benchmark(
     else:
         raise ValueError(f'Unknown backend: {backend}')
 
-    print('Starting initial single prompt test run...')
-    test_prompt, test_prompt_len, test_output_len = input_requests[0]
-    test_input = RequestFuncInput(
-        model=model_id,
-        prompt=test_prompt,
-        api_url=api_url,
-        prompt_len=test_prompt_len,
-        output_len=test_output_len,
-        extra_request_body=extra_request_body,
-    )
-    test_output = await request_func(request_func_input=test_input)
-    if not test_output.success:
-        raise ValueError('Initial test run failed - Please make sure benchmark arguments '
-                         f'are correctly specified. Error: {test_output.error}')
-    else:
-        print('Initial test run completed. Starting main benchmark run...')
-
-    time.sleep(1.5)
+    # print('Starting initial single prompt test run...')
+    # start_warmup = time.perf_counter()
+    # test_prompt, test_prompt_len, test_output_len = input_requests[0]
+    # test_input = RequestFuncInput(
+    #     model=model_id,
+    #     prompt=test_prompt,
+    #     api_url=api_url,
+    #     prompt_len=test_prompt_len,
+    #     output_len=test_output_len,
+    #     extra_request_body=extra_request_body,
+    # )
+    # test_output = await request_func(request_func_input=test_input)
+    # if not test_output.success:
+    #     raise ValueError('Initial test run failed - Please make sure benchmark arguments '
+    #                      f'are correctly specified. Error: {test_output.error}')
+    # else:
+    #     print('Initial test run completed. Starting main benchmark run...')
+    # end_warmup = time.perf_counter()
+    # print(f'warmup time: {end_warmup - start_warmup:.2f}s')
+    # time.sleep(1.5)
 
     pbar = None if disable_tqdm else tqdm(total=len(input_requests))
 
@@ -890,6 +916,12 @@ def run_benchmark(args_: argparse.Namespace):
             tokenizer=tokenizer,
             dataset_path=args.dataset_path,
         )
+    elif args.dataset_name == 'xpuyu':
+        input_requests = sample_xpuyu_requests(
+            num_prompts=args.num_prompts,
+            tokenizer=tokenizer,
+            dataset_path=args.dataset_path,
+        )
     else:
         raise ValueError(f'Unknown dataset: {args.dataset_name}')
 
@@ -961,7 +993,7 @@ if __name__ == '__main__':
         '--dataset-name',
         type=str,
         default='sharegpt',
-        choices=['sharegpt', 'random'],
+        choices=['sharegpt', 'random', 'xpuyu'],
         help='Name of the dataset to benchmark on.',
     )
     parser.add_argument('--dataset-path', type=str, default='', help='Path to the dataset.')
@@ -982,6 +1014,13 @@ if __name__ == '__main__':
         type=int,
         default=1000,
         help='Number of prompts to process. Default is 1000.',
+    )
+    parser.add_argument(
+        '--sharegpt-input-len',
+        type=int,
+        default=None,
+        help='Output length for each request. Overrides the output length '
+        'from the ShareGPT dataset.',
     )
     parser.add_argument(
         '--sharegpt-output-len',
