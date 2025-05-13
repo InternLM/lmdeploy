@@ -112,7 +112,8 @@ class NodeManager:
         self.initialized = False
 
     def get_nodes(self, role: EngineRole) -> Dict:
-        return {node_url: node_status for (node_url, node_status) in self.nodes.items() if node_status.role == role}
+        items = list(self.nodes.items())
+        return {node_url: node_status for (node_url, node_status) in items if node_status.role == role}
 
     @property
     def hybrid_nodes(self):
@@ -230,7 +231,8 @@ class NodeManager:
     def model_list(self):
         """Supported model list."""
         model_names = []
-        for _, status in self.nodes.items():
+        items = list(self.nodes.items())
+        for _, status in items:
             model_names.extend(status.models)
         return model_names
 
