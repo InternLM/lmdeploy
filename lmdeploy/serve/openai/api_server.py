@@ -1075,6 +1075,7 @@ def handle_torchrun():
 @router.on_event('startup')
 async def startup_event():
     async_engine = VariableInterface.async_engine
+    async_engine.start_loop(use_async_api=True)
 
     if VariableInterface.proxy_url is None:
         return
