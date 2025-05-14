@@ -497,7 +497,7 @@ class AutoModelAgent:
 
             # inference
             if is_all_dummy:
-                logger.warning(f'<ForwardTask> rank[{rank}]: all inputs are dummy, skip forward.')
+                logger.debug(f'<ForwardTask> rank[{rank}]: all inputs are dummy, skip forward.')
             else:
                 logger.debug(f'<ForwardTask> rank[{rank}]: model forward [{idx}].')
                 output = await self._async_model_forward(
