@@ -12,8 +12,9 @@ import torch
 from ray.util.placement_group import PlacementGroup
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.backends.selector import init_backend
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, ModelConfig
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
@@ -157,7 +158,7 @@ def _get_master_port():
 
 
 def get_ascend_device_rank_mapping(master_addr):
-    rank_table_file = os.environ.get('ASCEND_RANK_TABLE_FILE_PATH')
+    rank_table_file = _envs.ascend_rank_table_file
     if not rank_table_file:
         raise ValueError('ASCEND_RANK_TABLE_FILE_PATH is not set')
     with open(rank_table_file, 'r') as f:
@@ -183,6 +184,20 @@ def get_ascend_device_rank_mapping(master_addr):
     return rank_mapping, worker_ips, envs
 
 
+def _update_runtime_env_nsys(runtime_env: Dict):
+    """update runtime env for nsys."""
+    nsight_env = {
+        't': 'cuda,cudnn,cublas,nvtx',
+        'o': "'worker_process_%p'",
+        'stop-on-exit': 'true',
+    }
+    prefix_path = _envs.ray_nsys_output_prefix
+    if prefix_path is not None:
+        nsight_env['o'] = f'{prefix_path}%p'
+    runtime_env['nsight'] = nsight_env
+    return runtime_env
+
+
 class RayWorkerWrapper(WorkerWrapperBase):
     """worker wrapper."""
 
@@ -192,6 +207,7 @@ class RayWorkerWrapper(WorkerWrapperBase):
         cache_config: CacheConfig,
         backend_config: BackendConfig,
         dist_config: DistConfig,
+        misc_config: MiscConfig,
         adapters: Dict[str, str] = None,
         device_type: str = 'cuda',
         dtype: str = 'auto',
@@ -208,6 +224,7 @@ class RayWorkerWrapper(WorkerWrapperBase):
             backend_config=backend_config,
             model_config=model_config,
             dist_config=dist_config,
+            misc_config=misc_config,
             adapters=adapters,
             device_type=device_type,
             tokenizer=tokenizer,
@@ -259,6 +276,7 @@ class RayExecutor(ExecutorBase):
                  cache_config: CacheConfig,
                  backend_config: BackendConfig,
                  dist_config: DistConfig,
+                 misc_config: MiscConfig,
                  tokenizer: Any,
                  adapters: Dict[str, str] = None,
                  device_type: str = 'cuda',
@@ -269,6 +287,7 @@ class RayExecutor(ExecutorBase):
                          cache_config=cache_config,
                          backend_config=backend_config,
                          dist_config=dist_config,
+                         misc_config=misc_config,
                          tokenizer=tokenizer,
                          adapters=adapters,
                          device_type=device_type)
@@ -287,8 +306,8 @@ class RayExecutor(ExecutorBase):
                 self.master_addr = _get_master_addr()
                 self.master_port = _get_master_port()
             else:
-                self.master_addr = os.environ.get('LMDEPLOY_DP_MASTER_ADDR', None)
-                self.master_port = os.environ.get('LMDEPLOY_DP_MASTER_PORT', None)
+                self.master_addr = _envs.dp_master_addr
+                self.master_port = _envs.dp_master_port
                 if self.master_addr is None or self.master_port is None:
                     raise RuntimeError('DP > 1 requires "LMDEPLOY_DP_MASTER_ADDR" and "LMDEPLOY_DP_MASTER_PORT".')
 
@@ -298,6 +317,7 @@ class RayExecutor(ExecutorBase):
                 cache_config=cache_config,
                 backend_config=backend_config,
                 dist_config=dist_config,
+                misc_config=misc_config,
                 adapters=adapters,
                 device_type=device_type,
                 dtype=dtype,
@@ -361,6 +381,10 @@ class RayExecutor(ExecutorBase):
     def build_cache_engine(self):
         """build cache engine."""
         self.collective_rpc('build_cache_engine')
+
+    def update_params(self, request: Any):
+        """update params."""
+        self.collective_rpc('update_params', (request, ))
 
     def warmup(self):
         """build cache engine."""
@@ -527,10 +551,14 @@ class RayExecutor(ExecutorBase):
             )
 
             if device_str == 'GPU':
+                runtime_env = dict()
+                if _envs.ray_nsys_enable:
+                    runtime_env = _update_runtime_env_nsys(runtime_env)
                 worker = ray.remote(
                     num_cpus=0,
                     num_gpus=1.0,
                     scheduling_strategy=scheduling_strategy,
+                    runtime_env=runtime_env,
                 )(RayWorkerWrapper).remote(**worker_kwargs)
             else:
                 worker = ray.remote(

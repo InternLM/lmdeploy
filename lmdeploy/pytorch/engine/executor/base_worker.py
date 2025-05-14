@@ -3,7 +3,7 @@ import asyncio
 from typing import Any, Dict, List
 
 from lmdeploy.pytorch.backends.selector import get_backend
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, ModelConfig
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig
 from lmdeploy.pytorch.devices import DeviceContext
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
@@ -26,6 +26,7 @@ class WorkerWrapperBase:
         backend_config: BackendConfig,
         model_config: ModelConfig,
         dist_config: DistConfig,
+        misc_config: MiscConfig,
         adapters: Dict[str, str] = None,
         device_type: str = 'cuda',
         tokenizer: Any = None,
@@ -36,6 +37,7 @@ class WorkerWrapperBase:
         self.cache_config = cache_config
         self.backend_config = backend_config
         self.dist_config = dist_config
+        self.misc_config = misc_config
         self.tokenizer = tokenizer
         self.adapters = adapters
         self.device_type = device_type
@@ -93,6 +95,7 @@ class WorkerWrapperBase:
                                              model_config=self.model_config,
                                              cache_config=self.cache_config,
                                              backend_config=self.backend_config,
+                                             misc_config=self.misc_config,
                                              tokenizer=self.tokenizer,
                                              device_ctx=self.device_ctx,
                                              dist_ctx=self.dist_ctx,
@@ -118,6 +121,10 @@ class WorkerWrapperBase:
     def build_cache_engine(self):
         """build cache engine."""
         self.model_agent.build_cache_engine()
+
+    def update_params(self, request: Any):
+        """update params."""
+        self.model_agent.update_params(request)
 
     def warmup(self):
         """warmup."""
