@@ -55,6 +55,25 @@ def _tensorlize_block_offsets(block_offsets, dtype=torch.int32):
     return block_offsets
 
 
+def _update_engine_config(engine_config: PytorchEngineConfig):
+    """update pytorch engine config."""
+    # make sure engine exits
+    if engine_config is None:
+        engine_config = PytorchEngineConfig()
+    else:
+        engine_config = copy.deepcopy(engine_config)
+
+    if engine_config.max_batch_size is None:
+        engine_config.max_batch_size = get_max_batch_size(engine_config.device_type)
+
+    if engine_config.dp != 1:
+        if engine_config.tp == 1 and engine_config.ep == 1:
+            engine_config.dp = 1
+            engine_config.dp_rank = 0
+
+    return engine_config
+
+
 def _build_scheduler_config(engine_config: PytorchEngineConfig):
     """build scheduler config."""
     scheduler_config = SchedulerConfig(max_batches=engine_config.max_batch_size,
@@ -296,22 +315,13 @@ class Engine:
                  tokenizer: object,
                  engine_config: PytorchEngineConfig = None,
                  trust_remote_code: bool = True) -> None:
-        # make sure engine exits
-        if engine_config is None:
-            engine_config = PytorchEngineConfig()
-        else:
-            engine_config = copy.deepcopy(engine_config)
-        if engine_config.max_batch_size is None:
-            engine_config.max_batch_size = get_max_batch_size(engine_config.device_type)
+        engine_config = _update_engine_config(engine_config)
 
-        tp = engine_config.tp
-        dp = engine_config.dp
-        dp_rank = engine_config.dp_rank
-
+        # dist args
         self.tokenizer = tokenizer
-        self.tp = tp
-        self.dp = dp
-        self.dp_rank = dp_rank
+        self.tp = engine_config.tp
+        self.dp = engine_config.dp
+        self.dp_rank = engine_config.dp_rank
 
         # download models and adapters
         if not os.path.exists(model_path):

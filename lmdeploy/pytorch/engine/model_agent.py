@@ -2,7 +2,7 @@
 import asyncio
 import base64
 import functools
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from multiprocessing.reduction import ForkingPickler
 from typing import Any, Dict
 
@@ -99,6 +99,27 @@ def _try_to_cuda(val, non_blocking: bool = False):
         return val.to_device('cuda', non_blocking=non_blocking)
     else:
         raise RuntimeError(f'Can not cast {type(val)} to cuda.')
+
+
+class DistGatherScalar:
+    """distribute value gather."""
+
+    def __init__(self, val, size: int, device: str = 'cpu', group: dist.ProcessGroup = None):
+        self.val = val
+        self.device = device
+        self.group = group
+
+        self.all_vals = torch.tensor([val] * size, device=device)
+        self.worker = dist.all_gather_into_tensor(self.all_vals,
+                                                  self.all_vals.new_tensor([val]),
+                                                  group=group,
+                                                  async_op=True)
+
+    async def async_wait(self, timeout: float = 0.001):
+        while not self.worker.is_completed():
+            await asyncio.sleep(timeout)
+        self.worker.wait()
+        return self.all_vals
 
 
 SwapMap = Dict[int, int]
@@ -333,6 +354,24 @@ class AutoModelAgent:
 
         return next_token_ids
 
+    def _push_output(self, output: dict):
+        """push output."""
+        event = torch.cuda.Event()
+        event.record()
+        output['event'] = event
+        self._out_que.put_nowait(output)
+
+    def _broadcast_next_token(self, next_token_ids: torch.Tensor, dist_ctx: DistContext = None):
+        if dist_ctx is None:
+            dist_ctx = get_dist_manager().current_context()
+        if self.cache_config.role == EngineRole.Decode:
+            next_token_ids = next_token_ids.cpu()
+            tp_cpu_group = dist_ctx.tp_cpu_group
+            dist.all_reduce(next_token_ids, op=dist.ReduceOp.SUM, group=tp_cpu_group)
+        else:
+            tp_gpu_group = dist_ctx.tp_gpu_group
+            dist.broadcast(next_token_ids, src=0, group=tp_gpu_group)
+
     async def _async_step_background(
         self,
         inputs: ModelInputs,
@@ -350,9 +389,15 @@ class AutoModelAgent:
     ):
         """asyc forward task."""
 
-        def __update_inputs(next_token_ids):
+        dist_ctx = get_dist_manager().current_context()
+        dp_cpu_group = dist_ctx.dp_cpu_group
+
+        def __update_inputs(next_token_ids, model_metas):
             """update inputs."""
-            nonlocal all_ids, guided_input_ids
+            nonlocal all_ids, guided_input_ids, swap_in_map, swap_out_map
+            swap_in_map = dict()
+            swap_out_map = dict()
+            inputs.model_metas = model_metas
             inputs.update(next_token_ids)
             if all_ids is not None:
                 all_ids = torch.cat([all_ids, next_token_ids[:, None].to(all_ids.device)], 1)
@@ -366,83 +411,114 @@ class AutoModelAgent:
                 await asyncio.sleep(timeout)
             worker.wait()
 
+        def __try_copy_everything():
+            """try copy all inputs."""
+            nonlocal inputs, all_ids, guided_input_ids, sampling_inputs, num_appendable_ids, num_ignore_eos
+            non_blocking = True
+            inputs = _try_to_cuda(inputs, non_blocking=non_blocking)
+            all_ids = _try_to_cuda(all_ids, non_blocking=non_blocking)
+            guided_input_ids = _try_to_cuda(guided_input_ids, non_blocking=non_blocking)
+            sampling_inputs = _try_to_cuda(sampling_inputs, non_blocking=non_blocking)
+            num_appendable_ids = _try_to_cuda(num_appendable_ids, non_blocking=non_blocking)
+            num_ignore_eos = _try_to_cuda(num_ignore_eos, non_blocking=non_blocking)
+
+            self.stream.synchronize()
+
+        def __update_dp_meta():
+            nonlocal inputs
+            inputs.build_dp_meta()
+            inputs = self.patched_model.update_inputs(inputs)
+
+        @asynccontextmanager
+        async def __prepare_dp_decoding():
+            if self.backend_config.eager_mode:
+                yield
+                return
+            batch_size = inputs.seq_length.numel()
+            all_batch_sizes = DistGatherScalar(batch_size, dp, device='cpu', group=dp_cpu_group)
+            yield
+            all_batch_sizes = await all_batch_sizes.async_wait()
+            padding_batch_size = all_batch_sizes.cpu().max().item()
+            meta = self.patched_model.get_meta()
+            meta.padding_batch_size = padding_batch_size
+            logger.debug(f'padding_batch_size={padding_batch_size}')
+
+        @asynccontextmanager
+        async def __prepare_dp_prefill():
+            nonlocal sync_long_context
+            all_sync_flags = DistGatherScalar(sync_long_context, dp, device='cpu', group=dp_cpu_group)
+            yield
+            all_sync_flags = await all_sync_flags.async_wait()
+            sync_long_context = all_sync_flags.any()
+            logger.debug(f'sync_long_context={sync_long_context}')
+
+        @asynccontextmanager
+        async def __prepare_dp():
+            """prepare dp."""
+            if dp == 1:
+                yield
+                return
+
+            nonlocal is_all_dummy
+            all_dummy = DistGatherScalar(is_dummy, dp, device='cpu', group=dp_cpu_group)
+
+            if is_decoding:
+                async with __prepare_dp_decoding():
+                    yield
+            else:
+                async with __prepare_dp_prefill():
+                    yield
+
+            all_dummy = await all_dummy.async_wait()
+            is_all_dummy = all_dummy.all()
+            __update_dp_meta()
+
         # dist tools
         dist_ctx = get_dist_manager().current_context()
         rank = dist_ctx.rank
         tp = dist_ctx.tp
         dp = dist_ctx.dp
-        tp_cpu_group = dist_ctx.tp_cpu_group
-        tp_gpu_group = dist_ctx.tp_gpu_group
+        sync_long_context = False if dp == 1 else sync_long_context
+        is_decoding = inputs.is_decoding
 
         logger.debug(f'<ForwardTask> rank[{rank}]: '
                      f'batch_size={inputs.seq_length.size(0)} '
                      f'num_tokens={inputs.input_ids.size(-1)} '
                      f'is_decoding={inputs.is_decoding}')
 
-        is_decoding = inputs.is_decoding
-        eager_mode = self.backend_config.eager_mode
-        if dp > 1:
-            if is_decoding and not eager_mode:
-                batch_size = inputs.seq_length.numel()
-                all_batch_sizes = torch.tensor([0] * dp, device='cuda')
-                lc_handle = dist.all_gather_into_tensor(all_batch_sizes,
-                                                        all_batch_sizes.new_tensor(batch_size),
-                                                        async_op=True)
-            else:
-                all_sync_flags = torch.tensor([False] * dp, device='cuda')
-                lc_handle = dist.all_gather_into_tensor(all_sync_flags,
-                                                        torch.tensor(sync_long_context, device='cuda'),
-                                                        async_op=True)
-
-        non_blocking = True
-        inputs = _try_to_cuda(inputs, non_blocking=non_blocking)
-        all_ids = _try_to_cuda(all_ids, non_blocking=non_blocking)
-        guided_input_ids = _try_to_cuda(guided_input_ids, non_blocking=non_blocking)
-        sampling_inputs = _try_to_cuda(sampling_inputs, non_blocking=non_blocking)
-        num_appendable_ids = _try_to_cuda(num_appendable_ids, non_blocking=non_blocking)
-        num_ignore_eos = _try_to_cuda(num_ignore_eos, non_blocking=non_blocking)
-
-        self.stream.synchronize()
-
-        if dp > 1:
-            if is_decoding and not eager_mode:
-                await __await_distworker(lc_handle)
-                padding_batch_size = all_batch_sizes.cpu().max().item()
-                meta = self.patched_model.get_meta()
-                meta.padding_batch_size = padding_batch_size
-                logger.debug(f'padding_batch_size={padding_batch_size}')
-            else:
-                await __await_distworker(lc_handle)
-                sync_long_context = all_sync_flags.any()
-                logger.debug(f'sync_long_context={sync_long_context}')
-            inputs.build_dp_meta()
-            inputs = self.patched_model.update_inputs(inputs)
-        else:
-            sync_long_context = False
+        # is_all_dummy would be updated in __prepare_dp
+        is_all_dummy = False
+        async with __prepare_dp():
+            __try_copy_everything()
 
         need_output = dp > 1 or rank % tp == 0
 
         for idx in range(loop_count):
-            # inference
-            logger.debug(f'<ForwardTask> rank[{rank}]: model forward [{idx}].')
-            output = await self._async_model_forward(
-                inputs,
-                swap_in_map=swap_in_map,
-                swap_out_map=swap_out_map,
-                return_logits=return_logits,
-                sync_long_context=sync_long_context,
-            )
-            logits = output['logits']
-            logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
 
+            # inference
+            if is_all_dummy:
+                logger.warning(f'<ForwardTask> rank[{rank}]: all inputs are dummy, skip forward.')
+            else:
+                logger.debug(f'<ForwardTask> rank[{rank}]: model forward [{idx}].')
+                output = await self._async_model_forward(
+                    inputs,
+                    swap_in_map=swap_in_map,
+                    swap_out_map=swap_out_map,
+                    return_logits=return_logits,
+                    sync_long_context=sync_long_context,
+                )
+                logits = output['logits']
+                logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
+
+            # output empty for dummy inputs
             if is_dummy:
                 self._out_que.put_nowait(None)
                 continue
 
-            need_broadcast_next = (dp == 1 and tp > 1 and idx < loop_count - 1)
+            # sampling and stopping
             if need_output:
-                # sampling
                 logger.debug(f'<ForwardTask> rank[{rank}]: Sampling [{idx}].')
+                # sampling
                 next_token_ids = await self.async_sampling_logits(logits, all_ids, guided_input_ids, sampling_inputs,
                                                                   inputs, num_ignore_eos > 0)
                 num_ignore_eos = num_ignore_eos - 1
@@ -455,35 +531,26 @@ class AutoModelAgent:
                 # as it can trigger recompilation on different ranks when using torch.compile.
                 with torch.inference_mode():
                     next_token_ids = torch.zeros_like(num_ignore_eos)
-                stopped = None
 
+            # broadcast next token for TP > 1
+            need_broadcast_next = (dp == 1 and tp > 1 and idx < loop_count - 1)
             if need_broadcast_next:
-                logger.info(f'<ForwardTask> rank[{rank}]: synchornize token ids [{idx}]')
-                if self.cache_config.role == EngineRole.Decode:
-                    next_token_ids = next_token_ids.cpu()
-                    dist.all_reduce(next_token_ids, op=dist.ReduceOp.SUM, group=tp_cpu_group)
-                else:
-                    dist.broadcast(next_token_ids, src=0, group=tp_gpu_group)
+                logger.debug(f'<ForwardTask> rank[{rank}]: synchornize token ids [{idx}]')
+                next_token_ids = self._broadcast_next_token(next_token_ids, dist_ctx)
 
             # send output
             model_metas = output.get('model_metas')
             if need_output:
-                event = torch.cuda.Event()
-                event.record()
-                output = dict(next_token_ids=next_token_ids,
-                              logits=logits if return_logits else None,
-                              stopped=stopped,
-                              model_metas=model_metas,
-                              event=event)
                 logger.debug(f'<ForwardTask> rank[{rank}]: Output [{idx}]')
-                self._out_que.put_nowait(output)
+                self._push_output(
+                    dict(next_token_ids=next_token_ids,
+                         logits=logits if return_logits else None,
+                         stopped=stopped,
+                         model_metas=model_metas))
 
             # update for next loop
             if is_decoding and idx < loop_count - 1:
-                swap_in_map = dict()
-                swap_out_map = dict()
-                inputs.model_metas = model_metas
-                __update_inputs(next_token_ids)
+                __update_inputs(next_token_ids, model_metas)
 
     @torch.inference_mode()
     async def _async_loop_background(self, forward_event: asyncio.Event = None):
