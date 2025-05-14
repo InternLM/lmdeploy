@@ -6,6 +6,7 @@ import torch
 import torch.distributed as dist
 
 from lmdeploy.pytorch.backends.cuda.token_dispatcher import DeepEPTokenDispatcherLowLatency, TokenDispatcherBuilder
+from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.pytorch.kernels.cuda import fused_moe, fused_moe_w8a8
 from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import fused_moe_blocked_fp8
 from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
@@ -15,6 +16,7 @@ from lmdeploy.pytorch.kernels.cuda.fused_moe import _renormalize
 from lmdeploy.pytorch.kernels.cuda.w8a8_triton_kernels import per_token_quant_int8
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 from lmdeploy.pytorch.models.q_modules import QTensor
+from lmdeploy.pytorch.models.utils.eplb import get_eplb_metadata_by_layer
 from lmdeploy.utils import get_logger
 
 from ..moe import (FusedMoEBlockedF8Builder, FusedMoEBlockedF8Impl, FusedMoEBuilder, FusedMoEImpl, FusedMoEW8A8Builder,
@@ -571,6 +573,7 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
                  num_experts: int,
                  hidden_dim: int,
                  renormalize: bool = False,
+                 enable_eplb: bool = False,
                  block_size: int = 128,
                  out_dtype: torch.dtype = torch.bfloat16,
                  layer_idx: int = 0):
@@ -582,6 +585,7 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
         self.block_size = block_size
         self.out_dtype = out_dtype
         self.layer_idx = layer_idx
+        self.enable_eplb = enable_eplb
         try:
             import deep_gemm
             DeepEPExpertsDeepGEMM.deep_gemm = deep_gemm
@@ -597,6 +601,18 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
         except ImportError:
             self.use_dlblas = False
             logger.warning('For higher performance, please install dlBLAS https://github.com/DeepLink-org/dlBLAS')
+
+    def ep_expert_list(self, world_size: int, rank: int):
+        """experts list of current rank."""
+        if get_dist_manager().current_context().dist_config.enable_eplb:
+            _, phy2log, _ = get_eplb_metadata_by_layer(self.layer_idx)
+            expert_per_rank = (self.num_experts + world_size - 1) // world_size
+            first_expert = rank * expert_per_rank
+            last_expert = min(first_expert + expert_per_rank, self.num_experts)
+            sliced_phy2log = phy2log[first_expert:last_expert].tolist()
+            return sliced_phy2log
+        else:
+            return super().ep_expert_list(world_size=world_size, rank=rank)
 
     def forward(self,
                 hidden_states: torch.Tensor,

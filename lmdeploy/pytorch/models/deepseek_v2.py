@@ -12,7 +12,9 @@ from torch import nn
 
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.distributed import get_dist_manager, get_tp_world_rank
+from lmdeploy.pytorch.kernels.cuda.ep_moe import map_logic_to_physical_idx_hash_random
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager, get_step_ctx_manager
+from lmdeploy.pytorch.models.utils.eplb import get_eplb_metadata_by_layer, init_global_eplb_metadata
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
 from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_down_linear, build_gateup_linear, build_o_proj,
                                         build_rowwise_linear)
@@ -685,7 +687,9 @@ class DeepseekV2MoE(nn.Module):
         self.topk_group = config.topk_group
 
         self.gate = MoEGate(config, dtype=dtype, device=device)
-
+        if get_dist_manager().current_context().dist_config.enable_eplb:
+            self.log2phy, self.phy2log, self.expert_count = get_eplb_metadata_by_layer(layer_idx)
+            self.num_experts = self.phy2log.shape[0]  # num_physical_experts
         dist_ctx = get_dist_manager().current_context()
         dp = dist_ctx.dp
         world_size = dist_ctx.world_size
@@ -702,7 +706,6 @@ class DeepseekV2MoE(nn.Module):
             quant_config=quantization_config,
             layer_idx=layer_idx,
         )
-
         self.shared_experts = None
         if config.n_shared_experts is not None:
             intermediate_size = (config.moe_intermediate_size * config.n_shared_experts)
@@ -724,6 +727,8 @@ class DeepseekV2MoE(nn.Module):
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
         topk_weights, topk_ids = self.gate(hidden_states)
+        if get_dist_manager().current_context().dist_config.enable_eplb:
+            topk_ids = map_logic_to_physical_idx_hash_random(topk_ids, self.log2phy, self.expert_count)
         out_states = self.experts(
             hidden_states,
             topk_weights,
@@ -961,6 +966,9 @@ class DeepseekV2Model(nn.Module):
                                          self.padding_idx,
                                          dtype=dtype,
                                          device=device)
+        if get_dist_manager().current_context().dist_config.enable_eplb:
+            init_global_eplb_metadata(num_routed_experts=config.n_routed_experts,
+                                      num_hidden_layers=config.num_hidden_layers)
         self.layers = nn.ModuleList([
             DeepseekV2DecoderLayer(config, layer_idx, dtype=dtype, device=device)
             for layer_idx in range(config.num_hidden_layers)
