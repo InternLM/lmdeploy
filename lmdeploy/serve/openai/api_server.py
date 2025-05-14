@@ -30,7 +30,7 @@ from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, ChatCompletio
                                             CompletionResponseStreamChoice, CompletionStreamResponse, DeltaMessage,
                                             EmbeddingsRequest, EncodeRequest, EncodeResponse, ErrorResponse,
                                             GenerateRequest, GenerateResponse, LogProbs, ModelCard, ModelList,
-                                            ModelPermission, TopLogprob, UsageInfo)
+                                            ModelPermission, TopLogprob, UpdateParamsRequest, UsageInfo)
 from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import ReasoningParser, ReasoningParserManager
 from lmdeploy.serve.openai.tool_parser.tool_parser import ToolParser, ToolParserManager
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
@@ -54,6 +54,7 @@ class VariableInterface:
     reasoning_parser: Optional[ReasoningParser] = None
     # following is for tool parsers
     tool_parser: Optional[ToolParser] = None
+    allow_terminate_by_client: bool = False
 
 
 router = APIRouter()
@@ -231,6 +232,19 @@ def _create_chat_completion_logprobs(tokenizer: Tokenizer,
 @router.get('/health')
 async def health() -> Response:
     """Health check."""
+    return Response(status_code=200)
+
+
+@router.get('/terminate')
+async def terminate():
+    """terminate server."""
+    import signal
+
+    if not VariableInterface.allow_terminate_by_client:
+        return create_error_response(
+            HTTPStatus.BAD_REQUEST,
+            'The server can not be terminated. Please add --allow-terminate-by-client when start the server.')
+    os.kill(os.getpid(), signal.SIGTERM)
     return Response(status_code=200)
 
 
@@ -856,6 +870,15 @@ async def encode(request: EncodeRequest, raw_request: Request = None):
         return EncodeResponse(input_ids=encoded, length=length)
 
 
+@router.post('/update_weights', dependencies=[Depends(check_api_key)])
+def update_params(request: UpdateParamsRequest, raw_request: Request = None):
+    """Update weights for the model."""
+    if VariableInterface.async_engine.backend != 'pytorch':
+        return create_error_response(HTTPStatus.BAD_REQUEST, 'Unsupported by turbomind.')
+    VariableInterface.async_engine.engine.update_params(request)
+    return JSONResponse(content=None)
+
+
 """ PD Disaggregation API Begin """
 
 
@@ -1051,26 +1074,24 @@ def handle_torchrun():
 
 @router.on_event('startup')
 async def startup_event():
+    async_engine = VariableInterface.async_engine
+    async_engine.start_loop()
+
     if VariableInterface.proxy_url is None:
         return
     try:
         import requests
         engine_config = VariableInterface.async_engine.engine.engine_config
+        engine_role = engine_config.role.value if hasattr(engine_config, 'role') else 1
         url = f'{VariableInterface.proxy_url}/nodes/add'
-        data = {
-            'url': VariableInterface.api_server_url,
-            'status': {
-                'models': get_model_list(),
-                'role': engine_config.role.value
-            }
-        }
+        data = {'url': VariableInterface.api_server_url, 'status': {'models': get_model_list(), 'role': engine_role}}
         headers = {'accept': 'application/json', 'Content-Type': 'application/json'}
         response = requests.post(url, headers=headers, json=data)
 
         if response.status_code != 200:
             raise HTTPException(status_code=response.status_code, detail='Service registration failed')
     except Exception as e:
-        print(f'Service registration failed: {e}')
+        logger.error(f'Service registration failed: {e}')
 
 
 class ConcurrencyLimitMiddleware(BaseHTTPMiddleware):
@@ -1127,6 +1148,7 @@ def serve(model_path: str,
           max_concurrent_requests: Optional[int] = None,
           reasoning_parser: Optional[str] = None,
           tool_call_parser: Optional[str] = None,
+          allow_terminate_by_client: bool = False,
           **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -1178,6 +1200,7 @@ def serve(model_path: str,
             clients concurrently during that time. Default to None.
         reasoning_parser (str): The reasoning parser name.
         tool_call_parser (str): The tool call parser name.
+        allow_terminate_by_client (bool): Allow request from client to terminate server.
     """
     if os.getenv('TM_LOG_LEVEL') is None:
         os.environ['TM_LOG_LEVEL'] = log_level
@@ -1207,6 +1230,7 @@ def serve(model_path: str,
     if max_concurrent_requests is not None:
         app.add_middleware(ConcurrencyLimitMiddleware, max_concurrent_requests=max_concurrent_requests)
 
+    VariableInterface.allow_terminate_by_client = allow_terminate_by_client
     if api_keys is not None:
         if isinstance(api_keys, str):
             api_keys = api_keys.split(',')
