@@ -30,7 +30,10 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
     if 'extra' in param.keys():
         extra = param['extra']
     else:
-        extra = None
+        extra = ''
+
+    if str(config.get('env_tag')) == '3090':
+        extra += ' --cache-max-entry-count 0.7'
 
     if 'modelscope' in param.keys():
         modelscope = param['modelscope']
@@ -85,8 +88,8 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
         pid = startRes.pid
 
     http_url = BASE_HTTP_URL + ':' + str(port)
-    with open(start_log, 'r') as file:
-        content = file.read()
+    with open(start_log, 'r') as f:
+        content = f.read()
         print(content)
     start_time = int(time())
 
@@ -196,9 +199,9 @@ def interactive_test(config, case, case_info, model, url, worker_id: str = ''):
 
     interactive_log = os.path.join(log_path, 'interactive_' + model + worker_id + '_' + case + '.log')
 
-    file = open(interactive_log, 'w')
-
     result = True
+
+    file = open(interactive_log, 'w')
 
     api_client = APIClient(url)
     file.writelines('available_models:' + ','.join(api_client.available_models) + '\n')
