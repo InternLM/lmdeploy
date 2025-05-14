@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal
 
 import torch
 
@@ -9,17 +9,7 @@ import torch
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.config import ModelConfig
-from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
-from lmdeploy.pytorch.disagg.request import MigrationRequest
 from lmdeploy.pytorch.multimodal.data_type import MultiModalTensor
-
-
-def _broadcast_tensor(value: torch.Tensor, src: int = 0, device: str = 'cuda'):
-    """broadcast tensor."""
-    if value.device.type == 'meta':
-        value = torch.empty_like(value, device=device)
-    dist.broadcast(value, src, group=dist.get_tp_group('gpu'))
-    return value
 
 
 @dataclass
@@ -81,37 +71,6 @@ class VisionModelInputs:
 
         return VisionModelInputs(**out_dict)
 
-    def broadcast(self):
-        """broadcast inputs.
-
-        Do `dist.broadcast_object_list(inputs.to_device('meta'))`
-        before broadcast tensors.
-        """
-        out_dict = dict()
-        for f in fields(self):
-            k = f.name
-            v = getattr(self, k)
-            if v is None:
-                continue
-            if isinstance(v, torch.Tensor):
-                v = _broadcast_tensor(v)
-            elif k == 'input_embedding_ranges':
-                v = [_broadcast_tensor(e) for e in v]
-            elif k == 'input_embeddings':
-                v = [[_broadcast_tensor(e) for e in li] for li in v]
-            elif k == 'input_multimodals':
-                new_v = []
-                for mm_datas in v:
-                    new_mm_datas = dict()
-                    for modal_type, data in mm_datas.items():
-                        data = [d.broadcast() for d in data]
-                        new_mm_datas[modal_type] = data
-                    new_v.append(new_mm_datas)
-                v = new_v
-            out_dict[k] = v
-
-        return VisionModelInputs(**out_dict)
-
     def get_inputs(self, history_lengths: torch.Tensor, seq_lengths: torch.Tensor):
         """get vision embedding inputs."""
         input_embeddings = None
@@ -153,8 +112,6 @@ class ModelInputs:
     history_cross_length: torch.LongTensor = None
     model_metas: List[Dict[str, Any]] = None
     dp_meta: 'DPMeta' = None
-    migration_inputs: Optional[MigrationExecutionBatch] = None
-    migration_requests: Optional[MigrationRequest] = None
 
     def update(self, input_ids: torch.LongTensor):
         """update input ids."""
@@ -289,24 +246,6 @@ class ModelInputs:
                 v = v.to(device, non_blocking=non_blocking)
             elif isinstance(v, VisionModelInputs):
                 v = v.to_device(device, non_blocking=non_blocking)
-            out_dict[k] = v
-
-        return ModelInputs(**out_dict)
-
-    def broadcast(self):
-        """broadcast inputs.
-
-        Do `dist.broadcast_object_list(inputs.to_device('meta'))`
-        before broadcast tensors.
-        """
-        out_dict = dict()
-        for f in fields(self):
-            k = f.name
-            v = getattr(self, k)
-            if isinstance(v, torch.Tensor):
-                v = _broadcast_tensor(v)
-            elif isinstance(v, VisionModelInputs):
-                v = v.broadcast()
             out_dict[k] = v
 
         return ModelInputs(**out_dict)
