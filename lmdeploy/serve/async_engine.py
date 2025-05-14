@@ -300,6 +300,7 @@ class AsyncEngine(LogitsMixin):
         self._session_id = count(0)
         self.request_logger = RequestLogger(max_log_len)
         self.internal_thread = _EventLoopThread(daemon=True)
+        self.start_loop()
         self.limiter: asyncio.Semaphore = None
 
     def close(self):
@@ -900,7 +901,14 @@ class AsyncEngine(LogitsMixin):
     def start_loop(self):
         """start engine loop."""
         if hasattr(self.engine, 'start_loop'):
-            return self.engine.start_loop()
+            fut = concurrent.futures.Future()
+
+            def _start_loop(fut):
+                res = self.engine.start_loop()
+                fut.set_result(res)
+
+            self.internal_thread.loop.call_soon_threadsafe(_start_loop, fut)
+            return fut.result()
         else:
             return True
 
