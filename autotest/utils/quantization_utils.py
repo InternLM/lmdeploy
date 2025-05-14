@@ -39,6 +39,8 @@ def quantization(config,
 
     if not is_bf16_supported() or quantization_type == 'gptq':
         quantization_cmd += ' --batch-size 8'
+    elif str(config.get('env_tag')) == '3090':
+        quantization_cmd += ' --batch-size 8'
     else:
         quantization_cmd += ' --batch-size 32'
 
