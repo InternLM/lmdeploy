@@ -406,11 +406,6 @@ class AutoModelAgent:
             if sampling_inputs.random_offsets is not None:
                 sampling_inputs.random_offsets += 1
 
-        async def __await_distworker(worker, timeout: float = 0.001):
-            while not worker.is_completed():
-                await asyncio.sleep(timeout)
-            worker.wait()
-
         def __try_copy_everything():
             """try copy all inputs."""
             nonlocal inputs, all_ids, guided_input_ids, sampling_inputs, num_appendable_ids, num_ignore_eos
