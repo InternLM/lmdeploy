@@ -493,22 +493,25 @@ class AutoModelAgent:
 
         need_output = dp > 1 or rank % tp == 0
 
-        for idx in range(loop_count):
+        # skip dummy forward.
+        if is_all_dummy:
+            logger.debug(f'<ForwardTask> rank[{rank}]: all inputs are dummy, skip forward.')
+            for idx in range(loop_count):
+                self._out_que.put_nowait(None)
+            return
 
+        for idx in range(loop_count):
             # inference
-            if is_all_dummy:
-                logger.debug(f'<ForwardTask> rank[{rank}]: all inputs are dummy, skip forward.')
-            else:
-                logger.debug(f'<ForwardTask> rank[{rank}]: model forward [{idx}].')
-                output = await self._async_model_forward(
-                    inputs,
-                    swap_in_map=swap_in_map,
-                    swap_out_map=swap_out_map,
-                    return_logits=return_logits,
-                    sync_long_context=sync_long_context,
-                )
-                logits = output['logits']
-                logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
+            logger.debug(f'<ForwardTask> rank[{rank}]: model forward [{idx}].')
+            output = await self._async_model_forward(
+                inputs,
+                swap_in_map=swap_in_map,
+                swap_out_map=swap_out_map,
+                return_logits=return_logits,
+                sync_long_context=sync_long_context,
+            )
+            logits = output['logits']
+            logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
 
             # output empty for dummy inputs
             if is_dummy:
