@@ -371,6 +371,7 @@ class AutoModelAgent:
         else:
             tp_gpu_group = dist_ctx.tp_gpu_group
             dist.broadcast(next_token_ids, src=0, group=tp_gpu_group)
+        return next_token_ids
 
     async def _async_step_background(
         self,
