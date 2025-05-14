@@ -15,7 +15,7 @@ from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model, logging_timer
 
 from ..adapter.adapter import AdapterManager
-from ..config import BackendConfig, CacheConfig, DistConfig, ModelConfig, SchedulerConfig
+from ..config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SchedulerConfig
 from ..messages import MessageStatus, SchedulerSequence
 from ..model_inputs import ModelInputs, VisionModelInputs
 from ..paging import Scheduler
@@ -50,8 +50,8 @@ class InferOutput:
 def _tensorlize_block_offsets(block_offsets, dtype=torch.int32):
     """tensorlize block_offsets."""
     from torch.nn.utils.rnn import pad_sequence
-    block_offsets = [torch.from_numpy(off).to(dtype) for off in block_offsets]
-    block_offsets = pad_sequence(block_offsets, batch_first=True)
+    block_offsets = [torch.from_numpy(off) for off in block_offsets]
+    block_offsets = pad_sequence(block_offsets, batch_first=True).to(dtype)
     return block_offsets
 
 
@@ -96,6 +96,12 @@ def _build_dist_config(engine_config: PytorchEngineConfig):
                              dp_rank=engine_config.dp_rank,
                              enable_microbatch=engine_config.enable_microbatch)
     return dist_config
+
+
+def _build_misc_config(engine_config: PytorchEngineConfig):
+    """build misc config."""
+    misc_config = MiscConfig(custom_module_map=engine_config.custom_module_map, empty_init=engine_config.empty_init)
+    return misc_config
 
 
 class RunableEventBase:
@@ -327,6 +333,7 @@ class Engine:
         cache_config = _build_cache_config(engine_config)
         backend_config = _build_backend_config(engine_config)
         dist_config = _build_dist_config(engine_config)
+        misc_config = _build_misc_config(engine_config)
         self.should_execute_dummy_batch = dist_config.need_dummy_batch()
 
         # build model agent
@@ -337,6 +344,7 @@ class Engine:
                                        cache_config=cache_config,
                                        backend_config=backend_config,
                                        dist_config=dist_config,
+                                       misc_config=misc_config,
                                        tokenizer=raw_tokenizer,
                                        adapters=adapters,
                                        device_type=engine_config.device_type,
@@ -563,6 +571,7 @@ class Engine:
                     req.data['token_ids'],
                     multimodals=req.data.get('input_multimodals'),
                     embeddings=req.data.get('input_embeddings'),
+                    append_tokens=True,
                 )
                 msg.num_new_tokens = 0
                 msg.sampling_param = sampling_param
@@ -721,8 +730,6 @@ class Engine:
             msg.update_token_ids(update_token, model_meta=model_meta)
             msg.num_new_tokens += 1
             if stop:
-                update_token = _EMPTY_TOKEN
-                msg.update_token_ids(update_token, model_meta=model_meta)
                 msg.status = MessageStatus.STOPPED
 
     def update_running_migration(self, running: SeqList, next_token_ids: np.ndarray, stopped: torch.Tensor,
@@ -835,7 +842,7 @@ class Engine:
             num_loops = 1 if prefill else prefill_interval
             return dict(
                 running=[],
-                inputs=ModelInputs.make_dummy(1, is_decoding=not prefill),
+                inputs=ModelInputs.make_dummy(1, is_decoding=not prefill, vocab_size=self.model_config.vocab_size),
                 swap_in_map=dict(),
                 swap_out_map=dict(),
                 loop_count=num_loops,
@@ -1060,6 +1067,10 @@ class Engine:
         self.executor.stop()
         self.executor.release()
 
+    def update_params(self, request: Any):
+        """update params."""
+        self.executor.update_params(request)
+
     async def async_loop(self):
         try:
             event_loop = asyncio.get_event_loop()
@@ -1125,3 +1136,10 @@ class Engine:
         """
         from .engine_instance import EngineInstance
         return EngineInstance(self)
+
+    def start_loop(self):
+        """start engine loop."""
+        if self.req_manager.is_loop_alive():
+            return True
+        self.req_manager.create_loop_task()
+        return True

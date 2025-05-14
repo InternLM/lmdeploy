@@ -241,16 +241,16 @@ class BlockedF8Linear(nn.Module):
         self.impl = impl_builder.build(in_features, out_features, block_size=128, bias=bias is not None, dtype=dtype)
         self.block_size = 128
         self.fp8_dtype = fp8_dtype
-        weight, scale, bias = self.create_weights(in_features, out_features, bias, dtype, device)
+        weight, weight_scale_inv, bias = self.create_weights(in_features, out_features, bias, dtype, device)
         weight = torch.nn.Parameter(weight, requires_grad=False)
         weight.weight_loader = self.weight_loader
-        scale = torch.nn.Parameter(scale, requires_grad=False)
-        scale.weight_loader = self.weight_loader
+        weight_scale_inv = torch.nn.Parameter(weight_scale_inv, requires_grad=False)
+        weight_scale_inv.weight_loader = self.weight_loader
         if bias is not None:
             bias = torch.nn.Parameter(bias, requires_grad=False)
             bias.weight_loader = self.weight_loader
         self.register_parameter('weight', weight)
-        self.register_parameter('scale', scale)
+        self.register_parameter('weight_scale_inv', weight_scale_inv)
         self.register_parameter('bias', bias)
 
         self.in_features = in_features
@@ -302,27 +302,27 @@ class BlockedF8Linear(nn.Module):
     def create_weights(self, in_features: int, out_features: int, bias: bool, dtype: torch.dtype, device: torch.device):
         """create weights."""
         weight = torch.empty((out_features, in_features), dtype=self.fp8_dtype, device=device)
-        scale = torch.empty((div_up(out_features, self.block_size), div_up(in_features, self.block_size)),
-                            dtype=torch.float32,
-                            device=device)
+        weight_scale_inv = torch.empty((div_up(out_features, self.block_size), div_up(in_features, self.block_size)),
+                                       dtype=torch.float32,
+                                       device=device)
         if bias:
             bias = torch.empty((out_features, ), dtype=dtype, device=device)
         else:
             bias = None
-        return weight, scale, bias
+        return weight, weight_scale_inv, bias
 
     def update_weights(self):
         """update weights."""
-        weight, scale, bias = self.impl.update_weights(self.weight, self.scale, self.bias)
+        weight, weight_scale_inv, bias = self.impl.update_weights(self.weight, self.weight_scale_inv, self.bias)
         weight = torch.nn.Parameter(weight, requires_grad=False)
         self.weight.weight_loader = self.weight_loader
-        scale = torch.nn.Parameter(scale, requires_grad=False)
-        self.scale.weight_loader = self.weight_loader
+        weight_scale_inv = torch.nn.Parameter(weight_scale_inv, requires_grad=False)
+        self.weight_scale_inv.weight_loader = self.weight_loader
         if bias is not None:
             bias = torch.nn.Parameter(bias, requires_grad=False)
             self.bias.weight_loader = self.weight_loader
         self.register_parameter('weight', weight)
-        self.register_parameter('scale', scale)
+        self.register_parameter('weight_scale_inv', weight_scale_inv)
         self.register_parameter('bias', bias)
 
     def forward(self, x):
@@ -340,11 +340,11 @@ class BlockedF8Linear(nn.Module):
         if len(self.lora_adapters) == 0:
             if self.dp_scatter:
                 _, rank = get_tp_world_rank()
-                return self.impl.forward(x, self.weight, self.scale, self.bias, all_reduce, rank, tp_sizes)
+                return self.impl.forward(x, self.weight, self.weight_scale_inv, self.bias, all_reduce, rank, tp_sizes)
             else:
-                return self.impl.forward(x, self.weight, self.scale, self.bias, all_reduce)
+                return self.impl.forward(x, self.weight, self.weight_scale_inv, self.bias, all_reduce)
 
-        out = self.impl.forward(x, self.weight, self.scale, self.bias, False)
+        out = self.impl.forward(x, self.weight, self.weight_scale_inv, self.bias, False)
         for lora_adapter in self.lora_adapters.values():
             out = lora_adapter(x, out)
         if all_reduce:
@@ -394,10 +394,10 @@ class MergedBlockedF8Linear(BlockedF8Linear):
                          dp_gather=dp_gather)
         self.weight.weight_loader = self.weight_loader
         self.weight._weight_type = 'qweight'
-        self.scale.weight_loader = self.weight_loader
-        self.scale._weight_type = 'scales'
+        self.weight_scale_inv.weight_loader = self.weight_loader
+        self.weight_scale_inv._weight_type = 'scales'
         self.weight.weight_spliter = self.weight_spliter
-        self.scale.weight_spliter = self.weight_spliter
+        self.weight_scale_inv.weight_spliter = self.weight_spliter
         if self.bias is not None:
             self.bias.weight_loader = self.weight_loader
             self.bias.weight_spliter = self.weight_spliter
@@ -1675,7 +1675,7 @@ def build_qkv_proj(in_features: int,
                    device: Optional[torch.device] = None,
                    is_tp: bool = True,
                    num_replicate_kv_heads: int = 1,
-                   dp_disable_tp: bool = False,
+                   dp_disable_tp: bool = True,
                    all_reduce: bool = False,
                    dp_gather: bool = False):
     """build qkv proj."""

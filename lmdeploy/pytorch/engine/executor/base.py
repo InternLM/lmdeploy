@@ -3,7 +3,7 @@
 import asyncio
 from typing import Any, Dict, List
 
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, ModelConfig
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.pytorch.engine.cache_engine import CacheEngine
@@ -21,6 +21,7 @@ class ExecutorBase:
                  cache_config: CacheConfig,
                  backend_config: BackendConfig,
                  dist_config: DistConfig,
+                 misc_config: MiscConfig,
                  tokenizer: Any,
                  adapters: Dict[str, str] = None,
                  device_type: str = 'cuda'):
@@ -30,6 +31,7 @@ class ExecutorBase:
         self.cache_config = cache_config
         self.backend_config = backend_config
         self.dist_config = dist_config
+        self.misc_config = misc_config,
         self.tokenizer = tokenizer
         self.dp = dist_config.dp
         self.tp = dist_config.tp
@@ -66,6 +68,10 @@ class ExecutorBase:
 
     def warmup(self):
         """warmup."""
+        raise NotImplementedError('Not Implemented.')
+
+    def update_params(self, request: Any):
+        """update params."""
         raise NotImplementedError('Not Implemented.')
 
     def get_input_processor(self):

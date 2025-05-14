@@ -407,6 +407,15 @@ class ArgumentHelper:
             help=f'The registered tool parser name {ToolParserManager.module_dict.keys()}. Default to None.')
 
     @staticmethod
+    def allow_terminate_by_client(parser):
+        """Add argument allow_terminate_by_client to parser."""
+
+        return parser.add_argument('--allow-terminate-by-client',
+                                   action='store_true',
+                                   default=False,
+                                   help='Enable server to be terminated by request from client')
+
+    @staticmethod
     def cache_max_entry_count(parser):
         """Add argument cache_max_entry_count to parser."""
 
