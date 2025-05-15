@@ -81,18 +81,13 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
 
     print('reproduce command restful: ' + cmd)
 
-    with open(start_log, 'w') as f:
-        f.writelines('reproduce command restful: ' + cmd + '\n')
+    file = open(start_log, 'w')
 
-        startRes = subprocess.Popen([cmd], stdout=f, stderr=f, shell=True, text=True, encoding='utf-8')
-        pid = startRes.pid
+    startRes = subprocess.Popen([cmd], stdout=file, stderr=file, shell=True, text=True, encoding='utf-8')
+    pid = startRes.pid
 
     http_url = BASE_HTTP_URL + ':' + str(port)
-    with open(start_log, 'r') as f:
-        content = f.read()
-        print(content)
     start_time = int(time())
-
     start_timeout = 300
     if not is_bf16_supported():
         start_timeout = 600
@@ -105,6 +100,17 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
         result = health_check(http_url)
         if result or total_time >= start_timeout:
             break
+        try:
+            # Check if process is still running
+            return_code = startRes.wait(timeout=1)  # Small timeout to check status
+            if return_code != 0:
+                with open(start_log, 'r') as f:
+                    content = f.read()
+                    print(content)
+                break
+        except subprocess.TimeoutExpired:
+            continue
+    file.close()
     allure.attach.file(start_log, attachment_type=allure.attachment_type.TEXT)
     return pid, startRes
 
