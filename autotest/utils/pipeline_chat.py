@@ -93,7 +93,7 @@ def run_pipeline_vl_chat_test(config,
     if str(config.get('env_tag')) == '3090':
         if extra is None:
             extra = {}
-        extra['cache-max-entry-count'] = 0.7
+        extra['cache-max-entry-count'] = 0.5
 
     if extra is not None:
         extra = json.dumps(extra, ensure_ascii=False, indent=None)
