@@ -241,7 +241,7 @@ class Scheduler:
         waiting = _reorder_waiting()
         while len(waiting) > 0 and len(running) < max_batches:
             # for logging
-            scheduled_timestamp = time.monotonic()
+            scheduled_timestamp = time.perf_counter()
 
             seq = waiting.pop(0)
 
@@ -268,7 +268,7 @@ class Scheduler:
 
         # for logging
         # FIXME, record request scheduled event
-        # scheduled_timestamp = time.monotonic()
+        # scheduled_timestamp = time.perf_counter()
 
         running = self.running
         assert len(running) != 0

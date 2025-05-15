@@ -411,13 +411,20 @@ class Response:
     last_hidden_state: torch.Tensor = None
     index: int = 0
 
+    # for logging
     scheduler_stats: SchedulerStats = None
     iteration_stats: IterationStats = None
 
 
 # copy from https://github.com/vllm-project/vllm/blob/main/vllm/v1/engine/__init__.py
 class EngineCoreEventType(enum.IntEnum):
-    """The type of engine core request event."""
+    """The type of engine core request event.
+
+    QUEUED - when the request was received by the engine core and added to the scheduler queue
+    SCHEDULED - when the request was first scheduled for execution
+    PREEMPTED - the request has been put back in the waiting queue in order to make room for other requests to complete.
+                It will be re-scheduled in future and re-start its prefill phase
+    """
     QUEUED = 1
     SCHEDULED = 2
     PREEMPTED = 3  # FIXME, currently ignored for simplicity
@@ -436,7 +443,7 @@ class EngineCoreEvent():
 
     @classmethod
     def new_event(cls, event_type: EngineCoreEventType, timestamp: Optional[float] = None) -> 'EngineCoreEvent':
-        timestamp = time.monotonic() if timestamp is None else timestamp
+        timestamp = time.perf_counter() if timestamp is None else timestamp
         return cls(event_type, timestamp)
 
 
@@ -453,6 +460,14 @@ class EngineOutput:
             position.
         cache_block_ids (List[int]): send cache blocks back for migration in
             Disaggregated LLM Serving when Prefill Engine is Done.
+        timestamp (float):
+            initialized after the instantiation of EngineOutput, used for calculating first_token_ts and tpot
+        scheduler_stats (SchedulerStats):
+            scheduler related information, e.g. num_running_reqs, num_waiting_reqs, gpu_cache_usage
+        iteration_stats (IterationStats):
+            information related to single set of EngineOutputs, e.g. num_generation_tokens, num_prompt_tokens
+        events (List[EngineCoreEvent]):
+            event timestamps for calculating time intervals: queued_time, prefill_time, inference_time, decode_time
     """
     status: ResponseType
     token_ids: List[int]
@@ -463,7 +478,7 @@ class EngineOutput:
 
     cache_block_ids: Optional[List[int]] = None
 
-    # engine-side time stamp, for logging
+    # for logging
     timestamp: float = 0.0
     scheduler_stats: SchedulerStats = None
     iteration_stats: IterationStats = None
@@ -474,15 +489,23 @@ class EngineOutput:
             self.timestamp = time.monotonic()
 
 
-@dataclass
 class RequestState:
-    """per request state."""
 
-    def __init__(self, arrival_time: float, prompt_len: int, is_prefilling: bool, enable_metrics: bool):
+    def __init__(self,
+                 arrival_time: float,
+                 enable_metrics: bool,
+                 prompt_len: int,
+                 is_prefilling: Optional[bool] = True):
+        self.arrival_time = arrival_time
+        self.enable_metrics = enable_metrics
+        self.prompt_len = prompt_len
+        self.is_prefilling = is_prefilling
 
-        self.prompt_len: int = prompt_len
-        self.is_prefilling: bool = is_prefilling
         self.stats = RequestStateStats(arrival_time=arrival_time) if enable_metrics else None
+
+    def from_new_request(cls, request, enable_metrics: bool, is_prefilling: bool) -> 'RequestState':
+        """update request state from new request."""
+        return cls(arrival_time=request.arrival_time, enable_metrics=enable_metrics, is_prefilling=is_prefilling)
 
 
 @dataclass

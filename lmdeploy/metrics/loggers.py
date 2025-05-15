@@ -30,7 +30,7 @@ class LoggingStatLogger(StatLoggerBase):
 
     def __init__(self, engine_index: int = 0):
         self.engine_index = engine_index
-        self._reset(time.monotonic())
+        self._reset(time.perf_counter())
         self.last_scheduler_stats = SchedulerStats()
 
     def _reset(self, now):
@@ -58,7 +58,10 @@ class LoggingStatLogger(StatLoggerBase):
         self.last_scheduler_stats = scheduler_stats
 
     def log(self):
-        now = time.monotonic()
+        now = time.perf_counter()
+        print(f'{self.last_log_time} {now}')
+        print(f'self.num_prompt_tokens: {self.num_prompt_tokens}')
+        print(f'self.num_generation_tokens: {self.num_generation_tokens}')
         prompt_throughput = self._get_throughput(self.num_prompt_tokens, now)
         generation_throughput = self._get_throughput(self.num_generation_tokens, now)
 

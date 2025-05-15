@@ -515,9 +515,9 @@ class Engine:
     def _on_add_message(self, reqs: List[Request], **kwargs):
         """on add message callback."""
         for req in reqs:
-            # record arrival time, when requests arrive engine side
+            # FIXME: record req arrival time
             if req.arrival_time is None:
-                req.arrival_time = time.time()
+                req.arrival_time = time.perf_counter()
 
             req_data = req.data
             if req_data.get('input_multimodals', None) is None:
@@ -949,6 +949,7 @@ class Engine:
             """send response."""
             resp_type = (ResponseType.FINISH if out.finish else ResponseType.SUCCESS)
 
+            # FIXME, should we put this in another places?
             scheduler_stats = SchedulerStats(num_running_reqs=self.scheduler.num_running(),
                                              num_waiting_reqs=self.scheduler.num_waiting(),
                                              gpu_cache_usage=self.scheduler.usage)

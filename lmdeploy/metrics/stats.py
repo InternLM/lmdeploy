@@ -25,10 +25,10 @@ class RequestStateStats:
 
     num_generation_tokens: int = 0
 
-    # This is a engine frontend timestamp (wall-clock)
+    # This is a engine frontend timestamp
     arrival_time: float = 0.0
 
-    # These are engine core timestamps (monotonic)
+    # These are engine core timestamps
     queued_ts: float = 0.0
     scheduled_ts: float = 0.0
     first_token_ts: float = 0.0
@@ -43,7 +43,6 @@ class FinishedRequestStats:
     e2e_latency: float = 0.0
     num_prompt_tokens: int = 0
     num_generation_tokens: int = 0
-    # max_tokens_param: Optional[int] = None
     queued_time: float = 0.0
     prefill_time: float = 0.0
     inference_time: float = 0.0
@@ -54,15 +53,25 @@ class IterationStats:
     """Stats associated with a single set of EngineCoreOutputs."""
 
     def __init__(self):
-        self.iteration_timestamp = time.time()
+        self.iteration_timestamp = time.perf_counter()
         self.num_generation_tokens = 0
         self.num_prompt_tokens = 0
         self.num_preempted_reqs = 0
         self.finished_requests: list[FinishedRequestStats] = []
-        # self.max_num_generation_tokens_iter: list[int] = []
-        # self.n_params_iter: list[int] = []
         self.time_to_first_tokens_iter: list[float] = []
         self.time_per_output_tokens_iter: list[float] = []
+
+    def __repr__(self):
+        """Return a human-readable string representation."""
+        return (f'IterationStats(\n'
+                f'  iteration_timestamp={self.iteration_timestamp:.6f},\n'
+                f'  num_generation_tokens={self.num_generation_tokens},\n'
+                f'  num_prompt_tokens={self.num_prompt_tokens},\n'
+                f'  num_preempted_reqs={self.num_preempted_reqs},\n'
+                f'  finished_requests_count={len(self.finished_requests)},\n'
+                f'  time_to_first_tokens_iter={self.time_to_first_tokens_iter},\n'
+                f'  time_per_output_tokens_iter={self.time_per_output_tokens_iter},\n'
+                f')')
 
     def _time_since(self, start: float) -> float:
         """Calculate an interval relative to this iteration's timestamp."""
@@ -79,6 +88,7 @@ class IterationStats:
 
             first_token_latency = self._time_since(req_stats.arrival_time)
             self.time_to_first_tokens_iter.append(first_token_latency)
+            print(f'req_stats.arrival_time: {req_stats.arrival_time}, first_token_latency: {first_token_latency}')
 
         req_stats.num_generation_tokens += num_new_generation_tokens
 
@@ -89,11 +99,15 @@ class IterationStats:
         # Process the batch-level "new tokens" engine core event
         if is_prefilling:
             req_stats.first_token_ts = engine_core_timestamp
+            print(f'req_stats.first_token_ts {req_stats.first_token_ts}')
         else:
             tpot = engine_core_timestamp - req_stats.last_token_ts
             self.time_per_output_tokens_iter.append(tpot)
+            print(f'tpot {tpot} = engine_core_timestamp: {engine_core_timestamp} \
+                    - req_stats.last_token_ts: {req_stats.last_token_ts}')
 
         req_stats.last_token_ts = engine_core_timestamp
+        print(f'set req_stats.last_token_ts: {engine_core_timestamp}')
 
     def update_from_events(self, events: list['EngineCoreEvent'], req_stats: RequestStateStats):
         # Avoid circular dependency
@@ -109,12 +123,8 @@ class IterationStats:
             # elif event.type == EngineCoreEventType.PREEMPTED:
             #     self.num_preempted_reqs += 1
 
-    def update_from_finished_request(
-            self,
-            finish_reason: 'ResponseType',
-            num_prompt_tokens: int,
-            #  max_tokens_param: Optional[int],
-            req_stats: RequestStateStats):
+    def update_from_finished_request(self, finish_reason: 'ResponseType', num_prompt_tokens: int,
+                                     req_stats: RequestStateStats):
 
         e2e_latency = self._time_since(req_stats.arrival_time)
 
@@ -138,7 +148,6 @@ class IterationStats:
                                  e2e_latency=e2e_latency,
                                  num_prompt_tokens=num_prompt_tokens,
                                  num_generation_tokens=req_stats.num_generation_tokens,
-                                 # max_tokens_param=max_tokens_param,
                                  queued_time=queued_time,
                                  prefill_time=prefill_time,
                                  inference_time=inference_time,

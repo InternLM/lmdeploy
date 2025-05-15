@@ -620,28 +620,27 @@ class AsyncEngine(LogitsMixin):
             await generator.aclose()
 
     def _update_stats_from_output(self, req_state: RequestState, engine_core_output: EngineOutput,
-                                  iteration_stats: Optional[IterationStats]):
+                                  engine_core_timestamp: Optional[float], iteration_stats: Optional[IterationStats]):
         print('update from output')
         if iteration_stats is None:
             return
 
-        assert req_state.stats is not None
-        iteration_stats.update_from_output(engine_core_output, engine_core_output.timestamp, req_state.is_prefilling,
+        assert engine_core_timestamp is not None, 'engine_core_timestamp cannot be None'
+        assert req_state.stats is not None, 'req_state.stats cannot be None'
+        iteration_stats.update_from_output(engine_core_output, engine_core_timestamp, req_state.is_prefilling,
                                            req_state.prompt_len, req_state.stats)
 
     def _update_stats_from_finished(self, req_state: RequestState, finish_reason: Optional[ResponseType],
                                     iteration_stats: Optional[IterationStats]):
-
+        print('update from finished')
         if iteration_stats is None:
             return
 
-        assert finish_reason is not None
-        assert req_state.stats is not None
-        iteration_stats.update_from_finished_request(
-            finish_reason=finish_reason,
-            num_prompt_tokens=req_state.prompt_len,
-            # max_tokens_param=req_state.max_tokens_param,
-            req_stats=req_state.stats)
+        assert finish_reason is not None, 'finish_reason cannot be None'
+        assert req_state.stats is not None, 'req_state.stats cannot be None'
+        iteration_stats.update_from_finished_request(finish_reason=finish_reason,
+                                                     num_prompt_tokens=req_state.prompt_len,
+                                                     req_stats=req_state.stats)
 
     @staticmethod
     def _record_stats(
@@ -782,9 +781,11 @@ class AsyncEngine(LogitsMixin):
                 prev_len = 0
                 hit_stop_token = 0
                 iteration_stats = IterationStats() if self.enable_metrics else None
+                req_state = RequestState(
+                    arrival_time=0,  # FIXME: update req arrival time
+                    prompt_len=input_len,
+                    enable_metrics=self.enable_metrics)
                 async for outputs in gen:
-                    print(f'=> async engine step outputs {type(outputs)}, {outputs}')
-
                     # decode res
                     if is_error(outputs.status):
                         break
@@ -837,28 +838,25 @@ class AsyncEngine(LogitsMixin):
                         if hit_stop_token:
                             out.logits = out.logits[:-hit_stop_token]
 
-                    # update stats from per iteration engine outputs (i.e. step output)
-                    req_state = RequestState(
-                        arrival_time=outputs.timestamp,
-                        prompt_len=input_len,
-                        is_prefilling=(output_len == 0),  # FIXME: is this logic correct ?
-                        enable_metrics=self.enable_metrics)
+                    # update stats from engine outputs in each step
+                    req_state.is_prefilling = (prev_len == 0)
                     self._update_stats_from_output(req_state=req_state,
                                                    engine_core_output=outputs,
+                                                   engine_core_timestamp=outputs.timestamp,
                                                    iteration_stats=iteration_stats)
+                    print(f'=> yield out {out}')
                     yield out
                 # end of generator loop
 
                 # update stats from per finished requests engine outputs
-                self._update_stats_from_finished(
-                    req_state=req_state,
-                    finish_reason=outputs.status,  # ResponseType
-                    iteration_stats=iteration_stats)
+                self._update_stats_from_finished(req_state=req_state,
+                                                 finish_reason=outputs.status,
+                                                 iteration_stats=iteration_stats)
                 print(f'=> check async engine output {type(outputs)} {outputs}')
 
                 # perform logging
                 if self.stat_loggers:
-                    assert outputs.scheduler_stats is not None
+                    assert outputs.scheduler_stats is not None, 'outputs.scheduler_stats cannot be None'
 
                     AsyncEngine._record_stats(
                         self.stat_loggers,

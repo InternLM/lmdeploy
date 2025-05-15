@@ -125,11 +125,7 @@ class EngineInstance:
             int: The number of the output tokens.
         """
         if len(input_ids) > self.max_input_len:
-            yield EngineOutput(status=ResponseType.INPUT_LENGTH_ERROR,
-                               token_ids=[],
-                               num_token=0,
-                               scheduler_stats=None,
-                               iteration_stats=None)
+            yield EngineOutput(ResponseType.INPUT_LENGTH_ERROR, [], 0)
             return
         gen_config = gen_config or GenerationConfig()
         sampling_param = SamplingParam.from_gen_config(gen_config=gen_config)
@@ -150,7 +146,7 @@ class EngineInstance:
 
         while True:
             resp = await self.req_sender.async_recv(resp)
-            print(f'=> finally get resp {resp}')
+            print(f'=> finally get resp {type(resp)} {resp}')
 
             cache_block_ids = resp.data.get('cache_block_ids', None)
             if resp.type == ResponseType.SUCCESS:
@@ -181,13 +177,7 @@ class EngineInstance:
                 break
             else:
                 logger.debug(f'session[{session_id}] failed.')
-                yield EngineOutput(status=resp.type,
-                                   token_ids=[],
-                                   num_token=0,
-                                   scheduler_stats=resp.scheduler_stats,
-                                   iteration_stats=resp.iteration_stats,
-                                   events=resp.events)
-                # FIXME, should be None for scheduler_stats etc ?
+                yield EngineOutput(resp.type, [], 0)
                 break
 
     async def async_infer(self,
