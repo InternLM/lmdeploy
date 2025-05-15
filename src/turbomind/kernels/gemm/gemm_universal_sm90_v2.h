@@ -163,8 +163,8 @@ struct GemmUniversalSm90_v2 {
     static constexpr int MMA_ITER_N = TILE_N / MMA_ATOM_N;
     static constexpr int MMA_ITER_K = TILE_K / MMA_ATOM_K;
 
-    static constexpr int kMulticastA = 1;
-    static constexpr int kMulticastB = 2;
+    static constexpr int kMulticastA = 2;
+    static constexpr int kMulticastB = 4;
 
     static constexpr int kClusterSize = kMulticastA * kMulticastB;
 
@@ -462,8 +462,12 @@ struct GemmUniversalSm90_v2 {
                 };
 
                 if constexpr (kClusterSize > 1) {
-                    if (!cta_tile_p) {
-                        // other CTAs in the cluster are still alive
+                    if (!cta_tile_p) {  // other CTAs in the cluster are still alive
+                        math_barrier_sync(0);
+                        pipe_state.advance(storage.pipe_count - pipe_state.count());
+                        smem_iter_A.Reset(pipe_state.index());
+                        smem_iter_B.Reset(pipe_state.index());
+                        wg_barrier.sync();
                         for (; k_iter > 0; --k_iter) {
                             ProducerBar::wait(&producer_bar[pipe_state.index()], pipe_state.phase());
                             consumer_arrive();
@@ -471,6 +475,11 @@ struct GemmUniversalSm90_v2 {
                             smem_iter_B.Advance(pipe_state.index());
                             ++pipe_state;
                         }
+                        if (wg_lane == 0) {
+                            storage.pipe_count = pipe_state.count();
+                        }
+                        math_barrier_sync(1);
+                        sched.next(WARPGORUPS);
                         continue;
                     }
                 }
