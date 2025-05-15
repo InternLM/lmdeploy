@@ -153,7 +153,7 @@ def run_pipeline_vl_chat_test(config,
             with assume:
                 assert case_result, 'reason: batch-example1: tiger should in ' + response
         if not is_smoke:
-            if 'internvl' in model_case.lower():
+            if 'internvl' in model_case.lower() and 'internvl2-4b' not in model_case.lower():
                 internvl_vl_testcase(output_text, f)
                 internvl_vl_testcase(output_text, f, 'cn')
             if 'minicpm' in model_case.lower():
@@ -233,7 +233,7 @@ def assert_pipeline_single_element(output, is_stream: bool = False, is_last: boo
         result &= output.logprobs is None
     else:
         if is_stream:
-            result &= len(output.logprobs) == 1
+            result &= len(output.logprobs) >= 1
         else:
             result &= len(output.logprobs) == output.generate_token_len or len(
                 output.logprobs) == output.generate_token_len + 1

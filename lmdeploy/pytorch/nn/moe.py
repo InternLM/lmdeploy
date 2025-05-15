@@ -421,25 +421,25 @@ class LinearWeightsBlockedF8(LinearWeights):
             ep=ep,
         )
         self.block_size = block_size
-        scale = torch.empty((num_experts, div_up(out_features, block_size), div_up(in_features, block_size)),
-                            dtype=torch.float32,
-                            device=device)
-        scale = torch.nn.Parameter(scale, requires_grad=False)
-        self.register_parameter('scale', scale)
+        weight_scale_inv = torch.empty((num_experts, div_up(out_features, block_size), div_up(in_features, block_size)),
+                                       dtype=torch.float32,
+                                       device=device)
+        weight_scale_inv = torch.nn.Parameter(weight_scale_inv, requires_grad=False)
+        self.register_parameter('weight_scale_inv', weight_scale_inv)
 
         if self.ep:
             self.expert_map = dict((eid, idx) for idx, eid in enumerate(expert_list))
-            self.scale.weight_loader = self.weight_loader_scale_ep
+            self.weight_scale_inv.weight_loader = self.weight_loader_scale_ep
         else:
-            self.scale.weight_loader = self.weight_loader_scale_tp
+            self.weight_scale_inv.weight_loader = self.weight_loader_scale_tp
 
-    def update_weight(self, weight: torch.Tensor, scale: torch.Tensor):
+    def update_weight(self, weight: torch.Tensor, weight_scale_inv: torch.Tensor):
         """update weight."""
         super().update_weight(weight=weight)
-        weight_loader = self.scale.weight_loader
-        scale = torch.nn.Parameter(scale, requires_grad=False)
-        scale.weight_loader = weight_loader
-        self.register_parameter('scale', scale)
+        weight_loader = self.weight_scale_inv.weight_loader
+        weight_scale_inv = torch.nn.Parameter(weight_scale_inv, requires_grad=False)
+        weight_scale_inv.weight_loader = weight_loader
+        self.register_parameter('weight_scale_inv', weight_scale_inv)
 
     def weight_loader_scale_ep(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, expert_id: int,
                                shard_id: str):
@@ -483,7 +483,8 @@ class FusedMoEBlockedF8(nn.Module):
                  dtype: Optional[torch.dtype] = None,
                  device: Optional[torch.device] = None,
                  all_reduce: bool = True,
-                 enable_ep: bool = False):
+                 enable_ep: bool = False,
+                 layer_idx: int = 0):
         super().__init__()
         if device is None:
             device = torch.device('cpu')
@@ -499,7 +500,8 @@ class FusedMoEBlockedF8(nn.Module):
                                        block_size=self.block_size,
                                        ep_size=self.ep_size,
                                        ep_group=dist_ctx.ep_gpu_group,
-                                       out_dtype=dtype)
+                                       out_dtype=dtype,
+                                       layer_idx=layer_idx)
 
         if self.ep_size > 1:
             expert_list = self.impl.ep_expert_list(self.ep_size, rank)
@@ -543,8 +545,8 @@ class FusedMoEBlockedF8(nn.Module):
     def update_weights(self):
         """update weights."""
         (gate_up_weights, down_weights, gate_up_scale,
-         down_scale) = self.impl.update_weights(self.gate_up.weight, self.down.weight, self.gate_up.scale,
-                                                self.down.scale)
+         down_scale) = self.impl.update_weights(self.gate_up.weight, self.down.weight, self.gate_up.weight_scale_inv,
+                                                self.down.weight_scale_inv)
         self.gate_up.update_weight(gate_up_weights, gate_up_scale)
         self.down.update_weight(down_weights, down_scale)
 
@@ -560,11 +562,22 @@ class FusedMoEBlockedF8(nn.Module):
         out_state = self.combine(gemm_state)
         return out_state['hidden_states']
 
-    def dispatch(self, state: Dict):
+    def before_dispatch(self, state: Dict):
         moe_type = state['moe_type']
         if moe_type == MoeType.DSAsyncPrefill:
             fusedmoe = self.fusedmoe_build(low_latency_mode=False)
+            state['fusedmoe'] = fusedmoe
+            if hasattr(fusedmoe, 'per_token_group_quant_fp8'):
+                state['hidden_states'] = fusedmoe.per_token_group_quant_fp8(state['hidden_states'])
             previous_event = fusedmoe.capture()
+            state['previous_event'] = previous_event
+        return state
+
+    def dispatch(self, state: Dict):
+        moe_type = state['moe_type']
+        if moe_type == MoeType.DSAsyncPrefill:
+            fusedmoe = state['fusedmoe']
+            previous_event = state['previous_event']
             (
                 recv_hidden_states,
                 recv_topk_idx,
@@ -624,10 +637,12 @@ class FusedMoEBlockedF8(nn.Module):
     def gemm(self, state: Dict):
         moe_type = state['moe_type']
         if moe_type == MoeType.DSAsyncPrefill:
-            if state['recv_hidden_states'].shape[0] > 0:
+            if (state['recv_hidden_states'][0]
+                    if isinstance(state['recv_hidden_states'], tuple) else state['recv_hidden_states']).shape[0] > 0:
                 state['recv_hidden_states'] = state['fusedmoe'].fusedmoe_forward(state, self.gate_up.weight,
-                                                                                 self.gate_up.scale, self.down.weight,
-                                                                                 self.down.scale)
+                                                                                 self.gate_up.weight_scale_inv,
+                                                                                 self.down.weight,
+                                                                                 self.down.weight_scale_inv)
             gemm_state = {
                 'fusedmoe': state['fusedmoe'],
                 'hidden_states': state['recv_hidden_states'],
@@ -636,8 +651,9 @@ class FusedMoEBlockedF8(nn.Module):
             }
         elif moe_type == MoeType.DSAsyncDecode:
             state['recv_hidden_states'] = state['fusedmoe'].fusedmoe_forward(state, self.gate_up.weight,
-                                                                             self.gate_up.scale, self.down.weight,
-                                                                             self.down.scale)
+                                                                             self.gate_up.weight_scale_inv,
+                                                                             self.down.weight,
+                                                                             self.down.weight_scale_inv)
             gemm_state = {
                 'fusedmoe': state['fusedmoe'],
                 'hidden_states': state['recv_hidden_states'],
@@ -648,8 +664,8 @@ class FusedMoEBlockedF8(nn.Module):
             }
         else:  # MoeType.Default
             hidden_states = self.impl.forward(state['hidden_states'], state['topk_weights'], state['topk_idx'],
-                                              self.gate_up.weight, self.gate_up.scale, self.down.weight,
-                                              self.down.scale, self.expert_list)
+                                              self.gate_up.weight, self.gate_up.weight_scale_inv, self.down.weight,
+                                              self.down.weight_scale_inv, self.expert_list)
             gemm_state = {'hidden_states': hidden_states, 'moe_type': state['moe_type']}
         return gemm_state
 
@@ -719,6 +735,7 @@ def build_fused_moe(
     all_reduce: bool = True,
     enable_ep: bool = False,
     quant_config: Any = None,
+    layer_idx: int = 0,
 ):
     """fused moe builder."""
 
@@ -769,6 +786,7 @@ def build_fused_moe(
             device=device,
             all_reduce=all_reduce,
             enable_ep=enable_ep,
+            layer_idx=layer_idx,
         )
     else:
         raise RuntimeError(f'Unsupported quant method: {quant_method}')

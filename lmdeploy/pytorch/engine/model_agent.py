@@ -1,16 +1,20 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import base64
 import functools
 from contextlib import contextmanager
+from multiprocessing.reduction import ForkingPickler
 from typing import Any, Dict
 
 import torch
 import torch.distributed as dist
 
+from lmdeploy.pytorch.disagg.config import EngineRole
+from lmdeploy.serve.openai.protocol import UpdateParamsRequest
 from lmdeploy.utils import get_logger
 
 from ..backends import get_backend
-from ..config import BackendConfig, CacheConfig, ModelConfig
+from ..config import BackendConfig, CacheConfig, MiscConfig, ModelConfig
 from ..devices import DeviceContext, get_device_manager
 from ..distributed import DistContext, get_dist_manager
 from ..model_inputs import ModelInputs, step_ctx_manager
@@ -300,7 +304,7 @@ class AutoModelAgent:
 
         # compute dummy loop
         if dummy_loop > 0:
-            dummy_inputs = ModelInputs.make_dummy(1, False, 'cuda')
+            dummy_inputs = ModelInputs.make_dummy(1, False, 'cuda', vocab_size=self.model_config.vocab_size)
         for _ in range(dummy_loop):
             await __forward(dummy_inputs)
 
@@ -367,10 +371,13 @@ class AutoModelAgent:
         rank = dist_ctx.rank
         tp = dist_ctx.tp
         dp = dist_ctx.dp
+        tp_cpu_group = dist_ctx.tp_cpu_group
+        tp_gpu_group = dist_ctx.tp_gpu_group
 
-        logger.info(f'<ForwardTask> rank[{rank}]: '
-                    f'batch_size={inputs.seq_length.size(0)} '
-                    f'num_tokens={inputs.input_ids.size(-1)}')
+        logger.debug(f'<ForwardTask> rank[{rank}]: '
+                     f'batch_size={inputs.seq_length.size(0)} '
+                     f'num_tokens={inputs.input_ids.size(-1)} '
+                     f'is_decoding={inputs.is_decoding}')
 
         is_decoding = inputs.is_decoding
         eager_mode = self.backend_config.eager_mode
@@ -444,13 +451,19 @@ class AutoModelAgent:
                 stopped, num_appendable_ids = _batch_stopping_criteria(next_token_ids, sampling_inputs.stop_words,
                                                                        num_appendable_ids)
             else:
-                next_token_ids = torch.empty_like(num_ignore_eos)
+                # Avoid adding the ADInplaceOrView dispatch key to `next_token_ids`,
+                # as it can trigger recompilation on different ranks when using torch.compile.
+                with torch.inference_mode():
+                    next_token_ids = torch.zeros_like(num_ignore_eos)
                 stopped = None
 
             if need_broadcast_next:
-                logger.debug(f'<ForwardTask> rank[{rank}]: synchornize token ids [{idx}]')
-                tp_gpu_group = dist_ctx.tp_gpu_group
-                dist.broadcast(next_token_ids, src=rank // tp * tp, group=tp_gpu_group)
+                logger.info(f'<ForwardTask> rank[{rank}]: synchornize token ids [{idx}]')
+                if self.cache_config.role == EngineRole.Decode:
+                    next_token_ids = next_token_ids.cpu()
+                    dist.all_reduce(next_token_ids, op=dist.ReduceOp.SUM, group=tp_cpu_group)
+                else:
+                    dist.broadcast(next_token_ids, src=0, group=tp_gpu_group)
 
             # send output
             model_metas = output.get('model_metas')
@@ -567,6 +580,7 @@ class BaseModelAgent(AutoModelAgent):
                  model_config: ModelConfig,
                  cache_config: CacheConfig,
                  backend_config: BackendConfig,
+                 misc_config: MiscConfig,
                  tokenizer: Any,
                  dist_ctx: DistContext,
                  device_ctx: DeviceContext,
@@ -580,6 +594,7 @@ class BaseModelAgent(AutoModelAgent):
         )
         device = 'cuda'
         self.backend_config = backend_config
+        self.misc_config = misc_config
         rank = dist_ctx.rank
 
         self.model_path = model_path
@@ -609,7 +624,8 @@ class BaseModelAgent(AutoModelAgent):
         logger.debug(msg_with_rank(rank, 'build model.'))
         patched_model = build_patched_model(self.model_config, device=device)
         logger.debug(msg_with_rank(rank, 'loading weights.'))
-        load_model_weights(patched_model, model_path, device=device)
+        if not self.misc_config.empty_init:
+            load_model_weights(patched_model, model_path, device=device)
         if adapters is not None:
             logger.debug(msg_with_rank(rank, 'loading adapters.'))
             add_adapters(patched_model, adapters, dtype=self.model_config.dtype, device=device)
@@ -637,7 +653,11 @@ class BaseModelAgent(AutoModelAgent):
             attn_dist_cfg = dist_ctx.dist_config.attn_config
             tp = attn_dist_cfg.tp
 
-            self.cache_engine = CacheEngine(self.cache_config, self.model_config, world_size=tp)
+            self.cache_engine = CacheEngine(self.cache_config,
+                                            self.model_config,
+                                            rank=self.rank,
+                                            tp_rank=self.tp_rank,
+                                            world_size=tp)
 
     def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
         cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
@@ -674,6 +694,31 @@ class BaseModelAgent(AutoModelAgent):
         if hasattr(self.patched_model, 'reset'):
             self.patched_model.reset()
 
+    @torch.inference_mode()
+    def update_params(self, request: UpdateParamsRequest):
+        """update params."""
+
+        # modified from https://github.com/vllm-project/vllm/blob/v0.8.5/examples/offline_inference/rlhf_utils.py#L82
+        def _construct(item):
+            func, args = item
+            args = list(args)
+            args[6] = torch.cuda.current_device()  # device id.
+            # clone() seems necessary otherwise the producer can not release the memory
+            return func(*args).clone()
+
+        with self.all_context():
+            weights = ForkingPickler.loads(base64.b64decode(request.serialized_named_tensors))
+            weights = [(k, _construct(v)) for k, v in weights]
+            self.patched_model.get_model().load_weights(weights)
+
+            if request.finished:
+                for _, mod in self.patched_model.get_model().named_modules():
+                    if not hasattr(mod, 'update_weights'):
+                        continue
+                    mod.update_weights()
+
+            torch.cuda.empty_cache()
+
     def release(self):
         """release."""
         self.reset_graph_runner()
@@ -686,6 +731,7 @@ def build_model_agent(model_path: str,
                       model_config: ModelConfig,
                       cache_config: CacheConfig,
                       backend_config: BackendConfig,
+                      misc_config: MiscConfig,
                       tokenizer: Any,
                       dist_ctx: DistContext = None,
                       device_ctx: DeviceContext = None,
@@ -714,6 +760,7 @@ def build_model_agent(model_path: str,
         model_config=model_config,
         cache_config=cache_config,
         backend_config=backend_config,
+        misc_config=misc_config,
         tokenizer=tokenizer,
         adapters=adapters,
         dist_ctx=dist_ctx,

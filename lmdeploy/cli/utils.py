@@ -407,6 +407,15 @@ class ArgumentHelper:
             help=f'The registered tool parser name {ToolParserManager.module_dict.keys()}. Default to None.')
 
     @staticmethod
+    def allow_terminate_by_client(parser):
+        """Add argument allow_terminate_by_client to parser."""
+
+        return parser.add_argument('--allow-terminate-by-client',
+                                   action='store_true',
+                                   default=False,
+                                   help='Enable server to be terminated by request from client')
+
+    @staticmethod
     def cache_max_entry_count(parser):
         """Add argument cache_max_entry_count to parser."""
 
@@ -527,3 +536,22 @@ class ArgumentHelper:
         return parser.add_argument('--enable-microbatch',
                                    action='store_true',
                                    help='enable microbatch for specified model')
+
+    # For Disaggregation
+    @staticmethod
+    def role(parser):
+        return parser.add_argument('--role',
+                                   type=str,
+                                   default='Hybrid',
+                                   choices=['Hybrid', 'Prefill', 'Decode'],
+                                   help='Hybrid for Non-Disaggregated Engine;'
+                                   'Prefill for Disaggregated Prefill Engine;'
+                                   'Decode for Disaggregated Decode Engine;')
+
+    @staticmethod
+    def migration_backend(parser):
+        return parser.add_argument('--migration-backend',
+                                   type=str,
+                                   default='DLSlime',
+                                   choices=['DLSlime'],
+                                   help='kvcache migration management backend when PD disaggregation')

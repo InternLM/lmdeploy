@@ -4,6 +4,8 @@ from typing import Any, Dict, List, Literal
 
 import torch
 
+from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
+
 
 def _update_torch_dtype(config: 'ModelConfig', dtype: str):
     """Update the torch dtype from the model config.
@@ -79,6 +81,10 @@ class CacheConfig:
     enable_prefix_caching: bool = False
     quant_policy: Literal[0, 4, 8] = 0
     device_type: str = 'cuda'
+
+    # For PD Disaggregation
+    role: EngineRole = EngineRole.Hybrid
+    migration_backend: MigrationBackend = MigrationBackend.DLSlime
 
     def __post_init__(self):
         """post init."""
@@ -206,3 +212,9 @@ class ModelConfig:
             model_config.eos_token_id = [model_config.eos_token_id]
 
         return model_config
+
+
+@dataclass
+class MiscConfig:
+    custom_module_map: str = None
+    empty_init: bool = False

@@ -89,7 +89,7 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
     }
 
     if (param.gen_cfg.output_logprobs) {
-        add(outputs_, "logprob_vals", data_type_, kCPU, max_out_len, kMaxLogProb);
+        add(outputs_, "logprob_vals", data_type_v<float>, kCPU, max_out_len, kMaxLogProb);
         add(outputs_, "logprob_indexes", data_type_v<int>, kCPU, max_out_len, kMaxLogProb);
         add(outputs_, "logprob_nums", data_type_v<int>, kCPU, max_out_len);
     }

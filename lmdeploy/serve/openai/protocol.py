@@ -276,6 +276,7 @@ class CompletionRequest(BaseModel):
     spaces_between_special_tokens: Optional[bool] = True
     top_k: Optional[int] = 40  # for opencompass
     seed: Optional[int] = None
+    min_p: float = 0.0
 
 
 class CompletionResponseChoice(BaseModel):
@@ -372,3 +373,9 @@ class GenerateResponse(BaseModel):
     input_tokens: int
     history_tokens: int
     finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error']] = None
+
+
+class UpdateParamsRequest(BaseModel):
+    """Update weights request."""
+    serialized_named_tensors: str
+    finished: bool = False

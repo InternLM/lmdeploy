@@ -19,8 +19,11 @@ from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_down_linear,
 from lmdeploy.pytorch.nn.moe import MoeType, SoftmaxTopK, build_fused_moe
 from lmdeploy.pytorch.nn.rotary_embedding import YarnParameters
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
+from lmdeploy.utils import get_logger
 
 from .utils.cudagraph import CudaGraphMixin
+
+logger = get_logger('lmdeploy')
 
 
 # microbatch
@@ -116,7 +119,7 @@ def execute_batch(inputs: list, fn, delta_stages: int = 0, exec_type: ExecType =
         before:
         A-attn0->A-attn1
         roll:
-        A-dis->B-attn0->B-attn1->A-dis_wait->B-dis->A-moe->B-dis_wait->A-comb->
+        B-attn0->B-attn1->A-dis->A-dis_wait->A-moe->B-dis->B-dis_wait->A-comb->
         B-moe->(A-share->A-comb_wait)->B-comb->A-attn0->A-attn1->(B-share->B-comb_wait)
         after:
         B-dis_wait->B-moe->B-comb->B-comb_wait and end
@@ -127,7 +130,7 @@ def execute_batch(inputs: list, fn, delta_stages: int = 0, exec_type: ExecType =
             worker_list[0].next()
 
         pipeline = [
-            '0-dis', '1-attn0', '1-attn1', '0-dis_wait', '1-dis', '0-moe', '1-dis_wait', '0-comb', '1-moe',
+            '1-attn0', '1-attn1', '0-dis', '0-dis_wait', '0-moe', '1-dis', '1-dis_wait', '0-comb', '1-moe',
             '0-share+0-comb_wait', '1-comb', '0-attn0', '0-attn1', '1-share+1-comb_wait'
         ]
         pipline_length = len(pipeline)
@@ -589,9 +592,14 @@ class MoEGate(nn.Module):
             self.e_score_correction_bias = nn.Parameter(
                 torch.empty((self.n_routed_experts, ), dtype=dtype, device=device))
         self.softmax_topk = SoftmaxTopK(self.top_k)
+        try:
+            import dlblas
+            self.dlblas_fused_gate = dlblas.moe_fused_gate
+        except Exception:
+            self.dlblas_fused_gate = None
+            logger.warning('For higher performance, please install dlBLAS https://github.com/DeepLink-org/dlBLAS')
 
-        import os
-        self.fake_eplab = os.environ.get('LMDEPLOY_FAKE_EPLB', False).lower() == 'true'
+        self.fake_eplb = getenv('LMDEPLOY_FAKE_EPLB', 'False').lower() == 'true'
 
     def _compute_scores(self, logits: torch.Tensor):
         """compute scores."""
@@ -626,6 +634,10 @@ class MoEGate(nn.Module):
             grouped_logits = grouped_logits.masked_fill(group_mask, 0.0)
             scores = grouped_logits.flatten(1, 2)
             topk_weight, topk_idx = self.softmax_topk(scores)
+        elif (self.topk_method == 'noaux_tc' and self.scoring_func == 'sigmoid' and self.renormalize
+              and self.dlblas_fused_gate is not None):
+            topk_weight, topk_idx = self.dlblas_fused_gate(router_logits, self.e_score_correction_bias, self.n_group,
+                                                           self.topk_group, self.top_k)
         elif self.topk_method == 'noaux_tc':
             scores = self._compute_scores(router_logits)
             scores_for_choice = scores.view(sequence_length, -1) + self.e_score_correction_bias[None]
@@ -643,7 +655,7 @@ class MoEGate(nn.Module):
         else:
             raise RuntimeError(f'Unsupported topk_method: {self.topk_method}')
 
-        if self.renormalize:
+        if self.renormalize and self.dlblas_fused_gate is None:
             denominator = topk_weight.sum(dim=-1, keepdim=True) + 1e-20
             topk_weight = topk_weight / denominator
             if not topk_weight.is_contiguous():
@@ -651,13 +663,14 @@ class MoEGate(nn.Module):
 
         if not self.renormalize or self.topk_method == 'noaux_tc':
             topk_weight = topk_weight * self.routed_scaling_factor
+
         return topk_weight, topk_idx
 
 
 class DeepseekV2MoE(nn.Module):
     """Deepseek v2 MoE."""
 
-    def __init__(self, config: Any, dtype: torch.dtype = None, device: torch.device = None):
+    def __init__(self, config: Any, layer_idx, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         self.hidden_dim = config.hidden_size
@@ -687,6 +700,7 @@ class DeepseekV2MoE(nn.Module):
             device=device,
             all_reduce=moe_all_reduce,
             quant_config=quantization_config,
+            layer_idx=layer_idx,
         )
 
         self.shared_experts = None
@@ -806,7 +820,7 @@ class DeepseekV2DecoderLayer(nn.Module):
             self.self_attn = LlamaAttention(config, dtype=dtype, device=device)
 
         # mlp
-        self.mlp = (DeepseekV2MoE(config, dtype=dtype, device=device) if
+        self.mlp = (DeepseekV2MoE(config, layer_idx, dtype=dtype, device=device) if
                     (config.n_routed_experts is not None and layer_idx >= config.first_k_dense_replace
                      and layer_idx % config.moe_layer_freq == 0) else DeepseekV2MLP(config, dtype=dtype, device=device))
 
@@ -897,6 +911,8 @@ class DeepseekV2DecoderLayer(nn.Module):
             'raw_hidden_shape': hidden_shape,
             'moe_type': MoeType.DSAsyncDecode if is_decoding else MoeType.DSAsyncPrefill,
         }
+
+        self.mlp.experts.before_dispatch(state)
 
         # yield for attn1, dis (+share)
         yield
@@ -1265,8 +1281,8 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             if name.endswith('.weight'):
                 weight_name = name
                 scale_name = name.replace('.weight', '.scale')
-            elif name.endswith('.scale'):
-                weight_name = name.replace('.scale', '.weight')
+            elif name.endswith('.weight_scale_inv'):
+                weight_name = name.replace('.weight_scale_inv', '.weight')
                 scale_name = name
             self._load_buffers[name] = loaded_weight
             if (weight_name in self._load_buffers and scale_name in self._load_buffers):
@@ -1280,7 +1296,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
         for (mod_name, head_dim, pe_dim_offset) in update_pe_mapping:
             if mod_name not in name:
                 continue
-            if name.endswith('.scale'):
+            if name.endswith('.weight_scale_inv'):
                 weight = loaded_weight
             else:
                 loaded_weight = loaded_weight.to(device)
@@ -1319,8 +1335,6 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             ('.gate_up_proj', '.gate_proj', 0),
             ('.gate_up_proj', '.up_proj', 1),
         ]
-
-        scale_suffix = '.weight_scale_inv'
 
         config = self.config
 
@@ -1367,8 +1381,7 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
                     continue
             if self.config.tie_word_embeddings and 'lm_head.weight' in name:
                 continue
-            if name.endswith(scale_suffix):
-                name = name[:-len(scale_suffix)] + '.scale'
+
             if '.experts' in name:
                 self._load_weight_experts(name, loaded_weight, params_dict, expert_params_mapping=expert_params_mapping)
             elif '.self_attn' in name and getattr(config, 'use_mla', True):

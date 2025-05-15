@@ -8,6 +8,7 @@ import numpy as np
 from torch import Tensor
 
 from lmdeploy.messages import GenerationConfig, LogitsProcessor
+from lmdeploy.pytorch.disagg.request import MigrationRequest
 from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
 from lmdeploy.utils import get_logger
 
@@ -135,6 +136,17 @@ class MessageStatus(enum.Enum):
     ABORTED = enum.auto()
     LOCKED = enum.auto()
 
+    # PD Disaggregation
+    # WAITING_MIGRATION: state of Unmigrated Requests
+    # in both prefill and decode engines are tagged by
+    # RUNNING_MIGRATION: state of Migrating Requests
+    # in decode engine
+    TO_BE_MIGRATED = enum.auto()
+    WAITING_MIGRATION = enum.auto()
+    RUNNING_MIGRATION = enum.auto()
+    MIGRATION_LOCKED = enum.auto()
+    MIGRATION_DONE = enum.auto()
+
 
 _SEQ_COUNT = 0
 
@@ -215,7 +227,10 @@ class SchedulerSession:
                      adapter_name: str = None,
                      return_logits: bool = False,
                      multimodals: MultiModalInputs = None,
-                     input_embeddings: List[InputEmbeddings] = None) -> 'SchedulerSequence':
+                     input_embeddings: List[InputEmbeddings] = None,
+                     migration_request: Optional[MigrationRequest] = None,
+                     resp_cache: bool = False,
+                     preserve_cache: bool = False) -> 'SchedulerSequence':
         """Add a new message."""
         if isinstance(token_ids, Tensor):
             token_ids = token_ids.numpy()
@@ -237,6 +252,9 @@ class SchedulerSession:
             history_embeddings=HistoryEmbeddings(input_embeddings),
             history_multimodals=HistoryMultiModals(multimodals),
             return_logits=return_logits,
+            migration_request=migration_request,
+            resp_cache=resp_cache,
+            preserve_cache=preserve_cache,
         )
         self.sequences[seq.seq_id] = seq
         if self.seq_manager is not None:
@@ -443,6 +461,11 @@ class SchedulerSequence:
     num_ignored_history: int = 0
     model_meta: Dict[str, Any] = None
 
+    # For Disaggregation
+    migration_request: Optional[MigrationRequest] = None
+    resp_cache: bool = False
+    preserve_cache: bool = False
+
     def __post_init__(self):
         """post init."""
         self._num_history_ids: int = 0
@@ -567,11 +590,15 @@ class SchedulerSequence:
                          token_ids: Tensor,
                          multimodals: MultiModalInputs = None,
                          embeddings: List[InputEmbeddings] = None,
-                         model_meta: Dict[str, Any] = None):
+                         model_meta: Dict[str, Any] = None,
+                         append_tokens: bool = False):
         """Update token ids, old token ids will be added to history."""
         old_num_history_ids = self._num_history_ids
 
-        self._num_history_ids += self._num_token_ids
+        # update history
+        if not append_tokens:
+            self._num_history_ids += self._num_token_ids
+
         # update history image nums
         self._num_history_images += self._num_images
         self._num_images = 0
@@ -601,7 +628,10 @@ class SchedulerSequence:
             token_ids = np.array(token_ids)
         if token_ids.ndim == 0:
             token_ids = token_ids[None]
-        self._num_token_ids = len(token_ids)
+        if append_tokens:
+            self._num_token_ids += len(token_ids)
+        else:
+            self._num_token_ids = len(token_ids)
         self.history_cache.append(token_ids)
         self.random_offsets += 1
         self.arrive_time = time.time()
