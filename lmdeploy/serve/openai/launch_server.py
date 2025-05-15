@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import asyncio
 import copy
 import multiprocessing as mp
 import os
@@ -7,11 +6,7 @@ import random
 import signal
 import socket
 import sys
-import time
-from typing import Dict, List, Union
-
-import aiohttp
-import requests
+from typing import List, Union
 
 from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig
 from lmdeploy.utils import get_logger
@@ -85,63 +80,6 @@ def cleanup_processes(processes: List[mp.Process]):
     sys.exit(0)
 
 
-def is_server_ready(server_url: str):
-    """check server."""
-    url = f'{server_url}/health'
-    headers = {'accept': 'application/json'}
-    ready = False
-    try:
-        response = requests.get(url, headers=headers, timeout=3)
-        ready = response.status_code == 200
-    except:  # noqa
-        pass
-    return ready
-
-
-async def _warmup_server(server_url: str, request_data: Dict, endpoint: str = '/v1/chat/completions'):
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(server_url + endpoint, json=request_data, timeout=120) as response:
-                resp_text = await response.text()
-                logger.info(f'Finish warm up server {server_url}. Example output = {resp_text}')
-                return True
-    except (Exception, GeneratorExit, aiohttp.ClientError, asyncio.CancelledError) as e:  # noqa  # yapf: disable
-        import traceback
-        traceback.print_exc()
-        traceback.print_stack()
-        logger.error(f'Failed to warm up server {server_url} with exception: {e}')
-        return False
-
-
-async def _warmup_all_servers(server_urls: List[str], model_name: str):
-    """warmup all servers."""
-    request_dict = dict(model=model_name,
-                        messages=[{
-                            'role': 'user',
-                            'content': 'Hello! How are you?'
-                        }],
-                        stream=False,
-                        max_tokens=32)
-    tasks = [_warmup_server(url, request_dict) for url in server_urls]
-    successes = await asyncio.gather(*tasks)
-    return successes
-
-
-def warmup_servers(server_urls: List[str], model_name: str, timeout: int = 600):
-    """warmup all servers."""
-    start_time = time.time()
-    while time.time() - start_time <= timeout:
-        time.sleep(6)
-        if all([is_server_ready(url) for url in server_urls]):
-            break
-
-    successes = asyncio.run(_warmup_all_servers(server_urls, model_name))
-    all_good = all(successes)
-    if all_good:
-        logger.info(f'Finish warm up servers: {server_urls}')
-    return all_good
-
-
 def launch_server(num_nodes: int,
                   node_rank: int,
                   model_path: str,
@@ -187,6 +125,7 @@ def launch_server(num_nodes: int,
         cur_server_kwargs['proxy_url'] = proxy_url
         url = f'{http_or_https}://{server_name}:{server_port}'
         server_urls.append(url)
+        logger.info(f'create server with url={url}')
         logger.info(f'backend_config_dp={backend_config_dp} gpus={gpu_ids_per_dp}')
         proc = mp.Process(target=_run_server, args=(gpu_ids_per_dp, model_path), kwargs=cur_server_kwargs, daemon=True)
         proc.start()
