@@ -363,7 +363,7 @@ class DeepEPTokenDispatcherLowLatency(TokenDispatcherImpl):
         self.hidden_size = hidden_size
         self.params_bytes = params_dtype.itemsize
         self.handle = None
-        self.num_max_dispatch_tokens_per_rank = 128
+        self.num_max_dispatch_tokens_per_rank = 512
         self.buffer_low_latency = get_buffer_common(self.group,
                                                     self.num_max_dispatch_tokens_per_rank,
                                                     self.hidden_size,

@@ -391,7 +391,6 @@ class AutoModelAgent:
         """asyc forward task."""
 
         dist_ctx = get_dist_manager().current_context()
-        dp_cpu_group = dist_ctx.dp_cpu_group
 
         def __update_inputs(next_token_ids, model_metas):
             """update inputs."""
@@ -420,11 +419,6 @@ class AutoModelAgent:
 
             self.stream.synchronize()
 
-        def __update_dp_meta():
-            nonlocal inputs
-            inputs.build_dp_meta()
-            inputs = self.patched_model.update_inputs(inputs)
-
         @asynccontextmanager
         async def __prepare_dp():
             """prepare dp."""
@@ -432,29 +426,29 @@ class AutoModelAgent:
                 yield
                 return
 
+            nonlocal inputs, sync_long_context, is_all_dummy
+
             # gather dp forward metadata
-            nonlocal sync_long_context
             batch_size = inputs.seq_length.numel()
             dp_forward_meta = [int(is_decoding), int(is_dummy), batch_size, int(sync_long_context)]
-            gathered_meta = DistGatherScalar(dp_forward_meta, dp, device='cpu', group=dp_cpu_group)
+            gathered_meta = DistGatherScalar(dp_forward_meta, dp, device='cuda')
 
             yield
 
-            gathered_meta = await gathered_meta.async_wait()
+            gathered_meta = (await gathered_meta.async_wait()).cpu()
 
             # check is_decoding
             all_is_decoding = gathered_meta[:, 0]
             assert all_is_decoding.sum().item() in [0, dp]
 
             # check if all inputs are dummy inputs
-            nonlocal is_all_dummy
             is_all_dummy = gathered_meta[:, 1].all()
             if is_all_dummy:
                 return
 
             if is_decoding:
                 all_batch_sizes = gathered_meta[:, 2]
-                padding_batch_size = all_batch_sizes.cpu().max().item()
+                padding_batch_size = all_batch_sizes.max().item()
                 meta = self.patched_model.get_meta()
                 meta.padding_batch_size = padding_batch_size
                 logger.debug(f'padding_batch_size={padding_batch_size}')
@@ -463,7 +457,9 @@ class AutoModelAgent:
                 sync_long_context = all_sync_flags.any()
                 logger.debug(f'sync_long_context={sync_long_context}')
 
-            __update_dp_meta()
+            # update dp meta
+            inputs.build_dp_meta()
+            inputs = self.patched_model.update_inputs(inputs)
 
         # dist tools
         dist_ctx = get_dist_manager().current_context()
