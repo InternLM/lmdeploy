@@ -13,7 +13,7 @@
 namespace turbomind::gemm {
 
 template<Order order, int cluster_m, int cluster_n>
-class TileScheduler {
+struct TileScheduler {
     int4 gemm_shape_;
     int4 tiled_shape_;
     int  log_tile_;
@@ -105,14 +105,14 @@ public:
         is_valid_.y = cluster_tile_offset.x < cluster_tiled_shape_.x && cluster_tile_offset.y < cluster_tiled_shape_.y;
     }
 
-    TM_DEVICE void grid_init()
+    TM_DEVICE void grid_init(int n = 1)
     {
-        cluster_idx_ = (int)cute::cluster_id_in_grid().x - (int)cute::cluster_grid_dims().x;
+        cluster_idx_ = (int)cute::cluster_id_in_grid().x - n * (int)cute::cluster_grid_dims().x;
     }
 
-    TM_DEVICE bool next()
+    TM_DEVICE bool next(int n = 1)
     {
-        cluster_idx_ += (int)cute::cluster_grid_dims().x;
+        cluster_idx_ += n * (int)cute::cluster_grid_dims().x;
 
         if (cluster_idx_ >= clusters_) {
             return false;
@@ -121,6 +121,11 @@ public:
         unswizzle();
 
         return true;
+    }
+
+    TM_DEVICE explicit operator bool() const
+    {
+        return cluster_idx_ < clusters_;
     }
 
     TM_DEVICE int2 is_valid_tile() const

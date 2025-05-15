@@ -31,9 +31,9 @@ template<class Gemm>
 class KernelImplSm90: public Kernel {
 public:
     // import frequently used constants
-    static constexpr int CTA_M = Gemm::CTA_M;
-    static constexpr int CTA_N = Gemm::CTA_N;
-    static constexpr int CTA_K = Gemm::CTA_K;
+    static constexpr int TILE_M = Gemm::TILE_M;
+    static constexpr int TILE_N = Gemm::TILE_N;
+    static constexpr int TILE_K = Gemm::TILE_K;
 
     // using Impl = typename Gemm::Impl;
 
@@ -75,17 +75,17 @@ public:
         desc_.quant_b = QuantDesc{QuantType::kDefault, 128};
         // }
 
-        desc_.cta_tile = {CTA_M, CTA_N, CTA_K};
-        desc_.mma_tile = {CTA_M / Gemm::MMA_M, CTA_N / Gemm::MMA_N, CTA_N / Gemm::MMA_N};
-        chunk_size_k_  = Gemm::CTA_K;
+        desc_.cta_tile = {TILE_M, TILE_N, TILE_K};
+        desc_.mma_tile = {1, 1, 1};
+        chunk_size_k_  = Gemm::TILE_K;
 
         desc_.align.x = 1;  // OpA::kOrder == kColMajor ? IterA::ThreadMap::kAccessC : 1;
         desc_.align.y = 1;  // OpB::kOrder == kColMajor ? IterB::ThreadMap::kAccessC : 1;
-        desc_.align.z = 1;  // Gemm::CTA_K;
+        desc_.align.z = 1;  // Gemm::TILE_K;
 
         desc_.policy_a = 0;               // (int)IterA::Policy::kEvictPolicy;
         desc_.policy_b = 0;               // (int)IterB::Policy::kEvictPolicy;
-        desc_.c_tile   = {CTA_M, CTA_N};  // {Gemm::Epilogue::TM, Gemm::Epilogue::TN};
+        desc_.c_tile   = {TILE_M, TILE_N};  // {Gemm::Epilogue::TM, Gemm::Epilogue::TN};
         desc_.op_class = OpClass::kGMMA_s64n16;
 
         smem_size_ = Gemm::kSmemSize;
@@ -159,11 +159,11 @@ public:
                 return Sched{operation.context->Schedule(spec)};
             }
             else {
-                const int chunk_cnt = ceil_div(k, CTA_K);
+                const int chunk_cnt = ceil_div(k, TILE_K);
                 // Limit splits by num of chunks to avoid chaos
                 splits = std::min(chunk_cnt, splits);
 
-                const int2 tiles = get_tiled_shape(m, n, CTA_M, CTA_N);
+                const int2 tiles = get_tiled_shape(m, n, TILE_M, TILE_N);
                 const int4 shape{m, n, k, 1};
 
                 if (splits > 1) {
@@ -172,18 +172,21 @@ public:
 
                 swizzle = Sched::get_log_tile(tiles, 1 << swizzle);
 
-                return Sched{shape, tiles, splits, swizzle, CTA_K, CTA_K};
+                return Sched{shape, tiles, splits, swizzle, TILE_K, TILE_K};
             }
         }();
 
         constexpr int kMulticastA = Gemm::kMulticastA;
         constexpr int kMulticastB = Gemm::kMulticastB;
 
+        constexpr int kTileM = Gemm::TILE_M;
+        constexpr int kTileN = Gemm::TILE_N;
+
         // std::cout << "A: " << Adesc << "\n";
-        auto tm_a = make_2d_tma_desc((void*)A, Adesc, {CTA_M / kMulticastA, CTA_K}, CU_TENSOR_MAP_SWIZZLE_128B);
+        auto tm_a = make_2d_tma_desc((void*)A, Adesc, {kTileM / kMulticastA, TILE_K}, CU_TENSOR_MAP_SWIZZLE_128B);
 
         // std::cout << "B: " << Bdesc << "\n";
-        auto tm_b = make_2d_tma_desc((void*)B, Bdesc, {CTA_N / kMulticastB, CTA_K}, CU_TENSOR_MAP_SWIZZLE_128B);
+        auto tm_b = make_2d_tma_desc((void*)B, Bdesc, {kTileN / kMulticastB, TILE_K}, CU_TENSOR_MAP_SWIZZLE_128B);
 
         // std::cout << "C: " << Cdesc << "\n";
         using LayoutC = typename Gemm::LayoutC;
@@ -191,9 +194,9 @@ public:
 
         CUtensorMap tm_u{};
         if (U) {
-            TM_CHECK_EQ(CTA_K, 128);
+            TM_CHECK_EQ(TILE_K, 128);
             // std::cout << "U: " << Udesc << "\n";
-            tm_u = make_2d_tma_desc((void*)U, Udesc, {CTA_M, 1}, CU_TENSOR_MAP_SWIZZLE_NONE);
+            tm_u = make_2d_tma_desc((void*)U, Udesc, {kTileM, 1}, CU_TENSOR_MAP_SWIZZLE_NONE);
         }
 
         CUtensorMap tm_v{};
@@ -342,7 +345,7 @@ public:
     int GetSwizzle(int m, int n, int k, int splits, int swizzle) const override
     {
         using Map        = typename Gemm::Scheduler;
-        const auto tiles = get_tiled_shape(m, n, CTA_M, CTA_N);
+        const auto tiles = get_tiled_shape(m, n, TILE_M, TILE_N);
         return Map::get_log_tile(tiles, 1 << swizzle);
     }
 

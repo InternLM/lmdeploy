@@ -144,44 +144,46 @@ __global__ void quant_symm_block(Tout* out, Tscale* scales, const T* src, Tscale
 
     constexpr int S = cdiv(block_size, rows);
 
-    const int bx = blockIdx.x;
-    const int by = blockIdx.y;
-
     using BlockReduce = cub::BlockReduce<T, cta_size>;
     __shared__ typename BlockReduce::TempStorage temp_storage;
     __shared__ T                                 shared_inv_scale;
 
-    Array<T, vec_size>    xs[S];
+    const int ti  = blockIdx.x * block_size;
+    const int di  = blockIdx.y * block_size;
+    const int col = threadIdx.x % threads;
+    const int row = threadIdx.x / threads;
+
+    T                  absmax{};
+    Array<T, vec_size> xs[S]{};
+    PRAGMA_UNROLL
+    for (int s = 0; s < S; ++s) {
+        if (auto r = ti + s * rows + row; r < num) {
+            Ldg(xs[s], src + (int64_t)r * dim + di + col * vec_size);
+        }
+        PRAGMA_UNROLL
+        for (int i = 0; i < vec_size; ++i) {
+            absmax = __hmax(absmax, __habs(xs[s][i]));
+        }
+    }
+
+    absmax = BlockReduce{temp_storage}.Reduce(absmax, [](auto a, auto b) { return __hmax(a, b); });
+    if (threadIdx.x == 0) {
+        auto maxval                                 = static_cast<Tscale>(absmax);
+        scales[blockIdx.x * gridDim.y + blockIdx.y] = maxval / qmax;
+        shared_inv_scale                            = qmax / maxval;
+    }
+    __syncthreads();
+    const Tscale inv_scale = shared_inv_scale;
+
     Array<Tout, vec_size> ys[S];
-    for (int tx = bx; tx < dim / block_size; tx += gridDim.x) {
-        for (int ty = by; ty < num / block_size; ty += gridDim.y) {
-            const int col = threadIdx.x % threads;
-            const int row = threadIdx.x / threads;
-            T         absmax{};
-            PRAGMA_UNROLL
-            for (int s = 0; s < S; ++s) {
-                Ldg(xs[s], src + int64_t(ty * block_size + s * rows + row) * dim + tx * block_size + col * vec_size);
-                PRAGMA_UNROLL
-                for (int i = 0; i < vec_size; ++i) {
-                    absmax = __hmax(absmax, __habs(xs[s][i]));
-                }
-            }
-            absmax = BlockReduce{temp_storage}.Reduce(absmax, [](auto a, auto b) { return __hmax(a, b); });
-            if (threadIdx.x == 0) {
-                auto maxval                        = static_cast<Tscale>(absmax);
-                scales[ty * dim / block_size + tx] = maxval / qmax;
-                shared_inv_scale                   = qmax / maxval;
-            }
-            __syncthreads();
-            const Tscale inv_scale = shared_inv_scale;
-            PRAGMA_UNROLL
-            for (int s = 0; s < S; ++s) {
-                PRAGMA_UNROLL
-                for (int i = 0; i < vec_size; ++i) {
-                    ys[s][i] = Tout(static_cast<Tscale>(xs[s][i]) * inv_scale);
-                }
-                Store(out + int64_t(ty * block_size + s * rows + row) * dim + tx * block_size + col * vec_size, ys[s]);
-            }
+    PRAGMA_UNROLL
+    for (int s = 0; s < S; ++s) {
+        PRAGMA_UNROLL
+        for (int i = 0; i < vec_size; ++i) {
+            ys[s][i] = Tout(static_cast<Tscale>(xs[s][i]) * inv_scale);
+        }
+        if (auto r = ti + s * rows + row; r < num) {
+            Store(out + (int64_t)r * dim + di + col * vec_size, ys[s]);
         }
     }
 }
@@ -200,8 +202,11 @@ void QuantizeSymmBlock(Tensor& out, Tensor& scale, const Tensor& src, cudaStream
 
     const auto [num, dim] = src.shapes(0, 1);
 
+    const int bnum = cdiv<int>(num, block_size);
+    const int bdim = cdiv<int>(dim, block_size);
+
     constexpr int cta_size = 1024;
-    const dim3    grid(dim / block_size, num / block_size);
+    const dim3    grid(bnum, bdim);
 
     if (!out) {
         out = Tensor_<Tout>{src.layout(), kDEVICE};
@@ -211,10 +216,10 @@ void QuantizeSymmBlock(Tensor& out, Tensor& scale, const Tensor& src, cudaStream
     }
 
     if (!scale) {
-        scale = Tensor_<Tscale>({num / block_size, dim / block_size}, kDEVICE);
+        scale = Tensor_<Tscale>({bnum, bdim}, kDEVICE);
     }
     else {
-        TM_CHECK(std::make_tuple(num / block_size, dim / block_size) == scale.shapes(0, 1));
+        TM_CHECK(std::make_tuple(bnum, bdim) == scale.shapes(0, 1));
     }
 
     quant_symm_block<vec_size, cta_size, block_size><<<grid, cta_size, 0, st>>>(  //
@@ -232,26 +237,24 @@ __global__ void dequant_symm_block(Tout* out, const T* src, const Tscale* scales
     static_assert(block_size % vec_size == 0);
     constexpr int threads = block_size / vec_size;
     static_assert(cta_size % threads == 0);
-    constexpr int rows = cta_size / threads;
-    constexpr int S    = cdiv(block_size, rows);
-    const int     bx   = blockIdx.x;
-    const int     by   = blockIdx.y;
-    for (int tx = bx; tx < dim / block_size; tx += gridDim.x) {
-        for (int ty = by; ty < num / block_size; ty += gridDim.y) {
-            const int  col   = threadIdx.x % threads;
-            const int  row   = threadIdx.x / threads;
-            const auto scale = __ldg(&scales[ty * dim / block_size + tx]);
+    constexpr int rows  = cta_size / threads;
+    constexpr int S     = cdiv(block_size, rows);
+    const int     col   = threadIdx.x % threads;
+    const int     row   = threadIdx.x / threads;
+    const auto    scale = __ldg(&scales[blockIdx.x * gridDim.y + blockIdx.y]);
+    const auto    di    = blockIdx.y * block_size + col * vec_size;
+    PRAGMA_UNROLL
+    for (int s = 0; s < S; ++s) {
+        const auto ti = blockIdx.x * block_size + s * rows + row;
+        if (ti < num) {
+            Array<T, vec_size> x;
+            Ldg(x, src + (int64_t)ti * dim + di);
+            Array<Tout, vec_size> y;
             PRAGMA_UNROLL
-            for (int s = 0; s < S; ++s) {
-                Array<T, vec_size> x;
-                Ldg(x, src + int64_t(ty * block_size + s * rows + row) * dim + tx * block_size + col * vec_size);
-                Array<Tout, vec_size> y;
-                PRAGMA_UNROLL
-                for (int i = 0; i < vec_size; ++i) {
-                    y[i] = Tout(static_cast<Tscale>(x[i]) * scale);
-                }
-                Store(out + int64_t(ty * block_size + s * rows + row) * dim + tx * block_size + col * vec_size, y);
+            for (int i = 0; i < vec_size; ++i) {
+                y[i] = Tout(static_cast<Tscale>(x[i]) * scale);
             }
+            Store(out + (int64_t)ti * dim + di, y);
         }
     }
 }
@@ -274,8 +277,11 @@ void DequantizeSymmBlock(Tensor& out, const Tensor& src, const Tensor& scale, cu
 
     const auto [num, dim] = src.shapes(0, 1);
 
+    const int bnum = cdiv<int>(num, block_size);
+    const int bdim = cdiv<int>(dim, block_size);
+
     constexpr int cta_size = 1024;
-    const dim3    grid(dim / block_size, num / block_size);
+    const dim3    grid(bnum, bdim);
 
     dequant_symm_block<vec_size, cta_size, block_size><<<grid, cta_size, 0, st>>>(  //
         out.data<Tout>(),

@@ -16,7 +16,7 @@ int main()
 
     auto stream = core::Context::stream().handle();
 
-    const int m = 5120, n = 8192, gs = 128;
+    const int m = 128, n = 128, gs = 128;
 
     Tensor_<bfloat16_t> h_x{{m, n}, kCPU};
     Tensor_<bfloat16_t> h_x_f{{m, n}, kCPU};
@@ -51,7 +51,7 @@ int main()
 
     /////////////////////////////////////////////////////////////////////////////////////
     // round trip of dequant(quant(x))
-    x_s = {{m / gs, n / gs}, kDEVICE};
+    x_s = {{cdiv(m, gs), cdiv(n, gs)}, kDEVICE};
     r.UniformFloat(x, 2.f, -1.f);  // [-1, +1]
     Copy(x, h_x);
     QuantizeSymmBlock(x_q, x_s, x, stream);
