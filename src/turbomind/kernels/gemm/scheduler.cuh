@@ -12,7 +12,7 @@
 
 namespace turbomind::gemm {
 
-template<Order order, int cluster_m, int cluster_n>
+template<Order order, int cluster_m, int cluster_n, int striped_m, bool striped_n>
 struct TileScheduler {
     int4 gemm_shape_;
     int4 tiled_shape_;
@@ -80,8 +80,8 @@ public:
         int cluster_cta_m = cute::block_id_in_cluster().x % cluster_m;  // M-major cluster shape
         int cluster_cta_n = cute::block_id_in_cluster().x / cluster_m;
 
-        const int offset_x = cluster_cta_m * cluster_tiled_shape_.x;
-        const int offset_y = cluster_cta_n * cluster_tiled_shape_.y;
+        const int offset_x = cluster_cta_m * (striped_m ? cluster_tiled_shape_.x : 1);
+        const int offset_y = cluster_cta_n * (striped_n ? cluster_tiled_shape_.y : 1);
 
         int2 cluster_tile_offset;
 
@@ -94,11 +94,16 @@ public:
                                    (cluster_idx_x >> log_tile_)};
         }
 
-        tile_offset_         = {offset_x + cluster_tile_offset.x, offset_y + cluster_tile_offset.y, cluster_idx_z, 0};
+        tile_offset_ = {offset_x + cluster_tile_offset.x * (striped_m ? 1 : cluster_m),
+                        offset_y + cluster_tile_offset.y * (striped_n ? 1 : cluster_n),
+                        cluster_idx_z,
+                        0};
+
         const int chunk_id   = tile_offset_.z * chunks_per_split_ + max(tile_offset_.z - chunk_offset_, 0);
         const int iter_k_beg = chunk_id * iter_k_per_chunk_;
         const int iter_k_cnt = (chunks_per_split_ + int(tile_offset_.z >= chunk_offset_)) * iter_k_per_chunk_;
-        iter_k_range_        = {iter_k_beg, iter_k_beg + iter_k_cnt};
+
+        iter_k_range_ = {iter_k_beg, iter_k_beg + iter_k_cnt};
 
         is_valid_.x =
             tile_offset_.x < tiled_shape_.x && tile_offset_.y < tiled_shape_.y && tile_offset_.z < tiled_shape_.z;

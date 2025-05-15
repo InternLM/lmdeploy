@@ -163,7 +163,7 @@ struct GemmUniversalSm90_v2 {
     static constexpr int MMA_ITER_N = TILE_N / MMA_ATOM_N;
     static constexpr int MMA_ITER_K = TILE_K / MMA_ATOM_K;
 
-    static constexpr int kMulticastA = 2;
+    static constexpr int kMulticastA = 1;
     static constexpr int kMulticastB = 4;
 
     static constexpr int kClusterSize = kMulticastA * kMulticastB;
@@ -185,7 +185,7 @@ struct GemmUniversalSm90_v2 {
     using Tv = float;
 
     using Arch      = Arch_;
-    using Scheduler = TileScheduler<kRowMajor, kMulticastB, kMulticastA>;
+    using Scheduler = TileScheduler<kRowMajor, kMulticastB, kMulticastA, false, false>;
 
     using ProducerBar = cutlass::arch::ClusterTransactionBarrier;
     using ConsumerBar = cutlass::arch::ClusterBarrier;
@@ -262,33 +262,33 @@ struct GemmUniversalSm90_v2 {
         if (warpgroup_id == WARPGORUPS) {
             cutlass::arch::warpgroup_reg_dealloc<40>();
 
-            sched.grid_init();
-            sched.next();
-
             static_assert(TILE_M % kMulticastA == 0);
             static_assert(TILE_N % kMulticastB == 0);
 
-            const int cta_id = cute::block_id_in_cluster().x;
-
-            // NOTE: ternary operator is used to convince the compiler the result is constant in the trivial case
-            const int cta_id_m = kMulticastB > 1 ? cta_id % kMulticastB : 0;
-            const int cta_id_n = kMulticastA > 1 ? cta_id / kMulticastB : 0;
-
-            const int mc_offset_m = cta_id_n * (TILE_M / kMulticastA);
-            const int mc_offset_n = cta_id_m * (TILE_N / kMulticastB);
-
-            auto  smem_A = storage.source.A.data() + mc_offset_m * TILE_K;
-            auto  smem_B = storage.source.B.data() + mc_offset_n * TILE_K;
-            auto& smem_U = storage.source.U;
-
             if (threadIdx.x == WARPGORUPS * WARPGROUP_SIZE) {
+
+                const int cta_id = cute::block_id_in_cluster().x;
+
+                // NOTE: ternary operator is used to convince the compiler the result is constant in the trivial case
+                const int cta_id_m = kMulticastB > 1 ? cta_id % kMulticastB : 0;
+                const int cta_id_n = kMulticastA > 1 ? cta_id / kMulticastB : 0;
+
+                const int mc_offset_m = cta_id_n * (TILE_M / kMulticastA);
+                const int mc_offset_n = cta_id_m * (TILE_N / kMulticastB);
+
+                auto  smem_A = storage.source.A.data() + mc_offset_m * TILE_K;
+                auto  smem_B = storage.source.B.data() + mc_offset_n * TILE_K;
+                auto& smem_U = storage.source.U;
+
+                sched.grid_init();
+
                 cutlass::PipelineState<Stages> write_state{0, 1, 0};
 
                 if (kDebug) {
                     printf("producer %d,0: BASE %d\n", blockIdx.x, sched.cluster_idx_);
                 }
 
-                while (sched) {
+                while (sched.next()) {
                     auto [valid_cta_tile_p, cluster_tile_p] = sched.is_valid_tile();
 
                     if (!cluster_tile_p) {
@@ -344,8 +344,6 @@ struct GemmUniversalSm90_v2 {
 
                         ++write_state;
                     }
-
-                    sched.next();
                 }
 
                 if (kDebug) {
@@ -401,7 +399,7 @@ struct GemmUniversalSm90_v2 {
 
             cutlass::arch::NamedBarrier wg_barrier(WARPGROUP_SIZE, warpgroup_id + 2);  // 2,3
 
-            sched.next(WARPGORUPS + warpgroup_id);
+            sched.next(warpgroup_id);
 
             if (threadIdx.x % WARPGROUP_SIZE == 0 && kDebug) {
                 printf("consumer %d,%d: BASE %d\n", blockIdx.x, warpgroup_id, sched.cluster_idx_);
@@ -422,7 +420,7 @@ struct GemmUniversalSm90_v2 {
                 math_barrier_sync(1);
             }
 
-            while (sched) {
+            while (sched.next(WARPGORUPS)) {
                 auto [cta_tile_p, cluster_tile_p] = sched.is_valid_tile();
 
                 if (!cluster_tile_p) {
@@ -479,7 +477,6 @@ struct GemmUniversalSm90_v2 {
                             storage.pipe_count = pipe_state.count();
                         }
                         math_barrier_sync(1);
-                        sched.next(WARPGORUPS);
                         continue;
                     }
                 }
@@ -754,8 +751,6 @@ struct GemmUniversalSm90_v2 {
                         &tm_c, &storage.C[wg_thread_id * TILE_M * LayoutC::C0], offset_n + tma_n, offset_m);
                     cute::tma_store_arrive();
                 }
-
-                sched.next(WARPGORUPS);
 
             }  // scheduler loop
 
