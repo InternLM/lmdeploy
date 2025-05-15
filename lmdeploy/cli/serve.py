@@ -125,6 +125,11 @@ class SubCliServe:
                             'engine’s tasks once the maximum number of concurrent requests is '
                             'reached, regardless of any additional requests sent by clients '
                             'concurrently during that time. Default to None.')
+        # FIXME: change default value to False
+        parser.add_argument('--enable-metrics',
+                            action='store_true',
+                            default=True,
+                            help='Whether log stats to cli / prometheus')
         # common args
         ArgumentHelper.backend(parser)
         ArgumentHelper.log_level(parser)
@@ -272,7 +277,8 @@ class SubCliServe:
                                                  device_type=args.device,
                                                  quant_policy=args.quant_policy,
                                                  eager_mode=args.eager_mode,
-                                                 max_prefill_token_num=args.max_prefill_token_num)
+                                                 max_prefill_token_num=args.max_prefill_token_num,
+                                                 enable_metrics=args.enable_metrics)
         else:
             backend_config = TurbomindEngineConfig(dtype=args.dtype,
                                                    tp=args.tp,
@@ -369,6 +375,7 @@ class SubCliServe:
                        max_log_len=args.max_log_len,
                        disable_fastapi_docs=args.disable_fastapi_docs,
                        max_concurrent_requests=args.max_concurrent_requests,
+                       enable_metrics=args.enable_metrics,
                        reasoning_parser=args.reasoning_parser,
                        tool_call_parser=args.tool_call_parser)
 

@@ -1,10 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from: https://github.com/vllm-project/vllm
 
+import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
+from lmdeploy.messages import EngineCoreEventType
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.utils import get_logger, logging_timer
 
@@ -51,6 +53,14 @@ class Scheduler:
         self.eviction_helper = self.build_eviction_helper(self.scheduler_config.eviction_type)
 
         self.seq_manager = SequenceManager()
+
+    @property
+    def usage(self) -> float:
+        """Get the KV cache usage.
+
+        The KV cache usage (between 0.0 and 1.0).
+        """
+        return self.block_manager.get_usage()
 
     @property
     def waiting(self):
@@ -135,6 +145,9 @@ class Scheduler:
 
         # push message to waiting queue
         self._set_message_status(seq, MessageStatus.WAITING)
+
+        if self.scheduler_config.enable_metrics:
+            seq.record_event(EngineCoreEventType.QUEUED)
 
     @logging_timer('ScheduleMigration', logger)
     def _schedule_migration(self):
@@ -227,6 +240,9 @@ class Scheduler:
 
         waiting = _reorder_waiting()
         while len(waiting) > 0 and len(running) < max_batches:
+            # for logging
+            scheduled_timestamp = time.perf_counter()
+
             seq = waiting.pop(0)
 
             if (len(running) > 0 and token_count + seq.num_token_ids > self.cache_config.max_prefill_token_num):
@@ -241,11 +257,18 @@ class Scheduler:
             self.block_manager.allocate(seq)
             _to_running(seq)
 
+            if self.scheduler_config.enable_metrics:
+                seq.record_event(EngineCoreEventType.SCHEDULED, scheduled_timestamp)
+
         return running, swap_in_map, swap_out_map, copy_map
 
     @logging_timer('ScheduleDecoding', logger)
     def _schedule_decoding(self, prealloc_size: int = 0):
         """schedule decoding."""
+
+        # for logging
+        # FIXME, record request scheduled event
+        # scheduled_timestamp = time.perf_counter()
 
         running = self.running
         assert len(running) != 0
