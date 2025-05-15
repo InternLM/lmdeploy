@@ -33,8 +33,6 @@ turbomind_vl_model:
 pytorch_vl_model:
     - OpenGVLab/InternVL3-8B
     - OpenGVLab/InternVL2_5-1B
-    - Qwen/Qwen3-8B
-    - Qwen/Qwen2.5-7B-Instruct
     - Qwen/Qwen2.5-VL-7B-Instruct
 
 turbomind_base_model:
