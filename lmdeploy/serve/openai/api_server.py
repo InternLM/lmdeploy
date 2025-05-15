@@ -31,7 +31,7 @@ from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, ChatCompletio
                                             CompletionResponseStreamChoice, CompletionStreamResponse, DeltaMessage,
                                             EmbeddingsRequest, EncodeRequest, EncodeResponse, ErrorResponse,
                                             GenerateRequest, GenerateResponse, LogProbs, ModelCard, ModelList,
-                                            ModelPermission, TopLogprob, UsageInfo)
+                                            ModelPermission, TopLogprob, UpdateParamsRequest, UsageInfo)
 from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import ReasoningParser, ReasoningParserManager
 from lmdeploy.serve.openai.tool_parser.tool_parser import ToolParser, ToolParserManager
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
@@ -869,6 +869,15 @@ async def encode(request: EncodeRequest, raw_request: Request = None):
             encoded.append(ids)
             length.append(len(ids))
         return EncodeResponse(input_ids=encoded, length=length)
+
+
+@router.post('/update_weights', dependencies=[Depends(check_api_key)])
+def update_params(request: UpdateParamsRequest, raw_request: Request = None):
+    """Update weights for the model."""
+    if VariableInterface.async_engine.backend != 'pytorch':
+        return create_error_response(HTTPStatus.BAD_REQUEST, 'Unsupported by turbomind.')
+    VariableInterface.async_engine.engine.update_params(request)
+    return JSONResponse(content=None)
 
 
 """ PD Disaggregation API Begin """

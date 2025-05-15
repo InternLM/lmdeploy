@@ -214,3 +214,9 @@ class ModelConfig:
             model_config.eos_token_id = [model_config.eos_token_id]
 
         return model_config
+
+
+@dataclass
+class MiscConfig:
+    custom_module_map: str = None
+    empty_init: bool = False

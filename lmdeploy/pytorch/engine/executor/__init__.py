@@ -3,7 +3,7 @@ from logging import Logger
 from typing import Any, Dict
 
 from lmdeploy.pytorch import envs
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, ModelConfig
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig
 from lmdeploy.utils import get_logger
 
 from .base import ExecutorBase
@@ -57,6 +57,7 @@ def build_executor(model_path: str,
                    cache_config: CacheConfig,
                    backend_config: BackendConfig,
                    dist_config: DistConfig,
+                   misc_config: MiscConfig,
                    tokenizer: Any,
                    adapters: Dict[str, str] = None,
                    device_type: str = 'cuda',
@@ -77,6 +78,11 @@ def build_executor(model_path: str,
             'dp>1 requires distributed_executor_backend="ray", ',
             f'get distributed_executor_backend="{distributed_executor_backend}"')
 
+    if misc_config.empty_init:
+        assert distributed_executor_backend == 'ray', (
+            'empty_init requires distributed_executor_backend="ray", ',
+            f'get distributed_executor_backend="{distributed_executor_backend}"')
+
     if distributed_executor_backend is not None:
         logger.info(f'Build <{distributed_executor_backend}> executor.')
     if distributed_executor_backend == 'uni':
@@ -87,6 +93,7 @@ def build_executor(model_path: str,
             model_config=model_config,
             cache_config=cache_config,
             backend_config=backend_config,
+            misc_config=misc_config,
             tokenizer=tokenizer,
             adapters=adapters,
             device_type=device_type,
@@ -99,6 +106,7 @@ def build_executor(model_path: str,
             cache_config=cache_config,
             backend_config=backend_config,
             dist_config=dist_config,
+            misc_config=misc_config,
             tokenizer=tokenizer,
             adapters=adapters,
             device_type=device_type,
@@ -111,6 +119,7 @@ def build_executor(model_path: str,
             cache_config=cache_config,
             backend_config=backend_config,
             dist_config=dist_config,
+            misc_config=misc_config,
             tokenizer=tokenizer,
             adapters=adapters,
             device_type=device_type,

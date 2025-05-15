@@ -470,7 +470,7 @@ def remove_node(node: Node):
         logger.info(f'delete node {node_url} successfully')
         return 'Deleted successfully'
     except:  # noqa
-        logger.error(f'delete node {node_url} failed.')
+        logger.error(f'delete node {node.url} failed.')
         return 'Failed to delete, please check the input url.'
 
 
