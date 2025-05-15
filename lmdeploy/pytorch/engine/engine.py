@@ -315,6 +315,7 @@ class Engine:
                  tokenizer: object,
                  engine_config: PytorchEngineConfig = None,
                  trust_remote_code: bool = True) -> None:
+        # make sure engine config exist
         engine_config = _update_engine_config(engine_config)
 
         # dist args
@@ -970,9 +971,9 @@ class Engine:
         """async loop migration."""
         while True:
             migration_running = self.scheduler._schedule_migration()
-            if not migration_running:
+            if not migration_running and not self.scheduler.has_migration_waiting:
                 await self.migration_event.wait()
-            else:
+            elif migration_running:
                 self.migration_event.clear()
                 for msg in migration_running:
                     migration_execution_requests: List[Tuple[int, List[Tuple[int, int]]]] = []
@@ -1008,7 +1009,10 @@ class Engine:
                     self.update_running_migration([msg], np.array([token_ids]), [False], [None])
                 resp_que.put_nowait(outputs)
                 self.scheduler.unlock_running_migration(migration_running)
-                has_runable_event.event.set()
+                has_runable_event.set()
+            else:
+                # release coroutine for decoding
+                await asyncio.sleep(0)
 
     @torch.inference_mode()
     async def _async_loop_main(
@@ -1037,6 +1041,7 @@ class Engine:
             scheduler.lock_running(running)
             for idx in range(num_loops):
                 if idx >= num_loops - 1:
+                    scheduler.collect_migration_done()
                     forward_inputs, next_running = await inputs_maker.prefetch_next_inputs()
                 logger.info('inputs forwarding done')
                 out = await self.executor.get_output_async()
