@@ -426,47 +426,43 @@ class AutoModelAgent:
             inputs = self.patched_model.update_inputs(inputs)
 
         @asynccontextmanager
-        async def __prepare_dp_decoding():
-            if self.backend_config.eager_mode:
-                yield
-                return
-            batch_size = inputs.seq_length.numel()
-            all_batch_sizes = DistGatherScalar(batch_size, dp, device='cpu', group=dp_cpu_group)
-            yield
-            all_batch_sizes = await all_batch_sizes.async_wait()
-            padding_batch_size = all_batch_sizes.cpu().max().item()
-            meta = self.patched_model.get_meta()
-            meta.padding_batch_size = padding_batch_size
-            logger.debug(f'padding_batch_size={padding_batch_size}')
-
-        @asynccontextmanager
-        async def __prepare_dp_prefill():
-            nonlocal sync_long_context
-            all_sync_flags = DistGatherScalar(sync_long_context, dp, device='cpu', group=dp_cpu_group)
-            yield
-            all_sync_flags = await all_sync_flags.async_wait()
-            sync_long_context = all_sync_flags.any()
-            logger.debug(f'sync_long_context={sync_long_context}')
-
-        @asynccontextmanager
         async def __prepare_dp():
             """prepare dp."""
             if dp == 1:
                 yield
                 return
 
+            # gather dp forward metadata
+            nonlocal sync_long_context
+            batch_size = inputs.seq_length.numel()
+            dp_forward_meta = [int(is_decoding), int(is_dummy), batch_size, int(sync_long_context)]
+            gathered_meta = DistGatherScalar(dp_forward_meta, dp, device='cpu', group=dp_cpu_group)
+
+            yield
+
+            gathered_meta = await gathered_meta.async_wait()
+
+            # check is_decoding
+            all_is_decoding = gathered_meta[:, 0]
+            assert all_is_decoding.sum().item() in [0, dp]
+
+            # check if all inputs are dummy inputs
             nonlocal is_all_dummy
-            all_dummy = DistGatherScalar(is_dummy, dp, device='cpu', group=dp_cpu_group)
+            is_all_dummy = gathered_meta[:, 1].all()
+            if is_all_dummy:
+                return
 
             if is_decoding:
-                async with __prepare_dp_decoding():
-                    yield
+                all_batch_sizes = gathered_meta[:, 2]
+                padding_batch_size = all_batch_sizes.cpu().max().item()
+                meta = self.patched_model.get_meta()
+                meta.padding_batch_size = padding_batch_size
+                logger.debug(f'padding_batch_size={padding_batch_size}')
             else:
-                async with __prepare_dp_prefill():
-                    yield
+                all_sync_flags = gathered_meta[:, 3].bool()
+                sync_long_context = all_sync_flags.any()
+                logger.debug(f'sync_long_context={sync_long_context}')
 
-            all_dummy = await all_dummy.async_wait()
-            is_all_dummy = all_dummy.all()
             __update_dp_meta()
 
         # dist tools
