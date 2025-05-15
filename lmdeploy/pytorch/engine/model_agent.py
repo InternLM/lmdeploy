@@ -707,7 +707,10 @@ class BaseModelAgent(AutoModelAgent):
             return func(*args).clone()
 
         with self.all_context():
-            weights = ForkingPickler.loads(base64.b64decode(request.serialized_named_tensors))
+            serialized_data = request.serialized_named_tensors
+            if isinstance(serialized_data, list):
+                serialized_data = serialized_data[self.dist_ctx.tp_rank]
+            weights = ForkingPickler.loads(base64.b64decode(serialized_data))
             weights = [(k, _construct(v)) for k, v in weights]
             self.patched_model.get_model().load_weights(weights)
 
