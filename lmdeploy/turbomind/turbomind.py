@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import asyncio
+import base64
 import copy
 import json
 import math
@@ -11,7 +12,9 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from functools import partial
+from multiprocessing.reduction import ForkingPickler
 from queue import Queue
+from threading import Thread
 from typing import Dict, List
 
 import numpy as np
@@ -21,6 +24,7 @@ from torch.nn.utils.rnn import pad_sequence
 
 import lmdeploy
 from lmdeploy.messages import EngineOutput, GenerationConfig, ResponseType, TurbomindEngineConfig
+from lmdeploy.serve.openai.protocol import UpdateParamsRequest
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model
 
 from .deploy.config import TurbomindModelConfig
@@ -150,15 +154,41 @@ class TurboMind:
                                             model_path=model_path,
                                             engine_config=_engine_config)
 
+        if not _engine_config.empty_init:
+            self._load_weights(model_source)
+            self._process_weights()
+            self._create_engine()
+
+        self.session_len = self.config.session_len
+
+    def _check_unloaded_tm_params(self):
+        tm_params = self._tm_model.tm_params
+        if len(tm_params) > 0:
+            uninitialized = list(tm_params.keys())
+            logger.warning('the model may not be loaded successfully '
+                           f'with {len(tm_params)} uninitialized params:\n{uninitialized}')
+
+    def _load_weights(self, model_source: ModelSource):
+        """Load weights."""
+        if model_source == ModelSource.WORKSPACE:
+            return
+
+        self._tm_model.export()
+        self._check_unloaded_tm_params()
+
+    def _process_weights(self):
+        """Process weight."""
         with ThreadPoolExecutor(max_workers=self.gpu_count) as e:
             ranks = [self.node_id * self.gpu_count + device_id for device_id in range(self.gpu_count)]
             for _ in e.map(self.model_comm.process_weight, range(self.gpu_count), ranks):
                 pass
-            # implicit synchronization
+
+    def _create_engine(self):
+        """Create engine."""
+        with ThreadPoolExecutor(max_workers=self.gpu_count) as e:
+            ranks = [self.node_id * self.gpu_count + device_id for device_id in range(self.gpu_count)]
             for _ in e.map(self.model_comm.create_engine, range(self.gpu_count), ranks):
                 pass
-
-        self.session_len = self.config.session_len
 
     def _create_weight(self, model_comm):
         """Allocate weight buffer, load params if from_workspace."""
@@ -245,17 +275,12 @@ class TurboMind:
 
         # create empty weight
         self._create_weight(model_comm)
-
-        # copy hf model weight to turbomind weight
+        # output model
+        self._tm_model = tm_model
+        # get tm params
         tm_params = tm_model.tm_params
         self._get_model_params(model_comm, tm_params)
         logger.warning(f'get {len(tm_params)} model params')
-        tm_model.export()
-        # there should be no left turbomind params.
-        if len(tm_params) > 0:
-            uninitialized = list(tm_params.keys())
-            logger.warning('the model may not be loaded successfully '
-                           f'with {len(tm_params)} uninitialized params:\n{uninitialized}')
         return model_comm
 
     def _from_workspace(self, model_path: str, engine_config: TurbomindEngineConfig):
@@ -280,6 +305,41 @@ class TurboMind:
         # create weight and load params
         self._create_weight(model_comm)
         return model_comm
+
+    def update_params(self, request: UpdateParamsRequest):
+        """update params."""
+
+        def _construct(item):
+            func, args = item
+            args = list(args)
+            args[6] = torch.cuda.current_device()  # device id.
+            return func(*args).clone()
+
+        if not hasattr(self, '_update_params_thread'):
+            self._update_params_que = Queue()
+
+            def _update_thread():
+                tm_model = self._tm_model
+                tm_model.input_model.model_path = self._update_params_que
+                tm_model.export()
+
+            self._update_params_thread = Thread(target=_update_thread)
+            self._update_params_thread.start()
+
+        # it seems if deserialize the tensor in `_update_thread` thread, the procuder memory will not be released
+        if isinstance(request.serialized_named_tensors, str):
+            weights = ForkingPickler.loads(base64.b64decode(request.serialized_named_tensors))
+            weights = {k: _construct(v) for k, v in weights}
+        else:
+            weights = request.serialized_named_tensors
+        self._update_params_que.put(weights)
+
+        if request.finished:
+            self._update_params_que.put(None)
+            self._update_params_thread.join()
+            self._check_unloaded_tm_params()
+            self._process_weights()
+            self._create_engine()
 
     @classmethod
     def from_pretrained(cls,
@@ -433,10 +493,17 @@ class TurboMindInstance:
         self.session_len = tm_model.session_len
 
         # create model instances
-        self.model_inst = self._create_model_instance(0)
+        lazy_init = self.tm_model.config_dict['engine_config'].get('empty_init', False)
+        self._model_inst = None if lazy_init else self._create_model_instance(0)
 
         self.config = config
         self.lock = None
+
+    @property
+    def model_inst(self):
+        if self._model_inst is None:
+            self._model_inst = self._create_model_instance(0)
+        return self._model_inst
 
     def _create_model_instance(self, device_id):
         model_inst = self.tm_model.model_comm.create_model_instance(device_id)

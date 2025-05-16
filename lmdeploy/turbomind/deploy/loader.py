@@ -6,7 +6,8 @@ from abc import ABC, abstractmethod
 from collections import defaultdict
 from functools import partial
 from glob import glob
-from typing import Iterator, Tuple
+from queue import Queue
+from typing import Dict, Iterator, Tuple, Union
 
 import torch
 from safetensors import safe_open
@@ -144,8 +145,38 @@ class PytorchLoader(BaseLoader):
             yield (idx, params.pop(idx))
 
 
-def create_loader(model_path: str, pattern: str) -> BaseLoader:
+class StateDictLoader:
+    """This loader is used for `update_params`.
+
+    Currently, the item in the queue should be full state dict of a decoder layer or the meta of the model (embedding,
+    lm_head, norm).
+    """
+
+    def __init__(self, queue: Queue[Dict[str, torch.Tensor]], pattern: str):
+        self.que = queue
+        self.pattern = pattern
+
+    def items(self):
+        for data in iter(self.que.get, None):
+            for k in data.keys():
+                match = re.findall(self.pattern, k)
+                break
+
+            if not match:
+                yield (-1, data)
+            else:
+                idx = int(match[0])
+                yield (idx, data)
+
+            torch.cuda.empty_cache()
+
+
+def create_loader(model_path: Union[str, Queue], pattern: str) -> BaseLoader:
     args = (model_path, pattern)
+
+    if isinstance(model_path, Queue):
+        # used for `update_params`
+        return StateDictLoader(*args)
 
     if osp.exists(osp.join(model_path, SAFE_WEIGHT_INDEX_NAME)):
         return SafetensorsLoader(*args, index_name=SAFE_WEIGHT_INDEX_NAME)
