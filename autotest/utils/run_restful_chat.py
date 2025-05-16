@@ -293,6 +293,10 @@ def run_vl_testcase(config, port: int = DEFAULT_PORT):
     http_url = BASE_HTTP_URL + ':' + str(port)
     log_path = config.get('log_path')
 
+    model = get_model(http_url)
+    if model is None:
+        assert False, 'server not start correctly'
+
     client = OpenAI(api_key='YOUR_API_KEY', base_url=http_url + '/v1')
     model_name = client.models.list().data[0].id
 
