@@ -8,7 +8,6 @@ import numpy as np
 from torch import Tensor
 
 from lmdeploy.messages import GenerationConfig, LogitsProcessor
-from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.pytorch.disagg.request import MigrationRequest
 from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
 from lmdeploy.utils import get_logger
@@ -466,7 +465,6 @@ class SchedulerSequence:
     migration_request: Optional[MigrationRequest] = None
     resp_cache: bool = False
     preserve_cache: bool = False
-    migration_inputs: Optional[MigrationExecutionBatch] = None
 
     def __post_init__(self):
         """post init."""
