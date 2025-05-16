@@ -14,7 +14,7 @@ def run_pipeline_chat_test(config,
                            model_case,
                            backend_type,
                            worker_id: str = '',
-                           extra: object = {},
+                           extra: object = None,
                            use_local_model: bool = True,
                            is_smoke: bool = False):
     log_path = config.get('log_path')
@@ -78,7 +78,7 @@ def run_pipeline_vl_chat_test(config,
                               model_case,
                               backend_type,
                               worker_id: str = '',
-                              extra: object = {},
+                              extra: object = None,
                               is_smoke: bool = False):
     log_path = config.get('log_path')
     tp = get_tp_num(config, model_case)
