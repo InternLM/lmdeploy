@@ -138,9 +138,8 @@ class SubCliServe:
         ArgumentHelper.chat_template(parser)
 
         # parsers
-        parser_group = parser.add_mutually_exclusive_group()
-        ArgumentHelper.tool_call_parser(parser_group)
-        ArgumentHelper.reasoning_parser(parser_group)
+        ArgumentHelper.tool_call_parser(parser)
+        ArgumentHelper.reasoning_parser(parser)
 
         # model args
         ArgumentHelper.revision(parser)
