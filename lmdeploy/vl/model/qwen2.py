@@ -57,9 +57,16 @@ class Qwen2VLModel(VisonModel):
 
     def build_model(self):
         check_qwen_vl_deps_install()
-        from transformers import Qwen2VLForConditionalGeneration
+        arch = self.hf_config.architectures[0]
+        if arch == 'Qwen2VLForConditionalGeneration':
+            from transformers import Qwen2VLForConditionalGeneration as AutoModelCls
+        elif arch == 'Qwen2_5_VLForConditionalGeneration':
+            from transformers import Qwen2_5_VLForConditionalGeneration as AutoModelCls
+        else:
+            raise ValueError(f'Unsupported arch={arch}')
+
         if self.with_llm:
-            self.vl_model = Qwen2VLForConditionalGeneration.from_pretrained(self.model_path, device_map='cpu')
+            self.vl_model = AutoModelCls.from_pretrained(self.model_path, device_map='cpu')
         else:
             raise NotImplementedError('turbomind has not supported qwen2-vl yet')
 
