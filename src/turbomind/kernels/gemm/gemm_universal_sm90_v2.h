@@ -121,6 +121,18 @@ inline __device__ void warpgroup_fence_operand(float (&x)[M][N][K])
     }
 }
 
+template<int N, int K>
+inline __device__ void warpgroup_fence_operand(float (&x)[N][K])
+{
+    PRAGMA_UNROLL
+    for (int n = 0; n < N; ++n) {
+        PRAGMA_UNROLL
+        for (int k = 0; k < K; ++k) {
+            warpgroup_fence_operand(x[n][k]);
+        }
+    }
+}
+
 template<class Func, size_t... Is>
 __device__ void for_(std::index_sequence<Is...>, Func func)
 {
@@ -185,7 +197,7 @@ struct GemmUniversalSm90_v2 {
     using Tv = float;
 
     using Arch      = Arch_;
-    using Scheduler = TileScheduler<kRowMajor, kMulticastB, kMulticastA, false, false>;
+    using Scheduler = TileScheduler<kRowMajor, kMulticastB, kMulticastA, true, true>;
 
     using ProducerBar = cutlass::arch::ClusterTransactionBarrier;
     using ConsumerBar = cutlass::arch::ClusterBarrier;
@@ -377,11 +389,9 @@ struct GemmUniversalSm90_v2 {
             constexpr int kStepKA = (sizeof(Ta) * MMA_ATOM_K) >> 4;
             constexpr int kStepKB = (sizeof(Tb) * MMA_ATOM_K) >> 4;
 
-            cutlass::PipelineState<Stages> pipe_state{};
+            cutlass::PipelineState<Stages> pipe_acquire{};
+            cutlass::PipelineState<Stages> pipe_release{};
 
-            // auto math_barrier = [warpgroup_id](int phase) -> cutlass::arch::NamedBarrier {
-            //     return cutlass::arch::NamedBarrier(WARPGORUPS * WARPGROUP_SIZE, warpgroup_id ^ phase);  // 0,1
-            // };
             auto math_barrier_sync = [&](int phase, int alive = 1) {
                 constexpr int base    = (int)cutlass::arch::ReservedNamedBarriers::FirstUserBarrier;
                 constexpr int threads = WARPGORUPS * WARPGROUP_SIZE;
@@ -405,18 +415,7 @@ struct GemmUniversalSm90_v2 {
                 printf("consumer %d,%d: BASE %d\n", blockIdx.x, warpgroup_id, sched.cluster_idx_);
             }
 
-            // if (sched) {
-            //     atomicAdd(&storage.alive_count, 1);
-            // }
-
-            // cutlass::arch::NamedBarrier(WARPGORUPS * WARPGROUP_SIZE, 4).sync();
-
-            // if (threadIdx.x == 0 % WARPGROUP_SIZE == 0) {
-            //     printf("consumer %d,%d alive=%d", blockIdx.x, warpgroup_id, storage.alive_count);
-            // }
-
             if (warpgroup_id == 1) {
-                // math_barrier(1).arrive_unaligned();
                 math_barrier_sync(1);
             }
 
@@ -450,11 +449,11 @@ struct GemmUniversalSm90_v2 {
                 auto consumer_arrive = [&] {
                     __syncwarp();
                     if constexpr (kClusterSize > 1) {
-                        ConsumerBar::arrive(&consumer_bar[pipe_state.index()], lane_id, lane_id < kClusterSize);
+                        ConsumerBar::arrive(&consumer_bar[pipe_release.index()], lane_id, lane_id < kClusterSize);
                     }
                     else {
                         if (lane_id == 0) {
-                            ConsumerBar::arrive(&consumer_bar[pipe_state.index()]);
+                            ConsumerBar::arrive(&consumer_bar[pipe_release.index()]);
                         }
                     }
                 };
@@ -462,19 +461,22 @@ struct GemmUniversalSm90_v2 {
                 if constexpr (kClusterSize > 1) {
                     if (!cta_tile_p) {  // other CTAs in the cluster are still alive
                         math_barrier_sync(0);
-                        pipe_state.advance(storage.pipe_count - pipe_state.count());
-                        smem_iter_A.Reset(pipe_state.index());
-                        smem_iter_B.Reset(pipe_state.index());
+                        const int distance = storage.pipe_count - pipe_acquire.count();
+                        pipe_acquire.advance(distance);
+                        pipe_release.advance(distance);
+                        smem_iter_A.Reset(pipe_acquire.index());
+                        smem_iter_B.Reset(pipe_acquire.index());
                         wg_barrier.sync();
                         for (; k_iter > 0; --k_iter) {
-                            ProducerBar::wait(&producer_bar[pipe_state.index()], pipe_state.phase());
+                            ProducerBar::wait(&producer_bar[pipe_acquire.index()], pipe_acquire.phase());
                             consumer_arrive();
-                            smem_iter_A.Advance(pipe_state.index());
-                            smem_iter_B.Advance(pipe_state.index());
-                            ++pipe_state;
+                            smem_iter_A.Advance(pipe_acquire.index());
+                            smem_iter_B.Advance(pipe_acquire.index());
+                            ++pipe_acquire;
+                            ++pipe_release;
                         }
                         if (wg_lane == 0) {
-                            storage.pipe_count = pipe_state.count();
+                            storage.pipe_count = pipe_acquire.count();
                         }
                         math_barrier_sync(1);
                         continue;
@@ -518,51 +520,76 @@ struct GemmUniversalSm90_v2 {
 
                 int iter_V = 0;
 
-                auto tile_gemm = [&] {
-                    if constexpr (MMA_ITER_M == 1) {
-                        PRAGMA_UNROLL
-                        for (int k = 0; k < MMA_ITER_K; ++k) {
-                            PRAGMA_UNROLL
-                            for (int m = 0; m < MMA_ITER_M; ++m) {
-                                PRAGMA_UNROLL
-                                for (int n = 0; n < MMA_ITER_N; ++n) {
-                                    wgmma<MMA_Atom>(smem_iter_A, smem_iter_B, frag_C[m][n], k == 0);
-                                    smem_iter_B += kStepNB;
-                                }
-                                smem_iter_B -= MMA_ITER_N * kStepNB;
-                                smem_iter_A += kStepMA;
-                            }
-                            smem_iter_A += kStepKA - MMA_ITER_M * kStepMA;
-                            smem_iter_B += kStepKB;
-                        }
-                        smem_iter_A -= MMA_ITER_K * kStepKA;
-                        smem_iter_B -= MMA_ITER_K * kStepKB;
-                        cute::warpgroup_commit_batch();
-                    }
-                    else {
-                        PRAGMA_UNROLL
-                        for (int m = 0; m < MMA_ITER_M; ++m) {
-                            PRAGMA_UNROLL
-                            for (int k = 0; k < MMA_ITER_K; ++k) {
-                                PRAGMA_UNROLL
-                                for (int n = 0; n < MMA_ITER_N; ++n) {
-                                    wgmma<MMA_Atom>(smem_iter_A, smem_iter_B, frag_C[m][n], k == 0);
-                                    smem_iter_B += kStepNB;
-                                }
-                                smem_iter_B -= MMA_ITER_N * kStepNB;
-                                smem_iter_A += kStepKA;
-                                smem_iter_B += kStepKB;
-                            }
-                            cute::warpgroup_commit_batch();
-                            smem_iter_A -= MMA_ITER_K * kStepKA;
-                            smem_iter_B -= MMA_ITER_K * kStepKB;
-                            smem_iter_A += kStepMA;
-                        }
-                        smem_iter_A -= MMA_ITER_M * kStepMA;
-                    }
+                // auto tile_gemm = [&] {
+                //     if constexpr (MMA_ITER_M == 1) {
+                //         PRAGMA_UNROLL
+                //         for (int k = 0; k < MMA_ITER_K; ++k) {
+                //             PRAGMA_UNROLL
+                //             for (int m = 0; m < MMA_ITER_M; ++m) {
+                //                 PRAGMA_UNROLL
+                //                 for (int n = 0; n < MMA_ITER_N; ++n) {
+                //                     wgmma<MMA_Atom>(smem_iter_A, smem_iter_B, frag_C[m][n], k == 0);
+                //                     smem_iter_B += kStepNB;
+                //                 }
+                //                 smem_iter_B -= MMA_ITER_N * kStepNB;
+                //                 smem_iter_A += kStepMA;
+                //             }
+                //             smem_iter_A += kStepKA - MMA_ITER_M * kStepMA;
+                //             smem_iter_B += kStepKB;
+                //         }
+                //         smem_iter_A -= MMA_ITER_K * kStepKA;
+                //         smem_iter_B -= MMA_ITER_K * kStepKB;
+                //         cute::warpgroup_commit_batch();
+                //     }
+                //     else {
+                //         PRAGMA_UNROLL
+                //         for (int m = 0; m < MMA_ITER_M; ++m) {
+                //             PRAGMA_UNROLL
+                //             for (int k = 0; k < MMA_ITER_K; ++k) {
+                //                 PRAGMA_UNROLL
+                //                 for (int n = 0; n < MMA_ITER_N; ++n) {
+                //                     wgmma<MMA_Atom>(smem_iter_A, smem_iter_B, frag_C[m][n], k == 0);
+                //                     smem_iter_B += kStepNB;
+                //                 }
+                //                 smem_iter_B -= MMA_ITER_N * kStepNB;
+                //                 smem_iter_A += kStepKA;
+                //                 smem_iter_B += kStepKB;
+                //             }
+                //             cute::warpgroup_commit_batch();
+                //             smem_iter_A -= MMA_ITER_K * kStepKA;
+                //             smem_iter_B -= MMA_ITER_K * kStepKB;
+                //             smem_iter_A += kStepMA;
+                //         }
+                //         smem_iter_A -= MMA_ITER_M * kStepMA;
+                //     }
 
-                    smem_iter_A.Advance(pipe_state.index());
-                    smem_iter_B.Advance(pipe_state.index());
+                //     smem_iter_A.Advance(pipe_acquire.index());
+                //     smem_iter_B.Advance(pipe_acquire.index());
+                // };
+
+                auto gmma = [&](int m) {
+                    // warpgroup_fence_operand(frag_C[m]);
+                    PRAGMA_UNROLL
+                    for (int k = 0; k < MMA_ITER_K; ++k) {
+                        PRAGMA_UNROLL
+                        for (int n = 0; n < MMA_ITER_N; ++n) {
+                            wgmma<MMA_Atom>(smem_iter_A, smem_iter_B, frag_C[m][n], k == 0);
+                            smem_iter_B += kStepNB;
+                        }
+                        smem_iter_B -= MMA_ITER_N * kStepNB;
+                        smem_iter_A += kStepKA;
+                        smem_iter_B += kStepKB;
+                    }
+                    cute::warpgroup_commit_batch();
+                    // warpgroup_fence_operand(frag_C[m]);
+                    smem_iter_A -= MMA_ITER_K * kStepKA;
+                    smem_iter_B -= MMA_ITER_K * kStepKB;
+                    smem_iter_A += kStepMA;
+                    if (m == MMA_ITER_M - 1) {
+                        smem_iter_A -= MMA_ITER_M * kStepMA;
+                        smem_iter_A.Advance(pipe_acquire.index());
+                        smem_iter_B.Advance(pipe_acquire.index());
+                    }
                 };
 
                 static_assert(MMA_ITER_N == 1);
@@ -583,112 +610,159 @@ struct GemmUniversalSm90_v2 {
 
                 auto Load_U = [&] {
                     for (int m = 0; m < MMA_ITER_M; ++m) {
-                        scale_U[m][0] = smem_U[pipe_state.index()][offset_U + m * MMA_ATOM_M];
-                        scale_U[m][1] = smem_U[pipe_state.index()][offset_U + m * MMA_ATOM_M + 8];
+                        scale_U[m][0] = smem_U[pipe_acquire.index()][offset_U + m * MMA_ATOM_M];
+                        scale_U[m][1] = smem_U[pipe_acquire.index()][offset_U + m * MMA_ATOM_M + 8];
                     }
                 };
 
-                auto scale_accum = [&]() {  // cta_n = mma_iter_n * wg_n * mma_atom_n
-                    for_(std::make_index_sequence<MMA_ITER_M>{}, [&](auto m) {
-                        float scales[2][2];
+                auto scale_accum = [&](auto m) {  // cta_n = mma_iter_n * wg_n * mma_atom_n
+                    float scales[2][2];
 
-                        scales[0][0] = scale_U[m][0] * scale_V[0];
-                        scales[1][0] = scale_U[m][1] * scale_V[0];
-                        scales[0][1] = scale_U[m][0] * scale_V[1];
-                        scales[1][1] = scale_U[m][1] * scale_V[1];
+                    scales[0][0] = scale_U[m][0] * scale_V[0];
+                    scales[1][0] = scale_U[m][1] * scale_V[0];
+                    scales[0][1] = scale_U[m][0] * scale_V[1];
+                    scales[1][1] = scale_U[m][1] * scale_V[1];
 
-                        cute::warpgroup_wait<MMA_ITER_M - 1 - m>();
-
+                    PRAGMA_UNROLL
+                    for (int n = 0; n < MMA_ITER_N; ++n) {
                         PRAGMA_UNROLL
-                        for (int n = 0; n < MMA_ITER_N; ++n) {
+                        for (int c0 = 0; c0 < MMA_ATOM_N; c0 += OUTER_N) {
+                            bool pred = (pred_V & (1U << (c0 / OUTER_N)));
                             PRAGMA_UNROLL
-                            for (int c0 = 0; c0 < MMA_ATOM_N; c0 += OUTER_N) {
-                                bool pred = (pred_V & (1U << (c0 / OUTER_N)));
-                                PRAGMA_UNROLL
-                                for (int cc = 0; cc < OUTER_N; cc += 8) {
-                                    int c = c0 + cc;
-                                    // clang-format off
+                            for (int cc = 0; cc < OUTER_N; cc += 8) {
+                                int c = c0 + cc;
+                                // clang-format off
                                     accum_C[m][n][c / 2 + 0] += (pred ? scales[0][1] : scales[0][0]) * frag_C[m][n][c / 2 + 0];
                                     accum_C[m][n][c / 2 + 1] += (pred ? scales[0][1] : scales[0][0]) * frag_C[m][n][c / 2 + 1];
                                     accum_C[m][n][c / 2 + 2] += (pred ? scales[1][1] : scales[1][0]) * frag_C[m][n][c / 2 + 2];
                                     accum_C[m][n][c / 2 + 3] += (pred ? scales[1][1] : scales[1][0]) * frag_C[m][n][c / 2 + 3];
-                                    // clang-format on
-                                }
+                                // clang-format on
                             }
                         }
-                    });
+                    }
+                    // });
                 };
 
-                // math_barrier(0).arrive_and_wait_unaligned();
                 math_barrier_sync(0);
 
-                pipe_state.advance(storage.pipe_count - pipe_state.count());
-
-                smem_iter_A.Reset(pipe_state.index());
-                smem_iter_B.Reset(pipe_state.index());
+                const int distance = storage.pipe_count - pipe_acquire.count();
+                pipe_acquire.advance(distance);
+                pipe_release.advance(distance);
+                smem_iter_A.Reset(pipe_acquire.index());
+                smem_iter_B.Reset(pipe_acquire.index());
 
                 wg_barrier.sync();
 
-                if (wg_lane == 0 && kDebug) {
-                    printf("consumer %d,%d: TILE %d %d, count=%d\n",
-                           blockIdx.x,
-                           warpgroup_id,
-                           offset_m,
-                           offset_n,
-                           pipe_state.count());
-                }
+                k_iter = 16;
 
                 Load_V();
-
-                if (wg_lane == 0 && kDebug) {
-                    printf("consumer %d,%d: pipe=%d\n", blockIdx.x, warpgroup_id, pipe_state.index());
-                }
-
-                ProducerBar::wait(&producer_bar[pipe_state.index()], pipe_state.phase());
-
-                if (wg_lane == 0 && kDebug) {
-                    printf("consumer %d,%d: ok\n", blockIdx.x, warpgroup_id);
-                }
-
+                ProducerBar::wait(&producer_bar[pipe_acquire.index()], pipe_acquire.phase());
                 Load_U();
                 cute::warpgroup_arrive();
-                warpgroup_fence_operand(frag_C);
-                tile_gemm();
-                warpgroup_fence_operand(frag_C);
-                scale_accum();
+                warpgroup_fence_operand(frag_C[0]);
+                gmma(0);
+                warpgroup_fence_operand(frag_C[1]);
+                gmma(1);
+                cute::warpgroup_wait<1>();
+                warpgroup_fence_operand(frag_C[0]);
+                scale_accum(0);
+                ++pipe_acquire;
+                --k_iter;
+
+                PRAGMA_UNROLL
+                for (; k_iter > 0; --k_iter) {
+
+                    ProducerBar::wait(&producer_bar[pipe_acquire.index()], pipe_acquire.phase());
+
+                    cute::warpgroup_arrive();
+                    warpgroup_fence_operand(frag_C[0]);
+                    gmma(0);
+
+                    cute::warpgroup_wait<1>();
+                    warpgroup_fence_operand(frag_C[1]);
+                    scale_accum(1);
+
+                    Load_V();
+                    Load_U();
+
+                    consumer_arrive();
+
+                    cute::warpgroup_arrive();
+                    warpgroup_fence_operand(frag_C[1]);
+                    gmma(1);
+
+                    cute::warpgroup_wait<1>();
+                    warpgroup_fence_operand(frag_C[0]);
+                    scale_accum(0);
+
+                    ++pipe_acquire;
+                    ++pipe_release;
+                }
+
+                // cute::warpgroup_wait<1>();
+                // warpgroup_fence_operand(frag_C[0]);
+                // scale_accum(0);
+                cute::warpgroup_wait<0>();
+                warpgroup_fence_operand(frag_C[1]);
+                scale_accum(1);
                 consumer_arrive();
-                ++pipe_state;
+                ++pipe_release;
+
+#if 0
+                Load_V();
+                ProducerBar::wait(&producer_bar[pipe_acquire.index()], pipe_acquire.phase());
+                Load_U();
+                cute::warpgroup_arrive();
+                warpgroup_fence_operand(frag_C[0]);
+                gmma(0);
+                warpgroup_fence_operand(frag_C[1]);
+                gmma(1);
+                ++pipe_acquire;
                 --k_iter;
 
                 for (; k_iter > 0; --k_iter) {
-                    Load_V();
+                    cute::warpgroup_wait<1>();
+                    warpgroup_fence_operand(frag_C[0]);
+                    scale_accum(0);
 
-                    if (wg_lane == 0 && kDebug) {
-                        printf("consumer %d,%d: pipe=%d\n", blockIdx.x, warpgroup_id, pipe_state.index());
-                    }
+                    cute::warpgroup_wait<0>();
+                    warpgroup_fence_operand(frag_C[1]);
+                    scale_accum(1);
 
-                    ProducerBar::wait(&producer_bar[pipe_state.index()], pipe_state.phase());
-
-                    if (wg_lane == 0 && kDebug) {
-                        printf("consumer %d,%d: ok\n", blockIdx.x, warpgroup_id);
-                    }
-
-                    Load_U();
-                    cute::warpgroup_arrive();
-                    warpgroup_fence_operand(frag_C);
-                    tile_gemm();
-                    warpgroup_fence_operand(frag_C);
-                    scale_accum();
                     consumer_arrive();
-                    ++pipe_state;
+
+                    Load_V();
+                    ProducerBar::wait(&producer_bar[pipe_acquire.index()], pipe_acquire.phase());
+                    Load_U();
+
+                    cute::warpgroup_arrive();
+
+                    warpgroup_fence_operand(frag_C[0]);
+                    gmma(0);
+
+                    warpgroup_fence_operand(frag_C[1]);
+                    gmma(1);
+
+                    ++pipe_acquire;
+                    ++pipe_release;
                 }
 
+                cute::warpgroup_wait<1>();
+                warpgroup_fence_operand(frag_C[0]);
+                scale_accum(0);
+                cute::warpgroup_wait<0>();
+                warpgroup_fence_operand(frag_C[1]);
+                scale_accum(1);
+                consumer_arrive();
+                ++pipe_release;
+#endif
+
                 if (wg_lane == 0) {
-                    storage.pipe_count = pipe_state.count();
+                    storage.pipe_count = pipe_acquire.count();
                 }
 
                 if (wg_lane == 0 && kDebug) {
-                    printf("consumer %d,%d: post, count=%d\n", blockIdx.x, warpgroup_id, pipe_state.count());
+                    printf("consumer %d,%d: post, count=%d\n", blockIdx.x, warpgroup_id, pipe_acquire.count());
                 }
 
                 // math_barrier(1).arrive_and_wait_unaligned();
