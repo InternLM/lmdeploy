@@ -55,6 +55,25 @@ def _tensorlize_block_offsets(block_offsets, dtype=torch.int32):
     return block_offsets
 
 
+def _update_engine_config(engine_config: PytorchEngineConfig):
+    """update pytorch engine config."""
+    # make sure engine exits
+    if engine_config is None:
+        engine_config = PytorchEngineConfig()
+    else:
+        engine_config = copy.deepcopy(engine_config)
+
+    if engine_config.max_batch_size is None:
+        engine_config.max_batch_size = get_max_batch_size(engine_config.device_type)
+
+    if engine_config.dp != 1:
+        if engine_config.tp == 1 and engine_config.ep == 1:
+            engine_config.dp = 1
+            engine_config.dp_rank = 0
+
+    return engine_config
+
+
 def _build_scheduler_config(engine_config: PytorchEngineConfig):
     """build scheduler config."""
     scheduler_config = SchedulerConfig(max_batches=engine_config.max_batch_size,
@@ -297,21 +316,13 @@ class Engine:
                  engine_config: PytorchEngineConfig = None,
                  trust_remote_code: bool = True) -> None:
         # make sure engine exits
-        if engine_config is None:
-            engine_config = PytorchEngineConfig()
-        else:
-            engine_config = copy.deepcopy(engine_config)
-        if engine_config.max_batch_size is None:
-            engine_config.max_batch_size = get_max_batch_size(engine_config.device_type)
+        engine_config = _update_engine_config(engine_config)
 
-        tp = engine_config.tp
-        dp = engine_config.dp
-        dp_rank = engine_config.dp_rank
-
+        # dist args
         self.tokenizer = tokenizer
-        self.tp = tp
-        self.dp = dp
-        self.dp_rank = dp_rank
+        self.tp = engine_config.tp
+        self.dp = engine_config.dp
+        self.dp_rank = engine_config.dp_rank
 
         # download models and adapters
         if not os.path.exists(model_path):
@@ -960,9 +971,9 @@ class Engine:
         """async loop migration."""
         while True:
             migration_running = self.scheduler._schedule_migration()
-            if not migration_running:
+            if not migration_running and not self.scheduler.has_migration_waiting:
                 await self.migration_event.wait()
-            else:
+            elif migration_running:
                 self.migration_event.clear()
                 for msg in migration_running:
                     migration_execution_requests: List[Tuple[int, List[Tuple[int, int]]]] = []
@@ -998,7 +1009,10 @@ class Engine:
                     self.update_running_migration([msg], np.array([token_ids]), [False], [None])
                 resp_que.put_nowait(outputs)
                 self.scheduler.unlock_running_migration(migration_running)
-                has_runable_event.event.set()
+                has_runable_event.set()
+            else:
+                # release coroutine for decoding
+                await asyncio.sleep(0)
 
     @torch.inference_mode()
     async def _async_loop_main(
@@ -1027,6 +1041,7 @@ class Engine:
             scheduler.lock_running(running)
             for idx in range(num_loops):
                 if idx >= num_loops - 1:
+                    scheduler.collect_migration_done()
                     forward_inputs, next_running = await inputs_maker.prefetch_next_inputs()
                 logger.info('inputs forwarding done')
                 out = await self.executor.get_output_async()
