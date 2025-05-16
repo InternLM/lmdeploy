@@ -96,6 +96,27 @@ def _try_to_cuda(val, non_blocking: bool = False):
         raise RuntimeError(f'Can not cast {type(val)} to cuda.')
 
 
+class DistGatherScalar:
+    """distribute value gather."""
+
+    def __init__(self, val, size: int, device: str = 'cpu', group: dist.ProcessGroup = None):
+        self.val = val
+        self.device = device
+        self.group = group
+
+        self.all_vals = torch.tensor([val] * size, device=device)
+        self.worker = dist.all_gather_into_tensor(self.all_vals,
+                                                  self.all_vals.new_tensor([val]),
+                                                  group=group,
+                                                  async_op=True)
+
+    async def async_wait(self, timeout: float = 0.001):
+        while not self.worker.is_completed():
+            await asyncio.sleep(timeout)
+        self.worker.wait()
+        return self.all_vals
+
+
 SwapMap = Dict[int, int]
 
 
@@ -403,6 +424,8 @@ class BaseModelAgent:
     ):
         """asyc forward task."""
 
+        dist_ctx = get_dist_manager().current_context()
+
         def __update_inputs(next_token_ids, model_metas):
             """update inputs."""
             nonlocal all_ids, guided_input_ids, swap_in_map, swap_out_map
@@ -417,11 +440,6 @@ class BaseModelAgent:
             if sampling_inputs.random_offsets is not None:
                 sampling_inputs.random_offsets += 1
 
-        async def __await_distworker(worker, timeout: float = 0.001):
-            while not worker.is_completed():
-                await asyncio.sleep(timeout)
-            worker.wait()
-
         def __try_copy_everything():
             """try copy all inputs."""
             nonlocal inputs, all_ids, guided_input_ids, sampling_inputs, num_appendable_ids, num_ignore_eos
@@ -435,53 +453,47 @@ class BaseModelAgent:
 
             self.stream.synchronize()
 
-        def __update_dp_meta():
-            nonlocal inputs
-            inputs.build_dp_meta()
-            inputs = self.patched_model.update_inputs(inputs)
-
-        @asynccontextmanager
-        async def __prepare_dp_decoding():
-            if self.backend_config.eager_mode:
-                yield
-                return
-            batch_size = inputs.seq_length.numel()
-            all_batch_sizes = torch.tensor([0] * dp, device='cuda')
-            lc_handle = dist.all_gather_into_tensor(all_batch_sizes,
-                                                    all_batch_sizes.new_tensor(batch_size),
-                                                    async_op=True)
-            yield
-            await __await_distworker(lc_handle)
-            padding_batch_size = all_batch_sizes.cpu().max().item()
-            meta = self.patched_model.get_meta()
-            meta.padding_batch_size = padding_batch_size
-            logger.debug(f'padding_batch_size={padding_batch_size}')
-
-        @asynccontextmanager
-        async def __prepare_dp_prefill():
-            nonlocal sync_long_context
-            all_sync_flags = torch.tensor([False] * dp, device='cuda')
-            lc_handle = dist.all_gather_into_tensor(all_sync_flags,
-                                                    torch.tensor(sync_long_context, device='cuda'),
-                                                    async_op=True)
-            yield
-            await __await_distworker(lc_handle)
-            sync_long_context = all_sync_flags.any()
-            logger.debug(f'sync_long_context={sync_long_context}')
-
         @asynccontextmanager
         async def __prepare_dp():
             """prepare dp."""
             if dp == 1:
                 yield
                 return
+
+            nonlocal inputs, sync_long_context, is_all_dummy
+
+            # gather dp forward metadata
+            batch_size = inputs.seq_length.numel()
+            dp_forward_meta = [int(is_decoding), int(is_dummy), batch_size, int(sync_long_context)]
+            gathered_meta = DistGatherScalar(dp_forward_meta, dp, device='cuda')
+
+            yield
+
+            gathered_meta = (await gathered_meta.async_wait()).cpu()
+
+            # check is_decoding
+            all_is_decoding = gathered_meta[:, 0]
+            assert all_is_decoding.sum().item() in [0, dp]
+
+            # check if all inputs are dummy inputs
+            is_all_dummy = gathered_meta[:, 1].all()
+            if is_all_dummy:
+                return
+
             if is_decoding:
-                async with __prepare_dp_decoding():
-                    yield
+                all_batch_sizes = gathered_meta[:, 2]
+                padding_batch_size = all_batch_sizes.max().item()
+                meta = self.patched_model.get_meta()
+                meta.padding_batch_size = padding_batch_size
+                logger.debug(f'padding_batch_size={padding_batch_size}')
             else:
-                async with __prepare_dp_prefill():
-                    yield
-            __update_dp_meta()
+                all_sync_flags = gathered_meta[:, 3].bool()
+                sync_long_context = all_sync_flags.any()
+                logger.debug(f'sync_long_context={sync_long_context}')
+
+            # update dp meta
+            inputs.build_dp_meta()
+            inputs = self.patched_model.update_inputs(inputs)
 
         # dist tools
         dist_ctx = get_dist_manager().current_context()
@@ -496,10 +508,19 @@ class BaseModelAgent:
                      f'num_tokens={inputs.input_ids.size(-1)} '
                      f'is_decoding={inputs.is_decoding}')
 
+        # is_all_dummy would be updated in __prepare_dp
+        is_all_dummy = False
         async with __prepare_dp():
             __try_copy_everything()
 
         need_output = dp > 1 or rank % tp == 0
+
+        # skip dummy forward.
+        if is_all_dummy:
+            logger.debug(f'<ForwardTask> rank[{rank}]: all inputs are dummy, skip forward.')
+            for idx in range(loop_count):
+                self._out_que.put_nowait(None)
+            return
 
         for idx in range(loop_count):
             # inference
@@ -681,7 +702,10 @@ class BaseModelAgent:
             return func(*args).clone()
 
         with self.all_context():
-            weights = ForkingPickler.loads(base64.b64decode(request.serialized_named_tensors))
+            serialized_data = request.serialized_named_tensors
+            if isinstance(serialized_data, list):
+                serialized_data = serialized_data[self.dist_ctx.tp_rank]
+            weights = ForkingPickler.loads(base64.b64decode(serialized_data))
             weights = [(k, _construct(v)) for k, v in weights]
             self.patched_model.get_model().load_weights(weights)
 
