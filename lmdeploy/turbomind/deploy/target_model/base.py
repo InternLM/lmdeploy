@@ -205,11 +205,6 @@ class BaseOutputModel(ABC):
             if self.model(i, reader):
                 pbar.update(1)
         pbar.close()
-        # manually clean up meta reader
-        if hasattr(self.input_model, 'meta_reader'):
-            self.input_model.meta_reader.clean_up(True)
-            del self.input_model.meta_reader
-            torch.cuda.empty_cache()
 
     @property
     def tm_config(self):
