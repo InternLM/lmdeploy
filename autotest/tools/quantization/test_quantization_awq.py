@@ -7,6 +7,7 @@ from utils.quantization_utils import quantization
 
 
 @pytest.mark.order(3)
+@pytest.mark.test_3090
 @pytest.mark.timeout(900)
 @pytest.mark.parametrize('model', get_quantization_model_list('awq'))
 def test_quantization_awq(config, model, worker_id):
