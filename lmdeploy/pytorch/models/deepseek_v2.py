@@ -12,9 +12,9 @@ from torch import nn
 
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.distributed import get_dist_manager, get_tp_world_rank
-from lmdeploy.pytorch.kernels.cuda.ep_moe import map_logic_to_physical_idx_hash_random
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager, get_step_ctx_manager
-from lmdeploy.pytorch.models.utils.eplb import get_eplb_metadata_by_layer, init_global_eplb_metadata
+from lmdeploy.pytorch.models.utils.eplb import (EPLBDispatchInfo, get_global_eplb_metadata, init_global_eplb_metadata,
+                                                topk_ids_logical_to_physical)
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, RopeType, SiluAndMul, build_rotary_embedding
 from lmdeploy.pytorch.nn.linear import (build_colwise_linear, build_down_linear, build_gateup_linear, build_o_proj,
                                         build_rowwise_linear)
@@ -687,13 +687,17 @@ class DeepseekV2MoE(nn.Module):
         self.topk_group = config.topk_group
 
         self.gate = MoEGate(config, dtype=dtype, device=device)
-        if get_dist_manager().current_context().dist_config.enable_eplb:
-            self.log2phy, self.phy2log, self.expert_count = get_eplb_metadata_by_layer(layer_idx)
-            self.num_experts = self.phy2log.shape[0]  # num_physical_experts
+
         dist_ctx = get_dist_manager().current_context()
         dp = dist_ctx.dp
         world_size = dist_ctx.world_size
         moe_all_reduce = dp > 1 and dist_ctx.tp > 1
+        if get_dist_manager().current_context().dist_config.enable_eplb:
+            self.eplb_dispatch_info = EPLBDispatchInfo.init_new(
+                ep_rank=dist_ctx.ep_rank,
+                layer_idx=layer_idx,
+            )
+            self.num_experts = get_global_eplb_metadata().num_physical_experts()
         self.experts = build_fused_moe(
             self.hidden_dim,
             self.ffn_dim,
@@ -728,7 +732,8 @@ class DeepseekV2MoE(nn.Module):
         hidden_states = hidden_states.view(-1, hidden_dim)
         topk_weights, topk_ids = self.gate(hidden_states)
         if get_dist_manager().current_context().dist_config.enable_eplb:
-            topk_ids = map_logic_to_physical_idx_hash_random(topk_ids, self.log2phy, self.expert_count)
+            topk_ids = topk_ids_logical_to_physical(topk_ids, self.eplb_dispatch_info)
+
         out_states = self.experts(
             hidden_states,
             topk_weights,

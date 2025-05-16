@@ -1,9 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import random
 from dataclasses import dataclass
 from os import getenv
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import torch
+import torch.nn.functional as F
 
 from lmdeploy.pytorch.distributed import get_ep_world_rank
 from lmdeploy.utils import get_logger
@@ -111,12 +113,110 @@ def rebalance_experts(weight: torch.Tensor, num_replicas: int, num_groups: int, 
     return phy2log, log2phy, logcnt
 
 
+def logical_to_all_physical_raw(logical_to_all_physical_map, layer_id: int, logical_expert_id: int) -> List[int]:
+    return [
+        physical_expert_id for physical_expert_id in logical_to_all_physical_map[layer_id, logical_expert_id].tolist()
+        if physical_expert_id != -1
+    ]
+
+
+def _compute_gpu_id_of_physical_expert(physical_expert_id: int, num_local_physical_experts: int) -> int:
+    return physical_expert_id // num_local_physical_experts
+
+
+def _fair_choices(arr: List, k: int, r: random.Random) -> List:
+    quotient, remainder = divmod(k, len(arr))
+    res = arr * quotient + r.sample(arr, k=remainder)
+    r.shuffle(res)
+    return res
+
+
+# This is rarely called, so we use for loops for maximum clarity
+def compute_logical_to_rank_dispatch_physical_map(
+    logical_to_all_physical_map: torch.Tensor,
+    num_gpus: int,
+    num_physical_experts: int,
+    seed: int = 42,
+):
+    r = random.Random(seed)
+
+    num_local_physical_experts = num_physical_experts // num_gpus
+    num_layers, num_logical_experts, _ = logical_to_all_physical_map.shape
+    dtype = logical_to_all_physical_map.dtype
+
+    logical_to_rank_dispatch_physical_map = torch.full(
+        size=(num_gpus, num_layers, num_logical_experts),
+        fill_value=-1,
+        dtype=dtype,
+    )
+
+    for layer_id in range(num_layers):
+        for logical_expert_id in range(num_logical_experts):
+            candidate_physical_expert_ids = (logical_to_all_physical_raw(logical_to_all_physical_map, layer_id,
+                                                                         logical_expert_id))
+            output_partial = logical_to_rank_dispatch_physical_map[:, layer_id, logical_expert_id]
+
+            for gpu_id in range(num_gpus):
+                same_gpu_physical_expert_ids = [
+                    physical_expert_id for physical_expert_id in candidate_physical_expert_ids
+                    if _compute_gpu_id_of_physical_expert(physical_expert_id, num_local_physical_experts) == gpu_id
+                ]
+                if len(same_gpu_physical_expert_ids) > 0:
+                    output_partial[gpu_id] = same_gpu_physical_expert_ids[0]
+
+            num_remain = torch.sum(output_partial == -1).item()
+            output_partial[output_partial == -1] = torch.tensor(
+                _fair_choices(candidate_physical_expert_ids, k=num_remain, r=r),
+                dtype=dtype,
+            )
+
+    assert torch.all(logical_to_rank_dispatch_physical_map != -1)
+    return logical_to_rank_dispatch_physical_map
+
+
 @dataclass
 class EPLBMetadata:
-    phy2log: torch.Tensor  # (layers, num_physical_experts)
-    log2phy: torch.Tensor  # (layers, num_logical_experts, X)
-    expert_count: torch.Tensor
-    num_phy_experts: int
+    physical_to_logical_map: torch.Tensor  # (layers, num_physical_experts)
+    logical_to_all_physical_map: torch.Tensor  # (layers, num_logical_experts, X)
+    logical_to_all_physical_map_num_valid: torch.Tensor  # (layers, num_logical_experts)
+    # (num_gpus, layers, num_logical_experts)
+    logical_to_rank_dispatch_physical_map: torch.Tensor
+
+    def num_physical_experts(self) -> int:
+        return self.physical_to_logical_map.shape[1]
+
+    def __post_init__(self):
+        num_layers_0, num_physical_experts_0 = self.physical_to_logical_map.shape
+        num_layers_1, num_logical_experts_0, num_physical_experts_1 = (self.logical_to_all_physical_map.shape)
+        num_layers_2, num_logical_experts_1 = (self.logical_to_all_physical_map_num_valid.shape)
+        _, num_layers_3, num_logical_experts_2 = (self.logical_to_rank_dispatch_physical_map.shape)
+        assert num_layers_0 == num_layers_1 == num_layers_2 == num_layers_3
+        assert num_logical_experts_0 == num_logical_experts_1 == num_logical_experts_2
+        assert num_physical_experts_0 == num_physical_experts_1
+
+    @staticmethod
+    def _init_raw(
+        ep_size: int,
+        physical_to_logical_map: torch.Tensor,
+        logical_to_all_physical_map: torch.Tensor,
+    ):
+        _, num_physical_experts = physical_to_logical_map.shape
+        logical_to_all_physical_map_padded = F.pad(
+            logical_to_all_physical_map,
+            (0, num_physical_experts - logical_to_all_physical_map.shape[-1]),
+            value=-1,
+        )
+        logical_to_all_physical_map_num_valid = torch.count_nonzero(logical_to_all_physical_map != -1, dim=-1)
+        return EPLBMetadata(
+            physical_to_logical_map=physical_to_logical_map,
+            logical_to_all_physical_map=logical_to_all_physical_map_padded,
+            logical_to_all_physical_map_num_valid=logical_to_all_physical_map_num_valid,
+            logical_to_rank_dispatch_physical_map=compute_logical_to_rank_dispatch_physical_map(
+                logical_to_all_physical_map,
+                num_gpus=ep_size,
+                num_physical_experts=num_physical_experts,
+            ),
+        )
 
     @staticmethod
     def init(num_routed_experts: int, num_hidden_layers: int):
@@ -138,18 +238,17 @@ class EPLBMetadata:
         num_nodes = 1 if ep_size < ranks_per_node else ep_size // ranks_per_node
         num_physical_experts = num_routed_experts + num_redundant_experts
 
-        phy2log, log2phy, expert_count = rebalance_experts(
+        physical_to_logical_map, logical_to_all_physical_map, _ = rebalance_experts(
             weight=experts_statistic,
             num_replicas=num_physical_experts,
             num_groups=num_groups,
             num_nodes=num_nodes,
             num_gpus=ep_size,
         )
-        return EPLBMetadata(
-            phy2log=phy2log,
-            log2phy=log2phy,
-            expert_count=expert_count,
-            num_phy_experts=num_physical_experts,
+        return EPLBMetadata._init_raw(
+            ep_size=ep_size,
+            physical_to_logical_map=physical_to_logical_map,
+            logical_to_all_physical_map=logical_to_all_physical_map,
         )
 
 
@@ -169,8 +268,42 @@ def get_global_eplb_metadata():
     return _global_eplb_metadata
 
 
-def get_eplb_metadata_by_layer(layer_idx: int):
+def get_eplb_phy2log_metadata_by_layer(layer_idx: int):
     global _global_eplb_metadata
     assert _global_eplb_metadata is not None
-    return _global_eplb_metadata.log2phy[layer_idx], _global_eplb_metadata.phy2log[
-        layer_idx], _global_eplb_metadata.expert_count[layer_idx]
+    return _global_eplb_metadata.physical_to_logical_map[layer_idx]
+
+
+@dataclass
+class EPLBDispatchInfo:
+    partial_logical_to_rank_dispatch_physical_map: torch.Tensor
+    partial_logical_to_all_physical_map: torch.Tensor
+    partial_logical_to_all_physical_map_num_valid: torch.Tensor
+
+    @classmethod
+    def init_new(cls, ep_rank: int, layer_idx: int):
+        eplb_metadata = get_global_eplb_metadata()
+        return cls(
+            partial_logical_to_rank_dispatch_physical_map=eplb_metadata.logical_to_rank_dispatch_physical_map[
+                ep_rank, layer_idx, :],
+            partial_logical_to_all_physical_map=eplb_metadata.logical_to_all_physical_map[layer_idx, :],
+            partial_logical_to_all_physical_map_num_valid=eplb_metadata.logical_to_all_physical_map_num_valid[
+                layer_idx, :],
+        )
+
+
+def _topk_ids_logical_to_physical_random(topk_ids: torch.Tensor, info: Optional[EPLBDispatchInfo]) -> torch.Tensor:
+    topk_ids_original_shape = topk_ids.shape
+    device = topk_ids.device
+    topk_ids = topk_ids.flatten()
+    chosen_dispatch_index = (torch.randint(0, 65536, topk_ids.shape, dtype=torch.int32, device=device) %
+                             info.partial_logical_to_all_physical_map_num_valid[topk_ids])
+    topk_ids = info.partial_logical_to_all_physical_map[topk_ids, chosen_dispatch_index]
+    topk_ids = topk_ids.view(topk_ids_original_shape)
+    return topk_ids
+
+
+def topk_ids_logical_to_physical(topk_ids: torch.Tensor, info: Optional[EPLBDispatchInfo]) -> torch.Tensor:
+    if info is None:
+        return topk_ids
+    return _topk_ids_logical_to_physical_random(topk_ids, info)
