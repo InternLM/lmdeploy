@@ -315,7 +315,7 @@ class Engine:
                  tokenizer: object,
                  engine_config: PytorchEngineConfig = None,
                  trust_remote_code: bool = True) -> None:
-        # make sure engine exits
+        # make sure engine config exist
         engine_config = _update_engine_config(engine_config)
 
         # dist args
@@ -374,6 +374,7 @@ class Engine:
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
         self.backend_config = backend_config
+        self.dist_config = dist_config
         self.max_session_len = self._get_max_session_len()
 
         self.req_manager = self._bind_request_manager()
@@ -851,9 +852,14 @@ class Engine:
             """make dummy inputs."""
             logger.info(f'make dummy forward inputs: prefill={prefill}.')
             num_loops = 1 if prefill else prefill_interval
+
+            batch_size = 2 if self.dist_config.enable_microbatch else 1
+            batch_size = min(self.cache_config.max_batches, batch_size)
             return dict(
                 running=[],
-                inputs=ModelInputs.make_dummy(1, is_decoding=not prefill, vocab_size=self.model_config.vocab_size),
+                inputs=ModelInputs.make_dummy(batch_size,
+                                              is_decoding=not prefill,
+                                              vocab_size=self.model_config.vocab_size),
                 swap_in_map=dict(),
                 swap_out_map=dict(),
                 loop_count=num_loops,
@@ -1030,7 +1036,6 @@ class Engine:
         next_running = None
 
         while True:
-            logger.info('begin loop')
             if next_running is None:
                 await has_runable_event.wait()
                 scheduler.collect_migration_done()
@@ -1043,16 +1048,12 @@ class Engine:
                 if idx >= num_loops - 1:
                     scheduler.collect_migration_done()
                     forward_inputs, next_running = await inputs_maker.prefetch_next_inputs()
-                logger.info('inputs forwarding done')
                 out = await self.executor.get_output_async()
-                logger.info('get_output_async done')
                 if len(out) > 0:
                     step_outputs = self._make_infer_outputs(**out, running=running)
                     resp_que.put_nowait(step_outputs)
-                logger.info('send response done')
             scheduler.unlock_running(running)
             has_runable_event.set()
-            logger.info('end loop')
 
     @staticmethod
     def _add_loop_tasks_done_callback(tasks: List[asyncio.Task]):
