@@ -32,9 +32,6 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
     else:
         extra = ''
 
-    if str(config.get('env_tag')) == '3090':
-        extra += ' --cache-max-entry-count 0.7'
-
     if 'modelscope' in param.keys():
         modelscope = param['modelscope']
         if modelscope:
@@ -76,6 +73,8 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
 
     if not is_bf16_supported():
         cmd += ' --cache-max-entry-count 0.5'
+    if str(config.get('env_tag')) == '3090':
+        extra += ' --cache-max-entry-count 0.5'
 
     start_log = os.path.join(log_path, 'start_restful_' + model.split('/')[1] + worker_id + '.log')
 
@@ -107,7 +106,7 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
                 with open(start_log, 'r') as f:
                     content = f.read()
                     print(content)
-                break
+                return 0, startRes
         except subprocess.TimeoutExpired:
             continue
     file.close()
