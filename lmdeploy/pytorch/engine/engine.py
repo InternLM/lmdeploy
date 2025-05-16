@@ -459,7 +459,9 @@ class Engine:
     def _get_max_session_len(self):
         """get max session len."""
         session_len = self.scheduler_config.max_session_len
-        max_tokens = (self.cache_config.num_gpu_blocks * self.cache_config.block_size)
+        block_size = self.cache_config.block_size
+        # leave one block to avoid over allocate
+        max_tokens = (self.cache_config.num_gpu_blocks * block_size - block_size)
         window_size = self.cache_config.window_size
         if window_size > 0 and window_size <= max_tokens:
             max_tokens = (1 << 63) - 1
@@ -600,7 +602,10 @@ class Engine:
 
     @property
     def gpu_count(self):
-        return self.tp * self.dp
+        dist_config = self.dist_config
+        if dist_config.dp > 1:
+            return 1
+        return max(dist_config.tp, dist_config.ep)
 
     @property
     def torch_int_dtype(self):
