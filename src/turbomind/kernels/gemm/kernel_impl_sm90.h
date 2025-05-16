@@ -83,8 +83,8 @@ public:
         desc_.align.y = 1;  // OpB::kOrder == kColMajor ? IterB::ThreadMap::kAccessC : 1;
         desc_.align.z = 1;  // Gemm::TILE_K;
 
-        desc_.policy_a = 0;               // (int)IterA::Policy::kEvictPolicy;
-        desc_.policy_b = 0;               // (int)IterB::Policy::kEvictPolicy;
+        desc_.policy_a = 0;                 // (int)IterA::Policy::kEvictPolicy;
+        desc_.policy_b = 0;                 // (int)IterB::Policy::kEvictPolicy;
         desc_.c_tile   = {TILE_M, TILE_N};  // {Gemm::Epilogue::TM, Gemm::Epilogue::TN};
         desc_.op_class = OpClass::kGMMA_s64n16;
 
@@ -104,6 +104,10 @@ public:
 
         if (smem_size_ > (48 << 10)) {
             cudaFuncSetAttribute(func, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size_);
+        }
+
+        if (1) {
+            cudaFuncSetAttribute(func, cudaFuncAttributeNonPortableClusterSizeAllowed, 16);
         }
 
         cudaOccupancyMaxActiveBlocksPerMultiprocessor(&desc_.max_active_ctas, func, Gemm::CTA_SIZE, smem_size_);

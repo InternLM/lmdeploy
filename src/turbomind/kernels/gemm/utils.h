@@ -50,6 +50,12 @@ __host__ __device__ constexpr int2 cs2mk(int c, int s)
 }
 
 template<Order order>
+__host__ __device__ constexpr int2 cs2mk(int2 cs)
+{
+    return cs2mk<order>(cs.x, cs.y);
+}
+
+template<Order order>
 __host__ __device__ constexpr int2 _kn2cs(int k, int n)
 {
     if constexpr (order == Order::kColMajor) {
@@ -91,8 +97,7 @@ struct PackingImpl {
 };
 
 template<Pack pack, Order order>
-struct Packing_v2: PackingImpl<get_mma_tag(pack), get_operand_tag(pack), get_pack_num(pack), order> {
-};
+struct Packing_v2: PackingImpl<get_mma_tag(pack), get_operand_tag(pack), get_pack_num(pack), order> {};
 
 /// TODO: move packing utility to arch/smem_copy_xxx
 
@@ -113,8 +118,7 @@ struct PackingImpl<HMMA_16816, OPERAND_A, num, kColMajor> {
 };
 
 template<int num, Order order>
-struct PackingImpl<HMMA_16816, OPERAND_B, num, order>: PackingImpl<HMMA_16816, OPERAND_A, num, order> {
-};
+struct PackingImpl<HMMA_16816, OPERAND_B, num, order>: PackingImpl<HMMA_16816, OPERAND_A, num, order> {};
 
 template<int num>
 struct PackingImpl<HMMA_SIMT, OPERAND_A, num, kRowMajor> {

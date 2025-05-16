@@ -12,7 +12,7 @@
 
 namespace turbomind::gemm {
 
-template<Order order, int cluster_m, int cluster_n, int striped_m, bool striped_n>
+template<Order order, class Cluster, int striped_m, bool striped_n>
 struct TileScheduler {
     int4 gemm_shape_;
     int4 tiled_shape_;
@@ -47,8 +47,8 @@ public:
         chunk_offset_ = splits - chunk_cnt % splits;
 
         cluster_tiled_shape_   = tiled_shape_;
-        cluster_tiled_shape_.x = cdiv(tiled_shape_.x, cluster_m);
-        cluster_tiled_shape_.y = cdiv(tiled_shape_.y, cluster_n);
+        cluster_tiled_shape_.x = cdiv(tiled_shape_.x, Cluster::M);
+        cluster_tiled_shape_.y = cdiv(tiled_shape_.y, Cluster::N);
 
         swizzled_shape_ = get_swizzled_shape(cluster_tiled_shape_, log_tile_);
 
@@ -73,12 +73,11 @@ public:
 
     TM_DEVICE void unswizzle()
     {
-        int cluster_idx_x = cluster_idx_ % swizzled_shape_.x;
-        int cluster_idx_y = cluster_idx_ / swizzled_shape_.x % swizzled_shape_.y;
-        int cluster_idx_z = cluster_idx_ / swizzled_shape_.x / swizzled_shape_.y;
+        int                  cluster_idx_x = cluster_idx_ % swizzled_shape_.x;
+        int                  cluster_idx_y = cluster_idx_ / swizzled_shape_.x % swizzled_shape_.y;
+        [[maybe_unused]] int cluster_idx_z = cluster_idx_ / swizzled_shape_.x / swizzled_shape_.y;
 
-        int cluster_cta_m = cute::block_id_in_cluster().x % cluster_m;  // M-major cluster shape
-        int cluster_cta_n = cute::block_id_in_cluster().x / cluster_m;
+        auto [cluster_cta_m, cluster_cta_n] = Cluster::cta_mn(cute::block_id_in_cluster().x);
 
         const int offset_x = cluster_cta_m * (striped_m ? cluster_tiled_shape_.x : 1);
         const int offset_y = cluster_cta_n * (striped_n ? cluster_tiled_shape_.y : 1);
@@ -94,8 +93,8 @@ public:
                                    (cluster_idx_x >> log_tile_)};
         }
 
-        tile_offset_ = {offset_x + cluster_tile_offset.x * (striped_m ? 1 : cluster_m),
-                        offset_y + cluster_tile_offset.y * (striped_n ? 1 : cluster_n),
+        tile_offset_ = {offset_x + cluster_tile_offset.x * (striped_m ? 1 : Cluster::M),
+                        offset_y + cluster_tile_offset.y * (striped_n ? 1 : Cluster::N),
                         cluster_idx_z,
                         0};
 

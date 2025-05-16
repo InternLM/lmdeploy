@@ -92,7 +92,7 @@ dequant_symm_row(Tout* out, int out_ld, const T* src, int src_ld, const Tscale* 
         for (int di = threadIdx.x * vec_size; di < dim; di += blockDim.x * vec_size) {
             Array<T, vec_size> vec;
             Ldg(vec, src + ti * src_ld + di);
-            const auto            scale = __ldg(&scales[(di / group_size) * scales_ld + ti]);
+            const auto            scale = 1.f;//__ldg(&scales[(di / group_size) * scales_ld + ti]);
             Array<Tout, vec_size> tmp;
             PRAGMA_UNROLL
             for (int c = 0; c < vec_size; ++c) {
@@ -241,7 +241,7 @@ __global__ void dequant_symm_block(Tout* out, const T* src, const Tscale* scales
     constexpr int S     = cdiv(block_size, rows);
     const int     col   = threadIdx.x % threads;
     const int     row   = threadIdx.x / threads;
-    const auto    scale = __ldg(&scales[blockIdx.x * gridDim.y + blockIdx.y]);
+    const auto    scale = 1.f;//__ldg(&scales[blockIdx.x * gridDim.y + blockIdx.y]);
     const auto    di    = blockIdx.y * block_size + col * vec_size;
     PRAGMA_UNROLL
     for (int s = 0; s < S; ++s) {
