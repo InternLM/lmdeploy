@@ -1134,17 +1134,18 @@ class QwQ(Qwen2d5Chat):
         if 'qwq' in lower_path and 'preview' not in lower_path:
             return 'qwq'
 
+
 @MODELS.register_module(name='qwen3')
 class Qwen3(Qwen2d5Chat):
 
     def __init__(self, meta_instruction='', **kwargs):
         super().__init__(meta_instruction=meta_instruction, **kwargs)
 
-    def messages2prompt(self, messages, sequence_start=True, tools=None, enable_thinking=None, **kwargs):        
+    def messages2prompt(self, messages, sequence_start=True, tools=None, enable_thinking=None, **kwargs):
         if isinstance(messages, str):
             prompt = self.get_prompt(messages, sequence_start)
         prompt = super().messages2prompt(messages, sequence_start, tools, **kwargs)
-        
+
         # enable_thinking parameter
         if enable_thinking is not None:
             no_think = not enable_thinking
@@ -1211,6 +1212,7 @@ class Qwen3(Qwen2d5Chat):
         lower_path = model_path.lower()
         if 'qwen3' in lower_path:
             return 'qwen3'
+
 
 @MODELS.register_module(name='codellama')
 class CodeLlama(Llama2):
