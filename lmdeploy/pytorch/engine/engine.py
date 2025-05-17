@@ -113,7 +113,8 @@ def _build_dist_config(engine_config: PytorchEngineConfig):
                              tp=engine_config.tp,
                              ep=engine_config.ep,
                              dp_rank=engine_config.dp_rank,
-                             enable_microbatch=engine_config.enable_microbatch)
+                             enable_microbatch=engine_config.enable_microbatch,
+                             enable_eplb=engine_config.enable_eplb)
     return dist_config
 
 
