@@ -140,9 +140,11 @@ class AutoModelAgent:
         self.cache_config = cache_config
         self.tokenizer = tokenizer
 
+        self._pre_in_que = None
         self._in_que = None
         self._out_que = None
         self._background_task = None
+        self._preprocess_task = None
 
         self.stream = torch.cuda.Stream()
         self.out_stream = torch.cuda.Stream()
@@ -406,19 +408,6 @@ class AutoModelAgent:
             if sampling_inputs.random_offsets is not None:
                 sampling_inputs.random_offsets += 1
 
-        def __try_copy_everything():
-            """try copy all inputs."""
-            nonlocal inputs, all_ids, guided_input_ids, sampling_inputs, num_appendable_ids, num_ignore_eos
-            non_blocking = True
-            inputs = _try_to_cuda(inputs, non_blocking=non_blocking)
-            all_ids = _try_to_cuda(all_ids, non_blocking=non_blocking)
-            guided_input_ids = _try_to_cuda(guided_input_ids, non_blocking=non_blocking)
-            sampling_inputs = _try_to_cuda(sampling_inputs, non_blocking=non_blocking)
-            num_appendable_ids = _try_to_cuda(num_appendable_ids, non_blocking=non_blocking)
-            num_ignore_eos = _try_to_cuda(num_ignore_eos, non_blocking=non_blocking)
-
-            self.stream.synchronize()
-
         @asynccontextmanager
         async def __prepare_dp():
             """prepare dp."""
@@ -477,7 +466,7 @@ class AutoModelAgent:
         # is_all_dummy would be updated in __prepare_dp
         is_all_dummy = False
         async with __prepare_dp():
-            __try_copy_everything()
+            pass
 
         need_output = dp > 1 or rank % tp == 0
 
@@ -556,6 +545,20 @@ class AutoModelAgent:
                 if forward_event is not None:
                     forward_event.set()
 
+    @torch.inference_mode()
+    async def _async_loop_inputs_preprocess(self):
+        """async loop inputs preprocess."""
+        non_blocking = True
+        keys = ['inputs', 'all_ids', 'guided_input_ids', 'sampling_inputs', 'num_appendable_ids', 'num_ignore_eos']
+        while True:
+            forward_inputs = await self._pre_in_que.get()
+
+            with torch.cuda.stream(self.out_stream):
+                for k in keys:
+                    forward_inputs[k] = _try_to_cuda(forward_inputs[k], non_blocking=non_blocking)
+                self.out_stream.synchronize()
+            self._in_que.put_nowait(forward_inputs)
+
     @staticmethod
     def _on_finish_callback(task: asyncio.Task, ptask: asyncio.Task) -> None:
         """raise exception on finish."""
@@ -576,12 +579,18 @@ class AutoModelAgent:
     def start(self, forward_event: asyncio.Event = None):
         """start event loop."""
         event_loop = asyncio.get_event_loop()
+        self._pre_in_que = asyncio.Queue()
         self._in_que = asyncio.Queue()
         self._out_que = asyncio.Queue()
+
         self._background_task = event_loop.create_task(self._async_loop_background(forward_event),
                                                        name='ModelAgentLoop')
         done_callback = functools.partial(self._on_finish_callback, ptask=asyncio.current_task())
         self._background_task.add_done_callback(done_callback)
+
+        # preprocess inputs task
+        self._preprocess_task = event_loop.create_task(self._async_loop_inputs_preprocess(),
+                                                       name='ModelAgentPreprocess')
 
     def stop(self):
         """stop task."""
@@ -598,10 +607,17 @@ class AutoModelAgent:
                 except asyncio.CancelledError:
                     logger.debug('ModelAgent background task cancelled.')
 
+            if not self._preprocess_task.done():
+                self._preprocess_task.cancel()
+                try:
+                    await self._preprocess_task
+                except asyncio.CancelledError:
+                    logger.debug('ModelAgent preprocess task cancelled.')
+
     def set_forward_inputs(self, inputs):
         """set forward inputs."""
-        assert self._in_que is not None, ('Please start backendground task before forward.')
-        self._in_que.put_nowait(inputs)
+        assert self._pre_in_que is not None, ('Please start backendground task before forward.')
+        self._pre_in_que.put_nowait(inputs)
 
     async def get_output_async(self):
         """async get output."""
