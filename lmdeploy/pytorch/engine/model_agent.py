@@ -125,17 +125,29 @@ class DistGatherScalar:
 SwapMap = Dict[int, int]
 
 
-class AutoModelAgent:
-    """Base model agent."""
+class BaseModelAgent:
+    """Base model agent.
 
-    def __init__(
-        self,
-        model_config: ModelConfig,
-        cache_config: CacheConfig,
-        tokenizer: Any,
-        dist_ctx: DistContext,
-        device_ctx: DeviceContext,
-    ):
+    load model on local gpu
+
+    Args:
+        model_path (str): The hugging face model path.
+        model_config (ModelConfig): The config of the model.
+        cache_config (CacheConfig): The config of the cache info.
+        trust_remote_code (bool): Trust remote code
+    """
+
+    def __init__(self,
+                 model_path: str,
+                 model_config: ModelConfig,
+                 cache_config: CacheConfig,
+                 backend_config: BackendConfig,
+                 misc_config: MiscConfig,
+                 tokenizer: Any,
+                 dist_ctx: DistContext,
+                 device_ctx: DeviceContext,
+                 adapters: Dict[str, str] = None):
+
         self.model_config = model_config
         self.cache_config = cache_config
         self.tokenizer = tokenizer
@@ -152,49 +164,32 @@ class AutoModelAgent:
         self.dist_ctx = dist_ctx
         self.device_ctx = device_ctx
 
+        device = 'cuda'
+        self.backend_config = backend_config
+        self.misc_config = misc_config
+        rank = dist_ctx.rank
+
+        self.model_path = model_path
+        self.adapters = adapters
+        self.device = device
+        self.rank = rank
+
+        tp_rank = dist_ctx.tp_rank
+        tp = dist_ctx.tp
+        world_size = dist_ctx.world_size
+        self.tp = tp
+        self.world_size = world_size
+        self.tp_rank = tp_rank
+
+        self.patched_model = None
+        self.cache_engine = None
+
     @contextmanager
     def all_context(self):
         device_mgr = get_device_manager()
         dist_mgr = get_dist_manager()
         with device_mgr.context(self.device_ctx), dist_mgr.context(self.dist_ctx):
             yield
-
-    def _forward_impl(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
-        raise NotImplementedError('NotImplemented.')
-
-    async def async_forward(self, inputs: ModelInputs, swap_in_map: SwapMap, swap_out_map: SwapMap):
-        """model forward.
-
-        Args:
-            inputs (Dict): The input data comes from _make_inputs.
-            swap_in_map (SwapMap): Cache maps to swap in.
-            swap_out_map (SwapMap): Cache maps to swap out.
-        """
-        raise NotImplementedError('Not implemented.')
-
-    def get_logits(self, hidden_states: torch.Tensor):
-        """get logits of model output."""
-        raise NotImplementedError('Not implemented.')
-
-    def get_input_processor(self):
-        """get input processor."""
-        raise NotImplementedError('Not implemented.')
-
-    def build_model(self):
-        """build model."""
-        raise NotImplementedError('Not implemented.')
-
-    def build_graph_runner(self):
-        """build graph runner."""
-        raise NotImplementedError('Not Implemented.')
-
-    def build_cache_engine(self):
-        """build cache engine."""
-        raise NotImplementedError('Not Implemented.')
-
-    def release(self):
-        """release."""
-        raise NotImplementedError('Not Implemented.')
 
     def set_cache_config(self, cache_config: CacheConfig):
         """set all cache config."""
@@ -649,56 +644,6 @@ class AutoModelAgent:
             if out['logits'] is not None:
                 out['logits'] = out['logits'].cpu()
         return out
-
-
-class BaseModelAgent(AutoModelAgent):
-    """Base model agent.
-
-    load model on local gpu
-
-    Args:
-        model_path (str): The hugging face model path.
-        model_config (ModelConfig): The config of the model.
-        cache_config (CacheConfig): The config of the cache info.
-        trust_remote_code (bool): Trust remote code
-    """
-
-    def __init__(self,
-                 model_path: str,
-                 model_config: ModelConfig,
-                 cache_config: CacheConfig,
-                 backend_config: BackendConfig,
-                 misc_config: MiscConfig,
-                 tokenizer: Any,
-                 dist_ctx: DistContext,
-                 device_ctx: DeviceContext,
-                 adapters: Dict[str, str] = None):
-        super().__init__(
-            model_config=model_config,
-            cache_config=cache_config,
-            tokenizer=tokenizer,
-            dist_ctx=dist_ctx,
-            device_ctx=device_ctx,
-        )
-        device = 'cuda'
-        self.backend_config = backend_config
-        self.misc_config = misc_config
-        rank = dist_ctx.rank
-
-        self.model_path = model_path
-        self.adapters = adapters
-        self.device = device
-        self.rank = rank
-
-        tp_rank = dist_ctx.tp_rank
-        tp = dist_ctx.tp
-        world_size = dist_ctx.world_size
-        self.tp = tp
-        self.world_size = world_size
-        self.tp_rank = tp_rank
-
-        self.patched_model = None
-        self.cache_engine = None
 
     def _build_model(self):
         """build patched model."""
