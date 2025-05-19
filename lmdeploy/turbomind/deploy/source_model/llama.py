@@ -114,6 +114,7 @@ class LlamaModel(BaseInputModel):
         for i, param in loader.items():
             reader = self.Reader(param, {}, False, self.model_config, policy=self.policy)
             yield i, reader
+        torch.cuda.empty_cache()
 
     def model_info(self):
         """Read model info."""
