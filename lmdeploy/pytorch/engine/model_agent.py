@@ -555,6 +555,8 @@ class AutoModelAgent:
 
             with torch.cuda.stream(self.out_stream):
                 for k in keys:
+                    if k not in forward_inputs:
+                        continue
                     forward_inputs[k] = _try_to_cuda(forward_inputs[k], non_blocking=non_blocking)
                 self.out_stream.synchronize()
             self._in_que.put_nowait(forward_inputs)
