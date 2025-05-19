@@ -1001,7 +1001,7 @@ class Engine:
         """async loop migration."""
         while True:
             migration_running = self.scheduler._schedule_migration()
-            if not migration_running and not self.scheduler.has_migration_waiting:
+            if not migration_running and not self.scheduler.has_migration_waiting():
                 await self.migration_event.wait()
             elif migration_running:
                 self.migration_event.clear()
