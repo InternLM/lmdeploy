@@ -458,7 +458,7 @@ struct GemmUniversalSm90_v2 {
 
                 const int wg_lane = threadIdx.x % WARPGROUP_SIZE;
 
-                cutlass::PipelineState<Stages> pipe_acquire{};
+                cutlass::PipelineState<Stages> pipe_read{};
                 cutlass::PipelineState<Stages> pipe_release{};
 
                 auto consumer_arrive = [&] {
@@ -476,15 +476,15 @@ struct GemmUniversalSm90_v2 {
                 if constexpr (kClusterSize > 1) {
                     if (!cta_tile_p) {  // other CTAs in the cluster are still alive
                         math_barrier_sync(0);
-                        pipe_release = pipe_acquire.advance(storage.pipe_count[warpgroup_id ^ 1]);
+                        pipe_release = pipe_read.advance(storage.pipe_count[warpgroup_id ^ 1]);
                         for (; k_iter > 0; --k_iter) {
-                            ProducerBar::wait(&producer_bar[pipe_acquire.index()], pipe_acquire.phase());
+                            ProducerBar::wait(&producer_bar[pipe_read.index()], pipe_read.phase());
                             consumer_arrive();
-                            ++pipe_acquire;
+                            ++pipe_read;
                             ++pipe_release;
                         }
                         if (wg_lane == 0) {
-                            storage.pipe_count[warpgroup_id] = pipe_acquire.count();
+                            storage.pipe_count[warpgroup_id] = pipe_read.count();
                         }
                         math_barrier_sync(1);
                         continue;
@@ -535,8 +535,8 @@ struct GemmUniversalSm90_v2 {
                 const int offset_U = warp_id % 4 * 16 + lane_id / 4;
                 auto      Load_U   = [&] {
                     for (int m = 0; m < MMA_ITER_M; ++m) {
-                        scale_U[m][0] = smem_U[pipe_acquire.index()][offset_U + m * MMA_ATOM_M];
-                        scale_U[m][1] = smem_U[pipe_acquire.index()][offset_U + m * MMA_ATOM_M + 8];
+                        scale_U[m][0] = smem_U[pipe_read.index()][offset_U + m * MMA_ATOM_M];
+                        scale_U[m][1] = smem_U[pipe_read.index()][offset_U + m * MMA_ATOM_M + 8];
                     }
                 };
 
@@ -568,8 +568,8 @@ struct GemmUniversalSm90_v2 {
 
                 auto gmma = [&](int m) {
                     if (m == 0) {
-                        smem_iter_A.Reset(pipe_acquire.index());
-                        smem_iter_B.Reset(pipe_acquire.index());
+                        smem_iter_A.Reset(pipe_read.index());
+                        smem_iter_B.Reset(pipe_read.index());
                     }
                     PRAGMA_UNROLL
                     for (int k = 0; k < MMA_ITER_K; ++k) {
@@ -592,10 +592,10 @@ struct GemmUniversalSm90_v2 {
 
                 math_barrier_sync(0);
 
-                pipe_release = pipe_acquire.advance(storage.pipe_count[warpgroup_id ^ 1]);
+                pipe_release = pipe_read.advance(storage.pipe_count[warpgroup_id ^ 1]);
 
                 Load_V();
-                ProducerBar::wait(&producer_bar[pipe_acquire.index()], pipe_acquire.phase());
+                ProducerBar::wait(&producer_bar[pipe_read.index()], pipe_read.phase());
                 Load_U();
                 cute::warpgroup_arrive();
                 gmma(0);
@@ -606,13 +606,13 @@ struct GemmUniversalSm90_v2 {
                 cute::warpgroup_wait<0>();
                 scale_accum(1);
                 consumer_arrive();
-                ++pipe_acquire;
+                ++pipe_read;
                 ++pipe_release;
                 --k_iter;
 
                 for (; k_iter > 0; --k_iter) {
                     Load_V();
-                    ProducerBar::wait(&producer_bar[pipe_acquire.index()], pipe_acquire.phase());
+                    ProducerBar::wait(&producer_bar[pipe_read.index()], pipe_read.phase());
                     Load_U();
                     cute::warpgroup_arrive();
                     gmma(0);
@@ -623,12 +623,12 @@ struct GemmUniversalSm90_v2 {
                     cute::warpgroup_wait<0>();
                     scale_accum(1);
                     consumer_arrive();
-                    ++pipe_acquire;
+                    ++pipe_read;
                     ++pipe_release;
                 }
 
                 if (wg_lane == 0) {
-                    storage.pipe_count[warpgroup_id] = pipe_acquire.count();
+                    storage.pipe_count[warpgroup_id] = pipe_read.count();
                 }
 
                 math_barrier_sync(1);
