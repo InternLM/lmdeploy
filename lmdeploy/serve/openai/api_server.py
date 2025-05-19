@@ -559,9 +559,10 @@ async def chat_completions_v1(raw_request: Request = None):
             return create_error_response(HTTPStatus.BAD_REQUEST, 'Failed to parse fc related info to json format!')
     elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
         logger.error('Please lanuch the api_server with --tool-call-parser if you want to use tool.')
+
     if VariableInterface.reasoning_parser is not None:
         reasoning_content, text = VariableInterface.reasoning_parser.extract_reasoning_content(text, request)
-      
+
     logprobs = None
     if gen_logprobs and len(final_logprobs):
         logprobs = _create_chat_completion_logprobs(VariableInterface.async_engine.tokenizer, final_token_ids,
