@@ -564,7 +564,7 @@ class AutoModelAgent:
             self._in_que.put_nowait(forward_inputs)
 
     @staticmethod
-    def _on_finish_callback(task: asyncio.Task, ptask: asyncio.Task) -> None:
+    def _on_finish_callback(task: asyncio.Task, ptasks: asyncio.Task) -> None:
         """raise exception on finish."""
         task_name = task.get_name()
         try:
@@ -572,13 +572,12 @@ class AutoModelAgent:
         except asyncio.CancelledError:
             logger.debug(f'Task <{task_name}> cancelled.')
             return
-        except Exception:
+        except BaseException:
             logger.exception(f'Task <{task_name}> failed')
         finally:
-            if not task.done():
-                task.cancel()
-            if not ptask.done():
-                ptask.cancel()
+            for ptask in ptasks:
+                if not ptask.done():
+                    ptask.cancel()
 
     def start(self, forward_event: asyncio.Event = None):
         """start event loop."""
@@ -587,14 +586,25 @@ class AutoModelAgent:
         self._in_que = asyncio.Queue()
         self._out_que = asyncio.Queue()
 
+        tasks_to_cancel = [asyncio.current_task()]
+
+        # forward task
+        logger.debug('Create task ModelAgentLoop.')
         self._background_task = event_loop.create_task(self._async_loop_background(forward_event),
                                                        name='ModelAgentLoop')
-        done_callback = functools.partial(self._on_finish_callback, ptask=asyncio.current_task())
-        self._background_task.add_done_callback(done_callback)
+        tasks_to_cancel.append(self._background_task)
 
         # preprocess inputs task
+        logger.debug('Create task ModelAgentPreprocess.')
         self._preprocess_task = event_loop.create_task(self._async_loop_inputs_preprocess(),
                                                        name='ModelAgentPreprocess')
+        tasks_to_cancel.append(self._preprocess_task)
+
+        # binding done task
+        logger.debug('binding done callback.')
+        done_callback = functools.partial(self._on_finish_callback, ptasks=tasks_to_cancel)
+        self._background_task.add_done_callback(done_callback)
+        self._preprocess_task.add_done_callback(done_callback)
 
     def stop(self):
         """stop task."""
