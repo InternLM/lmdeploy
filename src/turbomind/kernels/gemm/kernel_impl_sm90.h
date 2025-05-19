@@ -8,7 +8,7 @@
 #include "src/turbomind/kernels/gemm/cta_map.h"
 #include "src/turbomind/kernels/gemm/desc.h"
 #include "src/turbomind/kernels/gemm/epilogue.h"
-#include "src/turbomind/kernels/gemm/gemm_universal_sm90_v2.h"
+#include "src/turbomind/kernels/gemm/gemm_universal_sm90_v3.h"
 #include "src/turbomind/kernels/gemm/kernel.h"
 #include "src/turbomind/kernels/gemm/matrix_ptr.h"
 #include "src/turbomind/kernels/gemm/operand.h"
@@ -107,7 +107,7 @@ public:
         }
 
         if (1) {
-            cudaFuncSetAttribute(func, cudaFuncAttributeNonPortableClusterSizeAllowed, 16);
+            // cudaFuncSetAttribute(func, cudaFuncAttributeNonPortableClusterSizeAllowed, 16);
         }
 
         cudaOccupancyMaxActiveBlocksPerMultiprocessor(&desc_.max_active_ctas, func, Gemm::CTA_SIZE, smem_size_);

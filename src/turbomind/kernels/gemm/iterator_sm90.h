@@ -1,4 +1,4 @@
-
+#pragma once
 
 #include <cute/arch/copy_sm90_desc.hpp>
 #include <cute/arch/copy_sm90_tma.hpp>
