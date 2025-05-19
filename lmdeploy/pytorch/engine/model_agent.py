@@ -553,12 +553,14 @@ class AutoModelAgent:
         while True:
             forward_inputs = await self._pre_in_que.get()
 
+            logger.debug('preprocessing forward inputs.')
             with torch.cuda.stream(self.out_stream):
                 for k in keys:
                     if k not in forward_inputs:
                         continue
                     forward_inputs[k] = _try_to_cuda(forward_inputs[k], non_blocking=non_blocking)
                 self.out_stream.synchronize()
+            logger.debug('preprocessing forward inputs done.')
             self._in_que.put_nowait(forward_inputs)
 
     @staticmethod
