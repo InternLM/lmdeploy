@@ -1057,15 +1057,13 @@ class Engine:
         Each engine instance would communicate with the engine by queue.
         """
         scheduler = self.scheduler
-        do_migration = self.engine_config.role != EngineRole.Hybrid
         forward_inputs = None
         next_running = None
 
         while True:
             if next_running is None:
                 await has_runable_event.wait()
-                if do_migration:
-                    scheduler.collect_migration_done()
+                scheduler.collect_migration_done()
                 forward_inputs, next_running = await inputs_maker.send_next_inputs()
             num_loops = forward_inputs['loop_count']
             running = next_running
@@ -1081,8 +1079,7 @@ class Engine:
 
                 # pre-forward before get last token
                 if idx == num_loops - 1:
-                    if do_migration:
-                        scheduler.collect_migration_done()
+                    scheduler.collect_migration_done()
                     forward_inputs, next_running = await inputs_maker.prefetch_next_inputs()
 
                 # send output
