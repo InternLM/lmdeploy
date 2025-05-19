@@ -288,7 +288,6 @@ struct GemmUniversalSm90_v3 {
         __align__(1024) Array<Tc, TILE_M * TILE_N> C;
         __align__(128) uint64_t producer_bar[Stages];
         __align__(128) uint64_t consumer_bar[Stages];
-        int pipe_count[WARPGORUPS];
     };
 
     static constexpr int kSmemSize = sizeof(SharedStorage);
@@ -325,10 +324,6 @@ struct GemmUniversalSm90_v3 {
             cutlass::arch::fence_view_async_shared();
             if constexpr (kClusterSize > 1) {
                 cutlass::arch::fence_barrier_init();
-            }
-            PRAGMA_UNROLL
-            for (int i = 0; i < WARPGORUPS; ++i) {
-                storage.pipe_count[i] = 0;
             }
         }
 
@@ -419,22 +414,9 @@ struct GemmUniversalSm90_v3 {
             constexpr int kStepKA = (sizeof(Ta) * MMA_ATOM_K) >> 4;
             constexpr int kStepKB = (sizeof(Tb) * MMA_ATOM_K) >> 4;
 
-            // auto math_barrier_sync = [&](int phase, int alive = 1) {
-            //     constexpr int base    = (int)cutlass::arch::ReservedNamedBarriers::FirstUserBarrier;
-            //     constexpr int threads = WARPGORUPS * WARPGROUP_SIZE;
-            //     int           res;
-            //     asm volatile("{\n"
-            //                  "  .reg.pred p;\n"
-            //                  "  setp.ne.b32 p, %3, 0;\n"
-            //                  "  barrier.cta.red.or.pred p, %1, %2, p;\n"
-            //                  "  selp.s32 %0, 1, 0, p;\n"
-            //                  "}\n"
-            //                  : "=r"(res)
-            //                  : "r"(base + wg_idx ^ phase), "r"(threads), "r"(alive));
-            //     return res;
-            // };
-
             cutlass::arch::NamedBarrier wg_barrier(WARPGROUP_SIZE, wg_idx + 2);  // 2,3
+
+            cutlass::PipelineState<Stages> pipe_state{};
 
             while (sched.next(kSchedWarpGroups)) {
                 auto [cta_tile_p, cluster_tile_p] = sched.is_valid_tile();
@@ -463,16 +445,14 @@ struct GemmUniversalSm90_v3 {
                 const int warp_id = threadIdx.x / WARP_SIZE;
                 const int lane_id = threadIdx.x % WARP_SIZE;
 
-                cutlass::PipelineState<Stages> pipe_read{};
-
                 auto consumer_arrive = [&] {
                     __syncwarp();
                     if constexpr (kClusterSize > 1) {
-                        ConsumerBar::arrive(&consumer_bar[pipe_read.index()], lane_id, lane_id < kClusterSize);
+                        ConsumerBar::arrive(&consumer_bar[pipe_state.index()], lane_id, lane_id < kClusterSize);
                     }
                     else {
                         if (lane_id == 0) {
-                            ConsumerBar::arrive(&consumer_bar[pipe_read.index()]);
+                            ConsumerBar::arrive(&consumer_bar[pipe_state.index()]);
                         }
                     }
                 };
@@ -480,9 +460,11 @@ struct GemmUniversalSm90_v3 {
                 if constexpr (kClusterSize > 1) {
                     if (!cta_tile_p) {  // other CTAs in the cluster are still alive
                         for (; k_iter > 0; --k_iter) {
-                            ProducerBar::wait(&producer_bar[pipe_read.index()], pipe_read.phase());
+                            ProducerBar::wait(&producer_bar[pipe_state.index()], pipe_state.phase());
                             consumer_arrive();
-                            ++pipe_read;
+                            // smem_iter_A.Advance(pipe_state.index());
+                            // smem_iter_B.Advance(pipe_state.index());
+                            ++pipe_state;
                         }
                         continue;
                     }
@@ -532,8 +514,8 @@ struct GemmUniversalSm90_v3 {
                 const int offset_U = wg_idx_m * WG_TILE_M + warp_id % 4 * 16 + lane_id / 4;
                 auto      Load_U   = [&] {
                     for (int m = 0; m < MMA_ITER_M; ++m) {
-                        scale_U[m][0] = smem_U[pipe_read.index()][offset_U + m * MMA_ATOM_M];
-                        scale_U[m][1] = smem_U[pipe_read.index()][offset_U + m * MMA_ATOM_M + 8];
+                        scale_U[m][0] = smem_U[pipe_state.index()][offset_U + m * MMA_ATOM_M];
+                        scale_U[m][1] = smem_U[pipe_state.index()][offset_U + m * MMA_ATOM_M + 8];
                     }
                 };
 
@@ -544,7 +526,6 @@ struct GemmUniversalSm90_v3 {
                     scales[0][1] = scale_U[m][0] * scale_V[1];
                     scales[1][1] = scale_U[m][1] * scale_V[1];
                     cute::warpgroup_wait<0>();
-                    warpgroup_fence_operand(frag_C);
                     PRAGMA_UNROLL
                     for (int n = 0; n < MMA_ITER_N; ++n) {
                         PRAGMA_UNROLL
@@ -565,11 +546,6 @@ struct GemmUniversalSm90_v3 {
                 };
 
                 auto gmma = [&](int m) {
-                    if (m == 0) {
-                        smem_iter_A.Reset(pipe_read.index());
-                        smem_iter_B.Reset(pipe_read.index());
-                    }
-                    cute::warpgroup_arrive();
                     PRAGMA_UNROLL
                     for (int k = 0; k < MMA_ITER_K; ++k) {
                         PRAGMA_UNROLL
@@ -592,36 +568,48 @@ struct GemmUniversalSm90_v3 {
                 wg_barrier.sync();
 
                 Load_V();
-                ProducerBar::wait(&producer_bar[pipe_read.index()], pipe_read.phase());
+                ProducerBar::wait(&producer_bar[pipe_state.index()], pipe_state.phase());
                 Load_U();
-                warpgroup_fence_operand(frag_C);
+                smem_iter_A.Reset(pipe_state.index());
+                smem_iter_B.Reset(pipe_state.index());
+                cute::warpgroup_arrive();
                 gmma(0);
                 scale_accum(0);
                 consumer_arrive();
-                ++pipe_read;
+                ++pipe_state;
                 --k_iter;
 
-                for (; k_iter > 0; --k_iter) {
-                    Load_V();
-                    ProducerBar::wait(&producer_bar[pipe_read.index()], pipe_read.phase());
-                    Load_U();
-                    warpgroup_fence_operand(frag_C);
+                Load_V();
+                ProducerBar::wait(&producer_bar[pipe_state.index()], pipe_state.phase());
+                Load_U();
+                smem_iter_A.Reset(pipe_state.index());
+                smem_iter_B.Reset(pipe_state.index());
+
+                for (; k_iter > 1; --k_iter) {
+                    cute::warpgroup_arrive();
                     gmma(0);
                     scale_accum(0);
                     consumer_arrive();
-                    ++pipe_read;
+                    ++pipe_state;
+                    Load_V();
+                    ProducerBar::wait(&producer_bar[pipe_state.index()], pipe_state.phase());
+                    Load_U();
+                    smem_iter_A.Reset(pipe_state.index());
+                    smem_iter_B.Reset(pipe_state.index());
                 }
 
+                gmma(0);
+                scale_accum(0);
+                consumer_arrive();
+                ++pipe_state;
+
                 const int wg_thread_id = threadIdx.x % WARPGROUP_SIZE;
+
                 if (wg_thread_id < LayoutC::C1) {
                     cute::tma_store_wait<0>();
                 }
-                wg_barrier.sync();
 
-                // if (threadIdx.x < LayoutC::C1) {
-                //     cute::tma_store_wait<0>();
-                // }
-                // cutlass::arch::NamedBarrier(WARPGORUPS * WARPGROUP_SIZE).sync();
+                wg_barrier.sync();
 
                 Tc* smem_C = &storage.C[wg_idx_m * WG_TILE_M * TILE_N + wg_idx_n * WG_TILE_N];
 
@@ -664,8 +652,8 @@ struct GemmUniversalSm90_v3 {
                 }
 
                 cute::tma_store_fence();  // visibility: smem -> async proxy
+
                 wg_barrier.sync();
-                // cutlass::arch::NamedBarrier(WARPGORUPS * WARPGROUP_SIZE).sync();
 
                 if (wg_thread_id < LayoutC::C1) {
                     const int tma_n = wg_thread_id * LayoutC::C0;
