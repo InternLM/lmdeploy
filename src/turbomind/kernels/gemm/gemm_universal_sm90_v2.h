@@ -374,7 +374,7 @@ struct GemmUniversalSm90_v2 {
                     GmemIteratorSm90<kMulticastB> gmem_B{&tm_b, {offset_k, offset_n + mc_offset_n}, {TILE_K, 0}};
 
                     // column-major
-                    GmemIteratorSm90<false> gmem_U{&tm_u, {offset_m, offset_k / 128}, {0, 1}};
+                    GmemIteratorSm90<kMulticastA> gmem_U{&tm_u, {offset_m + mc_offset_m, offset_k / 128}, {0, 1}};
 
                     for (; k_iter > 0; --k_iter) {
                         int pipe = write_state.index();
@@ -382,7 +382,7 @@ struct GemmUniversalSm90_v2 {
                         ProducerBar::arrive_and_expect_tx(&producer_bar[pipe], kTmaTxBytes);
                         gmem_A.Load(&producer_bar[pipe], &smem_A[pipe * TILE_M * TILE_K], mask_A);
                         gmem_B.Load(&producer_bar[pipe], &smem_B[pipe * TILE_N * TILE_K], mask_B);
-                        gmem_U.Load(&producer_bar[pipe], &smem_U[pipe][0], 0);
+                        gmem_U.Load(&producer_bar[pipe], &smem_U[pipe][0] + mc_offset_m, mask_A);
                         ++write_state;
                     }
                 }

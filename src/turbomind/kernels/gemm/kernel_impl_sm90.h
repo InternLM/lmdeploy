@@ -200,7 +200,7 @@ public:
         if (U) {
             TM_CHECK_EQ(TILE_K, 128);
             // std::cout << "U: " << Udesc << "\n";
-            tm_u = make_2d_tma_desc((void*)U, Udesc, {kTileM, 1}, CU_TENSOR_MAP_SWIZZLE_NONE);
+            tm_u = make_2d_tma_desc((void*)U, Udesc, {kTileM / kMulticastA, 1}, CU_TENSOR_MAP_SWIZZLE_NONE);
         }
 
         CUtensorMap tm_v{};
