@@ -171,7 +171,6 @@ class SubCliServe:
         # multi-node serving args
         ArgumentHelper.node_rank(parser)
         ArgumentHelper.num_nodes(parser)
-        ArgumentHelper.base_gpu_id(parser)
 
         # turbomind args
         tb_group = parser.add_argument_group('TurboMind engine arguments')
@@ -381,7 +380,6 @@ class SubCliServe:
             launch_server(args.nnodes,
                           args.node_rank,
                           args.model_path,
-                          base_gpu_id=args.base_gpu_id,
                           model_name=args.model_name,
                           backend=backend,
                           backend_config=backend_config,

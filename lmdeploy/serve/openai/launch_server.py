@@ -84,7 +84,6 @@ def launch_server(num_nodes: int,
                   node_rank: int,
                   model_path: str,
                   backend_config: Union[PytorchEngineConfig, TurbomindEngineConfig],
-                  base_gpu_id: int = 0,
                   proxy_url: str = None,
                   **kwargs):
     """Run multiple server processes in dp mode."""
@@ -113,7 +112,7 @@ def launch_server(num_nodes: int,
     for idx in range(dp_per_node):
         backend_config_dp = copy.deepcopy(backend_config)
         dp_rank = node_rank * dp_per_node + idx
-        gpu_ids_per_dp = [base_gpu_id + gid for gid in range(idx * tp_per_dp, (idx + 1) * tp_per_dp)]
+        gpu_ids_per_dp = [gid for gid in range(idx * tp_per_dp, (idx + 1) * tp_per_dp)]
         backend_config_dp.dp_rank = dp_rank
         server_port = server_port_li[idx]
 
