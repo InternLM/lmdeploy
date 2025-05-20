@@ -27,6 +27,42 @@ from .logits_process import FusedLogitsProcessor, SamplingInputs
 logger = get_logger('lmdeploy')
 
 
+class AgentProfiler:
+
+    def __init__(self, rank: int):
+        from torch.profiler import ProfilerActivity, profile
+
+        from lmdeploy.pytorch import envs
+        self.rank = rank
+        self.profiler = None
+
+        activities = []
+
+        if envs.torch_profile_cpu:
+            activities.append(ProfilerActivity.CPU)
+        if envs.torch_profile_cuda:
+            activities.append(ProfilerActivity.CUDA)
+        if len(activities) > 0:
+            logger.debug(f'Profiler start on rank {rank}')
+            profiler = profile(activities=activities)
+            profiler.start()
+            self.profiler = profiler
+        else:
+            self.profiler = None
+        self.prefix = envs.torch_profile_output_prefix
+
+    def dump(self):
+        """dump profile result."""
+        if self.profiler is None:
+            return
+
+        try:
+            self.profiler.stop()
+            self.profiler.export_chrome_trace(f'{self.prefix}{self.rank}.json')
+        except Exception as e:
+            logger.error(f'Failed to dump profile result: {e}')
+
+
 def msg_with_rank(rank: int, msg: str):
     """return message with rank."""
     return f'rank[{rank}] - {msg}'
@@ -559,7 +595,7 @@ class BaseModelAgent:
             self._in_que.put_nowait(forward_inputs)
 
     @staticmethod
-    def _on_finish_callback(task: asyncio.Task, ptasks: asyncio.Task) -> None:
+    def _on_finish_callback(task: asyncio.Task, ptasks: asyncio.Task, profiler=None) -> None:
         """raise exception on finish."""
         task_name = task.get_name()
         try:
@@ -570,6 +606,9 @@ class BaseModelAgent:
         except BaseException:
             logger.exception(f'Task <{task_name}> failed')
         finally:
+            if profiler is not None:
+                profiler.dump()
+
             for ptask in ptasks:
                 if not ptask.done():
                     ptask.cancel()
@@ -595,11 +634,15 @@ class BaseModelAgent:
                                                        name='ModelAgentPreprocess')
         tasks_to_cancel.append(self._preprocess_task)
 
+        # profiler
+        profiler = AgentProfiler(self.rank)
+
         # binding done task
         logger.debug('binding done callback.')
-        done_callback = functools.partial(self._on_finish_callback, ptasks=tasks_to_cancel)
-        self._background_task.add_done_callback(done_callback)
-        self._preprocess_task.add_done_callback(done_callback)
+        backgroup_done_callback = functools.partial(self._on_finish_callback, ptasks=tasks_to_cancel, profiler=profiler)
+        self._background_task.add_done_callback(backgroup_done_callback)
+        preprocess_done_callback = functools.partial(self._on_finish_callback, ptasks=tasks_to_cancel)
+        self._preprocess_task.add_done_callback(preprocess_done_callback)
 
     def stop(self):
         """stop task."""
