@@ -1,5 +1,5 @@
-num_promts: &num_prompts 10000
-dataset_path: &dataset_path "./ShareGPT_V3_unfiltered_cleaned_split.json"
+num_promts: &num_prompts 1
+dataset_path: &dataset_path "/nvme1/shared/ShareGPT_V3_unfiltered_cleaned_split.json"
 dataset_name: &dataset_name "sharegpt"
 server:
   - tp: 2
@@ -11,11 +11,6 @@ server:
     "max-batch-size": 1024
     "cache-max-entry-count": 0.8
 data:
-  # - "dataset-name": *dataset_name
-  #   "dataset-path": *dataset_path
-  #   "sharegpt-input-len": 200
-  #   "sharegpt-output-len": 15000
-  #   "num-prompts": *num_prompts
   - "dataset-name": "sharegpt"
     "dataset-path": *dataset_path
     "num-prompts": *num_prompts
