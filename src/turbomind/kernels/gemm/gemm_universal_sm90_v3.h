@@ -261,9 +261,9 @@ struct GemmUniversalSm90_v3 {
     using Tu = float;
     using Tv = float;
 
-    using Cluster = arch::Cluster<kMulticastB, kMulticastA, kColMajor>;
+    using Cluster = arch::Cluster<kMulticastB, kMulticastA, kRowMajor>;
 
-    using Scheduler = TileScheduler<kRowMajor, Cluster, true, true>;
+    using Scheduler = TileScheduler<kRowMajor, Cluster, false, false>;
 
     using ProducerBar = cutlass::arch::ClusterTransactionBarrier;
     using ConsumerBar = cutlass::arch::ClusterBarrier;
@@ -281,7 +281,7 @@ struct GemmUniversalSm90_v3 {
         struct Source {
             __align__(1024) Array<Ta, Stages * TILE_M * TILE_K> A;
             __align__(1024) Array<Tb, Stages * TILE_N * TILE_K> B;
-            __align__(1024) Tu U[Stages][round_up(TILE_M_U * CTA_K_U, 32)];
+            __align__(1024) Tu U[Stages][TILE_M_U * CTA_K_U];
             __align__(1024) Tv V[2][WARPGORUPS][cdiv(MAX_K, 128)];
         };
         Source source;
@@ -416,6 +416,15 @@ struct GemmUniversalSm90_v3 {
 
             cutlass::arch::NamedBarrier wg_barrier(WARPGROUP_SIZE, wg_idx + 2);  // 2,3
 
+            auto epi_barrier = [&](int phase) {  // 0, 1
+                return EmptyBarrier{};
+                // return cutlass::arch::NamedBarrier(WARPGORUPS * WARPGROUP_SIZE, wg_idx ^ phase);
+            };
+
+            if (wg_idx == 1) {
+                epi_barrier(1).arrive_unaligned();
+            }
+
             cutlass::PipelineState<Stages> pipe_state{};
 
             while (sched.next(kSchedWarpGroups)) {
@@ -466,6 +475,8 @@ struct GemmUniversalSm90_v3 {
                             // smem_iter_B.Advance(pipe_state.index());
                             ++pipe_state;
                         }
+                        epi_barrier(0).arrive_and_wait_unaligned();
+                        epi_barrier(1).arrive_unaligned();
                         continue;
                     }
                 }
@@ -598,16 +609,19 @@ struct GemmUniversalSm90_v3 {
                     smem_iter_B.Reset(pipe_state.index());
                 }
 
+                cute::warpgroup_arrive();
                 gmma(0);
                 scale_accum(0);
                 consumer_arrive();
                 ++pipe_state;
 
-                const int wg_thread_id = threadIdx.x % WARPGROUP_SIZE;
+                const int wg_lane = threadIdx.x % WARPGROUP_SIZE;
 
-                if (wg_thread_id < LayoutC::C1) {
+                if (wg_lane < LayoutC::C1) {
                     cute::tma_store_wait<0>();
                 }
+
+                epi_barrier(0).arrive_and_wait_unaligned();
 
                 wg_barrier.sync();
 
@@ -655,19 +669,25 @@ struct GemmUniversalSm90_v3 {
 
                 wg_barrier.sync();
 
-                if (wg_thread_id < LayoutC::C1) {
-                    const int tma_n = wg_thread_id * LayoutC::C0;
+                if (wg_lane < LayoutC::C1) {
+                    const int tma_n = wg_lane * LayoutC::C0;
                     cute::SM90_TMA_STORE::copy(&tm_c,
-                                               &smem_C[wg_thread_id * WG_TILE_M * LayoutC::C0],
+                                               &smem_C[wg_lane * WG_TILE_M * LayoutC::C0],
                                                offset_n + wg_idx_n * WG_TILE_N + tma_n,
                                                offset_m + wg_idx_m * WG_TILE_M);
                     cute::tma_store_arrive();
                 }
 
+                epi_barrier(1).arrive_unaligned();
+
             }  // scheduler loop
 
             if (threadIdx.x % WARPGROUP_SIZE < LayoutC::C1) {
                 cute::tma_store_wait<0>();
+            }
+
+            if (wg_idx == 0) {
+                epi_barrier(0).arrive_and_wait_unaligned();
             }
         }
 
@@ -677,6 +697,12 @@ struct GemmUniversalSm90_v3 {
         }
 
     }  // operator()
+
+    struct EmptyBarrier {
+        __device__      EmptyBarrier(...) {}
+        __device__ void arrive_and_wait_unaligned() {}
+        __device__ void arrive_unaligned() {}
+    };
 };
 
 extern __shared__ char smem_buf[];

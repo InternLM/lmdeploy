@@ -107,7 +107,7 @@ public:
         }
 
         if (1) {
-            // cudaFuncSetAttribute(func, cudaFuncAttributeNonPortableClusterSizeAllowed, 16);
+            cudaFuncSetAttribute(func, cudaFuncAttributeNonPortableClusterSizeAllowed, 16);
         }
 
         cudaOccupancyMaxActiveBlocksPerMultiprocessor(&desc_.max_active_ctas, func, Gemm::CTA_SIZE, smem_size_);
