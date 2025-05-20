@@ -1141,6 +1141,30 @@ def set_parsers(reasoning_parser: Optional[str] = None, tool_parser: Optional[st
             )
 
 
+class RateLimiterMiddleware:
+
+    def __init__(self, app, max_requests: int = 100, time_window: int = 1.0):
+        self.app = app
+        self.max_requests = max_requests
+        self.time_window = time_window
+        self._semaphore = asyncio.Semaphore(1)
+        self._arrive_times = []
+
+    async def __call__(self, scope, receive, send):
+        async with self._semaphore:
+            current_time = time.time()
+            if len(self._arrive_times) >= self.max_requests - 1:
+                first_time = self._arrive_times.pop(0)
+            else:
+                first_time = 0
+            time_delta = first_time + self.time_window - current_time
+            if time_delta > 0:
+                await asyncio.sleep(time_delta)
+            self._arrive_times.append(current_time)
+
+        await self.app(scope, receive, send)
+
+
 def serve(model_path: str,
           model_name: Optional[str] = None,
           backend: Literal['turbomind', 'pytorch'] = 'turbomind',
@@ -1239,6 +1263,12 @@ def serve(model_path: str,
             allow_methods=allow_methods,
             allow_headers=allow_headers,
         )
+
+    app.add_middleware(
+        RateLimiterMiddleware,
+        max_requests=512,
+        time_window=1,
+    )
 
     # Set the maximum number of concurrent requests
     if max_concurrent_requests is not None:
