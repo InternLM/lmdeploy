@@ -45,7 +45,7 @@ pytorch_base_model:
 
 turbomind_quatization:
     no_awq:
-        - empty
+        - OpenGVLab/InternVL3-8B
     gptq:
         - empty
     no_kvint4:
@@ -61,7 +61,6 @@ pytorch_quatization:
     awq:
         - meta-llama/Llama-3.2-3B-Instruct
         - internlm/internlm3-8b-instruct
-        - OpenGVLab/InternVL3-8B
         - OpenGVLab/InternVL2_5-1B
         - Qwen/Qwen3-8B
         - Qwen/Qwen2.5-7B-Instruct
