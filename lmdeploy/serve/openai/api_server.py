@@ -1089,7 +1089,7 @@ async def startup_event():
         response = requests.post(url, headers=headers, json=data)
 
         if response.status_code != 200:
-            raise HTTPException(status_code=400, detail='Service registration failed')
+            raise HTTPException(status_code=response.status_code, detail='Service registration failed')
     except Exception as e:
         logger.error(f'Service registration failed: {e}')
 
