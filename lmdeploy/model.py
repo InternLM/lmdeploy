@@ -1158,7 +1158,6 @@ class Qwen3(Qwen2d5Chat):
                     content = msg.get('content', '')
                     if isinstance(content, list):
                         system_content = ' '.join(content)
-                    # 如果 content 是字符串，直接使用
                     elif isinstance(content, str):
                         system_content = content
 
