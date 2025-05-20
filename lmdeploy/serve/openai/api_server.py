@@ -1089,7 +1089,7 @@ async def startup_event():
         response = requests.post(url, headers=headers, json=data)
 
         if response.status_code != 200:
-            raise HTTPException(status_code=response.status_code, detail='Service registration failed')
+            raise HTTPException(status_code=400, detail='Service registration failed')
     except Exception as e:
         logger.error(f'Service registration failed: {e}')
 
@@ -1263,7 +1263,7 @@ def serve(model_path: str,
     uvicorn.run(app=app,
                 host=server_name,
                 port=server_port,
-                log_level=log_level.lower(),
+                log_level='info',
                 ssl_keyfile=ssl_keyfile,
                 ssl_certfile=ssl_certfile)
 

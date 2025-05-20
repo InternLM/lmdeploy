@@ -57,7 +57,6 @@ class SafetensorsLoader(BaseLoader):
             for shard in self.shards:
                 with safe_open(shard, 'pt') as f:
                     index.update({k: shard for k in f.keys()})
-        self.index = index
         # count layer-wise parameters
         for k in index.keys():
             match = re.findall(self.pattern, k)
@@ -67,13 +66,9 @@ class SafetensorsLoader(BaseLoader):
     def items(self):
         params = defaultdict(dict)
         for shard in self.shards:
-            filename = osp.split(shard)[-1]
             with safe_open(shard, 'pt') as f:
                 misc = []
                 for k in f.keys():
-                    if k not in self.index or self.index[k] != filename:
-                        print(f'skip {k} in {shard}')
-                        continue
                     match = re.findall(self.pattern, k)
                     if not match:
                         misc.append(k)
