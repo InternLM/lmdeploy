@@ -429,6 +429,7 @@ async def chat_completions_v1(raw_request: Request = None):
         sequence_end=True,
         do_preprocess=not isinstance(request.messages, str),  # text completion for string input
         adapter_name=adapter_name,
+        enable_thinking=request.enable_thinking,
     )
 
     def create_stream_response_json(index: int,

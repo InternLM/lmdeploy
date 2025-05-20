@@ -558,6 +558,7 @@ class AsyncEngine(LogitsMixin):
                                 sequence_start: bool,
                                 adapter_name: str,
                                 tools: Optional[List[object]] = None,
+                                enable_thinking: Optional[bool] = None,
                                 **kwargs):
         if do_preprocess:
             # use adapter's chat template if possible
@@ -566,7 +567,7 @@ class AsyncEngine(LogitsMixin):
                 chat_template = MODELS.module_dict[adapter_name]()
         else:
             chat_template = BaseChatTemplate()
-        prompt = chat_template.messages2prompt(prompt, sequence_start, tools=tools)
+        prompt = chat_template.messages2prompt(prompt, sequence_start, tools=tools, enable_thinking=enable_thinking)
         if prompt is None:
             raise ValueError(
                 f'You are using base template to handle chat task. Please specify a `--chat-template` name chosen from `lmdeploy list` if you want to use OpenAI messages input.'  # noqa
@@ -616,6 +617,7 @@ class AsyncEngine(LogitsMixin):
             skip_stop_tokens: bool = True,
             rewind_stop_tokens: bool = False,
             input_ids: Optional[List] = None,
+            enable_thinking: Optional[bool] = None,
             **kwargs):
         """Generate responses.
 
@@ -670,7 +672,8 @@ class AsyncEngine(LogitsMixin):
                                                         do_preprocess,
                                                         sequence_start,
                                                         adapter_name,
-                                                        tools=tools)
+                                                        tools=tools,
+                                                        enable_thinking=enable_thinking)
             prompt = prompt_input['prompt']
             input_ids = prompt_input['input_ids']
             self.request_logger.log_inputs(session_id=session_id,
