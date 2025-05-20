@@ -11,6 +11,7 @@ python3 -m sglang.bench_serving --backend sglang --dataset-name random --request
 """  # noqa
 import argparse
 import asyncio
+import csv
 import json
 import os
 import random
@@ -732,6 +733,12 @@ async def benchmark(
 
     if (metrics.median_ttft_ms is not None and metrics.mean_itl_ms is not None
             and metrics.output_throughput is not None):
+        FIELD_NAMES = [
+            'backend', 'dataset_name', 'sharegpt_output_len', 'random_input_len', 'random_output_len',
+            'random_range_ratio', 'request_rate', 'completed', 'total_input_tokens', 'total_output_tokens', 'duration',
+            'request_throughput', 'input_throughput', 'output_throughput', 'mean_e2e_latency_ms', 'mean_ttft_ms',
+            'mean_tpot_ms', 'mean_itl_ms'
+        ]
         result = {
             'backend': args.backend,
             'dataset_name': args.dataset_name,
@@ -750,6 +757,11 @@ async def benchmark(
             'random_range_ratio': args.random_range_ratio,
             'duration': benchmark_duration,
             'completed': metrics.completed,
+            'request_throughput': metrics.request_throughput,
+            'input_throughput': metrics.input_throughput,
+            'mean_ttft_ms': metrics.mean_ttft_ms,
+            'mean_tpot_ms': metrics.mean_tpot_ms,
+            'mean_itl_ms': metrics.mean_itl_ms,
         }
     else:
         print(f'Error running benchmark for request rate: {request_rate}')
@@ -763,11 +775,15 @@ async def benchmark(
         if args.dataset_name == 'random':
             output_file_name = f'{args.backend}_{now}_{args.num_prompts}_{args.random_input_len}_{args.random_output_len}.jsonl'  # noqa
         else:
-            output_file_name = f'{args.backend}_{now}_{args.num_prompts}_sharegpt.jsonl'  # noqa
+            output_file_name = f'{args.backend}_{now}_{args.num_prompts}_sharegpt.csv'  # noqa
 
-    # Append results to a JSONL file
-    with open(output_file_name, 'a') as file:
-        file.write(json.dumps(result) + '\n')
+    # Append results to a CSV file
+    file_exists = os.path.isfile(output_file_name)
+    with open(output_file_name, mode='a', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=FIELD_NAMES)
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(result)
 
     result = {
         'duration': benchmark_duration,

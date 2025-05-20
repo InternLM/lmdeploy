@@ -24,8 +24,8 @@ def get_launching_server_cmd(model_path, backend, **kwargs):
 
 def get_server_ip_port(backend, **kwargs):
     if backend in ['turbomind', 'pytorch']:
-        server_ip = kwargs.get('server_ip', '0.0.0.0')
-        server_port = kwargs.get('server_port', 23333)
+        server_ip = kwargs.get('server-ip', '0.0.0.0')
+        server_port = kwargs.get('server-port', 23333)
     elif backend == 'sglang':
         pass
     elif backend == 'vllm':
@@ -57,7 +57,6 @@ def get_client_cmd(backend, server_ip, server_port, **kwargs):
         cmd = [
             'python3', 'benchmark/profile_restful_api.py', '--backend', 'lmdeploy', '--host', server_ip, '--port',
             str(server_port)
-            # "--output-file", f"./benchmark/res/api_n{num_prompts}_in{in_len}_out{out_len}_dsv3.csv"
         ]
     elif backend == 'sglang':
         pass
@@ -80,6 +79,9 @@ def benchmark_server(model_path, backend, server_config, data_config):
     :param server_config: Configuration for the server.
     :param data_config: Configuration for the data.
     """
+    model_path = model_path or server_config['model_path']
+    server_config.pop('model_path')
+    model_name = model_path.split('/')[-1]
     server_cmd = get_launching_server_cmd(model_path, backend, **server_config)
     server_ip, server_port = get_server_ip_port(backend, **server_config)
     try:
@@ -91,6 +93,7 @@ def benchmark_server(model_path, backend, server_config, data_config):
             data_config = [data_config]
         assert isinstance(data_config, List) and all(isinstance(d, Dict) for d in data_config)
         for data in data_config:
+            data['output-file'] = f'benchmark_{model_name}_{backend}.csv'
             client_cmd = get_client_cmd(backend, server_ip, server_port, **data)
             print(f"Running client command: {' '.join(client_cmd)}")
             subprocess.run(client_cmd, check=True)
@@ -100,7 +103,7 @@ def benchmark_server(model_path, backend, server_config, data_config):
             time.sleep(60)
 
 
-def benchmark(model_path, backend, config_path):
+def benchmark(model_path=None, backend=None, config_path=None):
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
         server_setting = config['server']
