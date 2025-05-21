@@ -572,7 +572,6 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
                  num_experts: int,
                  hidden_dim: int,
                  renormalize: bool = False,
-                 enable_eplb: bool = False,
                  block_size: int = 128,
                  out_dtype: torch.dtype = torch.bfloat16,
                  layer_idx: int = 0):
@@ -584,7 +583,6 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
         self.block_size = block_size
         self.out_dtype = out_dtype
         self.layer_idx = layer_idx
-        self.enable_eplb = enable_eplb
         try:
             import deep_gemm
             DeepEPExpertsDeepGEMM.deep_gemm = deep_gemm
