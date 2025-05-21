@@ -43,7 +43,8 @@ class AgentProfiler:
         if envs.torch_profile_cuda:
             activities.append(ProfilerActivity.CUDA)
         if len(activities) > 0:
-            logger.debug(f'Profiler start on rank {rank}')
+            logger.warning(f'Profiler start on rank {rank}. '
+                           'Please Note that profiling might harm performance.')
             profiler = profile(activities=activities)
             profiler.start()
             self.profiler = profiler
@@ -58,7 +59,9 @@ class AgentProfiler:
 
         try:
             self.profiler.stop()
-            self.profiler.export_chrome_trace(f'{self.prefix}{self.rank}.json')
+            dump_path = f'{self.prefix}{self.rank}.json'
+            self.profiler.export_chrome_trace(dump_path)
+            logger.warning(f'Profiler dump to {dump_path}.')
         except Exception as e:
             logger.error(f'Failed to dump profile result: {e}')
 
