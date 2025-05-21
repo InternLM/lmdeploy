@@ -14,9 +14,13 @@ class DefaultsAndTypesHelpFormatter(argparse.HelpFormatter):
             if action.default is not argparse.SUPPRESS:
                 defaulting_nargs = [argparse.OPTIONAL, argparse.ZERO_OR_MORE]
                 if (action.option_strings or action.nargs in defaulting_nargs) and 'default' not in help.lower():
-                    help += '. Default: %(default)s'
+                    if not help.endswith('.'):
+                        help += '.'
+                    help += ' Default: %(default)s'
                 if action.type:
-                    help += '. Type: %(type)s'
+                    if not help.endswith('.'):
+                        help += '.'
+                    help += ' Type: %(type)s'
         return help
 
 
@@ -177,6 +181,18 @@ class ArgumentHelper:
                                    type=int,
                                    default=0,
                                    help='data parallelism rank, all ranks between 0 ~ dp should be created.')
+
+    @staticmethod
+    def node_rank(parser):
+        """add argument node_rank to parser."""
+
+        return parser.add_argument('--node-rank', type=int, default=0, help='The current node rank.')
+
+    @staticmethod
+    def num_nodes(parser):
+        """add argument num_nodes to parser."""
+
+        return parser.add_argument('--nnodes', type=int, default=1, help='The total node nums')
 
     @staticmethod
     def session_id(parser):

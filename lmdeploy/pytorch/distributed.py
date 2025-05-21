@@ -86,6 +86,10 @@ class DistContext:
                 ep_gpu_groups.append(group)
             ep_gpu_group = ep_gpu_groups[ep_group_id]
 
+        dp_cpu_group = None
+        if dp > 1:
+            dp_cpu_group = dist.new_group(ranks=range(dp), timeout=timeout, backend=cpu_backend)
+
         context = DistContext(
             rank=rank,
             world_size=world_size,
@@ -99,7 +103,7 @@ class DistContext:
             tp_cpu_group=tp_cpu_group,
             tp_gpu_group=tp_gpu_group,
             tp_gpu_groups=tp_gpu_groups,
-            dp_cpu_group=None,
+            dp_cpu_group=dp_cpu_group,
             dp_gpu_group=None,
             ep_gpu_group=ep_gpu_group,
             ep_gpu_groups=ep_gpu_groups,
