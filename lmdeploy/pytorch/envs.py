@@ -42,3 +42,7 @@ executor_backend = os.getenv('LMDEPLOY_EXECUTOR_BACKEND', None)
 torch_profile_cpu = env_to_bool('LMDEPLOY_PROFILE_CPU', False)
 torch_profile_cuda = env_to_bool('LMDEPLOY_PROFILE_CUDA', False)
 torch_profile_output_prefix = os.getenv('LMDEPLOY_ROFILE_OUT_PREFIX', 'lmdeploy_profile_')
+
+# ray timeline
+ray_timeline_enable = env_to_bool('LMDEPLOY_RAY_TIMELINE_ENABLE', False)
+ray_timeline_output_path = os.getenv('LMDEPLOY_RAY_TIMELINE_OUT_PATH', 'ray_timeline.json')

@@ -43,3 +43,12 @@ export LMDEPLOY_RAY_NSYS_OUT_PREFIX="/path/to/save/profile_"
 然后正常启动脚本或 api server 即可（注意**不要**添加 `nsys profile`）
 
 这样 profile 的结果就会被保存在 `LMDEPLOY_RAY_NSYS_OUT_PREFIX` 下，如果没有配置 `LMDEPLOY_RAY_NSYS_OUT_PREFIX`，可以在 `/tmp/ray/session_xxx/nsight` 目录下找到。
+
+## Ray timeline
+
+我们使用 ray 实现多卡支持，如果希望查看 ray timeline，可以配置如下环境变量：
+
+```bash
+export LMDEPLOY_RAY_TIMELINE_ENABLE=1
+export LMDEPLOY_RAY_TIMELINE_OUT_PATH="/path/to/save/timeline.json"
+```

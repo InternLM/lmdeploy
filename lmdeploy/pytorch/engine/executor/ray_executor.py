@@ -436,6 +436,9 @@ class RayExecutor(ExecutorBase):
 
     def release(self):
         """release."""
+        if _envs.ray_timeline_enable:
+            ray.timeline(_envs.ray_timeline_output_path)
+
         if self.dp == 1:
             try:
                 self.collective_rpc('release', timeout=5.0)

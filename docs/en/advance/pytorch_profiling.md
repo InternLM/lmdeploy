@@ -43,3 +43,12 @@ export LMDEPLOY_RAY_NSYS_OUT_PREFIX="/path/to/save/profile_"
 Then launch the script or API server as usual (Do **NOT** use nsys profile here).
 
 The profiling results will be saved under `LMDEPLOY_RAY_NSYS_OUT_PREFIX`. If `LMDEPLOY_RAY_NSYS_OUT_PREFIX` is not configured, you can find the results in `/tmp/ray/session_xxx/nsight`.
+
+## Ray timeline
+
+We use `ray` to support multi-device deployment. You can get the ray timeline with the environments below.
+
+```bash
+export LMDEPLOY_RAY_TIMELINE_ENABLE=1
+export LMDEPLOY_RAY_TIMELINE_OUT_PATH="/path/to/save/timeline.json"
+```
