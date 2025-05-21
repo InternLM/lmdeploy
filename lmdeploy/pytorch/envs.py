@@ -41,4 +41,4 @@ executor_backend = os.getenv('LMDEPLOY_EXECUTOR_BACKEND', None)
 # profiler
 torch_profile_cpu = env_to_bool('LMDEPLOY_PROFILE_CPU', False)
 torch_profile_cuda = env_to_bool('LMDEPLOY_PROFILE_CUDA', False)
-torch_profile_output_prefix = os.getenv('LMDEPLOY_ROFILE_OUT_PREFIX', None)
+torch_profile_output_prefix = os.getenv('LMDEPLOY_ROFILE_OUT_PREFIX', 'lmdeploy_profile_')
