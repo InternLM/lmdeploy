@@ -383,6 +383,8 @@ class TurboMind:
     def close(self):
         if self.model_comm is not None:
             self.model_comm = None
+        if hasattr(self, '_update_params_thread'):
+            del self._update_params_thread
 
     def create_instance(self, cuda_stream_id=0):
         """Create a turbomind instance.
