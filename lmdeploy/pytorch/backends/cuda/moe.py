@@ -6,6 +6,7 @@ import torch
 import torch.distributed as dist
 
 from lmdeploy.pytorch.backends.cuda.token_dispatcher import DeepEPTokenDispatcherLowLatency, TokenDispatcherBuilder
+from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.pytorch.kernels.cuda import fused_moe, fused_moe_w8a8
 from lmdeploy.pytorch.kernels.cuda.blocked_fp8_fused_moe import fused_moe_blocked_fp8
 from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import quant_fp8
@@ -592,11 +593,26 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
 
         try:
             from dlblas.layers.moe.ep_moe import build_deepep_moe
+            from dlblas.layers.moe.eplb import get_eplb_phy2log_metadata_by_layer
             self.use_dlblas = True
             self.build_deepep_moe = build_deepep_moe
+            self.get_eplb_phy2log_metadata_by_layer = get_eplb_phy2log_metadata_by_layer
         except ImportError:
             self.use_dlblas = False
             logger.warning('For higher performance, please install dlBLAS https://github.com/DeepLink-org/dlBLAS')
+
+    def ep_expert_list(self, world_size: int, rank: int):
+        """experts list of current rank."""
+        if get_dist_manager().current_context().dist_config.enable_eplb:
+            assert self.use_dlblas, 'Please install dlBLAS https://github.com/DeepLink-org/dlBLAS'
+            phy2log = self.get_eplb_phy2log_metadata_by_layer(self.layer_idx)
+            expert_per_rank = (self.num_experts + world_size - 1) // world_size
+            first_expert = rank * expert_per_rank
+            last_expert = min(first_expert + expert_per_rank, self.num_experts)
+            sliced_phy2log = phy2log[first_expert:last_expert].tolist()
+            return sliced_phy2log
+        else:
+            return super().ep_expert_list(world_size=world_size, rank=rank)
 
     def forward(self,
                 hidden_states: torch.Tensor,

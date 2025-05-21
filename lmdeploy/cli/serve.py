@@ -165,6 +165,7 @@ class SubCliServe:
         ArgumentHelper.dp(pt_group)
         ArgumentHelper.ep(pt_group)
         ArgumentHelper.enable_microbatch(pt_group)
+        ArgumentHelper.enable_eplb(pt_group)
         ArgumentHelper.role(pt_group)
         ArgumentHelper.migration_backend(pt_group)
         # multi-node serving args
@@ -329,6 +330,7 @@ class SubCliServe:
                                                  eager_mode=args.eager_mode,
                                                  max_prefill_token_num=args.max_prefill_token_num,
                                                  enable_microbatch=args.enable_microbatch,
+                                                 enable_eplb=args.enable_eplb,
                                                  role=EngineRole[args.role],
                                                  migration_backend=MigrationBackend[args.migration_backend])
         else:

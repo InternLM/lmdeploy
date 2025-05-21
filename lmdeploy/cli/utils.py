@@ -553,6 +553,12 @@ class ArgumentHelper:
                                    action='store_true',
                                    help='enable microbatch for specified model')
 
+    @staticmethod
+    def enable_eplb(parser):
+        """Add argument enable_eplb to parser."""
+
+        return parser.add_argument('--enable-eplb', action='store_true', help='enable eplb for specified model')
+
     # For Disaggregation
     @staticmethod
     def role(parser):
