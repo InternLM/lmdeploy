@@ -168,6 +168,7 @@ class StateDictLoader:
                 idx = int(match[0])
                 yield (idx, data)
 
+            self.que.task_done()
             torch.cuda.empty_cache()
 
 

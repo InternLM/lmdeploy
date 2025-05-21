@@ -334,6 +334,7 @@ class TurboMind:
         else:
             weights = request.serialized_named_tensors
         self._update_params_que.put(weights)
+        self._update_params_que.join()  # block until weights are processed
 
         if request.finished:
             self._update_params_que.put(None)
