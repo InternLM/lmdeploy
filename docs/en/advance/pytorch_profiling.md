@@ -11,11 +11,15 @@ We have integrated the PyTorch Profiler. You can enable it by setting environmen
 export LMDEPLOY_PROFILE_CPU=1
 # enable profile cuda
 export LMDEPLOY_PROFILE_CUDA=1
+# profile would start after 3 seconds
+export LMDEPLOY_PROFILE_DELAY=3
+# profile 10 seconds
+export LMDEPLOY_PROFILE_DURATION=10
 # prefix path to save profile files
-export LMDEPLOY_ROFILE_OUT_PREFIX="/path/to/save/profile_"
+export LMDEPLOY_PROFILE_OUT_PREFIX="/path/to/save/profile_"
 ```
 
-After the program exits, the profiling data will be saved to the path specified by `LMDEPLOY_ROFILE_OUT_PREFIX` for performance analysis.
+After the program exits, the profiling data will be saved to the path specified by `LMDEPLOY_PROFILE_OUT_PREFIX` for performance analysis.
 
 ## Nsight System
 

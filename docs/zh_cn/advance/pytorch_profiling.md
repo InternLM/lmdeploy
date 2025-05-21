@@ -11,11 +11,15 @@
 export LMDEPLOY_PROFILE_CPU=1
 # enable profile cuda
 export LMDEPLOY_PROFILE_CUDA=1
+# profile would start after 3 seconds
+export LMDEPLOY_PROFILE_DELAY=3
+# profile 10 seconds
+export LMDEPLOY_PROFILE_DURATION=10
 # prefix path to save profile files
-export LMDEPLOY_ROFILE_OUT_PREFIX="/path/to/save/profile_"
+export LMDEPLOY_PROFILE_OUT_PREFIX="/path/to/save/profile_"
 ```
 
-这样在退出程序后，统计信息会被存储在 `LMDEPLOY_ROFILE_OUT_PREFIX` 指定的地址，方便进行性能分析。
+这样在退出程序后，统计信息会被存储在 `LMDEPLOY_PROFILE_OUT_PREFIX` 指定的地址，方便进行性能分析。
 
 ## Nsight System
 

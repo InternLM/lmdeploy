@@ -8,6 +8,7 @@ from typing import Any, Dict
 
 import torch
 import torch.distributed as dist
+from torch.profiler import ProfilerActivity, profile, record_function
 
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.serve.openai.protocol import UpdateParamsRequest
@@ -29,41 +30,85 @@ logger = get_logger('lmdeploy')
 
 class AgentProfiler:
 
-    def __init__(self, rank: int):
-        from torch.profiler import ProfilerActivity, profile
-
+    def __init__(self, dist_ctx: DistContext, stream: torch.Stream):
         from lmdeploy.pytorch import envs
-        self.rank = rank
+        self.rank = dist_ctx.rank
+        self.dp_rank = dist_ctx.dp_rank
+        self.dp = dist_ctx.dp
+        self.stream = stream
         self.profiler = None
+        if self.dp == 1:
+            self.name = f'rank[{self.rank}]'
+        else:
+            self.name = f'dp_rank[{self.dp_rank}]'
 
+        self.delay = envs.torch_profile_delay
+        self.duration = envs.torch_profile_duration
+
+        self.profiler = self._build_profiler()
+        self.prefix = envs.torch_profile_output_prefix
+        self._task = None
+        self._started = False
+        if self.dp > 1 and self.duration < 0:
+            logger.warning('Do not support duration<=0 for dp > 1.')
+            self.profiler = None
+
+    def _build_profiler(self):
+        from lmdeploy.pytorch import envs
         activities = []
-
         if envs.torch_profile_cpu:
             activities.append(ProfilerActivity.CPU)
         if envs.torch_profile_cuda:
             activities.append(ProfilerActivity.CUDA)
         if len(activities) > 0:
-            logger.warning(f'Profiler start on rank {rank}. '
+            logger.warning(f'Profiler start on {self.name}. '
                            'Please Note that profiling might harm performance.')
             profiler = profile(activities=activities)
-            profiler.start()
-            self.profiler = profiler
+            return profiler
         else:
-            self.profiler = None
-        self.prefix = envs.torch_profile_output_prefix
+            return None
 
     def dump(self):
         """dump profile result."""
         if self.profiler is None:
             return
 
+        if not self._started:
+            logger.warning(f'Profiler {self.name} not started, skip dump.')
+            return
+
         try:
             self.profiler.stop()
-            dump_path = f'{self.prefix}{self.rank}.json'
+            rank = self.rank if self.dp == 1 else self.dp_rank
+            dump_path = f'{self.prefix}{rank}.json'
             self.profiler.export_chrome_trace(dump_path)
-            logger.warning(f'Profiler dump to {dump_path}.')
+            logger.warning(f'Profiler {self.name} dump to {dump_path}.')
         except Exception as e:
-            logger.error(f'Failed to dump profile result: {e}')
+            logger.error(f'Failed to dump profile {self.name} result: {e}')
+        finally:
+            self.profiler = None
+
+    async def profile_task(self):
+        """profile task."""
+        if self.profiler is None:
+            return
+
+        # start profiler with delay
+        await asyncio.sleep(self.delay)
+        self.profiler.start()
+        self._started = True
+
+        if self.duration <= 0:
+            return
+
+        # dump profiler
+        await asyncio.sleep(self.duration)
+        self.dump()
+
+    def create_task(self):
+        """create task."""
+        event_loop = asyncio.get_event_loop()
+        self._task = event_loop.create_task(self.profile_task())
 
 
 def msg_with_rank(rank: int, msg: str):
@@ -117,6 +162,7 @@ def model_forward(
     return dict(hidden_states=output, model_metas=model_metas)
 
 
+@record_function('stopping_criteria')
 def _batch_stopping_criteria(token_ids: torch.Tensor, stop_words: torch.Tensor, num_appendable_ids: torch.Tensor):
     """batched stopping criteria."""
     num_appendable_ids = num_appendable_ids - 1
@@ -222,6 +268,7 @@ class BaseModelAgent:
 
         self.patched_model = None
         self.cache_engine = None
+        self.profiler: AgentProfiler = None
 
     @contextmanager
     def all_context(self):
@@ -383,10 +430,13 @@ class BaseModelAgent:
             last_idx = seq_length.cumsum(-1) - 1
             return logits[last_idx, :]
 
-        split_logits = __get_last_logits()
-        logits_processor = FusedLogitsProcessor(sampling_inputs, ignore_eos, self.tokenizer)
-        logits = await logits_processor(all_ids, guided_input_ids, split_logits)
-        next_token_ids = logits_processor.sampling(logits)
+        # record function does not support async function
+        # so we can not decorate it on async_sampling_logits
+        with record_function('sampling_logits'):
+            split_logits = __get_last_logits()
+            logits_processor = FusedLogitsProcessor(sampling_inputs, ignore_eos, self.tokenizer)
+            logits = await logits_processor(all_ids, guided_input_ids, split_logits)
+            next_token_ids = logits_processor.sampling(logits)
 
         return next_token_ids
 
@@ -428,6 +478,7 @@ class BaseModelAgent:
 
         dist_ctx = get_dist_manager().current_context()
 
+        @record_function('update_inputs_for_next_step')
         def __update_inputs(next_token_ids, model_metas):
             """update inputs."""
             nonlocal all_ids, guided_input_ids, swap_in_map, swap_out_map
@@ -588,7 +639,7 @@ class BaseModelAgent:
             forward_inputs = await self._pre_in_que.get()
 
             logger.debug('preprocessing forward inputs.')
-            with torch.cuda.stream(self.out_stream):
+            with torch.cuda.stream(self.out_stream), record_function('inputs_H2D'):
                 for k in keys:
                     if k not in forward_inputs:
                         continue
@@ -598,7 +649,7 @@ class BaseModelAgent:
             self._in_que.put_nowait(forward_inputs)
 
     @staticmethod
-    def _on_finish_callback(task: asyncio.Task, ptasks: asyncio.Task, profiler=None) -> None:
+    def _on_finish_callback(task: asyncio.Task, ptasks: asyncio.Task) -> None:
         """raise exception on finish."""
         task_name = task.get_name()
         try:
@@ -609,9 +660,6 @@ class BaseModelAgent:
         except BaseException:
             logger.exception(f'Task <{task_name}> failed')
         finally:
-            if profiler is not None:
-                profiler.dump()
-
             for ptask in ptasks:
                 if not ptask.done():
                     ptask.cancel()
@@ -638,22 +686,44 @@ class BaseModelAgent:
         tasks_to_cancel.append(self._preprocess_task)
 
         # profiler
-        profiler = AgentProfiler(self.rank)
+        self.profiler = AgentProfiler(self.dist_ctx, self.stream)
+        self.profiler.create_task()
 
         # binding done task
         logger.debug('binding done callback.')
-        backgroup_done_callback = functools.partial(self._on_finish_callback, ptasks=tasks_to_cancel, profiler=profiler)
+        backgroup_done_callback = functools.partial(self._on_finish_callback, ptasks=tasks_to_cancel)
         self._background_task.add_done_callback(backgroup_done_callback)
         preprocess_done_callback = functools.partial(self._on_finish_callback, ptasks=tasks_to_cancel)
         self._preprocess_task.add_done_callback(preprocess_done_callback)
 
     def stop(self):
         """stop task."""
+        if self.dist_ctx.dp > 1:
+            return
+
+        if self.profiler is not None:
+            self.profiler.dump()
+
         if self._background_task is not None:
             if not self._background_task.done():
                 self._background_task.cancel()
 
+        if self._preprocess_task is not None:
+            if not self._preprocess_task.done():
+                self._preprocess_task.cancel()
+
     async def stop_async(self):
+        """stop task."""
+        if self.dist_ctx.dp > 1:
+            return
+
+        if self.profiler is not None:
+            # dirty hack for profiler
+            while not self.stream.query():
+                logger.debug('Profiler waiting for stream finish.')
+                await asyncio.sleep(1)
+            self.profiler.dump()
+
         if self._background_task is not None:
             if not self._background_task.done():
                 self._background_task.cancel()
@@ -662,6 +732,7 @@ class BaseModelAgent:
                 except asyncio.CancelledError:
                     logger.debug('ModelAgent background task cancelled.')
 
+        if self._preprocess_task is not None:
             if not self._preprocess_task.done():
                 self._preprocess_task.cancel()
                 try:
@@ -684,7 +755,7 @@ class BaseModelAgent:
         event = out.pop('event')
         while not event.query():
             await asyncio.sleep(0.001)
-        with torch.cuda.stream(self.out_stream):
+        with torch.cuda.stream(self.out_stream), record_function('outputs_D2H'):
             out['next_token_ids'] = out['next_token_ids'].cpu()
             out['stopped'] = out['stopped'].cpu()
             if out['logits'] is not None:
@@ -760,6 +831,7 @@ class BaseModelAgent:
         await asyncio.sleep(0)
         return output
 
+    @record_function('get_logits')
     def get_logits(self, hidden_states: torch.Tensor):
         """get logits of model output."""
         return self.patched_model.get_logits(hidden_states)
