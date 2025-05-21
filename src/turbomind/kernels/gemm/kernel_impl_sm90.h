@@ -248,7 +248,8 @@ public:
 
         // std::cout << "swizzle: " << swizzle << ", split: " << splits << "\n";
 
-        auto ec = cudaLaunchKernelEx(&config, func, tm_a, tm_b, tm_c, tm_u, tm_v, U, Udesc.ld, V, Vdesc.ld, sched);
+        auto ec = cudaLaunchKernelEx(
+            &config, func, tm_a, tm_b, tm_c, tm_u, tm_v, U, Udesc.ld, V, Vdesc.ld, D, sched, workspace.tensormaps);
         TM_CHECK_EQ(ec, cudaSuccess) << cudaGetErrorString(ec);
 
         // gemm_kernel_sm90<Gemm><<<grid, block, smem_size_, stream>>>(tm_a, tm_b, tm_c, (Tc*)C, Cdesc.ld, sched);

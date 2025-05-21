@@ -1,4 +1,5 @@
 #include <cstdlib>
+#include <cuda.h>
 #include <cuda_bf16.h>
 #include <functional>
 #include <numeric>
@@ -65,6 +66,9 @@ public:
         tie(Oa, Ob, Oc) = tie(c.oa, c.ob, c.oc);
         tie(Pa, Pu)     = tie(c.pa, c.pu);
         tie(Pb, Pv)     = tie(c.pb, c.pv);
+
+        workspace.tensormaps_size = 4096 * sizeof(CUtensorMap);
+        cudaMalloc(&workspace.tensormaps, workspace.tensormaps_size);
     }
 
     auto trans_(const Tensor& x, bool pred)
@@ -178,7 +182,7 @@ public:
                                 c_desc_,
                                 c_o_.raw_data(),
                                 c_desc_,
-                                {},
+                                workspace,
                                 stream_);
 
         TM_CHECK_EQ(status, 0);
@@ -269,6 +273,8 @@ private:
 
     Tensor c_f_;  // a_f * b_f
     Tensor c_o_;  // a_q * b_q
+
+    Workspace workspace{};
 
     RNG rng_;
 

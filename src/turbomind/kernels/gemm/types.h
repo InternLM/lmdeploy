@@ -184,6 +184,8 @@ struct Workspace {
     size_t barriers_size;
     void*  partials;
     size_t partials_size;
+    void*  tensormaps;
+    size_t tensormaps_size;
 };
 
 }  // namespace turbomind::gemm

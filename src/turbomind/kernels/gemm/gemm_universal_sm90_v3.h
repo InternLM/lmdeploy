@@ -7,6 +7,7 @@
 
 #include "cute/arch/cluster_sm90.hpp"
 #include "cute/arch/copy_sm90.hpp"
+#include "cute/arch/copy_sm90_desc.hpp"
 #include "cute/arch/copy_sm90_tma.hpp"
 #include "cute/arch/mma_sm90_desc.hpp"
 #include "cute/arch/mma_sm90_gmma.hpp"
@@ -263,7 +264,7 @@ struct GemmUniversalSm90_v3 {
 
     using Cluster = arch::Cluster<kMulticastB, kMulticastA, kRowMajor>;
 
-    using Scheduler = TileScheduler<kRowMajor, Cluster, false, false>;
+    using Scheduler = TileScheduler<kRowMajor, Cluster, true, true>;
 
     using ProducerBar = cutlass::arch::ClusterTransactionBarrier;
     using ConsumerBar = cutlass::arch::ClusterBarrier;
@@ -288,6 +289,7 @@ struct GemmUniversalSm90_v3 {
         __align__(1024) Array<Tc, TILE_M * TILE_N> C;
         __align__(128) uint64_t producer_bar[Stages];
         __align__(128) uint64_t consumer_bar[Stages];
+        __align__(128) CUtensorMap tma_desc_C[WARPGORUPS];
     };
 
     static constexpr int kSmemSize = sizeof(SharedStorage);
@@ -307,7 +309,9 @@ struct GemmUniversalSm90_v3 {
                                int                ldU,
                                const void*        V_,
                                int                ldV,
+                               void*              C,
                                Scheduler          sched,
+                               CUtensorMap*       tensormap_buf,
                                char*              smem_buf)
     {
         SharedStorage& storage = *reinterpret_cast<SharedStorage*>(smem_buf);
@@ -464,6 +468,7 @@ struct GemmUniversalSm90_v3 {
                             ConsumerBar::arrive(&consumer_bar[pipe_state.index()]);
                         }
                     }
+                    // __syncwarp();
                 };
 
                 if constexpr (kClusterSize > 1) {
@@ -471,8 +476,6 @@ struct GemmUniversalSm90_v3 {
                         for (; k_iter > 0; --k_iter) {
                             ProducerBar::wait(&producer_bar[pipe_state.index()], pipe_state.phase());
                             consumer_arrive();
-                            // smem_iter_A.Advance(pipe_state.index());
-                            // smem_iter_B.Advance(pipe_state.index());
                             ++pipe_state;
                         }
                         epi_barrier(0).arrive_and_wait_unaligned();
@@ -482,6 +485,7 @@ struct GemmUniversalSm90_v3 {
                 }
 
                 auto Copy = [k = cdiv(K, 128)](Tv* dst, const Tv* src) {
+                    PRAGMA_NO_UNROLL
                     for (int i = threadIdx.x % WARPGROUP_SIZE; i < k; i += WARPGROUP_SIZE) {
                         dst[i] = __ldg(&src[i]);
                     }
@@ -511,6 +515,8 @@ struct GemmUniversalSm90_v3 {
                     //     pred_V              = (pred_V >> (wg_id_n * tiles)) & ((1 << tiles) - 1);
                     // }
                 }
+
+                __syncwarp();
 
                 float scale_V[2];
                 auto  Load_V = [&] {
@@ -625,6 +631,11 @@ struct GemmUniversalSm90_v3 {
 
                 wg_barrier.sync();
 
+                void* Cdesc{};
+                if (threadIdx.x % WARPGROUP_SIZE / WARP_SIZE == 0) {
+                    Cdesc = update_tma_desc(tm_c, tensormap_buf, &storage.tma_desc_C[wg_idx], wg_idx, C, M);
+                }
+
                 Tc* smem_C = &storage.C[wg_idx_m * WG_TILE_M * TILE_N + wg_idx_n * WG_TILE_N];
 
                 // epilogue
@@ -671,7 +682,8 @@ struct GemmUniversalSm90_v3 {
 
                 if (wg_lane < LayoutC::C1) {
                     const int tma_n = wg_lane * LayoutC::C0;
-                    cute::SM90_TMA_STORE::copy(&tm_c,
+                    cute::tma_descriptor_fence_acquire((cute::TmaDescriptor*)Cdesc);
+                    cute::SM90_TMA_STORE::copy(Cdesc,
                                                &smem_C[wg_lane * WG_TILE_M * LayoutC::C0],
                                                offset_n + wg_idx_n * WG_TILE_N + tma_n,
                                                offset_m + wg_idx_m * WG_TILE_M);
@@ -703,6 +715,41 @@ struct GemmUniversalSm90_v3 {
         __device__ void arrive_and_wait_unaligned() {}
         __device__ void arrive_unaligned() {}
     };
+
+    __device__ void* update_tma_desc(const CUtensorMap& param_desc,
+                                     CUtensorMap*       gmem_desc,
+                                     CUtensorMap*       smem_desc,
+                                     int                wg_idx,
+                                     void*              global_addr,
+                                     int                dim)
+    {
+        uint32_t uint_ptr = cast_smem_ptr_to_uint(smem_desc);
+
+        const int lane_id = threadIdx.x % WARP_SIZE;
+
+        if (lane_id < sizeof(CUtensorMap) / sizeof(uint2)) {
+            ((uint2*)smem_desc)[lane_id] = ((uint2*)&param_desc)[lane_id];
+        }
+
+        __syncwarp();
+
+        if (lane_id == 0) {
+            // clang-format off
+            asm volatile("tensormap.replace.tile.global_address.shared::cta.b1024.b64 [%0], %1;" ::"r"(uint_ptr), "l"(global_addr));
+            asm volatile("tensormap.replace.tile.global_dim.shared::cta.b1024.b32 [%0], 1, %1;" ::"r"(uint_ptr), "r"(dim));
+            // clang-format on
+        }
+
+        __syncwarp();
+
+        auto gmem_ptr = (cute::TmaDescriptor*)&gmem_desc[blockIdx.x * WARPGORUPS + wg_idx];
+
+        // clang-format off
+        asm volatile("tensormap.cp_fenceproxy.global.shared::cta.tensormap::generic.release.gpu.sync.aligned [%0], [%1], 128;" :: "l"(gmem_ptr), "r"(uint_ptr));
+        // clang-format on
+
+        return gmem_ptr;
+    }
 };
 
 extern __shared__ char smem_buf[];
@@ -717,12 +764,14 @@ __global__ void __launch_bounds__(Kernel::CTA_SIZE, 1) gemm_kernel_sm90(const __
                                                                         int                                 ldU,
                                                                         const void*                         V_,
                                                                         int                                 ldV,
-                                                                        typename Kernel::Scheduler          sched)
+                                                                        void*                               C,
+                                                                        typename Kernel::Scheduler          sched,
+                                                                        void* tensormap_buf)
 {
 #if __CUDA_ARCH__
     if constexpr (Kernel::Arch::is_compatible(__CUDA_ARCH__)) {
         Kernel kernel;
-        kernel(tm_a, tm_b, tm_c, tm_u, tm_v, U_, ldU, V_, ldV, sched, smem_buf);
+        kernel(tm_a, tm_b, tm_c, tm_u, tm_v, U_, ldU, V_, ldV, C, sched, (CUtensorMap*)tensormap_buf, smem_buf);
     }
 #endif
 }

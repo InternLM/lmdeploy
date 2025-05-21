@@ -19,11 +19,13 @@ struct LlamaLinear::Impl {
     {
         workspace_ = {};
 
-        workspace_.barriers_size = gemm::Gemm::kBarriersSize;
-        workspace_.partials_size = gemm::Gemm::kPartialsSize;
+        workspace_.barriers_size   = gemm::Gemm::kBarriersSize;
+        workspace_.partials_size   = gemm::Gemm::kPartialsSize;
+        workspace_.tensormaps_size = 4096 * 128;  // maximum 4096 tensor maps
 
         check_cuda_error(cudaMallocAsync(&workspace_.barriers, workspace_.barriers_size, stream_));
         check_cuda_error(cudaMallocAsync(&workspace_.partials, workspace_.partials_size, stream_));
+        check_cuda_error(cudaMallocAsync(&workspace_.tensormaps, workspace_.partials_size, stream_));
         check_cuda_error(cudaMemsetAsync(workspace_.barriers, 0, workspace_.barriers_size, stream_));
 
         check_cuda_error(cublasCreate(&cublas_));
@@ -40,6 +42,7 @@ struct LlamaLinear::Impl {
         cublasDestroy(cublas_);
         cudaFreeAsync(workspace_.barriers, stream_);
         cudaFreeAsync(workspace_.partials, stream_);
+        cudaFreeAsync(workspace_.tensormaps, stream_);
         workspace_ = {};
     }
 
@@ -136,13 +139,11 @@ struct LlamaLinear::Impl {
             (int)quant.stride(0),
         };
 
-        const MatrixLayout u_desc{
-            scale.dtype(),  //
-            kColMajor,
-            (int)scale.shape(0),
-            (int)scale.shape(1),
-            (int)scale.stride(0) * (int)scale.stride(1)
-        };
+        const MatrixLayout u_desc{scale.dtype(),  //
+                                  kColMajor,
+                                  (int)scale.shape(0),
+                                  (int)scale.shape(1),
+                                  (int)scale.stride(0) * (int)scale.stride(1)};
 
         const MatrixLayout c_desc{
             output.dtype(),  //
