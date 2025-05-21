@@ -144,6 +144,7 @@ class TurboMind:
         update_parallel_config(_engine_config)
 
         self.gpu_count = _engine_config.device_num
+        self.devices = _engine_config.devices
 
         self.tokenizer = tokenizer
         if model_source == ModelSource.WORKSPACE:
@@ -174,7 +175,9 @@ class TurboMind:
         if model_source == ModelSource.WORKSPACE:
             return
 
-        self._tm_model.export()
+        with torch.cuda.device(self.devices[0]):
+            self._tm_model.export()
+
         self._check_unloaded_tm_params()
 
     def _process_weights(self):
@@ -322,7 +325,8 @@ class TurboMind:
             def _update_thread():
                 tm_model = self._tm_model
                 tm_model.input_model.model_path = self._update_params_que
-                tm_model.export()
+                with torch.cuda.device(self.devices[0]):
+                    tm_model.export()
 
             self._update_params_thread = Thread(target=_update_thread)
             self._update_params_thread.start()
