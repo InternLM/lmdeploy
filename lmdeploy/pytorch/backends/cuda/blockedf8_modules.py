@@ -42,7 +42,7 @@ class TritonLinearBlockedF8Impl(LinearBlockedF8Impl):
         """forward."""
         x_shape = x.shape
         x = x.flatten(0, -2)
-        input_quant, input_scale = quant_fp8(x, self.block_size, dtype=weight.dtype)
+        input_quant, input_scale = quant_fp8(x, self.block_size, dtype=weight.dtype, trans_scale=True)
 
         out = blocked_gemm_fp8(input_quant, input_scale, weight.t(), scale.t(), out_dtype=x.dtype)
         if bias is not None:
