@@ -701,5 +701,4 @@ class SchedulerSequence:
         event_type: EngineCoreEventType,
         timestamp: Optional[float] = None,
     ) -> None:
-        print(f'=> record event {event_type}, {timestamp}')
         self.engine_core_events.append(EngineCoreEvent.new_event(event_type, timestamp))

@@ -290,12 +290,11 @@ class AsyncEngine(LogitsMixin):
         # build status loggers
         # independent set for each DP rank, each set contains 1. cli logger 2. prometheus logger
         logger.info(f'enable metrics {backend_config.enable_metrics}')
-        backend_config.enable_metrics = True  # FIXME, how to set to True in pipeline. hard-coded for now
         self.stat_loggers: List[List[StatLoggerBase]] = setup_loggers(enable_metrics=backend_config.enable_metrics,
-                                                                      model_name=model_name,
+                                                                      model_name=self.model_name,
                                                                       engine_num=backend_config.dp)
-        print(f'dp: {backend_config.dp} dp_rank: {self.backend_config.dp_rank}')
-        print(self.stat_loggers)
+        logger.info(f'dp: {backend_config.dp} dp_rank: {self.backend_config.dp_rank}')
+
         if backend_config.enable_metrics:
             assert self.stat_loggers is not None
             assert self.backend_config.dp_rank < len(self.stat_loggers)
@@ -701,12 +700,12 @@ class AsyncEngine(LogitsMixin):
                                            prompt_token_ids=input_ids,
                                            gen_config=gen_config,
                                            adapter_name=adapter_name)
-            logger.info(f'session={session_id}, '
-                        f'history_tokens={self.id2step[session_id]}, '
-                        f'input_tokens={len(input_ids)}, '
-                        f'max_new_tokens={gen_config.max_new_tokens}, '
-                        f'seq_start={sequence_start}, seq_end={sequence_end}, '
-                        f'step={step}, prep={do_preprocess}')
+            logger.debug(f'session={session_id}, '
+                         f'history_tokens={self.id2step[session_id]}, '
+                         f'input_tokens={len(input_ids)}, '
+                         f'max_new_tokens={gen_config.max_new_tokens}, '
+                         f'seq_start={sequence_start}, seq_end={sequence_end}, '
+                         f'step={step}, prep={do_preprocess}')
         else:
             # TODO(lvhan) VLM doesn't support input_ids as an argument.
             # Figure out a graceful way to handle the invalid input
@@ -816,9 +815,9 @@ class AsyncEngine(LogitsMixin):
                     if not response.endswith('�'):
                         # avoid returning the last response twice
                         response = ''
-                    logger.info(f'session {session_id} finished, reason '
-                                f'"{finish_reason}", input_tokens '
-                                f'{len(input_ids)}, outupt_tokens {gen_len}')
+                    logger.debug(f'session {session_id} finished, reason '
+                                 f'"{finish_reason}", input_tokens '
+                                 f'{len(input_ids)}, outupt_tokens {gen_len}')
                     yield GenOut(response,
                                  self.id2step[session_id],
                                  len(input_ids),

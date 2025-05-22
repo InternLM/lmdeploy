@@ -59,10 +59,6 @@ class LoggingStatLogger(StatLoggerBase):
 
     def log(self):
         now = time.perf_counter()
-        # print(f'current DP: {self.dp_rank}')
-        # print(f'last: {self.last_log_time} now: {now}')
-        # print(f'self.num_prompt_tokens: {self.num_prompt_tokens}')
-        # print(f'self.num_generation_tokens: {self.num_generation_tokens}')
         prompt_throughput = self._get_throughput(self.num_prompt_tokens, now)
         generation_throughput = self._get_throughput(self.num_generation_tokens, now)
 
@@ -71,7 +67,6 @@ class LoggingStatLogger(StatLoggerBase):
         scheduler_stats = self.last_scheduler_stats
 
         # Format and print output.
-        # logger.warning(
         logger.info(
             'DP: %d, '
             'Avg prompt throughput: %.1f tokens/s, '
@@ -97,7 +92,8 @@ class PrometheusStatLogger(StatLoggerBase):
             if hasattr(collector, '_name') and 'lmdeploy' in collector._name:
                 prometheus_client.REGISTRY.unregister(collector)
 
-        max_model_len = 4096  # FIXME, hard code now, get from model config
+        # FIXME, get from model config, hard coded for now
+        max_model_len = 32768
 
         # config Information
         self.info_backend_config = prometheus_client.Info(name='lmdeploy:backend_config',
@@ -139,17 +135,14 @@ class PrometheusStatLogger(StatLoggerBase):
             documentation='Number of generation tokens processed.',
             labelnames=labelnames).labels(*labelvalues)
 
-        # from lmdeploy.messages import ResponseType
-        # self.counter_request_success: dict[ResponseType,
-        #                                    prometheus_client.Counter] = {}
-        # counter_request_success_base = prometheus_client.Counter(
-        #     name="lmdeploy:request_success_total",
-        #     documentation="Count of successfully processed requests.",
-        #     labelnames=labelnames + ["finished_reason"])
-        # for reason in FinishReason:
-        #     self.counter_request_success[
-        #         reason] = counter_request_success_base.labels(*(labelvalues +
-        #                                                         [str(reason)]))
+        from lmdeploy.messages import ResponseType
+        self.counter_request_success: dict[ResponseType, prometheus_client.Counter] = {}
+        counter_request_success_base = prometheus_client.Counter(
+            name='lmdeploy:request_success_total',
+            documentation='Count of successfully processed requests.',
+            labelnames=labelnames + ['finished_reason'])
+        for reason in ResponseType:
+            self.counter_request_success[reason] = counter_request_success_base.labels(*(labelvalues + [str(reason)]))
 
         #
         # Histograms of counts
@@ -168,13 +161,15 @@ class PrometheusStatLogger(StatLoggerBase):
                 buckets=build_1_2_5_buckets(max_model_len),
                 labelnames=labelnames).labels(*labelvalues)
 
-        # FIXME, build_cudagraph_buckets
-        # self.histogram_iteration_tokens = \
-        #     prometheus_client.Histogram(
-        #         name="lmdeploy:iteration_tokens_total",
-        #         documentation="Histogram of number of tokens per engine_step.",
-        #         buckets=build_cudagraph_buckets(vllm_config),
-        #         labelnames=labelnames).labels(*labelvalues)
+        self.histogram_iteration_tokens = \
+            prometheus_client.Histogram(
+                name='lmdeploy:iteration_tokens_total',
+                documentation='Histogram of number of tokens per engine_step.',
+                buckets=[
+                    1, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192,
+                    16384
+                ],
+                labelnames=labelnames).labels(*labelvalues)
 
         self.histogram_max_num_generation_tokens_request = \
             prometheus_client.Histogram(
@@ -256,24 +251,6 @@ class PrometheusStatLogger(StatLoggerBase):
                 buckets=request_latency_buckets,
                 labelnames=labelnames).labels(*labelvalues)
 
-    # def log_metrics_info(self, type: str, config_obj: SupportsMetricsInfo):
-    #     metrics_info = config_obj.metrics_info()
-
-    #     name, documentation = None, None
-    #     if type == "cache_config":
-    #         name = "lmdeploy:cache_config_info"
-    #         documentation = "Information of the LLMEngine CacheConfig"
-    #     assert name is not None, f"Unknown metrics info type {type}"
-
-    #     # Info type metrics are syntactic sugar for a gauge permanently set to 1
-    #     # Since prometheus multiprocessing mode does not support Info, emulate
-    #     # info here with a gauge.
-    #     info_gauge = prometheus_client.Gauge(
-    #         name=name,
-    #         documentation=documentation,
-    #         labelnames=metrics_info.keys()).labels(**metrics_info)
-    #     info_gauge.set(1)
-
     def record(self, scheduler_stats: SchedulerStats, iteration_stats: Optional[IterationStats]):
         """Log to prometheus."""
 
@@ -287,24 +264,17 @@ class PrometheusStatLogger(StatLoggerBase):
 
         self.counter_prompt_tokens.inc(iteration_stats.num_prompt_tokens)
         self.counter_generation_tokens.inc(iteration_stats.num_generation_tokens)
-        self.counter_generation_tokens.inc(iteration_stats.num_generation_tokens)
-        # self.histogram_iteration_tokens.observe(
-        #     iteration_stats.num_prompt_tokens + \
-        #     iteration_stats.num_generation_tokens)
+        self.histogram_iteration_tokens.observe(iteration_stats.num_prompt_tokens +
+                                                iteration_stats.num_generation_tokens)
 
-        # import pdb; pdb.set_trace()
         for ttft in iteration_stats.time_to_first_tokens_iter:
-            # print(f'ttft: {ttft}')
             self.histogram_time_to_first_token.observe(ttft)
 
-        # import pdb; pdb.set_trace()
         for tpot in iteration_stats.time_per_output_tokens_iter:
-            # print(f'tpot: {tpot}')
             self.histogram_time_per_output_token.observe(tpot)
 
-        # import pdb; pdb.set_trace()
         for finished_request in iteration_stats.finished_requests:
-            # self.counter_request_success[finished_request.finish_reason].inc()
+            self.counter_request_success[finished_request.finish_reason].inc()
             self.histogram_e2e_time_request.observe(finished_request.e2e_latency)
             self.histogram_queue_time_request.observe(finished_request.queued_time)
             self.histogram_prefill_time_request.observe(finished_request.prefill_time)
@@ -312,8 +282,6 @@ class PrometheusStatLogger(StatLoggerBase):
             self.histogram_decode_time_request.observe(finished_request.decode_time)
             self.histogram_num_prompt_tokens_request.observe(finished_request.num_prompt_tokens)
             self.histogram_num_generation_tokens_request.observe(finished_request.num_generation_tokens)
-            # self.histogram_max_tokens_request.observe(
-            #     finished_request.max_tokens_param)
 
 
 def build_buckets(mantissa_lst: List[int], max_value: int) -> List[int]:

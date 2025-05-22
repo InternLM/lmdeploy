@@ -1252,7 +1252,7 @@ def serve(model_path: str,
         task = None
         try:
             if backend_config.enable_metrics:
-                log_interval = 1.  # FIXME: change this
+                log_interval = 3.  # FIXME: change this
 
                 async def _force_log():
                     while True:
