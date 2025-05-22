@@ -3,13 +3,16 @@ import asyncio
 import copy
 import logging
 import os
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import torch
 
-from lmdeploy.messages import PytorchEngineConfig, ResponseType
+from lmdeploy.messages import EngineCoreEvent, PytorchEngineConfig, ResponseType
+from lmdeploy.metrics.loggers import StatLoggerBase
+from lmdeploy.metrics.stats import IterationStats, SchedulerStats
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model, logging_timer
@@ -46,6 +49,10 @@ class InferOutput:
     # when Prefill Engine is Done.
     cache_block_ids: List[int] = None
 
+    # for logging
+    engine_core_timestamp: float = None
+    engine_core_events: List[EngineCoreEvent] = field(default_factory=list)
+
 
 def _tensorlize_block_offsets(block_offsets, dtype=torch.int32):
     """tensorlize block_offsets."""
@@ -78,7 +85,8 @@ def _build_scheduler_config(engine_config: PytorchEngineConfig):
     """build scheduler config."""
     scheduler_config = SchedulerConfig(max_batches=engine_config.max_batch_size,
                                        max_session_len=engine_config.session_len,
-                                       prefill_interval=engine_config.prefill_interval)
+                                       prefill_interval=engine_config.prefill_interval,
+                                       enable_metrics=engine_config.enable_metrics)
     return scheduler_config
 
 
@@ -324,6 +332,7 @@ class Engine:
         self.tp = engine_config.tp
         self.dp = engine_config.dp
         self.dp_rank = engine_config.dp_rank
+        print(f'engine dp_rank: {self.dp_rank}')
 
         # download models and adapters
         if not os.path.exists(model_path):
@@ -386,6 +395,13 @@ class Engine:
 
         # for migration loop management
         self.migration_event: asyncio.Event = None
+
+    @staticmethod
+    def _record_stats(stat_loggers: StatLoggerBase, scheduler_stats: SchedulerStats, iteration_stats: IterationStats):
+        """Log stats to all registered loggers."""
+        # [LoggingStatLogger, PrometheusStatLogger]
+        for stat_logger in stat_loggers:
+            stat_logger.record(scheduler_stats=scheduler_stats, iteration_stats=iteration_stats)
 
     @classmethod
     def from_pretrained(cls,
@@ -764,7 +780,7 @@ class Engine:
                 msg.status = MessageStatus.STOPPED
 
     def _make_infer_outputs(self, next_token_ids: torch.LongTensor, running: SeqList, logits: torch.Tensor,
-                            stopped: torch.Tensor, model_metas: List[Dict[str, Any]]):
+                            stopped: torch.Tensor, model_metas: List[Dict[str, Any]], engine_core_timestamp: float):
         """make infer output."""
 
         seq_length = [seq.num_token_ids for seq in running]
@@ -790,7 +806,9 @@ class Engine:
                               resp=msg.resp,
                               finish=finish,
                               token_ids=token_ids,
-                              cache_block_ids=cache_block_ids)
+                              cache_block_ids=cache_block_ids,
+                              engine_core_timestamp=engine_core_timestamp,
+                              engine_core_events=msg.engine_core_events)
             outputs[session_id] = out
 
             if msg.return_logits:
@@ -959,8 +977,50 @@ class Engine:
         def __send_resps(step_outputs: List[InferOutput]):
             """send response callback."""
             __log_resps(step_outputs)
+
+            iteration_stats = IterationStats()
+            scheduler_stats = SchedulerStats(num_running_reqs=self.scheduler.num_running(),
+                                             num_waiting_reqs=self.scheduler.num_waiting(),
+                                             gpu_cache_usage=self.scheduler.usage)
+
             for out in step_outputs:
+                if self.engine_config.enable_metrics:
+                    session = self.scheduler.sessions.get(out.session_id)
+                    if session is None:
+                        logger.warning(f'Session {out.session_id} not found. Skipping stats update.')
+                        continue
+
+                    sequences = list(session.sequences.values())
+                    if not sequences:
+                        logger.warning(f'No sequences found for session {out.session_id}. Skipping stats update.')
+                        continue
+
+                    msg = sequences[0]
+                    req_state = getattr(msg, 'req_state', None)
+                    if req_state is None:
+                        logger.warning(f'req_state not found for session {out.session_id}. Skipping stats update.')
+                        continue
+
+                    if req_state and req_state.stats is not None:
+                        # update stats from output
+                        iteration_stats.update_from_output(output=out,
+                                                           engine_core_timestamp=out.engine_core_timestamp,
+                                                           is_prefilling=req_state.is_prefilling,
+                                                           prompt_len=req_state.prompt_len,
+                                                           req_stats=req_state.stats)
+                        # update stats if request is finished
+                        if out.finish:
+                            iteration_stats.update_from_finished_request(finish_reason=out.resp.type,
+                                                                         num_prompt_tokens=req_state.prompt_len,
+                                                                         req_stats=req_state.stats)
+
                 __send_resp(out)
+
+            if self.engine_config.enable_metrics:
+                assert self.stat_loggers is not None, 'stat loggers cannot be None when enabling metrics'
+                self._record_stats(stat_loggers=self.stat_loggers,
+                                   scheduler_stats=scheduler_stats,
+                                   iteration_stats=iteration_stats)
 
         while True:
             num_outs = que.qsize()
@@ -1049,9 +1109,13 @@ class Engine:
                 if idx >= num_loops - 1:
                     scheduler.collect_migration_done()
                     forward_inputs, next_running = await inputs_maker.prefetch_next_inputs()
+
+                engine_core_timestamp = time.perf_counter()  # capture timestamp for logging
                 out = await self.executor.get_output_async()
                 if len(out) > 0:
-                    step_outputs = self._make_infer_outputs(**out, running=running)
+                    step_outputs = self._make_infer_outputs(**out,
+                                                            running=running,
+                                                            engine_core_timestamp=engine_core_timestamp)
                     resp_que.put_nowait(step_outputs)
             scheduler.unlock_running(running)
             has_runable_event.set()

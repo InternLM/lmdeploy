@@ -3,10 +3,11 @@
 
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, List
 
 if TYPE_CHECKING:
-    from lmdeploy.messages import EngineCoreEvent, EngineOutput, ResponseType
+    from lmdeploy.messages import EngineCoreEvent, ResponseType
+    from lmdeploy.pytorch.engine import InferOutput
 
 
 @dataclass
@@ -77,7 +78,7 @@ class IterationStats:
         """Calculate an interval relative to this iteration's timestamp."""
         return self.iteration_timestamp - start
 
-    def update_from_output(self, output: 'EngineOutput', engine_core_timestamp: float, is_prefilling: bool,
+    def update_from_output(self, output: 'InferOutput', engine_core_timestamp: float, is_prefilling: bool,
                            prompt_len: int, req_stats: RequestStateStats):
         num_new_generation_tokens = len(output.token_ids)
 
@@ -88,32 +89,32 @@ class IterationStats:
 
             first_token_latency = self._time_since(req_stats.arrival_time)
             self.time_to_first_tokens_iter.append(first_token_latency)
-            print(f'req_stats.arrival_time: {req_stats.arrival_time}, first_token_latency: {first_token_latency}')
+            # print(f'req_stats.arrival_time: {req_stats.arrival_time}, first_token_latency: {first_token_latency}')
 
         req_stats.num_generation_tokens += num_new_generation_tokens
 
         # Process request-level engine core events
-        if output.events is not None:
-            self.update_from_events(output.events, req_stats)
+        if output.engine_core_events is not None:
+            self.update_from_events(output.engine_core_events, req_stats)
 
         # Process the batch-level "new tokens" engine core event
         if is_prefilling:
             req_stats.first_token_ts = engine_core_timestamp
-            print(f'req_stats.first_token_ts {req_stats.first_token_ts}')
+            # print(f'req_stats.first_token_ts {req_stats.first_token_ts}')
         else:
             tpot = engine_core_timestamp - req_stats.last_token_ts
             self.time_per_output_tokens_iter.append(tpot)
-            print(f'tpot {tpot} = engine_core_timestamp: {engine_core_timestamp} \
-                    - req_stats.last_token_ts: {req_stats.last_token_ts}')
+            # print(f'tpot {tpot} = engine_core_timestamp: {engine_core_timestamp} \
+            #         - req_stats.last_token_ts: {req_stats.last_token_ts}')
 
         req_stats.last_token_ts = engine_core_timestamp
-        print(f'set req_stats.last_token_ts: {engine_core_timestamp}')
+        # print(f'set req_stats.last_token_ts: {engine_core_timestamp}')
 
-    def update_from_events(self, events: list['EngineCoreEvent'], req_stats: RequestStateStats):
+    def update_from_events(self, engine_core_events: List['EngineCoreEvent'], req_stats: RequestStateStats):
         # Avoid circular dependency
         from lmdeploy.messages import EngineCoreEventType
 
-        for event in events:
+        for event in engine_core_events:
             if event.type == EngineCoreEventType.QUEUED:
                 req_stats.queued_ts = event.timestamp
             elif event.type == EngineCoreEventType.SCHEDULED:

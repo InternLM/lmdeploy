@@ -21,6 +21,7 @@ from lmdeploy import Tokenizer
 from lmdeploy.archs import get_model_arch
 from lmdeploy.logger import RequestLogger
 from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, Response, ResponseType, TurbomindEngineConfig
+from lmdeploy.metrics.loggers import StatLoggerBase, setup_loggers
 from lmdeploy.model import MODELS, BaseChatTemplate, ChatTemplateConfig, best_match_model
 from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.serve.utils import LogitsMixin
@@ -286,6 +287,20 @@ class AsyncEngine(LogitsMixin):
 
         logger.info(f'updated backend_config={self.backend_config}')
 
+        # build status loggers
+        # independent set for each DP rank, each set contains 1. cli logger 2. prometheus logger
+        logger.info(f'enable metrics {backend_config.enable_metrics}')
+        backend_config.enable_metrics = True  # FIXME, how to set to True in pipeline. hard-coded for now
+        self.stat_loggers: List[List[StatLoggerBase]] = setup_loggers(enable_metrics=backend_config.enable_metrics,
+                                                                      model_name=model_name,
+                                                                      engine_num=backend_config.dp)
+        print(f'dp: {backend_config.dp} dp_rank: {self.backend_config.dp_rank}')
+        print(self.stat_loggers)
+        if backend_config.enable_metrics:
+            assert self.stat_loggers is not None
+            assert self.backend_config.dp_rank < len(self.stat_loggers)
+            self.engine.stat_loggers = self.stat_loggers[backend_config.dp_rank]
+
         # parameters for member functions
         self.session_len = _get_and_verify_max_len(self.hf_tm_cfg, self.backend_config.session_len)
         self.stop_words = _stop_words(self.chat_template.stop_words, self.tokenizer)
@@ -376,6 +391,11 @@ class AsyncEngine(LogitsMixin):
                                 adapter_name=adapter_name,
                                 use_tqdm=use_tqdm,
                                 **kwargs)
+
+    async def do_log_stats(self, ) -> None:
+        for each_dp_engine_loggers in self.stat_loggers:
+            for stat_logger in each_dp_engine_loggers:
+                stat_logger.log()
 
     async def stop_session(self, session_id: int):
         """Stop a session by a session_id."""
