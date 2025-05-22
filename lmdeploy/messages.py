@@ -308,6 +308,7 @@ class PytorchEngineConfig:
         empty_init (bool): Whether to load the model weights, you should set
             it to True if you want to update weights after create the pipeline
         enable_microbatch (bool): enable microbatch for specified model
+        enable_eplb (bool): enable eplb for specified model
         role (EngineRole): role of engin, options: ['Hybrid', 'Prefill',
             'Decode']. Default to `EngineRole.Hybrid`.
         migration_backend: migration backend. options: ['DLSlime'].
@@ -338,6 +339,7 @@ class PytorchEngineConfig:
     distributed_executor_backend: str = None
     empty_init: bool = False
     enable_microbatch: bool = False
+    enable_eplb: bool = False
 
     role: EngineRole = EngineRole.Hybrid
     migration_backend: MigrationBackend = MigrationBackend.DLSlime
