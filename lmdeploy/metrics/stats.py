@@ -57,7 +57,6 @@ class IterationStats:
         self.iteration_timestamp = time.perf_counter()
         self.num_generation_tokens = 0
         self.num_prompt_tokens = 0
-        self.num_preempted_reqs = 0
         self.finished_requests: list[FinishedRequestStats] = []
         self.time_to_first_tokens_iter: list[float] = []
         self.time_per_output_tokens_iter: list[float] = []
@@ -68,7 +67,6 @@ class IterationStats:
                 f'  iteration_timestamp={self.iteration_timestamp:.6f},\n'
                 f'  num_generation_tokens={self.num_generation_tokens},\n'
                 f'  num_prompt_tokens={self.num_prompt_tokens},\n'
-                f'  num_preempted_reqs={self.num_preempted_reqs},\n'
                 f'  finished_requests_count={len(self.finished_requests)},\n'
                 f'  time_to_first_tokens_iter={self.time_to_first_tokens_iter},\n'
                 f'  time_per_output_tokens_iter={self.time_per_output_tokens_iter},\n'
@@ -89,7 +87,6 @@ class IterationStats:
 
             first_token_latency = self._time_since(req_stats.arrival_time)
             self.time_to_first_tokens_iter.append(first_token_latency)
-            # print(f'req_stats.arrival_time: {req_stats.arrival_time}, first_token_latency: {first_token_latency}')
 
         req_stats.num_generation_tokens += num_new_generation_tokens
 
@@ -100,15 +97,11 @@ class IterationStats:
         # Process the batch-level "new tokens" engine core event
         if is_prefilling:
             req_stats.first_token_ts = engine_core_timestamp
-            # print(f'req_stats.first_token_ts {req_stats.first_token_ts}')
         else:
             tpot = engine_core_timestamp - req_stats.last_token_ts
             self.time_per_output_tokens_iter.append(tpot)
-            # print(f'tpot {tpot} = engine_core_timestamp: {engine_core_timestamp} \
-            #         - req_stats.last_token_ts: {req_stats.last_token_ts}')
 
         req_stats.last_token_ts = engine_core_timestamp
-        # print(f'set req_stats.last_token_ts: {engine_core_timestamp}')
 
     def update_from_events(self, engine_core_events: List['EngineCoreEvent'], req_stats: RequestStateStats):
         # Avoid circular dependency

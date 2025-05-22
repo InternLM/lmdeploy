@@ -230,9 +230,14 @@ class SequenceManager:
 class SchedulerSession:
     """Scheduler session."""
 
-    def __init__(self, session_id: int, block_size: int, seq_manager: SequenceManager = None) -> None:
+    def __init__(self,
+                 session_id: int,
+                 block_size: int,
+                 enable_metrics: bool,
+                 seq_manager: SequenceManager = None) -> None:
         self.session_id = session_id
         self.block_size = block_size
+        self.enable_metrics = enable_metrics
         self.status: MessageStatus = MessageStatus.RUNNING
         self.sequences: SeqMap = dict()
         self.seq_manager = seq_manager
@@ -280,7 +285,7 @@ class SchedulerSession:
         # initialize req_state
         req_state = RequestState(
             arrival_time=arrive_time,
-            enable_metrics=True,  # FIXME
+            enable_metrics=self.enable_metrics,
             prompt_len=len(token_ids),
             is_prefilling=True,  # new sequence starts as prefilling
         )
