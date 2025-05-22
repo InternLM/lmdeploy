@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "cutlass/fast_math.h"
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/gemm/cta_map.h"
@@ -12,15 +13,13 @@
 
 namespace turbomind::gemm {
 
-template<Order order, class Cluster, int striped_m, bool striped_n>
+template<Order order, class Cluster, int striped_m, bool striped_n, bool is_grouped_gemm>
 struct TileScheduler {
     int4 gemm_shape_;
     int4 tiled_shape_;
     int  log_tile_;
 
-    int chunk_offset_;
-    int chunks_per_split_;
-    int iter_k_per_chunk_;
+    int k_iters_;
 
     int4 tile_offset_;
     int2 iter_k_range_;
@@ -34,17 +33,14 @@ struct TileScheduler {
 
     int2 is_valid_;  // {is_valid_cta_tile, is_valid_cluster_tile}
 
+    cutlass::FastDivmod swizzled_shape_x;
+
 public:
     TM_HOST_DEVICE
     TileScheduler(int4 gemm_shape, int2 tiled_mn, int splits, int log_tile, int cta_k, int chunk_size):
         gemm_shape_{gemm_shape}, tiled_shape_{tiled_mn.x, tiled_mn.y, splits}, log_tile_{log_tile}
     {
-        const int chunk_cnt = cdiv(gemm_shape_.z, chunk_size);
-
-        iter_k_per_chunk_ = chunk_size / cta_k;
-        chunks_per_split_ = chunk_cnt / splits;
-
-        chunk_offset_ = splits - chunk_cnt % splits;
+        k_iters_ = cdiv(gemm_shape_.z, cta_k);
 
         cluster_tiled_shape_   = tiled_shape_;
         cluster_tiled_shape_.x = cdiv(tiled_shape_.x, Cluster::M);
@@ -53,6 +49,8 @@ public:
         swizzled_shape_ = get_swizzled_shape(cluster_tiled_shape_, log_tile_);
 
         clusters_ = swizzled_shape_.x * swizzled_shape_.y * swizzled_shape_.z;
+
+        swizzled_shape_x = {(int)swizzled_shape_.x};
     }
 
     TM_HOST_DEVICE static int get_log_tile(int2 tiled_mn, int tile_size)
@@ -73,9 +71,9 @@ public:
 
     TM_DEVICE void unswizzle()
     {
-        int                  cluster_idx_x = cluster_idx_ % swizzled_shape_.x;
-        int                  cluster_idx_y = cluster_idx_ / swizzled_shape_.x % swizzled_shape_.y;
-        [[maybe_unused]] int cluster_idx_z = cluster_idx_ / swizzled_shape_.x / swizzled_shape_.y;
+
+        int cluster_idx_x, cluster_idx_y;
+        swizzled_shape_x(cluster_idx_y, cluster_idx_x, cluster_idx_);
 
         auto [cluster_cta_m, cluster_cta_n] = Cluster::cta_mn(cute::block_id_in_cluster().x);
 
@@ -95,17 +93,12 @@ public:
 
         tile_offset_ = {offset_x + cluster_tile_offset.x * (striped_m ? 1 : Cluster::M),
                         offset_y + cluster_tile_offset.y * (striped_n ? 1 : Cluster::N),
-                        cluster_idx_z,
+                        0,
                         0};
 
-        const int chunk_id   = tile_offset_.z * chunks_per_split_ + max(tile_offset_.z - chunk_offset_, 0);
-        const int iter_k_beg = chunk_id * iter_k_per_chunk_;
-        const int iter_k_cnt = (chunks_per_split_ + int(tile_offset_.z >= chunk_offset_)) * iter_k_per_chunk_;
+        iter_k_range_ = {0, k_iters_};
 
-        iter_k_range_ = {iter_k_beg, iter_k_beg + iter_k_cnt};
-
-        is_valid_.x =
-            tile_offset_.x < tiled_shape_.x && tile_offset_.y < tiled_shape_.y && tile_offset_.z < tiled_shape_.z;
+        is_valid_.x = tile_offset_.x < tiled_shape_.x && tile_offset_.y < tiled_shape_.y;
         is_valid_.y = cluster_tile_offset.x < cluster_tiled_shape_.x && cluster_tile_offset.y < cluster_tiled_shape_.y;
     }
 

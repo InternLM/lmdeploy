@@ -22,10 +22,41 @@
 
 namespace turbomind::gemm {
 
-// PFN_cuTensorMapEncodeTiled
-// get_
+extern __shared__ char smem_buf[];
 
-// CUtensorMap make_2d_tma_desc()
+template<class Kernel>
+__global__ void __launch_bounds__(Kernel::CTA_SIZE, 1) gemm_kernel_sm90(const __grid_constant__ CUtensorMap tm_a,
+                                                                        const __grid_constant__ CUtensorMap tm_b,
+                                                                        const __grid_constant__ CUtensorMap tm_c,
+                                                                        const __grid_constant__ CUtensorMap tm_u,
+                                                                        const __grid_constant__ CUtensorMap tm_v,
+                                                                        const MatrixParam                   param_A,
+                                                                        const MatrixParam                   param_B,
+                                                                        const MatrixParam                   param_U,
+                                                                        const MatrixParam                   param_V,
+                                                                        const MatrixParam                   param_C,
+                                                                        typename Kernel::Scheduler          sched,
+                                                                        void* tensormap_buf)
+{
+#if __CUDA_ARCH__
+    if constexpr (Kernel::Arch::is_compatible(__CUDA_ARCH__)) {
+        Kernel kernel;
+        kernel(tm_a,
+               tm_b,
+               tm_c,
+               tm_u,
+               tm_v,
+               param_A,
+               param_B,
+               param_U,
+               param_V,
+               param_C,
+               sched,
+               (CUtensorMap*)tensormap_buf,
+               smem_buf);
+    }
+#endif
+}
 
 template<class Gemm>
 class KernelImplSm90: public Kernel {
@@ -248,8 +279,20 @@ public:
 
         // std::cout << "swizzle: " << swizzle << ", split: " << splits << "\n";
 
-        auto ec = cudaLaunchKernelEx(
-            &config, func, tm_a, tm_b, tm_c, tm_u, tm_v, U, Udesc.ld, V, Vdesc.ld, D, sched, workspace.tensormaps);
+        auto ec = cudaLaunchKernelEx(&config,
+                                     func,
+                                     tm_a,
+                                     tm_b,
+                                     tm_c,
+                                     tm_u,
+                                     tm_v,
+                                     to_param((void*)A, Adesc),
+                                     to_param((void*)B, Bdesc),
+                                     to_param((void*)U, Udesc),
+                                     to_param((void*)V, Vdesc),
+                                     to_param((void*)D, Ddesc),
+                                     sched,
+                                     workspace.tensormaps);
         TM_CHECK_EQ(ec, cudaSuccess) << cudaGetErrorString(ec);
 
         // gemm_kernel_sm90<Gemm><<<grid, block, smem_size_, stream>>>(tm_a, tm_b, tm_c, (Tc*)C, Cdesc.ld, sched);

@@ -159,7 +159,7 @@ struct MatrixLayout {
 
 inline std::ostream& operator<<(std::ostream& os, const MatrixLayout& x)
 {
-    os << x.type << " " << to_string(x.order) << " " << x.rows << " " << x.cols << " " << x.ld;
+    os << x.type << " " << to_string(x.order) << " " << x.rows << " " << x.cols << " " << x.num << " " << x.ld;
     return os;
 }
 

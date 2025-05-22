@@ -29,6 +29,7 @@
 
 #include "src/turbomind/kernels/gemm/arch.h"
 #include "src/turbomind/kernels/gemm/iterator_sm90.h"
+#include "src/turbomind/kernels/gemm/matrix_ptr.h"
 #include "src/turbomind/kernels/gemm/scheduler.cuh"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gemm/utils.h"
@@ -264,7 +265,7 @@ struct GemmUniversalSm90_v3 {
 
     using Cluster = arch::Cluster<kMulticastB, kMulticastA, kRowMajor>;
 
-    using Scheduler = TileScheduler<kRowMajor, Cluster, true, true>;
+    using Scheduler = TileScheduler<kRowMajor, Cluster, true, true, false>;
 
     using ProducerBar = cutlass::arch::ClusterTransactionBarrier;
     using ConsumerBar = cutlass::arch::ClusterBarrier;
@@ -305,11 +306,11 @@ struct GemmUniversalSm90_v3 {
                                const CUtensorMap& tm_c,
                                const CUtensorMap& tm_u,
                                const CUtensorMap& tm_v,
-                               const void*        U_,
-                               int                ldU,
-                               const void*        V_,
-                               int                ldV,
-                               void*              C,
+                               const MatrixParam& param_A,
+                               const MatrixParam& param_B,
+                               const MatrixParam& param_U,
+                               const MatrixParam& param_V,
+                               const MatrixParam& param_C,
                                Scheduler          sched,
                                CUtensorMap*       tensormap_buf,
                                char*              smem_buf)
@@ -341,7 +342,8 @@ struct GemmUniversalSm90_v3 {
             static_assert(TILE_M % kMulticastA == 0);
             static_assert(TILE_N % kMulticastB == 0);
 
-            if (threadIdx.x == WARPGORUPS * WARPGROUP_SIZE) {
+            // if (threadIdx.x == WARPGORUPS * WARPGROUP_SIZE) {
+            if (threadIdx.x % WARPGROUP_SIZE / WARP_SIZE == 0) {
 
                 Cluster cluster(cute::block_id_in_cluster().x);
 
@@ -357,40 +359,42 @@ struct GemmUniversalSm90_v3 {
                 cutlass::PipelineState<Stages> write_state{0, 1, 0};
 
                 while (sched.next()) {
-                    auto [valid_cta_tile_p, cluster_tile_p] = sched.is_valid_tile();
+                    if (cute::elect_one_sync()) {
+                        auto [valid_cta_tile_p, cluster_tile_p] = sched.is_valid_tile();
 
-                    if (!cluster_tile_p) {
-                        // OOB tile caused by swizzle pattern
-                        continue;
-                    }
+                        if (!cluster_tile_p) {
+                            // OOB tile caused by swizzle pattern
+                            continue;
+                        }
 
-                    const auto tile_offset              = sched.tile_offset();
-                    const auto [iter_k_beg, iter_k_end] = sched.iter_k_range();
+                        const auto tile_offset              = sched.tile_offset();
+                        const auto [iter_k_beg, iter_k_end] = sched.iter_k_range();
 
-                    const int offset_k = iter_k_beg * TILE_K;
+                        const int offset_k = iter_k_beg * TILE_K;
 
-                    const uint16_t mask_A = cluster.mask_m();
-                    const uint16_t mask_B = cluster.mask_n();
+                        const uint16_t mask_A = cluster.mask_m();
+                        const uint16_t mask_B = cluster.mask_n();
 
-                    const int offset_m = tile_offset.x * TILE_M;
-                    const int offset_n = tile_offset.y * TILE_N;
+                        const int offset_m = tile_offset.x * TILE_M;
+                        const int offset_n = tile_offset.y * TILE_N;
 
-                    int k_iter = iter_k_end - iter_k_beg;
+                        int k_iter = iter_k_end - iter_k_beg;
 
-                    GmemIteratorSm90<kMulticastA> gmem_A{&tm_a, {offset_k, offset_m + mc_offset_m}, {TILE_K, 0}};
-                    GmemIteratorSm90<kMulticastB> gmem_B{&tm_b, {offset_k, offset_n + mc_offset_n}, {TILE_K, 0}};
+                        GmemIteratorSm90<kMulticastA> gmem_A{&tm_a, {offset_k, offset_m + mc_offset_m}, {TILE_K, 0}};
+                        GmemIteratorSm90<kMulticastB> gmem_B{&tm_b, {offset_k, offset_n + mc_offset_n}, {TILE_K, 0}};
 
-                    // column-major
-                    GmemIteratorSm90<kMulticastA> gmem_U{&tm_u, {offset_m + mc_offset_m, offset_k / 128}, {0, 1}};
+                        // column-major
+                        GmemIteratorSm90<kMulticastA> gmem_U{&tm_u, {offset_m + mc_offset_m, offset_k / 128}, {0, 1}};
 
-                    for (; k_iter > 0; --k_iter) {
-                        int pipe = write_state.index();
-                        ConsumerBar::wait(&consumer_bar[pipe], write_state.phase());
-                        ProducerBar::arrive_and_expect_tx(&producer_bar[pipe], kTmaTxBytes);
-                        gmem_A.Load(&producer_bar[pipe], &smem_A[pipe * TILE_M * TILE_K], mask_A);
-                        gmem_B.Load(&producer_bar[pipe], &smem_B[pipe * TILE_N * TILE_K], mask_B);
-                        gmem_U.Load(&producer_bar[pipe], &smem_U[pipe][0] + mc_offset_m, mask_A);
-                        ++write_state;
+                        for (; k_iter > 0; --k_iter) {
+                            int pipe = write_state.index();
+                            ConsumerBar::wait(&consumer_bar[pipe], write_state.phase());
+                            ProducerBar::arrive_and_expect_tx(&producer_bar[pipe], kTmaTxBytes);
+                            gmem_A.Step(&producer_bar[pipe], &smem_A[pipe * TILE_M * TILE_K], mask_A);
+                            gmem_B.Step(&producer_bar[pipe], &smem_B[pipe * TILE_N * TILE_K], mask_B);
+                            gmem_U.Step(&producer_bar[pipe], &smem_U[pipe][0] + mc_offset_m, mask_A);
+                            ++write_state;
+                        }
                     }
                 }
             }
@@ -490,7 +494,7 @@ struct GemmUniversalSm90_v3 {
                         dst[i] = __ldg(&src[i]);
                     }
                 };
-                auto gmem_V = (const Tv*)V_ + (wg_offset_n / 128) * ldV + (offset_k / 128);
+                auto gmem_V = (const Tv*)param_V.ptr + (wg_offset_n / 128) * param_V.stride + (offset_k / 128);
                 Copy(storage.source.V[0][wg_idx], gmem_V);
 
                 uint32_t pred_V{};
@@ -507,12 +511,12 @@ struct GemmUniversalSm90_v3 {
                     pred_V    = (mask << (phase / OUTER_N)) & mask;
 
                     if (pred_V && wg_offset_n / 128 + 1 < cdiv(N, 128)) {
-                        Copy(storage.source.V[1][wg_idx], gmem_V + ldV);
+                        Copy(storage.source.V[1][wg_idx], gmem_V + param_V.stride);
                     }
 
                     // if constexpr (WG_N > 1) {
                     //     constexpr int tiles = MMA_ATOM_N / OUTER_N;
-                    //     pred_V              = (pred_V >> (wg_id_n * tiles)) & ((1 << tiles) - 1);
+                    //     pred_V              = (pred_V >> (wg_idx_n * tiles)) & ((1 << tiles) - 1);
                     // }
                 }
 
@@ -631,10 +635,11 @@ struct GemmUniversalSm90_v3 {
 
                 wg_barrier.sync();
 
-                void* Cdesc{};
-                if (threadIdx.x % WARPGROUP_SIZE / WARP_SIZE == 0) {
-                    Cdesc = update_tma_desc(tm_c, tensormap_buf, &storage.tma_desc_C[wg_idx], wg_idx, C, M);
-                }
+                // void* Cdesc{};
+                // if (threadIdx.x % WARPGROUP_SIZE / WARP_SIZE == 0) {
+                //     Cdesc = update_tma_desc(tm_c, tensormap_buf, &storage.tma_desc_C[wg_idx], wg_idx, param_C.ptr,
+                //     M);
+                // }
 
                 Tc* smem_C = &storage.C[wg_idx_m * WG_TILE_M * TILE_N + wg_idx_n * WG_TILE_N];
 
@@ -682,8 +687,8 @@ struct GemmUniversalSm90_v3 {
 
                 if (wg_lane < LayoutC::C1) {
                     const int tma_n = wg_lane * LayoutC::C0;
-                    cute::tma_descriptor_fence_acquire((cute::TmaDescriptor*)Cdesc);
-                    cute::SM90_TMA_STORE::copy(Cdesc,
+                    // cute::tma_descriptor_fence_acquire((cute::TmaDescriptor*)Cdesc);
+                    cute::SM90_TMA_STORE::copy(&tm_c,
                                                &smem_C[wg_lane * WG_TILE_M * LayoutC::C0],
                                                offset_n + wg_idx_n * WG_TILE_N + tma_n,
                                                offset_m + wg_idx_m * WG_TILE_M);
@@ -719,7 +724,7 @@ struct GemmUniversalSm90_v3 {
     __device__ void* update_tma_desc(const CUtensorMap& param_desc,
                                      CUtensorMap*       gmem_desc,
                                      CUtensorMap*       smem_desc,
-                                     int                wg_idx,
+                                     int                index,
                                      void*              global_addr,
                                      int                dim)
     {
@@ -742,7 +747,9 @@ struct GemmUniversalSm90_v3 {
 
         __syncwarp();
 
-        auto gmem_ptr = (cute::TmaDescriptor*)&gmem_desc[blockIdx.x * WARPGORUPS + wg_idx];
+        constexpr int kNumPerCta = 4;
+
+        auto gmem_ptr = (void*)&gmem_desc[blockIdx.x * kNumPerCta + index];
 
         // clang-format off
         asm volatile("tensormap.cp_fenceproxy.global.shared::cta.tensormap::generic.release.gpu.sync.aligned [%0], [%1], 128;" :: "l"(gmem_ptr), "r"(uint_ptr));
@@ -751,29 +758,5 @@ struct GemmUniversalSm90_v3 {
         return gmem_ptr;
     }
 };
-
-extern __shared__ char smem_buf[];
-
-template<class Kernel>
-__global__ void __launch_bounds__(Kernel::CTA_SIZE, 1) gemm_kernel_sm90(const __grid_constant__ CUtensorMap tm_a,
-                                                                        const __grid_constant__ CUtensorMap tm_b,
-                                                                        const __grid_constant__ CUtensorMap tm_c,
-                                                                        const __grid_constant__ CUtensorMap tm_u,
-                                                                        const __grid_constant__ CUtensorMap tm_v,
-                                                                        const void*                         U_,
-                                                                        int                                 ldU,
-                                                                        const void*                         V_,
-                                                                        int                                 ldV,
-                                                                        void*                               C,
-                                                                        typename Kernel::Scheduler          sched,
-                                                                        void* tensormap_buf)
-{
-#if __CUDA_ARCH__
-    if constexpr (Kernel::Arch::is_compatible(__CUDA_ARCH__)) {
-        Kernel kernel;
-        kernel(tm_a, tm_b, tm_c, tm_u, tm_v, U_, ldU, V_, ldV, C, sched, (CUtensorMap*)tensormap_buf, smem_buf);
-    }
-#endif
-}
 
 }  // namespace turbomind::gemm
