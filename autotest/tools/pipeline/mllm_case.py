@@ -10,7 +10,7 @@ from lmdeploy.vl import load_image
 from lmdeploy.vl.constants import IMAGE_TOKEN
 from lmdeploy.vl.utils import encode_image_base64
 
-gen_config = GenerationConfig(max_new_tokens=500)
+gen_config = GenerationConfig(max_new_tokens=500, min_new_tokens=2)
 
 PIC1 = 'tiger.jpeg'
 PIC2 = 'human-pose.jpg'
@@ -32,6 +32,9 @@ def run_pipeline_mllm_test(model_path, resource_path, tp, backend_type, is_pr_te
         backend_config.quant_policy = extra.get('quant_policy')
     if 'turbomind' in backend_type and extra is not None and 'communicator' in extra:
         backend_config.communicator = extra.get('communicator')
+
+    if 'cache-max-entry-count' in extra and extra.get('cache-max-entry-count') is not None:
+        backend_config.cache_max_entry_count = extra.get('cache-max-entry-count')
 
     if 'w4' in model_path or ('4bits' in model_path or 'awq' in model_path.lower()):
         backend_config.model_format = 'awq'

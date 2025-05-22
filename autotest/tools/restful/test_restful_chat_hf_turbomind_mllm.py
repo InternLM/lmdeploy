@@ -32,6 +32,7 @@ def getModelList(tp_num):
 @pytest.mark.order(7)
 @pytest.mark.restful_api_vl
 @pytest.mark.gpu_num_1
+@pytest.mark.test_3090
 @pytest.mark.parametrize('prepare_environment', getModelList(tp_num=1), indirect=True)
 def test_restful_chat_tp1(config, worker_id):
     if get_workerid(worker_id) is None:
@@ -77,6 +78,7 @@ def getKvintModelList(tp_num, quant_policy: int = None):
 @pytest.mark.order(7)
 @pytest.mark.restful_api_vl
 @pytest.mark.gpu_num_1
+@pytest.mark.test_3090
 @pytest.mark.parametrize('prepare_environment', getKvintModelList(tp_num=1, quant_policy=4), indirect=True)
 def test_restful_chat_kvint4_tp1(config, worker_id):
     if get_workerid(worker_id) is None:
@@ -110,6 +112,7 @@ def test_restful_chat_kvint4_tp4(config, worker_id):
 @pytest.mark.order(7)
 @pytest.mark.restful_api_vl
 @pytest.mark.gpu_num_1
+@pytest.mark.test_3090
 @pytest.mark.parametrize('prepare_environment', getKvintModelList(tp_num=1, quant_policy=8), indirect=True)
 def test_restful_chat_kvint8_tp1(config, worker_id):
     if get_workerid(worker_id) is None:
