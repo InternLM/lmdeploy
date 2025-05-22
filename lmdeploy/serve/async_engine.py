@@ -20,10 +20,7 @@ import tqdm
 from lmdeploy import Tokenizer
 from lmdeploy.archs import get_model_arch
 from lmdeploy.logger import RequestLogger
-from lmdeploy.messages import (EngineOutput, GenerationConfig, PytorchEngineConfig, RequestState, Response,
-                               ResponseType, TurbomindEngineConfig)
-from lmdeploy.metrics.loggers import StatLoggerBase, setup_loggers
-from lmdeploy.metrics.stats import IterationStats, SchedulerStats
+from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, Response, ResponseType, TurbomindEngineConfig
 from lmdeploy.model import MODELS, BaseChatTemplate, ChatTemplateConfig, best_match_model
 from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.serve.utils import LogitsMixin
@@ -253,7 +250,6 @@ class AsyncEngine(LogitsMixin):
             Default to None.
         max_log_len (int): Max number of prompt characters or prompt tokens
             being printed in log. Default: Unlimited
-        enable_metrics (bool): Whether log stats to cli / prometheus
     """
 
     def __init__(self,
@@ -263,16 +259,7 @@ class AsyncEngine(LogitsMixin):
                  backend_config: Optional[Union[TurbomindEngineConfig, PytorchEngineConfig]] = None,
                  chat_template_config: Optional[ChatTemplateConfig] = None,
                  max_log_len: int = None,
-                 enable_metrics: Optional[bool] = True,
                  **kwargs) -> None:
-
-        # setup stat loggers
-        backend_config.enable_metrics = enable_metrics
-        self.enable_metrics = enable_metrics
-        self.stat_loggers: List[List[StatLoggerBase]] = setup_loggers(enable_metrics=enable_metrics,
-                                                                      engine_num=backend_config.dp)
-
-        # setup chat template
         logger.info(f'input backend={backend}, backend_config={backend_config}')
         logger.info(f'input chat_template_config={chat_template_config}')
 
@@ -389,11 +376,6 @@ class AsyncEngine(LogitsMixin):
                                 adapter_name=adapter_name,
                                 use_tqdm=use_tqdm,
                                 **kwargs)
-
-    async def do_log_stats(self, ) -> None:
-        for each_engine_loggers in self.stat_loggers:
-            for stat_logger in each_engine_loggers:
-                stat_logger.log()
 
     async def stop_session(self, session_id: int):
         """Stop a session by a session_id."""
@@ -576,6 +558,7 @@ class AsyncEngine(LogitsMixin):
                                 sequence_start: bool,
                                 adapter_name: str,
                                 tools: Optional[List[object]] = None,
+                                enable_thinking: Optional[bool] = None,
                                 **kwargs):
         if do_preprocess:
             # use adapter's chat template if possible
@@ -584,7 +567,7 @@ class AsyncEngine(LogitsMixin):
                 chat_template = MODELS.module_dict[adapter_name]()
         else:
             chat_template = BaseChatTemplate()
-        prompt = chat_template.messages2prompt(prompt, sequence_start, tools=tools)
+        prompt = chat_template.messages2prompt(prompt, sequence_start, tools=tools, enable_thinking=enable_thinking)
         if prompt is None:
             raise ValueError(
                 f'You are using base template to handle chat task. Please specify a `--chat-template` name chosen from `lmdeploy list` if you want to use OpenAI messages input.'  # noqa
@@ -619,39 +602,6 @@ class AsyncEngine(LogitsMixin):
         finally:
             await generator.aclose()
 
-    def _update_stats_from_output(self, req_state: RequestState, engine_core_output: EngineOutput,
-                                  engine_core_timestamp: Optional[float], iteration_stats: Optional[IterationStats]):
-        print('update from output')
-        if iteration_stats is None:
-            return
-
-        assert engine_core_timestamp is not None, 'engine_core_timestamp cannot be None'
-        assert req_state.stats is not None, 'req_state.stats cannot be None'
-        iteration_stats.update_from_output(engine_core_output, engine_core_timestamp, req_state.is_prefilling,
-                                           req_state.prompt_len, req_state.stats)
-
-    def _update_stats_from_finished(self, req_state: RequestState, finish_reason: Optional[ResponseType],
-                                    iteration_stats: Optional[IterationStats]):
-        print('update from finished')
-        if iteration_stats is None:
-            return
-
-        assert finish_reason is not None, 'finish_reason cannot be None'
-        assert req_state.stats is not None, 'req_state.stats cannot be None'
-        iteration_stats.update_from_finished_request(finish_reason=finish_reason,
-                                                     num_prompt_tokens=req_state.prompt_len,
-                                                     req_stats=req_state.stats)
-
-    @staticmethod
-    def _record_stats(
-        stat_loggers: StatLoggerBase,
-        scheduler_stats: SchedulerStats,
-        iteration_stats: Optional[IterationStats],
-    ):
-        for each_engine_loggers in stat_loggers:
-            for stat_logger in each_engine_loggers:
-                stat_logger.record(scheduler_stats=scheduler_stats, iteration_stats=iteration_stats)
-
     async def generate(
             self,
             messages,
@@ -667,6 +617,7 @@ class AsyncEngine(LogitsMixin):
             skip_stop_tokens: bool = True,
             rewind_stop_tokens: bool = False,
             input_ids: Optional[List] = None,
+            enable_thinking: Optional[bool] = None,
             **kwargs):
         """Generate responses.
 
@@ -721,7 +672,8 @@ class AsyncEngine(LogitsMixin):
                                                         do_preprocess,
                                                         sequence_start,
                                                         adapter_name,
-                                                        tools=tools)
+                                                        tools=tools,
+                                                        enable_thinking=enable_thinking)
             prompt = prompt_input['prompt']
             input_ids = prompt_input['input_ids']
             self.request_logger.log_inputs(session_id=session_id,
@@ -780,11 +732,6 @@ class AsyncEngine(LogitsMixin):
                                      step=history_len) as gen:
                 prev_len = 0
                 hit_stop_token = 0
-                iteration_stats = IterationStats() if self.enable_metrics else None
-                req_state = RequestState(
-                    arrival_time=0,  # FIXME: update req arrival time
-                    prompt_len=input_len,
-                    enable_metrics=self.enable_metrics)
                 async for outputs in gen:
                     # decode res
                     if is_error(outputs.status):
@@ -838,31 +785,8 @@ class AsyncEngine(LogitsMixin):
                         if hit_stop_token:
                             out.logits = out.logits[:-hit_stop_token]
 
-                    # update stats from engine outputs in each step
-                    req_state.is_prefilling = (prev_len == 0)
-                    self._update_stats_from_output(req_state=req_state,
-                                                   engine_core_output=outputs,
-                                                   engine_core_timestamp=outputs.timestamp,
-                                                   iteration_stats=iteration_stats)
-                    print(f'=> yield out {out}')
                     yield out
                 # end of generator loop
-
-                # update stats from per finished requests engine outputs
-                self._update_stats_from_finished(req_state=req_state,
-                                                 finish_reason=outputs.status,
-                                                 iteration_stats=iteration_stats)
-                print(f'=> check async engine output {type(outputs)} {outputs}')
-
-                # perform logging
-                if self.stat_loggers:
-                    assert outputs.scheduler_stats is not None, 'outputs.scheduler_stats cannot be None'
-
-                    AsyncEngine._record_stats(
-                        self.stat_loggers,
-                        scheduler_stats=outputs.scheduler_stats,
-                        iteration_stats=iteration_stats,
-                    )
 
                 if not is_error(outputs.status):
                     finish_reason = 'length' \
@@ -976,10 +900,29 @@ class AsyncEngine(LogitsMixin):
 
         return session
 
-    def start_loop(self):
-        """start engine loop."""
+    def start_loop(self, use_async_api=False):
+        """start engine loop.
+
+        When using pytorch backend with dp > 1, all dp_rank should receive at least one request
+        before it can start processing (warmup). Since pytorch engine will bound to event loop,
+        the pipeline can only choose either the synchronous apis(__call__, stream_infer, etc.) or
+        the asynchronous api (generate) during its lifetime.
+
+        The purpose of this function is to allow users to choose whether to use the
+        synchronous interface or the asynchronous interface for the pipeline.
+        """
         if hasattr(self.engine, 'start_loop'):
-            return self.engine.start_loop()
+            if use_async_api:
+                return self.engine.start_loop()
+            else:
+                fut = concurrent.futures.Future()
+
+                def _start_loop(fut):
+                    res = self.engine.start_loop()
+                    fut.set_result(res)
+
+                self.internal_thread.loop.call_soon_threadsafe(_start_loop, fut)
+                return fut.result()
         else:
             return True
 

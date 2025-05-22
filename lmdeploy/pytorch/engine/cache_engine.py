@@ -364,6 +364,8 @@ class CacheEngine:
                 remote_engine_id].remote_engine_config.num_gpu_blocks * assignment_len
 
             for i, t in enumerate(self.full_gpu_cache):
+                if t.numel() == 0:
+                    continue
                 assignment_batch.extend(
                     get_assignment_batch(str(i), blocks_to_migration, assignment_len, layer_stride,
                                          remote_layer_stride))

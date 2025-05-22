@@ -9,9 +9,10 @@ from functools import partial
 from http import HTTPStatus
 from typing import AsyncGenerator, Dict, List, Literal, Optional, Union
 
-import prometheus_client
 import uvicorn
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.security.http import HTTPAuthorizationCredentials, HTTPBearer
@@ -428,6 +429,7 @@ async def chat_completions_v1(raw_request: Request = None):
         sequence_end=True,
         do_preprocess=not isinstance(request.messages, str),  # text completion for string input
         adapter_name=adapter_name,
+        enable_thinking=request.enable_thinking,
     )
 
     def create_stream_response_json(index: int,
@@ -491,7 +493,9 @@ async def chat_completions_v1(raw_request: Request = None):
                         streaming_tools = True
                 previous_text = current_text
                 previous_token_ids = current_token_ids
-            elif VariableInterface.reasoning_parser is not None:
+            elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
+                logger.error('Please lanuch the api_server with --tool-call-parser if you want to use tool.')
+            if VariableInterface.reasoning_parser is not None:
                 current_text = current_text + res.response
                 delta_token_ids = res.token_ids if res.token_ids is not None else []
                 current_token_ids = current_token_ids + delta_token_ids
@@ -507,8 +511,6 @@ async def chat_completions_v1(raw_request: Request = None):
                     delta_message.content = reasoning_delta.content
                 previous_text = current_text
                 previous_token_ids = current_token_ids
-            elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
-                logger.error('Please lanuch the api_server with --tool-call-parser if you want to use tool.')
             response_json = create_stream_response_json(index=0,
                                                         delta_message=delta_message,
                                                         finish_reason=res.finish_reason,
@@ -558,11 +560,11 @@ async def chat_completions_v1(raw_request: Request = None):
         except Exception as e:
             logger.error(f'Failed to parse {text}. Exception: {e}.')
             return create_error_response(HTTPStatus.BAD_REQUEST, 'Failed to parse fc related info to json format!')
-    # assume reasoning uncompatible with tool call
-    elif VariableInterface.reasoning_parser is not None:
-        reasoning_content, text = VariableInterface.reasoning_parser.extract_reasoning_content(text, request)
     elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
         logger.error('Please lanuch the api_server with --tool-call-parser if you want to use tool.')
+
+    if VariableInterface.reasoning_parser is not None:
+        reasoning_content, text = VariableInterface.reasoning_parser.extract_reasoning_content(text, request)
 
     logprobs = None
     if gen_logprobs and len(final_logprobs):
@@ -1076,7 +1078,7 @@ def handle_torchrun():
 @router.on_event('startup')
 async def startup_event():
     async_engine = VariableInterface.async_engine
-    async_engine.start_loop()
+    async_engine.start_loop(use_async_api=True)
 
     if VariableInterface.proxy_url is None:
         return
@@ -1093,6 +1095,17 @@ async def startup_event():
             raise HTTPException(status_code=400, detail='Service registration failed')
     except Exception as e:
         logger.error(f'Service registration failed: {e}')
+
+
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """handler for RequestValidationError."""
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content=jsonable_encoder({
+            'detail': exc.errors(),
+            'body': exc.body
+        }),
+    )
 
 
 class ConcurrencyLimitMiddleware(BaseHTTPMiddleware):
@@ -1147,7 +1160,6 @@ def serve(model_path: str,
           max_log_len: int = None,
           disable_fastapi_docs: bool = False,
           max_concurrent_requests: Optional[int] = None,
-          enable_metrics: Optional[bool] = True,
           reasoning_parser: Optional[str] = None,
           tool_call_parser: Optional[str] = None,
           allow_terminate_by_client: bool = False,
@@ -1200,7 +1212,6 @@ def serve(model_path: str,
             process the engine’s tasks once the maximum number of concurrent
             requests is reached, regardless of any additional requests sent by
             clients concurrently during that time. Default to None.
-        enable_metrics: Whether log stats to cli / prometheus
         reasoning_parser (str): The reasoning parser name.
         tool_call_parser (str): The tool call parser name.
         allow_terminate_by_client (bool): Allow request from client to terminate server.
@@ -1208,6 +1219,31 @@ def serve(model_path: str,
     if os.getenv('TM_LOG_LEVEL') is None:
         os.environ['TM_LOG_LEVEL'] = log_level
     logger.setLevel(log_level)
+
+    if disable_fastapi_docs:
+        app = FastAPI(
+            docs_url=None,
+            redoc_url=None,
+            openapi_url=None,
+        )
+    else:
+        app = FastAPI(docs_url='/')
+
+    app.include_router(router)
+    app.add_exception_handler(RequestValidationError, validation_exception_handler)
+
+    if allow_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=allow_origins,
+            allow_credentials=allow_credentials,
+            allow_methods=allow_methods,
+            allow_headers=allow_headers,
+        )
+
+    # Set the maximum number of concurrent requests
+    if max_concurrent_requests is not None:
+        app.add_middleware(ConcurrencyLimitMiddleware, max_concurrent_requests=max_concurrent_requests)
 
     VariableInterface.allow_terminate_by_client = allow_terminate_by_client
     if api_keys is not None:
@@ -1228,59 +1264,9 @@ def serve(model_path: str,
                                                     backend_config=backend_config,
                                                     chat_template_config=chat_template_config,
                                                     max_log_len=max_log_len,
-                                                    enable_metrics=enable_metrics,
                                                     **kwargs)
     # set reasoning parser and tool parser
     set_parsers(reasoning_parser, tool_call_parser)
-
-    _running_tasks: set[asyncio.Task] = set()
-
-    async def lifespan(app: FastAPI):
-        async_engine = VariableInterface.async_engine
-        task = None
-        try:
-            if enable_metrics:
-                log_interval = 1.  # FIXME: change this
-
-                async def _force_log():
-                    while True:
-                        await asyncio.sleep(log_interval)
-
-                        await async_engine.do_log_stats()
-
-                task = asyncio.create_task(_force_log())
-                _running_tasks.add(task)
-                task.add_done_callback(_running_tasks.remove)
-
-            yield
-        finally:
-            if task:
-                task.cancel()
-
-    if disable_fastapi_docs:
-        app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
-    else:
-        app = FastAPI(docs_url='/', lifespan=lifespan)
-
-    app.include_router(router)
-
-    if enable_metrics:
-        # add prometheus asgi middleware to route '/metrics' requests
-        metrics_app = prometheus_client.make_asgi_app()
-        app.mount('/metrics', metrics_app)
-
-    if allow_origins:
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origins=allow_origins,
-            allow_credentials=allow_credentials,
-            allow_methods=allow_methods,
-            allow_headers=allow_headers,
-        )
-
-    # Set the maximum number of concurrent requests
-    if max_concurrent_requests is not None:
-        app.add_middleware(ConcurrencyLimitMiddleware, max_concurrent_requests=max_concurrent_requests)
 
     if proxy_url is not None:
         VariableInterface.proxy_url = proxy_url

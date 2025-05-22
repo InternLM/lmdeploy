@@ -66,8 +66,6 @@ class SchedulerConfig:
     prefill_interval: int = 16
     max_active_adapters: int = 64
 
-    enable_metrics: bool = False
-
 
 @dataclass
 class CacheConfig:
@@ -104,6 +102,7 @@ class DistConfig:
     ep: int = 1
     dp_rank: int = 0
     enable_microbatch: bool = False
+    enable_eplb: bool = False
     world_size: int = None
     attn_config: 'DistConfig' = None
 

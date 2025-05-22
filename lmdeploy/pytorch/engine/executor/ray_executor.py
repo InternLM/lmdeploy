@@ -441,18 +441,15 @@ class RayExecutor(ExecutorBase):
                 self.collective_rpc('release', timeout=5.0)
                 logger.debug('RayExecutor workers released.')
             except ray.exceptions.GetTimeoutError:
-                logger.info('Ray release timeout.')
-
-            try:
-                self.collective_rpc('exit')
-                logger.debug('RayExecutor workers exited.')
-            except ray.exceptions.RayActorError as e:
-                logger.debug(f'ray actor exit: {e}')
+                logger.info('Ray release timeout, killing workers')
+                [ray.kill(worker) for worker in self.workers]
         else:
             [ray.kill(worker) for worker in self.workers]
 
         ray.util.remove_placement_group(self.placement_group)
         logger.debug('RayExecutor placement group removed.')
+        ray.shutdown()
+        logger.debug('Ray shutdown.')
 
     def _compile_dag(self):
         """compile dag."""
