@@ -289,7 +289,7 @@ class AsyncEngine(LogitsMixin):
 
         # build status loggers
         # independent set for each DP rank, each set contains 1. cli logger 2. prometheus logger
-        logger.info(f'enable metrics {backend_config.enable_metrics}')
+        logger.info(f'enable metrics: {backend_config.enable_metrics}')
         self.stat_loggers: List[List[StatLoggerBase]] = setup_loggers(enable_metrics=backend_config.enable_metrics,
                                                                       model_name=self.model_name,
                                                                       engine_num=backend_config.dp)
