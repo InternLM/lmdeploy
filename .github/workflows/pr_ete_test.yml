@@ -68,7 +68,7 @@ jobs:
           make -j$(nproc) && make install && cd .. && rm -rf openmpi-4.1.5*
           export PATH=$PATH:/usr/local/openmpi/bin
           export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/openmpi/lib
-          python3 -m pip install cmake packaging wheel transformers_stream_generator transformers==4.45.3 datasets openai einops timm decord
+          python3 -m pip install cmake packaging wheel transformers_stream_generator transformers==4.52.3 datasets openai einops timm decord
           python3 -m pip install -r requirements_cuda.txt -r requirements/test.txt -r requirements/build.txt
           mkdir -p build && cd build &&\
           sh ../generate.sh &&\
