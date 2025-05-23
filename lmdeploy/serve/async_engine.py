@@ -21,6 +21,7 @@ from lmdeploy import Tokenizer
 from lmdeploy.archs import get_model_arch
 from lmdeploy.logger import RequestLogger
 from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, Response, ResponseType, TurbomindEngineConfig
+from lmdeploy.metrics.loggers import StatLoggerBase, setup_loggers
 from lmdeploy.model import MODELS, BaseChatTemplate, ChatTemplateConfig, best_match_model
 from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest
 from lmdeploy.serve.utils import LogitsMixin
@@ -286,6 +287,19 @@ class AsyncEngine(LogitsMixin):
 
         logger.info(f'updated backend_config={self.backend_config}')
 
+        # build status loggers
+        # independent set for each DP rank, each set contains 1. cli logger 2. prometheus logger
+        logger.info(f'enable metrics: {backend_config.enable_metrics}')
+        self.stat_loggers: List[List[StatLoggerBase]] = setup_loggers(enable_metrics=backend_config.enable_metrics,
+                                                                      model_name=self.model_name,
+                                                                      engine_num=backend_config.dp)
+        logger.info(f'dp: {backend_config.dp} dp_rank: {self.backend_config.dp_rank}')
+
+        if backend_config.enable_metrics:
+            assert self.stat_loggers is not None
+            assert self.backend_config.dp_rank < len(self.stat_loggers)
+            self.engine.stat_loggers = self.stat_loggers[backend_config.dp_rank]
+
         # parameters for member functions
         self.session_len = _get_and_verify_max_len(self.hf_tm_cfg, self.backend_config.session_len)
         self.stop_words = _stop_words(self.chat_template.stop_words, self.tokenizer)
@@ -376,6 +390,11 @@ class AsyncEngine(LogitsMixin):
                                 adapter_name=adapter_name,
                                 use_tqdm=use_tqdm,
                                 **kwargs)
+
+    async def do_log_stats(self, ) -> None:
+        for each_dp_engine_loggers in self.stat_loggers:
+            for stat_logger in each_dp_engine_loggers:
+                stat_logger.log()
 
     async def stop_session(self, session_id: int):
         """Stop a session by a session_id."""
@@ -681,12 +700,12 @@ class AsyncEngine(LogitsMixin):
                                            prompt_token_ids=input_ids,
                                            gen_config=gen_config,
                                            adapter_name=adapter_name)
-            logger.info(f'session={session_id}, '
-                        f'history_tokens={self.id2step[session_id]}, '
-                        f'input_tokens={len(input_ids)}, '
-                        f'max_new_tokens={gen_config.max_new_tokens}, '
-                        f'seq_start={sequence_start}, seq_end={sequence_end}, '
-                        f'step={step}, prep={do_preprocess}')
+            logger.debug(f'session={session_id}, '
+                         f'history_tokens={self.id2step[session_id]}, '
+                         f'input_tokens={len(input_ids)}, '
+                         f'max_new_tokens={gen_config.max_new_tokens}, '
+                         f'seq_start={sequence_start}, seq_end={sequence_end}, '
+                         f'step={step}, prep={do_preprocess}')
         else:
             # TODO(lvhan) VLM doesn't support input_ids as an argument.
             # Figure out a graceful way to handle the invalid input
@@ -796,9 +815,9 @@ class AsyncEngine(LogitsMixin):
                     if not response.endswith('�'):
                         # avoid returning the last response twice
                         response = ''
-                    logger.info(f'session {session_id} finished, reason '
-                                f'"{finish_reason}", input_tokens '
-                                f'{len(input_ids)}, outupt_tokens {gen_len}')
+                    logger.debug(f'session {session_id} finished, reason '
+                                 f'"{finish_reason}", input_tokens '
+                                 f'{len(input_ids)}, outupt_tokens {gen_len}')
                     yield GenOut(response,
                                  self.id2step[session_id],
                                  len(input_ids),

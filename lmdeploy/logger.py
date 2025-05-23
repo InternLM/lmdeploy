@@ -28,8 +28,8 @@ class RequestLogger:
         if self.max_log_len is not None:
             if prompt is not None:
                 prompt = prompt[:self.max_log_len]
-        logger.info(f'session={session_id}, '
-                    f'prompt={prompt!r}')
+        logger.debug(f'session={session_id}, '
+                     f'prompt={prompt!r}')
 
     def log_inputs(self, session_id: int, prompt: Optional[str], prompt_token_ids: Optional[List[int]],
                    gen_config: GenerationConfig, adapter_name: str) -> None:
@@ -42,9 +42,9 @@ class RequestLogger:
             if prompt_token_ids is not None:
                 prompt_token_ids = prompt_token_ids[:max_log_len]
 
-        logger.info(f'session={session_id}, '
-                    f'adapter_name={adapter_name}, '
-                    f'input_tokens={input_tokens}, '
-                    f'gen_config={gen_config}, '
-                    f'prompt={prompt!r}, '
-                    f'prompt_token_id={prompt_token_ids}')
+        logger.debug(f'session={session_id}, '
+                     f'adapter_name={adapter_name}, '
+                     f'input_tokens={input_tokens}, '
+                     f'gen_config={gen_config}, '
+                     f'prompt={prompt!r}, '
+                     f'prompt_token_id={prompt_token_ids}')
