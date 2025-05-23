@@ -955,7 +955,8 @@ class Engine:
             await self.req_manager.step()
             has_runable_event.set()
 
-    async def _async_loop_send_responses(self, que: asyncio.Queue, forward_event: asyncio.Event):
+    async def _async_loop_send_responses(self, que: asyncio.Queue, log_que: asyncio.Queue,
+                                         forward_event: asyncio.Event):
         """send responses."""
 
         def __log_resps(outputs: List[InferOutput]):
@@ -965,6 +966,36 @@ class Engine:
                 logger.debug(f'Response sessions: {session_ids}')
             elif logger.level <= logging.INFO:
                 logger.debug(f'Response: num_outputs={len(outputs)}.')
+
+        def __update_stats(out: InferOutput, iteration_stats: IterationStats):
+            session = self.scheduler.sessions.get(out.session_id)
+            if session is None:
+                logger.warning(f'Session {out.session_id} not found. Skipping stats update.')
+                return
+
+            sequences = list(session.sequences.values())
+            if not sequences:
+                logger.warning(f'No sequences found for session {out.session_id}. Skipping stats update.')
+                return
+
+            msg = sequences[0]
+            req_state = getattr(msg, 'req_state', None)
+            if req_state is None:
+                logger.warning(f'req_state not found for session {out.session_id}. Skipping stats update.')
+                return
+
+            if req_state and req_state.stats is not None:
+                # update stats from output
+                iteration_stats.update_from_output(output=out,
+                                                   engine_core_timestamp=out.engine_core_timestamp,
+                                                   is_prefilling=req_state.is_prefilling,
+                                                   prompt_len=req_state.prompt_len,
+                                                   req_stats=req_state.stats)
+                # update stats if request is finished
+                if out.finish:
+                    iteration_stats.update_from_finished_request(finish_reason=out.resp.type,
+                                                                 num_prompt_tokens=req_state.prompt_len,
+                                                                 req_stats=req_state.stats)
 
         def __send_resp(out: InferOutput):
             """send response."""
@@ -984,42 +1015,12 @@ class Engine:
 
             for out in step_outputs:
                 if self.engine_config.enable_metrics:
-                    session = self.scheduler.sessions.get(out.session_id)
-                    if session is None:
-                        logger.warning(f'Session {out.session_id} not found. Skipping stats update.')
-                        continue
-
-                    sequences = list(session.sequences.values())
-                    if not sequences:
-                        logger.warning(f'No sequences found for session {out.session_id}. Skipping stats update.')
-                        continue
-
-                    msg = sequences[0]
-                    req_state = getattr(msg, 'req_state', None)
-                    if req_state is None:
-                        logger.warning(f'req_state not found for session {out.session_id}. Skipping stats update.')
-                        continue
-
-                    if req_state and req_state.stats is not None:
-                        # update stats from output
-                        iteration_stats.update_from_output(output=out,
-                                                           engine_core_timestamp=out.engine_core_timestamp,
-                                                           is_prefilling=req_state.is_prefilling,
-                                                           prompt_len=req_state.prompt_len,
-                                                           req_stats=req_state.stats)
-                        # update stats if request is finished
-                        if out.finish:
-                            iteration_stats.update_from_finished_request(finish_reason=out.resp.type,
-                                                                         num_prompt_tokens=req_state.prompt_len,
-                                                                         req_stats=req_state.stats)
+                    __update_stats(out=out, iteration_stats=iteration_stats)
 
                 __send_resp(out)
 
             if self.engine_config.enable_metrics:
-                assert self.stat_loggers is not None, 'stat loggers cannot be None when enabling metrics'
-                self._record_stats(stat_loggers=self.stat_loggers,
-                                   scheduler_stats=scheduler_stats,
-                                   iteration_stats=iteration_stats)
+                log_que.put_nowait((scheduler_stats, iteration_stats))
 
         while True:
             num_outs = que.qsize()
@@ -1031,6 +1032,16 @@ class Engine:
                 resps = (await que.get()).values()
             await self._await_forward_event(forward_event)
             __send_resps(resps)
+
+    async def _async_log_stats_task(self, log_que: asyncio.Queue):
+
+        while True:
+            (scheduler_stats, iteration_stats) = await log_que.get()
+
+            assert self.stat_loggers is not None, 'stat loggers cannot be None when enabling metrics'
+            self._record_stats(stat_loggers=self.stat_loggers,
+                               scheduler_stats=scheduler_stats,
+                               iteration_stats=iteration_stats)
 
     @torch.inference_mode()
     async def _async_loop_migration(self, resp_que: asyncio.Queue, has_runable_event: asyncio.Event):
@@ -1172,10 +1183,15 @@ class Engine:
                 forward_event, has_runable_event),
                                                    name='MainLoopPreprocessMessage')
 
+            # log task
+            logger.info('Starting async task MainLoopLogStats.')
+            log_que = asyncio.Queue()
+            log_stats_task = asyncio.create_task(self._async_log_stats_task(log_que), name='MainLoopLogStats')
+
             # response task
             logger.info('Starting async task MainLoopResponse.')
             resp_que = asyncio.Queue()
-            loop_send_resp = event_loop.create_task(self._async_loop_send_responses(resp_que, forward_event),
+            loop_send_resp = event_loop.create_task(self._async_loop_send_responses(resp_que, log_que, forward_event),
                                                     name='MainLoopResponse')
 
             logger.info('Starting async task MigrationLoop.')
@@ -1186,7 +1202,7 @@ class Engine:
 
             # binding done callback
             loop_main = asyncio.current_task()
-            loop_tasks: List[asyncio.Task] = [loop_main, loop_msg_proc, loop_migration, loop_send_resp]
+            loop_tasks: List[asyncio.Task] = [loop_main, loop_msg_proc, loop_migration, log_stats_task, loop_send_resp]
             self._add_loop_tasks_done_callback(loop_tasks)
             self._loop_main = loop_main
 

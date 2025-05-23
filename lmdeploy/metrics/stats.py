@@ -19,6 +19,14 @@ class SchedulerStats:
 
     gpu_cache_usage: float = 0.0
 
+    def __repr__(self):
+        """Return a human-readable string representation."""
+        return (f'SchedulerStats(\n'
+                f'  num_running_reqs={self.num_running_reqs},\n'
+                f'  num_waiting_reqs={self.num_waiting_reqs},\n'
+                f'  gpu_cache_usage={self.gpu_cache_usage:.6f},\n'
+                f')')
+
 
 @dataclass
 class RequestStateStats:
