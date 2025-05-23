@@ -332,7 +332,7 @@ class Engine:
         self.tp = engine_config.tp
         self.dp = engine_config.dp
         self.dp_rank = engine_config.dp_rank
-        print(f'engine dp_rank: {self.dp_rank}')
+        logger.info(f'current engine dp_rank: {self.dp_rank}')
 
         # download models and adapters
         if not os.path.exists(model_path):

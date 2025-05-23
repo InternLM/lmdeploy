@@ -233,7 +233,7 @@ class SchedulerSession:
     def __init__(self,
                  session_id: int,
                  block_size: int,
-                 enable_metrics: bool,
+                 enable_metrics: bool = False,
                  seq_manager: SequenceManager = None) -> None:
         self.session_id = session_id
         self.block_size = block_size
