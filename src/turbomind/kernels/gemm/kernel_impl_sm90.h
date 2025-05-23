@@ -35,6 +35,7 @@ __global__ void __launch_bounds__(Kernel::CTA_SIZE, 1) gemm_kernel_sm90(const __
                                                                         const MatrixParam                   param_U,
                                                                         const MatrixParam                   param_V,
                                                                         const MatrixParam                   param_C,
+                                                                        // uint2                               box_V,
                                                                         typename Kernel::Scheduler          sched,
                                                                         void* tensormap_buf)
 {
@@ -51,6 +52,7 @@ __global__ void __launch_bounds__(Kernel::CTA_SIZE, 1) gemm_kernel_sm90(const __
                param_U,
                param_V,
                param_C,
+            //    box_V,
                sched,
                (CUtensorMap*)tensormap_buf,
                smem_buf);
@@ -229,14 +231,16 @@ public:
 
         CUtensorMap tm_u{};
         if (U) {
-            TM_CHECK_EQ(TILE_K, 128);
             // std::cout << "U: " << Udesc << "\n";
             tm_u = make_2d_tma_desc((void*)U, Udesc, {kTileM / kMulticastA, 1}, CU_TENSOR_MAP_SWIZZLE_NONE);
         }
 
         CUtensorMap tm_v{};
+        uint2       box_v{};
         if (V) {
-            // std::cout << "V: " << Vdesc << "\n";
+            // box_v = {(uint32_t)round_up(cdiv(k, 128), 4), 2};
+            // std::cout << "V: " << Vdesc << ", box: " << box_v.x << "," << box_v.y << "\n";
+            // tm_v = make_2d_tma_desc((void*)V, Vdesc, {box_v.y, box_v.x}, CU_TENSOR_MAP_SWIZZLE_NONE);
         }
 
         static constexpr int sm_count = 132;
@@ -291,6 +295,7 @@ public:
                                      to_param((void*)U, Udesc),
                                      to_param((void*)V, Vdesc),
                                      to_param((void*)D, Ddesc),
+                                    //  box_v,
                                      sched,
                                      workspace.tensormaps);
         TM_CHECK_EQ(ec, cudaSuccess) << cudaGetErrorString(ec);
