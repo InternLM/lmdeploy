@@ -10,9 +10,12 @@ from http import HTTPStatus
 from typing import AsyncGenerator, Dict, List, Literal, Optional, Union
 
 import uvicorn
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
-from fastapi.encoders import jsonable_encoder
-from fastapi.exceptions import RequestValidationError
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, applications
+from fastapi.staticfiles import StaticFiles
+from fastapi.openapi.docs import (
+    get_swagger_ui_html,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.security.http import HTTPAuthorizationCredentials, HTTPBearer
@@ -32,7 +35,7 @@ from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, ChatCompletio
                                             CompletionResponseStreamChoice, CompletionStreamResponse, DeltaMessage,
                                             EmbeddingsRequest, EncodeRequest, EncodeResponse, ErrorResponse,
                                             GenerateRequest, GenerateResponse, LogProbs, ModelCard, ModelList,
-                                            ModelPermission, TopLogprob, UpdateParamsRequest, UsageInfo)
+                                            ModelPermission, TopLogprob, UsageInfo)
 from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import ReasoningParser, ReasoningParserManager
 from lmdeploy.serve.openai.tool_parser.tool_parser import ToolParser, ToolParserManager
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
@@ -429,7 +432,6 @@ async def chat_completions_v1(raw_request: Request = None):
         sequence_end=True,
         do_preprocess=not isinstance(request.messages, str),  # text completion for string input
         adapter_name=adapter_name,
-        enable_thinking=request.enable_thinking,
     )
 
     def create_stream_response_json(index: int,
@@ -493,9 +495,7 @@ async def chat_completions_v1(raw_request: Request = None):
                         streaming_tools = True
                 previous_text = current_text
                 previous_token_ids = current_token_ids
-            elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
-                logger.error('Please lanuch the api_server with --tool-call-parser if you want to use tool.')
-            if VariableInterface.reasoning_parser is not None:
+            elif VariableInterface.reasoning_parser is not None:
                 current_text = current_text + res.response
                 delta_token_ids = res.token_ids if res.token_ids is not None else []
                 current_token_ids = current_token_ids + delta_token_ids
@@ -511,6 +511,8 @@ async def chat_completions_v1(raw_request: Request = None):
                     delta_message.content = reasoning_delta.content
                 previous_text = current_text
                 previous_token_ids = current_token_ids
+            elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
+                logger.error('Please lanuch the api_server with --tool-call-parser if you want to use tool.')
             response_json = create_stream_response_json(index=0,
                                                         delta_message=delta_message,
                                                         finish_reason=res.finish_reason,
@@ -560,11 +562,11 @@ async def chat_completions_v1(raw_request: Request = None):
         except Exception as e:
             logger.error(f'Failed to parse {text}. Exception: {e}.')
             return create_error_response(HTTPStatus.BAD_REQUEST, 'Failed to parse fc related info to json format!')
+    # assume reasoning uncompatible with tool call
+    elif VariableInterface.reasoning_parser is not None:
+        reasoning_content, text = VariableInterface.reasoning_parser.extract_reasoning_content(text, request)
     elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
         logger.error('Please lanuch the api_server with --tool-call-parser if you want to use tool.')
-
-    if VariableInterface.reasoning_parser is not None:
-        reasoning_content, text = VariableInterface.reasoning_parser.extract_reasoning_content(text, request)
 
     logprobs = None
     if gen_logprobs and len(final_logprobs):
@@ -873,15 +875,6 @@ async def encode(request: EncodeRequest, raw_request: Request = None):
         return EncodeResponse(input_ids=encoded, length=length)
 
 
-@router.post('/update_weights', dependencies=[Depends(check_api_key)])
-def update_params(request: UpdateParamsRequest, raw_request: Request = None):
-    """Update weights for the model."""
-    if VariableInterface.async_engine.backend != 'pytorch':
-        return create_error_response(HTTPStatus.BAD_REQUEST, 'Unsupported by turbomind.')
-    VariableInterface.async_engine.engine.update_params(request)
-    return JSONResponse(content=None)
-
-
 """ PD Disaggregation API Begin """
 
 
@@ -1078,7 +1071,7 @@ def handle_torchrun():
 @router.on_event('startup')
 async def startup_event():
     async_engine = VariableInterface.async_engine
-    async_engine.start_loop(use_async_api=True)
+    async_engine.start_loop()
 
     if VariableInterface.proxy_url is None:
         return
@@ -1095,17 +1088,6 @@ async def startup_event():
             raise HTTPException(status_code=400, detail='Service registration failed')
     except Exception as e:
         logger.error(f'Service registration failed: {e}')
-
-
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    """handler for RequestValidationError."""
-    return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content=jsonable_encoder({
-            'detail': exc.errors(),
-            'body': exc.body
-        }),
-    )
 
 
 class ConcurrencyLimitMiddleware(BaseHTTPMiddleware):
@@ -1228,9 +1210,25 @@ def serve(model_path: str,
         )
     else:
         app = FastAPI(docs_url='/')
+        # get file absolute path
+        docs_assets_path = kwargs['docs_assets_path']
+
+        # define static file path
+        def swagger_monkey_patch(*args, **kwargs):
+            logger.info("测试")
+            return get_swagger_ui_html(
+                *args,
+                **kwargs,
+                swagger_js_url="assets/js/swagger-ui-bundle.js",
+                swagger_css_url="assets/css/swagger-ui.css",
+                swagger_favicon_url="assets/images/favicon.png"
+            )
+        applications.get_swagger_ui_html = swagger_monkey_patch
+        app.mount(path=f'/assets',  # web resource path
+            app=StaticFiles(directory=f'{docs_assets_path}'),  # 网页资源目录的路径
+            name='assets')
 
     app.include_router(router)
-    app.add_exception_handler(RequestValidationError, validation_exception_handler)
 
     if allow_origins:
         app.add_middleware(
