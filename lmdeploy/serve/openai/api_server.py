@@ -1212,21 +1212,21 @@ def serve(model_path: str,
         app = FastAPI(docs_url='/')
         # get file absolute path
         docs_assets_path = kwargs['docs_assets_path']
-
-        # define static file path
-        def swagger_monkey_patch(*args, **kwargs):
-            logger.info("测试")
-            return get_swagger_ui_html(
-                *args,
-                **kwargs,
-                swagger_js_url="assets/js/swagger-ui-bundle.js",
-                swagger_css_url="assets/css/swagger-ui.css",
-                swagger_favicon_url="assets/images/favicon.png"
-            )
-        applications.get_swagger_ui_html = swagger_monkey_patch
-        app.mount(path=f'/assets',  # web resource path
-            app=StaticFiles(directory=f'{docs_assets_path}'),  # 网页资源目录的路径
-            name='assets')
+        if docs_assets_path:
+            # define static file path
+            def swagger_monkey_patch(*args, **kwargs):
+                logger.info("测试")
+                return get_swagger_ui_html(
+                    *args,
+                    **kwargs,
+                    swagger_js_url="assets/js/swagger-ui-bundle.js",
+                    swagger_css_url="assets/css/swagger-ui.css",
+                    swagger_favicon_url="assets/images/favicon.png"
+                )
+            applications.get_swagger_ui_html = swagger_monkey_patch
+            app.mount(path=f'/assets',  # web resource path
+                app=StaticFiles(directory=f'{docs_assets_path}'),  # 网页资源目录的路径
+                name='assets')
 
     app.include_router(router)
 
