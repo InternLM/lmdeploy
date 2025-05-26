@@ -36,8 +36,8 @@ __global__ void __launch_bounds__(Kernel::CTA_SIZE, 1) gemm_kernel_sm90(const __
                                                                         const MatrixParam                   param_V,
                                                                         const MatrixParam                   param_C,
                                                                         // uint2                               box_V,
-                                                                        typename Kernel::Scheduler          sched,
-                                                                        void* tensormap_buf)
+                                                                        typename Kernel::Scheduler sched,
+                                                                        void*                      tensormap_buf)
 {
 #if __CUDA_ARCH__
     if constexpr (Kernel::Arch::is_compatible(__CUDA_ARCH__)) {
@@ -52,7 +52,7 @@ __global__ void __launch_bounds__(Kernel::CTA_SIZE, 1) gemm_kernel_sm90(const __
                param_U,
                param_V,
                param_C,
-            //    box_V,
+               //    box_V,
                sched,
                (CUtensorMap*)tensormap_buf,
                smem_buf);
@@ -88,9 +88,9 @@ public:
         // using IterA = typename OpA::GmemIter;
         // using IterB = typename OpB::GmemIter;
 
-        desc_.striding_a = {};  // IterA::kMode;
-        desc_.striding_b = {};  // IterB::kMode;
-        desc_.striding_c = {};  // Gemm::Epilogue::kMode;
+        desc_.striding_a = {Striding::kBlocked};  // IterA::kMode;
+        desc_.striding_b = {Striding::kBlocked};  // IterB::kMode;
+        desc_.striding_c = {Striding::kBlocked};  // Gemm::Epilogue::kMode;
 
         desc_.pack_a = {};  // OpA::kPack;
         desc_.pack_b = {};  // OpB::kPack;
@@ -189,28 +189,17 @@ public:
         MatrixLayout Vdesc = transpose(_Vdesc);
 
         auto sched = [&] {
-            if constexpr (0) {
-                LaunchSpec spec{(Kernel*)this};
-                spec.splits  = splits;
-                spec.swizzle = swizzle;
-                return Sched{operation.context->Schedule(spec)};
-            }
-            else {
-                const int chunk_cnt = ceil_div(k, TILE_K);
-                // Limit splits by num of chunks to avoid chaos
-                splits = std::min(chunk_cnt, splits);
+            const int2 tiles = get_tiled_shape(m, n, TILE_M, TILE_N);
+            const int4 shape{m, n, k, 1};
 
-                const int2 tiles = get_tiled_shape(m, n, TILE_M, TILE_N);
-                const int4 shape{m, n, k, 1};
+            swizzle = Sched::get_log_tile(tiles, 1 << swizzle);
 
-                if (splits > 1) {
-                    splits = FixSplits(shape, tiles, splits, workspace);
-                }
+            Sched sched{};
+            sched.init(shape, swizzle, {TILE_M, TILE_N, TILE_K});
 
-                swizzle = Sched::get_log_tile(tiles, 1 << swizzle);
+            sched.offsets_ = Adesc.offsets;
 
-                return Sched{shape, tiles, splits, swizzle, TILE_K, TILE_K};
-            }
+            return sched;
         }();
 
         constexpr int kMulticastA = Gemm::kMulticastA;
@@ -219,25 +208,26 @@ public:
         constexpr int kTileM = Gemm::TILE_M;
         constexpr int kTileN = Gemm::TILE_N;
 
-        // std::cout << "A: " << Adesc << "\n";
+        std::cout << "A: " << Adesc << "\n";
         auto tm_a = make_2d_tma_desc((void*)A, Adesc, {kTileM / kMulticastA, TILE_K}, CU_TENSOR_MAP_SWIZZLE_128B);
 
-        // std::cout << "B: " << Bdesc << "\n";
+        std::cout << "B: " << Bdesc << "\n";
         auto tm_b = make_2d_tma_desc((void*)B, Bdesc, {kTileN / kMulticastB, TILE_K}, CU_TENSOR_MAP_SWIZZLE_128B);
 
-        // std::cout << "C: " << Cdesc << "\n";
+        std::cout << "C: " << Cdesc << "\n";
         using LayoutC = typename Gemm::LayoutC;
         auto tm_c     = make_2d_tma_desc((void*)C, Cdesc, {LayoutC::S0, LayoutC::C0}, get_tma_swizzle(Gemm::kSwizzleC));
 
         CUtensorMap tm_u{};
         if (U) {
-            // std::cout << "U: " << Udesc << "\n";
+            std::cout << "U: " << Udesc << "\n";
             tm_u = make_2d_tma_desc((void*)U, Udesc, {kTileM / kMulticastA, 1}, CU_TENSOR_MAP_SWIZZLE_NONE);
         }
 
-        CUtensorMap tm_v{};
-        uint2       box_v{};
+        CUtensorMap            tm_v{};
+        [[maybe_unused]] uint2 box_v{};
         if (V) {
+            std::cout << "V: " << Vdesc << "\n";
             // box_v = {(uint32_t)round_up(cdiv(k, 128), 4), 2};
             // std::cout << "V: " << Vdesc << ", box: " << box_v.x << "," << box_v.y << "\n";
             // tm_v = make_2d_tma_desc((void*)V, Vdesc, {box_v.y, box_v.x}, CU_TENSOR_MAP_SWIZZLE_NONE);
@@ -295,7 +285,7 @@ public:
                                      to_param((void*)U, Udesc),
                                      to_param((void*)V, Vdesc),
                                      to_param((void*)D, Ddesc),
-                                    //  box_v,
+                                     //  box_v,
                                      sched,
                                      workspace.tensormaps);
         TM_CHECK_EQ(ec, cudaSuccess) << cudaGetErrorString(ec);

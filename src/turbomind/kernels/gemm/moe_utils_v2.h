@@ -34,6 +34,12 @@ void invokeMoeDispatch(Ref<Tensor>   out_,  //
                        int           expert_per_token,
                        cudaStream_t  st);
 
+void invokeMoeDispatchScales(Ref<Tensor>   out_,  //
+                             const Tensor& src,
+                             const int*    f2n,
+                             int           expert_per_token,
+                             cudaStream_t  st);
+
 void invokeMoeCombine(Ref<Tensor>   out_,
                       const Tensor& src,
                       const float*  scales,

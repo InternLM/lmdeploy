@@ -643,14 +643,6 @@ struct GemmUniversalSm90_v2 {
 
                 math_barrier_sync(1);
 
-                const int wg_thread_id = threadIdx.x % WARPGROUP_SIZE;
-
-                if (wg_thread_id < LayoutC::C1) {
-                    cute::tma_store_wait<0>();
-                }
-
-                wg_barrier.sync();
-
                 // epilogue
                 PRAGMA_UNROLL
                 for (int m = 0; m < MMA_ITER_M; ++m) {
@@ -690,12 +682,17 @@ struct GemmUniversalSm90_v2 {
 
                 wg_barrier.sync();
 
+                const int wg_thread_id = threadIdx.x % WARPGROUP_SIZE;
+
                 if (wg_thread_id < LayoutC::C1) {
                     const int tma_n = wg_thread_id * LayoutC::C0;
                     cute::SM90_TMA_STORE::copy(
                         &tm_c, &storage.C[wg_thread_id * TILE_M * LayoutC::C0], offset_n + tma_n, offset_m);
                     cute::tma_store_arrive();
+                    cute::tma_store_wait<0>();
                 }
+
+                wg_barrier.sync();
 
             }  // scheduler loop
 

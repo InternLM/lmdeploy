@@ -80,11 +80,6 @@ public:
         cudaMalloc(&workspace.tensormaps, workspace.tensormaps_size);
     }
 
-    auto trans_(const Tensor& x, bool pred)
-    {
-        return pred ? x.t() : x;
-    }
-
     auto create_(int rows, int cols, DataType type, Order order, int num = 1)
     {
         MatrixLayout m{};
@@ -100,7 +95,7 @@ public:
         }
         else {
             m.ld = rows;
-            t    = {{{rows, cols * num}, {1, rows}}, type, kDEVICE};
+            t    = {{{cols * num, rows}, {rows, 1}}, type, kDEVICE};
         }
         return std::make_pair(t, m);
     }
@@ -145,8 +140,8 @@ public:
         if (Ta == kFloat8_e4m3) {
             QuantizeSymmBlock(a_q_, a_s_, a_, stream);
             DequantizeSymmBlock(a_f_, a_q_, a_s_, stream);
-            a_q_desc_ = {a_q_.dtype(), kRowMajor, (int)a_q_.shape(0), (int)a_q_.shape(1), (int)prod_(a_q_.stride())};
-            u_desc_   = {a_s_.dtype(), kRowMajor, (int)a_s_.shape(0), (int)a_s_.shape(1), (int)prod_(a_s_.stride())};
+            a_q_desc_ = {a_q_.dtype(), kRowMajor, M, K, (int)a_q_.stride(0)};
+            u_desc_   = {a_s_.dtype(), kRowMajor, (int)a_s_.shape(0), (int)a_s_.shape(1), (int)a_s_.stride(0)};
             tie(a_x_, a_desc_x_) = std::make_tuple(&a_q_, &a_q_desc_);
             u_desc_.num = a_q_desc_.num = a_desc_.num;
             if (1) {
@@ -157,15 +152,10 @@ public:
         }
 
         if (Tb == kFloat8_e4m3) {  // b is k-major & b_s is n-major
-            QuantizeSymm(b_q_, b_s_, trans_(b_, Ob == kColMajor), stream);
+            QuantizeSymm(b_q_, b_s_, b_, stream);
             DequantizeSymm(b_f_, b_q_, b_s_, stream);
-            if (Ob == kColMajor) {
-                b_q_ = b_q_.t();
-                b_s_ = b_s_.t();
-                b_f_ = b_f_.t();
-            }
-            b_q_desc_ = {b_q_.dtype(), kColMajor, (int)b_q_.shape(0), (int)b_q_.shape(1), (int)prod_(b_q_.stride())};
-            v_desc_   = {b_s_.dtype(), kRowMajor, (int)b_s_.shape(0), (int)b_s_.shape(1), (int)prod_(b_s_.stride())};
+            b_q_desc_ = {b_q_.dtype(), kColMajor, K, N, (int)b_q_.stride(0)};
+            v_desc_   = {b_s_.dtype(), kRowMajor, (int)b_s_.shape(0), (int)b_s_.shape(1), (int)b_s_.stride(0)};
             tie(b_x_, b_desc_x_) = std::make_tuple(&b_q_, &b_q_desc_);
             v_desc_.num = b_q_desc_.num = b_desc_.num;
             if (1) {
@@ -217,14 +207,14 @@ public:
             f2i[expert_ids[i]].push_back(i);  // i ~ [n, e]
         }
 
-        std::vector<int> n_offset(expert_num_ + 1);  // bsz
-        for (int i = 0; i < expert_num_; ++i) {
-            n_offset[i + 1] = n_offset[i] + cnt[i];
-        }
-
         std::vector<int> m_offset(expert_num_ + 1);  // output dim
         for (int i = 0; i < expert_num_; ++i) {
             m_offset[i + 1] = m_offset[i] + M;
+        }
+
+        std::vector<int> n_offset(expert_num_ + 1);  // bsz
+        for (int i = 0; i < expert_num_; ++i) {
+            n_offset[i + 1] = n_offset[i] + cnt[i];
         }
 
         std::vector<int> f2n(expert_ids.size());
@@ -241,27 +231,55 @@ public:
             }
         }
 
+        if (1) {
+            // std::cout << "f2n: ";
+            // for (size_t i = 0; i < f2n.size(); ++i) {
+            //     std::cout << f2n[i] << " ";
+            // }
+            // std::cout << "\n";
+            std::cout << "m_offset: ";
+            for (size_t i = 0; i < m_offset.size(); ++i) {
+                std::cout << m_offset[i] << " ";
+            }
+            std::cout << "\n";
+            std::cout << "n_offset: ";
+            for (size_t i = 0; i < n_offset.size(); ++i) {
+                std::cout << n_offset[i] << " ";
+            }
+            std::cout << "\n";
+        }
+
         moe_cnt_ = cnt;
 
         f2n_ = {(int)f2n.size(), kDEVICE};
         Copy(Buffer_{f2n.data(), f2n_.size(), kCPU}, f2n_);
+        // std::cout << "f2n: " << f2n_ << "\n";
 
         m_offset_ = {(int)m_offset.size(), kDEVICE};
         Copy(Buffer_{m_offset.data(), m_offset_.size(), kCPU}, m_offset_);
+        // std::cout << "m_offset: " << m_offset_ << "\n";
 
         n_offset_ = {(int)n_offset.size(), kDEVICE};
-        Copy(Buffer_{n_offset.data(), n_offset_.size(), kCPU}, m_offset_);
+        Copy(Buffer_{n_offset.data(), n_offset_.size(), kCPU}, n_offset_);
+        // std::cout << "n_offset: " << n_offset_ << "\n";
 
         en2f_ = {(int)en2f.size(), kDEVICE};
         Copy(Buffer_{en2f.data(), en2f_.size(), kCPU}, en2f_);
+        // std::cout << "en2f: " << en2f_ << "\n";
 
         moe_scales_ = {(int)scales.size(), kDEVICE};
         Copy(Buffer_{scales.data(), moe_scales_.size(), kCPU}, moe_scales_);
+        // std::cout << "moe_scales: " << moe_scales_ << "\n";
 
-        // b_e_   = create_(K, N, Tb, Ob, e_).first;
-        // b_e_f_ = empty_like(b_e_);
-        // invokeMoeDispatch(b_e_, b_, f2n_.data(), e_, stream_);
-        // invokeMoeDispatch(b_e_f_, b_f_, f2n_.data(), e_, stream_);
+        b_q_e_ = create_(K, N, b_q_.dtype(), Ob, e_).first;
+        // std::cout << "b_q_e: " << b_q_e_ << "\n";
+        invokeMoeDispatch(b_q_e_, b_q_, f2n_.data(), e_, stream_);
+        invokeMoeDispatchScales(v_e_, b_s_, f2n_.data(), e_, stream_);
+
+        b_q_desc_.num = v_desc_.num = expert_num_;
+        b_q_desc_.offsets = v_desc_.offsets = n_offset_.data();
+
+        b_x_ = &b_q_e_;
     }
 
     void Run()
@@ -272,15 +290,25 @@ public:
                                   {QuantType::kDefault, 128},
                                   0};
 
-        // const auto& a      = a_q_ ? a_q_ : a_;
-        // const auto& b      = b_q_ ? b_q_ : b_;
-        // const auto& a_desc = a_q_ ? a_q_desc_ : a_desc_;
-        // const auto& b_desc = b_q_ ? b_q_desc_ : b_desc_;
+        auto C = &c_x_;
+        auto V = &b_s_;
+
+        auto   c_desc = c_desc_;
+        Tensor C_e;
+        if (expert_num_) {
+            c_desc.num     = expert_num_;
+            c_desc.offsets = m_offset_.data();
+            C_e            = create_(M, N, Tc, Oc, e_).first;
+            C              = &C_e;
+            V              = &v_e_;
+
+            a_desc_x_->offsets = m_offset_.data();
+        }
 
         FT_CHECK(a_x_ && a_desc_x_);
         FT_CHECK(b_x_ && b_desc_x_);
 
-        std::cout << *a_desc_x_ << " " << *b_desc_x_ << " " << c_desc_ << "\n";
+        std::cout << *a_desc_x_ << " " << *b_desc_x_ << " " << c_desc << "\n";
 
         auto status = gemm_.Run(operation,
                                 1.f,
@@ -290,17 +318,26 @@ public:
                                 u_desc_,
                                 b_x_->raw_data(),
                                 *b_desc_x_,
-                                b_s_.data_or((void*)nullptr),
+                                V->data_or((void*)nullptr),
                                 v_desc_,
                                 0.f,
-                                c_x_.raw_data(),
-                                c_desc_,
-                                c_x_.raw_data(),
-                                c_desc_,
+                                C->raw_data(),
+                                c_desc,
+                                C->raw_data(),
+                                c_desc,
                                 workspace,
                                 stream_);
 
         TM_CHECK_EQ(status, 0);
+
+        invokeMoeCombine(c_x_,  //
+                         C_e,
+                         moe_scales_.data(),
+                         en2f_.data(),
+                         nullptr,
+                         e_,
+                         0,
+                         stream_);
 
         // Tensor h_c = empty_like(c_o_.t(), kCPU);
         // Copy(c_o_.t(), h_c);
@@ -329,7 +366,6 @@ public:
         }
 
         if (expert_num_ == 0) {
-
             reference_.gemm(a.raw_data(),  //
                             a_desc_,
                             b.raw_data(),
@@ -341,6 +377,7 @@ public:
             auto c_e = create_(M, N, Tc, Oc, e_).first;
             auto b_e = create_(K, N, b.dtype(), Ob, e_).first;
 
+            std::cout << b << " " << b_e << " " << c_e << "\n";
             invokeMoeDispatch(b_e, b, f2n_.data(), e_, stream_);
 
             auto a_ptr = (char*)a.raw_data();
@@ -368,15 +405,14 @@ public:
             }
             // std::cout << "C : " << c << "\n";
             // std::cout << "Ce: " << c_e << "\n";
-            invokeMoeCombine(
-                c, trans_(c_e, Oc == kColMajor), moe_scales_.data(), en2f_.data(), nullptr, e_, 0.f, stream_);
+            invokeMoeCombine(c, c_e, moe_scales_.data(), en2f_.data(), nullptr, e_, 0.f, stream_);
         }
     }
 
     auto Compare(int x, int r)
     {
         std::vector c{&c_, &c_f_, &c_x_};
-        return FastCompare(trans_(*c[x], Oc == kColMajor), trans_(*c[r], Oc == kColMajor), stream_);
+        return FastCompare(*c[x], *c[r], stream_);
     }
 
     auto Check()
@@ -443,6 +479,9 @@ private:
 
     Tensor c_f_;  //
     Tensor c_x_;  // test output
+
+    Tensor b_q_e_;
+    Tensor v_e_;
 
     Tensor*       a_x_;
     Tensor*       b_x_;

@@ -63,11 +63,12 @@ void QuantizeSymm(Tensor& out, Tensor& scale, const Tensor& src, cudaStream_t st
     const int aligned_num = round_up<int>(num, alignment);
 
     if (!scale) {
-        scale = Tensor_<Tscale>({{num, dim / group_size}, {1, aligned_num}}, kDEVICE);
+        scale = Tensor_<Tscale>({{dim / group_size, num}, {aligned_num, 1}}, kDEVICE);
     }
     else {
-        TM_CHECK(std::make_tuple(num, dim / group_size) == scale.shapes(0, 1));
-        TM_CHECK(scale.stride(1) % alignment == 0);
+        TM_CHECK(std::make_tuple(dim / group_size, num) == scale.shapes(0, 1));
+        TM_CHECK(scale.stride(1) == 1);
+        TM_CHECK(scale.stride(0) % alignment == 0);
     }
 
     constexpr int block_dim = 512;
@@ -75,7 +76,7 @@ void QuantizeSymm(Tensor& out, Tensor& scale, const Tensor& src, cudaStream_t st
     quant_symm_row<vec_size, group_size><<<num, block_dim, 0, st>>>(out.data<Tout>(),  //
                                                                     out.stride(0),
                                                                     scale.data<Tscale>(),
-                                                                    scale.stride(1),
+                                                                    scale.stride(0),
                                                                     src.data<T>(),
                                                                     src.stride(0),
                                                                     num,
@@ -128,7 +129,7 @@ void DequantizeSymm(Tensor& out, const Tensor& src, const Tensor& scale, cudaStr
                                                                                        src.data<T>(),
                                                                                        src.stride(0),
                                                                                        scale.data<Tscale>(),
-                                                                                       scale.stride(1),
+                                                                                       scale.stride(0),
                                                                                        num,
                                                                                        dim);
 }

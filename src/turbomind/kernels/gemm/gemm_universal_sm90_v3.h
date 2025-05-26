@@ -217,7 +217,7 @@ struct GemmUniversalSm90_v3 {
     using Arch = Sm90;
 
     // using MMA_Atom = GMMA::MMA_64x128x16_F32BF16BF16_SS<GMMA::Major::K, GMMA::Major::K>;
-    using MMA_Atom = GMMA::MMA_64x192x32_F32E4M3E4M3_SS_TN<>;
+    using MMA_Atom = GMMA::MMA_64x128x32_F32E4M3E4M3_SS_TN<>;
     static constexpr typename cute::MMA_Traits<MMA_Atom>::Shape_MNK MMA_Shape{};
 
     static constexpr int MMA_ATOM_M = cute::get<0>(MMA_Shape);
@@ -225,7 +225,7 @@ struct GemmUniversalSm90_v3 {
     static constexpr int MMA_ATOM_K = cute::get<2>(MMA_Shape);
 
     static constexpr int TILE_M = 128;
-    static constexpr int TILE_N = 192;
+    static constexpr int TILE_N = 128;
     static constexpr int TILE_K = 128;
 
     static constexpr int WG_M = 2;
@@ -242,7 +242,7 @@ struct GemmUniversalSm90_v3 {
     static constexpr int MMA_ITER_N = WG_TILE_N / MMA_ATOM_N;
     static constexpr int MMA_ITER_K = TILE_K / MMA_ATOM_K;
 
-    static constexpr int kMulticastA = 1;
+    static constexpr int kMulticastA = 2;
     static constexpr int kMulticastB = 2;
 
     static constexpr int kClusterSize = kMulticastA * kMulticastB;
@@ -263,9 +263,9 @@ struct GemmUniversalSm90_v3 {
     using Tu = float;
     using Tv = float;
 
-    using Cluster = arch::Cluster<kMulticastB, kMulticastA, kRowMajor>;
+    using Cluster = arch::Cluster<kMulticastB, kMulticastA, kColMajor>;
 
-    using Scheduler = TileScheduler<kRowMajor, Cluster, true, true, false>;
+    using Scheduler = TileScheduler<kColMajor, Cluster, true, true, true, 0>;
 
     using ProducerBar = cutlass::arch::ClusterTransactionBarrier;
     using ConsumerBar = cutlass::arch::ClusterBarrier;
@@ -290,7 +290,7 @@ struct GemmUniversalSm90_v3 {
         __align__(1024) Array<Tc, TILE_M * TILE_N> C;
         __align__(128) uint64_t producer_bar[Stages];
         __align__(128) uint64_t consumer_bar[Stages];
-        __align__(128) CUtensorMap tma_desc_C[WARPGORUPS];
+        __align__(128) CUtensorMap tma_desc_buf[5];  //
     };
 
     static constexpr int kSmemSize = sizeof(SharedStorage);
@@ -359,16 +359,41 @@ struct GemmUniversalSm90_v3 {
                 cutlass::PipelineState<Stages> write_state{0, 1, 0};
 
                 while (sched.next()) {
+
+                    auto [valid_cta_tile_p, cluster_tile_p] = sched.is_valid_tile();
+
+                    if (!cluster_tile_p) {
+                        // OOB tile caused by swizzle pattern
+                        continue;
+                    }
+
+                    const auto tile_offset              = sched.tile_offset();
+                    const auto [iter_k_beg, iter_k_end] = sched.iter_k_range();
+
+                    const int g = sched.group_idx_;
+
+                    update_tma_desc(tm_a,
+                                    tensormap_buf,
+                                    storage.tma_desc_buf,
+                                    0,
+                                    (Ta*)param_A.ptr + param_A.offsets[g] * param_A.stride,
+                                    param_A.offsets[g + 1] - param_A.offsets[g]);
+                    update_tma_desc(tm_b,
+                                    tensormap_buf,
+                                    storage.tma_desc_buf,
+                                    1,
+                                    (Tb*)param_B.ptr + param_B.offsets[g] * param_B.stride,
+                                    param_B.offsets[g + 1] - param_B.offsets[g]);
+                    const int alignment_u = 16 / sizeof(Tu);
+                    int       beg_u       = param_U.offsets[g] / alignment_u * alignment_u;
+                    update_tma_desc(tm_u,
+                                    tensormap_buf,
+                                    storage.tma_desc_buf,
+                                    2,
+                                    (Tu*)param_U.ptr + beg_u,
+                                    param_U.offsets[g + 1] - beg_u);
+
                     if (cute::elect_one_sync()) {
-                        auto [valid_cta_tile_p, cluster_tile_p] = sched.is_valid_tile();
-
-                        if (!cluster_tile_p) {
-                            // OOB tile caused by swizzle pattern
-                            continue;
-                        }
-
-                        const auto tile_offset              = sched.tile_offset();
-                        const auto [iter_k_beg, iter_k_end] = sched.iter_k_range();
 
                         const int offset_k = iter_k_beg * TILE_K;
 
@@ -382,7 +407,6 @@ struct GemmUniversalSm90_v3 {
 
                         GmemIteratorSm90<kMulticastA> gmem_A{&tm_a, {offset_k, offset_m + mc_offset_m}, {TILE_K, 0}};
                         GmemIteratorSm90<kMulticastB> gmem_B{&tm_b, {offset_k, offset_n + mc_offset_n}, {TILE_K, 0}};
-
                         // column-major
                         GmemIteratorSm90<kMulticastA> gmem_U{&tm_u, {offset_m + mc_offset_m, offset_k / 128}, {0, 1}};
 
@@ -635,11 +659,11 @@ struct GemmUniversalSm90_v3 {
 
                 wg_barrier.sync();
 
-                // void* Cdesc{};
-                // if (threadIdx.x % WARPGROUP_SIZE / WARP_SIZE == 0) {
-                //     Cdesc = update_tma_desc(tm_c, tensormap_buf, &storage.tma_desc_C[wg_idx], wg_idx, param_C.ptr,
-                //     M);
-                // }
+                void* Cdesc{};
+                if (threadIdx.x % WARPGROUP_SIZE / WARP_SIZE == 0) {
+                    Cdesc = update_tma_desc(
+                        tm_c, tensormap_buf, &storage.tma_desc_buf[3 + wg_idx], 3 + wg_idx, param_C.ptr, M);
+                }
 
                 Tc* smem_C = &storage.C[wg_idx_m * WG_TILE_M * TILE_N + wg_idx_n * WG_TILE_N];
 
@@ -687,8 +711,8 @@ struct GemmUniversalSm90_v3 {
 
                 if (wg_lane < LayoutC::C1) {
                     const int tma_n = wg_lane * LayoutC::C0;
-                    // cute::tma_descriptor_fence_acquire((cute::TmaDescriptor*)Cdesc);
-                    cute::SM90_TMA_STORE::copy(&tm_c,
+                    cute::tma_descriptor_fence_acquire((cute::TmaDescriptor*)Cdesc);
+                    cute::SM90_TMA_STORE::copy(Cdesc,
                                                &smem_C[wg_lane * WG_TILE_M * LayoutC::C0],
                                                offset_n + wg_idx_n * WG_TILE_N + tma_n,
                                                offset_m + wg_idx_m * WG_TILE_M);
