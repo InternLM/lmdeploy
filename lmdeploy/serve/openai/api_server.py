@@ -1278,7 +1278,7 @@ def serve(model_path: str,
     uvicorn.run(app=app,
                 host=server_name,
                 port=server_port,
-                log_level=log_level.lower(),
+                log_level=os.getenv('UVICORN_LOG_LEVEL', 'info').lower(),
                 ssl_keyfile=ssl_keyfile,
                 ssl_certfile=ssl_certfile)
 
