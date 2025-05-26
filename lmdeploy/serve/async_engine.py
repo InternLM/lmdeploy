@@ -287,19 +287,6 @@ class AsyncEngine(LogitsMixin):
 
         logger.info(f'updated backend_config={self.backend_config}')
 
-        # build status loggers
-        # independent set for each DP rank, each set contains 1. cli logger 2. prometheus logger
-        logger.info(f'enable metrics: {backend_config.enable_metrics}')
-        self.stat_loggers: List[List[StatLoggerBase]] = setup_loggers(enable_metrics=backend_config.enable_metrics,
-                                                                      model_name=self.model_name,
-                                                                      engine_num=backend_config.dp)
-        logger.info(f'dp: {backend_config.dp} dp_rank: {self.backend_config.dp_rank}')
-
-        if backend_config.enable_metrics:
-            assert self.stat_loggers is not None
-            assert self.backend_config.dp_rank < len(self.stat_loggers)
-            self.engine.stat_loggers = self.stat_loggers[backend_config.dp_rank]
-
         # parameters for member functions
         self.session_len = _get_and_verify_max_len(self.hf_tm_cfg, self.backend_config.session_len)
         self.stop_words = _stop_words(self.chat_template.stop_words, self.tokenizer)
@@ -315,6 +302,21 @@ class AsyncEngine(LogitsMixin):
         self.request_logger = RequestLogger(max_log_len)
         self.internal_thread = _EventLoopThread(daemon=True)
         self.limiter: asyncio.Semaphore = None
+
+        # build status loggers
+        # independent set for each DP rank, since monototic time differs for each process
+        # each set contains one cli logger and one prometheus logger
+        logger.info(f'enable metrics: {backend_config.enable_metrics}')
+        self.stat_loggers: List[List[StatLoggerBase]] = setup_loggers(enable_metrics=backend_config.enable_metrics,
+                                                                      model_name=self.model_name,
+                                                                      max_model_len=self.session_len,
+                                                                      engine_num=backend_config.dp)
+        logger.info(f'dp: {backend_config.dp} dp_rank: {self.backend_config.dp_rank}')
+
+        if backend_config.enable_metrics:
+            assert self.stat_loggers is not None
+            assert self.backend_config.dp_rank < len(self.stat_loggers)
+            self.engine.stat_loggers = self.stat_loggers[backend_config.dp_rank]
 
     def close(self):
         self.internal_thread.close()

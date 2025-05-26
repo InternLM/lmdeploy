@@ -84,7 +84,7 @@ class LoggingStatLogger(StatLoggerBase):
 
 class PrometheusStatLogger(StatLoggerBase):
 
-    def __init__(self, model_name: str, dp_rank: int = 0):
+    def __init__(self, model_name: str, max_model_len: int, dp_rank: int = 0):
         self.dp_rank = dp_rank
 
         # unregister any existing lmdeploy collectors
@@ -92,10 +92,7 @@ class PrometheusStatLogger(StatLoggerBase):
             if hasattr(collector, '_name') and 'lmdeploy' in collector._name:
                 prometheus_client.REGISTRY.unregister(collector)
 
-        # FIXME, get from model config, hard coded for now
-        max_model_len = 32768
-
-        # config Information
+        # config information
         self.info_backend_config = prometheus_client.Info(name='lmdeploy:backend_config',
                                                           documentation='information of backend_config')
 
@@ -308,14 +305,15 @@ def build_1_2_5_buckets(max_value: int) -> List[int]:
     return build_buckets([1, 2, 5], max_value)
 
 
-def setup_loggers(enable_metrics: bool, model_name: str, engine_num: int):
+def setup_loggers(enable_metrics: bool, model_name: str, max_model_len: int, engine_num: int):
     if not enable_metrics:
         return []
 
     stat_loggers: List[List[StatLoggerBase]] = []
     for dp_rank in range(engine_num):
-        stat_loggers.append(
-            [LoggingStatLogger(dp_rank=dp_rank),
-             PrometheusStatLogger(model_name=model_name, dp_rank=dp_rank)])
+        stat_loggers.append([
+            LoggingStatLogger(dp_rank=dp_rank),
+            PrometheusStatLogger(model_name=model_name, max_model_len=max_model_len, dp_rank=dp_rank)
+        ])
 
     return stat_loggers
