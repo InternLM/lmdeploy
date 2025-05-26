@@ -1,5 +1,6 @@
 import copy
 import os
+from collections import OrderedDict
 
 import yaml
 from utils.get_run_config import get_tp_num
@@ -92,7 +93,8 @@ def get_quantization_model_list(type):
     config = get_config()
     if type == 'awq':
         case_list = [
-            x for x in config.get('turbomind_chat_model') + config.get('turbomind_base_model')
+            x
+            for x in list(OrderedDict.fromkeys(config.get('turbomind_chat_model') + config.get('turbomind_base_model')))
             if x not in config.get('turbomind_quatization').get('no_awq') and not is_quantization_model(x)
         ]
         for key in config.get('pytorch_quatization').get('awq'):
