@@ -7,7 +7,7 @@ import yaml
 from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
 from lmdeploy.utils import is_bf16_supported
 
-gen_config = GenerationConfig(max_new_tokens=500)
+gen_config = GenerationConfig(max_new_tokens=500, min_new_tokens=2)
 
 
 def run_pipeline_chat_test(model_path, cases_path, tp, backend_type, is_pr_test, extra: object = None):
@@ -23,6 +23,9 @@ def run_pipeline_chat_test(model_path, cases_path, tp, backend_type, is_pr_test,
         backend_config.quant_policy = extra.get('quant_policy')
     if 'turbomind' in backend_type and extra is not None and 'communicator' in extra:
         backend_config.communicator = extra.get('communicator')
+
+    if extra is not None and 'cache-max-entry-count' in extra and extra.get('cache-max-entry-count') is not None:
+        backend_config.cache_max_entry_count = extra.get('cache-max-entry-count')
 
     if 'w4' in model_path or ('4bits' in model_path or 'awq' in model_path.lower()):
         backend_config.model_format = 'awq'
