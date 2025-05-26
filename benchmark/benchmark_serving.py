@@ -79,8 +79,10 @@ def benchmark_server(model_path, backend, server_config, data_config):
     :param server_config: Configuration for the server.
     :param data_config: Configuration for the data.
     """
+
+    # The model_path provided by the user will override the model_path in the config file.
     model_path = model_path or server_config['model_path']
-    server_config.pop('model_path')
+    server_config.pop('model_path', None)
     model_name = model_path.split('/')[-1]
     server_cmd = get_launching_server_cmd(model_path, backend, **server_config)
     server_ip, server_port = get_server_ip_port(backend, **server_config)
@@ -100,7 +102,7 @@ def benchmark_server(model_path, backend, server_config, data_config):
     finally:
         if proc and proc.poll() is None:
             proc.terminate()
-            time.sleep(60)
+            time.sleep(30)
 
 
 def benchmark(model_path=None, backend=None, config_path=None):
