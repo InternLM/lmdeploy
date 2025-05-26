@@ -1008,10 +1008,15 @@ class Engine:
             """send response callback."""
             __log_resps(step_outputs)
 
-            iteration_stats = IterationStats()
-            scheduler_stats = SchedulerStats(num_running_reqs=self.scheduler.num_running(),
-                                             num_waiting_reqs=self.scheduler.num_waiting(),
-                                             gpu_cache_usage=self.scheduler.usage)
+            if self.engine_config.enable_metrics:
+                iteration_stats = IterationStats()
+                # actual running requests
+                num_running_reqs = self.scheduler.num_locked()
+                # waiting to be scheduled or have been scheduled but not yet started execution
+                num_waiting_reqs = self.scheduler.num_waiting() + self.scheduler.num_running()
+                scheduler_stats = SchedulerStats(num_running_reqs=num_running_reqs,
+                                                 num_waiting_reqs=num_waiting_reqs,
+                                                 gpu_cache_usage=self.scheduler.usage)
 
             for out in step_outputs:
                 if self.engine_config.enable_metrics:
