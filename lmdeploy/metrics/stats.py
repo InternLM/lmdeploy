@@ -86,7 +86,7 @@ class IterationStats:
 
     def update_from_output(self, output: 'InferOutput', engine_core_timestamp: float, is_prefilling: bool,
                            prompt_len: int, req_stats: RequestStateStats):
-        num_new_generation_tokens = len(output.token_ids)
+        num_new_generation_tokens = 1
 
         self.num_generation_tokens += num_new_generation_tokens
         if is_prefilling:

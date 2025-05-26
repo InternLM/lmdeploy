@@ -672,13 +672,9 @@ class SchedulerSequence:
         self.random_offsets += 1
         self.arrive_time = time.perf_counter()
 
-        # update generation token count in stats
         if self.req_state and self.req_state.stats:
-            self.req_state.stats.num_generation_tokens += len(token_ids)
-
-        # transition from prefill to decode in stats
-        if self.req_state and self.req_state.is_prefilling:
-            if self.num_new_tokens > 0:
+            # Transition from prefill to decode
+            if self.req_state.is_prefilling and self.num_new_tokens > 0:
                 self.req_state.is_prefilling = False
 
     def set_step(self, step: int):
