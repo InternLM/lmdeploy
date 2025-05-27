@@ -217,7 +217,7 @@ struct GemmUniversalSm90_v3 {
     using Arch = Sm90;
 
     // using MMA_Atom = GMMA::MMA_64x128x16_F32BF16BF16_SS<GMMA::Major::K, GMMA::Major::K>;
-    using MMA_Atom = GMMA::MMA_64x128x32_F32E4M3E4M3_SS_TN<>;
+    using MMA_Atom = GMMA::MMA_64x192x32_F32E4M3E4M3_SS_TN<>;
     static constexpr typename cute::MMA_Traits<MMA_Atom>::Shape_MNK MMA_Shape{};
 
     static constexpr int MMA_ATOM_M = cute::get<0>(MMA_Shape);
@@ -225,7 +225,7 @@ struct GemmUniversalSm90_v3 {
     static constexpr int MMA_ATOM_K = cute::get<2>(MMA_Shape);
 
     static constexpr int TILE_M = 128;
-    static constexpr int TILE_N = 128;
+    static constexpr int TILE_N = 192;
     static constexpr int TILE_K = 128;
 
     static constexpr int WG_M = 2;
@@ -274,18 +274,18 @@ struct GemmUniversalSm90_v3 {
 
     static constexpr int MAX_K = 32768;
 
-    static constexpr int TILE_M_U = cdiv(TILE_M, 1);
-    static constexpr int CTA_K_U  = cdiv(TILE_K, 128);
+    static constexpr int kAlignmentU = 16 / sizeof(Tu);
+    static constexpr int kBoxU       = TILE_M + kAlignmentU;
 
     static constexpr int kTmaTxBytes =
-        sizeof(Ta) * (TILE_M * TILE_K) + sizeof(Tb) * (TILE_N * TILE_K) + sizeof(Tu) * TILE_M_U * CTA_K_U;
+        sizeof(Ta) * (TILE_M * TILE_K) + sizeof(Tb) * (TILE_N * TILE_K) + sizeof(Tu) * kBoxU;
 
     // ! Smem addr must be SBO aligned for TMA load/store
     struct SharedStorage {
         struct Source {
             __align__(1024) Array<Ta, Stages * TILE_M * TILE_K> A;
             __align__(1024) Array<Tb, Stages * TILE_N * TILE_K> B;
-            __align__(1024) Tu U[Stages][TILE_M_U * CTA_K_U];
+            __align__(1024) Tu U[Stages][round_up<int>(kBoxU, 128 / sizeof(Tu))];  // 128 byte alignment
             __align__(1024) Tv V[2][WARPGORUPS][cdiv(MAX_K, 128)];
         };
         Source source;
@@ -378,42 +378,23 @@ struct GemmUniversalSm90_v3 {
 
                     const int g = sched.group_idx_;
 
-                    // update_tma_desc(tm_a,
-                    //                 tensormap_buf,
-                    //                 storage.tma_desc_buf,
-                    //                 0,
-                    //                 (Ta*)param_A.ptr + param_A.offsets[g] * param_A.stride,
-                    //                 param_A.offsets[g + 1] - param_A.offsets[g]);
-                    // update_tma_desc(tm_b,
-                    //                 tensormap_buf,
-                    //                 storage.tma_desc_buf,
-                    //                 1,
-                    //                 (Tb*)param_B.ptr + param_B.offsets[g] * param_B.stride,
-                    //                 param_B.offsets[g + 1] - param_B.offsets[g]);
-                    // const int alignment_u = 16 / sizeof(Tu);
-                    // int       beg_u       = param_U.offsets[g] / alignment_u * alignment_u;
-                    // update_tma_desc(tm_u,
-                    //                 tensormap_buf,
-                    //                 storage.tma_desc_buf,
-                    //                 2,
-                    //                 (Tu*)param_U.ptr + beg_u,
-                    //                 param_U.offsets[g + 1] - beg_u);
-
                     const CUtensorMap* Adesc = &tm_a;
                     const CUtensorMap* Bdesc = &tm_b;
                     const CUtensorMap* Udesc = &tm_u;
 
                     if constexpr (is_grouped) {
                         Array<void*, 3> global_addrs;
-                        global_addrs[0]       = (Ta*)param_A.ptr + param_A.offsets[g] * param_A.stride;
-                        global_addrs[1]       = (Tb*)param_B.ptr + param_B.offsets[g] * param_B.stride;
-                        const int alignment_u = 16 / sizeof(Tu);
-                        int       beg_u       = param_U.offsets[g] / alignment_u * alignment_u;
-                        global_addrs[2]       = (Tu*)param_U.ptr + beg_u;
+                        global_addrs[0] = (Ta*)param_A.ptr + param_A.offsets[g] * param_A.stride;
+                        global_addrs[1] = (Tb*)param_B.ptr + param_B.offsets[g] * param_B.stride;
+
+                        const int beg_u = param_U.offsets[g] / kAlignmentU * kAlignmentU;
+                        const int end_u = round_up(param_U.offsets[g + 1], kAlignmentU);
+                        global_addrs[2] = (Tu*)param_U.ptr + beg_u;
+
                         Array<int, 3> dims;
                         dims[0] = param_A.offsets[g + 1] - param_A.offsets[g];
                         dims[1] = param_B.offsets[g + 1] - param_B.offsets[g];
-                        dims[2] = param_U.offsets[g + 1] - beg_u;
+                        dims[2] = end_u - beg_u;
 
                         auto descs = update_tma_descs(tensormap_buf, storage.tma_desc_buf, global_addrs, dims);
                         Adesc      = &descs[0];
@@ -441,7 +422,9 @@ struct GemmUniversalSm90_v3 {
                         GmemIteratorSm90<kMulticastA> gmem_A{Adesc, {offset_k, offset_m + mc_offset_m}, {TILE_K, 0}};
                         GmemIteratorSm90<kMulticastB> gmem_B{Bdesc, {offset_k, offset_n + mc_offset_n}, {TILE_K, 0}};
                         // column-major
-                        GmemIteratorSm90<kMulticastA> gmem_U{Udesc, {offset_m + mc_offset_m, offset_k / 128}, {0, 1}};
+                        // GmemIteratorSm90<kMulticastA> gmem_U{Udesc, {offset_m + mc_offset_m, offset_k / 128}, {0,
+                        // 1}};
+                        GmemIteratorSm90<1> gmem_U{Udesc, {offset_m, offset_k / 128}, {0, 1}};
 
                         for (; k_iter > 0; --k_iter) {
                             int pipe = write_state.index();
@@ -449,7 +432,8 @@ struct GemmUniversalSm90_v3 {
                             ProducerBar::arrive_and_expect_tx(&producer_bar[pipe], kTmaTxBytes);
                             gmem_A.Step(&producer_bar[pipe], &smem_A[pipe * TILE_M * TILE_K], mask_A);
                             gmem_B.Step(&producer_bar[pipe], &smem_B[pipe * TILE_N * TILE_K], mask_B);
-                            gmem_U.Step(&producer_bar[pipe], &smem_U[pipe][0] + mc_offset_m, mask_A);
+                            // gmem_U.Step(&producer_bar[pipe], &smem_U[pipe][0] + mc_offset_m, mask_A);
+                            gmem_U.Step(&producer_bar[pipe], &smem_U[pipe], 0);
                             ++write_state;
                         }
                     }
@@ -588,10 +572,11 @@ struct GemmUniversalSm90_v3 {
 
                 float     scale_U[MMA_ITER_M][2];
                 const int offset_U = wg_idx_m * WG_TILE_M + warp_id % 4 * 16 + lane_id / 4;
+                const int align_U  = param_U.offsets[sched.group_idx_] % kAlignmentU;
                 auto      Load_U   = [&] {
                     for (int m = 0; m < MMA_ITER_M; ++m) {
-                        scale_U[m][0] = smem_U[pipe_state.index()][offset_U + m * MMA_ATOM_M];
-                        scale_U[m][1] = smem_U[pipe_state.index()][offset_U + m * MMA_ATOM_M + 8];
+                        scale_U[m][0] = smem_U[pipe_state.index()][align_U + offset_U + m * MMA_ATOM_M];
+                        scale_U[m][1] = smem_U[pipe_state.index()][align_U + offset_U + m * MMA_ATOM_M + 8];
                     }
                 };
 
@@ -786,12 +771,6 @@ struct GemmUniversalSm90_v3 {
 
     }  // operator()
 
-    struct EmptyBarrier {
-        __device__      EmptyBarrier(...) {}
-        __device__ void arrive_and_wait_unaligned() {}
-        __device__ void arrive_unaligned() {}
-    };
-
     template<int N>
     __device__ void init_tma_descs(Array<const CUtensorMap*, N> param_desc, CUtensorMap* smem_desc)
     {
@@ -818,7 +797,11 @@ struct GemmUniversalSm90_v3 {
                 uint32_t uint_ptr = cast_smem_ptr_to_uint(&smem_desc[i]);
                 // clang-format off
                 asm volatile("tensormap.replace.tile.global_address.shared::cta.b1024.b64 [%0], %1;" ::"r"(uint_ptr), "l"(global_addrs[i]));
-                asm volatile("tensormap.replace.tile.global_dim.shared::cta.b1024.b32 [%0], 1, %1;" ::"r"(uint_ptr), "r"(dims[i]));
+                if (i != 2) {
+                    asm volatile("tensormap.replace.tile.global_dim.shared::cta.b1024.b32 [%0], 1, %1;" ::"r"(uint_ptr), "r"(dims[i]));
+                } else { // special case for U
+                    asm volatile("tensormap.replace.tile.global_dim.shared::cta.b1024.b32 [%0], 0, %1;" ::"r"(uint_ptr), "r"(dims[i]));
+                }
                 // clang-format on
             }
         }

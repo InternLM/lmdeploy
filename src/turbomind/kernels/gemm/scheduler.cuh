@@ -140,7 +140,7 @@ public:
         is_valid_.y = cluster_tile_offset.x < cluster_tiled_shape_.x && cluster_tile_offset.y < cluster_tiled_shape_.y;
     }
 
-    TM_DEVICE int update()
+    TM_DEVICE int update(bool& valid)
     {
         int group = -1;
         for (int g = threadIdx.x % WARP_SIZE; g < gemm_shape_.w; g += WARP_SIZE) {
@@ -149,13 +149,24 @@ public:
             // printf("b e: %d %d\n", beg, end);
             if (beg <= cluster_idx_ && cluster_idx_ < end) {
                 group = g;
+                // printf("idx%4d -> group%4d\n", cluster_idx_, g);
             }
         }
         // int  group = 0;
         auto mask = __ballot_sync((uint32_t)-1, group >= 0);
+
         // if (threadIdx.x == 0) {
         //     printf("mask = %x\n", mask);
         // }
+        // if (threadIdx.x == 0 && mask == 0) {
+        //     printf("FUCK%4d\n", cluster_idx_);
+        // }
+
+        if (!mask) {
+            valid = false;
+            return 0;
+        }
+
         group_idx_ = __shfl_sync((uint32_t)-1, group, __ffs(mask) - 1);
 
         gemm_shape_.x  = offsets_[group_idx_ + 1] - offsets_[group_idx_];
@@ -183,10 +194,15 @@ public:
             return false;
         }
 
-        auto cluster_idx = is_grouped_gemm ? update() : cluster_idx_;
+        bool is_valid    = true;
+        auto cluster_idx = is_grouped_gemm ? update(is_valid) : cluster_idx_;
         // if (threadIdx.x == 0) {
         //     printf("cluster_idx = %d\n", cluster_idx);
         // }
+
+        if (!is_valid) {
+            return false;
+        }
 
         unswizzle(cluster_idx);
 

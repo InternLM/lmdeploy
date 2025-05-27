@@ -228,7 +228,7 @@ public:
         CUtensorMap tm_u{};
         if (U) {
             std::cout << "U: " << Udesc << "\n";
-            tm_u = make_2d_tma_desc((void*)U, Udesc, {kTileM / kMulticastA, 1}, CU_TENSOR_MAP_SWIZZLE_NONE);
+            tm_u = make_2d_tma_desc((void*)U, Udesc, {Gemm::kBoxU / kMulticastA, 1}, CU_TENSOR_MAP_SWIZZLE_NONE);
         }
 
         CUtensorMap            tm_v{};
