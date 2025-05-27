@@ -15,7 +15,7 @@ from transformers.utils.hub import get_checkpoint_shard_files
 
 
 def load_weight_ckpt(ckpt: str) -> Dict[str, torch.Tensor]:
-    """load checkpoint."""
+    """Load checkpoint."""
     if ckpt.endswith('.safetensors'):
         return load_file(ckpt)
     else:
@@ -23,7 +23,7 @@ def load_weight_ckpt(ckpt: str) -> Dict[str, torch.Tensor]:
 
 
 def get_used_weight_files(folder: str, state_dict: Dict[str, torch.Tensor]) -> List[str]:
-    """get used checkpoint which contains keys in state_dict."""
+    """Get used checkpoint which contains keys in state_dict."""
     _index_file = os.path.join(folder, WEIGHTS_INDEX_NAME)
     _safe_index_file = os.path.join(folder, SAFE_WEIGHTS_INDEX_NAME)
     if os.path.exists(_index_file):
@@ -46,7 +46,7 @@ def get_used_weight_files(folder: str, state_dict: Dict[str, torch.Tensor]) -> L
 
 
 def load_model_from_weight_files(model: nn.Module, folder: str) -> None:
-    """load nn.Module weight from folder."""
+    """Load nn.Module weight from folder."""
     valid_files = get_used_weight_files(folder, model.state_dict())
     for file_name in valid_files:
         ckpt = os.path.join(folder, file_name)
@@ -151,7 +151,7 @@ def _set_func(origin_func_path: Union[str, None], rewrite_func: Callable, origin
 
 @contextmanager
 def rewrite_ctx(origin_func_path: List[Union[str, Callable]], rewrite_func: List[Callable]):
-    """rewrite context."""
+    """Rewrite context."""
     assert len(origin_func_path) == len(rewrite_func)
     origin_func_list = []
     for (func_path, dst_func) in zip(origin_func_path, rewrite_func):

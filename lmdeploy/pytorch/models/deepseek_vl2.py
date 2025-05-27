@@ -84,7 +84,7 @@ class MlpProjector(nn.Module):
         elif self.cfg.projector_type == 'downsample_mlp_gelu':
             bs, hw, input_dim = x.shape
             h = w = int((hw)**0.5)
-            """compute padding"""
+            """Compute padding."""
             if h % self.cfg.downsample_ratio:
                 pad = self.cfg.downsample_ratio - h % self.cfg.downsample_ratio
             else:
@@ -330,11 +330,11 @@ class DeepseekVLV2ForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
         return outputs
 
     def get_logits(self, hidden_states: torch.Tensor):
-        """compute logits of the model output."""
+        """Compute logits of the model output."""
         return self.language.get_logits(hidden_states)
 
     def get_input_embeddings(self):
-        """get input embeddings."""
+        """Get input embeddings."""
         return self.language.get_input_embeddings()
 
     def prepare_inputs_for_generation(
@@ -343,7 +343,7 @@ class DeepseekVLV2ForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
         inputs_embeds: torch.Tensor = None,
         context: StepContext = None,
     ):
-        """prepare input."""
+        """Prepare input."""
         input_ids = context.input_ids
         position_ids = context.position_ids
         attn_metadata = context.attn_metadata
@@ -382,7 +382,7 @@ class DeepseekVLV2ForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
         )
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
-        """load weights."""
+        """Load weights."""
 
         lang_prefix = 'language.'
         lang_prefix_length = len(lang_prefix)
@@ -408,12 +408,12 @@ class DeepseekVLV2ForCausalLM(nn.Module, CudaGraphMixin, DeployModelMixin):
         self.language.load_weights(new_weights.items())
 
     def get_input_processor(self) -> BaseModelInputProcessor:
-        """get input processor."""
+        """Get input processor."""
         return self.input_processor
 
 
 class DeepSeekVLV2InputProcessor(BaseModelInputProcessor):
-    """deepseek-vl2 input processor."""
+    """Deepseek-vl2 input processor."""
 
     def __init__(self, config: PretrainedConfig, dtype) -> None:
         self.config = config
@@ -425,7 +425,7 @@ class DeepSeekVLV2InputProcessor(BaseModelInputProcessor):
                          input_ids: List[int],
                          input_multimodals: List[Dict[str, Any]] = None,
                          **kwargs) -> PreprocessInputResult:
-        """prepare multimodal input."""
+        """Prepare multimodal input."""
         if input_multimodals is None or len(input_multimodals) == 0:
             return input_ids, input_multimodals
 

@@ -6,7 +6,7 @@ from ..activation import GeluAndMulBuilder, GeluAndMulImpl, SiluAndMulBuilder, S
 
 
 class DefaultSiluAndMulImpl(SiluAndMulImpl):
-    """silu + multiple residual fused implementation."""
+    """Silu + multiple residual fused implementation."""
 
     def __init__(self, inplace: bool):
         self.inplace = inplace
@@ -19,7 +19,7 @@ class DefaultSiluAndMulImpl(SiluAndMulImpl):
 
 
 class DefaultSiluAndMulBuilder(SiluAndMulBuilder):
-    """silu and mul implementation builder."""
+    """Silu and mul implementation builder."""
 
     @staticmethod
     def build(inplace: bool = False):
@@ -28,7 +28,7 @@ class DefaultSiluAndMulBuilder(SiluAndMulBuilder):
 
 
 class DefaultGeluAndMulImpl(GeluAndMulImpl):
-    """gelu + multiple residual fused implementation."""
+    """Gelu + multiple residual fused implementation."""
 
     def __init__(self, approximate: str = 'none'):
         self.act = nn.GELU(approximate=approximate)
@@ -40,7 +40,7 @@ class DefaultGeluAndMulImpl(GeluAndMulImpl):
 
 
 class DefaultGeluAndMulBuilder(GeluAndMulBuilder):
-    """gelu and mul implementation builder."""
+    """Gelu and mul implementation builder."""
 
     @staticmethod
     def build(approximate: str = 'none'):

@@ -17,7 +17,7 @@ def run(model_path_or_server: str,
         share: bool = False,
         max_log_len: int = None,
         **kwargs):
-    """chat with AI assistant through web ui.
+    """Chat with AI assistant through web ui.
 
     Args:
         model_path_or_server (str): the path of the deployed model or

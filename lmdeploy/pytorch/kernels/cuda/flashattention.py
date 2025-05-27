@@ -23,7 +23,7 @@ tl_exp2 = tl.exp2
 
 
 def _get_block_d(head_dim_k, head_dim_v):
-    """get block d."""
+    """Get block d."""
     BLOCK_DK = triton.next_power_of_2(head_dim_k)
     BLOCK_DK1 = 0
     if BLOCK_DK != head_dim_k:
@@ -35,7 +35,7 @@ def _get_block_d(head_dim_k, head_dim_v):
 
 @triton.jit
 def softcapping(qk, logit_softcapping: tl.constexpr):
-    """soft capping."""
+    """Soft capping."""
     if logit_softcapping > 0.0:
         qk = qk / logit_softcapping
         qk = tanh(qk)
@@ -45,7 +45,7 @@ def softcapping(qk, logit_softcapping: tl.constexpr):
 
 @triton.jit
 def _load_kv(ptrs, boundary_check: tl.constexpr):
-    """load kv."""
+    """Load kv."""
     if boundary_check is not None:
         return tl.load(ptrs, boundary_check=boundary_check, padding_option='zero')
     else:
@@ -187,7 +187,7 @@ def _flash_prefill_fwd_kernel(
     BLOCK_DK1: tl.constexpr,
     BLOCK_DV: tl.constexpr,
 ):
-    """flash attention kernel."""
+    """Flash attention kernel."""
     start_m = tl.program_id(0)
     head_id = tl.program_id(1)
     batch_id = tl.program_id(2)
@@ -360,7 +360,7 @@ def _kernel_meta_sm8x(BLOCK_DK: int, shared_kv: bool):
 
 
 def _kernel_meta_sm86(BLOCK_DK: int, shared_kv: bool):
-    """sm86 has different smem size with sm80."""
+    """Sm86 has different smem size with sm80."""
     num_warps = 4
     if BLOCK_DK <= 128:
         BLOCK_M = 128
@@ -412,7 +412,7 @@ def flash_attention_fwd(
     causal: bool = True,
     kv_layout: str = 'hsd',
 ):
-    """varlen flash Attention forward.
+    """Varlen flash Attention forward.
 
     Support sliding window, softcapping. Note that this kernel will not perform bound check for k,v.
     """

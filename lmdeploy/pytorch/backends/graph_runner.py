@@ -14,7 +14,7 @@ class GraphRunnerMeta:
 
 
 class GraphRunner:
-    """graph runner."""
+    """Graph runner."""
 
     def __init__(self, model: torch.nn.Module, model_config: ModelConfig, cache_config: CacheConfig,
                  backend_config: BackendConfig, device: torch.device, **kwargs):
@@ -27,15 +27,15 @@ class GraphRunner:
         self._runner_meta = GraphRunnerMeta()
 
     def __call__(self, **kwargs):
-        """call graph runner forward."""
+        """Call graph runner forward."""
         return self.model(**kwargs)
 
     def get_model(self):
-        """get model."""
+        """Get model."""
         return self.model
 
     def get_logits(self, hidden_states: torch.Tensor):
-        """get logits of model output."""
+        """Get logits of model output."""
         if not hasattr(self.model, 'get_logits'):
             return hidden_states
         return self.model.get_logits(hidden_states)
@@ -46,7 +46,7 @@ class GraphRunner:
         inputs_embeds: torch.Tensor = None,
         context: StepContext = None,
     ):
-        """prepare inputs."""
+        """Prepare inputs."""
         return self.model.prepare_inputs_for_generation(
             past_key_values,
             inputs_embeds,
@@ -59,7 +59,7 @@ class GraphRunner:
         inputs_embeds: torch.Tensor = None,
         context: StepContext = None,
     ):
-        """prepare inputs."""
+        """Prepare inputs."""
         if hasattr(self.model, 'update_model_metas'):
             return self.model.update_model_metas(
                 past_key_values,
@@ -70,18 +70,18 @@ class GraphRunner:
         return None
 
     def get_input_processor(self):
-        """get input processor."""
+        """Get input processor."""
         if hasattr(self.model, 'get_input_processor'):
             return self.model.get_input_processor()
         else:
             return None
 
     def reset(self):
-        """remove all graphs to prevent hanging on exit."""
+        """Remove all graphs to prevent hanging on exit."""
         pass
 
     def get_meta(self):
-        """get graphrunner meta."""
+        """Get graphrunner meta."""
         return self._runner_meta
 
     def update_inputs(self, inputs):

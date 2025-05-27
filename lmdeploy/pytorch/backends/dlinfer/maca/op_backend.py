@@ -12,12 +12,12 @@ logger = get_logger('lmdeploy')
 
 
 class MacaOpsBackend(DlinferOpsBackend):
-    """maca layer backend."""
+    """Maca layer backend."""
     total_slots = None
 
     @staticmethod
     def get_name() -> str:
-        """backend name."""
+        """Backend name."""
         return 'maca'
 
     @staticmethod
@@ -41,7 +41,7 @@ class MacaOpsBackend(DlinferOpsBackend):
 
     @classmethod
     def update_step_context(cls, step_context):
-        """update step context."""
+        """Update step context."""
 
         def get_total_slots():
             if cls.total_slots is None:
@@ -106,6 +106,6 @@ class MacaOpsBackend(DlinferOpsBackend):
     @staticmethod
     def build_graph_runner(model: torch.nn.Module, model_config: ModelConfig, cache_config: CacheConfig,
                            backend_config: BackendConfig, device: torch.device):
-        """build graph runner."""
+        """Build graph runner."""
         from lmdeploy.pytorch.backends.cuda.graph_runner import CUDAGraphRunner
         return CUDAGraphRunner(model, model_config, cache_config, backend_config, device)

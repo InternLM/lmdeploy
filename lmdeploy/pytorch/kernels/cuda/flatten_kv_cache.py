@@ -38,7 +38,7 @@ def _flatten_kv_cache(
     BLOCK_DK: tl.constexpr,
     BLOCK_DV: tl.constexpr,
 ):
-    """flatten kv cache."""
+    """Flatten kv cache."""
     page_id = tl.program_id(0)
     batch_id = tl.program_id(1)
     head_id = tl.program_id(2)
@@ -82,7 +82,7 @@ def _flatten_kv_cache(
 
 @triton.jit
 def _dequant_int4(val, HEAD_DIM: tl.constexpr, BLOCK: tl.constexpr):
-    """dequant int4."""
+    """Dequant int4."""
     offs = tl.arange(0, BLOCK) // (HEAD_DIM // 2)
     shift = (offs % 2) * 4
     return (val >> shift) & 0xf
@@ -130,7 +130,7 @@ def _flatten_kv_cache_quant(
     BLOCK_DK: tl.constexpr,
     BLOCK_DV: tl.constexpr,
 ):
-    """flatten kv cache."""
+    """Flatten kv cache."""
     page_id = tl.program_id(0)
     batch_id = tl.program_id(1)
     head_id = tl.program_id(2)
@@ -203,7 +203,7 @@ def flatten_kv_cache(k_caches: Tensor,
                      v_scales_zeros: Tensor = None,
                      quant_policy: Literal[0, 4, 8] = 0,
                      kv_layout: str = 'bshd'):
-    """recovery paged kv cache to normal kv cache."""
+    """Recovery paged kv cache to normal kv cache."""
     if kv_layout == 'bshd':
         b_dim, s_dim, h_dim, d_dim = (0, 1, 2, 3)
     elif kv_layout == 'bhsd':

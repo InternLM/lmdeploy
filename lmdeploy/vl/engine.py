@@ -14,7 +14,7 @@ logger = get_logger('lmdeploy')
 
 
 def _raise_exception_on_finish(task: asyncio.Task) -> None:
-    """raise exception on finish."""
+    """Raise exception on finish."""
     try:
         task.result()
     except asyncio.CancelledError:
@@ -42,14 +42,14 @@ class ImageEncoder:
         torch.cuda.empty_cache()
 
     async def preprocess(self, messages: List[Dict]) -> List[Dict]:
-        """preprocess multimodal data in the messages."""
+        """Preprocess multimodal data in the messages."""
         future = asyncio.get_event_loop().run_in_executor(self.executor, self.model.preprocess, messages)
         future.add_done_callback(_raise_exception_on_finish)
         outputs = await future
         return outputs
 
     async def async_infer(self, messages: List[Dict]) -> List[Dict]:
-        """get multimodal embedding.
+        """Get multimodal embedding.
 
         Args:
             messages (List[Dict]): a list of message, which is the output

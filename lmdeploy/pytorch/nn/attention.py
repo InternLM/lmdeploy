@@ -10,7 +10,7 @@ from .utils import get_distribute_size
 
 
 def _update_num_heads(num_heads: int, num_kv_heads: int):
-    """update heads."""
+    """Update heads."""
     dist_ctx = get_dist_manager().current_context()
     if dist_ctx.dp == 1:
         world_size, rank = get_tp_world_rank()
@@ -93,7 +93,7 @@ class Attention(nn.Module):
 
 
 class FlashAttention(nn.Module):
-    """flash attention w/o paging."""
+    """Flash attention w/o paging."""
 
     def __init__(
         self,

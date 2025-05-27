@@ -3,7 +3,7 @@ from .base import BaseChecker
 
 
 class TorchChecker(BaseChecker):
-    """check pytorch is available."""
+    """Check pytorch is available."""
 
     def __init__(self, device: str = 'cuda', logger=None) -> None:
         super().__init__(logger=logger)

@@ -6,7 +6,7 @@ from .window_block_manager import WindowBlockManager
 
 
 def build_block_manager(cache_config: CacheConfig) -> BaseBlockManager:
-    """build block manager.
+    """Build block manager.
 
     Args:
         cache_config (CacheConfig):  cache_config.

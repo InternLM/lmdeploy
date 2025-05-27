@@ -11,7 +11,7 @@ def make_model_inputs(input_ids: torch.Tensor,
                       block_offsets: torch.Tensor,
                       seq_length: torch.Tensor = None,
                       history_length: torch.Tensor = None):
-    """make model inputs."""
+    """Make model inputs."""
     from lmdeploy.pytorch.engine.model_agent import ModelInputs
     batch_size = input_ids.size(0)
     max_seq_len = input_ids.size(1)
@@ -44,7 +44,7 @@ def make_step_context(
     block_size: int = 64,
     world_size: int = 1,
 ):
-    """make step context."""
+    """Make step context."""
     device = input_ids.device
     from torch.nn.utils.rnn import pad_sequence
 
@@ -85,7 +85,7 @@ def make_step_context(
         )
 
     def __create_kv_caches():
-        """create kv caches."""
+        """Create kv caches."""
         total_length = seq_length + history_length
         num_blocks_per_seq = (total_length + block_size - 1) // block_size
         num_blocks = sum(num_blocks_per_seq)
@@ -107,7 +107,7 @@ def make_step_context(
         return kv_caches, block_offsets, num_blocks_offs
 
     def __fill_kv_caches(kv_caches, past_key_values, block_offsets):
-        """fill kv caches."""
+        """Fill kv caches."""
         if past_key_values is None:
             return
 

@@ -18,7 +18,7 @@ def wq_gemm_forward(
     bias=None,
     out_features=0,
 ):
-    """wq gemm forward."""
+    """Wq gemm forward."""
     from lmdeploy.pytorch.kernels.cuda.awq_kernels import awq_linear
     out_shape = x.shape[:-1] + (out_features, )
     input_dtype = x.dtype
@@ -41,7 +41,7 @@ def wq_gemm_forward(
 
 
 class AwqLinearW4A16Impl(LinearW4A16Impl):
-    """awq kernel linear."""
+    """Awq kernel linear."""
 
     def __init__(self, in_features: int, out_features: int, w_bit: int, group_size: int):
         self.in_features = in_features
@@ -65,7 +65,7 @@ class AwqLinearW4A16Impl(LinearW4A16Impl):
 
 
 class AwqLinearW4A16Builder(LinearW4A16Builder):
-    """awq linear builder."""
+    """Awq linear builder."""
 
     @staticmethod
     def build(in_features: int,

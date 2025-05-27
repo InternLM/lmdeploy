@@ -23,7 +23,7 @@ class RoutingStrategy(enum.Enum):
 
     @classmethod
     def from_str(cls, name):
-        """get strategy from string."""
+        """Get strategy from string."""
         if name == 'random':
             return cls.RANDOM
         elif name == 'min_expected_latency':

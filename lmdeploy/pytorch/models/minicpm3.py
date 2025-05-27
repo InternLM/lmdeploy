@@ -19,7 +19,7 @@ from .utils.cudagraph import CudaGraphMixin
 
 # TODO use MLA of pytorch engine
 class MiniCPMAttention(nn.Module):
-    """minicpm3 attention."""
+    """Minicpm3 attention."""
 
     def __init__(self, config: Any, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
@@ -206,7 +206,7 @@ class MiniCPMMLP(nn.Module):
 
 
 class MiniCPMDecoderLayer(nn.Module):
-    """decoder layer."""
+    """Decoder layer."""
 
     def __init__(self,
                  config: PretrainedConfig,
@@ -360,12 +360,12 @@ class MiniCPM3Model(nn.Module):
         return hidden_states
 
     def get_input_embeddings(self):
-        """get input embeddings."""
+        """Get input embeddings."""
         return self.embed_tokens
 
 
 class MiniCPM3ForCausalLM(nn.Module, CudaGraphMixin):
-    """rewrote model of MiniCPM3ForCausalLM."""
+    """Rewrote model of MiniCPM3ForCausalLM."""
 
     packed_modules_mapping = {
         'gate_up_proj': [
@@ -400,7 +400,7 @@ class MiniCPM3ForCausalLM(nn.Module, CudaGraphMixin):
         inputs_embeds: torch.Tensor = None,
         **kwargs,
     ):
-        """model forward, return logits."""
+        """Model forward, return logits."""
         hidden_states = self.model(
             input_ids=input_ids,
             position_ids=position_ids,
@@ -413,12 +413,12 @@ class MiniCPM3ForCausalLM(nn.Module, CudaGraphMixin):
         return logits
 
     def update_weights(self):
-        """update weights."""
+        """Update weights."""
         if self.config.tie_word_embeddings:
             self.lm_head.weight = self.model.embed_tokens.weight
 
     def get_input_embeddings(self):
-        """get input embeddings."""
+        """Get input embeddings."""
         return self.model.get_input_embeddings()
 
     def prepare_inputs_for_generation(
@@ -427,7 +427,7 @@ class MiniCPM3ForCausalLM(nn.Module, CudaGraphMixin):
         inputs_embeds: Optional[torch.Tensor] = None,
         context: StepContext = None,
     ):
-        """prepare input."""
+        """Prepare input."""
         # get input_ids, position_ids and attention metadatas
         input_ids = context.input_ids
         position_ids = context.position_ids
@@ -451,7 +451,7 @@ class MiniCPM3ForCausalLM(nn.Module, CudaGraphMixin):
         )
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
-        """load weights."""
+        """Load weights."""
         # modify from vllm
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)

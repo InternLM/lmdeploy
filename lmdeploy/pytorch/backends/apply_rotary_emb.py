@@ -19,5 +19,5 @@ class ApplyRotaryEmbBuilder(ABC):
     @staticmethod
     @abstractmethod
     def build():
-        """build implementation."""
+        """Build implementation."""
         raise NotImplementedError

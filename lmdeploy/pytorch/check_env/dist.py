@@ -6,7 +6,7 @@ from .base import BaseChecker
 
 
 class DistChecker(BaseChecker):
-    """check dist environment."""
+    """Check dist environment."""
 
     def __init__(self, tp: int, dp: int, ep: int, distributed_executor_backend: str, device_type: str, logger=None):
         super().__init__(logger)

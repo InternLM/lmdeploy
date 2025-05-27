@@ -11,7 +11,7 @@ from ..lora import AdapterInfo, LoRABuilder, LoRAImpl
 
 @dataclass
 class PackedLoRAInput:
-    """packed lora input."""
+    """Packed lora input."""
     x: torch.Tensor
     q_start_loc: torch.Tensor
     q_seqlens: torch.Tensor
@@ -21,11 +21,11 @@ class PackedLoRAInput:
 
 
 class TritonLoRAImpl(LoRAImpl):
-    """triton lora implementation."""
+    """Triton lora implementation."""
 
     @staticmethod
     def _make_packed_lora_input(x, ctx_mgr):
-        """make PackedLoRAInput."""
+        """Make PackedLoRAInput."""
         context = ctx_mgr.current_context()
 
         # adapter cache
@@ -82,7 +82,7 @@ class TritonLoRAImpl(LoRAImpl):
 
 
 class TritonLoRABuilder(LoRABuilder):
-    """triton lora layer builder."""
+    """Triton lora layer builder."""
 
     @staticmethod
     def build():

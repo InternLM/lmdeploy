@@ -21,7 +21,7 @@ logger = get_logger('lmdeploy')
 
 
 def _get_rewrite_qualname(origin_qualname: str, module_map: Dict[str, str]) -> str:
-    """get rewrite module from origin module name.
+    """Get rewrite module from origin module name.
 
     Args:
         origin_qualname (str): The origin qualname of the module.
@@ -58,7 +58,7 @@ def _class_from_qualname(qualname: str) -> Any:
 
 
 def _find_rewrite_module_qualname(model, module_map: Dict[str, str]):
-    """find rewrite module."""
+    """Find rewrite module."""
     module_name = inspect.getmodule(model).__name__
     class_name = model.__class__.__name__
 
@@ -93,7 +93,7 @@ def _find_rewrite_module_qualname(model, module_map: Dict[str, str]):
 
 
 def get_rewrite_cls(model: torch.nn.Module, module_map: Dict[str, str] = None):
-    """get rewrite cls."""
+    """Get rewrite cls."""
     if module_map is None:
         module_map = _get_module_map()
     rewrite_qualname = _find_rewrite_module_qualname(model, module_map=module_map)
@@ -103,7 +103,7 @@ def get_rewrite_cls(model: torch.nn.Module, module_map: Dict[str, str] = None):
 
 
 def _get_module_map():
-    """get module map."""
+    """Get module map."""
     module_map = MODULE_MAP.copy()
     device_type = get_device_manager().current_context().device_type
     if device_type != 'cuda':
@@ -115,7 +115,7 @@ def _get_module_map():
 
 
 def update_custom_module_map(module_map_path: str):
-    """moad custom module map from file."""
+    """Moad custom module map from file."""
     from importlib.machinery import SourceFileLoader
 
     from lmdeploy.pytorch.models.module_map import LMDEPLOY_PYTORCH_MODEL_PATH
@@ -153,7 +153,7 @@ def update_custom_module_map(module_map_path: str):
 
 
 def _get_model_class(config, module_map):
-    """get model class."""
+    """Get model class."""
     auto_map = getattr(config, 'auto_map', dict())
     if 'AutoModelForCausalLM' in auto_map:
         mapname = auto_map['AutoModelForCausalLM']
@@ -185,7 +185,7 @@ def _get_model_class(config, module_map):
 
 
 def build_model_from_hf_config(model_config: PretrainedConfig, dtype: torch.dtype = None, device: torch.device = None):
-    """build model from hf config."""
+    """Build model from hf config."""
     from lmdeploy.pytorch.model_inputs import StepContextManager
     ctx_mgr = StepContextManager()
     module_map = _get_module_map()
@@ -198,7 +198,7 @@ def build_model_from_hf_config(model_config: PretrainedConfig, dtype: torch.dtyp
 
 @torch.inference_mode()
 def build_patched_model(config: ModelConfig, device: torch.device = None):
-    """build patched model."""
+    """Build patched model."""
     model_config = config.hf_config
     dtype = config.dtype
     return build_model_from_hf_config(model_config, dtype=dtype, device=device)
@@ -209,7 +209,7 @@ def add_adapters(model: torch.nn.Module,
                  adapters: Dict[str, str],
                  dtype: torch.dtype = torch.float16,
                  device: torch.device = None):
-    """add adapters."""
+    """Add adapters."""
     from peft import PeftConfig
     from peft.tuners.lora import LoraConfig
 

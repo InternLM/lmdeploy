@@ -6,7 +6,7 @@ import triton.language as tl
 
 @triton.jit
 def _add_kernel(A, B, C, size, BLOCK: tl.constexpr):
-    """add kernel."""
+    """Add kernel."""
     prog_id = tl.program_id(0)
     offs = prog_id * BLOCK + tl.arange(0, BLOCK)
     a = tl.load(A + offs, mask=offs < size)
@@ -15,7 +15,7 @@ def _add_kernel(A, B, C, size, BLOCK: tl.constexpr):
 
 
 def custom_add(a, b):
-    """custom add one."""
+    """Custom add one."""
     c = torch.empty_like(a)
     size = c.size(0)
     BLOCK = 16

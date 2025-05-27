@@ -72,7 +72,7 @@ def fused_moe_kernel(
     reindex_a: tl.constexpr,
     reindex_c: tl.constexpr,
 ):
-    """fused moe kernel."""
+    """Fused moe kernel."""
     exp_id = tl.program_id(1)
     pid = tl.program_id(0)
 
@@ -154,7 +154,7 @@ def fused_moe_kernel_launcher(
     reindex_a: bool = True,
     reindex_c: bool = True,
 ):
-    """fused moe kernel launcher."""
+    """Fused moe kernel launcher."""
 
     if num_tokens is None:
         num_tokens = A.size(0)
@@ -235,7 +235,7 @@ def _get_exp_mask_kernel(
 
 
 def _get_exp_mask(topk_ids: torch.Tensor, num_experts: int):
-    """get exp mask."""
+    """Get exp mask."""
     assert topk_ids.dim() == 2
     M, topk = topk_ids.shape
     assert topk <= num_experts
@@ -278,7 +278,7 @@ def _get_start_end_kernel(
     topk: tl.constexpr,
     BLOCK_N: tl.constexpr,
 ):
-    """get start end kernel."""
+    """Get start end kernel."""
     token_start = tl.program_id(0)
 
     offs_exp = tl.arange(0, BLOCK_N)
@@ -315,7 +315,7 @@ def _get_start_end_kernel(
 
 
 def get_start_end(exp_cum: torch.Tensor, exp_topk: torch.Tensor, topk: int):
-    """get start end."""
+    """Get start end."""
     num_experts, num_tokens = exp_cum.shape
 
     start_end = exp_cum.new_empty(2, num_experts)
@@ -348,7 +348,7 @@ def get_start_end(exp_cum: torch.Tensor, exp_topk: torch.Tensor, topk: int):
 
 
 def _get_sorted_idx(topk_ids: torch.Tensor, num_experts: int):
-    """get sorted idx."""
+    """Get sorted idx."""
     assert topk_ids.dim() == 2
     _, topk = topk_ids.shape
 
@@ -372,7 +372,7 @@ def _renormalize(topk_weights: torch.Tensor, renormalize: bool):
 
 
 def _make_intermediate(shape: tuple, dtype: torch.dtype, device: torch.device, zeros: bool):
-    """make intermediate."""
+    """Make intermediate."""
     if zeros:
         return torch.zeros(shape, dtype=dtype, device=device)
     else:
@@ -388,7 +388,7 @@ def fused_moe(hidden_states: torch.Tensor,
               expert_offset: int = 0,
               num_experts: int = None,
               renormalize: bool = False) -> torch.Tensor:
-    """fused moe."""
+    """Fused moe."""
     M = hidden_states.size(0)
     E, N, _ = w1.shape
     if num_experts is None:

@@ -15,7 +15,7 @@ def _rotary_embedding_fwd(position_ids: torch.Tensor,
                           scaling_factor: float,
                           mscale: float = None,
                           dtype: torch.dtype = None):
-    """rotary embedding forward."""
+    """Rotary embedding forward."""
     if dtype is None:
         dtype = torch.float16
 
@@ -38,7 +38,7 @@ def _rotary_embedding_fwd(position_ids: torch.Tensor,
 
 
 class DlinferRotaryEmbeddingImpl(RotaryEmbeddingImpl, nn.Module):
-    """base rotary embedding."""
+    """Base rotary embedding."""
 
     def __init__(self, dim: int, base: int = 10000, scaling_factor: float = 1.0):
         super().__init__()
@@ -94,7 +94,7 @@ class DlinferLlamaDynamicNTKScalingRotaryEmbedding(LlamaDynamicNTKScalingRotaryE
 
 
 class DlinferLlama3RotaryEmbeddingImpl(DlinferRotaryEmbeddingImpl):
-    """llama3 rotary embedding implementation."""
+    """Llama3 rotary embedding implementation."""
 
     def __init__(
         self,
@@ -127,7 +127,7 @@ class DlinferLlama3RotaryEmbeddingImpl(DlinferRotaryEmbeddingImpl):
 
 
 class DlinferYarnRotaryEmbeddingImpl(YarnRotaryEmbeddingImpl):
-    """yarn rotary embedding implementation."""
+    """Yarn rotary embedding implementation."""
 
     def __init__(self,
                  dim: int,
@@ -146,7 +146,7 @@ class DlinferYarnRotaryEmbeddingImpl(YarnRotaryEmbeddingImpl):
 
 
 class DlinferRotaryEmbeddingBuilder(RotaryEmbeddingBuilder):
-    """rotary embedding dlinfer builder."""
+    """Rotary embedding dlinfer builder."""
 
     @staticmethod
     def build(

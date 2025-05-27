@@ -12,16 +12,16 @@ logger = get_logger('lmdeploy')
 
 
 class DlinferOpsBackend(DefaultOpsBackend):
-    """dlinfer layer backend."""
+    """Dlinfer layer backend."""
 
     @staticmethod
     def get_name() -> str:
-        """backend name."""
+        """Backend name."""
         return 'dlinfer'
 
     @classmethod
     def get_layer_impl_builder(cls, layer_type: OpType):
-        """get dlinfer layer builder."""
+        """Get dlinfer layer builder."""
         if layer_type == OpType.PagedAttention:
             from .attention import DlinferAttentionBuilder
             return DlinferAttentionBuilder
@@ -95,5 +95,5 @@ class DlinferOpsBackend(DefaultOpsBackend):
 
     @classmethod
     def update_step_context(cls, step_context):
-        """update step context."""
+        """Update step context."""
         raise NotImplementedError

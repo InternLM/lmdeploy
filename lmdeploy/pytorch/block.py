@@ -3,12 +3,12 @@ import numpy as np
 
 
 def _div_up(x, n):
-    """perform div up."""
+    """Perform div up."""
     return (x + n - 1) // n
 
 
 def _round_up(x, n):
-    """perform round up."""
+    """Perform round up."""
     return _div_up(x, n) * n
 
 
@@ -27,7 +27,7 @@ class LogicalTokenBlocks:
         self.last_shared_node = None
 
     def reserve(self, size: int):
-        """reserve cache size."""
+        """Reserve cache size."""
         num_blocks = self._blocks.size
         if num_blocks >= size:
             return
@@ -35,19 +35,19 @@ class LogicalTokenBlocks:
         self._blocks = np.pad(self._blocks, (0, reserve_size))
 
     def __setitem__(self, *args, **kwargs):
-        """set values."""
+        """Set values."""
         return self.get_real_blocks().__setitem__(*args, **kwargs)
 
     def __getitem__(self, *args, **kwargs):
-        """get values."""
+        """Get values."""
         return self.get_real_blocks().__getitem__(*args, **kwargs)
 
     def get_real_blocks(self):
-        """get logical blocks."""
+        """Get logical blocks."""
         return self._blocks[:self._num_real]
 
     def append(self, blocks: np.ndarray):
-        """append blocks."""
+        """Append blocks."""
         num_blocks = len(blocks)
         self.reserve(num_blocks + self._num_real)
         slice_start = self._num_real
@@ -56,11 +56,11 @@ class LogicalTokenBlocks:
         self._blocks[slice_start:slice_end] = blocks
 
     def __len__(self):
-        """get length."""
+        """Get length."""
         return self._num_real
 
     def resize(self, num_blocks: int):
-        """resize logical blocks."""
+        """Resize logical blocks."""
         assert num_blocks <= len(self)
         self._num_real = num_blocks
 
@@ -70,7 +70,7 @@ class LogicalTokenBlocks:
         self.last_shared_node = None
 
     def clone(self):
-        """clone logical blocks."""
+        """Clone logical blocks."""
         ret = LogicalTokenBlocks()
         ret.append(self.get_real_blocks())
         return ret

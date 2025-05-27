@@ -184,7 +184,7 @@ class Attn(Module):
         return qkv, o
 
     def _repeat_kv(self, qkvo, kind: str):
-        """replicate kv."""
+        """Replicate kv."""
         q, k, v, o = qkvo
         head_dim = self.model.model_config.size_per_head
         hidden_dim = self.model.model_config.hidden_units

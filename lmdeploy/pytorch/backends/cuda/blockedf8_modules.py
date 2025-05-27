@@ -14,7 +14,7 @@ logger = get_logger('lmdeploy')
 
 
 def _reduce_scatter_input(out: torch.Tensor, rank: int, tp_sizes: List[int]):
-    """reduce scatter."""
+    """Reduce scatter."""
     outs = out.split(tp_sizes, -2)
     out = outs[rank]
     outs = list(outs)
@@ -23,7 +23,7 @@ def _reduce_scatter_input(out: torch.Tensor, rank: int, tp_sizes: List[int]):
 
 
 class TritonLinearBlockedF8Impl(LinearBlockedF8Impl):
-    """triton linear blocked f8 implementation."""
+    """Triton linear blocked f8 implementation."""
 
     def __init__(self, in_features: int, out_features: int, block_size: int, out_dtype: torch.dtype = torch.float16):
         self.in_features = in_features
@@ -59,7 +59,7 @@ class TritonLinearBlockedF8Impl(LinearBlockedF8Impl):
 
 
 class TritonLinearBlockedF8Builder(LinearBlockedF8Builder):
-    """triton linear blocked f8 implementation builder."""
+    """Triton linear blocked f8 implementation builder."""
 
     @staticmethod
     def build(in_features: int, out_features: int, block_size: int = 128, bias: bool = True, dtype: torch.dtype = None):

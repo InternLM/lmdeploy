@@ -12,7 +12,7 @@ class GemmaModelConfigBuilder(AutoModelConfigBuilder):
 
     @classmethod
     def build(cls, hf_config, model_path: str = None, **kwargs):
-        """build gemma."""
+        """Build gemma."""
         cfg = DefaultModelConfigBuilder.build(hf_config, model_path, **kwargs)
         cfg.head_dim = hf_config.head_dim
         return cfg
@@ -28,7 +28,7 @@ class GemmaVLModelConfigBuilder(AutoModelConfigBuilder):
 
     @classmethod
     def build(cls, hf_config, model_path: str = None, **kwargs):
-        """build gemma."""
+        """Build gemma."""
         hf_config.text_config.architectures = ['Gemma3ForCausalLM']
         cfg = DefaultModelConfigBuilder.build(hf_config.text_config, model_path, **kwargs)
         cfg.hf_config = hf_config

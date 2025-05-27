@@ -16,13 +16,13 @@ logger = get_logger('lmdeploy')
 
 LogitsProcessor = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 """LogitsProcessor is a function that takes a tensor of input_ids, the logits
-tensor for the next token, and returns a modified tensor of logits
-to sample from."""
+tensor for the next token, and returns a modified tensor of logits to sample
+from."""
 
 
 @dataclass
 class GenerationConfig:
-    """generation parameters used by inference engines.
+    """Generation parameters used by inference engines.
 
     Args:
         n (int): Define how many chat completion choices to generate for each
@@ -116,7 +116,7 @@ class GenerationConfig:
     migration_request: Optional[MigrationRequest] = None
 
     def convert_stop_bad_words_to_ids(self, tokenizer: Tokenizer):
-        """convert stop_words/bad_sords to ids and append the ids to
+        """Convert stop_words/bad_sords to ids and append the ids to
         stop_token_ids/bad_token_ids."""
 
         def special_word_token_ids(words):
@@ -138,7 +138,7 @@ class GenerationConfig:
         self.bad_token_ids = list(set(bad_token_ids)) or None
 
     def update_from_hf_gen_cfg(self, generation_config, tokenizer_eos_token_id):
-        """update the stop_token_ids."""
+        """Update the stop_token_ids."""
         stop_token_ids = set(self.stop_token_ids or [])
 
         # add tokenizer's eos_token_id

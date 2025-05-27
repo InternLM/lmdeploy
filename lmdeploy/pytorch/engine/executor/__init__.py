@@ -10,7 +10,7 @@ from .base import ExecutorBase
 
 
 def get_distributed_executor_backend(world_size: int, dp: int, device_type: str, logger: Logger = None):
-    """get distributed executor backend."""
+    """Get distributed executor backend."""
     from lmdeploy.pytorch.backends import get_backend
 
     def _log_info(message: str):
@@ -18,7 +18,7 @@ def get_distributed_executor_backend(world_size: int, dp: int, device_type: str,
             logger.info(message)
 
     def _log_and_set_backend(message: str, executor_backend: str):
-        """log and set backend."""
+        """Log and set backend."""
         message += f' distributed_executor_backend={executor_backend}.'
         _log_info(message)
         return executor_backend
@@ -63,7 +63,7 @@ def build_executor(model_path: str,
                    device_type: str = 'cuda',
                    distributed_executor_backend: str = None,
                    dtype: str = 'auto') -> ExecutorBase:
-    """build model agent executor."""
+    """Build model agent executor."""
     logger = get_logger('lmdeploy')
     dp = dist_config.dp
     world_size = dist_config.world_size

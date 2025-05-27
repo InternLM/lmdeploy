@@ -15,7 +15,7 @@ def _rotary_embedding_fwd(position_ids: torch.Tensor,
                           mscale: float = None,
                           dtype: torch.dtype = None,
                           device_type: torch.device = None):
-    """rotary embedding forward."""
+    """Rotary embedding forward."""
     if dtype is None:
         dtype = torch.float16
     if device_type is None:
@@ -40,7 +40,7 @@ def _rotary_embedding_fwd(position_ids: torch.Tensor,
 
 
 class RotaryEmbeddingImpl(RotaryEmbeddingImpl, nn.Module):
-    """base rotary embedding."""
+    """Base rotary embedding."""
 
     def __init__(self, dim: int, base: int = 10000, scaling_factor: float = 1.0):
         super().__init__()
@@ -100,7 +100,7 @@ class LlamaDynamicNTKScalingRotaryEmbedding(RotaryEmbeddingImpl):
 
 
 class Llama3RotaryEmbeddingImpl(RotaryEmbeddingImpl):
-    """llama3 rotary embedding implementation."""
+    """Llama3 rotary embedding implementation."""
 
     def __init__(
         self,
@@ -163,7 +163,7 @@ def yarn_linear_ramp_mask(min, max, dim):
 
 
 class YarnRotaryEmbeddingImpl(RotaryEmbeddingImpl):
-    """yarn rotary embedding implementation."""
+    """Yarn rotary embedding implementation."""
 
     def __init__(self,
                  dim: int,
@@ -219,7 +219,7 @@ class YarnRotaryEmbeddingImpl(RotaryEmbeddingImpl):
 
 
 class LongRoPEScalingRotaryEmbeddingImpl(RotaryEmbeddingImpl):
-    """yarn rotary embedding implementation."""
+    """Yarn rotary embedding implementation."""
 
     def __init__(
         self,
@@ -246,7 +246,7 @@ class LongRoPEScalingRotaryEmbeddingImpl(RotaryEmbeddingImpl):
                 self.mscale = math.sqrt(1 + math.log(scale) / math.log(self.original_max_position_embeddings))
 
     def forward(self, x: torch.Tensor, position_ids: torch.Tensor):
-        """rope forward."""
+        """Rope forward."""
         dtype = x.dtype
         device = position_ids.device
         if self.short_factor.device != device:
@@ -271,7 +271,7 @@ class LongRoPEScalingRotaryEmbeddingImpl(RotaryEmbeddingImpl):
 
 
 class DefaultRotaryEmbeddingBuilder(RotaryEmbeddingBuilder):
-    """rotary embedding builder."""
+    """Rotary embedding builder."""
 
     @staticmethod
     def build(

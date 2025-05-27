@@ -72,7 +72,7 @@ def _fwd_grouped_split_kernel(
     BLOCK_H: tl.constexpr,
     BLOCK_DMODEL1: tl.constexpr,
 ):
-    """first step kernel of split k attention."""
+    """First step kernel of split k attention."""
     cur_batch = tl.program_id(2)
     cur_kv_head = tl.program_id(0)
     split_k_id = tl.program_id(1)
@@ -254,7 +254,7 @@ def _fwd_grouped_split_quant_kernel(
     BLOCK_H: tl.constexpr,
     BLOCK_DMODEL1: tl.constexpr,
 ):
-    """first step kernel of split k attention.
+    """First step kernel of split k attention.
 
     Args:
         stride_xp: stride of page num dim
@@ -441,7 +441,7 @@ def _reduce_split_kernel(
     SPLIT_K: tl.constexpr,
     BLOCK_DV: tl.constexpr,
 ):
-    """second step kernel of split k attention."""
+    """Second step kernel of split k attention."""
     cur_batch = tl.program_id(0)
     cur_head = tl.program_id(1)
 
@@ -473,7 +473,7 @@ def _reduce_split_kernel(
 
 @triton.jit
 def _convert_pv(p, v):
-    """convert pv."""
+    """Convert pv."""
     p = p.to(v.dtype)
     return p, v
 
@@ -482,12 +482,12 @@ _nv_cap = None
 
 
 def _kernel_meta_default(BLOCK_DMODEL: int, BLOCK_H: int):
-    """kernel meta default."""
+    """Kernel meta default."""
     return 4, 2
 
 
 def _kernel_meta_sm8x(BLOCK_DMODEL: int, BLOCK_H: int):
-    """kernel meta default."""
+    """Kernel meta default."""
     num_stages = 2
     if BLOCK_DMODEL * BLOCK_H > 8192:
         num_warps = 8
@@ -497,12 +497,12 @@ def _kernel_meta_sm8x(BLOCK_DMODEL: int, BLOCK_H: int):
 
 
 def _kernel_meta_sm9x(BLOCK_DMODEL: int, BLOCK_H: int):
-    """kernel meta default."""
+    """Kernel meta default."""
     return _kernel_meta_default(BLOCK_DMODEL, BLOCK_H)
 
 
 def _get_split_k(device_idx: int, head_grid: int, batch_size: int):
-    """get split k."""
+    """Get split k."""
     props = get_device_props(device_idx)
     num_sm = props['multi_processor_count']
     # estimated occupancy 12.5%
@@ -563,7 +563,7 @@ def paged_attention_fwd(
     shared_kv = k.data_ptr() == v.data_ptr()
 
     def _get_block_d(Lk):
-        """get block d."""
+        """Get block d."""
         BLOCK_DMODEL = triton.next_power_of_2(Lk)
         BLOCK_DMODEL1 = 0
         if BLOCK_DMODEL != Lk:

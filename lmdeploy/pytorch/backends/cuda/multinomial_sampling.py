@@ -19,7 +19,7 @@ class TritonMultinomialSamplingImpl(MultinomialSamplingImpl):
 
 
 class TritonMultinomialSamplingBuilder(MultinomialSamplingBuilder):
-    """triton multinomial sampling builder."""
+    """Triton multinomial sampling builder."""
 
     def build():
         """build."""

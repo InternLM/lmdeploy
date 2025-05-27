@@ -104,7 +104,7 @@ def autoget_backend_config(
 
 
 def check_vl_llm(config: dict) -> bool:
-    """check if the model is a vl model from model config."""
+    """Check if the model is a vl model from model config."""
     if 'auto_map' in config:
         for _, v in config['auto_map'].items():
             if 'InternLMXComposer2ForCausalLM' in v:
@@ -134,7 +134,7 @@ def check_vl_llm(config: dict) -> bool:
 
 
 def get_task(model_path: str):
-    """get pipeline type and pipeline class from model config."""
+    """Get pipeline type and pipeline class from model config."""
     from lmdeploy.serve.async_engine import AsyncEngine
 
     if os.path.exists(os.path.join(model_path, 'triton_models', 'weights')):
@@ -150,7 +150,7 @@ def get_task(model_path: str):
 
 
 def get_model_arch(model_path: str):
-    """get a model's architecture and configuration.
+    """Get a model's architecture and configuration.
 
     Args:
         model_path(str): the model path

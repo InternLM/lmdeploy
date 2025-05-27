@@ -28,7 +28,7 @@ class BaseLoader(ABC):
         self.item_count = defaultdict(int)
 
     def get_index(self, index_name: str, file_pattern: str) -> Tuple[dict, list]:
-        """get shards and weight map (if possible) for the model."""
+        """Get shards and weight map (if possible) for the model."""
         get_path = partial(osp.join, self.model_path)
         shards = []
         if index_name:

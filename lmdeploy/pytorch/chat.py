@@ -51,13 +51,13 @@ def run_chat(model_path: str,
     chat_count = 0
 
     def __reset_chat_state():
-        """reset chat state."""
+        """Reset chat state."""
         nonlocal chat_count
         seed = random.getrandbits(64)
         gen_config.random_seed = seed
 
     async def __generate(prompt: str):
-        """chat generate."""
+        """Chat generate."""
         nonlocal chat_count
         print()
         async for out in pipe.generate(
@@ -73,7 +73,7 @@ def run_chat(model_path: str,
         chat_count += 1
 
     async def __chat_step(prompt: str):
-        """chat step."""
+        """Chat step."""
         if prompt == 'exit':
             exit(0)
         elif prompt == 'end':
@@ -83,7 +83,7 @@ def run_chat(model_path: str,
             await __generate(prompt)
 
     async def __chat_loop(model_path: str):
-        """chat loop."""
+        """Chat loop."""
         __reset_chat_state()
         _, chat_template_name = get_names_from_model(model_path)
         while True:

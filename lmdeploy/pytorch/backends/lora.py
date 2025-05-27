@@ -19,7 +19,7 @@ class AdapterInfo:
     max_rank: int = field(init=False)
 
     def __post_init__(self):
-        """post init."""
+        """Post init."""
         ranks = self.ranks
         rank_offsets = ranks.cumsum(0) - ranks
         max_rank = ranks.max().item()
@@ -28,7 +28,7 @@ class AdapterInfo:
 
 
 class LoRAImpl(ABC):
-    """lora implementation."""
+    """Lora implementation."""
 
     @abstractmethod
     def forward(self,
@@ -45,7 +45,7 @@ class LoRAImpl(ABC):
 
 
 class LoRABuilder(ABC):
-    """lora implementation builder."""
+    """Lora implementation builder."""
 
     @staticmethod
     @abstractmethod

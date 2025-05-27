@@ -10,7 +10,7 @@ logger = get_logger('lmdeploy')
 
 @dataclass
 class WarmupMeta:
-    """warmup meta."""
+    """Warmup meta."""
     max_num_tokens: int
     max_batch_size: int
     dtype: torch.dtype
@@ -22,19 +22,19 @@ class WarmupManager:
         self._warmup_calls = dict()
 
     def __contains__(self, key: str):
-        """contain key."""
+        """Contain key."""
         return key in self._warmup_calls
 
     def __getitem__(self, key: str):
-        """get item."""
+        """Get item."""
         return self._warmup_calls.get(key, None)
 
     def __setitem__(self, key: str, val):
-        """set item."""
+        """Set item."""
         self._warmup_calls[key] = val
 
     def warmup(self, warmup_meta: WarmupMeta):
-        """warmup meta."""
+        """Warmup meta."""
         if len(self._warmup_calls) == 0:
             return
 
@@ -47,7 +47,7 @@ _WARMUP_MANAGER = None
 
 
 def get_warmup_manager():
-    """get warmup manager."""
+    """Get warmup manager."""
     global _WARMUP_MANAGER
     if _WARMUP_MANAGER is None:
         _WARMUP_MANAGER = WarmupManager()

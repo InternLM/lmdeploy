@@ -9,7 +9,7 @@ BlockTable = np.ndarray
 
 
 def _num_blocks_to_drop(seq: SchedulerSequence, window_size: int):
-    """num blocks to free."""
+    """Num blocks to free."""
     if seq.history_len <= window_size:
         return 0
     block_size = seq.block_size
@@ -36,7 +36,7 @@ class WindowBlockManager(DefaultBlockManager):
         self.window_size = window_size
 
     def num_required_blocks(self, obj: SchedulerSequence, prealloc_size: int = 0):
-        """get num required blocks."""
+        """Get num required blocks."""
 
         # blocks is not enough
         if obj.num_history_ids <= self.window_size:
@@ -57,7 +57,7 @@ class WindowBlockManager(DefaultBlockManager):
         logical_blocks = msg.logical_blocks
 
         def __get_droped_blocks(num_drop_blocks):
-            """get dropped blocks."""
+            """Get dropped blocks."""
             nonlocal logical_blocks
             droped_blocks = None
             if num_drop_blocks > 0:
@@ -68,7 +68,7 @@ class WindowBlockManager(DefaultBlockManager):
             return droped_blocks
 
         def __reuse_droped_blocks(num_required_blocks, num_drop_blocks, droped_blocks):
-            """reuse dropped blocks."""
+            """Reuse dropped blocks."""
             num_used_blocks = min(num_drop_blocks - num_required_blocks, num_required_blocks)
             if num_used_blocks > 0:
                 reused_blocks = droped_blocks[:num_used_blocks]

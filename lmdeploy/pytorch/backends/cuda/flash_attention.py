@@ -5,7 +5,7 @@ from ..flash_attention import FlashAttentionBuilder, FlashAttentionImpl
 
 
 class TritonFlashAttentionImpl(FlashAttentionImpl):
-    """triton flash attention implementation."""
+    """Triton flash attention implementation."""
 
     def __init__(
         self,
@@ -74,7 +74,7 @@ class TritonFlashAttentionImpl(FlashAttentionImpl):
 
 
 class TritonFlashAttentionBuilder(FlashAttentionBuilder):
-    """triton attention builder."""
+    """Triton attention builder."""
 
     @staticmethod
     def build(

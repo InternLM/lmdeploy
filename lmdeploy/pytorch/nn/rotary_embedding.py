@@ -8,26 +8,26 @@ from ..backends.rotary_embedding import Llama3Parameters, LongRoPEScalingParamet
 
 
 def _get_default_rope_parameters(config: PretrainedConfig):
-    """get default rope parameters."""
+    """Get default rope parameters."""
     return dict(emb_type=RopeType.Default, scaling_factor=1.0)
 
 
 def _get_linear_scaling_rope_parameters(config: PretrainedConfig):
-    """get linear rope parameters."""
+    """Get linear rope parameters."""
     rope_scaling = config.rope_scaling
     scaling_factor = rope_scaling['factor']
     return dict(emb_type=RopeType.LinearScaling, scaling_factor=scaling_factor)
 
 
 def _get_dynamic_ntk_parameters(config: PretrainedConfig):
-    """get dynamic ntk parameters."""
+    """Get dynamic ntk parameters."""
     rope_scaling = config.rope_scaling
     scaling_factor = rope_scaling['factor']
     return dict(emb_type=RopeType.DynamicNTKScaling, scaling_factor=scaling_factor)
 
 
 def _get_yarn_parameters(config: PretrainedConfig):
-    """get yarn parameters."""
+    """Get yarn parameters."""
     rope_scaling = config.rope_scaling
     scaling_factor = rope_scaling['factor']
     params = YarnParameters()
@@ -38,7 +38,7 @@ def _get_yarn_parameters(config: PretrainedConfig):
 
 
 def _get_longrope_parameters(config: PretrainedConfig):
-    """get longrope parameters."""
+    """Get longrope parameters."""
     rope_scaling = config.rope_scaling
     params = LongRoPEScalingParameters()
     scaling_factor = rope_scaling['factor']
@@ -50,7 +50,7 @@ def _get_longrope_parameters(config: PretrainedConfig):
 
 
 def _get_llama3_parameters(config: PretrainedConfig):
-    """get llama rope parameters."""
+    """Get llama rope parameters."""
     rope_scaling = config.rope_scaling
     params = Llama3Parameters()
     scaling_factor = rope_scaling['factor']
@@ -62,7 +62,7 @@ def _get_llama3_parameters(config: PretrainedConfig):
 
 
 def build_rotary_params(config: PretrainedConfig):
-    """get scaling_factor rotary params, and emb_type."""
+    """Get scaling_factor rotary params, and emb_type."""
     params = dict(emb_type=RopeType.Default)
     # cannot access config.rope_scaling when the model is "Qwen/Qwen2-Math-RM-72B"
     rope_scaling = getattr(config, 'rope_scaling', None)
@@ -87,7 +87,7 @@ def build_rotary_embedding(dim: int,
                            llama3_params: Llama3Parameters = None,
                            emb_type: RopeType = RopeType.Default,
                            partial_rotary_factor: float = None) -> nn.Module:
-    """build rotary embedding op."""
+    """Build rotary embedding op."""
     backend = get_backend()
 
     builder = backend.get_layer_impl_builder(OpType.RotaryEmbedding)
@@ -106,7 +106,7 @@ def build_rotary_embedding(dim: int,
 
 
 class ApplyRotaryEmb(nn.Module):
-    """apply rotary embedding."""
+    """Apply rotary embedding."""
 
     def __init__(self):
         super().__init__()

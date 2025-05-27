@@ -243,7 +243,7 @@ class Llama4TextMoe(nn.Module):
 
 
 class Llama4TextDecoderLayer(nn.Module):
-    """decoder layer."""
+    """Decoder layer."""
 
     def __init__(self,
                  config: Llama4TextConfig,
@@ -301,7 +301,7 @@ class Llama4TextDecoderLayer(nn.Module):
 
 
 class Llama4TextModel(nn.Module):
-    """llama4 text model."""
+    """Llama4 text model."""
 
     def __init__(self, config: Llama4TextConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
@@ -324,7 +324,7 @@ class Llama4TextModel(nn.Module):
 
     @staticmethod
     def build_llama4_rotary_embedding(config: Llama4TextConfig):
-        """build llama4 rotary embedding."""
+        """Build llama4 rotary embedding."""
 
         scaling_factor = 1.0
         rope_dim = config.hidden_size // config.num_attention_heads
@@ -357,7 +357,7 @@ class Llama4TextModel(nn.Module):
         attn_metadata: Any = None,
         **kwargs,
     ):
-        """model forward."""
+        """Model forward."""
         hidden_states = inputs_embeds
 
         # rotary embedding
@@ -408,7 +408,7 @@ class Llama4ForCausalLM(nn.Module):
         attn_metadata: Any = None,
         **kwargs,
     ):
-        """model forward."""
+        """Model forward."""
         outputs = self.model(
             inputs_embeds=inputs_embeds,
             position_ids=position_ids,
@@ -420,11 +420,11 @@ class Llama4ForCausalLM(nn.Module):
         return outputs
 
     def get_input_embeddings(self):
-        """input embeddings."""
+        """Input embeddings."""
         return self.model.embed_tokens
 
     def get_logits(self, hidden_states: torch.Tensor):
-        """compute logits of the model output."""
+        """Compute logits of the model output."""
         return self.lm_head(hidden_states)
 
 
@@ -447,7 +447,7 @@ class Llama4MultiModalProjector(nn.Module):
 
 
 class Llama4UnfoldConvolution(nn.Module):
-    """llama4 unfold conv."""
+    """Llama4 unfold conv."""
 
     def __init__(self, config: Llama4VisionConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
@@ -515,7 +515,7 @@ def vision_apply_rotary_emb(
 
 
 class Llama4VisionAttention(nn.Module):
-    """vision attn."""
+    """Vision attn."""
 
     def __init__(self, config: Llama4VisionConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
@@ -585,7 +585,7 @@ class Llama4VisionAttention(nn.Module):
 
 
 class Llama4VisionMLP(nn.Module):
-    """vision mlp."""
+    """Vision mlp."""
 
     def __init__(self, config: Llama4VisionConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
@@ -613,7 +613,7 @@ class Llama4VisionMLP(nn.Module):
 
 
 class Llama4VisionEncoderLayer(nn.Module):
-    """vision encoder layer."""
+    """Vision encoder layer."""
 
     def __init__(self, config: Llama4VisionConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
@@ -652,7 +652,7 @@ class Llama4VisionEncoderLayer(nn.Module):
 
 
 class Llama4VisionEncoder(nn.Module):
-    """vision encoder."""
+    """Vision encoder."""
 
     def __init__(self, config: Llama4VisionConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
@@ -736,7 +736,7 @@ class Llama4VisionPixelShuffleMLP(nn.Module):
 
 
 class Llama4VisionModel(nn.Module):
-    """llama4 vision model."""
+    """Llama4 vision model."""
 
     def __init__(self, config: Llama4VisionConfig, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
@@ -839,7 +839,7 @@ class Llama4ForConditionalGeneration(nn.Module, CudaGraphMixin):
 
     @staticmethod
     def _update_quant_config(config: Llama4Config):
-        """update quant config."""
+        """Update quant config."""
         quant_config = getattr(config, 'quantization_config', None)
 
         if quant_config is None:
@@ -859,13 +859,13 @@ class Llama4ForConditionalGeneration(nn.Module, CudaGraphMixin):
         pixel_values: torch.FloatTensor,
         **kwargs,
     ):
-        """get image features."""
+        """Get image features."""
         kwargs = {k: v for k, v in kwargs.items() if v is not None}
         hidden_state = self.vision_model(pixel_values, **kwargs)
         return hidden_state
 
     def get_input_embeddings(self):
-        """input embeddings."""
+        """Input embeddings."""
         return self.language_model.get_input_embeddings()
 
     def forward(
@@ -878,7 +878,7 @@ class Llama4ForConditionalGeneration(nn.Module, CudaGraphMixin):
         image_mask: torch.Tensor = None,
         **kwargs,
     ):
-        """model forward."""
+        """Model forward."""
         image_embeds = None
         if pixel_values is not None:
             image_features = self.get_image_features(pixel_values=pixel_values, )
@@ -900,7 +900,7 @@ class Llama4ForConditionalGeneration(nn.Module, CudaGraphMixin):
         )
 
     def get_logits(self, hidden_states: torch.Tensor):
-        """compute logits of the model output."""
+        """Compute logits of the model output."""
         return self.language_model.get_logits(hidden_states)
 
     def prepare_inputs_for_generation(
@@ -909,7 +909,7 @@ class Llama4ForConditionalGeneration(nn.Module, CudaGraphMixin):
         inputs_embeds: Optional[torch.Tensor] = None,
         context: StepContext = None,
     ):
-        """prepare input."""
+        """Prepare input."""
         # get input_ids, position_ids and attention metadatas
         input_ids = context.input_ids
         position_ids = context.position_ids
@@ -942,7 +942,7 @@ class Llama4ForConditionalGeneration(nn.Module, CudaGraphMixin):
         )
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
-        """load weights."""
+        """Load weights."""
 
         def _load_experts_bf16(name, loaded_weight):
             if '.gate_up_proj' in name:
@@ -975,7 +975,7 @@ class Llama4ForConditionalGeneration(nn.Module, CudaGraphMixin):
                 load_weight(param, loaded_weight)
 
         def _load_experts(name, loaded_weight):
-            """load experts weight."""
+            """Load experts weight."""
             quantization_config = getattr(self.config, 'quantization_config', None)
             if quantization_config is None:
                 _load_experts_bf16(name, loaded_weight)
@@ -1025,12 +1025,12 @@ class Llama4ForConditionalGeneration(nn.Module, CudaGraphMixin):
                     load_weight(param, loaded_weight)
 
     def get_input_processor(self) -> BaseModelInputProcessor:
-        """get input processor."""
+        """Get input processor."""
         return self.input_processor
 
 
 class Llama4InputProcessor(BaseModelInputProcessor):
-    """llama4 input processor."""
+    """Llama4 input processor."""
 
     def __init__(self, config: Llama4Config, dtype) -> None:
         self.config = config
@@ -1042,7 +1042,7 @@ class Llama4InputProcessor(BaseModelInputProcessor):
                          input_ids: List[int],
                          input_multimodals: List[Dict[str, Any]] = None,
                          **kwargs) -> PreprocessInputResult:
-        """prepare multimodal input."""
+        """Prepare multimodal input."""
 
         if input_multimodals is None or len(input_multimodals) == 0:
             return input_ids, input_multimodals

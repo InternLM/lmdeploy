@@ -39,19 +39,19 @@ class OpsBackend(ABC):
     @staticmethod
     @abstractmethod
     def get_name() -> str:
-        """get backend name."""
+        """Get backend name."""
         raise NotImplementedError
 
     @classmethod
     @abstractmethod
     def get_layer_impl_builder(cls, layer_type: OpType):
-        """get builder of given layer type."""
+        """Get builder of given layer type."""
         raise NotImplementedError
 
     @staticmethod
     @abstractmethod
     def get_attention_metadata_cls():
-        """get attention metadata class."""
+        """Get attention metadata class."""
         raise NotImplementedError
 
     @staticmethod
@@ -62,7 +62,7 @@ class OpsBackend(ABC):
         head_size: int,
         dtype: torch.dtype,
     ) -> Tuple[int, ...]:
-        """get block shape of k."""
+        """Get block shape of k."""
         raise NotImplementedError
 
     @staticmethod
@@ -73,12 +73,12 @@ class OpsBackend(ABC):
         head_size: int,
         dtype: torch.dtype,
     ) -> Tuple[int, ...]:
-        """get block shape of v."""
+        """Get block shape of v."""
         raise NotImplementedError
 
     @classmethod
     def update_step_context(cls, step_context):
-        """update StepContext for inference.
+        """Update StepContext for inference.
 
         attention meta should be built here.
         """
@@ -87,16 +87,16 @@ class OpsBackend(ABC):
     @staticmethod
     def build_graph_runner(model: torch.nn.Module, model_config: ModelConfig, cache_config: CacheConfig,
                            backend_config: BackendConfig, device: torch.device):
-        """build graph runner."""
+        """Build graph runner."""
         from .graph_runner import GraphRunner
         return GraphRunner(model, model_config, cache_config, backend_config, device)
 
     @staticmethod
     def device_count():
-        """get num available devices."""
+        """Get num available devices."""
         return None
 
     @staticmethod
     def support_ray():
-        """support ray."""
+        """Support ray."""
         return False

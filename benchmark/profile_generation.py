@@ -33,9 +33,10 @@ async def infer(model, session_id: int, input_ids: List, gen_config: GenerationC
         token_latency_stats = [0] * (output_seqlen + 1)
         prev = time.perf_counter()
         n_prev_token = 0
-        """
-        The iterator provided by `stream_infer` denotes the number of generated tokens so far,
-        which is represented by the variable `n_token`.
+        """The iterator provided by `stream_infer` denotes the number of
+        generated tokens so far, which is represented by the variable
+        `n_token`.
+
         Please note that `n_token` is not a continuous value. In other words, during the iteration,
         its value might be 5, 7, 8, 16, and so on, rather than 1, 2, 3, 4, etc.
         So, it is quite difficult to get the latency of each generated token.

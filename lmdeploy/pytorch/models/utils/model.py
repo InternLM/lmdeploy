@@ -10,7 +10,7 @@ from lmdeploy.pytorch.model_inputs import StepContext
 class DeployModelMixin:
 
     def forward(self, *args, **kwargs):
-        """forward of model."""
+        """Forward of model."""
         raise NotImplementedError('Not Implemented')
 
     def prepare_inputs_for_generation(
@@ -19,28 +19,28 @@ class DeployModelMixin:
         inputs_embeds: Optional[torch.Tensor] = None,
         context: StepContext = None,
     ):
-        """prepare input."""
+        """Prepare input."""
         raise NotImplementedError('Not Implemented')
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
-        """load weights."""
+        """Load weights."""
         raise NotImplementedError('Not Implemented')
 
     def get_logits(self, hidden_states: torch.Tensor):
-        """compute logits of the model output."""
+        """Compute logits of the model output."""
         return hidden_states
 
     def update_weights(self):
-        """update weights."""
+        """Update weights."""
         pass
 
     def update_model_metas(self,
                            past_key_values: List[List[torch.Tensor]],
                            inputs_embeds: Optional[torch.Tensor] = None,
                            context: StepContext = None):
-        """update model meta."""
+        """Update model meta."""
         return None
 
     def get_input_processor(self) -> BaseModelInputProcessor:
-        """get input processor."""
+        """Get input processor."""
         return None

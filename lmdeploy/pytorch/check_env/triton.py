@@ -8,10 +8,10 @@ MIN_TRITON_VERSION = '3.0.0'
 
 
 class TritonChecker(BaseChecker):
-    """check triton is available."""
+    """Check triton is available."""
 
     def check_version(self):
-        """check version."""
+        """Check version."""
         logger = self.get_logger()
 
         # version check

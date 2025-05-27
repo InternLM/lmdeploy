@@ -1270,7 +1270,7 @@ class ChatGLM2(BaseModel):
         self.count = 0
 
     def get_prompt(self, prompt, sequence_start=True):
-        """get prompt."""
+        """Get prompt."""
         # need more check
         # https://github.com/THUDM/ChatGLM2-6B/issues/48
         # [64790, 64792] to be prepended
@@ -1281,7 +1281,7 @@ class ChatGLM2(BaseModel):
         return ret
 
     def messages2prompt(self, messages, sequence_start=True, **kwargs):
-        """message to prompt."""
+        """Message to prompt."""
         if isinstance(messages, str):
             return self.get_prompt(messages, sequence_start)
         ret = ''

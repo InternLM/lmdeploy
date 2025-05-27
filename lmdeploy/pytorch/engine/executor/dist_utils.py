@@ -9,7 +9,7 @@ from lmdeploy.pytorch.backends.selector import get_backend
 
 
 def find_available_port() -> bool:
-    """find available port."""
+    """Find available port."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(('0.0.0.0', 0))
         s.listen(1)
@@ -18,7 +18,7 @@ def find_available_port() -> bool:
 
 
 def setup_master_addr(addr: str, port: str):
-    """setup master addr."""
+    """Setup master addr."""
     from lmdeploy.utils import get_logger
     logger = get_logger('lmdeploy')
 
@@ -30,13 +30,13 @@ def setup_master_addr(addr: str, port: str):
 
 
 def init_dist_environ(rank: int, world_size: int):
-    """init environ."""
+    """Init environ."""
     os.environ['RANK'] = str(rank)
     os.environ['WORLD_SIZE'] = str(world_size)
 
 
 def init_process_group(rank: int, world_size: int):
-    """init process group."""
+    """Init process group."""
     DIST_TIMEOUT = timedelta(days=35600)
     init_dist_environ(rank, world_size)
     os.environ.pop('TORCHELASTIC_USE_AGENT_STORE', None)

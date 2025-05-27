@@ -15,7 +15,7 @@ from .utils.cudagraph import CudaGraphMixin
 
 
 class InternLM2ForRewardModel(nn.Module, CudaGraphMixin):
-    """rewrote model of InternLM2ForRewardModel."""
+    """Rewrote model of InternLM2ForRewardModel."""
 
     packed_modules_mapping = {
         'gate_up_proj': [
@@ -46,7 +46,7 @@ class InternLM2ForRewardModel(nn.Module, CudaGraphMixin):
         inputs_embeds: torch.Tensor = None,
         **kwargs,
     ):
-        """model forward, return logits."""
+        """Model forward, return logits."""
         hidden_states = self.model(
             input_ids=input_ids,
             position_ids=position_ids,
@@ -57,11 +57,11 @@ class InternLM2ForRewardModel(nn.Module, CudaGraphMixin):
         return hidden_states
 
     def get_logits(self, hidden_states: torch.Tensor):
-        """compute logits of the model output."""
+        """Compute logits of the model output."""
         return self.v_head(hidden_states)
 
     def get_input_embeddings(self):
-        """get input embeddings."""
+        """Get input embeddings."""
         return self.model.get_input_embeddings()
 
     def prepare_inputs_for_generation(
@@ -70,7 +70,7 @@ class InternLM2ForRewardModel(nn.Module, CudaGraphMixin):
         inputs_embeds: Optional[torch.Tensor] = None,
         context: StepContext = None,
     ):
-        """prepare input."""
+        """Prepare input."""
         # get input_ids, position_ids and attention metadatas
         input_ids = context.input_ids
         position_ids = context.position_ids
@@ -90,7 +90,7 @@ class InternLM2ForRewardModel(nn.Module, CudaGraphMixin):
         )
 
     def load_lora_weights(self, weights: Iterable[Tuple[str, torch.Tensor]], adapter_id: int):
-        """load lora weights."""
+        """Load lora weights."""
 
         from lmdeploy.pytorch.adapter.adapter import load_lora_weights
 
@@ -114,7 +114,7 @@ class InternLM2ForRewardModel(nn.Module, CudaGraphMixin):
         load_lora_weights(self, weights_iter, adapter_id)
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
-        """load weights."""
+        """Load weights."""
         # modify from vllm
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)
