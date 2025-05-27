@@ -1251,7 +1251,7 @@ def serve(model_path: str,
         async_engine = VariableInterface.async_engine
         task = None
         try:
-            if backend_config.enable_metrics:
+            if backend == 'pytorch' and backend_config.enable_metrics:
                 log_interval = 5.
 
                 async def _force_log():
@@ -1291,7 +1291,7 @@ def serve(model_path: str,
         app.add_middleware(ConcurrencyLimitMiddleware, max_concurrent_requests=max_concurrent_requests)
 
     # add prometheus asgi middleware to route '/metrics' requests
-    if backend_config.enable_metrics:
+    if backend == 'pytorch' and backend_config.enable_metrics:
         metrics_app = prometheus_client.make_asgi_app()
         app.mount('/metrics', metrics_app)
 
