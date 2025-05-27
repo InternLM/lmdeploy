@@ -158,6 +158,8 @@ class StateDictLoader:
 
     def items(self):
         for data in iter(self.que.get, None):
+            # If data is state dict of a decoder layer, any key will match the pattern.
+            # Otherwise, none of the keys will match the pattern.
             for k in data.keys():
                 match = re.findall(self.pattern, k)
                 break
