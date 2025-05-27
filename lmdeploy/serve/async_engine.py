@@ -314,10 +314,9 @@ class AsyncEngine(LogitsMixin):
                                                                           engine_num=backend_config.dp)
             logger.info(f'dp: {backend_config.dp} dp_rank: {self.backend_config.dp_rank}')
 
-        if backend_config.enable_metrics:
-            assert self.stat_loggers is not None
-            assert self.backend_config.dp_rank < len(self.stat_loggers)
-            self.engine.stat_loggers = self.stat_loggers[backend_config.dp_rank]
+            if backend_config.enable_metrics:
+                assert self.backend_config.dp_rank < len(self.stat_loggers), 'dp_rank should < the number of loggers'
+                self.engine.stat_loggers = self.stat_loggers[backend_config.dp_rank]
 
     def close(self):
         self.internal_thread.close()
