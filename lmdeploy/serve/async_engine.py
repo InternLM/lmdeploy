@@ -306,12 +306,13 @@ class AsyncEngine(LogitsMixin):
         # build status loggers
         # independent set for each DP rank, since monototic time differs for each process
         # each set contains one cli logger and one prometheus logger
-        logger.info(f'enable metrics: {backend_config.enable_metrics}')
-        self.stat_loggers: List[List[StatLoggerBase]] = setup_loggers(enable_metrics=backend_config.enable_metrics,
-                                                                      model_name=self.model_name,
-                                                                      max_model_len=self.session_len,
-                                                                      engine_num=backend_config.dp)
-        logger.info(f'dp: {backend_config.dp} dp_rank: {self.backend_config.dp_rank}')
+        if backend == 'pytorch':
+            logger.info(f'enable metrics: {backend_config.enable_metrics}')
+            self.stat_loggers: List[List[StatLoggerBase]] = setup_loggers(enable_metrics=backend_config.enable_metrics,
+                                                                          model_name=self.model_name,
+                                                                          max_model_len=self.session_len,
+                                                                          engine_num=backend_config.dp)
+            logger.info(f'dp: {backend_config.dp} dp_rank: {self.backend_config.dp_rank}')
 
         if backend_config.enable_metrics:
             assert self.stat_loggers is not None
@@ -394,9 +395,10 @@ class AsyncEngine(LogitsMixin):
                                 **kwargs)
 
     async def do_log_stats(self, ) -> None:
-        for each_dp_engine_loggers in self.stat_loggers:
-            for stat_logger in each_dp_engine_loggers:
-                stat_logger.log()
+        if self.backend == 'pytorch':
+            for each_dp_engine_loggers in self.stat_loggers:
+                for stat_logger in each_dp_engine_loggers:
+                    stat_logger.log()
 
     async def stop_session(self, session_id: int):
         """Stop a session by a session_id."""
