@@ -601,6 +601,18 @@ struct GemmUniversalSm90_v3 {
                     scales[1][0] = scale_U[m][1] * scale_V[0];
                     scales[0][1] = scale_U[m][0] * scale_V[1];
                     scales[1][1] = scale_U[m][1] * scale_V[1];
+                    // scales[0][0] = 1;
+                    // scales[1][0] = 1;
+                    // scales[0][1] = 1;
+                    // scales[1][1] = 1;
+                    // scales[0][0] = scale_V[0];
+                    // scales[1][0] = scale_V[0];
+                    // scales[0][1] = scale_V[1];
+                    // scales[1][1] = scale_V[1];
+                    // scales[0][0] = scale_U[m][0];
+                    // scales[1][0] = scale_U[m][1];
+                    // scales[0][1] = scale_U[m][0];
+                    // scales[1][1] = scale_U[m][1];
                     cute::warpgroup_wait<0>();
                     PRAGMA_UNROLL
                     for (int n = 0; n < MMA_ITER_N; ++n) {

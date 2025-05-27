@@ -57,6 +57,7 @@ public:
             swizzled_shape_x       = {(int)swizzled_shape_.x};
         }
         else {
+            printf("gemm shape: %d %d %d\n", gemm_shape.x, gemm_shape.y, gemm_shape.z);
             int num      = gemm_shape_.w;
             tiled_shape_ = get_tiled_shape(gemm_shape.x + num * tile_shape.x, gemm_shape.y, tile_shape.x, tile_shape.y);
             printf("tiled shape: %d %d\n", tiled_shape_.x, tiled_shape_.y);
@@ -123,15 +124,15 @@ public:
         tile_offset_ = {offset_x + cluster_tile_offset.x * (striped_m ? 1 : Cluster::M),
                         offset_y + cluster_tile_offset.y * (striped_n ? 1 : Cluster::N)};
 
-        if (threadIdx.x == 0) {
-            printf("g:%4d, tiled idx:%4d, cluster:%4d%4d, tiled offset:%4d%4d\n",
-                   group_idx_,
-                   cluster_idx,
-                   cluster_idx_x,
-                   cluster_idx_y,
-                   tile_offset_.x,
-                   tile_offset_.y);
-        }
+        // if (threadIdx.x == 0) {
+        //     printf("g:%4d, tiled idx:%4d, cluster:%4d%4d, tiled offset:%4d%4d\n",
+        //            group_idx_,
+        //            cluster_idx,
+        //            cluster_idx_x,
+        //            cluster_idx_y,
+        //            tile_offset_.x,
+        //            tile_offset_.y);
+        // }
 
         iter_k_range_ = {0, k_iters_};
 

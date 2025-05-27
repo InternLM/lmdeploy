@@ -276,8 +276,11 @@ public:
         invokeMoeDispatch(b_q_e_, b_q_, f2n_.data(), e_, stream_);
         invokeMoeDispatchScales(v_e_, b_s_, f2n_.data(), e_, stream_);
 
+        std::cout << "Ve: " << v_e_ << std::endl;
         b_q_desc_.num = v_desc_.num = expert_num_;
         b_q_desc_.offsets = v_desc_.offsets = n_offset_.data();
+
+        v_desc_.ld = v_e_.stride(0);
 
         b_x_ = &b_q_e_;
     }
@@ -293,7 +296,12 @@ public:
         auto C = &c_x_;
         auto V = &b_s_;
 
-        auto   c_desc = c_desc_;
+        auto a_desc = *a_desc_x_;
+        auto u_desc = u_desc_;
+        auto b_desc = *b_desc_x_;
+        auto v_desc = v_desc_;
+        auto c_desc = c_desc_;
+
         Tensor C_e;
         if (expert_num_) {
             c_desc.num     = expert_num_;
@@ -301,26 +309,26 @@ public:
             C_e            = create_(M, N, Tc, Oc, e_).first;
             C              = &C_e;
             V              = &v_e_;
-
-            a_desc_x_->offsets = m_offset_.data();
-            u_desc_.offsets    = m_offset_.data();
+            a_desc.offsets = m_offset_.data();
+            u_desc.offsets = m_offset_.data();
+            c_desc.cols *= e_;
+            b_desc.cols *= e_;
+            v_desc.cols *= e_;
         }
 
         FT_CHECK(a_x_ && a_desc_x_);
         FT_CHECK(b_x_ && b_desc_x_);
 
-        std::cout << *a_desc_x_ << " " << *b_desc_x_ << " " << c_desc << "\n";
-
         auto status = gemm_.Run(operation,
                                 1.f,
                                 a_x_->raw_data(),
-                                *a_desc_x_,
+                                a_desc,
                                 a_s_.data_or((void*)nullptr),
-                                u_desc_,
+                                u_desc,
                                 b_x_->raw_data(),
-                                *b_desc_x_,
+                                b_desc,
                                 V->data_or((void*)nullptr),
-                                v_desc_,
+                                v_desc,
                                 0.f,
                                 C->raw_data(),
                                 c_desc,
