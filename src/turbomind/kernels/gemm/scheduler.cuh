@@ -59,10 +59,12 @@ public:
         else {
             int num      = gemm_shape_.w;
             tiled_shape_ = get_tiled_shape(gemm_shape.x + num * tile_shape.x, gemm_shape.y, tile_shape.x, tile_shape.y);
+            printf("tiled shape: %d %d\n", tiled_shape_.x, tiled_shape_.y);
             cluster_tiled_shape_.x = cdiv(tiled_shape_.x, Cluster::M);
             cluster_tiled_shape_.y = cdiv(tiled_shape_.y, Cluster::N);
             swizzled_shape_        = get_swizzled_shape(cluster_tiled_shape_, log_tile_);
             clusters_              = swizzled_shape_.x * swizzled_shape_.y;
+            printf("clusterd = %d\n", clusters_);
             // M is runtime value
         }
     }
@@ -94,7 +96,13 @@ public:
     {
         int cluster_idx_x, cluster_idx_y;
 
-        swizzled_shape_x(cluster_idx_y, cluster_idx_x, cluster_idx);
+        if constexpr (is_grouped_gemm) {
+            cluster_idx_x = cluster_idx % swizzled_shape_.x;
+            cluster_idx_y = cluster_idx / swizzled_shape_.x;
+        }
+        else {
+            swizzled_shape_x(cluster_idx_y, cluster_idx_x, cluster_idx);
+        }
 
         auto [cluster_cta_m, cluster_cta_n] = Cluster::cta_mn(cute::block_id_in_cluster().x);
 
@@ -115,6 +123,16 @@ public:
         tile_offset_ = {offset_x + cluster_tile_offset.x * (striped_m ? 1 : Cluster::M),
                         offset_y + cluster_tile_offset.y * (striped_n ? 1 : Cluster::N)};
 
+        if (threadIdx.x == 0) {
+            printf("g:%4d, tiled idx:%4d, cluster:%4d%4d, tiled offset:%4d%4d\n",
+                   group_idx_,
+                   cluster_idx,
+                   cluster_idx_x,
+                   cluster_idx_y,
+                   tile_offset_.x,
+                   tile_offset_.y);
+        }
+
         iter_k_range_ = {0, k_iters_};
 
         is_valid_.x = tile_offset_.x < tiled_shape_.x && tile_offset_.y < tiled_shape_.y;
@@ -124,14 +142,19 @@ public:
     TM_DEVICE int update()
     {
         int group = -1;
-        for (int g = group_idx_ + threadIdx.x % WARP_SIZE; g < gemm_shape_.w; g += WARP_SIZE) {
-            int beg = (offsets_[g + 0] / gemm_shape_.x + g + 0) * gemm_shape_.y;
-            int end = (offsets_[g + 1] / gemm_shape_.x + g + 1) * gemm_shape_.y;
+        for (int g = threadIdx.x % WARP_SIZE; g < gemm_shape_.w; g += WARP_SIZE) {
+            int beg = (offsets_[g + 0] / tile_shape_.x + g + 0) * tiled_shape_.y;
+            int end = (offsets_[g + 1] / tile_shape_.x + g + 1) * tiled_shape_.y;
+            // printf("b e: %d %d\n", beg, end);
             if (beg <= cluster_idx_ && cluster_idx_ < end) {
                 group = g;
             }
         }
-        auto mask  = __ballot_sync((uint32_t)-1, group >= 0);
+        // int  group = 0;
+        auto mask = __ballot_sync((uint32_t)-1, group >= 0);
+        // if (threadIdx.x == 0) {
+        //     printf("mask = %x\n", mask);
+        // }
         group_idx_ = __shfl_sync((uint32_t)-1, group, __ffs(mask) - 1);
 
         gemm_shape_.x  = offsets_[group_idx_ + 1] - offsets_[group_idx_];
@@ -139,7 +162,14 @@ public:
 
         swizzled_shape_ = get_swizzled_shape(tiled_shape_, log_tile_);
 
-        auto beg = (offsets_[group_idx_] / gemm_shape_.x + group_idx_) * gemm_shape_.y;
+        auto beg = (offsets_[group_idx_] / tile_shape_.x + group_idx_) * tiled_shape_.y;
+
+        // if (threadIdx.x == 0 && cluster_idx_ - beg == 0) {
+        //     printf("g:%4d, tiled shape:%4d%4d\n", group_idx_, tiled_shape_.x, tiled_shape_.y);
+        // }
+        // if (threadIdx.x == 0) {
+        //     printf("g:%4d, beg:%4d\n", group_idx_, beg);
+        // }
 
         return cluster_idx_ - beg;
     }
@@ -153,6 +183,9 @@ public:
         }
 
         auto cluster_idx = is_grouped_gemm ? update() : cluster_idx_;
+        // if (threadIdx.x == 0) {
+        //     printf("cluster_idx = %d\n", cluster_idx);
+        // }
 
         unswizzle(cluster_idx);
 

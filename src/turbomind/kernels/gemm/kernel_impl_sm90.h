@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "cute/util/debug.hpp"
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/data_type.h"
 #include "src/turbomind/kernels/gemm/context.h"
@@ -39,6 +40,10 @@ __global__ void __launch_bounds__(Kernel::CTA_SIZE, 1) gemm_kernel_sm90(const __
                                                                         typename Kernel::Scheduler sched,
                                                                         void*                      tensormap_buf)
 {
+    // if (cute::thread0()) {
+    //     printf("ffs %d\n", __ffs(0x0));
+    // }
+
 #if __CUDA_ARCH__
     if constexpr (Kernel::Arch::is_compatible(__CUDA_ARCH__)) {
         Kernel kernel;
@@ -178,6 +183,8 @@ public:
         [[maybe_unused]] const int n = Ddesc.cols;
         [[maybe_unused]] const int k = Adesc.cols;
 
+        std::cout << "M: " << m << ", N: " << n << ", K: " << k << "\n";
+
         auto transpose = [](MatrixLayout x) {
             std::swap(x.rows, x.cols);
             x.order = gemm::transpose(x.order);
@@ -190,7 +197,7 @@ public:
 
         auto sched = [&] {
             const int2 tiles = get_tiled_shape(m, n, TILE_M, TILE_N);
-            const int4 shape{m, n, k, 1};
+            const int4 shape{m, n, k, Adesc.num};
 
             swizzle = Sched::get_log_tile(tiles, 1 << swizzle);
 

@@ -297,12 +297,13 @@ public:
         Tensor C_e;
         if (expert_num_) {
             c_desc.num     = expert_num_;
-            c_desc.offsets = m_offset_.data();
+            c_desc.offsets = n_offset_.data();
             C_e            = create_(M, N, Tc, Oc, e_).first;
             C              = &C_e;
             V              = &v_e_;
 
             a_desc_x_->offsets = m_offset_.data();
+            u_desc_.offsets    = m_offset_.data();
         }
 
         FT_CHECK(a_x_ && a_desc_x_);
@@ -330,14 +331,16 @@ public:
 
         TM_CHECK_EQ(status, 0);
 
-        invokeMoeCombine(c_x_,  //
-                         C_e,
-                         moe_scales_.data(),
-                         en2f_.data(),
-                         nullptr,
-                         e_,
-                         0,
-                         stream_);
+        if (expert_num_) {
+            invokeMoeCombine(c_x_,  //
+                             C_e,
+                             moe_scales_.data(),
+                             en2f_.data(),
+                             nullptr,
+                             e_,
+                             0,
+                             stream_);
+        }
 
         // Tensor h_c = empty_like(c_o_.t(), kCPU);
         // Copy(c_o_.t(), h_c);
