@@ -703,12 +703,12 @@ class AsyncEngine(LogitsMixin):
                                            prompt_token_ids=input_ids,
                                            gen_config=gen_config,
                                            adapter_name=adapter_name)
-            logger.debug(f'session={session_id}, '
-                         f'history_tokens={self.id2step[session_id]}, '
-                         f'input_tokens={len(input_ids)}, '
-                         f'max_new_tokens={gen_config.max_new_tokens}, '
-                         f'seq_start={sequence_start}, seq_end={sequence_end}, '
-                         f'step={step}, prep={do_preprocess}')
+            logger.info(f'session={session_id}, '
+                        f'history_tokens={self.id2step[session_id]}, '
+                        f'input_tokens={len(input_ids)}, '
+                        f'max_new_tokens={gen_config.max_new_tokens}, '
+                        f'seq_start={sequence_start}, seq_end={sequence_end}, '
+                        f'step={step}, prep={do_preprocess}')
         else:
             # TODO(lvhan) VLM doesn't support input_ids as an argument.
             # Figure out a graceful way to handle the invalid input
@@ -818,9 +818,9 @@ class AsyncEngine(LogitsMixin):
                     if not response.endswith('�'):
                         # avoid returning the last response twice
                         response = ''
-                    logger.debug(f'session {session_id} finished, reason '
-                                 f'"{finish_reason}", input_tokens '
-                                 f'{len(input_ids)}, outupt_tokens {gen_len}')
+                    logger.info(f'session {session_id} finished, reason '
+                                f'"{finish_reason}", input_tokens '
+                                f'{len(input_ids)}, outupt_tokens {gen_len}')
                     yield GenOut(response,
                                  self.id2step[session_id],
                                  len(input_ids),

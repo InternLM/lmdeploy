@@ -242,7 +242,7 @@ class InputsMakerAsync(InputsMakerBase):
             return None, None
         next_running = forward_inputs.pop('running')
         inputs = forward_inputs['inputs']
-        logger.debug(f'Sending forward inputs: {inputs.log_info()}')
+        logger.info(f'Sending forward inputs: {inputs.log_info()}')
         if logger.level <= logging.DEBUG:
             session_ids = [seq.session_id for seq in next_running]
             logger.debug(f'Forward session_ids: {session_ids}')
@@ -270,7 +270,7 @@ class InputsMakerAsync(InputsMakerBase):
 
         if enable:
             # send next forward
-            logger.debug('Prefetching next forward inputs.')
+            logger.info('Prefetching next forward inputs.')
             return await self._send_next_inputs_impl(prefill, True)
         else:
             return None, None
@@ -886,7 +886,7 @@ class Engine:
             )
 
         scheduler = self.scheduler
-        logger.debug(f'Make forward inputs with prefill={prefill}, enable_empty={enable_empty}')
+        logger.info(f'Make forward inputs with prefill={prefill}, enable_empty={enable_empty}')
 
         if self.should_execute_dummy_batch:
             if prefill and scheduler.num_waiting() == 0:

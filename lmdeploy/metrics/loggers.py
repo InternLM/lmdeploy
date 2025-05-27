@@ -3,6 +3,7 @@
 
 import time
 from abc import ABC, abstractmethod
+from datetime import datetime
 from typing import List, Optional
 
 import numpy as np
@@ -67,19 +68,14 @@ class LoggingStatLogger(StatLoggerBase):
         scheduler_stats = self.last_scheduler_stats
 
         # Format and print output.
-        logger.info(
-            'DP: %d, '
-            'Avg prompt throughput: %.1f tokens/s, '
-            'Avg generation throughput: %.1f tokens/s, '
-            'Running: %d reqs, Waiting: %d reqs, '
-            'GPU KV cache usage: %.1f%%, ',
-            self.dp_rank,
-            prompt_throughput,
-            generation_throughput,
-            scheduler_stats.num_running_reqs,
-            scheduler_stats.num_waiting_reqs,
-            scheduler_stats.gpu_cache_usage * 100,
-        )
+        log_msg = (f"[{datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')} "
+                   f'DP{self.dp_rank}] '
+                   f'Avg prompt throughput: {prompt_throughput:.1f} tokens/s, '
+                   f'Avg generation throughput: {generation_throughput:.1f} tokens/s, '
+                   f'Running: {scheduler_stats.num_running_reqs} reqs, '
+                   f'Waiting: {scheduler_stats.num_waiting_reqs} reqs, '
+                   f'GPU KV cache usage: {scheduler_stats.gpu_cache_usage:.1f}%')
+        print(log_msg)
 
 
 class PrometheusStatLogger(StatLoggerBase):
