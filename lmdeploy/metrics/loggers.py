@@ -74,7 +74,7 @@ class LoggingStatLogger(StatLoggerBase):
                    f'Avg generation throughput: {generation_throughput:.1f} tokens/s, '
                    f'Running: {scheduler_stats.num_running_reqs} reqs, '
                    f'Waiting: {scheduler_stats.num_waiting_reqs} reqs, '
-                   f'GPU KV cache usage: {scheduler_stats.gpu_cache_usage:.1f}%')
+                   f'GPU KV cache usage: {scheduler_stats.gpu_cache_usage * 100 :.1f}%')
         print(log_msg)
 
 
