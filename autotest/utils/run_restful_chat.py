@@ -27,10 +27,16 @@ def start_restful_api(config, param, model, model_path, backend_type, worker_id)
 
     cuda_prefix = param['cuda_prefix']
     tp_num = param['tp_num']
+
     if 'extra' in param.keys():
         extra = param['extra']
     else:
         extra = ''
+
+    # temp remove testcase because of issue 3434
+    if ('InternVL3' in model or 'InternVL2_5' in model or 'MiniCPM-V-2_6' in model):
+        if 'turbomind' in backend_type and extra is not None and 'communicator native' in extra and tp_num > 1:
+            return
 
     if 'modelscope' in param.keys():
         modelscope = param['modelscope']
