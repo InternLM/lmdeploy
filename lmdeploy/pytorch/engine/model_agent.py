@@ -617,10 +617,9 @@ class BaseModelAgent:
             if is_decoding and idx < loop_count - 1:
                 __update_inputs(next_token_ids, model_metas)
 
-    @torch.inference_mode()
     async def _async_loop_background(self, forward_event: asyncio.Event = None):
         """async loop background."""
-        with self.all_context(), torch.cuda.stream(self.stream):
+        with self.all_context(), torch.cuda.stream(self.stream), torch.inference_mode():
             while True:
                 forward_inputs = await self._in_que.get()
 
@@ -630,7 +629,6 @@ class BaseModelAgent:
                 if forward_event is not None:
                     forward_event.set()
 
-    @torch.inference_mode()
     async def _async_loop_inputs_preprocess(self):
         """async loop inputs preprocess."""
         non_blocking = True
@@ -639,7 +637,7 @@ class BaseModelAgent:
             forward_inputs = await self._pre_in_que.get()
 
             logger.debug('preprocessing forward inputs.')
-            with torch.cuda.stream(self.out_stream), record_function('inputs_H2D'):
+            with torch.cuda.stream(self.out_stream), torch.inference_mode(), record_function('inputs_H2D'):
                 for k in keys:
                     if k not in forward_inputs:
                         continue
@@ -755,7 +753,7 @@ class BaseModelAgent:
         event = out.pop('event')
         while not event.query():
             await asyncio.sleep(0.001)
-        with torch.cuda.stream(self.out_stream), record_function('outputs_D2H'):
+        with torch.cuda.stream(self.out_stream), torch.inference_mode(), record_function('outputs_D2H'):
             out['next_token_ids'] = out['next_token_ids'].cpu()
             out['stopped'] = out['stopped'].cpu()
             if out['logits'] is not None:
