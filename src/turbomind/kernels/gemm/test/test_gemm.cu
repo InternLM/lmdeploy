@@ -25,7 +25,7 @@ int main()
     // test->Initialize(6144, 8192, 4096, core::Context::stream().handle());
     // test->Initialize(4096, 8192, 4096, core::Context::stream().handle());
 
-    test->Initialize(1536, 32768, 4096, 128, 8, core::Context::stream().handle());
+    test->Initialize(1536, 32768, 8192, 128, 8, core::Context::stream().handle());
 
     // test->Initialize(1536, 77, 4096, 8, 2, core::Context::stream().handle());
     // test->Initialize(1536, 256, 4096, 8, 2, core::Context::stream().handle());

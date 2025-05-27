@@ -243,7 +243,8 @@ struct GemmUniversalSm90_v3 {
     static constexpr int MMA_ITER_K = TILE_K / MMA_ATOM_K;
 
     static constexpr int kMulticastA = 1;
-    static constexpr int kMulticastB = 1;
+    static constexpr int kMulticastB = 2;
+    static constexpr int kMulticastU = 1;
 
     static constexpr int kClusterSize = kMulticastA * kMulticastB;
 
@@ -384,8 +385,8 @@ struct GemmUniversalSm90_v3 {
 
                     if constexpr (is_grouped) {
                         Array<void*, 3> global_addrs;
-                        global_addrs[0] = (Ta*)param_A.ptr + param_A.offsets[g] * param_A.stride;
-                        global_addrs[1] = (Tb*)param_B.ptr + param_B.offsets[g] * param_B.stride;
+                        global_addrs[0] = (Ta*)param_A.ptr + param_A.offsets[g] * (int64_t)param_A.stride;
+                        global_addrs[1] = (Tb*)param_B.ptr + param_B.offsets[g] * (int64_t)param_B.stride;
 
                         const int beg_u = param_U.offsets[g] / kAlignmentU * kAlignmentU;
                         const int end_u = round_up(param_U.offsets[g + 1], kAlignmentU);
@@ -690,7 +691,7 @@ struct GemmUniversalSm90_v3 {
                 if constexpr (is_grouped) {
                     if (threadIdx.x % WARPGROUP_SIZE / WARP_SIZE == 0) {
                         const int g           = sched.group_idx_;
-                        auto      global_addr = (Tc*)param_C.ptr + param_C.offsets[g] * param_C.stride;
+                        auto      global_addr = (Tc*)param_C.ptr + param_C.offsets[g] * (int64_t)param_C.stride;
                         int       idx         = 3 + wg_idx;
                         // if (lane_id == 0) {
                         //     printf("FUCK %d %d %d %d\n", g, param_C.offsets[g], M, param_C.stride);
@@ -754,7 +755,6 @@ struct GemmUniversalSm90_v3 {
                                                offset_n + wg_idx_n * WG_TILE_N + tma_n,
                                                offset_m + wg_idx_m * WG_TILE_M);
                     cute::tma_store_arrive();
-                    // cute::tma_store_wait<0>();
                 }
 
             }  // scheduler loop

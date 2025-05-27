@@ -272,7 +272,7 @@ public:
         // std::cout << "moe_scales: " << moe_scales_ << "\n";
 
         b_q_e_ = create_(K, N, b_q_.dtype(), Ob, e_).first;
-        // std::cout << "b_q_e: " << b_q_e_ << "\n";
+        std::cout << "Bqe: " << b_q_e_ << "\n";
         invokeMoeDispatch(b_q_e_, b_q_, f2n_.data(), e_, stream_);
         invokeMoeDispatchScales(v_e_, b_s_, f2n_.data(), e_, stream_);
 
