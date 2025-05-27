@@ -42,6 +42,19 @@ def test_throughput_tp4(config, run_id, run_config, worker_id):
     assert result, msg
 
 
+@pytest.mark.gpu_num_8
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('run_config', get_benchmark_model_list(tp_num=4, kvint_list=[4, 8]))
+def test_throughput_tp8(config, run_id, run_config, worker_id):
+    result, msg = throughput_test(config,
+                                  run_id,
+                                  run_config,
+                                  cuda_prefix=get_cuda_prefix_by_workerid(worker_id, tp_num=8),
+                                  worker_id=worker_id)
+
+    assert result, msg
+
+
 @pytest.mark.function
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('run_config', [{

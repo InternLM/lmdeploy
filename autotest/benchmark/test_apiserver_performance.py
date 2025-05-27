@@ -60,6 +60,15 @@ def test_restful_tp4(config, run_id, prepare_environment, worker_id):
     assert result, msg
 
 
+@pytest.mark.gpu_num_8
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.parametrize('prepare_environment', getModelList(tp_num=8), indirect=True)
+def test_restful_tp8(config, run_id, prepare_environment, worker_id):
+    result, msg = restful_test(config, run_id, prepare_environment, worker_id=worker_id)
+
+    assert result, msg
+
+
 @pytest.mark.function
 @pytest.mark.flaky(reruns=0)
 @pytest.mark.parametrize('prepare_environment', [{
