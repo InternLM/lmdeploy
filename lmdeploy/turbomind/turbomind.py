@@ -385,6 +385,8 @@ class TurboMind:
                    **kwargs)
 
     def close(self):
+        if hasattr(self, '_tm_model'):
+            self._tm_model.tm_params.clear()
         if self.model_comm is not None:
             self.model_comm = None
         if hasattr(self, '_update_params_thread'):

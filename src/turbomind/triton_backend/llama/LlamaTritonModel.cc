@@ -218,6 +218,7 @@ void LlamaTritonModel::handleMissingParams()
 
 LlamaTritonModel::~LlamaTritonModel()
 {
+    CudaDeviceGuard guard(getDevice());
     FT_CHECK(weights_.size() == engines_.size());
 
     gateway_->shutdown();
@@ -409,8 +410,6 @@ LlamaTritonModel::LlamaTritonModel(DataType                               dtype,
 
 std::unique_ptr<ModelRequest> LlamaTritonModel::createModelInstance(int device_id)
 {
-    check_cuda_error(cudaSetDevice(engine_param_.devices[device_id]));
-
     FT_CHECK(engines_[device_id] != nullptr);
 
     return std::make_unique<ModelRequest>(
