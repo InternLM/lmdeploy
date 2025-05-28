@@ -6,7 +6,7 @@ from typing import List
 
 
 class RopeType(Enum):
-    """rotary embedding type."""
+    """Rotary embedding type."""
     Default = auto()
     LinearScaling = auto()
     DynamicNTKScaling = auto()
@@ -37,14 +37,14 @@ class LongRoPEScalingParameters:
 
 @dataclass
 class Llama3Parameters:
-    """llama3 rope parameters."""
+    """Llama3 rope parameters."""
     low_freq_factor: float = 1.0
     high_freq_factor: float = 4.0
     original_max_position_embeddings: int = 8192
 
 
 class RotaryEmbeddingImpl(ABC):
-    """rotary embedding implementation api."""
+    """Rotary embedding implementation api."""
 
     @abstractmethod
     def forward(self, x, position_ids):
@@ -53,7 +53,7 @@ class RotaryEmbeddingImpl(ABC):
 
 
 class RotaryEmbeddingBuilder(ABC):
-    """rotary embedding implementation builder."""
+    """Rotary embedding implementation builder."""
 
     @staticmethod
     @abstractmethod

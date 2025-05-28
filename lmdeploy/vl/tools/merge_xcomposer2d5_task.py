@@ -9,7 +9,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
 def main(src_path: str, dst_path: str, task: str):
-    """merge internlm-xcomposer2d5-7b LoRA model weights.
+    """Merge internlm-xcomposer2d5-7b LoRA model weights.
 
     Args:
         src_path (str): the source model path of internlm-xcomposer2d5-7b

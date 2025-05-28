@@ -46,7 +46,7 @@ def _construct_stop_or_bad_words(words: List[int] = None):
 
 
 def _np_dict_to_tm_dict(np_dict: dict):
-    """map numpy.ndarray to turbomind's tensor."""
+    """Map numpy.ndarray to turbomind's tensor."""
     ret = _tm.TensorMap()
     for k, v in np_dict.items():
         ret[k] = _tm.from_dlpack(v)
@@ -55,7 +55,7 @@ def _np_dict_to_tm_dict(np_dict: dict):
 
 
 def _tm_dict_to_torch_dict(tm_dict: _tm.TensorMap):
-    """map turbomind's tensor to torch's tensor."""
+    """Map turbomind's tensor to torch's tensor."""
     ret = dict()
     for k, v in tm_dict.items():
         if v.type == _tm.DataType.TYPE_UINT32:
@@ -202,7 +202,7 @@ class TurboMind:
                 tm_params[k].append(v)
 
     def _postprocess_config(self, tm_config: TurbomindModelConfig, engine_config: TurbomindEngineConfig):
-        """postprocess turbomind config by."""
+        """Postprocess turbomind config by."""
         import copy
         self.config = copy.deepcopy(tm_config)
         # Update the attribute values in `self.config` with the valid values
@@ -527,7 +527,7 @@ class TurboMindInstance:
         self.model_inst.cancel()
 
     def async_end_cb(self, fut: asyncio.Future, status: int):
-        """executing on engine's signaling thread."""
+        """Executing on engine's signaling thread."""
         logger.info(f'[async_end_cb] session ended, status = {status}')
         fut.get_loop().call_soon_threadsafe(fut.set_result, status)
 
@@ -537,7 +537,7 @@ class TurboMindInstance:
         await fut
 
     def async_signal_cb(self, s: StreamingSemaphore):
-        """executing on engine's signaling thread."""
+        """Executing on engine's signaling thread."""
         s.loop.call_soon_threadsafe(s.release)
 
     async def async_stream_infer(self,

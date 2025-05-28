@@ -6,7 +6,7 @@ from ..multinomial_sampling import MultinomialSamplingBuilder, MultinomialSampli
 
 
 class DefaultMultinomialSamplingImpl(MultinomialSamplingImpl):
-    """multinomial sampling implementation api."""
+    """Multinomial sampling implementation api."""
 
     def forward(self,
                 scores: torch.Tensor,
@@ -20,7 +20,7 @@ class DefaultMultinomialSamplingImpl(MultinomialSamplingImpl):
 
 
 class DefaultMultinomialSamplingBuilder(MultinomialSamplingBuilder):
-    """multinomial sampling implementation builder."""
+    """Multinomial sampling implementation builder."""
 
     def build():
         """build."""

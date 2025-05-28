@@ -459,7 +459,7 @@ class DeepEPTokenDispatcherLowLatency(TokenDispatcherImpl):
 
 
 class TokenDispatcherBuilder:
-    """token dispatcher builder."""
+    """Token dispatcher builder."""
 
     @staticmethod
     def build(

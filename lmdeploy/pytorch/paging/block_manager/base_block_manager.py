@@ -18,18 +18,18 @@ class LogicalMemory:
         self.access_time: np.ndarray = np.zeros((self._num_blocks, ), dtype=np.int64)
 
     def get_physical_blocks(self, logical_address: np.ndarray):
-        """get physical address."""
+        """Get physical address."""
         if isinstance(logical_address, np.ndarray) and len(logical_address) == 0:
             return np.empty((0, ), dtype=np.int64)
         return self.phy_map[logical_address]
 
     def num_blocks(self):
-        """get num blocks."""
+        """Get num blocks."""
         return self._num_blocks
 
 
 class PhysicalMemory:
-    """physical memory blocks."""
+    """Physical memory blocks."""
 
     def __init__(self, num_cpu_blocks: int, num_gpu_blocks: int) -> None:
         self._num_cpu_blocks = num_cpu_blocks
@@ -37,11 +37,11 @@ class PhysicalMemory:
         self._num_blocks = num_cpu_blocks + num_gpu_blocks
 
     def num_cpu_blocks(self):
-        """get num cpu blocks."""
+        """Get num cpu blocks."""
         return self._num_cpu_blocks
 
     def num_gpu_blocks(self):
-        """get num gpu blocks."""
+        """Get num gpu blocks."""
         return self._num_gpu_blocks
 
 
@@ -101,7 +101,7 @@ class LogicalAllocator:
         self._free_count = num_blocks
 
     def get_phy_allocator(self, device: str):
-        """get allocator."""
+        """Get allocator."""
         if device == 'gpu':
             return self._gpu_allocator
         elif device == 'cpu':
@@ -110,7 +110,7 @@ class LogicalAllocator:
             raise ValueError(f'Unsupported device: {device}')
 
     def allocate(self, num_blocks: int, device: str = 'gpu'):
-        """allocate logical blocks."""
+        """Allocate logical blocks."""
         if num_blocks == 0:
             return np.empty((0, ), dtype=np.int64)
         phy_allocator = self.get_phy_allocator(device)
@@ -159,47 +159,47 @@ class LogicalAllocator:
         return self._free_count
 
     def get_physical_blocks(self, blocks: np.ndarray):
-        """get physical address."""
+        """Get physical address."""
         return self._log_mem.get_physical_blocks(blocks)
 
     def get_ref_count(self, blocks: np.ndarray):
-        """get ref count."""
+        """Get ref count."""
         return self._log_mem.ref_count[blocks]
 
     def add_ref_count(self, blocks: np.ndarray, value: np.ndarray):
-        """update ref count."""
+        """Update ref count."""
         np.add.at(self._log_mem.ref_count, blocks, value)
 
     def get_access_time(self, blocks: np.ndarray):
-        """get access time."""
+        """Get access time."""
         return self._log_mem.access_time[blocks]
 
     def update_access_time(self, blocks: np.ndarray):
-        """update access time."""
+        """Update access time."""
         now = time.perf_counter()
         self._log_mem.access_time[blocks] = now
 
     def cpu_mem_offset(self):
-        """get cpu mem offset in unified physical memory."""
+        """Get cpu mem offset in unified physical memory."""
         return self._cpu_mem_offset
 
     def count_cpu_blocks(self, blocks: np.ndarray):
-        """count cpu blocks."""
+        """Count cpu blocks."""
         phy_blocks = self.get_physical_blocks(blocks)
         return np.count_nonzero(phy_blocks >= self.cpu_mem_offset())
 
     def count_gpu_blocks(self, blocks: np.ndarray):
-        """count gpu blocks."""
+        """Count gpu blocks."""
         phy_blocks = self.get_physical_blocks(blocks)
         return np.count_nonzero(phy_blocks < self.cpu_mem_offset())
 
     def update_phy_map(self, log_blocks: np.ndarray, phy_blocks: np.ndarray):
-        """update physical map."""
+        """Update physical map."""
         assert len(phy_blocks) == len(log_blocks)
         self._log_mem.phy_map.put(log_blocks, phy_blocks)
 
     def on_device(self, blocks: np.ndarray, device: str):
-        """blocks on given device."""
+        """Blocks on given device."""
         if len(blocks) == 0:
             return False
 
@@ -235,7 +235,7 @@ class BaseBlockManager:
 
     @classmethod
     def num_required_blocks(cls, obj: SchedulerSequence, prealloc_size: int = 0):
-        """get num required blocks."""
+        """Get num required blocks."""
         raise NotImplementedError('Not implemented.')
 
     def can_allocate(self, msg: SchedulerSequence, prealloc_size: int = 0):
@@ -269,7 +269,7 @@ class BaseBlockManager:
         return self.allocator.get_physical_blocks(logical_blocks.get_real_blocks())
 
     def allocate(self, data: SchedulerSequence, prealloc_size: int = 0):
-        """allocate stuff."""
+        """Allocate stuff."""
         if isinstance(data, SchedulerSequence):
             return self.allocate_msg(data, prealloc_size)
         else:

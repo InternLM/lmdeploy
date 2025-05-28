@@ -62,7 +62,7 @@ async def chat_stream_local(instruction: str, state_chatbot: Sequence, cancel_bt
 
 
 async def reset_local_func(instruction_txtbox: gr.Textbox, state_chatbot: Sequence, session_id: int):
-    """reset the session.
+    """Reset the session.
 
     Args:
         instruction_txtbox (str): user's prompt
@@ -76,7 +76,7 @@ async def reset_local_func(instruction_txtbox: gr.Textbox, state_chatbot: Sequen
 
 
 async def cancel_local_func(state_chatbot: Sequence, cancel_btn: gr.Button, reset_btn: gr.Button, session_id: int):
-    """stop the session.
+    """Stop the session.
 
     Args:
         instruction_txtbox (str): user's prompt
@@ -118,7 +118,7 @@ def run_local(model_path: str,
               share: bool = False,
               max_log_len: int = None,
               **kwargs):
-    """chat with AI assistant through web ui.
+    """Chat with AI assistant through web ui.
 
     Args:
         model_path (str): the path of a model.

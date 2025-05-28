@@ -15,7 +15,7 @@ from .utils.cudagraph import CudaGraphMixin
 
 
 class MixtralAttention(nn.Module):
-    """mixtral attention."""
+    """Mixtral attention."""
 
     def __init__(self, config: Any, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
@@ -99,7 +99,7 @@ class MixtralAttention(nn.Module):
 
 
 class MixtralSparseMoeBlock(nn.Module):
-    """mixtral sparse moe block."""
+    """Mixtral sparse moe block."""
 
     def __init__(self, config: Any, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
@@ -151,7 +151,7 @@ class MixtralSparseMoeBlock(nn.Module):
 
 
 class MixtralDecoderLayer(nn.Module):
-    """mixtral decoder layer."""
+    """Mixtral decoder layer."""
 
     def __init__(self, config: Any, layer_idx: int, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
@@ -204,7 +204,7 @@ class MixtralDecoderLayer(nn.Module):
 
 
 class MixtralModel(nn.Module):
-    """mixtral model."""
+    """Mixtral model."""
 
     def __init__(self, config: Any, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
@@ -269,12 +269,12 @@ class MixtralModel(nn.Module):
         return hidden_states
 
     def get_input_embeddings(self):
-        """get input embeddings."""
+        """Get input embeddings."""
         return self.embed_tokens
 
 
 class MixtralForCausalLM(nn.Module, CudaGraphMixin):
-    """mixture model for causalLM."""
+    """Mixture model for causalLM."""
 
     def __init__(self,
                  config: Any,
@@ -311,11 +311,11 @@ class MixtralForCausalLM(nn.Module, CudaGraphMixin):
         return hidden_states
 
     def get_logits(self, hidden_states: torch.Tensor):
-        """compute logits of the model output."""
+        """Compute logits of the model output."""
         return self.lm_head(hidden_states)
 
     def get_input_embeddings(self):
-        """get input embeddings."""
+        """Get input embeddings."""
         return self.model.get_input_embeddings()
 
     def prepare_inputs_for_generation(
@@ -324,7 +324,7 @@ class MixtralForCausalLM(nn.Module, CudaGraphMixin):
         inputs_embeds: Optional[torch.Tensor] = None,
         context: StepContext = None,
     ):
-        """prepare input."""
+        """Prepare input."""
         input_ids = context.input_ids
         position_ids = context.position_ids
         attn_metadata = context.attn_metadata
@@ -338,7 +338,7 @@ class MixtralForCausalLM(nn.Module, CudaGraphMixin):
         )
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
-        """load weights."""
+        """Load weights."""
         # modify from vllm
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)

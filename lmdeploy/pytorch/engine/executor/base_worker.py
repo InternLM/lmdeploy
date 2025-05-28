@@ -17,7 +17,7 @@ logger = get_logger('lmdeploy')
 
 
 class WorkerWrapperBase:
-    """worker wrapper."""
+    """Worker wrapper."""
 
     def __init__(
         self,
@@ -52,7 +52,7 @@ class WorkerWrapperBase:
         self._output_loop: asyncio.Task = None
 
     def init_process_group(self, rank: int, master_addr: str = None, master_port: str = None):
-        """initialize process group."""
+        """Initialize process group."""
         self.rank = rank
         if self.world_size > 1:
             if master_addr is not None and master_port is not None:
@@ -64,11 +64,11 @@ class WorkerWrapperBase:
         self.dist_ctx = DistContext.build(self.rank, self.dist_config, ccl_backend)
 
     def pack_output(self, output: Dict):
-        """pack output."""
+        """Pack output."""
         return output
 
     async def _get_outputs_loop(self):
-        """get outputs loop."""
+        """Get outputs loop."""
         assert self.out_que is not None
         while True:
             ret = await self.get_output_async()
@@ -76,7 +76,7 @@ class WorkerWrapperBase:
             self.out_que.put_nowait(ret)
 
     async def get_outputs(self):
-        """get outputs."""
+        """Get outputs."""
         assert self.out_que is not None
         qsize = self.out_que.qsize()
         if qsize > 0:
@@ -88,7 +88,7 @@ class WorkerWrapperBase:
             return [await self.out_que.get()]
 
     def build_model(self):
-        """build model."""
+        """Build model."""
         self.device_ctx = DeviceContext(device_type=self.device_type)
 
         self.model_agent = build_model_agent(model_path=self.model_path,
@@ -103,27 +103,27 @@ class WorkerWrapperBase:
         self.model_agent.build_model()
 
     def get_free_mem(self):
-        """gather free mem."""
+        """Gather free mem."""
         return self.model_agent.get_free_mem()
 
     def set_cache_config(self, cache_config: CacheConfig):
-        """set all cache config."""
+        """Set all cache config."""
         self.model_agent.set_cache_config(cache_config)
 
     def set_model_config(self, model_config: ModelConfig):
-        """set all model config."""
+        """Set all model config."""
         self.model_agent.set_model_config(model_config)
 
     def build_graph_runner(self):
-        """build graph runner."""
+        """Build graph runner."""
         self.model_agent.build_graph_runner()
 
     def build_cache_engine(self):
-        """build cache engine."""
+        """Build cache engine."""
         self.model_agent.build_cache_engine()
 
     def update_params(self, request: Any):
-        """update params."""
+        """Update params."""
         self.model_agent.update_params(request)
 
     def warmup(self):
@@ -131,18 +131,18 @@ class WorkerWrapperBase:
         self.model_agent.warmup()
 
     def get_input_processor(self):
-        """build cache engine."""
+        """Build cache engine."""
         return self.model_agent.get_input_processor()
 
     def start(self):
-        """start engine loop."""
+        """Start engine loop."""
         self.model_agent.start()
         event_loop = asyncio.get_event_loop()
         self.out_que = asyncio.Queue()
         self._output_loop = event_loop.create_task(self._get_outputs_loop(), name='GetOutputsLoop')
 
     def stop(self):
-        """stop engine loop."""
+        """Stop engine loop."""
         self.model_agent.stop()
         if self._output_loop is not None:
             self._output_loop.cancel()
@@ -157,16 +157,16 @@ class WorkerWrapperBase:
                 logger.debug('worker output loop cancelled.')
 
     async def forward_async(self, inputs):
-        """start forward."""
+        """Start forward."""
         self.model_agent.set_forward_inputs(inputs)
 
     async def get_output_async(self):
-        """get output async."""
+        """Get output async."""
         ret = await self.model_agent.get_output_async()
         return ret
 
     def release(self):
-        """stop engine loop."""
+        """Stop engine loop."""
         self.model_agent.release()
 
     """ PD Disaggregation API Begin """

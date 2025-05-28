@@ -17,7 +17,7 @@ _model_path = None
 
 
 def _build_vision_projector(config, delay_load=False, **kwargs):
-    """build yi projector."""
+    """Build yi projector."""
     # copy from https://github.com/01-ai/Yi/blob/main/VL/llava/model/multimodal_projector/builder.py # noqa: E501
     projector_type = getattr(config, 'mm_projector_type', 'linear')
 
@@ -55,7 +55,7 @@ def _build_vision_projector(config, delay_load=False, **kwargs):
 
 
 def _build_vision_tower(vision_tower_cfg, **kwargs):
-    """build yi vision tower."""
+    """Build yi vision tower."""
     cfg = vision_tower_cfg
     vision_tower = getattr(cfg, 'mm_vision_tower', getattr(cfg, 'vision_tower', None))
     if os.path.exists(os.path.join(_model_path, vision_tower)):
@@ -87,7 +87,7 @@ class YiVisionModel(LlavaVisionModel):
 
     @classmethod
     def match(cls, config: AutoConfig):
-        """check whether the config match the model."""
+        """Check whether the config match the model."""
         arch = config.architectures[0] if config.architectures else None
         if arch == 'LlavaLlamaForCausalLM':
             projector_type = getattr(config, 'mm_projector_type', 'linear')
@@ -107,7 +107,7 @@ class YiVisionModel(LlavaVisionModel):
             self.n_token_per_image += 1
 
     def build_model(self):
-        """build the vision part of a VLM model when backend is turbomind, or
+        """Build the vision part of a VLM model when backend is turbomind, or
         load the whole VLM model when `self.with_llm==True`"""
         check_llava_install()
 
@@ -118,7 +118,7 @@ class YiVisionModel(LlavaVisionModel):
             super().build_model()
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
-        """refer to `super().preprocess() for spec."""
+        """Refer to `super().preprocess() for spec."""
         images = self.collect_images(messages)
         outputs = []
         for image, params in images:

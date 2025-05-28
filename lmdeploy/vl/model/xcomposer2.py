@@ -36,7 +36,7 @@ class ModelType(enum.Enum):
 
 
 def get_xcomposer_type(model_path: str) -> Tuple[ModelType, Any]:
-    """get xcomposer type."""
+    """Get xcomposer type."""
     from transformers.dynamic_module_utils import get_class_from_dynamic_module
     match_modules = {
         'ixc_utils.Image_transform': ModelType.XCOMPOSER2D5,
@@ -60,7 +60,7 @@ def _CLIPVisionModel_from_pretrained(vision_tower_name):
 
 @contextmanager
 def init_empty_vit(model_path):
-    """skip download vision model."""
+    """Skip download vision model."""
     origin_func_path = [
         'transformers.CLIPVisionModel.from_pretrained',
     ]
@@ -101,7 +101,7 @@ class Xcomposer2VisionModel(VisonModel):
 
     @classmethod
     def match(cls, config: AutoConfig):
-        """check whether the config match the model."""
+        """Check whether the config match the model."""
         arch = config.architectures[0] if config.architectures else None
         target = 'InternLMXComposer2ForCausalLM'
         if arch == target:
@@ -134,7 +134,7 @@ class Xcomposer2VisionModel(VisonModel):
             self.preprocess_func = self._preprocess_7b
 
     def build_model(self):
-        """build the vision part of a VLM model when backend is turbomind, or
+        """Build the vision part of a VLM model when backend is turbomind, or
         load the whole VLM model when `self.with_llm==True`"""
         from accelerate import init_empty_weights
         with init_empty_weights(), warnings.catch_warnings(), \
@@ -181,7 +181,7 @@ class Xcomposer2VisionModel(VisonModel):
         self.model = model.eval()
 
     def _preprocess_2d5(self, image: Image, params: Dict) -> Dict:
-        """image preprocessing for internlm-xcomposer2d5-7b."""
+        """Image preprocessing for internlm-xcomposer2d5-7b."""
         hd_num = params.get('hd_num', 24)
         image = self.HD_transform(image, hd_num=hd_num)
         pixel_values = self.vis_processor(image).unsqueeze(0).half()
@@ -191,12 +191,12 @@ class Xcomposer2VisionModel(VisonModel):
         return pixel_values, n_token_per_image
 
     def _preprocess_7b(self, image: Image, params: Dict) -> Dict:
-        """image preprocessing for internlm-xcomposer2-7b."""
+        """Image preprocessing for internlm-xcomposer2-7b."""
         pixel_values = self.vis_processor(image).unsqueeze(0).half()
         return pixel_values, 256
 
     def _preprocess_4khd_7b(self, image: Image, params: Dict) -> Dict:
-        """image preprocessing for internlm-xcomposer2-4khd-7b."""
+        """Image preprocessing for internlm-xcomposer2-4khd-7b."""
         image = self.HD_transform(image, hd_num=25)
         pixel_values = self.vis_processor(image).unsqueeze(0).half()
         w, h = image.size
@@ -205,7 +205,7 @@ class Xcomposer2VisionModel(VisonModel):
         return pixel_values, n_token_per_image
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
-        """refer to `super().preprocess() for spec."""
+        """Refer to `super().preprocess() for spec."""
         images = self.collect_images(messages)
         outputs = []
         for image, params in images:
@@ -221,7 +221,7 @@ class Xcomposer2VisionModel(VisonModel):
 
     @torch.no_grad()
     def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
-        """extract image feature. ONLY implement it when the backend is
+        """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
@@ -255,7 +255,7 @@ class Xcomposer2VisionModel(VisonModel):
 
     @staticmethod
     def proc_messages(messages, chat_template, sequence_start, model_type):
-        """apply chat template to get the prompt."""
+        """Apply chat template to get the prompt."""
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
         prefix_image_token = ''

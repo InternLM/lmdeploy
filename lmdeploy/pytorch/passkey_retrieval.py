@@ -59,7 +59,7 @@ class LLM(object):
 
 
 def valid_str(string, coding='utf-8'):
-    """decode text according to its encoding type."""
+    """Decode text according to its encoding type."""
     invalid_chars = [b'\xef\xbf\xbd']
     bstr = bytes(string, coding)
     for invalid_char in invalid_chars:
@@ -69,7 +69,7 @@ def valid_str(string, coding='utf-8'):
 
 
 def parse_config():
-    """parse arguments."""
+    """Parse arguments."""
     parser = argparse.ArgumentParser(description='arg parser')
     parser.add_argument('--model_path',
                         type=str,

@@ -26,7 +26,7 @@ def _silu_and_mul_kernel(
     stride_on: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
 ):
-    """silu and mul kernel."""
+    """Silu and mul kernel."""
     n_block_id = tl.program_id(0)
     m_id_start = tl.program_id(1)
     m_id_stride = tl.num_programs(1)
@@ -60,7 +60,7 @@ def _silu_and_mul_kernel(
 
 
 def silu_and_mul(gate_up: torch.Tensor, out: torch.Tensor = None):
-    """silu and mul."""
+    """Silu and mul."""
     assert gate_up.dim() == 2
 
     M = gate_up.size(0)

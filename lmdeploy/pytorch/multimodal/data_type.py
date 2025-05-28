@@ -18,7 +18,7 @@ NestedTensor = Union[Tensor, List[Tensor]]
 
 
 def _broadcast_tensor(value: torch.Tensor, src: int = 0, device: str = 'cuda'):
-    """broadcast tensor."""
+    """Broadcast tensor."""
     if value.device.type == 'meta':
         value = torch.empty_like(value, device=device)
     dist.broadcast(value, src)
@@ -38,7 +38,7 @@ class MultiModalTensor:
             self.end = self.start
 
     def to_device(self, device: str, non_blocking: bool = False):
-        """to device."""
+        """To device."""
         out_dict = dict()
         for f in fields(self):
             k = f.name
@@ -67,7 +67,7 @@ class MultiModalTensor:
         return MultiModalTensor(**out_dict)
 
     def broadcast(self):
-        """broadcast inputs tensors."""
+        """Broadcast inputs tensors."""
         out_dict = dict()
         for f in fields(self):
             k = f.name

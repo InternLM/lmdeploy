@@ -5,7 +5,7 @@ from ..activation import SiluAndMulBuilder, SiluAndMulImpl
 
 
 class DlinferSiluAndMulImpl(SiluAndMulImpl):
-    """silu + multiple fused implementation."""
+    """Silu + multiple fused implementation."""
 
     def forward(self, x):
         """forward."""
@@ -13,7 +13,7 @@ class DlinferSiluAndMulImpl(SiluAndMulImpl):
 
 
 class DlinferSiluAndMulBuilder(SiluAndMulBuilder):
-    """silu and mul implementation builder."""
+    """Silu and mul implementation builder."""
 
     @staticmethod
     def build(inplace: bool = False):

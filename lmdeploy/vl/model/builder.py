@@ -36,7 +36,7 @@ def load_vl_model(model_path: str,
                   backend: str,
                   with_llm: bool = False,
                   backend_config: Optional[Union[TurbomindEngineConfig, PytorchEngineConfig]] = None):
-    """load visual model.
+    """Load visual model.
 
     Args:
         model_path(str): the path or repo_id from model hub of the model

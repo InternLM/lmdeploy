@@ -37,7 +37,7 @@ class CudaGraphMeta:
 
 
 class CudaGraphMixin:
-    """mixin class to support cudagraph."""
+    """Mixin class to support cudagraph."""
 
     def support_cuda_graph(
         self,
@@ -48,11 +48,11 @@ class CudaGraphMixin:
         inputs_embeds: torch.Tensor = None,
         **kwargs,
     ):
-        """return True is model support cudagraph."""
+        """Return True is model support cudagraph."""
         return attn_metadata.is_decoding
 
     def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, *args, **kwargs) -> BuffType:
-        """make cudagraph buffers from forward inputs."""
+        """Make cudagraph buffers from forward inputs."""
         max_batches = graph_meta.max_batchs
         max_tokens = graph_meta.max_tokens
         num_blocks = graph_meta.num_blocks
@@ -87,7 +87,7 @@ class CudaGraphMixin:
     def fill_buffers_cudagraph(self, graph_meta: CudaGraphMeta, input_ids: Tensor, position_ids: Tensor,
                                past_key_values: List, attn_metadata: Any, inputs_embeds: Tensor,
                                **kwargs) -> Dict[str, Tensor]:
-        """fill cudagraph buffers from forward inputs."""
+        """Fill cudagraph buffers from forward inputs."""
 
         is_decoding = graph_meta.is_decoding
         block_offsets: Tensor = attn_metadata.block_offsets
@@ -158,7 +158,7 @@ class CudaGraphMixin:
         return new_inputs
 
     def update_context_cudagraph(self, graph_meta: CudaGraphMeta, context: StepContext):
-        """update step context with input buffers."""
+        """Update step context with input buffers."""
         input_buffers = graph_meta.input_buffers
         local_adapter_ids = context.local_adapter_ids
         if local_adapter_ids is not None:

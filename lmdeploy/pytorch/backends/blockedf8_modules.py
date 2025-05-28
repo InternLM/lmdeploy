@@ -6,10 +6,10 @@ import torch
 
 
 class LinearBlockedF8Impl(ABC):
-    """linear BlockedF8 implementation api."""
+    """Linear BlockedF8 implementation api."""
 
     def update_weights(self, weight: torch.Tensor, scale: torch.Tensor, bias: Optional[torch.Tensor] = None):
-        """update weights."""
+        """Update weights."""
         return weight, scale, bias
 
     @abstractmethod
@@ -26,7 +26,7 @@ class LinearBlockedF8Impl(ABC):
 
 
 class LinearBlockedF8Builder(ABC):
-    """linear BlockedF8 implementation builder."""
+    """Linear BlockedF8 implementation builder."""
 
     @staticmethod
     @abstractmethod

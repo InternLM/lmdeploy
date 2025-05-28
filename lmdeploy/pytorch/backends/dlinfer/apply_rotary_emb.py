@@ -25,5 +25,5 @@ class DlinferApplyRotaryEmbBuilder(ApplyRotaryEmbBuilder):
 
     @staticmethod
     def build():
-        """build implementation."""
+        """Build implementation."""
         return DlinferApplyRotaryEmbImpl()

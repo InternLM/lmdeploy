@@ -17,7 +17,7 @@ logger = get_logger('lmdeploy')
 
 
 def find_available_ports(num: int) -> List[int]:
-    """find available port."""
+    """Find available port."""
 
     def __is_port_ok(port: int):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -40,7 +40,7 @@ def find_available_ports(num: int) -> List[int]:
 
 
 def get_host_ip():
-    """get host ip."""
+    """Get host ip."""
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         s.connect(('8.8.8.8', 0))
         ip = s.getsockname()[0]
@@ -48,7 +48,7 @@ def get_host_ip():
 
 
 def _run_server(gpu_ids: List[int], model_path: str, **kwargs):
-    """launch a server process."""
+    """Launch a server process."""
     cuda_visible_devices = ','.join([str(_) for _ in gpu_ids])
     os.setpgrp()
     if len(gpu_ids) > 0:
@@ -57,7 +57,7 @@ def _run_server(gpu_ids: List[int], model_path: str, **kwargs):
 
 
 def cleanup_processes(processes: List[mp.Process]):
-    """clean up server process."""
+    """Clean up server process."""
     for process in processes:
         logger.info(f'Terminating process group {process.pid}')
         try:

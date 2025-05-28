@@ -5,7 +5,7 @@ import subprocess
 
 
 def get_llama_gemm():
-    """get the executable binary llama_gemm."""
+    """Get the executable binary llama_gemm."""
     import os.path as osp
 
     import lmdeploy
@@ -16,7 +16,7 @@ def get_llama_gemm():
 
 
 def read_config(config_file: str):
-    """read turbomind config from turbomind.
+    """Read turbomind config from turbomind.
 
     Args:
         config_file (str): the path of turbomind config file in turbomind model

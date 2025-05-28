@@ -25,7 +25,7 @@ class MllamaVLModel(VisonModel):
         self.image_token_id = 128256
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
-        """refer to the spec of `super().preprocess`"""
+        """Refer to the spec of `super().preprocess`"""
         images = self.collect_images(messages)
         outputs = []
         for image, params in images:
@@ -47,7 +47,7 @@ class MllamaVLModel(VisonModel):
 
     @staticmethod
     def proc_messages(messages, chat_template, sequence_start):
-        """apply chat template to get the prompt."""
+        """Apply chat template to get the prompt."""
         prompt_messages = []
         IMAGE_TOKEN = '<|image|>'
         for message in messages:

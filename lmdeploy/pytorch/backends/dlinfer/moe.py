@@ -10,7 +10,7 @@ from ..moe import FusedMoEBuilder, FusedMoEImpl, SoftmaxTopKBuilder, SoftmaxTopK
 
 
 class DlinferSoftmaxTopKImpl(SoftmaxTopKImpl):
-    """dlinfer softmax topk implementation."""
+    """Dlinfer softmax topk implementation."""
 
     def __init__(self, top_k: int, dim: int = -1):
         self.top_k = top_k
@@ -22,7 +22,7 @@ class DlinferSoftmaxTopKImpl(SoftmaxTopKImpl):
 
 
 class DlinferSoftmaxTopKBuilder(SoftmaxTopKBuilder):
-    """dlinfer softmax topk implementation builder."""
+    """Dlinfer softmax topk implementation builder."""
 
     @staticmethod
     def build(top_k: int, dim: int = -1):
@@ -31,14 +31,14 @@ class DlinferSoftmaxTopKBuilder(SoftmaxTopKBuilder):
 
 
 class DlinferFusedMoEImpl(FusedMoEImpl):
-    """dlinfer fused moe implementation."""
+    """Dlinfer fused moe implementation."""
 
     def __init__(self, top_k: int, renormalize: bool = False):
         self.top_k = top_k
         self.renormalize = renormalize
 
     def update_weights(self, gate_up_weights: torch.Tensor, down_weights: torch.Tensor):
-        """update weights."""
+        """Update weights."""
         device_type = gate_up_weights.device.type
         if device_type in ['npu']:
             return gate_up_weights.transpose(-1, -2).contiguous(), down_weights.transpose(-1, -2).contiguous()
@@ -57,9 +57,9 @@ class DlinferFusedMoEImpl(FusedMoEImpl):
 
 
 class DlinferFusedMoEBuilder(FusedMoEBuilder):
-    """dlinfer fused moe builder."""
+    """Dlinfer fused moe builder."""
 
     @staticmethod
     def build(top_k: int, num_experts: int, renormalize: bool = False):
-        """build from mlp."""
+        """Build from mlp."""
         return DlinferFusedMoEImpl(top_k=top_k, renormalize=renormalize)

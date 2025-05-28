@@ -46,7 +46,7 @@ class LlavaMultiModalProjector(nn.Module):
 
 
 class CLIPVisionEmbeddings(nn.Module):
-    """clip vision embedding."""
+    """Clip vision embedding."""
 
     def __init__(self, config, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
@@ -139,7 +139,7 @@ class CLIPVisionEmbeddings(nn.Module):
 
 
 class CLIPAttention(nn.Module):
-    """clip attention."""
+    """Clip attention."""
 
     def __init__(self, config, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
@@ -203,7 +203,7 @@ class CLIPAttention(nn.Module):
 
 
 class CLIPMLP(nn.Module):
-    """clip mlp."""
+    """Clip mlp."""
 
     def __init__(self, config, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
@@ -240,7 +240,7 @@ class CLIPMLP(nn.Module):
 
 
 class CLIPEncoderLayer(nn.Module):
-    """clip encoder layer."""
+    """Clip encoder layer."""
 
     def __init__(self, config, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
@@ -276,7 +276,7 @@ class CLIPEncoderLayer(nn.Module):
 
 
 class CLIPEncoder(nn.Module):
-    """clip encoder."""
+    """Clip encoder."""
 
     def __init__(self, config, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
@@ -307,7 +307,7 @@ class CLIPEncoder(nn.Module):
 
 
 class CLIPVisionTransformer(nn.Module):
-    """clip vision transformer."""
+    """Clip vision transformer."""
 
     def __init__(self, config, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
@@ -344,7 +344,7 @@ class CLIPVisionTransformer(nn.Module):
 
 
 class CLIPVisionModel(nn.Module):
-    """clip vision model."""
+    """Clip vision model."""
 
     def __init__(self, config, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__()
@@ -362,7 +362,7 @@ class CLIPVisionModel(nn.Module):
 
 
 def build_vision_model(vision_config, dtype: torch.dtype = None, device: torch.device = None):
-    """build vision model."""
+    """Build vision model."""
     model_type = vision_config.model_type
 
     if model_type == 'clip_vision_model':
@@ -395,7 +395,7 @@ class LlavaForConditionalGeneration(nn.Module, CudaGraphMixin, DeployModelMixin)
                            pixel_values,
                            vision_feature_layer: int = -1,
                            vision_feature_select_strategy: str = 'default'):
-        """get image features."""
+        """Get image features."""
         selected_image_feature = self.vision_tower(pixel_values, vision_feature_layer=vision_feature_layer)[0]
         if vision_feature_select_strategy == 'default':
             selected_image_feature = selected_image_feature[:, 1:]
@@ -439,11 +439,11 @@ class LlavaForConditionalGeneration(nn.Module, CudaGraphMixin, DeployModelMixin)
                                            attn_metadata=attn_metadata)
 
     def get_logits(self, hidden_states: torch.Tensor):
-        """compute logits of the model output."""
+        """Compute logits of the model output."""
         return self.language_model.get_logits(hidden_states)
 
     def get_input_embeddings(self):
-        """get input embeddings."""
+        """Get input embeddings."""
         return self.language_model.get_input_embeddings()
 
     def prepare_inputs_for_generation(
@@ -452,7 +452,7 @@ class LlavaForConditionalGeneration(nn.Module, CudaGraphMixin, DeployModelMixin)
         inputs_embeds: torch.Tensor = None,
         context: StepContext = None,
     ):
-        """prepare input."""
+        """Prepare input."""
         input_ids = context.input_ids
         position_ids = context.position_ids
         attn_metadata = context.attn_metadata
@@ -492,7 +492,7 @@ class LlavaForConditionalGeneration(nn.Module, CudaGraphMixin, DeployModelMixin)
         )
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
-        """load weights."""
+        """Load weights."""
 
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)
@@ -526,12 +526,12 @@ class LlavaForConditionalGeneration(nn.Module, CudaGraphMixin, DeployModelMixin)
         self.language_model.load_weights(new_weights.items())
 
     def get_input_processor(self) -> BaseModelInputProcessor:
-        """get input processor."""
+        """Get input processor."""
         return self.input_processor
 
 
 class LLavaInputProcessor(BaseModelInputProcessor):
-    """llava input processor."""
+    """Llava input processor."""
 
     def __init__(self, config: PretrainedConfig, dtype) -> None:
         self.config = config
@@ -541,7 +541,7 @@ class LLavaInputProcessor(BaseModelInputProcessor):
                          input_ids: List[int],
                          input_multimodals: List[Dict[str, Any]] = None,
                          **kwargs) -> PreprocessInputResult:
-        """prepare multimodal input."""
+        """Prepare multimodal input."""
         if input_multimodals is None or len(input_multimodals) == 0:
             return input_ids, input_multimodals
 
@@ -756,7 +756,7 @@ class LlavaNextForConditionalGeneration(LlavaForConditionalGeneration):
                                            attn_metadata=attn_metadata)
 
     def get_input_processor(self) -> BaseModelInputProcessor:
-        """get input processor."""
+        """Get input processor."""
         return self.input_processor
 
     def prepare_inputs_for_generation(
@@ -765,7 +765,7 @@ class LlavaNextForConditionalGeneration(LlavaForConditionalGeneration):
         inputs_embeds: torch.Tensor = None,
         context: StepContext = None,
     ):
-        """prepare input."""
+        """Prepare input."""
         input_ids = context.input_ids
         position_ids = context.position_ids
         attn_metadata = context.attn_metadata
@@ -809,7 +809,7 @@ class LlavaNextForConditionalGeneration(LlavaForConditionalGeneration):
 
 
 class LLavaNextInputProcessor(BaseModelInputProcessor):
-    """llava input processor."""
+    """Llava input processor."""
 
     def __init__(self, config: PretrainedConfig, dtype) -> None:
         self.config = config
@@ -819,7 +819,7 @@ class LLavaNextInputProcessor(BaseModelInputProcessor):
                          input_ids: List[int],
                          input_multimodals: List[Dict[str, Any]] = None,
                          **kwargs) -> PreprocessInputResult:
-        """prepare multimodal input."""
+        """Prepare multimodal input."""
         if input_multimodals is None or len(input_multimodals) == 0:
             return input_ids, input_multimodals
 

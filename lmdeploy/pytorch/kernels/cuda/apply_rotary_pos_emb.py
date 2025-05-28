@@ -31,7 +31,7 @@ def apply_rotary_pos_emb_qk_kernel(
     BLOCK_QH: tl.constexpr,
     BLOCK_N: tl.constexpr,
 ):
-    """apply rotary on key AND query kernel."""
+    """Apply rotary on key AND query kernel."""
     seq_block_id = tl.program_id(1)
     head_id = tl.program_id(0)
 

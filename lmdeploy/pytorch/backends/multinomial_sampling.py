@@ -5,7 +5,7 @@ import torch
 
 
 class MultinomialSamplingImpl(ABC):
-    """multinomial sampling implementation api."""
+    """Multinomial sampling implementation api."""
 
     @abstractmethod
     def forward(scores: torch.Tensor, seeds: torch.LongTensor, offsets: torch.LongTensor, indices: torch.Tensor = None):
@@ -14,7 +14,7 @@ class MultinomialSamplingImpl(ABC):
 
 
 class MultinomialSamplingBuilder(ABC):
-    """multinomial sampling implementation builder."""
+    """Multinomial sampling implementation builder."""
 
     @staticmethod
     @abstractmethod

@@ -10,7 +10,7 @@ class RMSNormW8A8Impl(ABC):
 
     @staticmethod
     def create_weight(hidden_size: int, dtype: torch.dtype = None, device: torch.device = None):
-        """create weight."""
+        """Create weight."""
         if dtype is None:
             dtype = torch.float16
         if device is None:
@@ -35,10 +35,10 @@ class RMSNormW8A8Builder(ABC):
 
 
 class LinearW8A8Impl(ABC):
-    """linear w8a8 implementation api."""
+    """Linear w8a8 implementation api."""
 
     def update_weights(self, weight: torch.Tensor, scale: torch.Tensor, bias: Optional[torch.Tensor] = None):
-        """update weights."""
+        """Update weights."""
         return weight, scale, bias
 
     @abstractmethod
@@ -53,7 +53,7 @@ class LinearW8A8Impl(ABC):
 
 
 class LinearW8A8Builder(ABC):
-    """linear w8a8 implementation builder."""
+    """Linear w8a8 implementation builder."""
 
     @staticmethod
     @abstractmethod

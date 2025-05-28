@@ -53,43 +53,43 @@ class Scheduler:
 
     @property
     def waiting(self):
-        """get waiting sequence."""
+        """Get waiting sequence."""
         seq_map = self.seq_manager.get_sequences(MessageStatus.WAITING)
         return list(seq_map.values())
 
     @property
     def running(self):
-        """get waiting sequence."""
+        """Get waiting sequence."""
         seq_map = self.seq_manager.get_sequences(MessageStatus.RUNNING)
         return list(seq_map.values())
 
     @property
     def hanging(self):
-        """get waiting sequence."""
+        """Get waiting sequence."""
         seq_map = self.seq_manager.get_sequences(MessageStatus.STOPPED)
         return list(seq_map.values())
 
     @property
     def locked(self):
-        """get waiting sequence."""
+        """Get waiting sequence."""
         seq_map = self.seq_manager.get_sequences(MessageStatus.LOCKED)
         return list(seq_map.values())
 
     @property
     def waiting_migration(self):
-        """get migration sequence."""
+        """Get migration sequence."""
         seq_map = self.seq_manager.get_sequences(MessageStatus.WAITING_MIGRATION)
         return list(seq_map.values())
 
     @property
     def running_migration(self):
-        """get migration sequence."""
+        """Get migration sequence."""
         seq_map = self.seq_manager.get_sequences(MessageStatus.RUNNING_MIGRATION)
         return list(seq_map.values())
 
     @property
     def migration_done(self):
-        """get waiting sequence."""
+        """Get waiting sequence."""
         seq_map = self.seq_manager.get_sequences(MessageStatus.MIGRATION_DONE)
         return list(seq_map.values())
 
@@ -142,14 +142,14 @@ class Scheduler:
         migrating_token_count = 0
 
         def _to_running(seq: SchedulerSequence):
-            """to running."""
+            """To running."""
             seq.status = MessageStatus.RUNNING_MIGRATION
             running_migration.append(seq)
             nonlocal migrating_token_count
             migrating_token_count += seq.num_token_ids
 
         def __evict_for_seq(seq: SchedulerSequence, waiting):
-            """evict until can append."""
+            """Evict until can append."""
             from itertools import chain
 
             hanging = reversed(self.hanging)
@@ -158,7 +158,7 @@ class Scheduler:
             return self.eviction_helper.evict_for_seq(seq, evictable, 0)
 
         def _reorder_migrating():
-            """reorder waiting."""
+            """Reorder waiting."""
             return sorted(self.waiting_migration, key=lambda seq: seq.arrive_time)
 
         waiting = _reorder_migrating()
@@ -188,14 +188,14 @@ class Scheduler:
         token_count = 0
 
         def _to_running(seq: SchedulerSequence):
-            """to running."""
+            """To running."""
             seq.status = MessageStatus.RUNNING
             running.append(seq)
             nonlocal token_count
             token_count += seq.num_token_ids
 
         def __evict_for_seq(seq: SchedulerSequence, waiting):
-            """evict until can append."""
+            """Evict until can append."""
             from itertools import chain
             hanging = reversed(self.hanging)
             waiting = reversed(waiting)
@@ -203,7 +203,7 @@ class Scheduler:
             return eviction_helper.evict_for_seq(seq, evictable, 0)
 
         def _reorder_waiting():
-            """reorder waiting."""
+            """Reorder waiting."""
             return sorted(self.waiting, key=lambda seq: seq.arrive_time)
 
         num_waiting = self.seq_manager.num_sequences(MessageStatus.WAITING)
@@ -230,7 +230,7 @@ class Scheduler:
 
     @logging_timer('ScheduleDecoding', logger)
     def _schedule_decoding(self, prealloc_size: int = 0):
-        """schedule decoding."""
+        """Schedule decoding."""
 
         running = self.running
         assert len(running) != 0
@@ -241,7 +241,7 @@ class Scheduler:
         copy_map: Dict[int, int] = dict()
 
         def __evict_for_seq(seq: SchedulerSequence):
-            """evict until can append."""
+            """Evict until can append."""
             from itertools import chain
             hanging = reversed(self.hanging)
             waiting = reversed(self.waiting)
@@ -344,35 +344,35 @@ class Scheduler:
         return self.num_migration_done() > 0
 
     def get_block_tables(self, seqs: SeqList):
-        """get block table of the sequences."""
+        """Get block table of the sequences."""
         return [self.block_manager.get_block_table(seq) for seq in seqs]
 
     def num_running(self):
-        """num running."""
+        """Num running."""
         return self.seq_manager.num_sequences(MessageStatus.RUNNING)
 
     def num_waiting(self):
-        """num waiting."""
+        """Num waiting."""
         return self.seq_manager.num_sequences(MessageStatus.WAITING)
 
     def num_migration_running(self):
-        """num migration running."""
+        """Num migration running."""
         return self.seq_manager.num_sequences(MessageStatus.RUNNING_MIGRATION)
 
     def num_migration_done(self):
-        """num migration done."""
+        """Num migration done."""
         return self.seq_manager.num_sequences(MessageStatus.MIGRATION_DONE)
 
     def num_migration_waiting(self):
-        """num waiting."""
+        """Num waiting."""
         return self.seq_manager.num_sequences(MessageStatus.WAITING_MIGRATION)
 
     def num_locked(self):
-        """num locked."""
+        """Num locked."""
         return self.seq_manager.num_sequences(MessageStatus.LOCKED)
 
     def lock_running(self, running: SeqList):
-        """lock running sequence."""
+        """Lock running sequence."""
         for seq in running:
             if seq.status == MessageStatus.RUNNING:
                 self._set_message_status(seq, MessageStatus.LOCKED)
@@ -383,13 +383,13 @@ class Scheduler:
                 self._set_message_status(seq, MessageStatus.RUNNING)
 
     def lock_running_migration(self, running: SeqList):
-        """lock running sequence."""
+        """Lock running sequence."""
         for seq in running:
             if seq.status == MessageStatus.RUNNING_MIGRATION:
                 self._set_message_status(seq, MessageStatus.MIGRATION_LOCKED)
 
     def unlock_running_migration(self, locked: SeqList):
-        """unlock running migration."""
+        """Unlock running migration."""
         for seq in locked:
             if seq.status == MessageStatus.MIGRATION_LOCKED:
                 self._set_message_status(seq, MessageStatus.MIGRATION_DONE)

@@ -15,7 +15,7 @@ def fill_kv_cache(
     v_scales_zeros: Sequence[Optional[Tensor]],
     quant_bits: int = 0,
 ):
-    """fill key/value state to cache for paged attention."""
+    """Fill key/value state to cache for paged attention."""
     return ext_ops.fill_kv_cache(key_states,
                                  value_states,
                                  key_caches,

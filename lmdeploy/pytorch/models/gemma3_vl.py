@@ -78,7 +78,7 @@ class Gemma3MultiModalProjector(nn.Module):
 
 
 class Gemma3VLInputProcessor(BaseModelInputProcessor):
-    """internvl input processor."""
+    """Internvl input processor."""
 
     def __init__(self, config: PretrainedConfig, dtype) -> None:
         self.config = config
@@ -95,7 +95,7 @@ class Gemma3VLInputProcessor(BaseModelInputProcessor):
                          input_ids: List[int],
                          input_multimodals: List[Dict[str, Any]] = None,
                          **kwargs) -> PreprocessInputResult:
-        """prepare multimodal input."""
+        """Prepare multimodal input."""
         if input_multimodals is None or len(input_multimodals) == 0:
             return input_ids, input_multimodals
 
@@ -142,7 +142,7 @@ class Gemma3ForConditionalGeneration(nn.Module, CudaGraphMixin, DeployModelMixin
         return self.language_model.get_input_embeddings()
 
     def get_logits(self, hidden_states: torch.Tensor):
-        """compute logits of the model output."""
+        """Compute logits of the model output."""
         return self.language_model.get_logits(hidden_states)
 
     def get_image_features(self, pixel_values: torch.Tensor):
@@ -303,7 +303,7 @@ class Gemma3ForConditionalGeneration(nn.Module, CudaGraphMixin, DeployModelMixin
         return self.language_model.tie_weights()
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
-        """load weights."""
+        """Load weights."""
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)
             ('.qkv_proj', '.q_proj', 'q'),
@@ -335,5 +335,5 @@ class Gemma3ForConditionalGeneration(nn.Module, CudaGraphMixin, DeployModelMixin
         self.language_model.load_weights(new_weights.items())
 
     def get_input_processor(self) -> BaseModelInputProcessor:
-        """get input processor."""
+        """Get input processor."""
         return self.input_processor

@@ -5,7 +5,7 @@ from .base import BaseChecker
 
 
 class ModelChecker(BaseChecker):
-    """check model is available."""
+    """Check model is available."""
 
     def __init__(self, model_path: str, trust_remote_code: bool, dtype: str, device_type: str, logger=None) -> None:
         super().__init__(logger=logger)
@@ -15,7 +15,7 @@ class ModelChecker(BaseChecker):
         self.dtype = dtype
 
     def check_config(self, trans_version):
-        """check config."""
+        """Check config."""
         model_path = self.model_path
         trust_remote_code = self.trust_remote_code
         try:
@@ -29,7 +29,7 @@ class ModelChecker(BaseChecker):
         return config
 
     def check_trans_version(self, config, trans_version):
-        """check transformers version."""
+        """Check transformers version."""
         model_path = self.model_path
         try:
             model_trans_version = getattr(config, 'transformers_version', None)
@@ -43,7 +43,7 @@ class ModelChecker(BaseChecker):
             self.log_and_exit(e, 'transformers', message=message)
 
     def check_dtype(self, config):
-        """check dtype."""
+        """Check dtype."""
         logger = self.get_logger()
         model_path = self.model_path
         device_type = self.device_type

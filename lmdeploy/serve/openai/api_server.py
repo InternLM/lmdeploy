@@ -144,7 +144,7 @@ def _create_completion_logprobs(tokenizer: Tokenizer,
                                 all_token_ids: List[int] = None,
                                 state: DetokenizeState = None,
                                 spaces_between_special_tokens: bool = True):
-    """create openai LogProbs for completion.
+    """Create openai LogProbs for completion.
 
     Args:
         tokenizer (Tokenizer): tokenizer.
@@ -198,7 +198,7 @@ def _create_completion_logprobs(tokenizer: Tokenizer,
 def _create_chat_completion_logprobs(tokenizer: Tokenizer,
                                      token_ids: List[int] = None,
                                      logprobs: List[Dict[int, float]] = None):
-    """create openai LogProbs for chat.completion.
+    """Create openai LogProbs for chat.completion.
 
     Args:
         tokenizer (Tokenizer): tokenizer.
@@ -239,7 +239,7 @@ async def health() -> Response:
 
 @router.get('/terminate')
 async def terminate():
-    """terminate server."""
+    """Terminate server."""
     import signal
 
     if not VariableInterface.allow_terminate_by_client:
@@ -1092,13 +1092,13 @@ async def startup_event():
         response = requests.post(url, headers=headers, json=data)
 
         if response.status_code != 200:
-            raise HTTPException(status_code=400, detail='Service registration failed')
+            raise HTTPException(status_code=response.status_code, detail=response.text)
     except Exception as e:
         logger.error(f'Service registration failed: {e}')
 
 
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    """handler for RequestValidationError."""
+    """Handler for RequestValidationError."""
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content=jsonable_encoder({
@@ -1278,7 +1278,7 @@ def serve(model_path: str,
     uvicorn.run(app=app,
                 host=server_name,
                 port=server_port,
-                log_level='info',
+                log_level=os.getenv('UVICORN_LOG_LEVEL', 'info').lower(),
                 ssl_keyfile=ssl_keyfile,
                 ssl_certfile=ssl_certfile)
 

@@ -5,7 +5,7 @@ from ..activation import SiluAndMulBuilder, SiluAndMulImpl
 
 
 class TritonSiluAndMulImpl(SiluAndMulImpl):
-    """silu + multiple residual fused implementation."""
+    """Silu + multiple residual fused implementation."""
 
     def __init__(self, inplace: bool):
         self.inplace = inplace
@@ -28,7 +28,7 @@ class TritonSiluAndMulImpl(SiluAndMulImpl):
 
 
 class TritonSiluAndMulBuilder(SiluAndMulBuilder):
-    """silu and mul implementation builder."""
+    """Silu and mul implementation builder."""
 
     @staticmethod
     def build(inplace: bool = False):

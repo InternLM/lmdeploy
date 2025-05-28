@@ -86,7 +86,7 @@ def fused_moe_w8a8_kernel(
     reindex_c: tl.constexpr,
     ACCUMULATOR_DTYPE: tl.constexpr,
 ):
-    """fused moe kernel."""
+    """Fused moe kernel."""
     exp_id = tl.program_id(1)
     pid = tl.program_id(0)
 
@@ -178,7 +178,7 @@ def fused_moe_w8a8_kernel_launcher(
     reindex_a: bool = True,
     reindex_c: bool = True,
 ):
-    """fused moe kernel launcher."""
+    """Fused moe kernel launcher."""
 
     if num_tokens is None:
         num_tokens = A.size(0)
@@ -244,7 +244,7 @@ def fused_moe_w8a8(input: torch.Tensor,
                    expert_offset: int = 0,
                    num_experts: int = None,
                    renormalize: bool = False) -> torch.Tensor:
-    """fused moe."""
+    """Fused moe."""
     device = input.device
     M = input.size(0)
     E, N, _ = w1.shape

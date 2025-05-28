@@ -5,7 +5,7 @@ from ..flash_attention import FlashAttentionBuilder, FlashAttentionImpl
 
 
 class DlinferFlashAttentionImpl(FlashAttentionImpl):
-    """dlinfer flash attention implementation."""
+    """Dlinfer flash attention implementation."""
 
     def __init__(
         self,
@@ -69,7 +69,7 @@ class DlinferFlashAttentionImpl(FlashAttentionImpl):
 
 
 class DlinferFlashAttentionBuilder(FlashAttentionBuilder):
-    """dlinfer attention builder."""
+    """Dlinfer attention builder."""
 
     @staticmethod
     def build(

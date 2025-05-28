@@ -33,7 +33,7 @@ def rms_norm_w8a8(
     quant_dtype: torch.dtype = torch.int8,
     residual: Tensor = None,
 ):
-    """rms norm kernel."""
+    """Rms norm kernel."""
     if residual is None:
         return ext_ops.rms_norm_w8a8(hidden_states, weight, epsilon, quant_dtype)
     else:

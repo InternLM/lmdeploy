@@ -45,7 +45,7 @@ def multinomial_sampling(scores: torch.Tensor,
                          seeds: torch.LongTensor,
                          offsets: torch.LongTensor,
                          indices: torch.Tensor = None):
-    """multinomial sampling."""
+    """Multinomial sampling."""
 
     assert scores.dim() == 2
     batch_size, num_tokens = scores.size()

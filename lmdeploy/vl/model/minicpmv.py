@@ -42,7 +42,7 @@ class MiniCPMVModel(VisonModel):
         self._preprocess_func = (self._preprocess_v2_5 if self.version == '2.5' else self._preprocess_v2_6)
 
     def build_model(self):
-        """build the vision part of a VLM model when backend is turbomind, or
+        """Build the vision part of a VLM model when backend is turbomind, or
         load the whole VLM model when `self.with_llm==True`"""
         from accelerate import init_empty_weights
         with init_empty_weights(), warnings.catch_warnings():
@@ -95,7 +95,7 @@ class MiniCPMVModel(VisonModel):
         return patches, tgt_sizes
 
     def _preprocess_v2_5(self, image: Image, params: Dict = None) -> Dict:
-        """image preprocessing for MiniCPM-Llama3-V-2_5."""
+        """Image preprocessing for MiniCPM-Llama3-V-2_5."""
         slice_images, best_grid = self._get_slice_image(image)
         # pixel_values, tgt_sizes are list of torch tensors
         pixel_values, tgt_sizes = self._reshape_by_patch(slice_images)
@@ -109,7 +109,7 @@ class MiniCPMVModel(VisonModel):
             image_token_id=self.image_token_id)
 
     def _preprocess_v2_6(self, image: Image, params: Dict = None) -> Dict:
-        """image preprocessing for MiniCPM-V-2_6."""
+        """Image preprocessing for MiniCPM-V-2_6."""
         max_slice_nums = self.image_processor.max_slice_nums
         use_image_id = self.image_processor.use_image_id
         max_slice_nums = params.get('max_slice_nums', max_slice_nums)
@@ -131,7 +131,7 @@ class MiniCPMVModel(VisonModel):
             use_image_id=use_image_id)
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
-        """refer to `super().preprocess() for spec."""
+        """Refer to `super().preprocess() for spec."""
         outputs = []
         for i, message in enumerate(messages):
             if message['role'] != 'user' or not isinstance(message['content'], List):
@@ -147,7 +147,7 @@ class MiniCPMVModel(VisonModel):
 
     @torch.no_grad()
     def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
-        """extract image feature. ONLY implement it when the backend is
+        """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
@@ -200,7 +200,7 @@ class MiniCPMVModel(VisonModel):
         return messages
 
     def proc_messages(self, messages, chat_template, sequence_start):
-        """apply chat template to get the prompt."""
+        """Apply chat template to get the prompt."""
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
         idx = 0

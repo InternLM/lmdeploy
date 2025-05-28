@@ -7,7 +7,7 @@ from ..norm import RMSNormBuilder, RMSNormImpl
 
 
 class DlinferRMSNormImpl(RMSNormImpl):
-    """dlinfer RMS norm implementation."""
+    """Dlinfer RMS norm implementation."""
 
     def __init__(self, hidden_size: int, eps: float = 1e-6):
         self.hidden_size = hidden_size
@@ -24,7 +24,7 @@ class DlinferRMSNormImpl(RMSNormImpl):
 
 
 class DlinferRMSNormBuilder(RMSNormBuilder):
-    """dlinfer RMS norm implementation builder."""
+    """Dlinfer RMS norm implementation builder."""
 
     @staticmethod
     def build(weight: torch.Tensor, eps: float = 1e-6):

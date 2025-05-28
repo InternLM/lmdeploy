@@ -32,7 +32,7 @@ class VisonModel(ABC):
         self.image_token_id = self.get_pad_token_id(model_path, hf_config) or 0
 
     def get_pad_token_id(self, model_path, hf_config):
-        """get pad_token_id from hf_config or tokenizer."""
+        """Get pad_token_id from hf_config or tokenizer."""
         pad_token_id = getattr(hf_config, 'pad_token_id', None)
         if pad_token_id is None:
             try:
@@ -45,7 +45,7 @@ class VisonModel(ABC):
 
     @abstractmethod
     def build_preprocessor(self, ):
-        """build the preprocessor.
+        """Build the preprocessor.
 
         NOTE: When the derived class implements this method, try not to
         introduce the upper stream model repo as a thirdparty package
@@ -53,7 +53,7 @@ class VisonModel(ABC):
         raise NotImplementedError()
 
     def build_model(self, ):
-        """build the vision part of a VLM model when backend is turbomind.
+        """Build the vision part of a VLM model when backend is turbomind.
 
         But when `with_llm=True`, load the whole VLM model
         """
@@ -62,7 +62,9 @@ class VisonModel(ABC):
 
     @abstractmethod
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
-        """preprocess multimodal data in the messages. The derived class,
+        """Preprocess multimodal data in the messages.
+
+        The derived class,
         i.e., a specific vision model, takes the charge of image preprocessing
         and the result management.
         It can integrate the result into the messages list, or insert it to
@@ -103,7 +105,7 @@ class VisonModel(ABC):
         raise NotImplementedError()
 
     def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
-        """extract image feature. ONLY implement it when the backend is
+        """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:
@@ -118,7 +120,7 @@ class VisonModel(ABC):
             raise NotImplementedError()
 
     def to_pytorch(self, messages, chat_template, tokenizer, sequence_start):
-        """pack the preprocessing results in a format compatible with what is
+        """Pack the preprocessing results in a format compatible with what is
         required by pytorch engine. ONLY implement it when the backend is
         pytorch engine.
 
@@ -132,7 +134,7 @@ class VisonModel(ABC):
             raise NotImplementedError()
 
     def to_turbomind(self, messages, chat_template, tokenizer, sequence_start):
-        """pack the forwarding results in a format compatible with what is
+        """Pack the forwarding results in a format compatible with what is
         required by turbomind engine. ONLY implement it when the backend is
         turbomind engine.
 
@@ -147,7 +149,7 @@ class VisonModel(ABC):
 
     @staticmethod
     def collect_images(messages):
-        """gather all images along with their respective parameters from the
+        """Gather all images along with their respective parameters from the
         messages and compile them into a single list. Each image is converted
         to RGB color space.
 
@@ -167,7 +169,7 @@ class VisonModel(ABC):
         return images
 
     def to_pytorch_aux(self, messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start):
-        """auxiliary function to pack the preprocessing results in a format
+        """Auxiliary function to pack the preprocessing results in a format
         compatible with what is required by pytorch engine.
 
         Args:
@@ -202,7 +204,7 @@ class VisonModel(ABC):
         return dict(prompt=prompt, input_ids=input_ids, multimodal=preps)
 
     def to_turbomind_aux(self, messages, prompt, IMAGE_TOKEN, tokenizer, sequence_start):
-        """auxiliary function to pack the forwarding results in a format
+        """Auxiliary function to pack the forwarding results in a format
         compatible with what is required by turbomind engine.
 
         Args:
@@ -239,7 +241,7 @@ class VisonModel(ABC):
 
     @classmethod
     def match(cls, config: AutoConfig):
-        """check whether the config match the model."""
+        """Check whether the config match the model."""
         arch = config.architectures[0] if config.architectures else None
         if arch and (arch == cls._arch or arch in cls._arch):
             return True

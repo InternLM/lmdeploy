@@ -10,7 +10,7 @@ from ..check_env.transformers import TransformersChecker
 
 
 class EngineChecker(BaseChecker):
-    """check transformers is available."""
+    """Check transformers is available."""
 
     def __init__(self,
                  model_path: str,

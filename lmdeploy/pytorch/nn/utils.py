@@ -3,12 +3,12 @@ import torch
 
 
 def div_up(a: int, b: int):
-    """div up."""
+    """Div up."""
     return (a + b - 1) // b
 
 
 def get_distribute_size(feature_size: int, world_size: int, rank: int, align: int = 1):
-    """update feature size."""
+    """Update feature size."""
     assert feature_size % align == 0
     aligned_size = feature_size // align
     # try to make every rank has same amount of feats
@@ -21,7 +21,7 @@ def get_distribute_size(feature_size: int, world_size: int, rank: int, align: in
 
 
 def chunk_aligned(weight: torch.Tensor, chunks: int, dim: int, align: int):
-    """chunk aligned."""
+    """Chunk aligned."""
     if align == 1:
         return weight.chunk(chunks, dim=dim)
     size = weight.size(dim)

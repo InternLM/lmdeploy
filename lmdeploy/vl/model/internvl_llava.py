@@ -47,7 +47,7 @@ def _intern_vl_model__from_pretrained(vision_tower_name: str):
 
 @contextmanager
 def init_empty_vit():
-    """skip download vision model if possible."""
+    """Skip download vision model if possible."""
     origin_func_path = [
         'llava.model.multimodal_encoder.intern_vit_6b.modeling_intern_vit.InternVisionModel.from_pretrained',  # noqa: E501
         'llava.model.multimodal_encoder.internvl_14b.modeling_internvl.InternVLModel.from_pretrained',  # noqa: E501
@@ -63,7 +63,7 @@ class InternVLLlavaVisionModel(LlavaVisionModel):
 
     @classmethod
     def match(cls, config: AutoConfig):
-        """check whether the config match the model."""
+        """Check whether the config match the model."""
         arch = config.architectures[0] if config.architectures else None
         if arch == 'LlavaLlamaForCausalLM':
             mm_vision_tower = getattr(config, 'mm_vision_tower', '')
@@ -75,7 +75,7 @@ class InternVLLlavaVisionModel(LlavaVisionModel):
         return super().build_preprocessor()
 
     def build_model(self):
-        """build the vision part of a VLM model when backend is turbomind, or
+        """Build the vision part of a VLM model when backend is turbomind, or
         load the whole VLM model when `self.with_llm==True`"""
         check_llava_install()
         # currently, only support llava llama
@@ -126,12 +126,12 @@ class InternVLLlavaVisionModel(LlavaVisionModel):
         self.mm_projector = model.model.mm_projector.eval()
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
-        """refer to `super().preprocess() for spec."""
+        """Refer to `super().preprocess() for spec."""
         return super().preprocess(messages)
 
     @torch.no_grad()
     def forward(self, messages: List[Dict], max_batch_size: int = 1) -> List[Dict]:
-        """extract image feature. ONLY implement it when the backend is
+        """Extract image feature. ONLY implement it when the backend is
         turbomind engine.
 
         Args:

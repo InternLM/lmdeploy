@@ -67,7 +67,7 @@ def _fill_kv_cache_kernel(
     BLOCK_D: tl.constexpr,
     BLOCK_DV: tl.constexpr,
 ):
-    """fill kv cache kernel."""
+    """Fill kv cache kernel."""
     batch_id = tl.program_id(2)
     head_id = tl.program_id(0)
     block_id = tl.program_id(1)
@@ -170,7 +170,7 @@ def _fill_kv_cache_quant_kernel(
     BLOCK_DV: tl.constexpr,
     BLOCK_H: tl.constexpr,
 ):
-    """fill kv cache kernel with int4 and int8 quant fuzed.
+    """Fill kv cache kernel with int4 and int8 quant fuzed.
 
     Args:
         stride_xss: stride of sequence length dim of key or value states
@@ -278,7 +278,7 @@ def fill_kv_cache(k_states: Tensor,
                   v_scales_zeros: Tensor = None,
                   quant_policy: Literal[0, 4, 8] = 0,
                   kv_layout: str = 'bshd'):
-    """fill key/value state to cache for paged attention."""
+    """Fill key/value state to cache for paged attention."""
     if kv_layout == 'bshd':
         b_dim, s_dim, h_dim, d_dim = (0, 1, 2, 3)
     elif kv_layout == 'bhsd':

@@ -13,7 +13,7 @@ class LlavaHfModelConfigBuilder(AutoModelConfigBuilder):
 
     @classmethod
     def build(cls, hf_config, model_path: str = None, **kwargs):
-        """build llava hf."""
+        """Build llava hf."""
         text_config = hf_config.text_config
         hidden_size = getattr(text_config, 'hidden_size', 4096)
         num_attention_heads = getattr(text_config, 'num_attention_heads', 32)

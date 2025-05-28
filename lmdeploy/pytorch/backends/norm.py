@@ -33,7 +33,7 @@ class LayerNormImpl(ABC):
 
 
 class LayerNormBuilder(ABC):
-    """layer norm implementation builder."""
+    """Layer norm implementation builder."""
 
     @staticmethod
     @abstractmethod

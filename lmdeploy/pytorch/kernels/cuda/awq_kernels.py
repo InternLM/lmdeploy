@@ -54,7 +54,7 @@ def _dequant_s4_to_f16x2(weight, shift: tl.constexpr, is_top: tl.constexpr):
 
 @triton.jit
 def _unpack_weight(weight):
-    """unpack weight."""
+    """Unpack weight."""
     # broadcast and shift
     width: tl.constexpr = 8
     BLOCK_SIZE_K: tl.constexpr = weight.shape[0]
@@ -109,6 +109,7 @@ def awq_linear_kernel(
         GROUP_SIZE_M: tl.constexpr,  #
 ):
     """Kernel for computing the matmul C = A x B.
+
     A has shape (M, K), B has shape (K, N) and C has shape (M, N)
     """
 
@@ -202,7 +203,7 @@ def awq_linear_kernel(
 
 
 def awq_linear(x, qweight, scales, qzeros):
-    """awq linear."""
+    """Awq linear."""
     M = x.size(0)
     K = qweight.size(0)
     N = scales.size(1)

@@ -35,7 +35,7 @@ def _fused_rotary_emb_kernel(Q, K, PostionIds, InvFreq, scaling_factor, OutQ, Ou
                              stride_hk: tl.constexpr, stride_dk: tl.constexpr, stride_bp, stride_sp, max_seq_len,
                              BLOCK: tl.constexpr, BLOCK_HQ: tl.constexpr, BLOCK_HK: tl.constexpr,
                              BLOCK_F: tl.constexpr):
-    """fused rotary emb kernel."""
+    """Fused rotary emb kernel."""
     batch_id = tl.program_id(0)
     seq_block_id = tl.program_id(1)
 

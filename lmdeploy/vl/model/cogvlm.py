@@ -40,7 +40,7 @@ class CogVLMVisionModel(VisonModel):
             raise NotImplementedError('turbomind has not supported cogvlm yet')
 
     def preprocess(self, messages: List[Dict]) -> List[Dict]:
-        """refer to the spec of `super().preprocess`"""
+        """Refer to the spec of `super().preprocess`"""
         images = self.collect_images(messages)
         outputs = []
         for image, _ in images:
@@ -56,7 +56,7 @@ class CogVLMVisionModel(VisonModel):
 
     @staticmethod
     def proc_messages(messages, chat_template, sequence_start):
-        """apply chat template to get the prompt."""
+        """Apply chat template to get the prompt."""
         prompt_messages = []
         for message in messages:
             if isinstance(message['content'], str):

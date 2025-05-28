@@ -26,5 +26,5 @@ class TritonApplyRotaryEmbBuilder(ApplyRotaryEmbBuilder):
 
     @staticmethod
     def build():
-        """build implementation."""
+        """Build implementation."""
         return TritonApplyRotaryEmbImpl()

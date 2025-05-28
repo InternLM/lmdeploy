@@ -21,7 +21,7 @@ class DlinferAttentionMetadata(AttentionMetadata):
 
 
 class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
-    """dlinfer attention implementation."""
+    """Dlinfer attention implementation."""
 
     def __init__(
         self,
@@ -146,7 +146,7 @@ class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
 
 
 class DlinferAttentionBuilder(AttentionBuilder[DlinferAttentionMetadata]):
-    """dlinfer attention builder."""
+    """Dlinfer attention builder."""
 
     @staticmethod
     def build(
