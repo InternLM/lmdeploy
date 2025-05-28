@@ -268,7 +268,7 @@ struct GemmUniversalSm90_v3 {
 
     static constexpr auto is_grouped = true;
 
-    using Scheduler = TileScheduler<kColMajor, Cluster, true, true, is_grouped, 0>;
+    using Scheduler = TileScheduler<kColMajor, Cluster, true, true, TILE_M, TILE_N, is_grouped, 0>;
 
     using ProducerBar = cutlass::arch::ClusterTransactionBarrier;
     using ConsumerBar = cutlass::arch::ClusterBarrier;
@@ -346,7 +346,9 @@ struct GemmUniversalSm90_v3 {
             static_assert(TILE_N % kMulticastB == 0);
 
             // if (threadIdx.x == WARPGORUPS * WARPGROUP_SIZE) {
-            if (threadIdx.x % WARPGROUP_SIZE / WARP_SIZE == 0) {
+            const int warp_id = __shfl_sync((uint32_t)-1, threadIdx.x / WARP_SIZE, 0);
+
+            if (warp_id % 4 == 0) {
 
                 Cluster cluster(cute::block_id_in_cluster().x);
 
@@ -693,9 +695,6 @@ struct GemmUniversalSm90_v3 {
                         const int g           = sched.group_idx_;
                         auto      global_addr = (Tc*)param_C.ptr + param_C.offsets[g] * (int64_t)param_C.stride;
                         int       idx         = 3 + wg_idx;
-                        // if (lane_id == 0) {
-                        //     printf("FUCK %d %d %d %d\n", g, param_C.offsets[g], M, param_C.stride);
-                        // }
                         Cdesc =
                             update_tma_descs<1>(tensormap_buf + idx, storage.tma_desc_buf + idx, {global_addr}, {M});
                     }
