@@ -264,7 +264,7 @@ struct GemmUniversalSm90_v3 {
     using Tu = float;
     using Tv = float;
 
-    using Cluster = arch::Cluster<kMulticastB, kMulticastA, kColMajor>;
+    using Cluster = arch::Cluster<kMulticastB, kMulticastA, kRowMajor>;
 
     static constexpr auto is_grouped = true;
 

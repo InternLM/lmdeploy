@@ -40,9 +40,12 @@ struct TileScheduler {
     int clusters_;
 
     //////// v2 /////
+    int2 swizzle_unit_;
     int2 cluster_tiles_;
     int2 padded_cluster_tiles_;
     int2 swizzled_cluster_tiles_;
+
+    cutlass::FastDivmod swizzle_tile_x_;
     /////////////
 
     int2 is_valid_;  // {is_valid_cta_tile, is_valid_cluster_tile}
@@ -71,19 +74,27 @@ public:
             printf("gemm shape: %d %d %d\n", gemm_shape.x, gemm_shape.y, gemm_shape.z);
             int num = gemm_shape_.w;
 
-            const int2 swizzle_unit = get_swizzled_shape({1, 1}, log_tile);  // {8, 1}
-
             tiled_shape_.x = cdiv(gemm_shape.x, tile_.x);
             tiled_shape_.y = cdiv(gemm_shape.y, tile_.y);
 
             cluster_tiles_.x = cdiv(gemm_shape.x, cluster_tile_.x);  // useless
             cluster_tiles_.y = cdiv(gemm_shape.y, cluster_tile_.y);
 
-            printf("swizzle units: %d %d\n", swizzle_unit.y, swizzle_unit.x);
+            printf("cluster tiles: %d %d\n", cluster_tiles_.x, cluster_tiles_.y);
+
+            {
+                int2 unit     = get_swizzled_shape({1, 1}, log_tile);
+                swizzle_unit_ = order == kColMajor ? int2{unit.y, unit.x} : int2{unit.x, unit.y};
+            }
+
+            // col {8, 1}, row {1, 8}
+            printf("swizzle unit: %d %d\n", swizzle_unit_.x, swizzle_unit_.y);
+
+            swizzle_tile_x_ = cluster_tile_.x * swizzle_unit_.x;
 
             // num of tiles won't change after swizzle
-            padded_cluster_tiles_.x = (cdiv(gemm_shape.x, cluster_tile_.x * swizzle_unit.y) + num) * swizzle_unit.y;
-            padded_cluster_tiles_.y = (cdiv(gemm_shape.y, cluster_tile_.y * swizzle_unit.x) + 0x0) * swizzle_unit.x;
+            padded_cluster_tiles_.x = (num + gemm_shape.x / (cluster_tile_.x * swizzle_unit_.x)) * swizzle_unit_.x;
+            padded_cluster_tiles_.y = cdiv(gemm_shape.y, cluster_tile_.y * swizzle_unit_.y) * swizzle_unit_.y;
 
             printf("padded   cluster tiles: %d %d\n", padded_cluster_tiles_.x, padded_cluster_tiles_.y);
 
@@ -151,16 +162,6 @@ public:
         tile_offset_ = {offset_x + cluster_tile_offset.x * (striped_m ? 1 : Cluster::M),
                         offset_y + cluster_tile_offset.y * (striped_n ? 1 : Cluster::N)};
 
-        // if (threadIdx.x == 0) {
-        //     printf("g:%4d, tiled idx:%4d, cluster:%4d%4d, tiled offset:%4d%4d\n",
-        //            group_idx_,
-        //            cluster_idx,
-        //            cluster_idx_x,
-        //            cluster_idx_y,
-        //            tile_offset_.x,
-        //            tile_offset_.y);
-        // }
-
         iter_k_range_ = {0, k_iters_};
 
         is_valid_.x = tile_offset_.x < tiled_shape_.x && tile_offset_.y < tiled_shape_.y;
@@ -169,52 +170,37 @@ public:
 
     TM_DEVICE int get_start_index(int g)
     {
-        return (offsets_[g] / cluster_tile_.x + g) * padded_cluster_tiles_.y;
+        // return (__ldg(&offsets_[g]) / (cluster_tile_.x * swizzle_unit_.x) + g) * swizzle_unit_.x
+        //        * padded_cluster_tiles_.y;
+        return (swizzle_tile_x_.div(__ldg(&offsets_[g])) + g) * swizzle_unit_.x * padded_cluster_tiles_.y;
     }
 
     TM_DEVICE bool update()
     {
-        int group = -1;
+        const int lane_id = threadIdx.x % WARP_SIZE;
 
-        PRAGMA_NO_UNROLL
-        for (int g = threadIdx.x % WARP_SIZE; g < gemm_shape_.w; g += WARP_SIZE) {
-            int beg = get_start_index(g);
-            int end = get_start_index(g + 1);
-            if (beg <= cluster_idx_ && cluster_idx_ < end) {
-                group = g;
-            }
+        uint32_t mask = 0;
+
+        for (int g = lane_id + group_idx_; mask == 0; g += WARP_SIZE) {
+            int pred   = g < gemm_shape_.w && cluster_idx_ < get_start_index(g + 1);
+            mask       = __ballot_sync((uint32_t)-1, pred);
+            group_idx_ = g;
         }
 
-        auto mask = __ballot_sync((uint32_t)-1, group >= 0);
+        // NOTE: __ffs = BREV + FLO
+        group_idx_ = __shfl_sync((uint32_t)-1, group_idx_, __ffs(mask) - 1);
 
-        if (!mask) {
-            return false;
-        }
+        gemm_shape_.x = offsets_[group_idx_ + 1] - offsets_[group_idx_];
 
-        group = __shfl_sync((uint32_t)-1, group, __ffs(mask) - 1);
+        group_beg_ = get_start_index(group_idx_);
+        group_end_ = get_start_index(group_idx_ + 1);
 
-        if (group != group_idx_) {
-            group_idx_ = group;
+        tiled_shape_.x   = cdiv(gemm_shape_.x, tile_.x);
+        cluster_tiles_.x = cdiv(gemm_shape_.x, cluster_tile_.x);
 
-            gemm_shape_.x = offsets_[group_idx_ + 1] - offsets_[group_idx_];
-
-            tiled_shape_.x   = cdiv(gemm_shape_.x, tile_.x);
-            cluster_tiles_.x = cdiv(gemm_shape_.x, cluster_tile_.x);
-
-            swizzled_cluster_tiles_ = get_swizzled_shape(cluster_tiles_, log_tile_);
-
-            group_beg_ = get_start_index(group_idx_);
-            group_end_ = get_start_index(group_idx_ + 1);
-        }
+        swizzled_cluster_tiles_ = get_swizzled_shape(cluster_tiles_, log_tile_);
 
         return true;
-
-        // if (threadIdx.x == 0 && cluster_idx_ - beg == 0) {
-        //     printf("g:%4d, tiled shape:%4d%4d\n", group_idx_, tiled_shape_.x, tiled_shape_.y);
-        // }
-        // if (threadIdx.x == 0) {
-        //     printf("g:%4d, beg:%4d\n", group_idx_, beg);
-        // }
     }
 
     TM_DEVICE bool next(int n = 1)
@@ -226,9 +212,7 @@ public:
         }
 
         if constexpr (is_grouped_gemm) {
-            if (!update()) {
-                return false;
-            }
+            update();
             unswizzle(cluster_idx_ - group_beg_);
         }
         else {
