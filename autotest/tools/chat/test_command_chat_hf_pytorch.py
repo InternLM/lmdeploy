@@ -216,7 +216,7 @@ def test_hf_pytorch_chat_kvin8_tp4(config, model, cli_case_config, worker_id):
 @pytest.mark.hf_pytorch_chat
 @pytest.mark.gpu_num_8
 @pytest.mark.parametrize('model', get_torch_model_list(tp_num=8, quant_policy=8))
-def test_hf_pytorch_chat_kvin8_tp8(config, model, cli_case_config, worker_id):
+def test_hf_pytorch_chat_kvint8_tp8(config, model, cli_case_config, worker_id):
     usercase = 'chat_testcase'
     result, chat_log, msg = hf_command_line_test(config,
                                                  usercase,
