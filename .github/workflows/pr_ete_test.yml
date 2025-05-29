@@ -58,9 +58,9 @@ jobs:
         run: |
           python3 -m pip cache dir
           python3 -m pip install --upgrade pip setuptools==69.5.1
-          python3 -m pip install torch==2.5.1 torchvision==0.20.1
+          python3 -m pip install torch==2.6.0 torchvision==0.21.0
           # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/flash_attn-2.6.3+cu123torch2.3cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+          python3 -m pip install /root/packages/flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
       - name: Build lmdeploy
         run: |
           cp /nvme/qa_test_models/offline_pkg/openmpi-4.1.5.tar.gz .
@@ -68,7 +68,7 @@ jobs:
           make -j$(nproc) && make install && cd .. && rm -rf openmpi-4.1.5*
           export PATH=$PATH:/usr/local/openmpi/bin
           export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/openmpi/lib
-          python3 -m pip install cmake packaging wheel transformers_stream_generator transformers datasets openai einops timm decord
+          python3 -m pip install cmake packaging wheel transformers_stream_generator transformers==4.51.3 datasets openai einops timm decord
           python3 -m pip install -r requirements_cuda.txt -r requirements/test.txt -r requirements/build.txt
           mkdir -p build && cd build &&\
           sh ../generate.sh &&\
