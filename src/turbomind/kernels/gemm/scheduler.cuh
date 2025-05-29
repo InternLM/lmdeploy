@@ -190,7 +190,7 @@ public:
         // NOTE: __ffs = BREV + FLO
         group_idx_ = __shfl_sync((uint32_t)-1, group_idx_, __ffs(mask) - 1);
 
-        gemm_shape_.x = offsets_[group_idx_ + 1] - offsets_[group_idx_];
+        gemm_shape_.x = __ldg(&offsets_[group_idx_ + 1]) - __ldg(&offsets_[group_idx_]);
 
         group_beg_ = get_start_index(group_idx_);
         group_end_ = get_start_index(group_idx_ + 1);

@@ -242,8 +242,8 @@ struct GemmUniversalSm90_v3 {
     static constexpr int MMA_ITER_N = WG_TILE_N / MMA_ATOM_N;
     static constexpr int MMA_ITER_K = TILE_K / MMA_ATOM_K;
 
-    static constexpr int kMulticastA = 1;
-    static constexpr int kMulticastB = 2;
+    static constexpr int kMulticastA = 2;
+    static constexpr int kMulticastB = 4;
     static constexpr int kMulticastU = 1;
 
     static constexpr int kClusterSize = kMulticastA * kMulticastB;
@@ -268,7 +268,7 @@ struct GemmUniversalSm90_v3 {
 
     static constexpr auto is_grouped = true;
 
-    using Scheduler = TileScheduler<kColMajor, Cluster, true, true, TILE_M, TILE_N, is_grouped, 0>;
+    using Scheduler = TileScheduler<kRowMajor, Cluster, true, true, TILE_M, TILE_N, is_grouped, 0>;
 
     using ProducerBar = cutlass::arch::ClusterTransactionBarrier;
     using ConsumerBar = cutlass::arch::ClusterBarrier;
@@ -303,6 +303,8 @@ struct GemmUniversalSm90_v3 {
     using LayoutC = std::conditional_t<kSwizzleC >= 32,
                                        SmemLayoutV2<WG_TILE_M, WG_TILE_N, -1, kSwizzleC / sizeof(Tc)>,
                                        SmemLayoutV2<WG_TILE_M, WG_TILE_N>>;
+
+    static constexpr int OUTER_N = std::gcd(MMA_ATOM_N, 128);
 
     __device__ void operator()(const CUtensorMap& tm_a,
                                const CUtensorMap& tm_b,
@@ -366,6 +368,8 @@ struct GemmUniversalSm90_v3 {
                 sched.grid_init();
 
                 cutlass::PipelineState<Stages> write_state{0, 1, 0};
+
+                int iters = 0;
 
                 while (sched.next()) {
 
@@ -440,7 +444,13 @@ struct GemmUniversalSm90_v3 {
                             ++write_state;
                         }
                     }
+
+                    ++iters;
                 }
+
+                // if (threadIdx.x % WARP_SIZE == 0) {
+                //     printf("%4d run %4d iters\n", blockIdx.x, iters);
+                // }
             }
         }
         else {
@@ -484,7 +494,7 @@ struct GemmUniversalSm90_v3 {
                     continue;
                 }
 
-                MMA_Atom::CRegisters frag_C[MMA_ITER_N];
+                MMA_Atom::CRegisters frag_C[MMA_ITER_M][MMA_ITER_N];
                 MMA_Atom::CRegisters accum_C[MMA_ITER_M][MMA_ITER_N]{};
 
                 const auto tile_offset              = sched.tile_offset();
@@ -494,9 +504,6 @@ struct GemmUniversalSm90_v3 {
 
                 const int offset_m = tile_offset.x * TILE_M;
                 const int offset_n = tile_offset.y * TILE_N;
-                const int offset_k = 0;
-
-                const int wg_offset_n = offset_n + wg_idx_n * WG_TILE_N;
 
                 int k_iter = iter_k_end - iter_k_beg;
 
@@ -513,7 +520,6 @@ struct GemmUniversalSm90_v3 {
                             ConsumerBar::arrive(&consumer_bar[pipe_state.index()]);
                         }
                     }
-                    // __syncwarp();
                 };
 
                 if constexpr (kClusterSize > 1) {
@@ -527,44 +533,21 @@ struct GemmUniversalSm90_v3 {
                     }
                 }
 
-                auto Copy = [k = cdiv(K, 128)](Tv* dst, const Tv* src) {
-                    PRAGMA_NO_UNROLL
-                    for (int i = threadIdx.x % WARPGROUP_SIZE; i < k; i += WARPGROUP_SIZE) {
-                        dst[i] = __ldg(&src[i]);
-                    }
-                };
-                auto gmem_V = (const Tv*)param_V.ptr + (wg_offset_n / 128) * param_V.stride + (offset_k / 128);
-                if constexpr (is_grouped) {
-                    gmem_V += param_V.offsets[sched.group_idx_] / 128 * param_V.stride;
-                }
-                Copy(storage.source.V[0][wg_idx], gmem_V);
-
                 uint32_t pred_V{};
-                int      iter_V{};
-
-                constexpr int OUTER_N = std::gcd(MMA_ATOM_N, 128);
-                if constexpr (OUTER_N != 128) {
-
-                    static_assert(MMA_ATOM_N <= 128 + OUTER_N, "MMA inst is crossing more than 2 scale blocks");
-
-                    constexpr uint32_t mask = (1UL << (WG_TILE_N / OUTER_N)) - 1;
-
-                    int phase = 128 - wg_offset_n % 128;
-                    pred_V    = (mask << (phase / OUTER_N)) & mask;
-
-                    if (pred_V && wg_offset_n / 128 + 1 < cdiv(N, 128)) {
-                        Copy(storage.source.V[1][wg_idx], gmem_V + param_V.stride);
-                    }
-
-                    // if constexpr (WG_N > 1) {
-                    //     constexpr int tiles = MMA_ATOM_N / OUTER_N;
-                    //     pred_V              = (pred_V >> (wg_idx_n * tiles)) & ((1 << tiles) - 1);
-                    // }
-                }
-
+                Fetch_V(pred_V,
+                        param_V,
+                        K,
+                        N,
+                        sched.tile_offset().y * TILE_N,
+                        wg_idx,
+                        wg_idx_n,
+                        sched.group_idx_,
+                        storage,
+                        cta_tile_p);
                 __syncwarp();
 
                 float scale_V[2];
+                int   iter_V{};
                 auto  Load_V = [&] {
                     scale_V[0] = storage.source.V[0][wg_idx][iter_V];
                     if (pred_V) {
@@ -583,60 +566,55 @@ struct GemmUniversalSm90_v3 {
                     }
                 };
 
-                auto scale_accum = [&](int m) {  // cta_n = mma_iter_n * wg_n * mma_atom_n
-                    float scales[2][2];
-                    scales[0][0] = scale_U[m][0] * scale_V[0];
-                    scales[1][0] = scale_U[m][1] * scale_V[0];
-                    scales[0][1] = scale_U[m][0] * scale_V[1];
-                    scales[1][1] = scale_U[m][1] * scale_V[1];
-                    // scales[0][0] = 1;
-                    // scales[1][0] = 1;
-                    // scales[0][1] = 1;
-                    // scales[1][1] = 1;
-                    // scales[0][0] = scale_V[0];
-                    // scales[1][0] = scale_V[0];
-                    // scales[0][1] = scale_V[1];
-                    // scales[1][1] = scale_V[1];
-                    // scales[0][0] = scale_U[m][0];
-                    // scales[1][0] = scale_U[m][1];
-                    // scales[0][1] = scale_U[m][0];
-                    // scales[1][1] = scale_U[m][1];
-                    cute::warpgroup_wait<0>();
+                auto scale_accum = [&] {  // cta_n = mma_iter_n * wg_n * mma_atom_n
                     PRAGMA_UNROLL
-                    for (int n = 0; n < MMA_ITER_N; ++n) {
+                    for (int m = 0; m < MMA_ITER_M; ++m) {
+                        float scales[2][2];
+                        scales[0][0] = scale_U[m][0] * scale_V[0];
+                        scales[1][0] = scale_U[m][1] * scale_V[0];
+                        scales[0][1] = scale_U[m][0] * scale_V[1];
+                        scales[1][1] = scale_U[m][1] * scale_V[1];
                         PRAGMA_UNROLL
-                        for (int c0 = 0; c0 < MMA_ATOM_N; c0 += OUTER_N) {
-                            bool pred = (pred_V & (1U << (c0 / OUTER_N)));
+                        for (int n = 0; n < MMA_ITER_N; ++n) {
                             PRAGMA_UNROLL
-                            for (int cc = 0; cc < OUTER_N; cc += 8) {
-                                int c = c0 + cc;
-                                // clang-format off
-                                accum_C[m][n][c / 2 + 0] += (pred ? scales[0][1] : scales[0][0]) * frag_C[n][c / 2 + 0];
-                                accum_C[m][n][c / 2 + 1] += (pred ? scales[0][1] : scales[0][0]) * frag_C[n][c / 2 + 1];
-                                accum_C[m][n][c / 2 + 2] += (pred ? scales[1][1] : scales[1][0]) * frag_C[n][c / 2 + 2];
-                                accum_C[m][n][c / 2 + 3] += (pred ? scales[1][1] : scales[1][0]) * frag_C[n][c / 2 + 3];
-                                // clang-format on
+                            for (int c0 = 0; c0 < MMA_ATOM_N; c0 += OUTER_N) {
+                                bool pred = (pred_V & (1U << (c0 / OUTER_N)));
+                                PRAGMA_UNROLL
+                                for (int cc = 0; cc < OUTER_N; cc += 8) {
+                                    int c = c0 + cc;
+                                    // clang-format off
+                                    accum_C[m][n][c / 2 + 0] += (pred ? scales[0][1] : scales[0][0]) * frag_C[m][n][c / 2 + 0];
+                                    accum_C[m][n][c / 2 + 1] += (pred ? scales[0][1] : scales[0][0]) * frag_C[m][n][c / 2 + 1];
+                                    accum_C[m][n][c / 2 + 2] += (pred ? scales[1][1] : scales[1][0]) * frag_C[m][n][c / 2 + 2];
+                                    accum_C[m][n][c / 2 + 3] += (pred ? scales[1][1] : scales[1][0]) * frag_C[m][n][c / 2 + 3];
+                                    // clang-format on
+                                }
                             }
                         }
                     }
                 };
 
-                auto gmma = [&](int m) {
+                auto gmma = [&] {
                     PRAGMA_UNROLL
                     for (int k = 0; k < MMA_ITER_K; ++k) {
                         PRAGMA_UNROLL
-                        for (int n = 0; n < MMA_ITER_N; ++n) {
-                            wgmma<MMA_Atom>(smem_iter_A, smem_iter_B, frag_C[n], k == 0);
-                            smem_iter_B += kStepNB;
+                        for (int m = 0; m < MMA_ITER_M; ++m) {
+                            PRAGMA_UNROLL
+                            for (int n = 0; n < MMA_ITER_N; ++n) {
+                                wgmma<MMA_Atom>(smem_iter_A, smem_iter_B, frag_C[m][n], k == 0);
+                                smem_iter_B += kStepNB;
+                            }
+                            smem_iter_B -= MMA_ITER_N * kStepNB;
+                            smem_iter_A += kStepMA;
                         }
-                        smem_iter_B -= MMA_ITER_N * kStepNB;
+                        smem_iter_A -= MMA_ITER_M * kStepMA;
                         smem_iter_A += kStepKA;
                         smem_iter_B += kStepKB;
                     }
                     smem_iter_A -= MMA_ITER_K * kStepKA;
                     smem_iter_B -= MMA_ITER_K * kStepKB;
-                    smem_iter_A += kStepMA;
                     cute::warpgroup_commit_batch();
+                    cute::warpgroup_wait<0>();
                 };
 
                 static_assert(MMA_ITER_N == 1);
@@ -649,8 +627,8 @@ struct GemmUniversalSm90_v3 {
                 smem_iter_A.Reset(pipe_state.index());
                 smem_iter_B.Reset(pipe_state.index());
                 cute::warpgroup_arrive();
-                gmma(0);
-                scale_accum(0);
+                gmma();
+                scale_accum();
                 consumer_arrive();
                 ++pipe_state;
                 --k_iter;
@@ -663,8 +641,8 @@ struct GemmUniversalSm90_v3 {
 
                 for (; k_iter > 1; --k_iter) {
                     cute::warpgroup_arrive();
-                    gmma(0);
-                    scale_accum(0);
+                    gmma();
+                    scale_accum();
                     consumer_arrive();
                     ++pipe_state;
                     Load_V();
@@ -675,8 +653,8 @@ struct GemmUniversalSm90_v3 {
                 }
 
                 cute::warpgroup_arrive();
-                gmma(0);
-                scale_accum(0);
+                gmma();
+                scale_accum();
                 consumer_arrive();
                 ++pipe_state;
 
@@ -756,6 +734,7 @@ struct GemmUniversalSm90_v3 {
                     cute::tma_store_arrive();
                 }
 
+
             }  // scheduler loop
 
             if (threadIdx.x % WARPGROUP_SIZE < LayoutC::C1) {
@@ -820,44 +799,62 @@ struct GemmUniversalSm90_v3 {
         return gmem_ptr;
     }
 
-#if 0
-    __device__ void* update_tma_desc(const CUtensorMap& param_desc,
-                                     CUtensorMap*       gmem_desc,
-                                     CUtensorMap*       smem_desc,
-                                     int                index,
-                                     void*              global_addr,
-                                     int                dim)
+    __device__ void Fetch_V(uint32_t&          pred_V,
+                            const MatrixParam& param_V,
+                            int                K,
+                            int                N,
+                            int                offset_n,
+                            int                wg_idx,
+                            int                wg_idx_n,
+                            int                group_idx,
+                            SharedStorage&     storage,
+                            bool               alive)
     {
-        uint32_t uint_ptr = cast_smem_ptr_to_uint(smem_desc);
+        const int wg_offset_k = 0;
+        const int wg_offset_n = offset_n + wg_idx_n * WG_TILE_N;
 
-        const int lane_id = threadIdx.x % WARP_SIZE;
+        auto Copy = [k = cdiv(K, 128)](Tv* dst, const Tv* src, bool pred) {
+            // PRAGMA_NO_UNROLL
+            // for (int i = threadIdx.x % WARPGROUP_SIZE; i < k; i += WARPGROUP_SIZE) {
+            //     dst[i] = __ldg(&src[i]);
+            // }
+            int i = threadIdx.x % WARPGROUP_SIZE;
+            if (i < k && pred) {
+                dst[i] = __ldg(&src[i]);
+            }
+        };
 
-        if (lane_id < sizeof(CUtensorMap) / sizeof(uint2)) {
-            ((uint2*)smem_desc)[lane_id] = ((uint2*)&param_desc)[lane_id];
+        auto gmem_V = (const Tv*)param_V.ptr + (wg_offset_n / 128) * param_V.stride + (wg_offset_k / 128);
+        if constexpr (is_grouped) {
+            gmem_V += (alive ? param_V.offsets[group_idx] : 0) / 128 * param_V.stride;
         }
 
-        __syncwarp();
+        Copy(storage.source.V[0][wg_idx], gmem_V, alive);
 
-        if (lane_id == 0) {
-            // clang-format off
-            asm volatile("tensormap.replace.tile.global_address.shared::cta.b1024.b64 [%0], %1;" ::"r"(uint_ptr), "l"(global_addr));
-            asm volatile("tensormap.replace.tile.global_dim.shared::cta.b1024.b32 [%0], 1, %1;" ::"r"(uint_ptr), "r"(dim));
-            // clang-format on
+        pred_V = 0;
+
+        if constexpr (OUTER_N != 128) {
+
+            static_assert(MMA_ATOM_N <= 128 + OUTER_N, "MMA inst is crossing more than 2 scale blocks");
+
+            constexpr uint32_t mask = (1UL << (WG_TILE_N / OUTER_N)) - 1;
+
+            int phase = 128 - wg_offset_n % 128;
+            pred_V    = (mask << (phase / OUTER_N)) & mask;
+
+            // if (pred_V && wg_offset_n / 128 + 1 < cdiv(N, 128)) {
+            //     Copy(storage.source.V[1][wg_idx], gmem_V + param_V.stride, true);
+            // }
+
+            bool pred = alive && pred_V && wg_offset_n / 128 + 1 < cdiv(N, 128);
+            Copy(storage.source.V[1][wg_idx], gmem_V + param_V.stride, pred);
+
+            // if constexpr (WG_N > 1) {
+            //     constexpr int tiles = MMA_ATOM_N / OUTER_N;
+            //     pred_V              = (pred_V >> (wg_idx_n * tiles)) & ((1 << tiles) - 1);
+            // }
         }
-
-        __syncwarp();
-
-        constexpr int kNumPerCta = 5;
-
-        auto gmem_ptr = (void*)&gmem_desc[blockIdx.x * kNumPerCta + index];
-
-        // clang-format off
-        asm volatile("tensormap.cp_fenceproxy.global.shared::cta.tensormap::generic.release.gpu.sync.aligned [%0], [%1], 128;" :: "l"(gmem_ptr), "r"(uint_ptr));
-        // clang-format on
-
-        return gmem_ptr;
     }
-#endif
 };
 
 }  // namespace turbomind::gemm
