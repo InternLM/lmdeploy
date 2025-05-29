@@ -88,7 +88,10 @@ def launch_server(num_nodes: int,
                   **kwargs):
     """Run multiple server processes in dp mode."""
     assert proxy_url is not None, 'Please launch proxy server and pass proxy_url'
-    mp.set_start_method('spawn')
+    log_level = kwargs.get('log_level', 'ERROR')
+    logger.setLevel(log_level)
+
+    mp.set_start_method('spawn', force=True)
     dp = backend_config.dp
     tp = backend_config.tp
     ep = backend_config.ep
