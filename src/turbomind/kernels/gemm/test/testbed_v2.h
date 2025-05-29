@@ -212,6 +212,17 @@ public:
             m_offset[i + 1] = m_offset[i] + M;
         }
 
+        Buffer_<uint64_t> a_ptrs(expert_num_, kCPU);
+        Buffer_<uint64_t> u_ptrs(expert_num_, kCPU);
+
+        for (int i = 0; i < expert_num_; ++i) {
+            a_ptrs[i] = reinterpret_cast<uint64_t>(a_x_->slice(m_offset[i]).raw_data());
+            if (a_s_) {
+                TM_CHECK(m_offset[i] % 128 == 0);
+                u_ptrs[i] = reinterpret_cast<uint64_t>(a_s_.slice(m_offset[i] / 128).raw_data());
+            }
+        }
+
         std::vector<int> n_offset(expert_num_ + 1);  // bsz
         for (int i = 0; i < expert_num_; ++i) {
             n_offset[i + 1] = n_offset[i] + cnt[i];
@@ -271,6 +282,12 @@ public:
         Copy(Buffer_{scales.data(), moe_scales_.size(), kCPU}, moe_scales_);
         // std::cout << "moe_scales: " << moe_scales_ << "\n";
 
+        a_ptrs_ = {a_ptrs.size(), kDEVICE};
+        Copy(a_ptrs, a_ptrs_);
+
+        u_ptrs_ = {u_ptrs.size(), kDEVICE};
+        Copy(u_ptrs, u_ptrs_);
+
         b_q_e_ = create_(K, N, b_q_.dtype(), Ob, e_).first;
         std::cout << "Bqe: " << b_q_e_ << "\n";
         invokeMoeDispatch(b_q_e_, b_q_, f2n_.data(), e_, stream_);
@@ -321,9 +338,9 @@ public:
 
         auto status = gemm_.Run(operation,
                                 1.f,
-                                a_x_->raw_data(),
+                                expert_num_ ? a_ptrs_.raw_data() : a_x_->raw_data(),
                                 a_desc,
-                                a_s_.data_or((void*)nullptr),
+                                expert_num_ ? u_ptrs_.raw_data() : a_s_.data_or((void*)nullptr),
                                 u_desc,
                                 b_x_->raw_data(),
                                 b_desc,
@@ -463,6 +480,9 @@ private:
     Buffer_<int>   f2n_;   // for `dispatch`
     Buffer_<int>   en2f_;  // for `combine`
     Buffer_<float> moe_scales_;
+
+    Buffer_<uint64_t> a_ptrs_;
+    Buffer_<uint64_t> u_ptrs_;
 
     std::vector<int> moe_cnt_;
 

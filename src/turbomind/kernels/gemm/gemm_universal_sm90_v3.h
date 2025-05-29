@@ -399,7 +399,8 @@ struct GemmUniversalSm90_v3 {
                     if constexpr (is_grouped_gemm) {
                         Array<void*, 3> global_addrs;
                         global_addrs[0] = (Ta*)param_A.ptr + param_A.offsets[g] * (int64_t)param_A.stride;
-                        global_addrs[1] = (Tb*)param_B.ptr + param_B.offsets[g] * (int64_t)param_B.stride;
+                        // global_addrs[1] = (Tb*)param_B.ptr + param_B.offsets[g] * (int64_t)param_B.stride;
+                        global_addrs[1] = ((void**)param_B.ptr)[g];
 
                         const int beg_u = param_U.offsets[g] / kAlignmentU * kAlignmentU;
                         const int end_u = round_up(param_U.offsets[g + 1], kAlignmentU);
@@ -822,7 +823,7 @@ struct GemmUniversalSm90_v3 {
                             int                wg_idx_n,
                             int                group_idx,
                             SharedStorage&     storage,
-                            bool               alive)
+                            bool               active)
     {
         const int wg_offset_k = 0;
         const int wg_offset_n = offset_n + wg_idx_n * WG_TILE_N;
@@ -842,12 +843,14 @@ struct GemmUniversalSm90_v3 {
             }
         };
 
-        auto gmem_V = (const Tv*)param_V.ptr + (wg_offset_n / 128) * param_V.stride + (wg_offset_k / 128);
-        if constexpr (is_grouped_gemm) {
-            gmem_V += (alive ? param_V.offsets[group_idx] : 0) / 128 * param_V.stride;
+        const Tv* gmem_V{};
+        if (active) {
+            gmem_V = is_grouped_gemm ? ((Tv**)param_V.ptr)[group_idx] : (const Tv*)param_V.ptr;
+            gmem_V += (wg_offset_n / 128) * param_V.stride + (wg_offset_k / 128);
+            // gmem_V += (alive ? param_V.offsets[group_idx] : 0) / 128 * param_V.stride;
         }
 
-        Copy(storage.source.V[0][wg_idx], gmem_V, alive);
+        Copy(storage.source.V[0][wg_idx], gmem_V, active);
 
         pred_V = 0;
 
@@ -864,7 +867,7 @@ struct GemmUniversalSm90_v3 {
             //     Copy(storage.source.V[1][wg_idx], gmem_V + param_V.stride, true);
             // }
 
-            bool pred = alive && pred_V && wg_offset_n / 128 + 1 < cdiv(N, 128);
+            bool pred = active && pred_V && wg_offset_n / 128 + 1 < cdiv(N, 128);
             Copy(storage.source.V[1][wg_idx], gmem_V + param_V.stride, pred);
 
             // if constexpr (WG_N > 1) {

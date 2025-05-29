@@ -220,7 +220,10 @@ public:
         auto tm_a = make_2d_tma_desc((void*)A, Adesc, {kTileM / kMulticastA, TILE_K}, CU_TENSOR_MAP_SWIZZLE_128B);
 
         std::cout << "B: " << Bdesc << "\n";
-        auto tm_b = make_2d_tma_desc((void*)B, Bdesc, {kTileN / kMulticastB, TILE_K}, CU_TENSOR_MAP_SWIZZLE_128B);
+        auto tm_b = make_2d_tma_desc(Gemm::is_grouped_gemm ? nullptr : (void*)B,
+                                     Bdesc,
+                                     {kTileN / kMulticastB, TILE_K},
+                                     CU_TENSOR_MAP_SWIZZLE_128B);
 
         std::cout << "C: " << Cdesc << "\n";
         using LayoutC = typename Gemm::LayoutC;
