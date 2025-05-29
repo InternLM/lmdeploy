@@ -14,7 +14,6 @@ from dataclasses import asdict
 from functools import partial
 from multiprocessing.reduction import ForkingPickler
 from queue import Queue
-from threading import Thread
 from typing import Dict, List
 
 import numpy as np
@@ -319,30 +318,23 @@ class TurboMind:
             args[6] = torch.cuda.current_device()  # device id.
             return func(*args).clone()
 
-        if not hasattr(self, '_update_params_thread'):
-            self._update_params_que = Queue()
+        if not hasattr(self, '_export_iter'):
+            que = Queue()
+            tm_model = self._tm_model
+            tm_model.input_model.model_path = que
+            self._update_params_que = que
+            self._export_iter = tm_model.export_iter()
 
-            def _update_thread():
-                tm_model = self._tm_model
-                tm_model.input_model.model_path = self._update_params_que
-                with torch.cuda.device(self.devices[0]):
-                    tm_model.export()
-
-            self._update_params_thread = Thread(target=_update_thread)
-            self._update_params_thread.start()
-
-        # it seems if deserialize the tensor in `_update_thread` thread, the procuder memory will not be released
-        if isinstance(request.serialized_named_tensors, str):
-            weights = ForkingPickler.loads(base64.b64decode(request.serialized_named_tensors))
-            weights = {k: _construct(v) for k, v in weights}
-        else:
-            weights = request.serialized_named_tensors
-        self._update_params_que.put(weights)
-        self._update_params_que.join()  # block until weights are processed
+        with torch.cuda.device(self.devices[0]):
+            if isinstance(request.serialized_named_tensors, str):
+                weights = ForkingPickler.loads(base64.b64decode(request.serialized_named_tensors))
+                weights = {k: _construct(v) for k, v in weights}
+            else:
+                weights = request.serialized_named_tensors
+            self._update_params_que.put(weights)
+            next(self._export_iter)
 
         if request.finished:
-            self._update_params_que.put(None)
-            self._update_params_thread.join()
             self._check_unloaded_tm_params()
             self._process_weights()
             self._create_engine()
@@ -386,11 +378,12 @@ class TurboMind:
 
     def close(self):
         if hasattr(self, '_tm_model'):
+            # close immediately after init engine with empty_init=True
             self._tm_model.tm_params.clear()
+        if hasattr(self, '_export_iter'):
+            del self._export_iter
         if self.model_comm is not None:
             self.model_comm = None
-        if hasattr(self, '_update_params_thread'):
-            del self._update_params_thread
 
     def create_instance(self, cuda_stream_id=0):
         """Create a turbomind instance.

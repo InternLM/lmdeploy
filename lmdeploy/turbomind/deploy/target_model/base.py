@@ -206,6 +206,12 @@ class BaseOutputModel(ABC):
                 pbar.update(1)
         pbar.close()
 
+    def export_iter(self):
+        self.export_config()
+        for i, reader in self.input_model.readers():
+            self.model(i, reader)
+            yield i
+
     @property
     def tm_config(self):
         return TurbomindModelConfig(model_config=self.model_config,

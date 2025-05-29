@@ -170,8 +170,8 @@ class StateDictLoader:
                 idx = int(match[0])
                 yield (idx, data)
 
-            self.que.task_done()
             torch.cuda.empty_cache()
+            self.que.task_done()
 
 
 def create_loader(model_path: Union[str, Queue], pattern: str) -> BaseLoader:
