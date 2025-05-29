@@ -109,7 +109,6 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |          Phi-3.5-mini          |      3.8B       | LLM  |    Yes    |   Yes   |   No    |  -   |   -   |
 |          Phi-3.5-MoE           |     16x3.8B     | LLM  |    Yes    |   Yes   |   No    |  -   |   -   |
 |         Phi-3.5-vision         |      4.2B       | MLLM |    Yes    |   Yes   |   No    |  -   |   -   |
-|           Phi-4-mini           |      3.8B       | LLM  |    Yes    |   Yes   |   No    |  -   |   -   |
 
 ```{note}
 * [1] Currently Mono-InternVL does not support FP16 due to numerical instability. Please use BF16 instead.

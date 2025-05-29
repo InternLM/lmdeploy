@@ -49,6 +49,9 @@ def hf_command_line_test(config,
     else:
         model_path = model_case
 
+    if str(config.get('env_tag')) == '3090':
+        extra += ' --cache-max-entry-count 0.7'
+
     cmd = get_command_with_extra(' '.join(['lmdeploy chat', model_path, '--backend', type, extra,
                                            '--session-len 4096']),
                                  config,

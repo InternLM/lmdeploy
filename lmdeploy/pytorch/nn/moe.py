@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from collections import defaultdict
 from enum import Enum, auto
 from typing import Any, Dict, List, Optional
 
@@ -73,7 +74,9 @@ class LinearWeights(nn.Module):
         self.half_out = out_features // 2
 
         if self.ep:
-            self.expert_map = dict((eid, idx) for idx, eid in enumerate(expert_list))
+            self.expert_map = defaultdict(list)
+            for idx, eid in enumerate(expert_list):
+                self.expert_map[eid].append(idx)
             self.weight.weight_loader = self.weight_loader_ep
         else:
             self.weight.weight_loader = self.weight_loader_tp
@@ -110,16 +113,17 @@ class LinearWeights(nn.Module):
             return
 
         expert_map = self.expert_map
-        param_id = expert_map[expert_id]
-        if shard_id == 'gate':
-            param_data = param.data[param_id, :self.half_out]
-        elif shard_id == 'up':
-            param_data = param.data[param_id, self.half_out:]
-        elif shard_id == 'down':
-            param_data = param.data[param_id]
-        else:
-            raise RuntimeError(f'Unknown shard_id: {shard_id}')
-        param_data.copy_(loaded_weight)
+        param_ids = expert_map[expert_id]
+        for param_id in param_ids:
+            if shard_id == 'gate':
+                param_data = param.data[param_id, :self.half_out]
+            elif shard_id == 'up':
+                param_data = param.data[param_id, self.half_out:]
+            elif shard_id == 'down':
+                param_data = param.data[param_id]
+            else:
+                raise RuntimeError(f'Unknown shard_id: {shard_id}')
+            param_data.copy_(loaded_weight)
 
 
 def _gather_input(x: torch.Tensor, tp_sizes: List[int]):
@@ -428,7 +432,6 @@ class LinearWeightsBlockedF8(LinearWeights):
         self.register_parameter('weight_scale_inv', weight_scale_inv)
 
         if self.ep:
-            self.expert_map = dict((eid, idx) for idx, eid in enumerate(expert_list))
             self.weight_scale_inv.weight_loader = self.weight_loader_scale_ep
         else:
             self.weight_scale_inv.weight_loader = self.weight_loader_scale_tp
@@ -446,8 +449,9 @@ class LinearWeightsBlockedF8(LinearWeights):
         expert_list = self.expert_list
         if expert_id not in expert_list:
             return
-        expert_id = self.expert_map[expert_id]
-        self.weight_loader_scale_tp(param, loaded_weight, expert_id, shard_id)
+        expert_ids = self.expert_map[expert_id]
+        for expert_id in expert_ids:
+            self.weight_loader_scale_tp(param, loaded_weight, expert_id, shard_id)
 
     def weight_loader_scale_tp(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, expert_id: int,
                                shard_id: str):

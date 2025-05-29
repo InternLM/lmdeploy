@@ -10,7 +10,9 @@ from http import HTTPStatus
 from typing import AsyncGenerator, Dict, List, Literal, Optional, Union
 
 import uvicorn
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.security.http import HTTPAuthorizationCredentials, HTTPBearer
@@ -427,6 +429,7 @@ async def chat_completions_v1(raw_request: Request = None):
         sequence_end=True,
         do_preprocess=not isinstance(request.messages, str),  # text completion for string input
         adapter_name=adapter_name,
+        enable_thinking=request.enable_thinking,
     )
 
     def create_stream_response_json(index: int,
@@ -490,7 +493,9 @@ async def chat_completions_v1(raw_request: Request = None):
                         streaming_tools = True
                 previous_text = current_text
                 previous_token_ids = current_token_ids
-            elif VariableInterface.reasoning_parser is not None:
+            elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
+                logger.error('Please lanuch the api_server with --tool-call-parser if you want to use tool.')
+            if VariableInterface.reasoning_parser is not None:
                 current_text = current_text + res.response
                 delta_token_ids = res.token_ids if res.token_ids is not None else []
                 current_token_ids = current_token_ids + delta_token_ids
@@ -506,8 +511,6 @@ async def chat_completions_v1(raw_request: Request = None):
                     delta_message.content = reasoning_delta.content
                 previous_text = current_text
                 previous_token_ids = current_token_ids
-            elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
-                logger.error('Please lanuch the api_server with --tool-call-parser if you want to use tool.')
             response_json = create_stream_response_json(index=0,
                                                         delta_message=delta_message,
                                                         finish_reason=res.finish_reason,
@@ -557,11 +560,11 @@ async def chat_completions_v1(raw_request: Request = None):
         except Exception as e:
             logger.error(f'Failed to parse {text}. Exception: {e}.')
             return create_error_response(HTTPStatus.BAD_REQUEST, 'Failed to parse fc related info to json format!')
-    # assume reasoning uncompatible with tool call
-    elif VariableInterface.reasoning_parser is not None:
-        reasoning_content, text = VariableInterface.reasoning_parser.extract_reasoning_content(text, request)
     elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
         logger.error('Please lanuch the api_server with --tool-call-parser if you want to use tool.')
+
+    if VariableInterface.reasoning_parser is not None:
+        reasoning_content, text = VariableInterface.reasoning_parser.extract_reasoning_content(text, request)
 
     logprobs = None
     if gen_logprobs and len(final_logprobs):
@@ -1073,7 +1076,7 @@ def handle_torchrun():
 @router.on_event('startup')
 async def startup_event():
     async_engine = VariableInterface.async_engine
-    async_engine.start_loop()
+    async_engine.start_loop(use_async_api=True)
 
     if VariableInterface.proxy_url is None:
         return
@@ -1090,6 +1093,17 @@ async def startup_event():
             raise HTTPException(status_code=400, detail='Service registration failed')
     except Exception as e:
         logger.error(f'Service registration failed: {e}')
+
+
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """handler for RequestValidationError."""
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content=jsonable_encoder({
+            'detail': exc.errors(),
+            'body': exc.body
+        }),
+    )
 
 
 class ConcurrencyLimitMiddleware(BaseHTTPMiddleware):
@@ -1214,6 +1228,7 @@ def serve(model_path: str,
         app = FastAPI(docs_url='/')
 
     app.include_router(router)
+    app.add_exception_handler(RequestValidationError, validation_exception_handler)
 
     if allow_origins:
         app.add_middleware(
