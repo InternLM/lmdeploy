@@ -180,7 +180,7 @@ public:
         // Sample `top_e` experts per token
         std::mt19937 g{};
 
-        auto expert_ids = SampleBalanced(bsz, expert_num_, e_, g);
+        auto expert_ids = SampleUniform(bsz, expert_num_, e_, g);
 
         std::vector<float> tmp(e_);
         std::vector<float> scales(bsz * e_);

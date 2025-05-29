@@ -267,9 +267,9 @@ struct GemmUniversalSm90_v3 {
 
     using Cluster = arch::Cluster<kMulticastB, kMulticastA, kRowMajor>;
 
-    static constexpr auto is_grouped_gemm = false;
+    static constexpr auto is_grouped_gemm = true;
 
-    using Scheduler = TileScheduler<kRowMajor, Cluster, true, true, TILE_M, TILE_N, is_grouped_gemm>;
+    using Scheduler = TileScheduler<kColMajor, Cluster, true, true, TILE_M, TILE_N, is_grouped_gemm>;
 
     static constexpr int kMulticastU = is_grouped_gemm ? 1 : kMulticastA;
 
@@ -282,12 +282,13 @@ struct GemmUniversalSm90_v3 {
     static constexpr int kAlignmentU = 16 / sizeof(Tu);
     static constexpr int kBoxU       = TILE_M + (is_grouped_gemm ? kAlignmentU : 0);
 
-    static_assert(kMulticastU == 1 || sizeof(Tu) * kBoxU / kMulticastU % 128 == 0); // This forbids multicast factor 8
+    // Alignment requirement for SMEM addr. This forbids multicast factor 8.
+    static_assert(kMulticastU == 1 || sizeof(Tu) * kBoxU / kMulticastU % 128 == 0);
 
     static constexpr int kTmaTxBytes =
         sizeof(Ta) * (TILE_M * TILE_K) + sizeof(Tb) * (TILE_N * TILE_K) + sizeof(Tu) * kBoxU;
 
-    // ! Smem addr must be SBO aligned for TMA load/store
+    // ! SMEM addr must be SBO aligned for TMA load/store
     struct SharedStorage {
         struct Source {
             __align__(1024) Array<Ta, Stages * TILE_M * TILE_K> A;
@@ -625,17 +626,20 @@ struct GemmUniversalSm90_v3 {
 
                 static_assert(MMA_ITER_N == 1);
 
-                // __syncwarp();
+                // wg_barrier.sync();
+                // Load_V();
 
-                wg_barrier.sync();
-                
-                Load_V();
                 ProducerBar::wait(&producer_bar[pipe_state.index()], pipe_state.phase());
                 Load_U();
                 smem_iter_A.Reset(pipe_state.index());
                 smem_iter_B.Reset(pipe_state.index());
                 cute::warpgroup_arrive();
                 gmma();
+
+                __pipeline_wait_prior(0);
+                wg_barrier.sync();
+                Load_V();
+
                 cute::warpgroup_wait<0>();
                 scale_accum();
                 consumer_arrive();
@@ -825,17 +829,17 @@ struct GemmUniversalSm90_v3 {
 
         auto Copy = [k = cdiv(K, 128)](Tv* dst, const Tv* src, bool pred) {
             const int tid = threadIdx.x % WARPGROUP_SIZE;
-            PRAGMA_UNROLL
-            for (int i = 0; i < MAX_K_BLOCKS; i += WARPGROUP_SIZE) {
-                if (int p = tid + i; p < k && pred) {
-                    dst[p] = __ldg(&src[p]);
-                }
-            }
             // PRAGMA_UNROLL
             // for (int i = 0; i < MAX_K_BLOCKS; i += WARPGROUP_SIZE) {
-            //     int p = tid + i;
-            //     CP_ASYNC<CacheOp::kAlways, 4, 0>::apply(cast_smem_ptr_to_uint(&dst[p]), &src[p], p < k && pred);
+            //     if (int p = tid + i; p < k && pred) {
+            //         dst[p] = __ldg(&src[p]);
+            //     }
             // }
+            PRAGMA_UNROLL
+            for (int i = 0; i < MAX_K_BLOCKS; i += WARPGROUP_SIZE) {
+                int p = tid + i;
+                CP_ASYNC<CacheOp::kAlways, 4, 0>::apply(cast_smem_ptr_to_uint(&dst[p]), &src[p], p < k && pred);
+            }
         };
 
         auto gmem_V = (const Tv*)param_V.ptr + (wg_offset_n / 128) * param_V.stride + (wg_offset_k / 128);
@@ -869,7 +873,7 @@ struct GemmUniversalSm90_v3 {
             // }
         }
 
-        // __pipeline_commit();
+        __pipeline_commit();
     }
 };
 
