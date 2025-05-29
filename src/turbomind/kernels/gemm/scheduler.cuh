@@ -13,14 +13,7 @@
 
 namespace turbomind::gemm {
 
-template<Order order,
-         class Cluster,
-         int  striped_m,
-         bool striped_n,
-         int  tile_m,
-         int  tile_n,
-         bool is_grouped_gemm,
-         int  batch_dim>
+template<Order order, class Cluster, int striped_m, bool striped_n, int tile_m, int tile_n, bool is_grouped_gemm>
 struct TileScheduler {
     int4 gemm_shape_;
     int2 tiled_shape_;
@@ -66,22 +59,20 @@ public:
     {
         gemm_shape_ = gemm_shape;
 
+        printf("gemm shape: %d %d %d\n", gemm_shape.x, gemm_shape.y, gemm_shape.z);
+
         log_tile_ = log_tile;
         k_iters_  = cdiv(gemm_shape_.z, tile_shape.z);
 
+        tiled_shape_.x = cdiv(gemm_shape.x, tile_.x);
+        tiled_shape_.y = cdiv(gemm_shape.y, tile_.y);
+
+        cluster_tiles_.x = cdiv(gemm_shape.x, cluster_tile_.x);  // useless
+        cluster_tiles_.y = cdiv(gemm_shape.y, cluster_tile_.y);
+
+        printf("cluster tiles: %d %d\n", cluster_tiles_.x, cluster_tiles_.y);
+
         if constexpr (is_grouped_gemm) {
-
-            printf("gemm shape: %d %d %d\n", gemm_shape.x, gemm_shape.y, gemm_shape.z);
-            int num = gemm_shape_.w;
-
-            tiled_shape_.x = cdiv(gemm_shape.x, tile_.x);
-            tiled_shape_.y = cdiv(gemm_shape.y, tile_.y);
-
-            cluster_tiles_.x = cdiv(gemm_shape.x, cluster_tile_.x);  // useless
-            cluster_tiles_.y = cdiv(gemm_shape.y, cluster_tile_.y);
-
-            printf("cluster tiles: %d %d\n", cluster_tiles_.x, cluster_tiles_.y);
-
             {
                 int2 unit     = get_swizzled_shape({1, 1}, log_tile);
                 swizzle_unit_ = order == kColMajor ? int2{unit.y, unit.x} : int2{unit.x, unit.y};
@@ -91,6 +82,8 @@ public:
             printf("swizzle unit: %d %d\n", swizzle_unit_.x, swizzle_unit_.y);
 
             swizzle_tile_x_ = cluster_tile_.x * swizzle_unit_.x;
+
+            int num = gemm_shape_.w;
 
             // num of tiles won't change after swizzle
             padded_cluster_tiles_.x = (num + gemm_shape.x / (cluster_tile_.x * swizzle_unit_.x)) * swizzle_unit_.x;
@@ -106,6 +99,19 @@ public:
 
             printf("clusters = %d\n", clusters_);
             // M is runtime value
+        }
+        else {
+            tiled_shape_.x = cdiv(gemm_shape.x, tile_.x);
+            tiled_shape_.y = cdiv(gemm_shape.y, tile_.y);
+
+            cluster_tiles_.x = cdiv(gemm_shape.x, cluster_tile_.x);
+            cluster_tiles_.y = cdiv(gemm_shape.y, cluster_tile_.y);
+
+            swizzled_cluster_tiles_ = get_swizzled_shape(cluster_tiles_, log_tile);
+
+            swizzle_tile_x_ = swizzled_cluster_tiles_.x;
+
+            clusters_ = swizzled_cluster_tiles_.x * swizzled_cluster_tiles_.y;
         }
     }
 
@@ -140,7 +146,7 @@ public:
             cluster_idx_y = cluster_idx / swizzled_cluster_tiles_.x;
         }
         else {
-            // swizzled_shape_x(cluster_idx_y, cluster_idx_x, cluster_idx);
+            swizzle_tile_x_(cluster_idx_y, cluster_idx_x, cluster_idx);
         }
 
         auto [cluster_cta_m, cluster_cta_n] = Cluster::cta_mn(cute::block_id_in_cluster().x);
