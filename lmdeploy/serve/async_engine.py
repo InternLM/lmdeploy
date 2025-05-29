@@ -304,19 +304,7 @@ class AsyncEngine(LogitsMixin):
         self.limiter: asyncio.Semaphore = None
 
         # build status loggers
-        # independent set for each DP rank, since monototic time differs for each process
-        # each set contains one cli logger and one prometheus logger
-        if backend == 'pytorch':
-            logger.info(f'enable metrics: {backend_config.enable_metrics}')
-            self.stat_loggers: List[List[StatLoggerBase]] = setup_loggers(enable_metrics=backend_config.enable_metrics,
-                                                                          model_name=self.model_name,
-                                                                          max_model_len=self.session_len,
-                                                                          engine_num=backend_config.dp)
-            logger.info(f'dp: {backend_config.dp} dp_rank: {self.backend_config.dp_rank}')
-
-            if backend_config.enable_metrics:
-                assert self.backend_config.dp_rank < len(self.stat_loggers), 'dp_rank should < the number of loggers'
-                self.engine.stat_loggers = self.stat_loggers[backend_config.dp_rank]
+        self._build_stat_loggers()
 
     def close(self):
         self.internal_thread.close()
@@ -361,6 +349,21 @@ class AsyncEngine(LogitsMixin):
         self.engine = Engine(model_path=model_path, tokenizer=self.tokenizer, engine_config=backend_config)
         self.backend_config = self.engine.engine_config
         self.hf_tm_cfg = getattr(self.engine.model_config, 'hf_config', None)
+
+    def _build_stat_loggers(self):
+        if self.backend == 'turbomind':
+            return
+        if not self.backend_config.enable_metrics:
+            return
+
+        # independent set for each DP rank, since monototic time differs for each process
+        # each set contains one cli logger and one prometheus logger
+        self.stat_loggers: List[List[StatLoggerBase]] = setup_loggers(model_name=self.model_name,
+                                                                      max_model_len=self.session_len,
+                                                                      engine_num=self.backend_config.dp)
+
+        logger.info(f'dp: {self.backend_config.dp} dp_rank: {self.backend_config.dp_rank}')
+        self.engine.stat_loggers = self.stat_loggers[self.backend_config.dp_rank]
 
     def __call__(self,
                  prompts: Union[List[str], str, List[Dict], List[List[Dict]]],

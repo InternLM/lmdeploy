@@ -301,10 +301,8 @@ def build_1_2_5_buckets(max_value: int) -> List[int]:
     return build_buckets([1, 2, 5], max_value)
 
 
-def setup_loggers(enable_metrics: bool, model_name: str, max_model_len: int, engine_num: int):
-    if not enable_metrics:
-        return []
-
+def setup_loggers(model_name: str, max_model_len: int, engine_num: int):
+    """setup loggers."""
     stat_loggers: List[List[StatLoggerBase]] = []
     for dp_rank in range(engine_num):
         stat_loggers.append([
