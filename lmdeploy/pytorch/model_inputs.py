@@ -282,6 +282,7 @@ class ModelInputs:
         self.dp_meta = DPMeta.build(self.input_ids.numel())
 
     @classmethod
+    @record_function('make_dummy_input')
     def make_dummy(cls,
                    batch_size: int,
                    is_decoding: bool,
