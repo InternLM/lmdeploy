@@ -152,7 +152,10 @@ class TurbomindModelConfig:
             if self.attention_config.rope_param is None:
                 # some ut will create empty RopeParam, will check base/dim in src code
                 self.attention_config.rope_param = RopeParam(type='', base=0, dim=0)
-            self.attention_config.rope_param.__dict__.update(type='dynamic', factor=config.rope_scaling_factor)
+            self.attention_config.rope_param.__dict__.update(
+                type='dynamic',
+                factor=config.rope_scaling_factor,
+                max_position_embeddings=self.attention_config.max_position_embeddings)
 
     @classmethod
     def from_dict(cls, config: dict = {}):

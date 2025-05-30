@@ -2,6 +2,7 @@
 import asyncio
 import functools
 import logging
+import os
 import sys
 import time
 from contextlib import contextmanager
@@ -117,7 +118,14 @@ def get_logger(name: Optional[str] = None,
     stream_handler = logging.StreamHandler(stream=sys.stdout)
     handlers = [stream_handler]
 
+    # set log_file from env
+    log_file = log_file or os.getenv('LMDEPLOY_LOG_FILE')
+
     if log_file is not None:
+        log_file = os.path.expanduser(log_file)
+        log_dir = os.path.dirname(log_file)
+        if log_dir:
+            os.makedirs(log_dir, exist_ok=True)
         # Here, the default behaviour of the official logger is 'a'. Thus, we
         # provide an interface to change the file mode to the default
         # behaviour.
