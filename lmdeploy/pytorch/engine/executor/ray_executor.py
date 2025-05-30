@@ -147,6 +147,9 @@ def init_ray_cluster(world_size: int, ray_address: str = None, dp: int = 1):
 
 def _get_master_addr():
     """get master addr."""
+    addr = _envs.dist_master_addr
+    if addr is not None:
+        return addr
     gcs_addr = ray.get_runtime_context().gcs_address
     master_addr = gcs_addr.split(':')[0]
     return master_addr
@@ -154,6 +157,9 @@ def _get_master_addr():
 
 def _get_master_port():
     """get master port."""
+    port = _envs.dist_master_port
+    if port is not None:
+        return port
     return find_available_port()
 
 

@@ -577,11 +577,7 @@ class DeepseekV2Attention(nn.Module):
 class MoEGate(nn.Module):
     """Deepseek Gate."""
 
-    def __init__(self,
-                 config: Any,
-                 dtype: torch.dtype = None,
-                 device: torch.device = None,
-                 info: Any = None):
+    def __init__(self, config: Any, dtype: torch.dtype = None, device: torch.device = None, info: Any = None):
         super().__init__()
         self.config = config
         self.top_k = config.num_experts_per_tok
