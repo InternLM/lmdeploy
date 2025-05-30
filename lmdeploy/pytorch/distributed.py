@@ -86,6 +86,10 @@ class DistContext:
                 ep_gpu_groups.append(group)
             ep_gpu_group = ep_gpu_groups[ep_group_id]
 
+        dp_cpu_group = None
+        if dp > 1:
+            dp_cpu_group = dist.new_group(ranks=range(dp), timeout=timeout, backend=cpu_backend)
+
         context = DistContext(
             rank=rank,
             world_size=world_size,
@@ -99,7 +103,7 @@ class DistContext:
             tp_cpu_group=tp_cpu_group,
             tp_gpu_group=tp_gpu_group,
             tp_gpu_groups=tp_gpu_groups,
-            dp_cpu_group=None,
+            dp_cpu_group=dp_cpu_group,
             dp_gpu_group=None,
             ep_gpu_group=ep_gpu_group,
             ep_gpu_groups=ep_gpu_groups,
@@ -241,36 +245,36 @@ def all_reduce(tensor, op=ReduceOp.SUM, group='tp', async_op=False):
     """all reduce."""
     if isinstance(group, str):
         group = get_group(group, 'gpu')
-    dist.all_reduce(tensor, op, group, async_op)
+    return dist.all_reduce(tensor, op, group, async_op)
 
 
 def broadcast(tensor, src, group='tp', async_op=False):
     """broadcast."""
     if isinstance(group, str):
         group = get_group(group, 'gpu')
-    dist.broadcast(tensor, src, group, async_op)
+    return dist.broadcast(tensor, src, group, async_op)
 
 
 def all_gather_object(object_list, obj, group='tp'):
     if isinstance(group, str):
         group = get_group(group, 'cpu')
-    dist.all_gather_object(object_list, obj, group=group)
+    return dist.all_gather_object(object_list, obj, group=group)
 
 
 def all_gather(tensor_list, tensor, group='tp', async_op=False):
     if isinstance(group, str):
         group = get_group(group, 'gpu')
-    dist.all_gather(tensor_list, tensor, group=group, async_op=async_op)
+    return dist.all_gather(tensor_list, tensor, group=group, async_op=async_op)
 
 
 def all_gather_into_tensor(output_tensor, input_tensor, group='tp', async_op=False):
     if isinstance(group, str):
         group = get_group(group, 'gpu')
-    dist.all_gather_into_tensor(output_tensor, input_tensor, group=group, async_op=async_op)
+    return dist.all_gather_into_tensor(output_tensor, input_tensor, group=group, async_op=async_op)
 
 
 def reduce_scatter(output, input_list, op=ReduceOp.SUM, group='tp', async_op=False):
     """reduce scatter."""
     if isinstance(group, str):
         group = get_group(group, 'gpu')
-    dist.reduce_scatter(output, input_list, op=op, group=group, async_op=async_op)
+    return dist.reduce_scatter(output, input_list, op=op, group=group, async_op=async_op)

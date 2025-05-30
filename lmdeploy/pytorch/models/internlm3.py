@@ -411,6 +411,7 @@ class InternLM3ForCausalLM(nn.Module, CudaGraphMixin):
                 continue
             if self.config.tie_word_embeddings and 'lm_head.weight' in name:
                 continue
+
             for (param_name, weight_name, shard_id) in stacked_params_mapping:
                 if weight_name not in name:
                     continue

@@ -84,7 +84,6 @@ jobs:
       matrix:
         pyver: [py310]
     runs-on: ubuntu-latest
-    environment: 'prod'
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
       PLAT_NAME: manylinux2014_x86_64
@@ -118,7 +117,6 @@ jobs:
     if: ${{!cancelled()}}
     needs: ['build-pypi', 'build-pypi-lmdeploy']
     runs-on: lmdeploy-volc
-    environment: 'prod'
     timeout-minutes: 120 #2hours
     steps:
       - name: Clone repository
@@ -148,6 +146,7 @@ jobs:
             pip install -r /fs-computility/llm/qa-llm-cicd/config/requirements.txt --cache-dir ${{env.PIP_CACHE_PATH}}
             pip install opencompass*.whl --cache-dir ${{env.PIP_CACHE_PATH}}
             pip install opencompass[lmdeploy] --cache-dir ${{env.PIP_CACHE_PATH}}
+            pip install opencompass[full] --cache-dir ${{env.PIP_CACHE_PATH}}
             pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --cache-dir ${{env.PIP_CACHE_PATH}}
             FLASH_ATTENTION_FORCE_BUILD=TRUE pip install /fs-computility/llm/qa-llm-cicd/packages/flash_attn-2.7.0.post2+cu12torch2.5cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
             cp -r /root/nltk_data ${{env.CONDA_PATH}}/envs/${{env.CONDA_ENV}}/nltk_data
@@ -179,7 +178,6 @@ jobs:
         regression_func: ${{fromJSON(github.event.inputs.regression_func_volc || '["chat_models","base_models"]')}}
         backend: ${{ fromJSON(github.event.inputs.backend || '["turbomind", "pytorch"]')}}
     runs-on: lmdeploy-volc
-    environment: 'prod'
     timeout-minutes: 480 #6hours
     steps:
       - name: Checkout repository

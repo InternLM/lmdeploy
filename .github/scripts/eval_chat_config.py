@@ -47,6 +47,8 @@ with read_base():
         models as lmdeploy_internlm2_chat_7b  # noqa: F401, E501
     from opencompass.configs.models.hf_internlm.lmdeploy_internlm2_chat_20b import \
         models as lmdeploy_internlm2_chat_20b  # noqa: F401, E501
+    from opencompass.configs.models.hf_internlm.lmdeploy_internlm3_8b_instruct import \
+        models as lmdeploy_internlm3_8b_instruct  # noqa: F401, E501
     from opencompass.configs.models.hf_internlm.lmdeploy_internlm_chat_7b import \
         models as lmdeploy_internlm_chat_7b  # noqa: F401, E501
     from opencompass.configs.models.hf_llama.hf_llama2_7b_chat import models as hf_llama2_chat_7b  # noqa: F401, E501
@@ -66,6 +68,8 @@ with read_base():
         models as hf_mixtral_chat_8x7b  # noqa: F401, E501
     from opencompass.configs.models.qwen2_5.lmdeploy_qwen2_5_7b_instruct import \
         models as lmdeploy_qwen2_5_7b_instruct  # noqa: F401, E501
+    from opencompass.configs.models.qwen2_5.lmdeploy_qwen2_5_32b_instruct import \
+        models as lmdeploy_qwen2_5_32b_instruct  # noqa: F401, E501
     from opencompass.configs.models.qwen.hf_qwen1_5_7b_chat import models as hf_qwen1_5_chat_7b  # noqa: F401, E501
     from opencompass.configs.models.qwen.hf_qwen1_5_moe_a2_7b_chat import \
         models as hf_qwen1_5_moe_a2_7b_chat  # noqa: F401, E501
@@ -116,15 +120,12 @@ pytorch_internlm2_5_7b_chat_w8a8 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
 turbomind_internlm2_5_7b_chat_batch1 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
 turbomind_internlm2_5_7b_chat_batch1_4bits = deepcopy(*lmdeploy_internlm2_5_7b_chat)
 
-turbomind_internlm3_8b_instruct = deepcopy(*lmdeploy_internlm2_5_7b_chat)
-turbomind_internlm3_8b_instruct_4bits = deepcopy(*lmdeploy_internlm2_5_7b_chat)
-turbomind_internlm3_8b_instruct_kvint4 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
-turbomind_internlm3_8b_instruct_kvint8 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
-pytorch_internlm3_8b_instruct = deepcopy(*lmdeploy_internlm2_5_7b_chat)
-pytorch_internlm3_8b_instruct_w8a8 = deepcopy(*lmdeploy_internlm2_5_7b_chat)
-for model in [v for k, v in locals().items() if 'internlm3_8b_instruct' in k]:
-    model['abbr'] = 'turbomind-internlm3-8b-instruct'
-    model['path'] = 'internlm/internlm3-8b-instruct'
+turbomind_internlm3_8b_instruct = deepcopy(*lmdeploy_internlm3_8b_instruct)
+turbomind_internlm3_8b_instruct_4bits = deepcopy(*lmdeploy_internlm3_8b_instruct)
+turbomind_internlm3_8b_instruct_kvint4 = deepcopy(*lmdeploy_internlm3_8b_instruct)
+turbomind_internlm3_8b_instruct_kvint8 = deepcopy(*lmdeploy_internlm3_8b_instruct)
+pytorch_internlm3_8b_instruct = deepcopy(*lmdeploy_internlm3_8b_instruct)
+pytorch_internlm3_8b_instruct_w8a8 = deepcopy(*lmdeploy_internlm3_8b_instruct)
 
 # ===== Configs for internlm/internlm2_5_20b_chat =====
 turbomind_internlm2_5_20b_chat = deepcopy(*lmdeploy_internlm2_5_20b_chat)
@@ -185,6 +186,14 @@ turbomind_qwen2_5_7b_instruct_kvint4 = deepcopy(*lmdeploy_qwen2_5_7b_instruct)
 turbomind_qwen2_5_7b_instruct_kvint8 = deepcopy(*lmdeploy_qwen2_5_7b_instruct)
 pytorch_qwen2_5_7b_instruct = deepcopy(*lmdeploy_qwen2_5_7b_instruct)
 pytorch_qwen2_5_7b_instruct_w8a8 = deepcopy(*lmdeploy_qwen2_5_7b_instruct)
+
+# ===== Configs for Qwen/Qwen25-32B-Instruct =====
+turbomind_qwen2_5_32b_instruct = deepcopy(*lmdeploy_qwen2_5_32b_instruct)
+turbomind_qwen2_5_32b_instruct_4bits = deepcopy(*lmdeploy_qwen2_5_32b_instruct)
+turbomind_qwen2_5_32b_instruct_kvint4 = deepcopy(*lmdeploy_qwen2_5_32b_instruct)
+turbomind_qwen2_5_32b_instruct_kvint8 = deepcopy(*lmdeploy_qwen2_5_32b_instruct)
+pytorch_qwen2_5_32b_instruct = deepcopy(*lmdeploy_qwen2_5_32b_instruct)
+pytorch_qwen2_5_32b_instruct_w8a8 = deepcopy(*lmdeploy_qwen2_5_32b_instruct)
 
 # ===== Configs for meta-llama/Llama-2-7b-chat-hf =====
 turbomind_llama2_7b_chat = deepcopy(*lmdeploy_llama2_7b_chat)

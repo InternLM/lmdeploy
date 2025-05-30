@@ -32,6 +32,7 @@ def getModelList(tp_num):
 @pytest.mark.order(7)
 @pytest.mark.restful_api_vl
 @pytest.mark.gpu_num_1
+@pytest.mark.test_3090
 @pytest.mark.parametrize('prepare_environment', getModelList(tp_num=1), indirect=True)
 def test_restful_chat_tp1(config, worker_id):
     if get_workerid(worker_id) is None:
@@ -77,6 +78,7 @@ def getKvintModelList(tp_num, quant_policy: int = None):
 @pytest.mark.order(7)
 @pytest.mark.restful_api_vl
 @pytest.mark.gpu_num_1
+@pytest.mark.test_3090
 @pytest.mark.parametrize('prepare_environment', getKvintModelList(tp_num=1, quant_policy=4), indirect=True)
 def test_restful_chat_kvint4_tp1(config, worker_id):
     if get_workerid(worker_id) is None:
@@ -110,6 +112,7 @@ def test_restful_chat_kvint4_tp4(config, worker_id):
 @pytest.mark.order(7)
 @pytest.mark.restful_api_vl
 @pytest.mark.gpu_num_1
+@pytest.mark.test_3090
 @pytest.mark.parametrize('prepare_environment', getKvintModelList(tp_num=1, quant_policy=8), indirect=True)
 def test_restful_chat_kvint8_tp1(config, worker_id):
     if get_workerid(worker_id) is None:
@@ -145,52 +148,56 @@ def test_restful_chat_kvint8_tp4(config, worker_id):
 @pytest.mark.gpu_num_1
 @pytest.mark.parametrize('prepare_environment', [
     {
-        'model': 'microsoft/Phi-3-mini-4k-instruct',
+        'model': 'OpenGVLab/InternVL2-4B',
         'cuda_prefix': None,
         'tp_num': 1,
     },
     {
-        'model': 'microsoft/Phi-3-mini-4k-instruct-inner-4bits',
+        'model': 'Qwen/Qwen2.5-VL-7B-Instruct',
         'cuda_prefix': None,
         'tp_num': 1
     },
     {
-        'model': 'microsoft/Phi-3-mini-4k-instruct-inner-w8a8',
+        'model': 'Qwen/Qwen2-VL-7B-Instruct-inner-4bits',
         'cuda_prefix': None,
         'tp_num': 1
     },
     {
-        'model': 'microsoft/Phi-3-mini-4k-instruct',
+        'model': 'THUDM/glm-4v-9b',
         'cuda_prefix': None,
-        'tp_num': 1,
-        'extra': ' --communicator native'
+        'tp_num': 1
     },
     {
-        'model': 'microsoft/Phi-3-mini-4k-instruct-inner-4bits',
+        'model': 'THUDM/glm-4v-9b-inner-4bits',
         'cuda_prefix': None,
-        'tp_num': 1,
-        'extra': ' --communicator native'
+        'tp_num': 1
     },
     {
-        'model': 'microsoft/Phi-3-mini-4k-instruct-inner-w8a8',
-        'cuda_prefix': None,
-        'tp_num': 1,
-        'extra': ' --communicator native'
-    },
-    {
-        'model': 'microsoft/Phi-3-mini-4k-instruct',
+        'model': 'OpenGVLab/InternVL2-4B',
         'cuda_prefix': None,
         'tp_num': 1,
         'extra': ' --quant-policy 8 --communicator native'
     },
     {
-        'model': 'microsoft/Phi-3-mini-4k-instruct-inner-4bits',
+        'model': 'Qwen/Qwen2.5-VL-7B-Instruct',
         'cuda_prefix': None,
         'tp_num': 1,
         'extra': ' --quant-policy 8 --communicator native'
     },
     {
-        'model': 'microsoft/Phi-3-mini-4k-instruct-inner-w8a8',
+        'model': 'Qwen/Qwen2-VL-7B-Instruct-inner-4bits',
+        'cuda_prefix': None,
+        'tp_num': 1,
+        'extra': ' --quant-policy 8 --communicator native'
+    },
+    {
+        'model': 'THUDM/glm-4v-9b',
+        'cuda_prefix': None,
+        'tp_num': 1,
+        'extra': ' --quant-policy 8 --communicator native'
+    },
+    {
+        'model': 'THUDM/glm-4v-9b-inner-4bits',
         'cuda_prefix': None,
         'tp_num': 1,
         'extra': ' --quant-policy 8 --communicator native'

@@ -232,6 +232,7 @@ class Phi3Model(nn.Module):
         rope_max_pos_emb = config.max_position_embeddings
         rope_base = config.rope_theta
         rope_scaling = config.rope_scaling
+        partial_rotary_factor = getattr(config, 'partial_rotary_factor', None)
         if rope_scaling is not None:
             scaling_type = rope_scaling['type']
             assert scaling_type in ['longrope', 'su']
@@ -246,6 +247,7 @@ class Phi3Model(nn.Module):
                 rope_base,
                 longrope_params=longrope_params,
                 emb_type=emb_type,
+                partial_rotary_factor=partial_rotary_factor,
             )
         else:
             self.rotary_emb = build_rotary_embedding(
@@ -253,6 +255,7 @@ class Phi3Model(nn.Module):
                 rope_max_pos_emb,
                 rope_base,
                 emb_type=emb_type,
+                partial_rotary_factor=partial_rotary_factor,
             )
 
     def forward(
@@ -347,6 +350,11 @@ class Phi3ForCausalLM(nn.Module, CudaGraphMixin):
     def get_logits(self, hidden_states: torch.Tensor):
         """compute logits of the model output."""
         return self.lm_head(hidden_states)
+
+    def update_weights(self):
+        """update weights."""
+        if self.config.tie_word_embeddings:
+            self.lm_head.weight = self.model.embed_tokens.weight
 
     def get_input_embeddings(self):
         """get input embeddings."""

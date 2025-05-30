@@ -1,6 +1,7 @@
 import pytest
 from utils.config_utils import get_communicator_list, get_turbomind_model_list, get_workerid
-from utils.run_restful_chat import run_all_step, run_reasoning_case, run_tools_case, start_restful_api, stop_restful_api
+from utils.run_restful_chat import (run_all_step, run_reasoning_case, run_tools_case, start_restful_api,
+                                    stop_restful_api, test_logprobs)
 
 DEFAULT_PORT = 23333
 
@@ -32,6 +33,7 @@ def getModelList(tp_num):
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.restful_api
 @pytest.mark.gpu_num_1
+@pytest.mark.test_3090
 @pytest.mark.parametrize('prepare_environment', getModelList(tp_num=1), indirect=True)
 def test_restful_chat_tp1(config, common_case_config, worker_id):
     if get_workerid(worker_id) is None:
@@ -80,6 +82,7 @@ def getKvintModelList(tp_num, quant_policy):
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.restful_api
 @pytest.mark.gpu_num_1
+@pytest.mark.test_3090
 @pytest.mark.parametrize('prepare_environment', getKvintModelList(tp_num=1, quant_policy=4), indirect=True)
 def test_restful_chat_kvint4_tp1(config, common_case_config, worker_id):
     if get_workerid(worker_id) is None:
@@ -116,6 +119,7 @@ def test_restful_chat_kvint4_tp4(config, common_case_config, worker_id):
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.restful_api
 @pytest.mark.gpu_num_1
+@pytest.mark.test_3090
 @pytest.mark.parametrize('prepare_environment', getKvintModelList(tp_num=1, quant_policy=8), indirect=True)
 def test_restful_chat_kvint8_tp1(config, common_case_config, worker_id):
     if get_workerid(worker_id) is None:
@@ -327,6 +331,22 @@ def test_restful_chat_pr(config, common_case_config):
 
 
 @pytest.mark.order(7)
+@pytest.mark.restful_api
+@pytest.mark.flaky(reruns=0)
+@pytest.mark.gpu_num_2
+@pytest.mark.pr_test
+@pytest.mark.parametrize('prepare_environment', [{
+    'model': 'internlm/internlm2_5-20b-chat',
+    'cuda_prefix': 'CUDA_VISIBLE_DEVICES=5,6',
+    'tp_num': 2
+}],
+                         indirect=True)
+def test_restful_logprobs(worker_id):
+
+    test_logprobs(worker_id)
+
+
+@pytest.mark.order(7)
 @pytest.mark.usefixtures('common_case_config')
 @pytest.mark.restful_api
 @pytest.mark.gpu_num_1
@@ -403,12 +423,6 @@ def test_restful_chat_reasoning_tp2(config, worker_id):
         'cuda_prefix': None,
         'tp_num': 1,
         'extra': ' --tool-call-parser qwen'
-    },
-    {
-        'model': 'meta-llama/Meta-Llama-3-1-8B-Instruct',
-        'cuda_prefix': None,
-        'tp_num': 1,
-        'extra': ' --tool-call-parser llama3'
     },
 ],
                          indirect=True)

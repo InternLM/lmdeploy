@@ -2,6 +2,7 @@
 import itertools
 import os
 import re
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Tuple
 
@@ -13,6 +14,31 @@ from lmdeploy.utils import get_logger
 from ..op_backend import DlinferOpsBackend
 
 logger = get_logger('lmdeploy')
+
+
+class SocVersion:
+    Ascend310P: str = 'Ascend310P'
+    Ascend910B: str = 'Ascend910B'
+
+    @classmethod
+    @lru_cache(maxsize=1)
+    def device_name(cls) -> str:
+        try:
+            import torch_npu
+            return torch_npu.npu.get_device_name()
+        except ImportError:
+            logger.warning('Failed to import torch_npu. Please make sure torch_npu is installed correctly. ')
+        except Exception as e:
+            logger.warning(f'Error during Ascend get device name: {str(e)}. '
+                           'Please check your Ascend environment configuration.')
+
+    @classmethod
+    def is_Ascend310P(cls) -> bool:
+        return cls.device_name().startswith(cls.Ascend310P)
+
+    @classmethod
+    def is_Ascend910B(cls) -> bool:
+        return cls.device_name().startswith(cls.Ascend910B)
 
 
 class AscendKVQuantMeta:
@@ -65,6 +91,8 @@ class AscendOpsBackend(DlinferOpsBackend):
     enable_graph = False
     half_negative_inf = torch.finfo(torch.float16).min
     total_slots = None
+    # compiled atb Transdataoperation to convert tensor from ACL_FORMAT_ND to ACL_FORMAT_FRACTAL_NZ format.
+    transdata_func = None
 
     @staticmethod
     def get_name() -> str:
@@ -78,10 +106,16 @@ class AscendOpsBackend(DlinferOpsBackend):
         head_size: int,
         dtype: torch.dtype,
     ) -> Tuple[int, ...]:
-        return (
-            block_size,
-            num_heads * head_size,
-        )
+        if SocVersion.is_Ascend910B():
+            return (block_size, num_heads, head_size)
+        elif SocVersion.is_Ascend310P():
+            return (
+                (num_heads * head_size + 15) // 16,
+                block_size,
+                16,
+            )
+        else:
+            raise ValueError(f'dlinfer does not support {SocVersion.device_name()} device currently.')
 
     @staticmethod
     def get_v_block_shape(
@@ -90,10 +124,16 @@ class AscendOpsBackend(DlinferOpsBackend):
         head_size: int,
         dtype: torch.dtype,
     ) -> Tuple[int, ...]:
-        return (
-            block_size,
-            num_heads * head_size,
-        )
+        if SocVersion.is_Ascend910B():
+            return (block_size, num_heads, head_size)
+        elif SocVersion.is_Ascend310P():
+            return (
+                (num_heads * head_size + 15) // 16,
+                block_size,
+                16,
+            )
+        else:
+            raise ValueError(f'dlinfer does not support {SocVersion.device_name()} device currently.')
 
     @classmethod
     def update_step_context(cls, step_context):
@@ -108,7 +148,11 @@ class AscendOpsBackend(DlinferOpsBackend):
             return cls.total_slots
 
         kv_start_indices, attention_mask = [], []
-        block_num, block_size, _ = step_context.kv_caches[0][0].shape
+        if SocVersion.is_Ascend910B():
+            block_num, block_size, *_ = step_context.kv_caches[0][0].shape
+        elif SocVersion.is_Ascend310P():
+            block_num, _, block_size, _ = step_context.kv_caches[0][0].shape
+
         is_unpaged_prefill = False
         if not step_context.is_decoding:
             is_unpaged_prefill = \
@@ -159,12 +203,30 @@ class AscendOpsBackend(DlinferOpsBackend):
             # prepare some params of unpaged_prefill attention stage.
             q_start_loc_cpu, kv_seqlens_cpu = None, None
             q_seqlens_cpu = step_context.q_seqlens.cpu()
-            single_attention_mask = torch.logical_not(
-                torch.tril(
-                    torch.ones(max_q_seq_len, max_kv_seq_len, dtype=torch.bool).cuda(),
-                    diagonal=max_kv_seq_len - max_q_seq_len,
-                ))
-            attention_mask.append(single_attention_mask)
+            if SocVersion.is_Ascend910B():
+                single_attention_mask = torch.logical_not(
+                    torch.tril(
+                        torch.ones(max_q_seq_len, max_kv_seq_len, dtype=torch.bool).cuda(),
+                        diagonal=max_kv_seq_len - max_q_seq_len,
+                    ))
+                attention_mask.append(single_attention_mask)
+            elif SocVersion.is_Ascend310P():
+                if not cls.enable_graph:
+                    for i in range(q_seqlens_cpu.size(0)):
+                        single_attention_mask = torch.zeros(q_seqlens_cpu[i],
+                                                            q_seqlens_cpu[i]).fill_(-float('inf')).cuda()
+                        single_attention_mask = torch.triu(single_attention_mask, diagonal=1)
+                        attention_mask.append(single_attention_mask)
+                else:
+                    # Transdata needs dtype to be float16 or int8
+                    single_attention_mask = torch.triu(
+                        torch.ones(max_q_seq_len, max_kv_seq_len, dtype=torch.float16).fill_(-float('inf')).cuda(),
+                        diagonal=max_kv_seq_len - max_q_seq_len + 1,
+                    )
+                    # Convert to NZ format
+                    attention_mask.append(cls.get_transdata_func()(single_attention_mask, 2))
+            else:
+                raise ValueError(f"dlinfer doesn't support {SocVersion.device_name()} device currently.")
         else:
             # prepare some params of paged_prefill attention stage.
             q_start_loc_cpu, q_seqlens_cpu = None, None
@@ -182,11 +244,21 @@ class AscendOpsBackend(DlinferOpsBackend):
             kv_seqlens = step_context.kv_seqlens.to(torch.int32)
             if not step_context.is_decoding:
                 if is_unpaged_prefill:
-                    attention_mask = [mask.half() for mask in attention_mask]
+                    if SocVersion.is_Ascend910B():
+                        attention_mask = [mask.half() for mask in attention_mask]
                 else:
-                    attention_mask = [
-                        torch.cat([mask.half() * cls.half_negative_inf for mask in attention_mask]).unsqueeze(1)
-                    ]
+                    if SocVersion.is_Ascend910B():
+                        attention_mask = [
+                            torch.cat([mask.half() * cls.half_negative_inf for mask in attention_mask]).unsqueeze(1)
+                        ]
+                    elif SocVersion.is_Ascend310P():
+                        # Convert mask to NZ format.
+                        attention_mask = [
+                            cls.get_transdata_func()(torch.cat(
+                                [mask.half() * cls.half_negative_inf for mask in attention_mask]).unsqueeze(1), 2)
+                        ]
+                    else:
+                        raise ValueError(f"dlinfer doesn't support {SocVersion.device_name()} device currently.")
                     kv_seqlens = kv_seqlens.repeat_interleave(step_context.q_seqlens, 0)
         else:
             if step_context.is_decoding:
@@ -243,10 +315,25 @@ class AscendOpsBackend(DlinferOpsBackend):
         return ascend_graph_runner
 
     @staticmethod
+    def get_transdata_func():
+        """get transdata function."""
+        if AscendOpsBackend.transdata_func is None:
+            import dlinfer
+            from dlinfer.ops import transdata
+            dlinfer.graph.config.enable_graph_mode = True
+            if torch.distributed.is_initialized():
+                torch._inductor.config.compile_threads = 1
+            AscendOpsBackend.transdata_func = torch.compile(transdata, fullgraph=True, dynamic=True, backend='atbgraph')
+        return AscendOpsBackend.transdata_func
+
+    @staticmethod
     def init():
         """Initialize Ascend backend."""
         try:
             from torch_npu.contrib import transfer_to_npu  # noqa: F401
+            if SocVersion.is_Ascend310P():
+                # NOTE: Ascend310P has a bug with InternVL vision embedding using interpolate.
+                torch.npu.set_compile_mode(jit_compile=False)
         except ImportError:
             logger.warning('Failed to import torch_npu. Please make sure torch_npu is installed correctly. '
                            'Ascend initialization skipped.')

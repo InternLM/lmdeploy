@@ -22,6 +22,7 @@ class RecomputeEvictionHelper(BaseEvictionHelper):
             evict_seq = evictable_seqs.pop(0)
 
             block_manager.free(evict_seq)
+            evict_seq.set_step(0)
             num_req = (num_required_blocks - block_manager.get_num_free_gpu_blocks())
             if num_req <= 0:
                 success = True

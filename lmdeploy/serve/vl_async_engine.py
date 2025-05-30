@@ -6,6 +6,7 @@ from typing import Dict, List, Literal, Optional, Tuple, Union
 import PIL
 
 from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig, VisionConfig
+from lmdeploy.model import BaseChatTemplate
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.utils import get_logger, try_import_deeplink
 from lmdeploy.vl.engine import ImageEncoder
@@ -71,6 +72,7 @@ class VLAsyncEngine(AsyncEngine):
         else:
             raise RuntimeError(f'unsupported messages {messages}')
 
+        chat_template = self.chat_template if do_preprocess else BaseChatTemplate()
         messages = await self.async_convert_to_pil_images(messages)
         results = await self.vl_encoder.preprocess(messages)
         if self.backend == 'turbomind':
@@ -80,13 +82,11 @@ class VLAsyncEngine(AsyncEngine):
             # embedding_ranges and so on. All the returned values are passed
             # to tm engine for token generation
             results = await self.vl_encoder.async_infer(results)
-            results = await self.vl_encoder.wrap_for_turbomind(results, self.chat_template, self.tokenizer,
-                                                               sequence_start)
+            results = await self.vl_encoder.wrap_for_turbomind(results, chat_template, self.tokenizer, sequence_start)
         elif self.backend == 'pytorch':
             # for pt engine, this module only conduct the image preprocessing
             # It leaves the vision embedding to the pt engine
-            results = await self.vl_encoder.wrap_for_pytorch(results, self.chat_template, self.tokenizer,
-                                                             sequence_start)
+            results = await self.vl_encoder.wrap_for_pytorch(results, chat_template, self.tokenizer, sequence_start)
         return results
 
     @classmethod

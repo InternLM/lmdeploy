@@ -136,7 +136,7 @@ public:
     template<class... Is>
     auto shapes(Is&&... is) const
     {
-        return layout_.shapes(((Is&&)is)...);
+        return layout_.shapes(((Is &&) is)...);
     }
 
     auto& stride() const noexcept
@@ -250,10 +250,10 @@ struct Tensor_: public Tensor {
     {
     }
 
-    Tensor_(const Tensor_&)            = default;
+    Tensor_(const Tensor_&) = default;
     Tensor_& operator=(const Tensor_&) = default;
 
-    Tensor_(Tensor_&&) noexcept            = default;
+    Tensor_(Tensor_&&) noexcept = default;
     Tensor_& operator=(Tensor_&&) noexcept = default;
 
     Tensor_(const Tensor& other)
@@ -300,7 +300,7 @@ private:
     static decltype(auto) ensure_dtype(U&& u)
     {
         TM_CHECK_EQ(u.dtype(), data_type_v<T>);
-        return (U&&)u;
+        return (U &&) u;
     }
 };
 

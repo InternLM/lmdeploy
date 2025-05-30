@@ -49,11 +49,11 @@ private:
     Buffer_<int>   f2n_;
     Buffer_<int>   en2f_;
     Buffer_<float> scales_;
-    Buffer_<float> shared_scales_;
     Buffer_<int>   accum_;
     Buffer_<int>   offsets_;
 
-    Tensor temp_;
+    Tensor         temp_;
+    Tensor_<float> shared_scales_;
     ///////////////////////////////////////////////////////
 };
 

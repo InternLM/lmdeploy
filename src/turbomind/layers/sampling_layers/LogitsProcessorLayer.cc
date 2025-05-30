@@ -193,6 +193,7 @@ void LogitsProcessorLayer<T>::Setup(const std::vector<const Request*>& rs, const
 
     sync_check_cuda_error();
 
+    bad_words_ten_ = {};
     init_stop_bad_words(&GenerationConfig::bad_ids,  //
                         "bad_words",
                         rs,
@@ -233,11 +234,6 @@ void LogitsProcessorLayer<T>::Setup(const std::vector<const Request*>& rs, const
     TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
 }
 
-#ifdef ENABLE_FP32
 template class LogitsProcessorLayer<float>;
-#endif
-template class LogitsProcessorLayer<half>;
-#ifdef ENABLE_BF16
-template class LogitsProcessorLayer<__nv_bfloat16>;
-#endif
+
 }  // namespace turbomind

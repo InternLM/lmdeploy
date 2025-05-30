@@ -43,7 +43,6 @@ SUPPORTED_ARCHS = dict(
     MiniCPMV='minicpmv',
     # mini gemini
     MGMLlamaForCausalLM='llama',
-    MiniGeminiLlamaForCausalLM='llama',
     # chatglm2/3, glm4
     ChatGLMModel='glm4',
     ChatGLMForConditionalGeneration='glm4',

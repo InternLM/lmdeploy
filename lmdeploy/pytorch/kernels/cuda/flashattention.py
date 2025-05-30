@@ -13,6 +13,7 @@ logger = get_logger('lmdeploy')
 
 TRITON_VERSION = version.parse(triton.__version__)
 VERSION_300 = version.parse('3.0.0')
+VERSION_320 = version.parse('3.2.0')
 assert TRITON_VERSION >= version.parse('2.2.0')
 
 # TODO: fast op might not work on non-nv device
@@ -347,27 +348,51 @@ def _kernel_meta_sm7x(BLOCK_DK):
     return BLOCK_M, BLOCK_N, num_warps, num_stages
 
 
-def _kernel_meta_sm8x(BLOCK_DK):
-    num_warps = 4
-    num_stages = min(4, max(2, 768 // BLOCK_DK))
-    BLOCK_M = max(16, 16384 // BLOCK_DK)
-    BLOCK_N = 64
-    if num_stages == 2:
-        num_warps = 8
-    if num_stages == 3:
-        BLOCK_N = 32
+def _kernel_meta_sm8x(BLOCK_DK: int, shared_kv: bool):
+    num_warps = 8
+    min_m = 64 if shared_kv else 16
+    BLOCK_M = max(min_m, 16384 // BLOCK_DK)
+    BLOCK_M = min(128, BLOCK_M)
+    BLOCK_N = BLOCK_M
+    num_stages = 3 if BLOCK_DK <= 128 else 2
+
     return BLOCK_M, BLOCK_N, num_warps, num_stages
 
 
-def _kernel_meta_sm9x(BLOCK_DK):
+def _kernel_meta_sm86(BLOCK_DK: int, shared_kv: bool):
+    """sm86 has different smem size with sm80."""
+    num_warps = 4
+    if BLOCK_DK <= 128:
+        BLOCK_M = 128
+        BLOCK_N = 64
+        num_stages = 3
+    elif BLOCK_DK <= 256:
+        BLOCK_M = 64
+        BLOCK_N = 32
+        num_stages = 2
+    else:
+        BLOCK_M = 32
+        BLOCK_N = 32
+        num_stages = 2
+
+    return BLOCK_M, BLOCK_N, num_warps, num_stages
+
+
+def _kernel_meta_sm9x(BLOCK_DK: int, shared_kv: bool):
+
     num_warps = 8
-    num_stages = min(4, max(2, 768 // BLOCK_DK))
-    BLOCK_M = max(16, 16384 // BLOCK_DK)
-    BLOCK_N = 64
-    if num_stages == 2:
-        BLOCK_N = 128
-    elif num_stages == 3:
+    BLOCK_M = 128 if BLOCK_DK <= 256 else 64
+    if not shared_kv and BLOCK_DK >= 512:
+        BLOCK_M = 32
+
+    # fix crash on triton<3.2.0
+    if BLOCK_DK >= 512 and TRITON_VERSION < VERSION_320:
+        BLOCK_M = 32
         num_warps = 4
+
+    BLOCK_N = 128 if BLOCK_DK <= 128 else 64
+
+    num_stages = 3 if BLOCK_DK <= 128 else 2
     return BLOCK_M, BLOCK_N, num_warps, num_stages
 
 
@@ -435,9 +460,12 @@ def flash_attention_fwd(
     if _nv_cap[0] < 8:
         BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm7x(BLOCK_DK)
     if _nv_cap[0] < 9:
-        BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm8x(BLOCK_DK)
+        if _nv_cap[1] in [6, 9]:
+            BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm86(BLOCK_DK, shared_kv)
+        else:
+            BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm8x(BLOCK_DK, shared_kv)
     else:
-        BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm9x(BLOCK_DK)
+        BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm9x(BLOCK_DK, shared_kv)
 
     BLOCK_M = min(128, BLOCK_M)
     _flash_prefill_fwd_kernel[grid](

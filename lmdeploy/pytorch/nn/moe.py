@@ -1,5 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Any, List, Optional
+from collections import defaultdict
+from enum import Enum, auto
+from typing import Any, Dict, List, Optional
 
 import torch
 from torch import nn
@@ -10,6 +12,15 @@ from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 
 from ..backends import OpType, get_backend
 from .utils import div_up
+
+
+class MoeType(Enum):
+    """batch ecex type."""
+    Default = auto()
+    DSSyncDecode = auto()
+    DSAsyncDecode = auto()
+    DSSyncPrefill = auto()
+    DSAsyncPrefill = auto()
 
 
 class SoftmaxTopK(nn.Module):
@@ -63,7 +74,9 @@ class LinearWeights(nn.Module):
         self.half_out = out_features // 2
 
         if self.ep:
-            self.expert_map = dict((eid, idx) for idx, eid in enumerate(expert_list))
+            self.expert_map = defaultdict(list)
+            for idx, eid in enumerate(expert_list):
+                self.expert_map[eid].append(idx)
             self.weight.weight_loader = self.weight_loader_ep
         else:
             self.weight.weight_loader = self.weight_loader_tp
@@ -100,16 +113,17 @@ class LinearWeights(nn.Module):
             return
 
         expert_map = self.expert_map
-        param_id = expert_map[expert_id]
-        if shard_id == 'gate':
-            param_data = param.data[param_id, :self.half_out]
-        elif shard_id == 'up':
-            param_data = param.data[param_id, self.half_out:]
-        elif shard_id == 'down':
-            param_data = param.data[param_id]
-        else:
-            raise RuntimeError(f'Unknown shard_id: {shard_id}')
-        param_data.copy_(loaded_weight)
+        param_ids = expert_map[expert_id]
+        for param_id in param_ids:
+            if shard_id == 'gate':
+                param_data = param.data[param_id, :self.half_out]
+            elif shard_id == 'up':
+                param_data = param.data[param_id, self.half_out:]
+            elif shard_id == 'down':
+                param_data = param.data[param_id]
+            else:
+                raise RuntimeError(f'Unknown shard_id: {shard_id}')
+            param_data.copy_(loaded_weight)
 
 
 def _gather_input(x: torch.Tensor, tp_sizes: List[int]):
@@ -307,6 +321,7 @@ class LinearWeightsW8A8(LinearWeights):
             weight = loaded_weight
         else:
             raise RuntimeError(f'Unknown shard_id: {shard_id}')
+        weight = weight.to(param.dtype)
         param_data.copy_(weight)
 
 
@@ -410,33 +425,33 @@ class LinearWeightsBlockedF8(LinearWeights):
             ep=ep,
         )
         self.block_size = block_size
-        scale = torch.empty((num_experts, div_up(out_features, block_size), div_up(in_features, block_size)),
-                            dtype=torch.float32,
-                            device=device)
-        scale = torch.nn.Parameter(scale, requires_grad=False)
-        self.register_parameter('scale', scale)
+        weight_scale_inv = torch.empty((num_experts, div_up(out_features, block_size), div_up(in_features, block_size)),
+                                       dtype=torch.float32,
+                                       device=device)
+        weight_scale_inv = torch.nn.Parameter(weight_scale_inv, requires_grad=False)
+        self.register_parameter('weight_scale_inv', weight_scale_inv)
 
         if self.ep:
-            self.expert_map = dict((eid, idx) for idx, eid in enumerate(expert_list))
-            self.scale.weight_loader = self.weight_loader_scale_ep
+            self.weight_scale_inv.weight_loader = self.weight_loader_scale_ep
         else:
-            self.scale.weight_loader = self.weight_loader_scale_tp
+            self.weight_scale_inv.weight_loader = self.weight_loader_scale_tp
 
-    def update_weight(self, weight: torch.Tensor, scale: torch.Tensor):
+    def update_weight(self, weight: torch.Tensor, weight_scale_inv: torch.Tensor):
         """update weight."""
         super().update_weight(weight=weight)
-        weight_loader = self.scale.weight_loader
-        scale = torch.nn.Parameter(scale, requires_grad=False)
-        scale.weight_loader = weight_loader
-        self.register_parameter('scale', scale)
+        weight_loader = self.weight_scale_inv.weight_loader
+        weight_scale_inv = torch.nn.Parameter(weight_scale_inv, requires_grad=False)
+        weight_scale_inv.weight_loader = weight_loader
+        self.register_parameter('weight_scale_inv', weight_scale_inv)
 
     def weight_loader_scale_ep(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, expert_id: int,
                                shard_id: str):
         expert_list = self.expert_list
         if expert_id not in expert_list:
             return
-        expert_id = self.expert_map[expert_id]
-        self.weight_loader_scale_tp(param, loaded_weight, expert_id, shard_id)
+        expert_ids = self.expert_map[expert_id]
+        for expert_id in expert_ids:
+            self.weight_loader_scale_tp(param, loaded_weight, expert_id, shard_id)
 
     def weight_loader_scale_tp(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, expert_id: int,
                                shard_id: str):
@@ -472,7 +487,8 @@ class FusedMoEBlockedF8(nn.Module):
                  dtype: Optional[torch.dtype] = None,
                  device: Optional[torch.device] = None,
                  all_reduce: bool = True,
-                 enable_ep: bool = False):
+                 enable_ep: bool = False,
+                 layer_idx: int = 0):
         super().__init__()
         if device is None:
             device = torch.device('cpu')
@@ -488,7 +504,8 @@ class FusedMoEBlockedF8(nn.Module):
                                        block_size=self.block_size,
                                        ep_size=self.ep_size,
                                        ep_group=dist_ctx.ep_gpu_group,
-                                       out_dtype=dtype)
+                                       out_dtype=dtype,
+                                       layer_idx=layer_idx)
 
         if self.ep_size > 1:
             expert_list = self.impl.ep_expert_list(self.ep_size, rank)
@@ -532,19 +549,183 @@ class FusedMoEBlockedF8(nn.Module):
     def update_weights(self):
         """update weights."""
         (gate_up_weights, down_weights, gate_up_scale,
-         down_scale) = self.impl.update_weights(self.gate_up.weight, self.down.weight, self.gate_up.scale,
-                                                self.down.scale)
+         down_scale) = self.impl.update_weights(self.gate_up.weight, self.down.weight, self.gate_up.weight_scale_inv,
+                                                self.down.weight_scale_inv)
         self.gate_up.update_weight(gate_up_weights, gate_up_scale)
         self.down.update_weight(down_weights, down_scale)
 
-    def forward(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_ids: torch.LongTensor):
-        hidden_states, topk_weights, topk_ids = _moe_gather_inputs(hidden_states, topk_weights, topk_ids, False)
+    def forward(self, hidden_states: torch.Tensor, topk_weights: torch.Tensor, topk_idx: torch.LongTensor):
+        state = {
+            'hidden_states': hidden_states,
+            'topk_idx': topk_idx,
+            'topk_weights': topk_weights,
+            'moe_type': MoeType.Default,
+        }
+        recv_state = self.dispatch(state)
+        gemm_state = self.gemm(recv_state)
+        out_state = self.combine(gemm_state)
+        return out_state['hidden_states']
 
-        ret = self.impl.forward(hidden_states, topk_weights, topk_ids, self.gate_up.weight, self.gate_up.scale,
-                                self.down.weight, self.down.scale, self.expert_list)
-        if self.all_reduce:
-            ret = _moe_reduce(ret, False)
-        return ret
+    def before_dispatch(self, state: Dict):
+        moe_type = state['moe_type']
+        if moe_type == MoeType.DSAsyncPrefill:
+            fusedmoe = self.fusedmoe_build(low_latency_mode=False)
+            state['fusedmoe'] = fusedmoe
+            if hasattr(fusedmoe, 'per_token_group_quant_fp8'):
+                state['hidden_states'] = fusedmoe.per_token_group_quant_fp8(state['hidden_states'])
+            previous_event = fusedmoe.capture()
+            state['previous_event'] = previous_event
+        return state
+
+    def dispatch(self, state: Dict):
+        moe_type = state['moe_type']
+        if moe_type == MoeType.DSAsyncPrefill:
+            fusedmoe = state['fusedmoe']
+            previous_event = state['previous_event']
+            (
+                recv_hidden_states,
+                recv_topk_idx,
+                recv_topk_weights,
+                recv_tokens_per_expert,
+                handle,
+                event,
+            ) = fusedmoe.dispatch_async(state['hidden_states'],
+                                        state['topk_idx'],
+                                        state['topk_weights'],
+                                        previous_event=previous_event,
+                                        async_finish=True)
+            recv_state = {
+                'fusedmoe': fusedmoe,
+                'recv_hidden_states': recv_hidden_states,
+                'recv_topk_idx': recv_topk_idx,
+                'recv_topk_weights': recv_topk_weights,
+                'recv_tokens_per_expert': recv_tokens_per_expert,
+                'handle': handle,
+                'event': event,
+                'num_experts': self.num_experts,
+                'moe_type': state['moe_type']
+            }
+        elif moe_type == MoeType.DSAsyncDecode:
+            fusedmoe = self.fusedmoe_build(low_latency_mode=True)
+            use_event = False
+            (recv_hidden_states, recv_expert_count, handle, event,
+             hook) = fusedmoe.dispatch_async(state['hidden_states'],
+                                             state['topk_idx'],
+                                             use_fp8=True,
+                                             async_finish=use_event)
+            recv_state = {
+                'fusedmoe': fusedmoe,
+                'recv_hidden_states': recv_hidden_states,
+                'recv_expert_count': recv_expert_count,
+                'topk_idx': state['topk_idx'],
+                'topk_weights': state['topk_weights'],
+                'raw_hidden_shape': state['raw_hidden_shape'],
+                'handle': handle,
+                'moe_type': state['moe_type']
+            }
+            if use_event:
+                recv_state['event'] = event
+            else:
+                recv_state['hook'] = hook
+        else:  # MoeType.Default
+            hidden_states, topk_weights, topk_idx = _moe_gather_inputs(state['hidden_states'], state['topk_weights'],
+                                                                       state['topk_idx'], False)
+            recv_state = {
+                'hidden_states': hidden_states,
+                'topk_idx': topk_idx,
+                'topk_weights': topk_weights,
+                'moe_type': state['moe_type']
+            }
+        return recv_state
+
+    def gemm(self, state: Dict):
+        moe_type = state['moe_type']
+        if moe_type == MoeType.DSAsyncPrefill:
+            if (state['recv_hidden_states'][0]
+                    if isinstance(state['recv_hidden_states'], tuple) else state['recv_hidden_states']).shape[0] > 0:
+                state['recv_hidden_states'] = state['fusedmoe'].fusedmoe_forward(state, self.gate_up.weight,
+                                                                                 self.gate_up.weight_scale_inv,
+                                                                                 self.down.weight,
+                                                                                 self.down.weight_scale_inv)
+            gemm_state = {
+                'fusedmoe': state['fusedmoe'],
+                'hidden_states': state['recv_hidden_states'],
+                'handle': state['handle'],
+                'moe_type': state['moe_type']
+            }
+        elif moe_type == MoeType.DSAsyncDecode:
+            state['recv_hidden_states'] = state['fusedmoe'].fusedmoe_forward(state, self.gate_up.weight,
+                                                                             self.gate_up.weight_scale_inv,
+                                                                             self.down.weight,
+                                                                             self.down.weight_scale_inv)
+            gemm_state = {
+                'fusedmoe': state['fusedmoe'],
+                'hidden_states': state['recv_hidden_states'],
+                'topk_idx': state['topk_idx'],
+                'topk_weights': state['topk_weights'],
+                'handle': state['handle'],
+                'moe_type': state['moe_type']
+            }
+        else:  # MoeType.Default
+            hidden_states = self.impl.forward(state['hidden_states'], state['topk_weights'], state['topk_idx'],
+                                              self.gate_up.weight, self.gate_up.weight_scale_inv, self.down.weight,
+                                              self.down.weight_scale_inv, self.expert_list)
+            gemm_state = {'hidden_states': hidden_states, 'moe_type': state['moe_type']}
+        return gemm_state
+
+    def combine(self, state: Dict):
+        moe_type = state['moe_type']
+        if moe_type == MoeType.DSAsyncPrefill:
+            fusedmoe = state['fusedmoe']
+            previous_event = fusedmoe.capture()
+            out_hidden_states, event = fusedmoe.combine_async(state['hidden_states'],
+                                                              state['handle'],
+                                                              previous_event=previous_event,
+                                                              async_finish=True)
+            out_state = {
+                'fusedmoe': state['fusedmoe'],
+                'hidden_states': out_hidden_states,
+                'event': event,
+                'moe_type': state['moe_type']
+            }
+        elif moe_type == MoeType.DSAsyncDecode:
+            fusedmoe = state['fusedmoe']
+            use_event = False
+            out_hidden_states, event, hook = fusedmoe.combine_async(state['hidden_states'],
+                                                                    state['topk_idx'],
+                                                                    state['topk_weights'],
+                                                                    state['handle'],
+                                                                    async_finish=use_event)
+            out_state = {
+                'fusedmoe': state['fusedmoe'],
+                'hidden_states': out_hidden_states,
+                'moe_type': state['moe_type']
+            }
+            if use_event:
+                out_state['event'] = event
+            else:
+                out_state['hook'] = hook
+        else:  # MoeType.Default
+            if self.all_reduce:
+                state['hidden_states'] = _moe_reduce(state['hidden_states'], False)
+            out_state = {'hidden_states': state['hidden_states'], 'moe_type': state['moe_type']}
+        return out_state
+
+    def wait(self, state):
+        if state.get('event', None) is not None:
+            state['fusedmoe'].wait(state['event'])
+            return True
+        elif state.get('hook', None) is not None:
+            state['hook']()
+            return True
+        else:
+            return False
+
+    def renormalize(self, topk_weights):
+        return self.impl.do_renormalize(topk_weights)
+
+    def fusedmoe_build(self, low_latency_mode: bool = False):
+        return self.impl.fusedmoe_build(low_latency_mode)
 
 
 def build_fused_moe(
@@ -558,6 +739,7 @@ def build_fused_moe(
     all_reduce: bool = True,
     enable_ep: bool = False,
     quant_config: Any = None,
+    layer_idx: int = 0,
 ):
     """fused moe builder."""
 
@@ -608,6 +790,7 @@ def build_fused_moe(
             device=device,
             all_reduce=all_reduce,
             enable_ep=enable_ep,
+            layer_idx=layer_idx,
         )
     else:
         raise RuntimeError(f'Unsupported quant method: {quant_method}')

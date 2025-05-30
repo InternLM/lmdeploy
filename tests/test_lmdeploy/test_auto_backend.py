@@ -29,7 +29,6 @@ class TestAutoBackend:
             ('THUDM/chatglm2-6b', True, False),
             ('THUDM/chatglm3-6b', True, False),
             ('deepseek-ai/deepseek-moe-16b-chat', True, False),
-            ('tiiuae/falcon-7b-instruct', True, False),
             ('01-ai/Yi-34B-Chat', True, True),
             ('codellama/CodeLlama-7b-Instruct-hf', True, True),
             ('Qwen/Qwen-7B-Chat', True, True),

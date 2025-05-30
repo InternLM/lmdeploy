@@ -32,14 +32,11 @@ DynamicDecodeLayer::DynamicDecodeLayer(DataType              dtype,
                                        const cudaDeviceProp* device_prop)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
-    auto dispatch = [&](auto t) {
-        using T = decltype(t);
-        BaseDynamicDecodeLayer::BaseParam param{max_batch_size, vocab_size, vocab_size_padded, stream, device_prop};
-        layers_.emplace_back(new LogitsProcessorLayer<T>{param});
-        layers_.emplace_back(new SamplingLayer<T>{param});
-        layers_.emplace_back(new StopCriteriaLayer<T>{param});
-    };
-    TM_DISPATCH_PRIMARY_DTYPES(dtype, dispatch);
+    TM_CHECK(dtype == kFloat32);
+    BaseDynamicDecodeLayer::BaseParam param{max_batch_size, vocab_size, vocab_size_padded, stream, device_prop};
+    layers_.emplace_back(new LogitsProcessorLayer<float>{param});
+    layers_.emplace_back(new SamplingLayer<float>{param});
+    layers_.emplace_back(new StopCriteriaLayer<float>{param});
 }
 
 DynamicDecodeLayer::~DynamicDecodeLayer() {}

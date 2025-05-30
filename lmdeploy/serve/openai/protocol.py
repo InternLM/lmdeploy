@@ -136,6 +136,7 @@ class ChatCompletionRequest(BaseModel):
     seed: Optional[int] = None
     min_new_tokens: Optional[int] = Field(default=None, examples=[None])
     min_p: float = 0.0
+    enable_thinking: Optional[bool] = None
 
 
 class FunctionCall(BaseModel):
@@ -276,6 +277,7 @@ class CompletionRequest(BaseModel):
     spaces_between_special_tokens: Optional[bool] = True
     top_k: Optional[int] = 40  # for opencompass
     seed: Optional[int] = None
+    min_p: float = 0.0
 
 
 class CompletionResponseChoice(BaseModel):
@@ -372,3 +374,9 @@ class GenerateResponse(BaseModel):
     input_tokens: int
     history_tokens: int
     finish_reason: Optional[Literal['stop', 'length', 'tool_calls', 'error']] = None
+
+
+class UpdateParamsRequest(BaseModel):
+    """Update weights request."""
+    serialized_named_tensors: Union[str, List[str]]
+    finished: bool = False

@@ -109,13 +109,7 @@ void invokeApplyTemperaturePenalty(T*           logits,
                                                 const int    vocab_size_padd,                                          \
                                                 cudaStream_t stream);
 
-#ifdef ENABLE_FP32
 INISTANTIATE_INVOKE_APPLY_TEMPERATURE_PENALTY(float);
-#endif
-INISTANTIATE_INVOKE_APPLY_TEMPERATURE_PENALTY(half);
-#ifdef ENABLE_BF16
-INISTANTIATE_INVOKE_APPLY_TEMPERATURE_PENALTY(__nv_bfloat16);
-#endif
 
 template<typename T>
 __global__ void batchApplyTemperaturePenalty(T*           logits,
@@ -215,13 +209,7 @@ void invokeBatchApplyTemperaturePenalty(T*           logits,
                                                      const int    vocab_size_padd,                                     \
                                                      cudaStream_t stream);
 
-#ifdef ENABLE_FP32
 INISTANTIATE_INVOKE_BATCH_APPLY_TEMPERATURE_PENALTY(float);
-#endif
-INISTANTIATE_INVOKE_BATCH_APPLY_TEMPERATURE_PENALTY(half);
-#ifdef ENABLE_BF16
-INISTANTIATE_INVOKE_BATCH_APPLY_TEMPERATURE_PENALTY(__nv_bfloat16);
-#endif
 
 template<typename T, int vec_size>
 __global__ void batchApplyTemperaturePenalty_v2(T*           logits,
@@ -268,7 +256,7 @@ __global__ void batchApplyTemperaturePenalty_v2(T*           logits,
                 vec[c] = (float)vec[c] * scale;
             }
             else {
-                vec[c] = -getMaxValue<T>();
+                vec[c] = -getInfValue<T>();
             }
         }
 
@@ -328,13 +316,7 @@ void invokeBatchApplyTemperaturePenalty_v2(T*           logits,
                                                         const int    vocab_size_padded,                                \
                                                         cudaStream_t stream);
 
-#ifdef ENABLE_FP32
 INSTANTIATE_INVOKE_BATCH_APPLY_TEMPERATURE_PENALTY_V2(float);
-#endif
-INSTANTIATE_INVOKE_BATCH_APPLY_TEMPERATURE_PENALTY_V2(half);
-#ifdef ENABLE_BF16
-INSTANTIATE_INVOKE_BATCH_APPLY_TEMPERATURE_PENALTY_V2(__nv_bfloat16);
-#endif
 
 template<typename T, RepetitionPenaltyType penalty_type>
 __global__ void applyRepetitionPenalty(T*          logits,
@@ -466,13 +448,7 @@ void invokeApplyRepetitionPenalty(T*                          logits,
                                                const RepetitionPenaltyType penalty_type,                               \
                                                cudaStream_t                stream);
 
-#ifdef ENABLE_FP32
 INISTANTIATE_INVOKE_APPLY_REPETITION_PENALTY(float);
-#endif
-INISTANTIATE_INVOKE_APPLY_REPETITION_PENALTY(half);
-#ifdef ENABLE_BF16
-INISTANTIATE_INVOKE_APPLY_REPETITION_PENALTY(__nv_bfloat16);
-#endif
 
 template<typename T, RepetitionPenaltyType penalty_type>
 __global__ void batchApplyRepetitionPenalty(T*           logits,
@@ -598,13 +574,7 @@ void invokeBatchApplyRepetitionPenalty(T*                    logits,
                                                     RepetitionPenaltyType penalty_type,                                \
                                                     cudaStream_t          stream);
 
-#ifdef ENABLE_FP32
 INSTANTIATE_INVOKE_BATCH_APPLY_REPETITION_PENALTY(float);
-#endif
-INSTANTIATE_INVOKE_BATCH_APPLY_REPETITION_PENALTY(half);
-#ifdef ENABLE_BF16
-INSTANTIATE_INVOKE_BATCH_APPLY_REPETITION_PENALTY(__nv_bfloat16);
-#endif
 
 template<typename T>
 __global__ void batchApplyMinLengthPenalty(T* __restrict__ logits,
@@ -653,12 +623,6 @@ void invokeMinLengthPenalty(T*           logits,
                                          const int    end_ids_size,                                                    \
                                          cudaStream_t stream);
 
-#ifdef ENABLE_FP32
 INSTANTIATE_INVOKE_MIN_LENGTH_PENALTY(float);
-#endif
-INSTANTIATE_INVOKE_MIN_LENGTH_PENALTY(half);
-#ifdef ENABLE_BF16
-INSTANTIATE_INVOKE_MIN_LENGTH_PENALTY(__nv_bfloat16);
-#endif
 
 }  // namespace turbomind

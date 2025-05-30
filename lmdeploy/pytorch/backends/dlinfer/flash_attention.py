@@ -57,6 +57,8 @@ class DlinferFlashAttentionImpl(FlashAttentionImpl):
             q_seqlens=q_seqlens,
             kv_start_loc=kv_start_loc,
             kv_seqlens=kv_seqlens,
+            num_heads=self.num_heads,
+            num_kv_heads=self.num_kv_heads,
             max_q_seqlen=max_q_seqlen,
             window_size=self.sliding_window,
             sm_scale=self.scale,

@@ -2,7 +2,9 @@
 from typing import Any, Dict, List, Tuple
 
 import torch
+from torch.profiler import record_function
 
+from lmdeploy.pytorch.backends.selector import get_backend
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
 from lmdeploy.pytorch.model_inputs import StepContext
 from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMeta
@@ -42,10 +44,12 @@ class CUDASingleGraphRunner:
         num_blocks: int,
         is_decoding: bool,
         pool: Tuple[int, int],
+        model_config: ModelConfig,
         device: torch.device,
     ):
         self.model = model
         self.ctx_mgr = model.ctx_mgr
+        self.model_config = model_config
 
         self.meta = CudaGraphMeta(
             max_batchs=max_batches,
@@ -55,6 +59,7 @@ class CUDASingleGraphRunner:
             device=device,
             input_buffers=dict(),
             output_buffers=dict(),
+            vocab_size=self.model_config.vocab_size,
         )
         self.device = device
         self.max_batches = max_batches
@@ -64,6 +69,7 @@ class CUDASingleGraphRunner:
         self.pool = pool
         self._graph: torch.cuda.CUDAGraph = None
 
+    @record_function('capture_cudagraph')
     def capture(self, **kwargs):
         """capture graph."""
         logger.debug(f'Capturing graph with meta: {self.meta}')
@@ -86,6 +92,7 @@ class CUDASingleGraphRunner:
         self.meta.output_buffers = output_buffers
         return output
 
+    @record_function('forward_cudagraph')
     def forward(self, **kwargs):
         """forward."""
         num_tokens = kwargs['input_ids'].size(-1)
@@ -117,6 +124,7 @@ class CUDAGraphRunner(GraphRunner):
 
         self.graph_pool_handle = torch.cuda.graph_pool_handle()
         self._runner_map: Dict[Any, CUDASingleGraphRunner] = dict()
+        self.has_try_compile_model: bool = False
 
     def check_enable_graph(self):
         """check enable graph."""
@@ -124,6 +132,16 @@ class CUDAGraphRunner(GraphRunner):
             return _false
 
         return getattr(self.model, 'support_cuda_graph', _false)
+
+    def _try_compile_model_once(self):
+        if self.has_try_compile_model:
+            return
+
+        if hasattr(self.model, 'compile_model'):
+            method = getattr(self.model, 'compile_model')
+            method()
+
+        self.has_try_compile_model = True
 
     def get_graph_key(self, input_ids: torch.Tensor, position_ids: torch.Tensor, past_key_values: List,
                       attn_metadata: Any, inputs_embeds: torch.Tensor, **kwargs):
@@ -140,10 +158,14 @@ class CUDAGraphRunner(GraphRunner):
 
     def __call__(self, **kwargs):
         """call."""
+        if not self.backend_config.eager_mode and get_backend().get_name() == 'cuda':
+            self._try_compile_model_once()
+
         enable_graph = self.enable_graph(**kwargs)
 
         if not enable_graph:
-            return self.model(**kwargs)
+            with record_function('forward_eager'):
+                return self.model(**kwargs)
 
         graph_key = self.get_graph_key(**kwargs)
         max_tokens = graph_key[0]
@@ -156,6 +178,7 @@ class CUDAGraphRunner(GraphRunner):
                                            num_blocks=self.num_blocks,
                                            is_decoding=is_decoding,
                                            pool=self.graph_pool_handle,
+                                           model_config=self.model_config,
                                            device=self.device)
             runner.capture(**kwargs)
             self._runner_map[graph_key] = runner
@@ -164,6 +187,7 @@ class CUDAGraphRunner(GraphRunner):
         output = runner.forward(**kwargs)
         return output
 
+    @record_function('prepare_inputs_for_generation')
     def prepare_inputs_for_generation(
         self,
         past_key_values: List[List[torch.Tensor]],

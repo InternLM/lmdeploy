@@ -4,16 +4,18 @@ import copy
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import torch
 
 from lmdeploy.messages import PytorchEngineConfig, ResponseType
+from lmdeploy.pytorch.disagg.config import EngineRole
+from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model, logging_timer
 
 from ..adapter.adapter import AdapterManager
-from ..config import BackendConfig, CacheConfig, DistConfig, ModelConfig, SchedulerConfig
+from ..config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SchedulerConfig
 from ..messages import MessageStatus, SchedulerSequence
 from ..model_inputs import ModelInputs, VisionModelInputs
 from ..paging import Scheduler
@@ -40,13 +42,36 @@ class InferOutput:
     finish: bool = False
     logits: torch.Tensor = None
 
+    # send cache blocks back for migration in Disaggregated LLM Serving
+    # when Prefill Engine is Done.
+    cache_block_ids: List[int] = None
+
 
 def _tensorlize_block_offsets(block_offsets, dtype=torch.int32):
     """tensorlize block_offsets."""
     from torch.nn.utils.rnn import pad_sequence
-    block_offsets = [torch.from_numpy(off).to(dtype) for off in block_offsets]
-    block_offsets = pad_sequence(block_offsets, batch_first=True)
+    block_offsets = [torch.from_numpy(off) for off in block_offsets]
+    block_offsets = pad_sequence(block_offsets, batch_first=True).to(dtype)
     return block_offsets
+
+
+def _update_engine_config(engine_config: PytorchEngineConfig):
+    """update pytorch engine config."""
+    # make sure engine exits
+    if engine_config is None:
+        engine_config = PytorchEngineConfig()
+    else:
+        engine_config = copy.deepcopy(engine_config)
+
+    if engine_config.max_batch_size is None:
+        engine_config.max_batch_size = get_max_batch_size(engine_config.device_type)
+
+    if engine_config.dp != 1:
+        if engine_config.tp == 1 and engine_config.ep == 1:
+            engine_config.dp = 1
+            engine_config.dp_rank = 0
+
+    return engine_config
 
 
 def _build_scheduler_config(engine_config: PytorchEngineConfig):
@@ -59,17 +84,17 @@ def _build_scheduler_config(engine_config: PytorchEngineConfig):
 
 def _build_cache_config(engine_config: PytorchEngineConfig):
     """build cache config."""
-    cache_config = CacheConfig(
-        max_batches=engine_config.max_batch_size,
-        block_size=engine_config.block_size,
-        num_cpu_blocks=engine_config.num_cpu_blocks,
-        num_gpu_blocks=engine_config.num_gpu_blocks,
-        cache_max_entry_count=engine_config.cache_max_entry_count,
-        max_prefill_token_num=engine_config.max_prefill_token_num,
-        enable_prefix_caching=engine_config.enable_prefix_caching,
-        quant_policy=engine_config.quant_policy,
-        device_type=engine_config.device_type,
-    )
+    cache_config = CacheConfig(max_batches=engine_config.max_batch_size,
+                               block_size=engine_config.block_size,
+                               num_cpu_blocks=engine_config.num_cpu_blocks,
+                               num_gpu_blocks=engine_config.num_gpu_blocks,
+                               cache_max_entry_count=engine_config.cache_max_entry_count,
+                               max_prefill_token_num=engine_config.max_prefill_token_num,
+                               enable_prefix_caching=engine_config.enable_prefix_caching,
+                               quant_policy=engine_config.quant_policy,
+                               device_type=engine_config.device_type,
+                               migration_backend=engine_config.migration_backend,
+                               role=engine_config.role)
     return cache_config
 
 
@@ -84,13 +109,43 @@ def _build_backend_config(engine_config: PytorchEngineConfig):
 
 def _build_dist_config(engine_config: PytorchEngineConfig):
     """build dist config."""
-    dist_config = DistConfig(
-        dp=engine_config.dp,
-        tp=engine_config.tp,
-        ep=engine_config.ep,
-        dp_rank=engine_config.dp_rank,
-    )
+    dist_config = DistConfig(dp=engine_config.dp,
+                             tp=engine_config.tp,
+                             ep=engine_config.ep,
+                             dp_rank=engine_config.dp_rank,
+                             enable_microbatch=engine_config.enable_microbatch,
+                             enable_eplb=engine_config.enable_eplb)
     return dist_config
+
+
+def _build_misc_config(engine_config: PytorchEngineConfig):
+    """build misc config."""
+    misc_config = MiscConfig(custom_module_map=engine_config.custom_module_map, empty_init=engine_config.empty_init)
+    return misc_config
+
+
+class CounterEvent:
+
+    def __init__(self):
+        self._counter = 0
+        self._event = asyncio.Event()
+
+    async def wait(self):
+        await self._event.wait()
+
+    def is_set(self):
+        return self._event.is_set()
+
+    def set(self):
+        if self._counter > 0:
+            self._counter -= 1
+        if self._counter == 0:
+            self._event.set()
+
+    def clear(self):
+        if self._counter == 0 and self._event.is_set():
+            self._event.clear()
+        self._counter += 1
 
 
 class RunableEventBase:
@@ -188,7 +243,8 @@ class InputsMakerAsync(InputsMakerBase):
         num_waiting = scheduler.num_waiting()
         max_batches = self.scheduler_config.max_batches
         # prefill if too much waiting
-        if num_waiting >= 4:
+        permitted_waiting = 4 if (self.engine.engine_config.role != EngineRole.Prefill) else 1
+        if num_waiting >= permitted_waiting:
             return True
         # prefill if no enough running
         if num_running < max_batches * 0.5:
@@ -244,8 +300,11 @@ class InputsMakerSync(InputsMakerAsync):
         self._is_prefill = True
 
     def do_prefill(self):
-        ret = self._is_prefill
-        self._is_prefill = not self._is_prefill
+        if self.engine.engine_config.role in [EngineRole.Hybrid, EngineRole.Decode]:
+            ret = self._is_prefill
+            self._is_prefill = not self._is_prefill
+        elif self.engine.engine_config.role == EngineRole.Prefill:
+            ret = True
         return ret
 
     async def send_next_inputs(self):
@@ -281,22 +340,14 @@ class Engine:
                  tokenizer: object,
                  engine_config: PytorchEngineConfig = None,
                  trust_remote_code: bool = True) -> None:
-        # make sure engine exits
-        if engine_config is None:
-            engine_config = PytorchEngineConfig()
-        else:
-            engine_config = copy.deepcopy(engine_config)
-        if engine_config.max_batch_size is None:
-            engine_config.max_batch_size = get_max_batch_size(engine_config.device_type)
+        # make sure engine config exist
+        engine_config = _update_engine_config(engine_config)
 
-        tp = engine_config.tp
-        dp = engine_config.dp
-        dp_rank = engine_config.dp_rank
-
+        # dist args
         self.tokenizer = tokenizer
-        self.tp = tp
-        self.dp = dp
-        self.dp_rank = dp_rank
+        self.tp = engine_config.tp
+        self.dp = engine_config.dp
+        self.dp_rank = engine_config.dp_rank
 
         # download models and adapters
         if not os.path.exists(model_path):
@@ -318,6 +369,7 @@ class Engine:
         cache_config = _build_cache_config(engine_config)
         backend_config = _build_backend_config(engine_config)
         dist_config = _build_dist_config(engine_config)
+        misc_config = _build_misc_config(engine_config)
         self.should_execute_dummy_batch = dist_config.need_dummy_batch()
 
         # build model agent
@@ -328,6 +380,7 @@ class Engine:
                                        cache_config=cache_config,
                                        backend_config=backend_config,
                                        dist_config=dist_config,
+                                       misc_config=misc_config,
                                        tokenizer=raw_tokenizer,
                                        adapters=adapters,
                                        device_type=engine_config.device_type,
@@ -346,6 +399,7 @@ class Engine:
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
         self.backend_config = backend_config
+        self.dist_config = dist_config
         self.max_session_len = self._get_max_session_len()
 
         self.req_manager = self._bind_request_manager()
@@ -353,6 +407,9 @@ class Engine:
         # create main thread
         self._start_loop()
         self._loop_main = None
+
+        # for migration loop management
+        self.migration_event: asyncio.Event = None
 
     @classmethod
     def from_pretrained(cls,
@@ -474,7 +531,11 @@ class Engine:
             resp = req.data.get('response', True)
             resp_type = ResponseType.SESSION_NOT_EXIST
             if session_id in self.scheduler.sessions:
-                self.scheduler.end_session(session_id)
+                msg = list(self.scheduler.sessions[session_id].sequences.values())[0]
+                if msg.preserve_cache:
+                    self.scheduler._set_message_status(msg, MessageStatus.TO_BE_MIGRATED)
+                else:
+                    self.scheduler.end_session(session_id)
                 resp_type = ResponseType.SUCCESS
             if resp:
                 self._response(req.resp, resp_type)
@@ -524,24 +585,30 @@ class Engine:
             sampling_param = req.data['sampling_param']
             return_logits = sampling_param.out_logits
             if len(sess.sequences) == 0:
+                migration_request = req.data.get('migration_request')
                 assert len(req.data['token_ids']) > 0, ('Empty input is not allowed.')
-                sess.add_sequence(
-                    req.data['token_ids'],
-                    sampling_param=sampling_param,
-                    adapter_name=req.data['adapter_name'],
-                    return_logits=return_logits,
-                    multimodals=req.data.get('input_multimodals'),
-                    input_embeddings=req.data.get('input_embeddings'),
-                )
+                sess.add_sequence(req.data['token_ids'],
+                                  sampling_param=sampling_param,
+                                  adapter_name=req.data['adapter_name'],
+                                  return_logits=return_logits,
+                                  multimodals=req.data.get('input_multimodals'),
+                                  input_embeddings=req.data.get('input_embeddings', ),
+                                  migration_request=migration_request,
+                                  resp_cache=req.data.get('with_cache'),
+                                  preserve_cache=req.data.get('preserve_cache'))
                 msg = next(iter(sess.sequences.values()))
                 __update_max_new_tokens(msg)
                 scheduler.add_sequence(msg)
+                if migration_request:
+                    self.scheduler._set_message_status(msg, MessageStatus.WAITING_MIGRATION)
+                    self.migration_event.set()
             else:
                 msg = next(iter(sess.sequences.values()))
                 msg.update_token_ids(
                     req.data['token_ids'],
                     multimodals=req.data.get('input_multimodals'),
                     embeddings=req.data.get('input_embeddings'),
+                    append_tokens=True,
                 )
                 msg.num_new_tokens = 0
                 msg.sampling_param = sampling_param
@@ -567,6 +634,7 @@ class Engine:
             return torch.int32
         return torch.int64
 
+    @torch.inference_mode()
     @logging_timer('CreateModelInputs', logger)
     def create_model_inputs(self, messages: SeqList, is_prefill: bool):
         """create model inputs from messages.
@@ -699,6 +767,22 @@ class Engine:
             msg.update_token_ids(update_token, model_meta=model_meta)
             msg.num_new_tokens += 1
             if stop:
+                msg.status = MessageStatus.STOPPED
+
+    def update_running_migration(self, running: SeqList, next_token_ids: np.ndarray, stopped: torch.Tensor,
+                                 model_metas: List[Dict[str, Any]]):
+        """update scheduler."""
+        if model_metas is None:
+            model_metas = [None] * len(running)
+        for token, msg, stop, model_meta in zip(next_token_ids, running, stopped, model_metas):
+            if msg.status != MessageStatus.MIGRATION_LOCKED:
+                continue
+            update_token = token
+
+            # fill token
+            msg.update_token_ids(update_token, model_meta=model_meta)
+            msg.num_new_tokens += 1
+            if stop:
                 update_token = _EMPTY_TOKEN
                 msg.update_token_ids(update_token, model_meta=model_meta)
                 msg.status = MessageStatus.STOPPED
@@ -722,12 +806,15 @@ class Engine:
             if not finish and len(token_ids) == 0:
                 continue
             session_id = msg.session_id
-            out = InferOutput(
-                session_id=session_id,
-                resp=msg.resp,
-                finish=finish,
-                token_ids=token_ids,
-            )
+            if msg.resp_cache:
+                cache_block_ids = self.scheduler.block_manager.get_block_table(msg).tolist()
+            else:
+                cache_block_ids = None
+            out = InferOutput(session_id=session_id,
+                              resp=msg.resp,
+                              finish=finish,
+                              token_ids=token_ids,
+                              cache_block_ids=cache_block_ids)
             outputs[session_id] = out
 
             if msg.return_logits:
@@ -790,9 +877,14 @@ class Engine:
             """make dummy inputs."""
             logger.info(f'make dummy forward inputs: prefill={prefill}.')
             num_loops = 1 if prefill else prefill_interval
+
+            batch_size = 2 if self.dist_config.enable_microbatch else 1
+            batch_size = min(self.cache_config.max_batches, batch_size)
             return dict(
                 running=[],
-                inputs=ModelInputs.make_dummy(1, is_decoding=not prefill),
+                inputs=ModelInputs.make_dummy(batch_size,
+                                              is_decoding=not prefill,
+                                              vocab_size=self.model_config.vocab_size),
                 swap_in_map=dict(),
                 swap_out_map=dict(),
                 loop_count=num_loops,
@@ -815,7 +907,9 @@ class Engine:
             return None
 
         # schedule decoding if no valid prefill reqs.
-        if prefill and len(scheduler_output.running) == 0 and not self.should_execute_dummy_batch:
+        if prefill and len(
+                scheduler_output.running
+        ) == 0 and not self.should_execute_dummy_batch and self.engine_config.role != EngineRole.Prefill:
             prefill = False
             scheduler_output = scheduler.schedule(is_prefill=prefill, prealloc_size=prefill_interval)
 
@@ -824,7 +918,7 @@ class Engine:
         swap_in_map = scheduler_output.swap_in_map
         swap_out_map = scheduler_output.swap_out_map
 
-        if self.should_execute_dummy_batch and len(running) == 0:
+        if (self.should_execute_dummy_batch or self.engine_config.role == EngineRole.Prefill) and len(running) == 0:
             return __make_dummy_inputs()
 
         assert len(running) > 0
@@ -877,12 +971,14 @@ class Engine:
                 session_ids = [out.session_id for out in outputs]
                 logger.debug(f'Response sessions: {session_ids}')
             elif logger.level <= logging.INFO:
-                logger.info(f'Response: num_outputs={len(outputs)}.')
+                logger.debug(f'Response: num_outputs={len(outputs)}.')
 
         def __send_resp(out: InferOutput):
             """send response."""
             resp_type = (ResponseType.FINISH if out.finish else ResponseType.SUCCESS)
-            self._response(out.resp, resp_type, data=dict(token_ids=out.token_ids, logits=out.logits))
+            self._response(out.resp,
+                           resp_type,
+                           data=dict(token_ids=out.token_ids, logits=out.logits, cache_block_ids=out.cache_block_ids))
 
         def __send_resps(step_outputs: List[InferOutput]):
             """send response callback."""
@@ -902,9 +998,58 @@ class Engine:
             __send_resps(resps)
 
     @torch.inference_mode()
+    async def _async_loop_migration(self, resp_que: asyncio.Queue, has_runable_event: asyncio.Event):
+        """async loop migration."""
+        while True:
+            migration_running = self.scheduler._schedule_migration()
+            if not migration_running and not self.scheduler.has_migration_waiting():
+                await self.migration_event.wait()
+            elif migration_running:
+                self.migration_event.clear()
+                for msg in migration_running:
+                    migration_execution_requests: List[Tuple[int, List[Tuple[int, int]]]] = []
+                    migration_request = msg.migration_request
+                    prefill_block_ids = migration_request.remote_block_ids
+                    decode_block_ids = list(self.scheduler.block_manager.get_block_table(msg=msg))
+
+                    assert len(prefill_block_ids) == len(decode_block_ids)
+                    migration_execution_requests.append((
+                        migration_request.remote_engine_id,
+                        list(zip(prefill_block_ids, decode_block_ids)),
+                    ))
+                    migration_inputs = MigrationExecutionBatch(protocol=migration_request.protocol,
+                                                               requests=migration_execution_requests)
+                    logger.info(f'migrating session: {msg.session_id} begin')
+                    await self.executor.migrate(migration_inputs)
+                    logger.info(f'migrating session: {msg.session_id} done')
+
+                # generate output
+                outputs: Dict[int, InferOutput] = dict()
+                self.scheduler.lock_running_migration(migration_running)
+                for _, msg in enumerate(migration_running):
+                    session_id = msg.session_id
+                    msg.resp.type = ResponseType.SUCCESS
+                    token_ids = [msg.migration_request.remote_token_id]
+                    out = InferOutput(
+                        session_id=session_id,
+                        resp=msg.resp,
+                        finish=False,
+                        token_ids=np.array(token_ids),
+                    )
+                    outputs[session_id] = out
+                    self.update_running_migration([msg], np.array([token_ids]), [False], [None])
+                resp_que.put_nowait(outputs)
+                self.scheduler.unlock_running_migration(migration_running)
+                has_runable_event.set()
+            else:
+                # release coroutine for decoding
+                await asyncio.sleep(0)
+
+    @torch.inference_mode()
     async def _async_loop_main(
         self,
         resp_que: asyncio.Queue,
+        forward_event: asyncio.Event,
         has_runable_event: RunableEventBase,
         inputs_maker: InputsMakerBase,
     ):
@@ -919,18 +1064,35 @@ class Engine:
         while True:
             if next_running is None:
                 await has_runable_event.wait()
+                scheduler.collect_migration_done()
                 forward_inputs, next_running = await inputs_maker.send_next_inputs()
             num_loops = forward_inputs['loop_count']
             running = next_running
             next_running = None
             scheduler.lock_running(running)
             for idx in range(num_loops):
-                if idx >= num_loops - 1:
+
+                # lock forward event
+                # make sure that prefetch forward would not wait for detokenize
+                # WARNING: this might have side effect on the performance
+                if idx == num_loops // 2:
+                    forward_event.clear()
+
+                # pre-forward before get last token
+                if idx == num_loops - 1:
+                    scheduler.collect_migration_done()
                     forward_inputs, next_running = await inputs_maker.prefetch_next_inputs()
+
+                # send output
                 out = await self.executor.get_output_async()
                 if len(out) > 0:
                     step_outputs = self._make_infer_outputs(**out, running=running)
                     resp_que.put_nowait(step_outputs)
+
+                # unlock forward event.
+                if idx == num_loops - 1:
+                    forward_event.set()
+
             scheduler.unlock_running(running)
             has_runable_event.set()
 
@@ -962,13 +1124,20 @@ class Engine:
         self.executor.stop()
         self.executor.release()
 
+    def update_params(self, request: Any):
+        """update params."""
+        self.executor.update_params(request)
+
     async def async_loop(self):
         try:
             event_loop = asyncio.get_event_loop()
 
             # forward task
-            forward_event = asyncio.Event()
+            forward_event = CounterEvent()
             forward_event.set()
+
+            # migration task
+            self.migration_event = asyncio.Event()
 
             logger.info('Starting executor.')
             self.executor.start(forward_event)
@@ -986,9 +1155,18 @@ class Engine:
             loop_send_resp = event_loop.create_task(self._async_loop_send_responses(resp_que, forward_event),
                                                     name='MainLoopResponse')
 
-            # binding done callback
             loop_main = asyncio.current_task()
             loop_tasks: List[asyncio.Task] = [loop_main, loop_msg_proc, loop_send_resp]
+
+            if self.engine_config.role != EngineRole.Hybrid:
+                logger.info('Starting async task MigrationLoop.')
+                loop_migration = event_loop.create_task(
+                    self._async_loop_migration(resp_que, has_runable_event=has_runable_event),
+                    name='MainLoopMigration',
+                )
+                loop_tasks.append(loop_migration)
+
+            # binding done callback
             self._add_loop_tasks_done_callback(loop_tasks)
             self._loop_main = loop_main
 
@@ -996,6 +1174,7 @@ class Engine:
             logger.info('Starting async task MainLoop.')
             inputs_maker = build_inputs_maker(self)
             await self._async_loop_main(resp_que=resp_que,
+                                        forward_event=forward_event,
                                         has_runable_event=has_runable_event,
                                         inputs_maker=inputs_maker)
 
@@ -1018,3 +1197,10 @@ class Engine:
         """
         from .engine_instance import EngineInstance
         return EngineInstance(self)
+
+    def start_loop(self):
+        """start engine loop."""
+        if self.req_manager.is_loop_alive():
+            return True
+        self.req_manager.create_loop_task()
+        return True

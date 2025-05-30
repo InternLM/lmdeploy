@@ -16,10 +16,10 @@ from .gemma3_vl import Gemma3VisionModel  # noqa F401
 from .glm_4v import GLM4VisionModel  # noqa F401
 from .internvl import InternVLVisionModel  # noqa F401
 from .internvl_llava import InternVLLlavaVisionModel  # noqa F401
+from .llama4 import LLama4VisionModel  # noqa F401
 from .llava import LlavaVisionModel  # noqa F401
 from .llava_hf import LlavaHfVisionModel  # noqa F401
 from .llava_next import LlavaNextVisionModel  # noqa F401
-from .mini_gemeni import MiniGeminiVisionModel  # noqa F401
 from .minicpmv import MiniCPMVModel  # noqa F401
 from .mllama import MllamaVLModel  # noqa F401
 from .molmo import MolmoVisionModel  # noqa F401

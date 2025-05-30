@@ -2,6 +2,7 @@
 # yapf: disable
 import asyncio
 import copy
+import json
 import os
 import time
 from functools import partial
@@ -9,7 +10,9 @@ from http import HTTPStatus
 from typing import AsyncGenerator, Dict, List, Literal, Optional, Union
 
 import uvicorn
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.security.http import HTTPAuthorizationCredentials, HTTPBearer
@@ -18,6 +21,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from lmdeploy.archs import get_task
 from lmdeploy.messages import GenerationConfig, LogitsProcessor, PytorchEngineConfig, TurbomindEngineConfig
 from lmdeploy.model import ChatTemplateConfig
+from lmdeploy.pytorch.disagg.config import DistServeEngineConfig
+from lmdeploy.pytorch.disagg.request import DistServeConnectionRequest, DistServeInitRequest, MigrationRequest
 from lmdeploy.serve.async_engine import AsyncEngine
 from lmdeploy.serve.openai.protocol import ChatCompletionResponse  # noqa: E501
 from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, ChatCompletionResponseChoice,
@@ -27,7 +32,7 @@ from lmdeploy.serve.openai.protocol import (ChatCompletionRequest, ChatCompletio
                                             CompletionResponseStreamChoice, CompletionStreamResponse, DeltaMessage,
                                             EmbeddingsRequest, EncodeRequest, EncodeResponse, ErrorResponse,
                                             GenerateRequest, GenerateResponse, LogProbs, ModelCard, ModelList,
-                                            ModelPermission, TopLogprob, UsageInfo)
+                                            ModelPermission, TopLogprob, UpdateParamsRequest, UsageInfo)
 from lmdeploy.serve.openai.reasoning_parser.reasoning_parser import ReasoningParser, ReasoningParserManager
 from lmdeploy.serve.openai.tool_parser.tool_parser import ToolParser, ToolParserManager
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
@@ -51,6 +56,7 @@ class VariableInterface:
     reasoning_parser: Optional[ReasoningParser] = None
     # following is for tool parsers
     tool_parser: Optional[ToolParser] = None
+    allow_terminate_by_client: bool = False
 
 
 router = APIRouter()
@@ -231,6 +237,19 @@ async def health() -> Response:
     return Response(status_code=200)
 
 
+@router.get('/terminate')
+async def terminate():
+    """terminate server."""
+    import signal
+
+    if not VariableInterface.allow_terminate_by_client:
+        return create_error_response(
+            HTTPStatus.BAD_REQUEST,
+            'The server can not be terminated. Please add --allow-terminate-by-client when start the server.')
+    os.kill(os.getpid(), signal.SIGTERM)
+    return Response(status_code=200)
+
+
 # modified from https://github.com/vllm-project/vllm/blob/v0.5.4/vllm/entrypoints/openai/logits_processors.py#L51  # noqa
 def logit_bias_logits_processor(logit_bias: Union[Dict[int, float], Dict[str, float]], tokenizer) -> LogitsProcessor:
     try:
@@ -263,7 +282,7 @@ def logit_bias_logits_processor(logit_bias: Union[Dict[int, float], Dict[str, fl
 
 
 @router.post('/v1/chat/completions', dependencies=[Depends(check_api_key)])
-async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Request = None):
+async def chat_completions_v1(raw_request: Request = None):
     """Completion API similar to OpenAI's API.
 
     Refer to  `https://platform.openai.com/docs/api-reference/chat/create`
@@ -323,6 +342,14 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
+    json_request = await raw_request.json()
+    request = ChatCompletionRequest.model_validate(json_request)
+    migration_request = json_request.pop('migration_request', None)
+    with_cache = json_request.pop('with_cache', False)
+    preserve_cache = json_request.pop('preserve_cache', False)
+    if migration_request:
+        migration_request = MigrationRequest.model_validate(migration_request)
+
     if request.session_id == -1:
         VariableInterface.session_id += 1
         request.session_id = VariableInterface.session_id
@@ -376,7 +403,10 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                                   min_new_tokens=request.min_new_tokens,
                                   min_p=request.min_p,
                                   random_seed=random_seed,
-                                  spaces_between_special_tokens=request.spaces_between_special_tokens)
+                                  spaces_between_special_tokens=request.spaces_between_special_tokens,
+                                  migration_request=migration_request,
+                                  with_cache=with_cache,
+                                  preserve_cache=preserve_cache)
 
     tools = None
     if request.tools and request.tool_choice != 'none':
@@ -399,6 +429,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         sequence_end=True,
         do_preprocess=not isinstance(request.messages, str),  # text completion for string input
         adapter_name=adapter_name,
+        enable_thinking=request.enable_thinking,
     )
 
     def create_stream_response_json(index: int,
@@ -462,7 +493,9 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                         streaming_tools = True
                 previous_text = current_text
                 previous_token_ids = current_token_ids
-            elif VariableInterface.reasoning_parser is not None:
+            elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
+                logger.error('Please lanuch the api_server with --tool-call-parser if you want to use tool.')
+            if VariableInterface.reasoning_parser is not None:
                 current_text = current_text + res.response
                 delta_token_ids = res.token_ids if res.token_ids is not None else []
                 current_token_ids = current_token_ids + delta_token_ids
@@ -478,13 +511,14 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                     delta_message.content = reasoning_delta.content
                 previous_text = current_text
                 previous_token_ids = current_token_ids
-            elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
-                logger.error('Please lanuch the api_server with --tool-call-parser if you want to use tool.')
             response_json = create_stream_response_json(index=0,
                                                         delta_message=delta_message,
                                                         finish_reason=res.finish_reason,
                                                         logprobs=logprobs,
                                                         usage=usage)
+            if res.cache_block_ids is not None:
+                response_json['cache_block_ids'] = res.cache_block_ids
+                response_json['remote_token_ids'] = res.token_ids
             yield f'data: {response_json}\n\n'
         yield 'data: [DONE]\n\n'
 
@@ -497,6 +531,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     final_token_ids = []
     final_res = None
     text = ''
+    cache_block_ids = []
+    remote_token_ids = []
     async for res in result_generator:
         if await raw_request.is_disconnected():
             # Abort the request if the client disconnects.
@@ -508,6 +544,8 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             final_token_ids.extend(res.token_ids)
         if res.logprobs:
             final_logprobs.extend(res.logprobs)
+        cache_block_ids.append(res.cache_block_ids)
+        remote_token_ids.append(res.token_ids)
 
     tool_calls = None
     reasoning_content = None
@@ -522,11 +560,11 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         except Exception as e:
             logger.error(f'Failed to parse {text}. Exception: {e}.')
             return create_error_response(HTTPStatus.BAD_REQUEST, 'Failed to parse fc related info to json format!')
-    # assume reasoning uncompatible with tool call
-    elif VariableInterface.reasoning_parser is not None:
-        reasoning_content, text = VariableInterface.reasoning_parser.extract_reasoning_content(text, request)
     elif request.tool_choice != 'none' and request.tools is not None and VariableInterface.tool_parser is None:
         logger.error('Please lanuch the api_server with --tool-call-parser if you want to use tool.')
+
+    if VariableInterface.reasoning_parser is not None:
+        reasoning_content, text = VariableInterface.reasoning_parser.extract_reasoning_content(text, request)
 
     logprobs = None
     if gen_logprobs and len(final_logprobs):
@@ -543,6 +581,10 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
     )
     choices.append(choice_data)
 
+    if with_cache:
+        cache_block_ids = cache_block_ids[0]
+        remote_token_ids = [remote_token_ids[0][-1]]
+
     total_tokens = sum([final_res.history_token_len, final_res.input_token_len, final_res.generate_token_len])
     usage = UsageInfo(
         prompt_tokens=final_res.input_token_len,
@@ -555,13 +597,17 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
         model=model_name,
         choices=choices,
         usage=usage,
-    )
+    ).model_dump()
+
+    if with_cache:
+        response['cache_block_ids'] = cache_block_ids
+        response['remote_token_ids'] = remote_token_ids
 
     return response
 
 
 @router.post('/v1/completions', dependencies=[Depends(check_api_key)])
-async def completions_v1(request: CompletionRequest, raw_request: Request = None):
+async def completions_v1(raw_request: Request = None):
     """Completion API similar to OpenAI's API.
 
     Go to `https://platform.openai.com/docs/api-reference/completions/create`
@@ -596,12 +642,25 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         this to False. This is setup to True in slow tokenizers.
     - top_k (int): The number of the highest probability vocabulary
         tokens to keep for top-k-filtering
+    - min_p (float): Minimum token probability, which will be scaled by the
+        probability of the most likely token. It must be a value between
+        0 and 1. Typical values are in the 0.01-0.2 range, comparably
+        selective as setting `top_p` in the 0.99-0.8 range (use the
+        opposite of normal `top_p` values)
 
     Currently we do not support the following features:
     - logprobs (not supported yet)
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
+    json_request = await raw_request.json()
+    request = CompletionRequest.model_validate(json_request)
+    migration_request = json_request.pop('migration_request', None)
+    with_cache = json_request.pop('with_cache', False)
+    preserve_cache = json_request.pop('preserve_cache', False)
+    if migration_request:
+        migration_request = MigrationRequest.model_validate(migration_request)
+
     if request.session_id == -1:
         VariableInterface.session_id += 1
         request.session_id = VariableInterface.session_id
@@ -633,8 +692,12 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
                                   ignore_eos=request.ignore_eos,
                                   stop_words=request.stop,
                                   skip_special_tokens=request.skip_special_tokens,
+                                  min_p=request.min_p,
                                   random_seed=random_seed,
-                                  spaces_between_special_tokens=request.spaces_between_special_tokens)
+                                  spaces_between_special_tokens=request.spaces_between_special_tokens,
+                                  migration_request=migration_request,
+                                  with_cache=with_cache,
+                                  preserve_cache=preserve_cache)
     generators = []
     for i in range(len(request.prompt)):
         result_generator = VariableInterface.async_engine.generate(
@@ -664,8 +727,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
             choices=[choice_data],
             usage=usage,
         )
-        response_json = response.model_dump_json()
-
+        response_json = response.model_dump()
         return response_json
 
     async def completion_stream_generator() -> AsyncGenerator[str, None]:
@@ -696,7 +758,10 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
                                                             finish_reason=res.finish_reason,
                                                             logprobs=logprobs,
                                                             usage=usage)
-                yield f'data: {response_json}\n\n'
+                if res.cache_block_ids is not None:
+                    response_json['cache_block_ids'] = res.cache_block_ids
+                    response_json['remote_token_ids'] = res.token_ids
+                yield f'data: {json.dumps(response_json)}\n\n'
         yield 'data: [DONE]\n\n'
 
     # Streaming response
@@ -706,8 +771,11 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
     # Non-streaming response
     usage = UsageInfo()
     choices = [None] * len(generators)
+    cache_block_ids = []
+    remote_token_ids = []
 
     async def _inner_call(i, generator):
+        nonlocal cache_block_ids, remote_token_ids
         final_logprobs = []
         final_token_ids = []
         final_res = None
@@ -719,6 +787,8 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
                 return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
             final_res = res
             text += res.response
+            cache_block_ids.append(res.cache_block_ids)
+            remote_token_ids.append(res.token_ids)
             if res.token_ids:
                 final_token_ids.extend(res.token_ids)
             if res.logprobs:
@@ -742,6 +812,10 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         )
         choices[i] = choice_data
 
+        if with_cache:
+            cache_block_ids = cache_block_ids[0]
+            remote_token_ids = [remote_token_ids[0][-1]]
+
         total_tokens = sum([final_res.history_token_len, final_res.input_token_len, final_res.generate_token_len])
         usage.prompt_tokens += final_res.input_token_len
         usage.completion_tokens += final_res.generate_token_len
@@ -755,7 +829,11 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
         model=model_name,
         choices=choices,
         usage=usage,
-    )
+    ).model_dump()
+
+    if with_cache:
+        response['cache_block_ids'] = cache_block_ids
+        response['remote_token_ids'] = remote_token_ids
 
     return response
 
@@ -793,6 +871,55 @@ async def encode(request: EncodeRequest, raw_request: Request = None):
             encoded.append(ids)
             length.append(len(ids))
         return EncodeResponse(input_ids=encoded, length=length)
+
+
+@router.post('/update_weights', dependencies=[Depends(check_api_key)])
+def update_params(request: UpdateParamsRequest, raw_request: Request = None):
+    """Update weights for the model."""
+    if VariableInterface.async_engine.backend != 'pytorch':
+        return create_error_response(HTTPStatus.BAD_REQUEST, 'Unsupported by turbomind.')
+    VariableInterface.async_engine.engine.update_params(request)
+    return JSONResponse(content=None)
+
+
+""" PD Disaggregation API Begin """
+
+
+@router.get('/distserve/engine_info')
+async def engine_info():
+    engine = VariableInterface.async_engine.engine
+
+    response = DistServeEngineConfig(tp_size=engine.engine_config.tp,
+                                     dp_size=engine.engine_config.dp,
+                                     pp_size=None,
+                                     ep_size=engine.engine_config.ep,
+                                     dp_rank=engine.engine_config.dp_rank,
+                                     block_size=engine.engine_config.block_size,
+                                     num_cpu_blocks=engine.scheduler.block_manager.num_cpu_blocks,
+                                     num_gpu_blocks=engine.scheduler.block_manager.num_gpu_blocks)
+
+    return response.model_dump_json()
+
+
+@router.post('/distserve/p2p_initialize')
+async def p2p_initialize(init_request: DistServeInitRequest):
+    return VariableInterface.async_engine.p2p_initialize(init_request)
+
+
+@router.post('/distserve/p2p_connect')
+async def p2p_connect(conn_request: List[DistServeConnectionRequest]):
+    return VariableInterface.async_engine.p2p_connect(conn_request)
+
+
+@router.post('/distserve/free_cache')
+async def free_cache(raw_request: Request) -> JSONResponse:
+    config = await raw_request.json()
+    session_id = int(config['session_id'])
+    VariableInterface.async_engine.free_cache(session_id)
+    return {'status': 'SUCCESS'}
+
+
+""" PD Disaggregation API End """
 
 
 @router.post('/v1/chat/interactive', dependencies=[Depends(check_api_key)])
@@ -950,20 +1077,35 @@ def handle_torchrun():
 
 @router.on_event('startup')
 async def startup_event():
+    async_engine = VariableInterface.async_engine
+    async_engine.start_loop(use_async_api=True)
+
     if VariableInterface.proxy_url is None:
         return
     try:
         import requests
+        engine_config = VariableInterface.async_engine.engine.engine_config
+        engine_role = engine_config.role.value if hasattr(engine_config, 'role') else 1
         url = f'{VariableInterface.proxy_url}/nodes/add'
-        data = {'url': VariableInterface.api_server_url, 'status': {'models': get_model_list()}}
+        data = {'url': VariableInterface.api_server_url, 'status': {'models': get_model_list(), 'role': engine_role}}
         headers = {'accept': 'application/json', 'Content-Type': 'application/json'}
         response = requests.post(url, headers=headers, json=data)
 
         if response.status_code != 200:
             raise HTTPException(status_code=400, detail='Service registration failed')
-        print(response.text)
     except Exception as e:
-        print(f'Service registration failed: {e}')
+        logger.error(f'Service registration failed: {e}')
+
+
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """handler for RequestValidationError."""
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content=jsonable_encoder({
+            'detail': exc.errors(),
+            'body': exc.body
+        }),
+    )
 
 
 class ConcurrencyLimitMiddleware(BaseHTTPMiddleware):
@@ -1020,6 +1162,7 @@ def serve(model_path: str,
           max_concurrent_requests: Optional[int] = None,
           reasoning_parser: Optional[str] = None,
           tool_call_parser: Optional[str] = None,
+          allow_terminate_by_client: bool = False,
           **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -1071,6 +1214,7 @@ def serve(model_path: str,
             clients concurrently during that time. Default to None.
         reasoning_parser (str): The reasoning parser name.
         tool_call_parser (str): The tool call parser name.
+        allow_terminate_by_client (bool): Allow request from client to terminate server.
     """
     if os.getenv('TM_LOG_LEVEL') is None:
         os.environ['TM_LOG_LEVEL'] = log_level
@@ -1086,6 +1230,7 @@ def serve(model_path: str,
         app = FastAPI(docs_url='/')
 
     app.include_router(router)
+    app.add_exception_handler(RequestValidationError, validation_exception_handler)
 
     if allow_origins:
         app.add_middleware(
@@ -1100,6 +1245,7 @@ def serve(model_path: str,
     if max_concurrent_requests is not None:
         app.add_middleware(ConcurrencyLimitMiddleware, max_concurrent_requests=max_concurrent_requests)
 
+    VariableInterface.allow_terminate_by_client = allow_terminate_by_client
     if api_keys is not None:
         if isinstance(api_keys, str):
             api_keys = api_keys.split(',')

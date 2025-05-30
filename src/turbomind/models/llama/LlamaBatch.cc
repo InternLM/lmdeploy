@@ -718,6 +718,8 @@ void LlamaBatch::AllocateBuffer(ssize_t batch_size, ssize_t session_len, int cac
 
     token_ids_buf_ = {ssize_t(session_len * 2 * batchxbeam), kDEVICE};
 
+    sampling_logits_ = {{(ssize_t)max_batch_size_, (ssize_t)model_->vocab_size_padded_}, kDEVICE};
+
     finished_buf_  = {(int)batchxbeam, kDEVICE};
     seq_limit_len_ = {batch_size, kDEVICE};
 
@@ -1139,7 +1141,6 @@ void LlamaBatch::Finish(GenerationState& g, std::vector<Signal>& signals)
     // ! Only rank-0 writes to output
     if (tp_rank_ == 0 && output_logprobs) {
         NvtxScope scope("logprobs");
-        // output logprobs, should be set before sequence_length
         float*    sampled_logprobs_ptr = h_sampled_logprobs_.data();
         uint32_t* sampled_indexes_ptr  = h_sampled_indexes_.data();
         uint32_t* sampled_nums_ptr     = h_sampled_nums_.data();
@@ -1569,19 +1570,22 @@ bool LlamaBatch::Forward(GenerationState& g)
             return false;
         }();
 
-        // stop-words & bad-words require the matched tokens to be contiguous, so item size > 1 is
-        // not supported.
+        auto sampling_logits = sampling_logits_.slice(0, bsz);
+        invokeCastFloat2D(logits, sampling_logits, stream_);
+        sync_check_cuda_error();
+
+        // stop-words & bad-words require the matched tokens to be contiguous, so item size > 1 is not supported
         model_->dynamicDecode(token_ids_buf_,
                               finished_buf_,
                               sequence_lengths_,
                               state_->curand_state,
-                              logits,  // <- batch size indicator
+                              sampling_logits,  // <- batch size indicator
                               seq_limit_len_,
                               init_context_length_,
                               state_->h_context_length,
                               state_->h_prompt_length,
-                              output_logprobs ? sampled_indexes_ : Buffer{},  // <- indicator
-                              sampled_logprobs_,
+                              output_logprobs ? sampled_logprobs_ : Buffer{},  // <- indicator
+                              sampled_indexes_,
                               sampled_nums_,
                               g.step,
                               g.max_init_ctx_len);

@@ -85,11 +85,16 @@ def build_rotary_embedding(dim: int,
                            yarn_params: YarnParameters = None,
                            longrope_params: LongRoPEScalingParameters = None,
                            llama3_params: Llama3Parameters = None,
-                           emb_type: RopeType = RopeType.Default) -> nn.Module:
+                           emb_type: RopeType = RopeType.Default,
+                           partial_rotary_factor: float = None) -> nn.Module:
     """build rotary embedding op."""
     backend = get_backend()
 
     builder = backend.get_layer_impl_builder(OpType.RotaryEmbedding)
+
+    # update rope_dim
+    if partial_rotary_factor is not None:
+        dim = int(dim * partial_rotary_factor)
     return builder.build(dim,
                          max_position_embeddings,
                          base,
