@@ -395,10 +395,9 @@ class AsyncEngine(LogitsMixin):
                                 **kwargs)
 
     async def do_log_stats(self, ) -> None:
-        if self.backend == 'pytorch':
-            for each_dp_engine_loggers in self.stat_loggers:
-                for stat_logger in each_dp_engine_loggers:
-                    stat_logger.log()
+        for each_dp_engine_loggers in self.stat_loggers:
+            for stat_logger in each_dp_engine_loggers:
+                stat_logger.log()
 
     async def stop_session(self, session_id: int):
         """Stop a session by a session_id."""
