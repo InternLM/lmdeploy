@@ -3,7 +3,6 @@ import asyncio
 import copy
 import logging
 import os
-import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Tuple
 
@@ -802,8 +801,8 @@ class Engine:
                 msg.update_token_ids(update_token, model_meta=model_meta)
                 msg.status = MessageStatus.STOPPED
 
-    def _make_infer_outputs(self, next_token_ids: torch.LongTensor, running: SeqList, logits: torch.Tensor,
-                            stopped: torch.Tensor, model_metas: List[Dict[str, Any]], engine_core_timestamp: float):
+    def _make_infer_outputs(self, engine_core_timestamp: float, next_token_ids: torch.LongTensor, running: SeqList,
+                            logits: torch.Tensor, stopped: torch.Tensor, model_metas: List[Dict[str, Any]]):
         """make infer output."""
 
         seq_length = [seq.num_token_ids for seq in running]
@@ -1159,12 +1158,9 @@ class Engine:
                     forward_inputs, next_running = await inputs_maker.prefetch_next_inputs()
 
                 # send output
-                engine_core_timestamp = time.perf_counter()
                 out = await self.executor.get_output_async()
                 if len(out) > 0:
-                    step_outputs = self._make_infer_outputs(**out,
-                                                            running=running,
-                                                            engine_core_timestamp=engine_core_timestamp)
+                    step_outputs = self._make_infer_outputs(**out, running=running)
                     resp_que.put_nowait(step_outputs)
 
                 # unlock forward event.

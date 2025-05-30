@@ -2,6 +2,7 @@
 import asyncio
 import base64
 import functools
+import time
 from contextlib import asynccontextmanager, contextmanager
 from multiprocessing.reduction import ForkingPickler
 from typing import Any, Dict
@@ -749,6 +750,8 @@ class BaseModelAgent:
         out = await self._out_que.get()
         if out is None:
             return dict()
+        else:
+            out['engine_core_timestamp'] = time.perf_counter()  # record each new token generated ts
 
         event = out.pop('event')
         while not event.query():

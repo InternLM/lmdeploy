@@ -151,17 +151,12 @@ class MessageStatus(enum.Enum):
 
 class RequestState:
 
-    def __init__(self,
-                 arrival_time: float,
-                 enable_metrics: bool,
-                 prompt_len: int,
-                 is_prefilling: Optional[bool] = True):
+    def __init__(self, arrival_time: float, prompt_len: int, is_prefilling: Optional[bool] = True):
         self.arrival_time = arrival_time
-        self.enable_metrics = enable_metrics
         self.prompt_len = prompt_len
         self.is_prefilling = is_prefilling
 
-        self.stats = RequestStateStats(arrival_time=arrival_time) if enable_metrics else None
+        self.stats = RequestStateStats(arrival_time=arrival_time)
 
 
 _SEQ_COUNT = 0
@@ -230,14 +225,9 @@ class SequenceManager:
 class SchedulerSession:
     """Scheduler session."""
 
-    def __init__(self,
-                 session_id: int,
-                 block_size: int,
-                 enable_metrics: bool = False,
-                 seq_manager: SequenceManager = None) -> None:
+    def __init__(self, session_id: int, block_size: int, seq_manager: SequenceManager = None) -> None:
         self.session_id = session_id
         self.block_size = block_size
-        self.enable_metrics = enable_metrics
         self.status: MessageStatus = MessageStatus.RUNNING
         self.sequences: SeqMap = dict()
         self.seq_manager = seq_manager
@@ -285,7 +275,6 @@ class SchedulerSession:
         # initialize req_state
         req_state = RequestState(
             arrival_time=arrive_time,
-            enable_metrics=self.enable_metrics,
             prompt_len=len(token_ids),
             is_prefilling=True,  # new sequence starts as prefilling
         )

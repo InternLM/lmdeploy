@@ -130,10 +130,7 @@ class Scheduler:
             session_id (int): New session id.
         """
         assert session_id not in self.sessions
-        session = SchedulerSession(session_id,
-                                   self.cache_config.block_size,
-                                   self.scheduler_config.enable_metrics,
-                                   seq_manager=self.seq_manager)
+        session = SchedulerSession(session_id, self.cache_config.block_size, seq_manager=self.seq_manager)
         self.sessions[session_id] = session
         return session
 
