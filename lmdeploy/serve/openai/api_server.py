@@ -4,12 +4,12 @@ import asyncio
 import copy
 import json
 import os
+import re
 import time
 from functools import partial
 from http import HTTPStatus
 from typing import AsyncGenerator, Dict, List, Literal, Optional, Union
 
-import prometheus_client
 import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
 from fastapi.encoders import jsonable_encoder
@@ -18,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.security.http import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.routing import Mount
 
 from lmdeploy.archs import get_task
 from lmdeploy.messages import GenerationConfig, LogitsProcessor, PytorchEngineConfig, TurbomindEngineConfig
@@ -1143,6 +1144,21 @@ def set_parsers(reasoning_parser: Optional[str] = None, tool_parser: Optional[st
             )
 
 
+def mount_metrics(app: FastAPI, enable_metrics: bool):
+    if not enable_metrics:
+        return
+
+    from prometheus_client import REGISTRY, make_asgi_app
+    registry = REGISTRY
+
+    # Add prometheus asgi middleware to route /metrics requests
+    metrics_route = Mount('/metrics', make_asgi_app(registry=registry))
+
+    # Workaround for 307 Redirect for /metrics
+    metrics_route.path_regex = re.compile('^/metrics(?P<path>.*)$')
+    app.routes.append(metrics_route)
+
+
 def serve(model_path: str,
           model_name: Optional[str] = None,
           backend: Literal['turbomind', 'pytorch'] = 'turbomind',
@@ -1276,6 +1292,7 @@ def serve(model_path: str,
 
     app.include_router(router)
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
+    mount_metrics(app, backend_config.enable_metrics)
 
     if allow_origins:
         app.add_middleware(
@@ -1289,11 +1306,6 @@ def serve(model_path: str,
     # set the maximum number of concurrent requests
     if max_concurrent_requests is not None:
         app.add_middleware(ConcurrencyLimitMiddleware, max_concurrent_requests=max_concurrent_requests)
-
-    # add prometheus asgi middleware to route '/metrics' requests
-    if backend == 'pytorch' and backend_config.enable_metrics:
-        metrics_app = prometheus_client.make_asgi_app()
-        app.mount('/metrics', metrics_app)
 
     if proxy_url is not None:
         VariableInterface.proxy_url = proxy_url
