@@ -1144,8 +1144,8 @@ def set_parsers(reasoning_parser: Optional[str] = None, tool_parser: Optional[st
             )
 
 
-def mount_metrics(app: FastAPI, enable_metrics: bool):
-    if not enable_metrics:
+def mount_metrics(app: FastAPI, backend_config: Union[PytorchEngineConfig, TurbomindEngineConfig]):
+    if not getattr(backend_config, 'enable_metrics', False):
         return
 
     from prometheus_client import REGISTRY, make_asgi_app
@@ -1267,7 +1267,7 @@ def serve(model_path: str,
         async_engine = VariableInterface.async_engine
         task = None
         try:
-            if backend == 'pytorch' and backend_config.enable_metrics:
+            if getattr(backend_config, 'enable_metrics', False):
                 log_interval = 5.
 
                 async def _force_log():
@@ -1292,7 +1292,7 @@ def serve(model_path: str,
 
     app.include_router(router)
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
-    mount_metrics(app, backend_config.enable_metrics)
+    mount_metrics(app, backend_config)
 
     if allow_origins:
         app.add_middleware(
