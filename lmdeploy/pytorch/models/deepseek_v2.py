@@ -581,7 +581,7 @@ class MoEGate(nn.Module):
                  config: Any,
                  dtype: torch.dtype = None,
                  device: torch.device = None,
-                 info: eplb.EPLBDispatchInfo = None):
+                 info: Any = None):
         super().__init__()
         self.config = config
         self.top_k = config.num_experts_per_tok
