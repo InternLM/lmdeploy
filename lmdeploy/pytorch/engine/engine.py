@@ -212,6 +212,7 @@ class InputsMakerAsync(InputsMakerBase):
         self.forward_inputs = None
 
         self.dp = self.engine.dist_config.dp
+        self.role = self.engine.cache_config.role
 
         self.next_is_prefill = True
         if self.dp == 1:
@@ -220,6 +221,9 @@ class InputsMakerAsync(InputsMakerBase):
             self.do_prefill = self.do_prefill_dp
 
     def do_prefill_dp(self):
+        if self.role == EngineRole.Prefill:
+            return True
+
         scheduler = self.scheduler
 
         if self.next_is_prefill:

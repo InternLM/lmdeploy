@@ -922,7 +922,7 @@ class DPForwardInputsMaker:
 
         # maker metas
         self._next_inputs = None
-        self._is_decoding = True
+        self._is_decoding = False
         self._ready_event = torch.cuda.Event()
 
     def _make_dummy_forward_inputs(self):
