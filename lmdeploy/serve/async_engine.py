@@ -351,9 +351,7 @@ class AsyncEngine(LogitsMixin):
         self.hf_tm_cfg = getattr(self.engine.model_config, 'hf_config', None)
 
     def _build_stat_loggers(self):
-        if self.backend == 'turbomind':
-            return
-        if not self.backend_config.enable_metrics:
+        if not getattr(self.backend_config, 'enable_metrics', False):
             return
 
         # independent set for each DP rank, since monototic time differs for each process
