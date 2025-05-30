@@ -45,15 +45,15 @@ class LlamaReader(BaseReader):
 
     def tok_embeddings(self):
         """Get embeddings."""
-        return self.params.get(self.tok_embeddings_key, None)
+        return self.transform(self.params.get(self.tok_embeddings_key, None), 'weight')
 
     def norm_weight(self):
         """Get norm."""
-        return self.params.get(self.norm_weight_key, None)
+        return self.transform(self.params.get(self.norm_weight_key, None), 'weight')
 
     def output_weight(self):
         """Get output."""
-        return self.params.get(self.output_weight_key, None)
+        return self.transform(self.params.get(self.output_weight_key, None), 'weight')
 
     def _transform(self, x: torch.Tensor, kind: str):
         return self.processor(x, kind)
@@ -74,7 +74,7 @@ class LlamaReader(BaseReader):
 
     def attn_norm(self, i: int):
         """Get attn norm for layer i."""
-        return self.params[f'{self.attn_layer_prefix}.{i}.input_layernorm.weight']
+        return self.transform(self.params[f'{self.attn_layer_prefix}.{i}.input_layernorm.weight'], 'weight')
 
     def _ffn(self, i: int, kind: str):
         """Get ffn kind for layer i."""
@@ -94,7 +94,7 @@ class LlamaReader(BaseReader):
 
     def ffn_norm(self, i: int):
         """Get ffn norm for layer i."""
-        return self.params[f'{self.attn_layer_prefix}.{i}.post_attention_layernorm.weight']
+        return self.transform(self.params[f'{self.attn_layer_prefix}.{i}.post_attention_layernorm.weight'], 'weight')
 
 
 @INPUT_MODELS.register_module(name='llama')

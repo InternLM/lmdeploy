@@ -212,6 +212,7 @@ struct Cluster {
 
 }  // namespace arch
 
+template<Order raster_order, bool is_grouped_gemm_>
 struct GemmUniversalSm90_v3 {
 
     static constexpr bool kDebug = false;
@@ -267,9 +268,9 @@ struct GemmUniversalSm90_v3 {
 
     using Cluster = arch::Cluster<kMulticastB, kMulticastA, kRowMajor>;
 
-    static constexpr auto is_grouped_gemm = true;
+    static constexpr auto is_grouped_gemm = is_grouped_gemm_;
 
-    using Scheduler = TileScheduler<kColMajor, Cluster, true, true, TILE_M, TILE_N, is_grouped_gemm>;
+    using Scheduler = TileScheduler<raster_order, Cluster, true, true, TILE_M, TILE_N, is_grouped_gemm>;
 
     static constexpr int kMulticastU = is_grouped_gemm ? 1 : kMulticastA;
 
@@ -408,7 +409,8 @@ struct GemmUniversalSm90_v3 {
 
                         Array<int, 3> dims;
                         dims[0] = param_A.offsets[g + 1] - param_A.offsets[g];
-                        dims[1] = param_B.offsets[g + 1] - param_B.offsets[g];
+                        // dims[1] = param_B.offsets[g + 1] - param_B.offsets[g];
+                        dims[1] = sched.gemm_shape().y;
                         dims[2] = end_u - beg_u;
 
                         auto descs = update_tma_descs(tensormap_buf, storage.tma_desc_buf, global_addrs, dims);

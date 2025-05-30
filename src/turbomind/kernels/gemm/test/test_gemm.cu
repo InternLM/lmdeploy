@@ -16,16 +16,21 @@ int main()
     auto test = gemm::get_test(gemm::TestPreset::kANY_e4m3_e4m3_bf16_TNN);
 
     // test->Initialize(384, 128, 1024, core::Context::stream().handle());
-    // test->Initialize(8192 * 4, 8192 * 4, 8192 * 4, 1, 1, core::Context::stream().handle());
-    // test->Initialize(8192 * 4, 1, 8192 * 4, core::Context::stream().handle());
+    // test->Initialize(8192 * 4, 8192 * 4, 8192 * 4, 0, 1, core::Context::stream().handle());
+    // test->Initialize(8192 * 4, 1, 8192 * 4, core::Context::stream().handle());p
     // test->Initialize(1024, 1024, 1024, core::Context::stream().handle());
     // test->Initialize(8192 * 2, 8192 * 2, 2048, 0, 0, core::Context::stream().handle());
-    // test->Initialize(12288 * 2, 3072, 4096, core::Context::stream().handle());
-    // test->Initialize(4096, 8192, 12288, core::Context::stream().handle());
-    // test->Initialize(6144, 8192, 4096, core::Context::stream().handle());
-    // test->Initialize(4096, 8192, 4096, core::Context::stream().handle());
+    // test->Initialize(12288 * 2, 100, 4096, 0, 0, core::Context::stream().handle());
+    // test->Initialize(4096, 100, 12288, 0, 0, core::Context::stream().handle());
+    // test->Initialize(6144, 100, 4096, 0, 0, core::Context::stream().handle());
+    // test->Initialize(4096, 100, 4096, 0, 0, core::Context::stream().handle());
 
-    test->Initialize(1536, 32768, 8192, 128, 8, core::Context::stream().handle());
+    // test->Initialize(1536, 32768, 8192, 128, 8, core::Context::stream().handle());
+
+    const int tp = 1;
+    test->Initialize(768 / tp, 100, 2048, 128, 8, core::Context::stream().handle());
+    // test->Initialize(1536 / tp, 4096, 4096, 128, 8, core::Context::stream().handle());
+    // test->Initialize(4096, 16384, 1536 / tp, 128, 8, core::Context::stream().handle());
 
     // test->Initialize(1536, 77, 4096, 8, 2, core::Context::stream().handle());
     // test->Initialize(1536, 256, 4096, 8, 2, core::Context::stream().handle());

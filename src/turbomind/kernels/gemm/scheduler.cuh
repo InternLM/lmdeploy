@@ -59,7 +59,7 @@ public:
     {
         gemm_shape_ = gemm_shape;
 
-        printf("gemm shape: %d %d %d\n", gemm_shape.x, gemm_shape.y, gemm_shape.z);
+        // printf("gemm shape: %d %d %d\n", gemm_shape.x, gemm_shape.y, gemm_shape.z);
 
         log_tile_ = log_tile;
         k_iters_  = cdiv(gemm_shape_.z, tile_shape.z);
@@ -70,7 +70,7 @@ public:
         cluster_tiles_.x = cdiv(gemm_shape.x, cluster_tile_.x);  // useless
         cluster_tiles_.y = cdiv(gemm_shape.y, cluster_tile_.y);
 
-        printf("cluster tiles: %d %d\n", cluster_tiles_.x, cluster_tiles_.y);
+        // printf("cluster tiles: %d %d\n", cluster_tiles_.x, cluster_tiles_.y);
 
         if constexpr (is_grouped_gemm) {
             {
@@ -79,7 +79,7 @@ public:
             }
 
             // col {8, 1}, row {1, 8}
-            printf("swizzle unit: %d %d\n", swizzle_unit_.x, swizzle_unit_.y);
+            // printf("swizzle unit: %d %d\n", swizzle_unit_.x, swizzle_unit_.y);
 
             swizzle_tile_x_ = cluster_tile_.x * swizzle_unit_.x;
 
@@ -89,15 +89,15 @@ public:
             padded_cluster_tiles_.x = (num + gemm_shape.x / (cluster_tile_.x * swizzle_unit_.x)) * swizzle_unit_.x;
             padded_cluster_tiles_.y = cdiv(gemm_shape.y, cluster_tile_.y * swizzle_unit_.y) * swizzle_unit_.y;
 
-            printf("padded   cluster tiles: %d %d\n", padded_cluster_tiles_.x, padded_cluster_tiles_.y);
+            // printf("padded   cluster tiles: %d %d\n", padded_cluster_tiles_.x, padded_cluster_tiles_.y);
 
             swizzled_cluster_tiles_ = get_swizzled_shape(padded_cluster_tiles_, log_tile);
 
-            printf("swizzled cluster tiles: %d %d\n", swizzled_cluster_tiles_.x, swizzled_cluster_tiles_.y);
+            // printf("swizzled cluster tiles: %d %d\n", swizzled_cluster_tiles_.x, swizzled_cluster_tiles_.y);
 
             clusters_ = padded_cluster_tiles_.x * padded_cluster_tiles_.y;
 
-            printf("clusters = %d\n", clusters_);
+            // printf("clusters = %d\n", clusters_);
             // M is runtime value
         }
         else {

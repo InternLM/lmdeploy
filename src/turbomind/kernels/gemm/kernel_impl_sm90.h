@@ -73,6 +73,7 @@ public:
     static constexpr int TILE_N = Gemm::TILE_N;
     static constexpr int TILE_K = Gemm::TILE_K;
 
+    static constexpr auto is_grouped_gemm = Gemm::is_grouped_gemm;
     // using Impl = typename Gemm::Impl;
 
     // using OpA = typename Gemm::OperandA;
@@ -93,9 +94,9 @@ public:
         // using IterA = typename OpA::GmemIter;
         // using IterB = typename OpB::GmemIter;
 
-        desc_.striding_a = {Striding::kBlocked};  // IterA::kMode;
-        desc_.striding_b = {Striding::kBlocked};  // IterB::kMode;
-        desc_.striding_c = {Striding::kBlocked};  // Gemm::Epilogue::kMode;
+        desc_.striding_a = {is_grouped_gemm ? Striding::kBlocked : Striding::kFlat};  // IterA::kMode;
+        desc_.striding_b = {is_grouped_gemm ? Striding::kBlocked : Striding::kFlat};  // IterB::kMode;
+        desc_.striding_c = {is_grouped_gemm ? Striding::kBlocked : Striding::kFlat};  // Gemm::Epilogue::kMode;
 
         desc_.pack_a = {};  // OpA::kPack;
         desc_.pack_b = {};  // OpB::kPack;
@@ -183,7 +184,7 @@ public:
         [[maybe_unused]] const int n = Ddesc.cols;
         [[maybe_unused]] const int k = Adesc.cols;
 
-        std::cout << "M: " << m << ", N: " << n << ", K: " << k << "\n";
+        // std::cout << "M: " << m << ", N: " << n << ", K: " << k << "\n";
 
         auto transpose = [](MatrixLayout x) {
             std::swap(x.rows, x.cols);
@@ -216,29 +217,29 @@ public:
         constexpr int kTileM = Gemm::TILE_M;
         constexpr int kTileN = Gemm::TILE_N;
 
-        std::cout << "A: " << Adesc << "\n";
+        // std::cout << "A: " << Adesc << "\n";
         auto tm_a = make_2d_tma_desc((void*)A, Adesc, {kTileM / kMulticastA, TILE_K}, CU_TENSOR_MAP_SWIZZLE_128B);
 
-        std::cout << "B: " << Bdesc << "\n";
+        // std::cout << "B: " << Bdesc << "\n";
         auto tm_b = make_2d_tma_desc(Gemm::is_grouped_gemm ? nullptr : (void*)B,
                                      Bdesc,
                                      {kTileN / kMulticastB, TILE_K},
                                      CU_TENSOR_MAP_SWIZZLE_128B);
 
-        std::cout << "C: " << Cdesc << "\n";
+        // std::cout << "C: " << Cdesc << "\n";
         using LayoutC = typename Gemm::LayoutC;
         auto tm_c     = make_2d_tma_desc((void*)C, Cdesc, {LayoutC::S0, LayoutC::C0}, get_tma_swizzle(Gemm::kSwizzleC));
 
         CUtensorMap tm_u{};
         if (U) {
-            std::cout << "U: " << Udesc << "\n";
+            // std::cout << "U: " << Udesc << "\n";
             tm_u = make_2d_tma_desc((void*)U, Udesc, {Gemm::kBoxU / kMulticastU, 1}, CU_TENSOR_MAP_SWIZZLE_NONE);
         }
 
         CUtensorMap            tm_v{};
         [[maybe_unused]] uint2 box_v{};
         if (V) {
-            std::cout << "V: " << Vdesc << "\n";
+            // std::cout << "V: " << Vdesc << "\n";
             // box_v = {(uint32_t)round_up(cdiv(k, 128), 4), 2};
             // std::cout << "V: " << Vdesc << ", box: " << box_v.x << "," << box_v.y << "\n";
             // tm_v = make_2d_tma_desc((void*)V, Vdesc, {box_v.y, box_v.x}, CU_TENSOR_MAP_SWIZZLE_NONE);
@@ -262,7 +263,7 @@ public:
         [[maybe_unused]] static bool _ = [&] {
             int max_cluster_size = 0;
             cudaOccupancyMaxPotentialClusterSize(&max_cluster_size, func, &config);
-            std::cout << "max cluster size: " << max_cluster_size << "\n";
+            // std::cout << "max cluster size: " << max_cluster_size << "\n";
             return false;
         }();
 
@@ -427,6 +428,20 @@ public:
         }
 
         return splits;
+    }
+
+    bool is_feasible(const GemmDesc& desc) const noexcept override
+    {
+        if (desc.striding_a != desc_.striding_a) {
+            return false;
+        }
+        if (desc.striding_b != desc_.striding_b) {
+            return false;
+        }
+        if (desc.striding_c != desc_.striding_c) {
+            return false;
+        }
+        return Kernel::is_feasible(desc);
     }
 };
 

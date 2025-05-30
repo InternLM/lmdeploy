@@ -613,49 +613,49 @@ void invokeMoeGate_V2(int*         f2n,            // [e*n]  -> n
                 softmax,
                 norm_topk,
                 routed_scale);
-    };
 
-    auto fail = [&] {
-        std::cerr << __FILE__ << "(" << __LINE__ << "): unsupported moe config: expert_num=" << experts
-                  << ", top_k=" << experts_per_token << ", softmax=" << softmax << ", norm_topk=" << norm_topk << "\n";
-        std::abort();
+        return true;
     };
 
     if (!softmax && norm_topk) {
         // norm top-k is part of softmax impl
-        fail();
+        TM_CHECK(0) << softmax << " " << norm_topk;
     }
 
-    if (experts <= 8) {
-        if (experts_per_token <= 2) {
-            invoke(_Int<8>, _Int<2>, _Int<8>, _Int<4>);
+    auto dispatch = [&] {
+        if (experts <= 8) {
+            if (experts_per_token <= 2) {
+                return invoke(_Int<8>, _Int<2>, _Int<8>, _Int<4>);
+            }
+            else {
+                return invoke(_Int<8>, _Int<8>, _Int<8>, _Int<4>);
+            }
         }
-        else {
-            invoke(_Int<8>, _Int<8>, _Int<8>, _Int<4>);
+        else if (experts <= 64) {
+            if (experts_per_token <= 4) {
+                return invoke(_Int<64>, _Int<4>, _Int<16>, _Int<4>);
+            }
+            else if (experts_per_token <= 8) {
+                return invoke(_Int<64>, _Int<8>, _Int<16>, _Int<4>);
+            }
         }
-    }
-    else if (experts <= 64) {
-        if (experts_per_token <= 4) {
-            invoke(_Int<64>, _Int<4>, _Int<16>, _Int<4>);
+        else if (experts <= 128) {
+            if (experts_per_token <= 8) {
+                return invoke(_Int<128>, _Int<8>, _Int<16>, _Int<4>);
+            }
         }
-        else if (experts_per_token <= 8) {
-            invoke(_Int<64>, _Int<8>, _Int<16>, _Int<4>);
+        else if (experts <= 160) {
+            if (experts_per_token <= 8) {
+                return invoke(_Int<160>, _Int<8>, _Int<10>, _Int<2>);
+            }
         }
-        else {
-            fail();
-        }
-    }
-    else if (experts <= 160) {
-        if (experts_per_token <= 8) {
-            invoke(_Int<160>, _Int<8>, _Int<10>, _Int<2>);
-        }
-        else {
-            fail();
-        }
-    }
-    else {
-        fail();
-    }
+        return false;
+    };
+
+    auto success = dispatch();
+
+    TM_CHECK(success) << "unsupported moe config: expert_num=" << experts << ", top_k=" << experts_per_token
+                      << ", softmax=" << softmax << ", norm_topk=" << norm_topk;
 
     {
         constexpr int threads = (1 << base_log_tile) / kMoeGateVecSize;

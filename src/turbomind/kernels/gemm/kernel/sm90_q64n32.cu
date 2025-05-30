@@ -8,8 +8,8 @@ namespace turbomind::gemm {
 
 void Registry::sm90_s64n32_dynamic()
 {
-    using Kernel = KernelImplSm90<GemmUniversalSm90_v3>;
-    Add(std::make_unique<Kernel>());
+    Add(std::make_unique<KernelImplSm90<GemmUniversalSm90_v3<kRowMajor, false>>>());
+    Add(std::make_unique<KernelImplSm90<GemmUniversalSm90_v3<kColMajor, true>>>());
 }
 
 }  // namespace turbomind::gemm

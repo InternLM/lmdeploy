@@ -472,7 +472,7 @@ MoeFfnWeight::MoeFfnWeight(int             layer_id,
     register_module("gate", gate);
 
     method        = param.method;
-    fuse_silu_act = fuse_silu_act && method == MoeParam::kFused;
+    fuse_silu_act = fuse_silu_act && method == MoeParam::kFused && weight_type != kFloat8_e4m3;
 
     experts.reserve(expert_num);
     for (int i = 0; i < expert_num; ++i) {
@@ -497,7 +497,11 @@ void MoeFfnWeight::prepare(bool use_simt)
     const int  n_expert = experts.size();
     const auto st       = core::Context::stream().handle();
 
-    auto make_block_ptr = [&](const auto& ptrs) {
+    auto make_strided_ptr = [&](const auto& ptrs) {
+        return std::shared_ptr<void>{gemm::make_strided_ptrs(ptrs, st), [](auto p) { cudaFree(p); }};
+    };
+
+    auto make_blocked_ptr = [&](const auto& ptrs) {
         return std::shared_ptr<void>{gemm::make_blocked_ptrs(ptrs, st), [](auto p) { cudaFree(p); }};
     };
 
@@ -510,6 +514,9 @@ void MoeFfnWeight::prepare(bool use_simt)
             weight_ptrs.push_back({m.weight.raw_data(), m.k_desc.ld});
             if (m.scales_zeros) {
                 quant_ptrs.emplace_back(m.scales_zeros.raw_data(), m.q_desc.ld);
+            }
+            else if (m.scales) {
+                quant_ptrs.emplace_back(m.scales.raw_data(), m.q_desc.ld);
             }
         }
 
@@ -527,14 +534,20 @@ void MoeFfnWeight::prepare(bool use_simt)
         }
 
         // Dummy tensors to hold the blocked ptrs
-        m.weight = Tensor{make_block_ptr(weight_ptrs), {n_expert}, m.weight_type, kDEVICE};
-        if (!quant_ptrs.empty()) {
+        if (m.weight_type == kFloat8_e4m3) {
             TM_CHECK_EQ(quant_ptrs.size(), n_expert);
-            m.scales_zeros = Tensor{make_block_ptr(quant_ptrs), {n_expert}, m.data_type, kDEVICE};
+            m.weight = Tensor{make_blocked_ptr(weight_ptrs), {n_expert}, m.weight_type, kDEVICE};
+            m.scales = Tensor{make_blocked_ptr(quant_ptrs), {n_expert}, kFloat, kDEVICE};
+        }
+        else {
+            m.weight = Tensor{make_strided_ptr(weight_ptrs), {n_expert}, m.weight_type, kDEVICE};
+            if (!quant_ptrs.empty()) {
+                TM_CHECK_EQ(quant_ptrs.size(), n_expert);
+                m.scales_zeros = Tensor{make_strided_ptr(quant_ptrs), {n_expert}, m.data_type, kDEVICE};
+            }
         }
 
         m.k_desc.num = m.q_desc.num = experts.size();
-        m.k_desc.ld = m.q_desc.ld = 0;  // `ld` is meaningless in this case
     };
 
     process(&LlamaFfnWeight::fused_gating_intermediate);

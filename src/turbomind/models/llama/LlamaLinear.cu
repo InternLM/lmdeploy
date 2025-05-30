@@ -1,10 +1,13 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
+#include "src/turbomind/core/check.h"
 #include "src/turbomind/core/cuda_data_type.h"
 #include "src/turbomind/core/data_type.h"
 
 #include "src/turbomind/kernels/gemm/gemm.h"
+#include "src/turbomind/kernels/gemm/moe_utils_v2.h"
 #include "src/turbomind/kernels/gemm/types.h"
+
 #include "src/turbomind/kernels/quantization.h"
 
 #include "src/turbomind/models/llama/LlamaLinear.h"
@@ -57,7 +60,7 @@ struct LlamaLinear::Impl {
             case kUint4:
                 return forwardInt4(output, input, dense, type);
             case kFloat8_e4m3:
-                return forwardFp8(output, input, dense, type);
+                return forwardFp8(output, input, dense, type, nullptr, nullptr);
             default:
                 TM_CHECK(0) << "not implemented for weight type: " << dense.weight_type;
         }
@@ -107,7 +110,12 @@ struct LlamaLinear::Impl {
                                       CUBLAS_GEMM_DEFAULT_TENSOR_OP));
     }
 
-    void forwardFp8(Tensor& output, const Tensor& input, const LlamaDenseWeight& dense, Type type)
+    void forwardFp8(Tensor&                 output,
+                    const Tensor&           input,
+                    const LlamaDenseWeight& dense,
+                    Type                    type,
+                    const int*              offsets,
+                    const int*              indices)
     {
         TM_CHECK_EQ(output.ndim(), 2);  // A [m, k]
         TM_CHECK_EQ(input.ndim(), 2);   // C [m, n]
@@ -115,23 +123,44 @@ struct LlamaLinear::Impl {
         TM_CHECK_EQ(input.stride(1), 1) << "input must be row-major";
         TM_CHECK_EQ(output.stride(1), 1) << "output must be row-major";
 
-        TM_CHECK_EQ(output.shape(0), input.shape(0));
+        // TM_CHECK_EQ(output.shape(0), input.shape(0));
         TM_CHECK_EQ(input.shape(1), dense.input_dim);
         // TM_CHECK_EQ(output.shape(1), dense.output_dim);
 
         using namespace gemm;
 
-        const Operation operation{dispatch_policy_,
-                                  type == kFusedSiluFfn ? Epilogue::kGatedSilu : Epilogue::kNone,
-                                  {QuantType::kDefault, 128},
-                                  {QuantType::kDefault, 128},
-                                  0};
+        TM_CHECK(type == kGemm);
+
+        Operation operation{dispatch_policy_,  //
+                            Epilogue::kNone,
+                            {QuantType::kDefault, 128},
+                            {QuantType::kDefault, 128},
+                            0};
 
         Tensor quant;
         Tensor scale;
         QuantizeSymm(quant, scale, input, stream_);
+        sync_check_cuda_error();
 
-        const MatrixLayout a_desc{
+        const int group_num = dense.k_desc.num;
+
+        if (indices) {
+            const auto [m, k] = input.shapes(0, 1);
+            const int e       = output.shape(0) / m;
+
+            Tensor a_e = {{m * e, k}, quant.dtype(), quant.device()};
+            invokeMoeDispatch(a_e, quant, indices, e, stream_);
+            sync_check_cuda_error();
+
+            Tensor u_e;
+            invokeMoeDispatchScales(u_e, scale, indices, e, stream_);
+            sync_check_cuda_error();
+
+            quant = a_e;
+            scale = u_e;
+        }
+
+        MatrixLayout a_desc{
             quant.dtype(),
             kRowMajor,
             (int)quant.shape(0),
@@ -139,19 +168,38 @@ struct LlamaLinear::Impl {
             (int)quant.stride(0),
         };
 
-        const MatrixLayout u_desc{scale.dtype(),  //
-                                  kColMajor,
-                                  (int)scale.shape(0),
-                                  (int)scale.shape(1),
-                                  (int)scale.stride(0) * (int)scale.stride(1)};
+        MatrixLayout u_desc{scale.dtype(),  //
+                            kColMajor,
+                            (int)scale.shape(1),
+                            (int)scale.shape(0),
+                            (int)scale.stride(0)};
 
-        const MatrixLayout c_desc{
+        MatrixLayout c_desc{
             output.dtype(),  //
             kRowMajor,
             (int)output.shape(0),
             dense.output_dim,
             (int)output.stride(0),
         };
+
+        auto b_desc = dense.k_desc;
+        auto v_desc = dense.q_desc;
+
+        if (group_num > 1) {
+            // clang-format off
+            a_desc.offsets = u_desc.offsets = c_desc.offsets = const_cast<int*>(offsets);
+            a_desc.num     = u_desc.num     = c_desc.num     = group_num;
+            // clang-format on
+
+            // This is needed to be recognized as blocked striding mode
+            b_desc.offsets = v_desc.offsets = (int*)1;
+
+            // std::cout << "A: " << a_desc << "\n";
+            // std::cout << "U: " << u_desc << "\n";
+            // std::cout << "B: " << dense.k_desc << "\n";
+            // std::cout << "V: " << dense.q_desc << "\n";
+            // std::cout << "C: " << c_desc << "\n";
+        }
 
         auto ec = gemm_.Run(operation,
                             1.f,
@@ -160,9 +208,9 @@ struct LlamaLinear::Impl {
                             scale.raw_data(),
                             u_desc,
                             dense.weight.raw_data(),
-                            dense.k_desc,
+                            b_desc,
                             dense.scales.raw_data(),
-                            dense.q_desc,
+                            v_desc,
                             type == kFusedAdd ? 1.0f : 0.0f,
                             output.raw_data(),
                             c_desc,
@@ -170,6 +218,11 @@ struct LlamaLinear::Impl {
                             c_desc,
                             workspace_,
                             stream_);
+        sync_check_cuda_error();
+
+        // if (group_num > 1) {
+        //     TM_CHECK(0);
+        // }
 
         if (ec) {
             TM_LOG_ERROR("%s: %d", __PRETTY_FUNCTION__, ec);
@@ -289,6 +342,11 @@ struct LlamaLinear::Impl {
 
         a_desc.num = c_desc.num = dense.k_desc.num;
 
+        auto k_desc = dense.k_desc;
+        auto q_desc = dense.q_desc;
+        // pre-90 grouped gemm need `ld == 0` to resolve with strided_ptr
+        k_desc.ld = q_desc.ld = 0;
+
         auto ec = gemm_.Run(operation,
                             1.f,
                             input.raw_data(),
@@ -296,9 +354,9 @@ struct LlamaLinear::Impl {
                             nullptr,
                             {},
                             dense.weight.raw_data(),
-                            dense.k_desc,
+                            k_desc,
                             dense.scales_zeros.data_or((void*)nullptr),
-                            dense.q_desc,
+                            q_desc,
                             type == kFusedAdd ? 1.0f : 0.0f,
                             output.raw_data(),
                             c_desc,
@@ -356,7 +414,12 @@ void LlamaLinear::forward_moe(Tensor&                 output,
                               Type                    type,
                               gemm::Context*          context)
 {
-    return impl_->forward_moe(output, input, indexes, offsets, dense, type, context);
+    if (dense.weight_type != kFloat8_e4m3) {
+        impl_->forward_moe(output, input, indexes, offsets, dense, type, context);
+    }
+    else {
+        impl_->forwardFp8(output, input, dense, type, offsets, indexes);
+    }
 }
 
 void LlamaLinear::set_measure(bool measure)

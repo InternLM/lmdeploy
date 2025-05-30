@@ -131,7 +131,7 @@ class Qwen2MoeReader(LlamaReader):
         return (*result, )
 
     def moe_ffn_gate(self, i):
-        return self.params.get(f'model.layers.{i}.mlp.gate.weight')
+        return self.transform(self.params.get(f'model.layers.{i}.mlp.gate.weight'), 'weight')
 
     def _ffn(self, i: int, kind: str):
         """Get ffn kind for layer i."""
@@ -172,7 +172,7 @@ class Qwen3Reader(LlamaReader):
         result = []
         for x in ['q', 'k']:
             name = f'{self.attn_layer_prefix}.{i}.self_attn.{x}_norm.weight'
-            result.append(self.params.get(name))
+            result.append(self.transform(self.params.get(name), 'weight'))
         return (*result, )
 
 
@@ -193,7 +193,7 @@ class Qwen3MoeReader(Qwen2MoeReader):
         result = []
         for x in ['q', 'k']:
             name = f'{self.attn_layer_prefix}.{i}.self_attn.{x}_norm.weight'
-            result.append(self.params.get(name))
+            result.append(self.transform(self.params.get(name), 'weight'))
         return (*result, )
 
 
