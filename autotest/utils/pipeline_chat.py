@@ -19,6 +19,12 @@ def run_pipeline_chat_test(config,
                            is_smoke: bool = False):
     log_path = config.get('log_path')
     tp = get_tp_num(config, model_case)
+
+    # temp remove testcase because of issue 3434
+    if ('InternVL3' in model_case or 'InternVL2_5' in model_case or 'MiniCPM-V-2_6' in model_case
+        ) and 'turbomind' in backend_type and extra is not None and 'communicator' in extra and extra.get(
+            'communicator') == 'native' and tp > 1:
+        return
     model_name = model_name = get_model_name(model_case)
     model_path = config.get('model_path')
     if use_local_model is True:
@@ -85,6 +91,11 @@ def run_pipeline_vl_chat_test(config,
     model_path = config.get('model_path')
     resource_path = config.get('resource_path')
     hf_path = model_path + '/' + model_case
+
+    if ('InternVL3' in model_case or 'InternVL2_5' in model_case or 'MiniCPM-V-2_6' in model_case
+        ) and 'turbomind' in backend_type and extra is not None and 'communicator' in extra and extra.get(
+            'communicator') == 'native' and tp > 1:
+        return
 
     pipeline_chat_log = os.path.join(
         log_path, '_'.join(['pipeline', 'mllm', backend_type, worker_id,

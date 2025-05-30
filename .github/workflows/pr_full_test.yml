@@ -1,4 +1,4 @@
-name: daily_ete_test
+name: pr_full_test
 
 on:
   workflow_dispatch:
@@ -38,8 +38,6 @@ on:
         description: 'regression functions'
         type: string
         default: "['quant', 'tools','restful','pipeline','benchmark','evaluation']"
-  schedule:
-    - cron:  '00 16 * * 0-4'
 
 env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
@@ -64,7 +62,7 @@ jobs:
     env:
       PYTHON_VERSION: ${{ matrix.pyver }}
       PLAT_NAME: manylinux2014_x86_64
-      DOCKER_TAG: cuda11.8
+      DOCKER_TAG: cuda12.1
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -93,10 +91,10 @@ jobs:
   download_pkgs:
     needs: linux-build
     if: ${{!cancelled()}}
-    runs-on: [self-hosted, linux-a100]
+    runs-on: [self-hosted, linux-pr]
     timeout-minutes: 50
     container:
-      image: openmmlab/lmdeploy:latest-cu11
+      image: openmmlab/lmdeploy:latest
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/qa_test_models:/nvme/qa_test_models
@@ -110,10 +108,10 @@ jobs:
           ref: ${{github.event.inputs.repo_ref || 'main'}}
       - name: Copy repository
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
-        run: rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && cp -r . ${{env.TEST_CODE_PATH}}
+        run: rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && cp -r . ${{env.TEST_CODE_PATH}} && mv ${{env.TEST_CODE_PATH}}/autotest/config-pr.yaml ${{env.TEST_CODE_PATH}}/autotest/config.yaml
       - name: Copy repository - offline
         if: ${{inputs.offline_mode}}
-        run: rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && cp -r ${{env.OFFLINE_CODE_PATH}}/. ${{env.TEST_CODE_PATH}}
+        run: rm -rf ${{env.TEST_CODE_PATH}} && mkdir ${{env.TEST_CODE_PATH}} && cp -r ${{env.OFFLINE_CODE_PATH}}/. ${{env.TEST_CODE_PATH}} && mv ${{env.TEST_CODE_PATH}}/autotest/config-pr.yaml ${{env.TEST_CODE_PATH}}/autotest/config.yaml
       - name: Download Artifacts
         if: ${{github.event_name == 'schedule' || !inputs.offline_mode}}
         uses: actions/download-artifact@v4
@@ -129,20 +127,21 @@ jobs:
   test_quantization:
     needs: download_pkgs
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'quant') )}}
-    runs-on: [self-hosted, linux-a100]
+    runs-on: [self-hosted, linux-pr]
     timeout-minutes: 150
     env:
       PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
     container:
-      image: openmmlab/lmdeploy:latest-cu11
+      image: openmmlab/lmdeploy:latest
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /mnt/shared:/mnt/shared
+        - /mnt/187:/mnt/187
         - /nvme/qa_test_models/lmdeploy/autotest:/local_case
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
@@ -162,7 +161,6 @@ jobs:
           pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
-          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
@@ -194,7 +192,7 @@ jobs:
 
   test_tools:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'tools'))}}
-    runs-on: [self-hosted, linux-a100]
+    runs-on: [self-hosted, linux-pr]
     needs: test_quantization
     timeout-minutes: 300
     strategy:
@@ -219,7 +217,7 @@ jobs:
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
     container:
-      image: openmmlab/lmdeploy:latest-cu11
+      image: openmmlab/lmdeploy:latest
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -227,6 +225,7 @@ jobs:
         - /nvme/github-actions/resources/lora:/root/lora
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /mnt/shared:/mnt/shared
+        - /mnt/187:/mnt/187
         - /nvme/qa_test_models/lmdeploy/autotest:/local_case
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
@@ -247,7 +246,6 @@ jobs:
           pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
-          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
           cp -r /root/lora .
@@ -311,7 +309,7 @@ jobs:
 
   test_restful:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'restful'))}}
-    runs-on: [self-hosted, linux-a100]
+    runs-on: [self-hosted, linux-pr]
     needs: test_quantization
     strategy:
       fail-fast: false
@@ -319,12 +317,13 @@ jobs:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
     timeout-minutes: 60
     container:
-      image: openmmlab/lmdeploy:latest-cu11
+      image: openmmlab/lmdeploy:latest
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
+        - /mnt/187:/mnt/187
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Copy repository and Artifacts
@@ -343,7 +342,6 @@ jobs:
           pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
-          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
@@ -405,16 +403,17 @@ jobs:
 
   test_pipeline:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'pipeline'))}}
-    runs-on: [self-hosted, linux-a100]
+    runs-on: [self-hosted, linux-pr]
     needs: test_quantization
     timeout-minutes: 120
     container:
-      image: openmmlab/lmdeploy:latest-cu11
+      image: openmmlab/lmdeploy:latest
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
+        - /mnt/187:/mnt/187
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Copy repository and Artifacts
@@ -433,7 +432,6 @@ jobs:
           pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
-          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
@@ -464,16 +462,17 @@ jobs:
 
   test_benchmark:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'benchmark'))}}
-    runs-on: [self-hosted, linux-a100]
+    runs-on: [self-hosted, linux-pr]
     needs: test_quantization
     timeout-minutes: 120
     container:
-      image: openmmlab/lmdeploy:latest-cu11
+      image: openmmlab/lmdeploy:latest
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
+        - /mnt/187:/mnt/187
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Copy repository and Artifacts
@@ -492,7 +491,6 @@ jobs:
           pip install ${{env.DEEPSEEK_VL}} --no-deps
       - name: Check env
         run: |
-          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
@@ -517,7 +515,7 @@ jobs:
 
   test_evaluation:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'evaluation'))}}
-    runs-on: [self-hosted, linux-a100]
+    runs-on: [self-hosted, linux-pr]
     needs: test_quantization
     timeout-minutes: 120 # 2hours
     strategy:
@@ -525,7 +523,7 @@ jobs:
       matrix:
         evaluate_type: ['chat', 'base']
     container:
-      image: openmmlab/lmdeploy:latest-cu11
+      image: openmmlab/lmdeploy:latest
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
@@ -535,6 +533,7 @@ jobs:
         - /nvme/qa_test_models/evaluation-reports:/root/evaluation-reports
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /mnt/shared:/mnt/shared
+        - /mnt/187:/mnt/187
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Copy repository and Artifacts
@@ -543,9 +542,6 @@ jobs:
       - name: Install lmdeploy - dependency
         run: |
           # manually install flash attn
-          # the install packeage from. https://github.com/Dao-AILab/flash-attention/releases
-          python3 -m pip install /root/packages/flash_attn-*.whl
-          python3 -m pip install sentence_transformers==2.2.2 --no-deps
           python3 -m pip install -r ${{env.OFFLINE_REQUIREMENTS}}
       - name: Install lmdeploy
         run: |
@@ -557,11 +553,10 @@ jobs:
           git clone --depth=1 https://github.com/open-compass/opencompass.git
           cd opencompass
           cp /nvme/qa_test_models/offline_pkg/requirements-oc.txt requirements/runtime.txt
-          python3 -m pip install -e .
+          python3 -m pip install -e .[full]
           echo "OPENCOMPASS_DIR=$(pwd)" >> $GITHUB_ENV
       - name: Check env
         run: |
-          pip uninstall -y nvidia-nccl-cu11
           python3 -m pip list
           lmdeploy check_env
           rm -rf allure-results
@@ -599,13 +594,14 @@ jobs:
     if: ${{!cancelled() && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'benchmark'))}}
     needs: [test_benchmark]
     timeout-minutes: 5
-    runs-on: [self-hosted, linux-a100]
+    runs-on: [self-hosted, linux-pr]
     container:
-      image: openmmlab/lmdeploy:latest-cu11
+      image: openmmlab/lmdeploy:latest
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
+        - /mnt/187:/mnt/187
     env:
       BENCHMARK_REPORT_DIR: /nvme/qa_test_models/benchmark-reports/${{ github.run_id }}
     steps:
@@ -622,16 +618,17 @@ jobs:
 
   get_coverage_report:
     if: ${{!cancelled()}}
-    runs-on: [self-hosted, linux-a100]
+    runs-on: [self-hosted, linux-pr]
     needs: [test_tools, test_restful, test_pipeline, test_benchmark]
     timeout-minutes: 5
     container:
-      image: openmmlab/lmdeploy:latest-cu11
+      image: openmmlab/lmdeploy:latest
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
       volumes:
         - /nvme/github-actions/pip-cache:/root/.cache/pip
         - /nvme/github-actions/packages:/root/packages
         - /nvme/qa_test_models:/nvme/qa_test_models
+        - /mnt/187:/mnt/187
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Copy repository and Artifacts
@@ -661,7 +658,7 @@ jobs:
     if: always() && !cancelled() && (github.ref_name == 'develop' || github.ref_name == 'main')
     needs: [get_benchmark_result, get_coverage_report, test_evaluation]
     timeout-minutes: 5
-    runs-on: [self-hosted, linux-a100]
+    runs-on: [self-hosted, linux-pr]
     steps:
       - name: notify
         if: contains(needs.*.result, 'failure')
