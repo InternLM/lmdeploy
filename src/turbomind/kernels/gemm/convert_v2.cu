@@ -299,7 +299,7 @@ __global__ void fill_strided_ptrs(Param<N> param)
 
 }  // namespace
 
-void* make_blocked_ptrs(const std::vector<std::pair<void*, int>>& ptrs, cudaStream_t stream)
+void* make_strided_ptrs(const std::vector<std::pair<void*, int>>& ptrs, cudaStream_t stream)
 {
     constexpr int N = 64;
     Param<N>      param{};
@@ -318,6 +318,38 @@ void* make_blocked_ptrs(const std::vector<std::pair<void*, int>>& ptrs, cudaStre
         param.ptr += N;
     }
     return ptr;
+}
+
+namespace {
+
+template<int N>
+__global__ void fill_blocked_ptrs(Array<void*, N> src, void** dst, int n)
+{
+    const int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    if (idx < n) {
+        dst[idx] = src[idx];
+    }
+}
+
+}  // namespace
+
+void* make_blocked_ptrs(const std::vector<std::pair<void*, int>>& ptrs, cudaStream_t stream)
+{
+    constexpr int   N = 64;
+    Array<void*, N> src{};
+    static_assert(sizeof(src) <= 4096);  // max parameter size for cuda11
+    void** dst{};
+    cudaMallocAsync(&dst, sizeof(void*) * ptrs.size(), stream);
+    for (int i = 0; i < (int)ptrs.size(); i += N) {
+        const int n = std::min<int>(ptrs.size() - i, N);
+        for (int j = 0; j < n; ++j) {
+            auto& [p, s] = ptrs[i + j];
+            src[j]       = p;
+        }
+        fill_blocked_ptrs<<<1, N, 0, stream>>>(src, dst, n);
+        dst += n;
+    }
+    return dst - ptrs.size();
 }
 
 }  // namespace turbomind::gemm

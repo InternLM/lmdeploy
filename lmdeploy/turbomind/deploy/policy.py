@@ -46,10 +46,23 @@ def process_gptq(x: torch.Tensor, kind: str):
     return x
 
 
+def process_fp8(x: torch.Tensor, kind: str):
+    x = x.cuda()
+    if x.dtype == torch.float8_e4m3fn:
+        # some ops (e.g. torch.cat) for fp8 is not implemented in pytorch
+        return x.view(dtype=torch.uint8)
+    elif kind != 'weight_scale_inv' and x.dtype == torch.float:
+        return x.to(dtype=torch.bfloat16)
+    else:
+        return x
+
+
 def get_input_policy(model_format):
     if model_format == 'awq':
         return process_awq_gemm
     elif model_format == 'gptq':
         return process_gptq
+    elif model_format == 'fp8':
+        return process_fp8
     else:
         return to_cuda

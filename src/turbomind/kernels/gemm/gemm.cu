@@ -200,12 +200,12 @@ struct Gemm::Impl {
 
         specs = Sampler{*measurer_, tuning_.clusters}.Run(specs, launch_func, st);
 
-        // for (const auto& s : specs) {
-        //     std::cout << s.kernel->name()          //
-        //               << " swizzle=" << s.swizzle  //
-        //               << ", splits=" << s.splits   //
-        //               << ", measured=" << s.measured << "ms\n";
-        // }
+        for (const auto& s : specs) {
+            std::cout << s.kernel->name()          //
+                      << " swizzle=" << s.swizzle  //
+                      << ", splits=" << s.splits   //
+                      << ", measured=" << s.measured << "ms\n";
+        }
 
         if (!specs.empty()) {
             cache_.Insert(desc, specs.front());
@@ -325,6 +325,40 @@ int Gemm::Run(const Operation&    operation,
         //           << " split_k=" << spec.splits                  //
         //           << " swizzle=" << spec.swizzle << std::endl;
         return launch(spec, stream);
+    }
+
+    const auto launch1 = [=](LaunchSpec spec, cudaStream_t st) {
+        auto _workspace = workspace;
+        return spec.kernel->Launch(operation,
+                                   alpha,
+                                   B,
+                                   transpose(Bdesc),
+                                   V,
+                                   transpose(Vdesc),
+                                   A,
+                                   transpose(Adesc),
+                                   U,
+                                   transpose(Udesc),
+                                   beta,
+                                   C,
+                                   transpose(Cdesc),
+                                   D,
+                                   transpose(Ddesc),
+                                   spec.swizzle,
+                                   spec.splits,
+                                   _workspace,
+                                   stream);
+    };
+
+    if (operation.dispatch & DispatchPolicy::kMeasure) {
+        impl_->Measure(context, transpose(*desc), workspace.barriers_size, workspace.partials_size, 1, launch1, stream);
+    }
+
+    spec = impl_->Dispatch(
+        context, operation.dispatch, transpose(*desc), workspace.barriers_size, workspace.partials_size);
+
+    if (spec.kernel) {
+        return launch1(spec, stream);
     }
 
     fprintf(stderr, "No feasible kernel found for the problem.\n");

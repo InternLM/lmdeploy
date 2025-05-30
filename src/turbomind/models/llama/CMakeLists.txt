@@ -34,6 +34,7 @@ target_link_libraries(Llama PUBLIC CUDA::cudart
         activation_kernels
         attention
         decoding_kernels
+        quantization_kernels
         unfused_attention_kernels
         gpt_kernels
         memory_utils
