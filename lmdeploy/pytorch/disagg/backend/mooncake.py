@@ -125,7 +125,7 @@ class MooncakeBackend(MigrationBackendImpl):
         protocol = "rdma"  
 
         # Get the device name from request
-        device_name = self.ibv_device[init_request.rank % len(self.nics)]
+        device_name = self.ibv_device[init_request.rank % len(self.ibv_device)]
         
         # Initialize the engine
         result = self.engine.initialize(self.hostname, metadata_server, protocol, device_name)
@@ -155,7 +155,8 @@ class MooncakeBackend(MigrationBackendImpl):
 
     def endpoint_info(self, remote_engine_id: int, protocol: MigrationProtocol):
         """Get endpoint information"""      
-        
+        # FIXME: Need to return local endpoint information
+        endpoint_info = self.endpoints[remote_engine_id] if remote_engine_id in self.endpoints else None
         
         return json.dumps(endpoint_info)
 
@@ -183,7 +184,7 @@ class MooncakeBackend(MigrationBackendImpl):
 
         self.remote_urls[connect_request.remote_engine_id] = endpoint_url
 
-        logger.info(f"Connecting to remote engine {connect_request.remote_engine_id} at endpoint {endpoint}")
+        logger.info(f"Connecting to remote engine {connect_request.remote_engine_id} at endpoint {endpoint_url}")
 
     def p2p_migrate(self, assignment: MigrationAssignment, async_op: bool = False):
         """Migrate data between engines"""
@@ -215,7 +216,3 @@ class MooncakeBackend(MigrationBackendImpl):
 
     def load(self, assignment: MigrationAssignment, async_op: bool = False):
         raise NotImplementedError
-    
-# TODO:
-# 1. Adjust the endpoint_info(). 
-# 2. Check the correctness of the migration address.
