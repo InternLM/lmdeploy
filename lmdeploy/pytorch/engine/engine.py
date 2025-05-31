@@ -1126,7 +1126,27 @@ class Engine:
 
     def update_params(self, request: Any):
         """update params."""
-        self.executor.update_params(request)
+        if not hasattr(self, '_update_thread'):
+            from threading import Thread
+            from queue import Queue
+            que = Queue()
+
+            def _update_func():
+                while True:
+                    req = que.get()
+                    self.executor.update_params(req)
+                    que.task_done()
+                    if req.finished:
+                        break
+
+            self._update_que = que
+            self._update_thread = Thread(target=_update_func, daemon=True)
+            self._update_thread.start()
+
+        self._update_que.put(request)
+        if request.finished:
+            self._update_que.join()
+            self._update_thread.join()
 
     async def async_loop(self):
         try:
