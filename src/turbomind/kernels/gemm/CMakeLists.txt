@@ -64,7 +64,7 @@ set_property(TARGET gemm2 PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
         if (NOT MSVC)
                 FetchContent_Declare(
                 repo-nvbench
-                GIT_REPOSITORY git@github.com:NVIDIA/nvbench.git
+                GIT_REPOSITORY https://github.com/NVIDIA/nvbench.git
                 GIT_TAG        d8dced8a64d9ce305add92fa6d274fd49b569b7e
                 )
 

@@ -40,7 +40,7 @@ include(FetchContent)
 if (BUILD_TEST)
   FetchContent_Declare(
     Catch2
-    GIT_REPOSITORY git@github.com:catchorg/Catch2.git
+    GIT_REPOSITORY https://github.com/catchorg/Catch2.git
     GIT_TAG        v3.8.0
   )
   FetchContent_MakeAvailable(Catch2)
@@ -49,7 +49,7 @@ endif()
 
 FetchContent_Declare(
   repo-cutlass
-  GIT_REPOSITORY git@github.com:NVIDIA/cutlass.git
+  GIT_REPOSITORY https://github.com/NVIDIA/cutlass.git
   GIT_TAG        81a43e6d92cdd8c20d22392f9579604ed5f710a1
   GIT_SHALLOW ON
 )
@@ -61,7 +61,7 @@ FetchContent_MakeAvailable(repo-cutlass)
 
 FetchContent_Declare(
   yaml-cpp
-  GIT_REPOSITORY git@github.com:jbeder/yaml-cpp.git
+  GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
   GIT_TAG 0.8.0
 )
 set(YAML_BUILD_SHARED_LIBS OFF CACHE BOOL "Build static library of yaml-cpp")
