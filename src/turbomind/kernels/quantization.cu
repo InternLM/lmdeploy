@@ -19,6 +19,7 @@ template<int vec_size, int group_size, class Tout, class Tscale, class T>
 __global__ void quant_symm_row(
     Tout* out, int out_ld, Tscale* scales, int scales_ld, const T* src, int src_ld, int num, int dim, Tscale qmax)
 {
+#if TURBOMIND_ARCH_SM90
     static_assert(group_size % vec_size == 0);
     constexpr int threads = group_size / vec_size;
     for (int ti = blockIdx.x; ti < num; ti += gridDim.x) {
@@ -40,6 +41,7 @@ __global__ void quant_symm_row(
             Store(out + ti * out_ld + di, tmp);
         }
     }
+#endif
 }
 
 void QuantizeSymm(Tensor& out, Tensor& scale, const Tensor& src, cudaStream_t st)
@@ -93,6 +95,7 @@ template<int vec_size, int group_size, class Tout, class Tscale, class T>
 __global__ void
 dequant_symm_row(Tout* out, int out_ld, const T* src, int src_ld, const Tscale* scales, int scales_ld, int num, int dim)
 {
+#if TURBOMIND_ARCH_SM90
     static_assert(group_size % vec_size == 0);
     for (int ti = blockIdx.x; ti < num; ti += gridDim.x) {
         for (int di = threadIdx.x * vec_size; di < dim; di += blockDim.x * vec_size) {
@@ -107,6 +110,7 @@ dequant_symm_row(Tout* out, int out_ld, const T* src, int src_ld, const Tscale* 
             Store(out + ti * out_ld + di, tmp);
         }
     }
+#endif
 }
 
 void DequantizeSymm(Tensor& out, const Tensor& src, const Tensor& scale, cudaStream_t st)
@@ -142,6 +146,7 @@ void DequantizeSymm(Tensor& out, const Tensor& src, const Tensor& scale, cudaStr
 template<int vec_size, int cta_size, int block_size, class Tout, class Tscale, class T>
 __global__ void quant_symm_block(Tout* out, Tscale* scales, const T* src, Tscale qmax, int num, int dim)
 {
+#if TURBOMIND_ARCH_SM90
     static_assert(block_size % vec_size == 0);
     constexpr int threads = block_size / vec_size;
 
@@ -192,6 +197,7 @@ __global__ void quant_symm_block(Tout* out, Tscale* scales, const T* src, Tscale
             Store(out + (int64_t)r * dim + di + col * vec_size, ys[s]);
         }
     }
+#endif
 }
 
 void QuantizeSymmBlock(Tensor& out, Tensor& scale, const Tensor& src, cudaStream_t st)
@@ -240,6 +246,7 @@ void QuantizeSymmBlock(Tensor& out, Tensor& scale, const Tensor& src, cudaStream
 template<int vec_size, int cta_size, int block_size, class Tout, class Tscale, class T>
 __global__ void dequant_symm_block(Tout* out, const T* src, const Tscale* scales, int num, int dim)
 {
+#if TURBOMIND_ARCH_SM90
     static_assert(block_size % vec_size == 0);
     constexpr int threads = block_size / vec_size;
     static_assert(cta_size % threads == 0);
@@ -263,6 +270,7 @@ __global__ void dequant_symm_block(Tout* out, const T* src, const Tscale* scales
             Store(out + (int64_t)ti * dim + di, y);
         }
     }
+#endif
 }
 
 void DequantizeSymmBlock(Tensor& out, const Tensor& src, const Tensor& scale, cudaStream_t st)
